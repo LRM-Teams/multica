@@ -7,9 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -152,14 +149,20 @@ func TestAgentTransportVoiceReplyPartsRequireSameTimeline(t *testing.T) {
 	}
 }
 
-func TestAgentTransportSendMessageEnforcesVoiceReplyForVoiceTrigger(t *testing.T) {
+func TestAgentTransportSendMessageDoesNotInferVoiceFromRetiredTaskContext(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	agentID := agentIDForTask(t, taskID)
+	agentID := createHandlerTestAgent(t, "transport-voice-"+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "transport-voice-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("add Agent member: %v", err)
+	}
 	trigger, err := testHandler.insertChannelMessageWithParts(
 		ctx,
 		parseUUID(channelID),
@@ -182,21 +185,14 @@ func TestAgentTransportSendMessageEnforcesVoiceReplyForVoiceTrigger(t *testing.T
 	if err != nil {
 		t.Fatalf("seed voice trigger: %v", err)
 	}
-	var chatSessionID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT chat_session_id
-		FROM agent_inbox_event
-		WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
-		t.Fatalf("load task chat session: %v", err)
+	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("load channel")
 	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO chat_message (chat_session_id, role, content, task_id)
-		VALUES ($1, 'user', $2, $3)`, chatSessionID, "Reaction target message id: "+trigger.ID, taskID); err != nil {
-		t.Fatalf("seed task source prompt: %v", err)
-	}
+	testHandler.deliverCanonicalMessageToChannelAgents(ctx, channel, trigger)
 
 	content := "这是智能体的完整回答"
-	rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+	rec := agentTransportSendForTest(t, "", agentID, map[string]any{
 		"target":            "#" + channelNameForTransportTest(t, channelID),
 		"content":           content,
 		"client_message_id": "voice-enforced-" + uuid.NewString(),
@@ -208,8 +204,8 @@ func TestAgentTransportSendMessageEnforcesVoiceReplyForVoiceTrigger(t *testing.T
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode transport response: %v", err)
 	}
-	if !channelMessageHasVoicePart(body.Message.Parts) || !agentTransportPartsHaveText(body.Message.Parts) {
-		t.Fatalf("message parts=%+v, want accessible voice reply", body.Message.Parts)
+	if channelMessageHasVoicePart(body.Message.Parts) || !agentTransportPartsHaveText(body.Message.Parts) {
+		t.Fatalf("message parts=%+v, want explicit text send without inferred voice", body.Message.Parts)
 	}
 	if body.Message.Content != content {
 		t.Fatalf("message content=%q, want %q", body.Message.Content, content)
@@ -246,6 +242,7 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	if firstBody.Message.Content != content || firstBody.Message.ClientMessageID == nil || *firstBody.Message.ClientMessageID != clientID {
 		t.Fatalf("first message payload mismatch: %+v", firstBody.Message)
 	}
+	assertAgentMessageSentActivityText(t, firstBody.Message.ID, content)
 
 	second := agentTransportSendForTest(t, taskID, agentID, map[string]any{
 		"target":            target,
@@ -265,6 +262,7 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	if secondBody.Message.ID != firstBody.Message.ID {
 		t.Fatalf("idempotent replay message id=%s, want %s", secondBody.Message.ID, firstBody.Message.ID)
 	}
+	assertAgentMessageSentActivityCount(t, firstBody.Message.ID, 1)
 
 	var messageRows int
 	if err := testPool.QueryRow(ctx, `
@@ -277,15 +275,6 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	if messageRows != 1 {
 		t.Fatalf("transport message rows=%d, want 1", messageRows)
 	}
-	assertAgentTransportAuditCount(t, taskID, agentTransportActionSend, 2)
-
-	finalText := "duplicate final text " + uuid.NewString()
-	done := completeTaskForTest(t, taskID, map[string]any{"output": finalText})
-	if done.Code != http.StatusOK {
-		t.Fatalf("complete task: status=%d body=%s", done.Code, done.Body.String())
-	}
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
-	assertNoChannelMessageContent(t, channelID, finalText)
 }
 
 // TestAgentTransportAgentDMExchangeNeverAutoPausesAndMustReplyChain replaces
@@ -301,33 +290,26 @@ func TestAgentTransportAgentDMExchangeNeverAutoPausesAndMustReplyChain(t *testin
 	}
 
 	ctx := context.Background()
-	firstTaskID, _ := createChannelCompletionTask(t, "group")
-	firstAgentID := agentIDForTask(t, firstTaskID)
-	secondAgentID := createHandlerTestAgent(t, "A2A Peer "+uuid.NewString(), []byte("[]"))
+	firstAgentID := createHandlerTestAgent(t, "A2A First "+uuid.NewString()[:8], []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "A2A Peer "+uuid.NewString()[:8], []byte("[]"))
 	firstHandle := agentHandleForTransportTest(t, firstAgentID)
 	secondHandle := agentHandleForTransportTest(t, secondAgentID)
 	canonical := dmCanonicalName("agent", firstAgentID, "agent", secondAgentID)
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `
-			DELETE FROM channel
-			WHERE workspace_id = $1 AND name = $2 AND kind = 'dm'`,
-			testWorkspaceID, canonical)
-		testPool.Exec(ctx, `
-			DELETE FROM inbox_item
-			WHERE workspace_id = $1 AND type = 'agent_dm_paused'`,
-			testWorkspaceID)
+		testPool.Exec(ctx, `DELETE FROM channel WHERE workspace_id = $1 AND name = $2 AND kind = 'dm'`, testWorkspaceID, canonical)
+		testPool.Exec(ctx, `DELETE FROM inbox_item WHERE workspace_id = $1 AND type = 'agent_dm_paused'`, testWorkspaceID)
 	})
 
-	send := func(taskID, agentID, target string, turn int) *httptest.ResponseRecorder {
+	send := func(agentID, target string, turn int) *httptest.ResponseRecorder {
 		t.Helper()
-		return agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		return agentTransportSendForTest(t, "", agentID, map[string]any{
 			"target":            target,
 			"content":           fmt.Sprintf("A2A turn %d", turn),
 			"client_message_id": fmt.Sprintf("a2a-%d-%s", turn, uuid.NewString()),
 		})
 	}
 
-	first := send(firstTaskID, firstAgentID, "dm:@"+secondHandle, 1)
+	first := send(firstAgentID, "dm:@"+secondHandle, 1)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("turn 1 send: status=%d body=%s", first.Code, first.Body.String())
 	}
@@ -349,144 +331,78 @@ func TestAgentTransportAgentDMExchangeNeverAutoPausesAndMustReplyChain(t *testin
 		t.Fatalf("load A2A exchange: %v", err)
 	}
 
-	currentRecipient := secondAgentID
+	currentSender := secondAgentID
 	currentTarget := "dm:@" + firstHandle + ":" + firstBody.Message.ID
-	// The old round_limit=3 default paused the exchange at turn_count=6
-	// (3 rounds * 2). Run to turn 9 (10 total turns) to prove there's no
-	// boundary effect left anywhere near the old budget.
 	const replyTurns = 9
 	for turn := 1; turn <= replyTurns; turn++ {
-		var eventID, responseMode string
-		var requiresWake bool
-		var eventTurn int
-		if err := testPool.QueryRow(ctx, `
-			SELECT id, response_mode, requires_wake, agent_dm_turn
-			FROM agent_inbox_event
-			WHERE agent_dm_exchange_id = $1
-			  AND agent_dm_turn = $2
-			  AND agent_id = $3`,
-			exchangeID, turn, currentRecipient).Scan(
-			&eventID, &responseMode, &requiresWake, &eventTurn,
-		); err != nil {
-			t.Fatalf("turn %d recipient inbox event: %v", turn, err)
-		}
-		if responseMode != "public_response" || !requiresWake || eventTurn != turn {
-			t.Fatalf(
-				"turn %d event mode=%q requires_wake=%v event_turn=%d",
-				turn, responseMode, requiresWake, eventTurn,
-			)
-		}
-		if _, err := testPool.Exec(ctx, `
-			UPDATE agent_inbox_event
-			SET status = 'draining', started_at = now(), updated_at = now()
-			WHERE id = $1`, eventID); err != nil {
-			t.Fatalf("activate turn %d inbox event: %v", turn, err)
-		}
-		reply := send(eventID, currentRecipient, currentTarget, turn+1)
+		reply := send(currentSender, currentTarget, turn+1)
 		if reply.Code != http.StatusCreated {
 			t.Fatalf("turn %d send: status=%d body=%s", turn+1, reply.Code, reply.Body.String())
 		}
 		if turn == 1 {
 			var threadReply AgentTransportSendResponse
 			if err := json.Unmarshal(reply.Body.Bytes(), &threadReply); err != nil {
-				t.Fatalf("decode active A2A thread send: %v", err)
+				t.Fatalf("decode A2A thread reply: %v", err)
 			}
-			if threadReply.Message.ThreadRootMessageID == nil ||
-				*threadReply.Message.ThreadRootMessageID != firstBody.Message.ID {
-				t.Fatalf(
-					"active A2A thread root=%v, want %s",
-					threadReply.Message.ThreadRootMessageID, firstBody.Message.ID,
-				)
+			if threadReply.Message.ThreadRootMessageID == nil || *threadReply.Message.ThreadRootMessageID != firstBody.Message.ID {
+				t.Fatalf("A2A thread root=%v, want %s", threadReply.Message.ThreadRootMessageID, firstBody.Message.ID)
 			}
 		}
-		if currentRecipient == secondAgentID {
-			currentRecipient = firstAgentID
+		if currentSender == secondAgentID {
+			currentSender = firstAgentID
 			currentTarget = "dm:@" + secondHandle
 		} else {
-			currentRecipient = secondAgentID
+			currentSender = secondAgentID
 			currentTarget = "dm:@" + firstHandle
 		}
 	}
 
-	// 1 initial send + replyTurns replies = total turn count.
 	wantTurns := replyTurns + 1
 	var turnCount int
 	var state string
-	if err := testPool.QueryRow(ctx, `
-		SELECT turn_count, state
-		FROM agent_dm_exchange
-		WHERE id = $1`, exchangeID).Scan(&turnCount, &state); err != nil {
+	if err := testPool.QueryRow(ctx, `SELECT turn_count, state FROM agent_dm_exchange WHERE id = $1`, exchangeID).Scan(&turnCount, &state); err != nil {
 		t.Fatalf("load final A2A exchange: %v", err)
 	}
 	if turnCount != wantTurns || state != "active" {
-		t.Fatalf("final exchange turn_count=%d state=%q, want %d active (no auto-pause)", turnCount, state, wantTurns)
+		t.Fatalf("final exchange turn_count=%d state=%q, want %d active", turnCount, state, wantTurns)
 	}
-	var agentMessageCount, wakeCount, systemMessageCount, ownerInboxCount int
+
+	var agentMessageCount, deliveryCount, systemMessageCount, ownerInboxCount, inboxEventCount int
 	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent'`, channelID).Scan(&agentMessageCount); err != nil {
-		t.Fatalf("count A2A messages: %v", err)
+		SELECT
+		  (SELECT count(*) FROM channel_message WHERE channel_id = $1::uuid AND author_type = 'agent'),
+		  (SELECT count(*) FROM agent_message_delivery d JOIN channel_message m ON m.id = d.message_id WHERE m.channel_id = $1::uuid AND m.author_type = 'agent'),
+		  (SELECT count(*) FROM channel_message WHERE channel_id = $1::uuid AND author_type = 'system'),
+		  (SELECT count(*) FROM inbox_item WHERE workspace_id = $2::uuid AND recipient_id = $3::uuid AND type = 'agent_dm_paused' AND details->>'exchange_id' = $4),
+		  (SELECT count(*) FROM agent_inbox_event WHERE agent_dm_exchange_id = $4::uuid)`,
+		channelID, testWorkspaceID, testUserID, exchangeID,
+	).Scan(&agentMessageCount, &deliveryCount, &systemMessageCount, &ownerInboxCount, &inboxEventCount); err != nil {
+		t.Fatalf("count A2A delivery state: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_inbox_event
-		WHERE agent_dm_exchange_id = $1`, exchangeID).Scan(&wakeCount); err != nil {
-		t.Fatalf("count A2A wake events: %v", err)
+	if agentMessageCount != wantTurns || deliveryCount != wantTurns || systemMessageCount != 0 || ownerInboxCount != 0 || inboxEventCount != 0 {
+		t.Fatalf("messages=%d deliveries=%d system=%d owner_inbox=%d inbox_events=%d, want %d/%d/0/0/0", agentMessageCount, deliveryCount, systemMessageCount, ownerInboxCount, inboxEventCount, wantTurns, wantTurns)
 	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'system'`, channelID).Scan(&systemMessageCount); err != nil {
-		t.Fatalf("count A2A system messages: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM inbox_item
-		WHERE workspace_id = $1
-		  AND recipient_id = $2
-		  AND type = 'agent_dm_paused'
-		  AND details->>'exchange_id' = $3`,
-		testWorkspaceID, testUserID, exchangeID).Scan(&ownerInboxCount); err != nil {
-		t.Fatalf("count owner A2A inbox items: %v", err)
-	}
-	// No auto-pause ever fires: no system pause message, no owner pause
-	// inbox item — every turn (including the last) produced a real agent
-	// message and woke the next recipient, since nothing ever pauses.
-	if agentMessageCount != wantTurns || wakeCount != wantTurns || systemMessageCount != 0 || ownerInboxCount != 0 {
-		t.Fatalf(
-			"messages=%d wakes=%d system=%d owner_inbox=%d, want %d/%d/0/0",
-			agentMessageCount, wakeCount, systemMessageCount, ownerInboxCount, wantTurns, wantTurns,
-		)
-	}
-	// A send well past the old 3-round/6-turn budget boundary still succeeds
-	// (from whichever agent the strict must-reply alternation now expects —
-	// that check is untouched by #813/#830 and still applies).
-	var finalEventID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT id
-		FROM agent_inbox_event
-		WHERE agent_dm_exchange_id = $1
-		  AND agent_dm_turn = $2
-		  AND agent_id = $3`,
-		exchangeID, wantTurns, currentRecipient).Scan(&finalEventID); err != nil {
-		t.Fatalf("load final-turn recipient inbox event: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET status = 'draining', started_at = now(), updated_at = now()
-		WHERE id = $1`, finalEventID); err != nil {
-		t.Fatalf("activate final-turn inbox event: %v", err)
-	}
-	pastOldBudget := send(
-		finalEventID,
-		currentRecipient,
-		currentTarget,
-		wantTurns+1,
-	)
+
+	pastOldBudget := send(currentSender, currentTarget, wantTurns+1)
 	if pastOldBudget.Code != http.StatusCreated {
 		t.Fatalf("send past old budget boundary should succeed: status=%d body=%s", pastOldBudget.Code, pastOldBudget.Body.String())
 	}
+}
+
+func createAgentAgentDMChannelForTest(t *testing.T, firstAgentID, secondAgentID string) ChannelResponse {
+	t.Helper()
+	channel, created := testHandler.createDMChannel(
+		context.Background(), nil, testWorkspaceID, testUserID,
+		dmCanonicalName("agent", firstAgentID, "agent", secondAgentID),
+		[]dmMember{
+			{memberType: "agent", memberID: parseUUID(firstAgentID)},
+			{memberType: "agent", memberID: parseUUID(secondAgentID)},
+		},
+	)
+	if !created {
+		t.Fatalf("create agent DM channel")
+	}
+	return channel
 }
 
 // TestAgentDMConcurrentDuplicateTurnStaysActiveNotPausedAtOldBudget replaces
@@ -524,17 +440,13 @@ func TestAgentDMConcurrentDuplicateTurnStaysActiveNotPausedAtOldBudget(t *testin
 		  workspace_id, channel_id, agent_low_id, agent_high_id,
 		  next_sender_agent_id, matter_id, turn_count
 		)
-		VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), 5)
+		VALUES ($1, $2, $3, $4, $5, $2, 5)
 		RETURNING id`,
 		testWorkspaceID, channel.ID, lowID, highID, secondAgentID).Scan(&exchangeID); err != nil {
 		t.Fatalf("seed concurrent exchange: %v", err)
 	}
 
 	source := agentTransportSource{
-		task: db.AgentInboxEvent{
-			ID:                parseUUID(uuid.NewString()),
-			AgentDmExchangeID: parseUUID(exchangeID),
-		},
 		origin: chatOutputOrigin{
 			workspaceID: parseUUID(testWorkspaceID),
 			agentID:     parseUUID(secondAgentID),
@@ -610,340 +522,6 @@ func TestAgentDMConcurrentDuplicateTurnStaysActiveNotPausedAtOldBudget(t *testin
 // 6-turn budget and the old 12-message/5min frequency limit — proves
 // neither exchange ever auto-pauses. Turn/window counters are still
 // tracked (kept for display), just never enforced.
-func TestAgentDMFrequencyAndBudgetNeverPauseAcrossMatters(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	firstAgentID := createHandlerTestAgent(t, "Frequency A "+uuid.NewString(), []byte("[]"))
-	secondAgentID := createHandlerTestAgent(t, "Frequency B "+uuid.NewString(), []byte("[]"))
-	channel := createAgentAgentDMChannelForTest(t, firstAgentID, secondAgentID)
-
-	runMatter := func(matterID string) string {
-		t.Helper()
-		exchangeID := ""
-		for turn := 1; turn <= 6; turn++ {
-			senderID, recipientID := firstAgentID, secondAgentID
-			if turn%2 == 0 {
-				senderID, recipientID = secondAgentID, firstAgentID
-			}
-			task := db.AgentInboxEvent{ID: parseUUID(matterID)}
-			if exchangeID != "" {
-				task.AgentDmExchangeID = parseUUID(exchangeID)
-			}
-			source := agentTransportSource{
-				task: task,
-				origin: chatOutputOrigin{
-					workspaceID: parseUUID(testWorkspaceID),
-					agentID:     parseUUID(senderID),
-				},
-			}
-			target := agentTransportTarget{
-				kind:          chatOutputTargetDM,
-				channel:       channel,
-				recipientType: "agent",
-				recipientID:   parseUUID(recipientID),
-			}
-			tx, err := testHandler.TxStarter.Begin(ctx)
-			if err != nil {
-				t.Fatalf("begin frequency turn %d: %v", turn, err)
-			}
-			reservation, err := testHandler.reserveAgentDMSendTx(ctx, tx, source, target)
-			if err != nil {
-				tx.Rollback(ctx)
-				t.Fatalf("reserve frequency turn %d: %v", turn, err)
-			}
-			if exchangeID == "" {
-				exchangeID = uuidToString(reservation.ExchangeID)
-			}
-			if err := tx.Commit(ctx); err != nil {
-				t.Fatalf("commit frequency turn %d: %v", turn, err)
-			}
-		}
-		return exchangeID
-	}
-
-	firstExchangeID := runMatter(uuid.NewString())
-	var firstState string
-	if err := testPool.QueryRow(ctx, `
-		SELECT state
-		FROM agent_dm_exchange
-		WHERE id = $1`, firstExchangeID).Scan(&firstState); err != nil {
-		t.Fatalf("load first frequency exchange: %v", err)
-	}
-	if firstState != "active" {
-		t.Fatalf("first exchange state=%q, want active (no auto-pause past old 6-turn budget)", firstState)
-	}
-
-	secondExchangeID := runMatter(uuid.NewString())
-	var secondState, pairState string
-	var windowCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT exchange.state, pair.state, pair.window_message_count
-		FROM agent_dm_exchange exchange
-		JOIN agent_dm_pair_control pair
-		  ON pair.workspace_id = exchange.workspace_id
-		 AND pair.agent_low_id = exchange.agent_low_id
-		 AND pair.agent_high_id = exchange.agent_high_id
-		WHERE exchange.id = $1`, secondExchangeID).Scan(
-		&secondState, &pairState, &windowCount,
-	); err != nil {
-		t.Fatalf("load second frequency exchange: %v", err)
-	}
-	// window_message_count still accumulates (kept for display/telemetry —
-	// see the "account agent dm pair frequency" update), it just never
-	// triggers a pause anymore.
-	if secondState != "active" || pairState != "active" || windowCount != 12 {
-		t.Fatalf(
-			"frequency states exchange=%q pair=%q count=%d, want active/active/12 (no auto-pause)",
-			secondState, pairState, windowCount,
-		)
-	}
-}
-
-func createAgentAgentDMChannelForTest(t *testing.T, firstAgentID, secondAgentID string) ChannelResponse {
-	t.Helper()
-	canonical := dmCanonicalName("agent", firstAgentID, "agent", secondAgentID)
-	channel, created := testHandler.createDMChannel(
-		context.Background(),
-		nil,
-		testWorkspaceID,
-		testUserID,
-		canonical,
-		[]dmMember{
-			{memberType: "agent", memberID: parseUUID(firstAgentID)},
-			{memberType: "agent", memberID: parseUUID(secondAgentID)},
-		},
-	)
-	if !created {
-		t.Fatal("create A2A DM channel failed")
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channel.ID)
-	})
-	return channel
-}
-
-func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	agentID := agentIDForTask(t, taskID)
-	target := "#" + channelNameForTransportTest(t, channelID)
-	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "seen before compose "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("seed seen message: %v", err)
-	}
-	newerText := "newer during compose " + uuid.NewString()
-	newer, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", newerText, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("seed newer message: %v", err)
-	}
-
-	draftContent := "held draft " + uuid.NewString()
-	clientID := "transport-held-" + uuid.NewString()
-	heldRec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":            target,
-		"content":           draftContent,
-		"client_message_id": clientID,
-		"seen_up_to_seq":    seen.Seq,
-	})
-	if heldRec.Code != http.StatusOK {
-		t.Fatalf("freshness hold send: status=%d body=%s", heldRec.Code, heldRec.Body.String())
-	}
-	var held AgentTransportSendHeldResponse
-	if err := json.Unmarshal(heldRec.Body.Bytes(), &held); err != nil {
-		t.Fatalf("decode held response: %v", err)
-	}
-	if held.State != "held" || held.Outcome != "held" || held.Subtype != "freshness" || held.Reason != "newer_messages_available" {
-		t.Fatalf("held envelope mismatch: %+v", held)
-	}
-	if held.SeenUpToSeq != seen.Seq || held.LatestSeq != newer.Seq || held.NewMessageCount != 1 || len(held.HeldMessages) != 1 || held.HeldMessages[0].ID != newer.ID {
-		t.Fatalf("held context mismatch: seen=%d newer=%s body=%+v", seen.Seq, newer.ID, held)
-	}
-	if held.ContextWindow.OlderBoundary != "No older." || held.ContextWindow.NewerBoundary != "No newer." ||
-		held.ContextWindow.OldestSeq != newer.Seq || held.ContextWindow.NewestSeq != newer.Seq {
-		t.Fatalf("held bounded window mismatch: %+v", held.ContextWindow)
-	}
-	if got := strings.Join(held.AvailableActions, ","); got != "review_newer_messages" {
-		t.Fatalf("held available actions=%q", got)
-	}
-	assertNoChannelMessageContent(t, channelID, draftContent)
-	assertAgentTransportDraftContent(t, agentID, target, draftContent)
-	assertAgentTransportVisibleOutputAuditCount(t, taskID, 0)
-
-	revised := "revised held draft " + uuid.NewString()
-	replaced := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":            target,
-		"content":           revised,
-		"client_message_id": agentTransportFreshnessRevisedClientMessageID(held.ProducerFactID),
-		"seen_up_to_seq":    held.LatestSeq,
-	})
-	if replaced.Code != http.StatusCreated {
-		t.Fatalf("send revised held draft: status=%d body=%s", replaced.Code, replaced.Body.String())
-	}
-	var replacedBody AgentTransportSendResponse
-	if err := json.Unmarshal(replaced.Body.Bytes(), &replacedBody); err != nil {
-		t.Fatalf("decode revised send response: %v", err)
-	}
-	if replacedBody.Message.Content != revised || replacedBody.FreshnessResolution != nil {
-		t.Fatalf("fresh message must not resolve or publish the held draft: %+v", replacedBody)
-	}
-	assertAgentTransportDraftMissing(t, agentID, target)
-	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
-}
-
-func TestAgentTransportFreshnessIgnoresOwnVisibleProgressMessage(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	agentID := agentIDForTask(t, taskID)
-	target := "#" + channelNameForTransportTest(t, channelID)
-	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "request before progress "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("seed seen message: %v", err)
-	}
-	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Agent", "visible progress "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
-		t.Fatalf("seed own progress message: %v", err)
-	}
-	finalContent := "final after own progress " + uuid.NewString()
-	rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{"target": target, "content": finalContent, "client_message_id": "after-progress-" + uuid.NewString(), "seen_up_to_seq": seen.Seq})
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("send after own progress: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	assertChannelMessageContentCount(t, channelID, finalContent, 1)
-	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
-}
-
-func TestAgentTransportFirstFreshnessHoldCannotCrossSourceCompletionFence(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	agentID := agentIDForTask(t, taskID)
-	target := "#" + channelNameForTransportTest(t, channelID)
-	seen, err := testHandler.insertChannelMessage(
-		ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
-		"user", parseUUID(testUserID), "Tester",
-		"seen before source fence "+uuid.NewString(), "multica", nil,
-		pgtype.UUID{}, pgtype.UUID{}, nil, 0,
-	)
-	if err != nil {
-		t.Fatalf("seed seen message: %v", err)
-	}
-	if _, err := testHandler.insertChannelMessage(
-		ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
-		"user", parseUUID(testUserID), "Tester",
-		"newer before source fence "+uuid.NewString(), "multica", nil,
-		pgtype.UUID{}, pgtype.UUID{}, nil, 0,
-	); err != nil {
-		t.Fatalf("seed newer message: %v", err)
-	}
-	event, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
-	if err != nil {
-		t.Fatalf("load source event: %v", err)
-	}
-
-	completionTx, err := testHandler.TxStarter.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin completion fence transaction: %v", err)
-	}
-	defer completionTx.Rollback(ctx)
-	publications, err := testHandler.abandonAgentTransportFreshnessDraftsWithExec(
-		ctx, completionTx, event, event.RuntimeID,
-	)
-	if err != nil {
-		t.Fatalf("enumerate empty completion drafts: %v", err)
-	}
-	if len(publications) != 0 {
-		t.Fatalf("empty completion publications=%d, want 0", len(publications))
-	}
-
-	draftContent := "must not hold after completion scan " + uuid.NewString()
-	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/send", taskID, agentID, map[string]any{
-		"target":            target,
-		"content":           draftContent,
-		"client_message_id": "source-fence-" + uuid.NewString(),
-		"seen_up_to_seq":    seen.Seq,
-	})
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		testHandler.AgentTransportSendMessage(rec, req)
-		close(done)
-	}()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		select {
-		case <-done:
-			t.Fatalf("freshness send completed before completion released the source fence: status=%d body=%s", rec.Code, rec.Body.String())
-		default:
-		}
-		var waiting bool
-		if err := testPool.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM pg_stat_activity
-				WHERE datname = current_database()
-				  AND wait_event_type = 'Lock'
-				  AND lower(COALESCE(wait_event, '')) = 'advisory'
-				  AND query LIKE '%agent_transport_source%'
-			)`).Scan(&waiting); err != nil {
-			t.Fatalf("inspect source-fence waiter: %v", err)
-		}
-		if waiting {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for freshness send on source-wide advisory lock")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if _, err := completionTx.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET status = 'acked', terminal_outcome = 'no_reply', updated_at = now()
-		WHERE id = $1`, parseUUID(taskID)); err != nil {
-		t.Fatalf("terminalize source under completion fence: %v", err)
-	}
-	if err := completionTx.Commit(ctx); err != nil {
-		t.Fatalf("commit source completion: %v", err)
-	}
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("freshness send did not finish after completion committed")
-	}
-	if rec.Code != http.StatusConflict ||
-		!strings.Contains(rec.Body.String(), errAgentTransportSourceNotActive.Error()) {
-		t.Fatalf("post-completion first hold: status=%d body=%s, want inactive-source conflict", rec.Code, rec.Body.String())
-	}
-	assertNoChannelMessageContent(t, channelID, draftContent)
-	assertAgentTransportDraftMissing(t, agentID, target)
-	var holdAudits int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_task_transport_audit
-		WHERE task_id = $1
-		  AND action = 'message_send'
-		  AND context_pack->>'held' = 'true'`,
-		parseUUID(taskID)).Scan(&holdAudits); err != nil {
-		t.Fatalf("count post-completion hold audits: %v", err)
-	}
-	if holdAudits != 0 {
-		t.Fatalf("post-completion hold audits=%d, want 0", holdAudits)
-	}
-}
-
 func TestAgentTransportHeldResponseMakesBoundedWindowEdgesExplicit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeAgentTransportHeldResponse(rec, agentTransportTarget{raw: "#multica"}, agentTransportFreshnessDecision{
@@ -975,196 +553,6 @@ func TestAgentTransportHeldResponseMakesBoundedWindowEdgesExplicit(t *testing.T)
 	}
 	if got := strings.Join(body.AvailableActions, ","); got != "review_newer_messages" {
 		t.Fatalf("bounded available actions=%q", got)
-	}
-}
-
-func TestAgentTransportFreshnessDraftsAreScopedToTheirTask(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	firstTaskID, channelID := createChannelCompletionTask(t, "group")
-	agentID := agentIDForTask(t, firstTaskID)
-	target := "#" + channelNameForTransportTest(t, channelID)
-	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "seen before source scoped hold "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("seed seen message: %v", err)
-	}
-	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "newer source scoped hold "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
-		t.Fatalf("seed newer message: %v", err)
-	}
-
-	var runtimeID, chatSessionID string
-	if err := testPool.QueryRow(ctx, `SELECT runtime_id, chat_session_id FROM agent_inbox_event WHERE id = $1`, firstTaskID).Scan(&runtimeID, &chatSessionID); err != nil {
-		t.Fatalf("load first task source: %v", err)
-	}
-	var secondTaskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (agent_id, runtime_id, chat_session_id, status, priority, started_at)
-		VALUES ($1, $2, $3, 'draining', 2, now())
-		RETURNING id`, agentID, runtimeID, chatSessionID).Scan(&secondTaskID); err != nil {
-		t.Fatalf("create second task: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, secondTaskID)
-	})
-
-	producerFacts := make([]string, 0, 2)
-	for _, tc := range []struct {
-		taskID  string
-		content string
-	}{
-		{firstTaskID, "first source scoped draft " + uuid.NewString()},
-		{secondTaskID, "second source scoped draft " + uuid.NewString()},
-	} {
-		rec := agentTransportSendForTest(t, tc.taskID, agentID, map[string]any{
-			"target": target, "content": tc.content, "client_message_id": "transport-source-" + uuid.NewString(), "seen_up_to_seq": seen.Seq,
-		})
-		if rec.Code != http.StatusOK {
-			t.Fatalf("source-scoped freshness hold: status=%d body=%s", rec.Code, rec.Body.String())
-		}
-		var held AgentTransportSendHeldResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &held); err != nil {
-			t.Fatalf("decode source-scoped freshness hold: %v", err)
-		}
-		producerFacts = append(producerFacts, held.ProducerFactID)
-	}
-	if producerFacts[0] == "" || producerFacts[0] == producerFacts[1] {
-		t.Fatalf("task sources must have distinct decision facts: %q", producerFacts)
-	}
-
-	var draftCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_transport_draft
-		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
-		  AND task_id IN ($4, $5)`, testWorkspaceID, agentID, target, firstTaskID, secondTaskID).Scan(&draftCount); err != nil {
-		t.Fatalf("count task-scoped drafts: %v", err)
-	}
-	if draftCount != 2 {
-		t.Fatalf("task-scoped drafts=%d, want 2", draftCount)
-	}
-}
-
-func TestAgentTransportFreshnessDraftSQLBranchesAreScopedToTaskOrInbox(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
-	if err != nil {
-		t.Fatalf("load transport task: %v", err)
-	}
-	origin, ok := testHandler.chatOutputOriginForTask(ctx, task)
-	if !ok {
-		t.Fatal("resolve transport task origin")
-	}
-	targetName := "#" + channelNameForTransportTest(t, channelID)
-	target, err := testHandler.resolveAgentTransportTarget(ctx, task, origin, targetName, true)
-	if err != nil {
-		t.Fatalf("resolve transport target: %v", err)
-	}
-	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "task inbox branch seen "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("seed task inbox branch seen message: %v", err)
-	}
-	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "task inbox branch newer "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
-		t.Fatalf("seed task inbox branch newer message: %v", err)
-	}
-
-	var inboxEventID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (
-			workspace_id, channel_id, agent_id, reason, status, priority,
-			seq_from, seq_to, delivery_mode, response_mode
-		)
-		VALUES ($1, $2, $3, 'mention', 'draining', 100, $4, $4, 'execute', 'public_response')
-		RETURNING id`, testWorkspaceID, channelID, uuidToString(task.AgentID), seen.Seq).Scan(&inboxEventID); err != nil {
-		t.Fatalf("insert transport inbox source: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, inboxEventID)
-	})
-
-	taskSource := agentTransportSource{task: task, origin: origin}
-	inboxSource := agentTransportSource{task: task, origin: origin, inboxEventID: parseUUID(inboxEventID)}
-	for _, tc := range []struct {
-		name      string
-		source    agentTransportSource
-		content   string
-		clientID  string
-		wantTask  bool
-		wantInbox bool
-	}{
-		{name: "task", source: taskSource, content: "task branch draft " + uuid.NewString(), clientID: "task-branch-" + uuid.NewString(), wantTask: true},
-		{name: "inbox", source: inboxSource, content: "inbox branch draft " + uuid.NewString(), clientID: "inbox-branch-" + uuid.NewString(), wantInbox: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			decision, err := testHandler.agentTransportFreshnessDecisionWithSeen(ctx, testHandler.DB, tc.source, target, seen.Seq)
-			if err != nil || !decision.Hold {
-				t.Fatalf("freshness decision = %+v, err=%v", decision, err)
-			}
-			chosen, _, err := testHandler.holdAgentTransportSend(ctx, tc.source, target, tc.content, []protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: tc.content}}, tc.clientID, decision)
-			if err != nil {
-				t.Fatalf("hold %s source draft: %v", tc.name, err)
-			}
-			draft, found, err := testHandler.loadAgentTransportDraft(ctx, tc.source, target.raw)
-			if err != nil || !found {
-				t.Fatalf("load %s source draft: found=%v err=%v", tc.name, found, err)
-			}
-			if draft.Content != tc.content || draft.DecisionFactID != chosen.ProducerID || draft.DecisionFactID == "" {
-				t.Fatalf("%s source draft = %+v, decision=%+v", tc.name, draft, chosen)
-			}
-			var taskRef, inboxRef pgtype.UUID
-			if err := testPool.QueryRow(ctx, `
-				SELECT task_id, inbox_event_id
-				FROM agent_transport_draft
-				WHERE id = $1`, draft.ID).Scan(&taskRef, &inboxRef); err != nil {
-				t.Fatalf("load %s draft source refs: %v", tc.name, err)
-			}
-			if taskRef.Valid != tc.wantTask || inboxRef.Valid != tc.wantInbox {
-				t.Fatalf("%s draft refs task=%s inbox=%s", tc.name, uuidToString(taskRef), uuidToString(inboxRef))
-			}
-		})
-	}
-
-	var draftCount, taskAuditCount, inboxAuditCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT
-			(SELECT count(*) FROM agent_transport_draft WHERE workspace_id = $1 AND agent_id = $2 AND target = $3),
-			(SELECT count(*) FROM agent_task_transport_audit WHERE workspace_id = $1 AND agent_id = $2 AND target = $3 AND task_id = $4),
-			(SELECT count(*) FROM agent_task_transport_audit WHERE workspace_id = $1 AND agent_id = $2 AND target = $3 AND inbox_event_id = $5)`,
-		testWorkspaceID, uuidToString(task.AgentID), target.raw, taskID, inboxEventID).Scan(&draftCount, &taskAuditCount, &inboxAuditCount); err != nil {
-		t.Fatalf("count task/inbox SQL branch rows: %v", err)
-	}
-	if draftCount != 2 || taskAuditCount != 1 || inboxAuditCount != 1 {
-		t.Fatalf("task/inbox SQL branch rows drafts=%d taskAudits=%d inboxAudits=%d, want 2/1/1", draftCount, taskAuditCount, inboxAuditCount)
-	}
-
-	if err := testHandler.deleteAgentTransportDraftWithExec(ctx, testHandler.DB, inboxSource, target.raw); err != nil {
-		t.Fatalf("delete inbox source draft: %v", err)
-	}
-	if _, found, err := testHandler.loadAgentTransportDraft(ctx, inboxSource, target.raw); err != nil || found {
-		t.Fatalf("inbox source draft after delete: found=%v err=%v", found, err)
-	}
-	if draft, found, err := testHandler.loadAgentTransportDraft(ctx, taskSource, target.raw); err != nil || !found || draft.Content == "" {
-		t.Fatalf("task sibling after inbox delete: draft=%+v found=%v err=%v", draft, found, err)
-	}
-	if err := testHandler.deleteAgentTransportDraftWithExec(ctx, testHandler.DB, taskSource, target.raw); err != nil {
-		t.Fatalf("delete task source draft: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_transport_draft
-		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3`,
-		testWorkspaceID, uuidToString(task.AgentID), target.raw).Scan(&draftCount); err != nil {
-		t.Fatalf("count task/inbox drafts after scoped deletes: %v", err)
-	}
-	if draftCount != 0 {
-		t.Fatalf("task/inbox drafts after scoped deletes=%d, want 0", draftCount)
 	}
 }
 
@@ -1203,258 +591,7 @@ func TestAgentTransportFreshnessHoldSameRangeEmitsOneActivityUnderConcurrency(t 
 			t.Fatalf("concurrent freshness hold: status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	}
-}
-
-func TestAgentTransportFreshnessHoldLoserReturnsPersistedWinnerDecision(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
-	if err != nil {
-		t.Fatalf("load transport task: %v", err)
-	}
-	origin, ok := testHandler.chatOutputOriginForTask(ctx, task)
-	if !ok {
-		t.Fatal("resolve transport task origin")
-	}
-	target, err := testHandler.resolveAgentTransportTarget(ctx, task, origin, "#"+channelNameForTransportTest(t, channelID), true)
-	if err != nil {
-		t.Fatalf("resolve transport target: %v", err)
-	}
-	firstSeen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "loser first seen "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("seed loser first seen: %v", err)
-	}
-	winnerSeen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "winner seen "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("seed winner seen: %v", err)
-	}
-	latest, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "winner newer "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("seed winner newer: %v", err)
-	}
-	source := agentTransportSource{task: task, origin: origin}
-	winnerDecision, err := testHandler.agentTransportFreshnessDecisionWithSeen(ctx, testHandler.DB, source, target, winnerSeen.Seq)
-	if err != nil || !winnerDecision.Hold {
-		t.Fatalf("winner freshness decision = %+v, err=%v", winnerDecision, err)
-	}
-	winner, _, err := testHandler.holdAgentTransportSend(ctx, source, target, "winner draft", []protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: "winner draft"}}, "winner-"+uuid.NewString(), winnerDecision)
-	if err != nil {
-		t.Fatalf("persist winner freshness decision: %v", err)
-	}
-	loserDecision, err := testHandler.agentTransportFreshnessDecisionWithSeen(ctx, testHandler.DB, source, target, firstSeen.Seq)
-	if err != nil || !loserDecision.Hold {
-		t.Fatalf("loser freshness decision = %+v, err=%v", loserDecision, err)
-	}
-	loser, transportID, err := testHandler.holdAgentTransportSend(ctx, source, target, "loser replacement", []protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: "loser replacement"}}, "loser-"+uuid.NewString(), loserDecision)
-	if err != nil {
-		t.Fatalf("persist loser freshness retry: %v", err)
-	}
-	if transportID != "" {
-		t.Fatalf("loser emitted transport audit %q, want none", transportID)
-	}
-	if loser.ProducerID != winner.ProducerID || loser.SeenUpToSeq != winnerSeen.Seq || loser.LatestSeq != latest.Seq || loser.TotalNewer != 1 {
-		t.Fatalf("loser response = %+v, want persisted winner fact=%q seen=%d latest=%d total=1", loser, winner.ProducerID, winnerSeen.Seq, latest.Seq)
-	}
-}
-
-func TestAgentTransportFreshnessDecisionFactIsScopedToTaskOrInboxSource(t *testing.T) {
-	workspaceID := parseUUID(uuid.NewString())
-	agentID := parseUUID(uuid.NewString())
-	target := agentTransportTarget{raw: "#same-target"}
-	baseTask := db.AgentInboxEvent{ID: parseUUID(uuid.NewString())}
-	base := agentTransportSource{
-		task:   baseTask,
-		origin: chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
-	}
-	otherTask := base
-	otherTaskEvent := otherTask.task
-	otherTaskEvent.ID = parseUUID(uuid.NewString())
-	otherTask.task = otherTaskEvent
-	inbox := base
-	inbox.inboxEventID = parseUUID(uuid.NewString())
-	otherInbox := inbox
-	otherInbox.inboxEventID = parseUUID(uuid.NewString())
-
-	fact := agentTransportFreshnessProducerID(base, target, 4, 9)
-	for label, got := range map[string]string{
-		"other task":  agentTransportFreshnessProducerID(otherTask, target, 4, 9),
-		"inbox":       agentTransportFreshnessProducerID(inbox, target, 4, 9),
-		"other inbox": agentTransportFreshnessProducerID(otherInbox, target, 4, 9),
-	} {
-		if got == fact {
-			t.Fatalf("%s source reused task decision fact %q", label, got)
-		}
-	}
-}
-
-func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
-	if testPool == nil {
-		t.Skip("database not available")
-	}
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve current test file")
-	}
-	migration, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations", "201_agent_transport_draft_decision_scope.up.sql"))
-	if err != nil {
-		t.Fatalf("read migration 201: %v", err)
-	}
-
-	for _, tc := range []struct {
-		name             string
-		sourceKind       string
-		audits           int
-		fact             string
-		auditSourceKinds []string
-		auditFacts       []string
-		auditLatestSeqs  []int64
-		wantFact         string
-		wantErr          bool
-	}{
-		{name: "valid exact task audit", sourceKind: "task", audits: 1, fact: "freshness_decision_fact:valid-task"},
-		{name: "valid exact inbox audit", sourceKind: "inbox", audits: 1, fact: "freshness_decision_fact:valid-inbox"},
-		{name: "repeated equivalent current-range audits", sourceKind: "inbox", audits: 2, fact: "freshness_decision_fact:equivalent"},
-		{
-			name:       "historical same-source audits use current-range fact",
-			sourceKind: "inbox",
-			audits:     3,
-			auditFacts: []string{
-				"freshness_decision_fact:older",
-				"freshness_decision_fact:newer",
-				"freshness_decision_fact:winner",
-			},
-			auditLatestSeqs: []int64{5, 7, 9},
-			wantFact:        "freshness_decision_fact:winner",
-		},
-		{name: "missing exact audit", sourceKind: "task", fact: "freshness_decision_fact:missing", wantErr: true},
-		{name: "missing fact", sourceKind: "task", audits: 1, fact: "", wantErr: true},
-		{
-			name:            "same source without current draft range",
-			sourceKind:      "inbox",
-			audits:          2,
-			fact:            "freshness_decision_fact:historical-only",
-			auditLatestSeqs: []int64{5, 8},
-			wantErr:         true,
-		},
-		{
-			name:       "same source current range has conflicting facts",
-			sourceKind: "inbox",
-			audits:     2,
-			auditFacts: []string{
-				"freshness_decision_fact:conflict-a",
-				"freshness_decision_fact:conflict-b",
-			},
-			wantErr: true,
-		},
-		{
-			name:             "distinct sources across exact audits",
-			sourceKind:       "both",
-			audits:           2,
-			fact:             "freshness_decision_fact:ambiguous-source",
-			auditSourceKinds: []string{"task", "inbox"},
-			wantErr:          true,
-		},
-		{name: "single audit with both sources", sourceKind: "both", audits: 1, fact: "freshness_decision_fact:both", wantErr: true},
-		{name: "single audit with neither source", sourceKind: "neither", audits: 1, fact: "freshness_decision_fact:neither", wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			tx, err := testPool.Begin(ctx)
-			if err != nil {
-				t.Fatalf("begin migration test transaction: %v", err)
-			}
-			defer tx.Rollback(ctx)
-			if _, err := tx.Exec(ctx, `
-				CREATE TEMP TABLE agent_task_queue (id UUID PRIMARY KEY) ON COMMIT DROP;
-				CREATE TEMP TABLE agent_inbox_event (id UUID PRIMARY KEY) ON COMMIT DROP;
-				CREATE TEMP TABLE agent_transport_draft (
-					id UUID PRIMARY KEY, workspace_id UUID NOT NULL, agent_id UUID NOT NULL, target TEXT NOT NULL,
-					channel_id UUID NOT NULL, thread_root_message_id UUID, content TEXT NOT NULL DEFAULT '', parts JSONB NOT NULL DEFAULT '[]'::jsonb,
-					client_message_id TEXT NOT NULL, seen_up_to_seq BIGINT NOT NULL, held_from_seq BIGINT NOT NULL, held_to_seq BIGINT NOT NULL,
-					shown_from_seq BIGINT, shown_to_seq BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-					UNIQUE (workspace_id, agent_id, target)
-				) ON COMMIT DROP;
-				CREATE TEMP TABLE agent_task_transport_audit (
-					id UUID PRIMARY KEY, workspace_id UUID NOT NULL, task_id UUID, inbox_event_id UUID, agent_id UUID NOT NULL,
-					action TEXT NOT NULL, target TEXT NOT NULL, client_message_id TEXT, context_pack JSONB NOT NULL,
-					created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-				) ON COMMIT DROP;`); err != nil {
-				t.Fatalf("create legacy migration fixtures: %v", err)
-			}
-			workspaceID, agentID, sourceID, draftID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-			if tc.sourceKind == "inbox" || tc.sourceKind == "both" {
-				if _, err := tx.Exec(ctx, `INSERT INTO agent_inbox_event (id) VALUES ($1)`, sourceID); err != nil {
-					t.Fatalf("insert legacy inbox event: %v", err)
-				}
-			}
-			if tc.sourceKind == "task" || tc.sourceKind == "both" {
-				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_queue (id) VALUES ($1)`, sourceID); err != nil {
-					t.Fatalf("insert legacy task: %v", err)
-				}
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO agent_transport_draft (id, workspace_id, agent_id, target, channel_id, client_message_id, seen_up_to_seq, held_from_seq, held_to_seq) VALUES ($1,$2,$3,'#held',$4,'exact-client',4,5,9)`, draftID, workspaceID, agentID, uuid.NewString()); err != nil {
-				t.Fatalf("insert legacy draft: %v", err)
-			}
-			for i := 0; i < tc.audits; i++ {
-				var taskID, inboxEventID any
-				auditSourceKind := tc.sourceKind
-				if i < len(tc.auditSourceKinds) {
-					auditSourceKind = tc.auditSourceKinds[i]
-				}
-				switch auditSourceKind {
-				case "inbox":
-					inboxEventID = sourceID
-				case "task":
-					taskID = sourceID
-				case "both":
-					taskID = sourceID
-					inboxEventID = sourceID
-				}
-				auditFact := tc.fact
-				if i < len(tc.auditFacts) {
-					auditFact = tc.auditFacts[i]
-				}
-				auditLatestSeq := int64(9)
-				if i < len(tc.auditLatestSeqs) {
-					auditLatestSeq = tc.auditLatestSeqs[i]
-				}
-				auditCreatedAt := time.Date(2026, time.July, 20, 0, 0, i, 0, time.UTC)
-				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_transport_audit (id, workspace_id, task_id, inbox_event_id, agent_id, action, target, client_message_id, context_pack, created_at) VALUES ($1,$2,$3,$4,$5,'message_send','#held','exact-client',jsonb_build_object('held', true, 'producer_fact_id', $6::text, 'seen_up_to_seq', 4, 'latest_seq', $7::bigint),$8)`, uuid.NewString(), workspaceID, taskID, inboxEventID, agentID, auditFact, auditLatestSeq, auditCreatedAt); err != nil {
-					t.Fatalf("insert legacy audit: %v", err)
-				}
-			}
-			_, err = tx.Exec(ctx, string(migration))
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("migration succeeded, want fail-closed error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("apply migration: %v", err)
-			}
-			var gotTaskID, gotInboxEventID pgtype.UUID
-			var gotFact string
-			if err := tx.QueryRow(ctx, `SELECT task_id, inbox_event_id, decision_fact_id FROM agent_transport_draft WHERE id = $1`, draftID).Scan(&gotTaskID, &gotInboxEventID, &gotFact); err != nil {
-				t.Fatalf("read migrated draft: %v", err)
-			}
-			gotSourceID := uuidToString(gotTaskID)
-			if tc.sourceKind == "inbox" {
-				gotSourceID = uuidToString(gotInboxEventID)
-			}
-			wantFact := tc.fact
-			if tc.wantFact != "" {
-				wantFact = tc.wantFact
-			}
-			if gotSourceID != sourceID || gotFact != wantFact || gotTaskID.Valid == gotInboxEventID.Valid {
-				t.Fatalf("migrated draft source/fact = task:%s inbox:%s/%q, want %s:%s/%q", uuidToString(gotTaskID), uuidToString(gotInboxEventID), gotFact, tc.sourceKind, sourceID, wantFact)
-			}
-		})
-	}
+	assertAgentTransportFreshnessHoldActivity(t, agentID, target, 1)
 }
 
 func TestAgentTransportSendMessageRejectsAgentControlledPartsAndAttachmentOnly(t *testing.T) {
@@ -1912,8 +1049,16 @@ func TestAgentTransportSendThreadReplyFollowsAgentForPlainFollowup(t *testing.T)
 		t.Fatalf("decode human thread reply: %v", err)
 	}
 
-	assertChannelAgentInboxEventCounts(t, channelID, agentID, 0, 1)
-	assertChannelAgentWakeReasonPriority(t, channelID, agentID, followup.ID, "thread_reply", channelThreadReplyPriority)
+	var deliveries int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_message_delivery
+		WHERE agent_id = $1 AND message_id = $2`, agentID, followup.ID).Scan(&deliveries); err != nil {
+		t.Fatalf("count canonical thread follow-up deliveries: %v", err)
+	}
+	if deliveries != 1 {
+		t.Fatalf("canonical thread follow-up deliveries=%d, want 1", deliveries)
+	}
 }
 
 func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
@@ -1993,8 +1138,6 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	if reactionRows != 1 {
 		t.Fatalf("agent reaction rows=%d, want 1", reactionRows)
 	}
-	assertAgentTransportAuditCount(t, taskID, agentTransportActionRead, 1)
-	assertAgentTransportAuditCount(t, taskID, agentTransportActionSearch, 1)
 }
 
 func TestAgentTransportResolveReturnsOneVisibleCanonicalMessage(t *testing.T) {
@@ -2102,13 +1245,6 @@ func TestAgentTransportResolveReturnsOneVisibleCanonicalMessage(t *testing.T) {
 		t.Fatalf("resolve malformed id: status=%d body=%s", invalidRec.Code, invalidRec.Body.String())
 	}
 
-	var auditCount int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_transport_audit WHERE task_id = $1`, taskID).Scan(&auditCount); err != nil {
-		t.Fatalf("count resolve transport side effects: %v", err)
-	}
-	if auditCount != 0 {
-		t.Fatalf("exact resolve must not write transport/context state; audit rows=%d", auditCount)
-	}
 }
 
 func TestNormalizeAgentTransportReactionEmoji(t *testing.T) {
@@ -2279,7 +1415,7 @@ func TestAgentTransportReactUsesCanonicalIdentityIdempotently(t *testing.T) {
 		t.Fatalf("duplicate remove must be idempotent: response=%+v events=%+v", duplicateRemoved, removedEvents)
 	}
 
-	var reactionRows, auditRows int
+	var reactionRows int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM channel_message_reaction
@@ -2288,12 +1424,6 @@ func TestAgentTransportReactUsesCanonicalIdentityIdempotently(t *testing.T) {
 	}
 	if reactionRows != 0 {
 		t.Fatalf("reaction rows after idempotent removal = %d, want 0", reactionRows)
-	}
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_transport_audit WHERE task_id = $1`, taskID).Scan(&auditRows); err != nil {
-		t.Fatalf("count react transport side effects: %v", err)
-	}
-	if auditRows != 0 {
-		t.Fatalf("canonical reactions must not write transport audit rows; got %d", auditRows)
 	}
 
 	hiddenChannelID := seedChannelForTest(t, "hidden-react-"+uuid.NewString()[:8], testUserID)
@@ -2464,7 +1594,6 @@ func TestAgentTransportSearchFiltersVisibleCanonicalMessagesWithoutConsumption(t
 	if hiddenRec.Code != http.StatusBadRequest {
 		t.Fatalf("search private channel: status=%d body=%s", hiddenRec.Code, hiddenRec.Body.String())
 	}
-	assertAgentTransportAuditCount(t, taskID, agentTransportActionSearch, 4)
 }
 
 func TestAgentTransportDMThreadTarget(t *testing.T) {
@@ -2601,7 +1730,6 @@ func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
 	if eventRows != 1 {
 		t.Fatalf("thread unfollow system event rows = %d, want 1", eventRows)
 	}
-	assertAgentTransportAuditCount(t, taskID, agentTransportActionThreadUnfollow, 2)
 }
 
 func TestDMThreadDeliveryHonorsFollowUnfollowAndAgentPost(t *testing.T) {
@@ -2639,18 +1767,17 @@ func TestDMThreadDeliveryHonorsFollowUnfollowAndAgentPost(t *testing.T) {
 		}
 		return message
 	}
-	assertWakeCount := func(messageID string, want int) {
+	assertDeliveryCount := func(messageID string, want int) {
 		t.Helper()
 		var got int
 		if err := testPool.QueryRow(ctx, `
 			SELECT count(*)
-			FROM agent_inbox_event
-			WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3 AND requires_wake`,
-			dmChannel.ID, agentID, messageID).Scan(&got); err != nil {
-			t.Fatalf("count dm thread wake events: %v", err)
+			FROM agent_message_delivery
+			WHERE agent_id = $1 AND message_id = $2`, agentID, messageID).Scan(&got); err != nil {
+			t.Fatalf("count dm thread canonical deliveries: %v", err)
 		}
 		if got != want {
-			t.Fatalf("dm thread wake events for message %s = %d, want %d", messageID, got, want)
+			t.Fatalf("dm thread canonical deliveries for message %s = %d, want %d", messageID, got, want)
 		}
 	}
 	assertFollowState := func(wantFollowed bool, wantWakeState string) {
@@ -2689,27 +1816,21 @@ func TestDMThreadDeliveryHonorsFollowUnfollowAndAgentPost(t *testing.T) {
 		Label:      "@" + agentHandle,
 	}
 	firstReply := sendHumanReply("first dm thread reply")
-	assertWakeCount(firstReply.ID, 1)
-	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, firstReply.ID, "thread_reply", channelThreadReplyPriority)
+	assertDeliveryCount(firstReply.ID, 1)
 	assertFollowState(true, "active")
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET status = 'acked', acked_at = now(), terminal_outcome = 'no_reply', retryable = false, terminal_at = now(), updated_at = now()
-		WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3`, dmChannel.ID, agentID, firstReply.ID); err != nil {
-		t.Fatalf("ack first thread reply wake: %v", err)
-	}
 
 	ordinary := sendHumanReply("ordinary followed reply " + uuid.NewString())
-	assertWakeCount(ordinary.ID, 1)
-	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, ordinary.ID, "thread_reply", channelThreadReplyPriority)
+	assertDeliveryCount(ordinary.ID, 1)
 
 	unfollow()
 	ignored := sendHumanReply("ordinary unfollowed reply " + uuid.NewString())
-	assertWakeCount(ignored.ID, 0)
+	assertDeliveryCount(ignored.ID, 0)
 	assertFollowState(false, "unfollowed")
 
 	mentioned := sendHumanReply("@"+agentHandle+" attempted dm thread mention after unfollow", mentionPart)
-	assertWakeCount(mentioned.ID, 0)
+	// DM actor mention sidecars are deliberately stripped; this remains an
+	// unfollowed thread reply, not a directed group-style delivery.
+	assertDeliveryCount(mentioned.ID, 0)
 	assertFollowState(false, "unfollowed")
 
 	post := agentTransportSendForTest(t, taskID, agentID, map[string]any{
@@ -2757,18 +1878,17 @@ func TestDMHumanRootThreadReplyWakesAgentUnlessExplicitlyUnfollowed(t *testing.T
 		}
 		return message
 	}
-	assertWakeCount := func(messageID string, want int) {
+	assertDeliveryCount := func(messageID string, want int) {
 		t.Helper()
 		var got int
 		if err := testPool.QueryRow(ctx, `
 			SELECT count(*)
-			FROM agent_inbox_event
-			WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3 AND requires_wake`,
-			dmChannel.ID, agentID, messageID).Scan(&got); err != nil {
-			t.Fatalf("count human-root dm thread wakes: %v", err)
+			FROM agent_message_delivery
+			WHERE agent_id = $1 AND message_id = $2`, agentID, messageID).Scan(&got); err != nil {
+			t.Fatalf("count human-root dm thread deliveries: %v", err)
 		}
 		if got != want {
-			t.Fatalf("human-root dm thread wakes for %s = %d, want %d", messageID, got, want)
+			t.Fatalf("human-root dm thread deliveries for %s = %d, want %d", messageID, got, want)
 		}
 	}
 	assertFollowState := func(wantFollowed bool, wantWakeState string) {
@@ -2788,8 +1908,7 @@ func TestDMHumanRootThreadReplyWakesAgentUnlessExplicitlyUnfollowed(t *testing.T
 	}
 
 	first := sendReply("ordinary reply to my own dm root " + uuid.NewString())
-	assertWakeCount(first.ID, 1)
-	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, first.ID, "thread_reply", channelThreadReplyPriority)
+	assertDeliveryCount(first.ID, 1)
 	assertFollowState(true, "active")
 
 	unfollow := agentTransportUnfollowThreadForTest(t, taskID, agentID, map[string]any{
@@ -2801,7 +1920,7 @@ func TestDMHumanRootThreadReplyWakesAgentUnlessExplicitlyUnfollowed(t *testing.T
 	assertFollowState(false, "unfollowed")
 
 	second := sendReply("ordinary reply after agent unfollow " + uuid.NewString())
-	assertWakeCount(second.ID, 0)
+	assertDeliveryCount(second.ID, 0)
 	assertFollowState(false, "unfollowed")
 }
 
@@ -3024,64 +2143,6 @@ func TestAgentTransportDMHandleTargetRejectsMissingAndAmbiguousHandles(t *testin
 	}
 }
 
-func TestAgentTransportAutoRetryReassignsPendingWake(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	agentID := agentIDForTask(t, taskID)
-	var chatSessionID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT chat_session_id
-		FROM agent_inbox_event
-		WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_ambient_pending_wake (
-			conversation_id, channel_id, workspace_id, agent_id, chat_session_id, task_id,
-			status, pending_from_seq, pending_to_seq, delivered_to_seq
-		)
-		SELECT c.id, $1, $2, $3, $4, $5, 'queued', 1, 1, 0
-		FROM conversation c
-		WHERE c.channel_id = $1`,
-		channelID, testWorkspaceID, agentID, chatSessionID, taskID); err != nil {
-		t.Fatalf("seed pending wake: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET status = 'acked', terminal_outcome = 'failed', terminal_at = now(),
-		    acked_at = now(), failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3
-		WHERE id = $1`, taskID); err != nil {
-		t.Fatalf("mark parent failed: %v", err)
-	}
-	parent, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
-	if err != nil {
-		t.Fatalf("load failed parent task: %v", err)
-	}
-
-	child, err := testHandler.TaskService.MaybeRetryFailedTask(ctx, parent)
-	if err != nil {
-		t.Fatalf("MaybeRetryFailedTask: %v", err)
-	}
-	if child == nil {
-		t.Fatal("MaybeRetryFailedTask returned nil child")
-	}
-
-	var pendingTaskID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT task_id
-		FROM channel_ambient_pending_wake
-		WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&pendingTaskID); err != nil {
-		t.Fatalf("load pending wake task: %v", err)
-	}
-	if pendingTaskID != uuidToString(child.ID) {
-		t.Fatalf("pending wake task_id=%s, want retry child %s", pendingTaskID, uuidToString(child.ID))
-	}
-}
-
 // TestAgentTransportAutoRetryStripsArealProxyFromChildContext verifies D9: a
 // retry child does NOT inherit the parent's areal_proxy RL-session config.
 // CreateRetryTask copies the parent's context verbatim, so the retry path strips
@@ -3127,74 +2188,6 @@ func TestAgentTransportAutoRetryStripsArealProxyFromChildContext(t *testing.T) {
 	}
 	if _, ok := ctxMap["squad_id"]; !ok {
 		t.Errorf("retry child lost squad_id; want it preserved, context=%s", string(reloaded.Context))
-	}
-}
-
-func TestAgentTransportAutoRetryFailsClosedForSettledPendingWake(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	agentID := agentIDForTask(t, taskID)
-	var chatSessionID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT chat_session_id
-		FROM agent_inbox_event
-		WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_ambient_pending_wake (
-			conversation_id, channel_id, workspace_id, agent_id, chat_session_id, task_id,
-			status, pending_from_seq, pending_to_seq, delivered_to_seq, completed_at
-		)
-		SELECT c.id, $1, $2, $3, $4, $5, 'failed', 1, 1, 0, now()
-		FROM conversation c
-		WHERE c.channel_id = $1`,
-		channelID, testWorkspaceID, agentID, chatSessionID, taskID); err != nil {
-		t.Fatalf("seed settled pending wake: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET status = 'acked', terminal_outcome = 'failed', terminal_at = now(),
-		    acked_at = now(), failure_reason = 'runtime_offline', attempt = 1, max_attempts = 3
-		WHERE id = $1`, taskID); err != nil {
-		t.Fatalf("mark parent failed: %v", err)
-	}
-	parent, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
-	if err != nil {
-		t.Fatalf("load failed parent task: %v", err)
-	}
-
-	child, err := testHandler.TaskService.MaybeRetryFailedTask(ctx, parent)
-	if err == nil {
-		t.Fatal("MaybeRetryFailedTask succeeded, want fail-closed error")
-	}
-	if child != nil {
-		t.Fatalf("MaybeRetryFailedTask child=%s, want nil", uuidToString(child.ID))
-	}
-
-	var childCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM agent_inbox_event
-		WHERE parent_task_id = $1`, taskID).Scan(&childCount); err != nil {
-		t.Fatalf("count retry children: %v", err)
-	}
-	if childCount != 0 {
-		t.Fatalf("retry child count = %d, want 0", childCount)
-	}
-	var pendingTaskID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT task_id
-		FROM channel_ambient_pending_wake
-		WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&pendingTaskID); err != nil {
-		t.Fatalf("load pending wake task: %v", err)
-	}
-	if pendingTaskID != taskID {
-		t.Fatalf("pending wake task_id=%s, want original parent %s", pendingTaskID, taskID)
 	}
 }
 
@@ -3246,13 +2239,12 @@ func agentTransportUnfollowThreadForTest(t *testing.T, taskID, agentID string, b
 	return rec
 }
 
-func agentTransportRequest(t *testing.T, method, path, taskID, agentID string, body any) *http.Request {
+func agentTransportRequest(t *testing.T, method, path, _ string, agentID string, body any) *http.Request {
 	t.Helper()
 	req := newRequest(method, path, body)
 	req = withChatTestWorkspaceCtx(t, req)
-	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Actor-Source", "agent_credential")
 	req.Header.Set("X-Agent-ID", agentID)
-	req.Header.Set("X-Task-ID", taskID)
 	return req
 }
 
@@ -3366,62 +2358,90 @@ func seedCompletedAgentAttachmentUploadSessionForTest(t *testing.T, agentID, cha
 	}
 }
 
-func assertAgentTransportAuditCount(t *testing.T, taskID, action string, want int) {
+func assertAgentTransportFreshnessHoldActivity(t *testing.T, agentID, target string, newMessages int) {
 	t.Helper()
-	var got int
+	var holdCount, obsoleteDetailCount int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT count(*)
-		FROM agent_task_transport_audit
-		WHERE task_id = $1 AND action = $2`, taskID, action).Scan(&got); err != nil {
-		t.Fatalf("count transport audit %s: %v", action, err)
+		FROM agent_activity_event
+		WHERE agent_id = $1
+		  AND event_type = 'send_freshness_hold'
+		  AND message = 'Send held by freshness check'
+		  AND target_slug = $2
+		  AND details->>'new_message_count' = $3
+		  AND details->>'decision' = 'local_hold'
+		  AND details->>'recommended_action' = 'review_newer_messages'`, agentID, target, fmt.Sprint(newMessages)).Scan(&holdCount); err != nil {
+		t.Fatalf("count freshness hold activity: %v", err)
 	}
-	if got != want {
-		t.Fatalf("transport audit %s count=%d, want %d", action, got, want)
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE agent_id = $1
+		  AND event_type = 'send_freshness_hold_detail'`, agentID).Scan(&obsoleteDetailCount); err != nil {
+		t.Fatalf("count obsolete freshness hold detail activity: %v", err)
+	}
+	if holdCount != 1 || obsoleteDetailCount != 0 {
+		t.Fatalf("freshness hold activity=%d obsolete detail=%d, want 1/0", holdCount, obsoleteDetailCount)
 	}
 }
 
-func assertAgentTransportVisibleOutputAuditCount(t *testing.T, taskID string, want int) {
+func assertAgentTransportFreshnessResolutionActivity(t *testing.T, taskID, target, producerFactID, outcome string) {
 	t.Helper()
-	var got int
+	var count int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT count(*)
-		FROM agent_task_transport_audit
-		WHERE task_id = $1 AND action IN ('message_send', 'message_react') AND channel_message_id IS NOT NULL`, taskID).Scan(&got); err != nil {
-		t.Fatalf("count visible transport audit: %v", err)
+		FROM agent_activity_event
+		WHERE task_id = $1
+		  AND event_type = 'send_freshness_resolved'
+		  AND message = CASE
+		    WHEN $4 = 'abandoned' THEN 'Held message was not sent'
+		    ELSE 'Freshness hold resolved'
+		  END
+		  AND target_slug = $2
+		  AND details->>'producer_fact_id' = $3
+		  AND details->>'outcome' = $4
+		  AND details ? 'freshness_hold_resolution_seconds'
+		  AND details ? 'resolution_ms'`,
+		taskID, target, producerFactID, outcome).Scan(&count); err != nil {
+		t.Fatalf("count freshness resolution activity: %v", err)
 	}
-	if got != want {
-		t.Fatalf("visible transport audit count=%d, want %d", got, want)
+	if count != 1 {
+		t.Fatalf("freshness resolution activity count=%d, want 1 for fact=%s outcome=%s", count, producerFactID, outcome)
 	}
 }
 
-func assertAgentTransportDraftContent(t *testing.T, agentID, target, want string) {
+func assertAgentMessageSentActivityText(t *testing.T, messageID, want string) {
 	t.Helper()
 	var got string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT content
-		FROM agent_transport_draft
-		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3`,
-		testWorkspaceID, agentID, target).Scan(&got); err != nil {
-		t.Fatalf("load transport draft: %v", err)
+		SELECT message
+		FROM agent_activity_event
+		WHERE event_type = 'message_sent'
+		  AND details->>'message_id' = $1
+		ORDER BY created_at DESC
+		LIMIT 1`, messageID).Scan(&got); err != nil {
+		t.Fatalf("load message_sent activity for message %s: %v", messageID, err)
 	}
 	if got != want {
-		t.Fatalf("draft content = %q, want %q", got, want)
+		t.Fatalf("message_sent activity text = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "Agent sent a visible message") {
+		t.Fatalf("message_sent activity leaked legacy machine phrase: %q", got)
 	}
 }
 
-func assertAgentTransportDraftMissing(t *testing.T, agentID, target string) {
+func assertAgentMessageSentActivityCount(t *testing.T, messageID string, want int) {
 	t.Helper()
-	var exists bool
+	var got int
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_transport_draft
-			WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
-		)`, testWorkspaceID, agentID, target).Scan(&exists); err != nil {
-		t.Fatalf("check transport draft: %v", err)
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE event_type = 'message_sent'
+		  AND details->>'message_id' = $1`, messageID).Scan(&got); err != nil {
+		t.Fatalf("count message_sent activity for message %s: %v", messageID, err)
 	}
-	if exists {
-		t.Fatalf("transport draft still exists for agent=%s target=%s", agentID, target)
+	if got != want {
+		t.Fatalf("message_sent activity count for message %s = %d, want %d", messageID, got, want)
 	}
 }
 

@@ -13,7 +13,6 @@ import {
   ChevronRight,
   Search,
   Settings,
-  Square,
   Trash2,
   VolumeX,
 } from "lucide-react";
@@ -101,7 +100,6 @@ export type ChannelDetailsAccess = {
   hideSettingsTab: boolean;
   projectBound: boolean;
   projectEditable: boolean;
-  stopAllDisabled?: boolean;
   mutePending?: boolean;
   renamePending?: boolean;
   descriptionPending?: boolean;
@@ -141,8 +139,6 @@ export function ChannelDetailsPanel({
   variant = "panel",
   portalContainer,
   onOpenSearch,
-  onStopAllAgents,
-  stopAllDisabledReason,
   notifyPrefLabel,
   onOpenNotificationPrefs,
   notifyLevel,
@@ -184,8 +180,6 @@ export function ChannelDetailsPanel({
   portalContainer?: RefObject<HTMLDivElement | null>;
   /** LRM-494 — channel-scoped search (not global). */
   onOpenSearch?: () => void;
-  onStopAllAgents?: () => void;
-  stopAllDisabledReason?: string;
   /** LRM-494 — live preference label from workspace notify settings (LRM-414). */
   notifyPrefLabel: string;
   /** Desktop (variant="panel"): close the panel and open the notify-prefs
@@ -211,7 +205,6 @@ export function ChannelDetailsPanel({
     canManage,
     isArchived,
     hideSettingsTab,
-    stopAllDisabled,
     mutePending,
     renamePending,
     descriptionPending,
@@ -584,20 +577,6 @@ export function ChannelDetailsPanel({
           ) : null}
 
           <ChannelDetailsSectionCard>
-            {onStopAllAgents ? (
-              <ChannelDetailsDetailRow
-                icon={<Square className="size-3.5 fill-current" aria-hidden />}
-                label={t(($) => $.stop_all_agents.menu_label)}
-                onClick={() => {
-                  if (stopAllDisabled) return;
-                  onClose();
-                  onStopAllAgents();
-                }}
-                disabled={stopAllDisabled}
-                destructive
-                testId="channel-details-stop-all"
-              />
-            ) : null}
             {onDelete ? (
               <ChannelDetailsDetailRow
                 icon={<Trash2 className="size-4" aria-hidden />}
@@ -612,9 +591,6 @@ export function ChannelDetailsPanel({
             ) : null}
           </ChannelDetailsSectionCard>
 
-          {stopAllDisabled && stopAllDisabledReason && onStopAllAgents ? (
-            <p className="px-1 text-xs text-muted-foreground">{stopAllDisabledReason}</p>
-          ) : null}
           {!settingsEditable && manageDisabledReason ? (
             <p className="px-1 text-xs text-muted-foreground">{manageDisabledReason}</p>
           ) : null}

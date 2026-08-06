@@ -4,8 +4,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
 import { AgentProfileActions } from "./agent-profile-actions";
-import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
-import type { ChannelActiveTask } from "@multica/core/types";
+import { pickStoppableDmTask, type StoppableAgentTask } from "./agent-profile-stoppable-task";
 
 const mocks = vi.hoisted(() => ({
   openDM: vi.fn(),
@@ -131,15 +130,11 @@ const agent = {
   archived_by: null,
 } as Agent;
 
-function runningTask(over: Partial<ChannelActiveTask> = {}): ChannelActiveTask {
+function runningTask(over: Partial<StoppableAgentTask> = {}): StoppableAgentTask {
   return {
     agent_id: "agent-1",
-    agent_name: "Atlas",
-    task_id: "t1",
+    task_id: "task-1",
     status: "running",
-    kind: "reply",
-    reason: "mention",
-    inbox_event_id: "inbox-1",
     ...over,
   };
 }
@@ -152,20 +147,17 @@ describe("pickStoppableDmTask (LRM-589)", () => {
           runningTask({
             agent_id: "other",
             task_id: "other",
-            inbox_event_id: "inbox-other",
           }),
           runningTask({
             status: "queued",
             task_id: "queued",
-            inbox_event_id: "inbox-queued",
           }),
           runningTask({
             status: "failed",
             outcome: "failed",
             task_id: "failed",
-            inbox_event_id: "inbox-failed",
           }),
-          runningTask({ task_id: "run", inbox_event_id: "inbox-run" }),
+          runningTask({ task_id: "run" }),
         ],
         "agent-1",
       )?.task_id,

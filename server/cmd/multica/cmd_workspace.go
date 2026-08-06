@@ -133,13 +133,13 @@ type workspaceSummary struct {
 // is shared by `list` and `switch` so both see the same access-controlled view
 // of workspaces.
 func fetchWorkspaces(ctx context.Context, cmd *cobra.Command) ([]workspaceSummary, error) {
-	serverURL := resolveServerURL(cmd)
-	token := resolveToken(cmd)
-	if token == "" {
+	if !inAgentExecutionContext() && resolveToken(cmd) == "" {
 		return nil, fmt.Errorf("not authenticated: run 'multica login' first")
 	}
-
-	client := cli.NewAPIClient(serverURL, "", token)
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return nil, err
+	}
 	if isAgentAPIToken(cmd) {
 		var one map[string]any
 		if err := client.GetJSON(ctx, "/api/agent/workspace", &one); err != nil {

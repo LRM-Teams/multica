@@ -41,10 +41,6 @@ export {
   type EnsureMessageLoadedStatus,
 } from "./use-ensure-message-loaded";
 export {
-  activeChannelTasksKeys,
-  activeChannelTasksOptions,
-} from "./active-tasks";
-export {
   channelProjectKeys,
   channelProjectOptions,
   useSetChannelProject,

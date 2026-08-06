@@ -189,7 +189,6 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
         },
       ]),
     channelProjectOptions: () => options(["channel-project"], ""),
-    activeChannelTasksOptions: () => options(["channel-tasks"], []),
     channelMessageThreadOptions: () => options(["channel-thread"], { messages: [] }),
     channelMessagesPageOptions: () => ({
       queryKey: ["channel-messages"],

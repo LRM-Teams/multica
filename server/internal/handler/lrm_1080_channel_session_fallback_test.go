@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -41,7 +40,9 @@ func TestIsChannelAgentTask_ChannelIDWithoutChatSession(t *testing.T) {
 	).Scan(&eventID); err != nil {
 		t.Fatalf("seed channel-only inbox event: %v", err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
+	})
 
 	event, err := testHandler.Queries.GetAgentInboxEvent(ctx, parseUUID(eventID))
 	if err != nil {
@@ -76,7 +77,9 @@ func TestChannelInitiatorForTask_PrefersWakeInitiatorWithoutSession(t *testing.T
 	).Scan(&eventID); err != nil {
 		t.Fatalf("seed initiator event: %v", err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
+	})
 
 	event, err := testHandler.Queries.GetAgentInboxEvent(ctx, parseUUID(eventID))
 	if err != nil {
@@ -88,45 +91,6 @@ func TestChannelInitiatorForTask_PrefersWakeInitiatorWithoutSession(t *testing.T
 	}
 	if testHandler.channelInitiatorForChatSession(ctx, pgtype.UUID{}).Valid {
 		t.Fatal("channelInitiatorForChatSession must no-op on empty session id")
-	}
-}
-
-func TestChannelAmbientGateStats_CountsChannelIDOnlyEvents(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "lrm-1080-gate-"+uuid.NewString()[:8], nil)
-	runtimeID := handlerTestRuntimeID(t)
-	channelID := seedChannelForTest(t, "lrm-1080-gate-"+uuid.NewString(), testUserID)
-
-	var eventID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (
-			workspace_id, agent_id, runtime_id, channel_id, status, priority,
-			force_fresh_session, reason, requires_wake, created_at
-		)
-		VALUES ($1, $2, $3, $4, 'pending', 1, true, 'ambient', true, now())
-		RETURNING id`,
-		testWorkspaceID, agentID, runtimeID, channelID,
-	).Scan(&eventID); err != nil {
-		t.Fatalf("seed channel-only ambient wake: %v", err)
-	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID) })
-
-	stats, err := testHandler.channelAmbientGateStats(ctx, parseUUID(channelID), parseUUID(agentID), parseUUID(runtimeID), time.Minute)
-	if err != nil {
-		t.Fatalf("channelAmbientGateStats: %v", err)
-	}
-	if stats.activeForAgent < 1 {
-		t.Fatalf("activeForAgent=%d, want >=1 for channel_id-only priority-1 wake", stats.activeForAgent)
-	}
-	if stats.recentForAgent < 1 {
-		t.Fatalf("recentForAgent=%d, want >=1", stats.recentForAgent)
-	}
-	if stats.recentForChannel < 1 {
-		t.Fatalf("recentForChannel=%d, want >=1", stats.recentForChannel)
 	}
 }
 
@@ -150,7 +114,9 @@ func TestCompleteTask_ChannelOnlyWakeSuppressesUnsentFinalOutput(t *testing.T) {
 	`, testWorkspaceID, "lrm-1080-"+uuid.NewString(), "LRM-1080 Runtime "+uuid.NewString(), metadata).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
 
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
@@ -183,7 +149,9 @@ func TestCompleteTask_ChannelOnlyWakeSuppressesUnsentFinalOutput(t *testing.T) {
 	).Scan(&taskID); err != nil {
 		t.Fatalf("create channel-only draining task: %v", err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
+	})
 
 	const visibleReply = "LRM-1080 channel-only final text must not bridge"
 	w := completeTaskForTest(t, taskID, map[string]any{

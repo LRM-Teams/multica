@@ -349,36 +349,11 @@ func TestCollaborationTurnTransportConsumeAuditsAndCompletionAdvances(t *testing
 	if err := testPool.QueryRow(context.Background(), `SELECT inbox_event_id FROM collaboration_turn WHERE session_id = $1 AND turn_index = 0`, result.SessionID).Scan(&firstEventID); err != nil {
 		t.Fatalf("load first event: %v", err)
 	}
-	tx, err := fixture.handler.TxStarter.Begin(context.Background())
-	if err != nil {
-		t.Fatalf("begin consume: %v", err)
-	}
-	source := agentTransportSource{origin: chatOutputOrigin{workspaceID: parseUUID(testWorkspaceID), channelID: parseUUID(fixture.channel.ID), agentID: parseUUID(fixture.agentIDs[0])}, inboxEventID: firstEventID}
-	if err := consumeAgentTransportVisibilityGrantTx(context.Background(), tx, source, parseUUID(fixture.channel.ID), parseUUID(trigger.ID)); err != nil {
-		_ = tx.Rollback(context.Background())
-		t.Fatalf("consume turn grant: %v", err)
-	}
-	if err := tx.Commit(context.Background()); err != nil {
-		t.Fatalf("commit consume: %v", err)
-	}
-	var grantStatus string
-	var auditCount int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT turn.grant_status,
-		       (SELECT count(*) FROM channel_decision_audit audit
-		         WHERE audit.inbox_event_id = $2 AND audit.event_type = 'turn_grant_consumed')::int
-		FROM collaboration_turn turn
-		WHERE turn.session_id = $1 AND turn.turn_index = 0`, result.SessionID, firstEventID).Scan(&grantStatus, &auditCount); err != nil {
-		t.Fatalf("inspect consumed turn: %v", err)
-	}
-	if grantStatus != "consumed" || auditCount != 1 {
-		t.Fatalf("turn status=%s audit=%d, want consumed/1", grantStatus, auditCount)
-	}
 	event, err := fixture.handler.Queries.GetAgentInboxEvent(context.Background(), firstEventID)
 	if err != nil {
 		t.Fatalf("load event: %v", err)
 	}
-	tx, err = fixture.handler.TxStarter.Begin(context.Background())
+	tx, err := fixture.handler.TxStarter.Begin(context.Background())
 	if err != nil {
 		t.Fatalf("begin completion: %v", err)
 	}
@@ -392,5 +367,18 @@ func TestCollaborationTurnTransportConsumeAuditsAndCompletionAdvances(t *testing
 	}
 	if len(wakes) != 1 || uuidToString(wakes[0].agent.ID) != fixture.agentIDs[1] {
 		t.Fatalf("next wakes = %+v, want agent %s", wakes, fixture.agentIDs[1])
+	}
+	var grantStatus string
+	var auditCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT turn.grant_status,
+		       (SELECT count(*) FROM channel_decision_audit audit
+		         WHERE audit.inbox_event_id = $2 AND audit.event_type = 'turn_grant_consumed')::int
+		FROM collaboration_turn turn
+		WHERE turn.session_id = $1 AND turn.turn_index = 0`, result.SessionID, firstEventID).Scan(&grantStatus, &auditCount); err != nil {
+		t.Fatalf("inspect consumed turn: %v", err)
+	}
+	if grantStatus != "consumed" || auditCount != 1 {
+		t.Fatalf("turn status=%s audit=%d, want consumed/1", grantStatus, auditCount)
 	}
 }

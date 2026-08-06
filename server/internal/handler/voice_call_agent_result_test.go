@@ -67,50 +67,30 @@ func TestVoiceCallAgentBridgeWaitsForExactAssistantCompletion(t *testing.T) {
 	}
 }
 
-func TestVoiceCallAgentBridgeUsesExactTransportMessagesInOrder(t *testing.T) {
+func TestVoiceCallAgentBridgeDoesNotTreatCanonicalChatAsVoiceCompletion(t *testing.T) {
 	bridge, dispatch, _, cleanup := voiceCallAgentResultFixture(t)
 	defer cleanup()
 
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO chat_message (chat_session_id, role, content, task_id)
-		VALUES ($1, 'assistant', '不应覆盖消息工具的输出', $2)`,
+		VALUES ($1, 'assistant', 'voice completion', $2)`,
 		dispatch.Event.ChatSessionID,
 		dispatch.Event.ID,
 	); err != nil {
-		t.Fatalf("seed assistant fallback: %v", err)
+		t.Fatalf("seed voice completion: %v", err)
 	}
-	for index, content := range []string{"第一段回答。", "第二段回答。"} {
-		var messageID string
-		if err := testPool.QueryRow(context.Background(), `
-			INSERT INTO channel_message (
-			  channel_id, workspace_id, author_type, author_id, author_name,
-			  content, parts, source, client_message_id
-			)
-			VALUES ($1, $2, 'agent', $3, 'Voice Agent', $4, '[]'::jsonb, 'multica', $5)
-			RETURNING id`,
-			dispatch.Scope.ChannelID,
-			dispatch.Scope.WorkspaceID,
-			dispatch.Event.AgentID,
-			content,
-			"voice-result-"+uuid.NewString(),
-		).Scan(&messageID); err != nil {
-			t.Fatalf("seed transport message %d: %v", index, err)
-		}
-		if _, err := testPool.Exec(context.Background(), `
-			INSERT INTO agent_task_transport_audit (
-			  workspace_id, inbox_event_id, agent_id, action, target,
-			  channel_id, channel_message_id, context_pack
-			)
-			VALUES ($1, $2, $3, 'message_send', $4, $5, $6, '{}'::jsonb)`,
-			dispatch.Scope.WorkspaceID,
-			dispatch.Event.ID,
-			dispatch.Event.AgentID,
-			"dm:@member",
-			dispatch.Scope.ChannelID,
-			messageID,
-		); err != nil {
-			t.Fatalf("seed transport audit %d: %v", index, err)
-		}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO channel_message (
+		  channel_id, workspace_id, author_type, author_id, author_name,
+		  content, parts, source, client_message_id
+		)
+		VALUES ($1, $2, 'agent', $3, 'Voice Agent', 'ordinary chat message', '[]'::jsonb, 'multica', $4)`,
+		dispatch.Scope.ChannelID,
+		dispatch.Scope.WorkspaceID,
+		dispatch.Event.AgentID,
+		"voice-chat-"+uuid.NewString(),
+	); err != nil {
+		t.Fatalf("seed unrelated canonical chat message: %v", err)
 	}
 	if _, err := testPool.Exec(context.Background(), `
 		UPDATE agent_inbox_event
@@ -122,15 +102,15 @@ func TestVoiceCallAgentBridgeUsesExactTransportMessagesInOrder(t *testing.T) {
 		WHERE id = $1`,
 		dispatch.Event.ID,
 	); err != nil {
-		t.Fatalf("complete transport event: %v", err)
+		t.Fatalf("complete voice event: %v", err)
 	}
 
 	content, err := bridge.waitForCompletion(context.Background(), dispatch)
 	if err != nil {
-		t.Fatalf("wait for transport completion: %v", err)
+		t.Fatalf("wait for voice completion: %v", err)
 	}
-	if content != "第一段回答。\n第二段回答。" {
-		t.Fatalf("transport completion = %q", content)
+	if content != "voice completion" {
+		t.Fatalf("voice completion = %q, want task assistant output only", content)
 	}
 }
 

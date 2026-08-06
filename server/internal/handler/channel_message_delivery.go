@@ -21,6 +21,9 @@ func (h *Handler) scheduleCanonicalMessageDelivery(ctx context.Context, eventTyp
 	if !ok || strings.TrimSpace(message.ID) == "" || message.Seq <= 0 {
 		return
 	}
+	if channelMessageHasPendingVoiceTranscription(message) {
+		return
+	}
 	h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
 		channel, found := h.getChannel(ctx, message.WorkspaceID, parseUUID(message.ChannelID))
 		if !found {
@@ -31,49 +34,80 @@ func (h *Handler) scheduleCanonicalMessageDelivery(ctx context.Context, eventTyp
 	})
 }
 
+func channelMessageHasPendingVoiceTranscription(message ChannelMessageResponse) bool {
+	for _, part := range message.Parts {
+		if part.Type == protocol.MessagePartTypeVoice && part.TranscriptionStatus == protocol.VoiceTranscriptionPending {
+			return true
+		}
+	}
+	return false
+}
+
 // deliverCanonicalMessageToChannelAgents persists and projects one committed
 // canonical Message to exactly the Agents selected by the channel routing
-// policy. The Workspace Runner, rather than a provider runtime socket, is the
-// live delivery address. Offline delivery is intentionally harmless:
-// startup/reconnect recovery reads the same persisted Delivery mapping.
+// policy. Offline delivery is intentionally harmless: startup/reconnect
+// recovery reads the same persisted Delivery mapping.
 func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) {
 	if h == nil || h.DB == nil || strings.TrimSpace(message.ID) == "" || message.Seq <= 0 {
 		return
 	}
-	target := "channel:" + ch.ID
-	if message.ThreadRootMessageID != nil && strings.TrimSpace(*message.ThreadRootMessageID) != "" {
-		target = "thread:" + *message.ThreadRootMessageID
-	}
 	for _, recipient := range h.canonicalMessageDeliveryRecipients(ctx, ch, message) {
-		if !recipient.RuntimeID.Valid {
+		delivery, ok, err := persistCanonicalMessageDelivery(ctx, h.DB, ch, message, recipient)
+		if err != nil {
+			slog.Warn("persist canonical Agent Message delivery failed", "workspace_id", ch.WorkspaceID, "channel_id", ch.ID, "message_id", message.ID, "agent_id", uuidToString(recipient.ID), "error", err)
 			continue
 		}
-		agentIDString := uuidToString(recipient.ID)
-		if _, err := h.DB.Exec(ctx, `
-			INSERT INTO agent_message_delivery (workspace_id, agent_id, message_id, target, seq)
-			VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT (agent_id, message_id) DO NOTHING`,
-			parseUUID(ch.WorkspaceID), recipient.ID, parseUUID(message.ID), target, message.Seq); err != nil {
-			slog.Warn("persist canonical Agent Message delivery failed", "workspace_id", ch.WorkspaceID, "channel_id", ch.ID, "message_id", message.ID, "agent_id", agentIDString, "error", err)
-			continue
+		if ok {
+			h.notifyCanonicalMessageDelivery(ch, recipient, delivery)
 		}
-		delivery := protocol.AgentDeliverPayload{
-			AgentID:    agentIDString,
-			Target:     target,
-			Seq:        message.Seq,
-			DeliveryID: "message:" + message.ID + ":agent:" + agentIDString,
-			Message: protocol.AgentMessageProjection{
-				ID: message.ID, Target: target, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
-			},
-		}
-		var daemonID *string
-		if err := h.DB.QueryRow(ctx, `SELECT daemon_id FROM agent_runtime WHERE id = $1`, recipient.RuntimeID).Scan(&daemonID); err != nil {
-			slog.Warn("load Agent Message delivery daemon failed", "workspace_id", ch.WorkspaceID, "agent_id", agentIDString, "runtime_id", uuidToString(recipient.RuntimeID), "message_id", message.ID, "error", err)
-			continue
-		}
-		if daemonID == nil || strings.TrimSpace(*daemonID) == "" || h.AgentDeliveryNotifier == nil || !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(ch.WorkspaceID, *daemonID, delivery) {
-			slog.Debug("Agent Message live delivery deferred to recovery", "workspace_id", ch.WorkspaceID, "agent_id", agentIDString, "daemon_id", daemonID, "message_id", message.ID, "delivery_id", delivery.DeliveryID)
-		}
+	}
+}
+
+// persistCanonicalMessageDelivery records one explicitly selected recipient.
+// Normal channel traffic supplies recipients through canonicalMessageDeliveryRecipients;
+// system primitives such as Reminder use this same durable mapping with their own
+// product-specific recipient rule.
+func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch ChannelResponse, message ChannelMessageResponse, recipient db.Agent) (protocol.AgentDeliverPayload, bool, error) {
+	if exec == nil || !recipient.RuntimeID.Valid || strings.TrimSpace(ch.WorkspaceID) == "" || strings.TrimSpace(message.ID) == "" || message.Seq <= 0 {
+		return protocol.AgentDeliverPayload{}, false, nil
+	}
+	agentID := uuidToString(recipient.ID)
+	if agentID == "" {
+		return protocol.AgentDeliverPayload{}, false, nil
+	}
+	target := canonicalMessageDeliveryTarget(ch, message)
+	tag, err := exec.Exec(ctx, `
+		INSERT INTO agent_message_delivery (workspace_id, agent_id, message_id, target, seq)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (agent_id, message_id) DO NOTHING`,
+		parseUUID(ch.WorkspaceID), recipient.ID, parseUUID(message.ID), target, message.Seq)
+	if err != nil {
+		return protocol.AgentDeliverPayload{}, false, err
+	}
+	if tag.RowsAffected() != 1 {
+		return protocol.AgentDeliverPayload{}, false, nil
+	}
+	return protocol.AgentDeliverPayload{
+		AgentID:    agentID,
+		Target:     target,
+		Seq:        message.Seq,
+		DeliveryID: "message:" + message.ID + ":agent:" + agentID,
+		Message: protocol.AgentMessageProjection{
+			ID: message.ID, Target: target, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
+		},
+	}, true, nil
+}
+
+func canonicalMessageDeliveryTarget(ch ChannelResponse, message ChannelMessageResponse) string {
+	if message.ThreadRootMessageID != nil && strings.TrimSpace(*message.ThreadRootMessageID) != "" {
+		return "thread:" + *message.ThreadRootMessageID
+	}
+	return "channel:" + ch.ID
+}
+
+func (h *Handler) notifyCanonicalMessageDelivery(ch ChannelResponse, recipient db.Agent, delivery protocol.AgentDeliverPayload) {
+	if h == nil || h.AgentDeliveryNotifier == nil || !h.AgentDeliveryNotifier.NotifyAgentDelivery(uuidToString(recipient.RuntimeID), delivery) {
+		slog.Debug("Agent Message live delivery deferred to recovery", "workspace_id", ch.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", uuidToString(recipient.RuntimeID), "message_id", delivery.Message.ID, "delivery_id", delivery.DeliveryID)
 	}
 }
 

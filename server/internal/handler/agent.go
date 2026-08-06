@@ -751,18 +751,19 @@ func basename(p string) string {
 
 // computeTaskKind picks the source-discriminator string the activity UI uses
 // to choose how to render a task row. Computed from the existing FK shape so
-// no extra DB lookup is needed: chat / autopilot / comment-on-issue (any
-// triggered task with both an issue_id and trigger_comment_id) / quick_create
-// (no linked source — the agent is creating the issue itself) / direct
-// (assignee-driven task on an existing issue).
+// no extra DB lookup is needed: legacy chat / product_task / autopilot /
+// comment-on-issue (any triggered task with both an issue_id and
+// trigger_comment_id) / quick_create (no linked source — the agent is
+// creating the issue itself) / direct (assignee-driven task on an existing
+// issue).
 func computeTaskKind(t db.AgentInboxEvent) string {
 	if uuidToString(t.ChatSessionID) != "" {
 		return "chat"
 	}
-	// LRM-1079: channel-only wakes have no chat_session_id but still present as
-	// chat work for presence / activity labeling.
+	// Ordinary channel Messages are no longer Inbox work. A channel-scoped
+	// Inbox event is therefore an explicit product task, not chat.
 	if uuidToString(t.ChannelID) != "" && uuidToString(t.IssueID) == "" {
-		return "chat"
+		return "product_task"
 	}
 	if uuidToString(t.AutopilotRunID) != "" {
 		return "autopilot"
@@ -1955,10 +1956,9 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cancel all pending/active tasks for this agent. Discard the returned
-	// rows here — the agent:archived event below already triggers a full
-	// active-tasks invalidation on every connected client, so per-task
-	// task:cancelled events would be redundant noise.
+	// Cancel all pending/active product tasks for this agent. Discard the
+	// returned rows here — the agent:archived event below refreshes the relevant
+	// agent views, so per-task task:cancelled events would be redundant noise.
 	if cancelled, err := h.Queries.CancelAgentTasksByAgent(r.Context(), agent.ID); err != nil {
 		slog.Warn("cancel agent tasks on archive failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
 	} else {

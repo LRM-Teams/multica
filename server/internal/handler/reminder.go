@@ -69,26 +69,26 @@ func writeReminderMutationError(w http.ResponseWriter, operation string, err err
 	writeError(w, http.StatusInternalServerError, "failed to "+operation+" reminder")
 }
 
-// authorizeNaturalLanguageReminderMutation gates cancel/update/snooze.
-//
-// LRM-1057 / product rule: reminder list/cancel manage only the calling
-// agent's own reminders — there is no create/cancel-for-others scenario.
-// Ownership is already enforced by agent_id scoping on the mutation query
-// path, so the turn's initiator_user_id must not block the owning agent
-// (ambient wakes and different human initiators were getting 403).
-func (h *Handler) authorizeNaturalLanguageReminderMutation(
-	w http.ResponseWriter,
-	r *http.Request,
-	tx pgx.Tx,
-	source agentTransportSource,
-	reminder agentReminder,
-) bool {
-	_ = w
-	_ = r
-	_ = tx
-	_ = source
-	_ = reminder
-	return true
+// requireReminderAgentCredential keeps reminder lifecycle operations outside
+// issue tasks and inbox deliveries. A reminder is owned by its agent; it does
+// not inherit a chat turn, task, lease, or delivery identity.
+func (h *Handler) requireReminderAgentCredential(w http.ResponseWriter, r *http.Request) (agentTransportSource, bool) {
+	if r.Header.Get("X-Actor-Source") != "agent_credential" {
+		writeError(w, http.StatusForbidden, "reminder transport requires an agent credential")
+		return agentTransportSource{}, false
+	}
+	for _, header := range []string{
+		"X-Task-ID",
+		"X-Agent-Inbox-Event-ID",
+		"X-Agent-Inbox-Delivery-ID",
+		"X-Agent-Inbox-Lease-Token",
+	} {
+		if strings.TrimSpace(r.Header.Get(header)) != "" {
+			writeError(w, http.StatusBadRequest, "reminder transport does not accept task or inbox delivery context")
+			return agentTransportSource{}, false
+		}
+	}
+	return h.requireAgentCredentialChatTransport(w, r)
 }
 
 type agentReminder struct {
@@ -102,7 +102,7 @@ type agentReminder struct {
 	AnchorThreadRootMessageID pgtype.UUID
 	FireAt                    pgtype.Timestamptz
 	Status                    string
-	FiredTaskID               pgtype.UUID
+	FiredReceiptMessageID     pgtype.UUID
 	SnoozeCount               int32
 	CreatedAt                 pgtype.Timestamptz
 	UpdatedAt                 pgtype.Timestamptz
@@ -129,8 +129,16 @@ type reminderQueryer interface {
 }
 
 type reminderAnchorSnapshot struct {
-	Excerpt   string
 	Available bool
+}
+
+const reminderFiredSystemEvent = "reminder_fired"
+
+type reminderFiredReceiptParams struct {
+	ReminderID      string `json:"reminder_id"`
+	OccurrenceID    string `json:"occurrence_id"`
+	Title           string `json:"title"`
+	AnchorAvailable bool   `json:"anchor_available"`
 }
 
 type agentReminderResponse struct {
@@ -270,7 +278,7 @@ func scanAgentReminder(row rowScanner) (agentReminder, error) {
 	err := row.Scan(
 		&out.ID, &out.WorkspaceID, &out.AgentID, &out.InitiatorUserID, &out.Title,
 		&out.AnchorChannelID, &out.AnchorMessageID, &out.AnchorThreadRootMessageID,
-		&out.FireAt, &out.Status, &out.FiredTaskID, &out.SnoozeCount,
+		&out.FireAt, &out.Status, &out.FiredReceiptMessageID, &out.SnoozeCount,
 		&out.CreatedAt, &out.UpdatedAt, &out.FiredAt, &out.Cadence,
 		&out.ScheduleTimezone, &out.CadenceNextAt, &out.CurrentOccurrenceID,
 		&out.TerminalReason, &out.Version,
@@ -282,7 +290,7 @@ func scanAgentReminder(row rowScanner) (agentReminder, error) {
 
 func reminderSelectColumns() string {
 	return `id, workspace_id, agent_id, initiator_user_id, title, anchor_channel_id, anchor_message_id,
-		anchor_thread_root_message_id, fire_at, status, fired_task_id, snooze_count,
+		anchor_thread_root_message_id, fire_at, status, fired_receipt_message_id, snooze_count,
 		created_at, updated_at, fired_at, cadence, schedule_timezone, cadence_next_at,
 		current_occurrence_id, terminal_reason, version, origin_kind, managed_kind,
 		origin_key, managed_backoff_step`
@@ -310,7 +318,7 @@ func parseReminderFireAt(now time.Time, delaySeconds *int64, rawFireAt string) (
 }
 
 func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.Request) {
-	source, ok := h.requireAgentTransportSource(w, r)
+	source, ok := h.requireReminderAgentCredential(w, r)
 	if !ok {
 		return
 	}
@@ -407,11 +415,19 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 	}
 	h.publishAgentReminderChanged(r.Context(), created.WorkspaceID, created.AgentID)
 	h.projectReminderUpsert(r.Context(), created)
+	targetKind, targetID, targetSlug := reminderActivityTarget(created, true)
+	h.recordAgentActivityEvent(r.Context(), h.DB,
+		origin.workspaceID, origin.agentID, pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, "reminder_scheduled", "info",
+		targetKind, targetID, targetSlug,
+		"", "Agent scheduled a future self-wake",
+		map[string]any{"reminder_id": uuidToString(created.ID), "fire_at": schedule.FireAt.Format(time.RFC3339)},
+	)
 	writeJSON(w, http.StatusCreated, reminderResponse(created))
 }
 
 func (h *Handler) AgentTransportListReminders(w http.ResponseWriter, r *http.Request) {
-	source, ok := h.requireAgentTransportSource(w, r)
+	source, ok := h.requireReminderAgentCredential(w, r)
 	if !ok {
 		return
 	}
@@ -460,7 +476,7 @@ func (h *Handler) AgentTransportListReminders(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) AgentTransportReminderLog(w http.ResponseWriter, r *http.Request) {
-	source, ok := h.requireAgentTransportSource(w, r)
+	source, ok := h.requireReminderAgentCredential(w, r)
 	if !ok {
 		return
 	}
@@ -515,7 +531,7 @@ func (h *Handler) AgentTransportReminderLog(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Request) {
-	source, ok := h.requireAgentTransportSource(w, r)
+	source, ok := h.requireReminderAgentCredential(w, r)
 	if !ok {
 		return
 	}
@@ -550,9 +566,6 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusConflict, "reminder cannot be snoozed in its current state")
 		return
 	}
-	if !h.authorizeNaturalLanguageReminderMutation(w, r, tx, source, previous) {
-		return
-	}
 	if previous.Status != "scheduled" && previous.Status != "fired" {
 		writeError(w, http.StatusConflict, "reminder cannot be snoozed in its current state")
 		return
@@ -560,7 +573,7 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 	updated, err := scanAgentReminder(tx.QueryRow(r.Context(), `
 			UPDATE agent_reminder
 			SET fire_at = $4, status = 'scheduled', fired_at = NULL,
-			    fired_task_id = NULL, current_occurrence_id = NULL,
+			    fired_receipt_message_id = NULL, current_occurrence_id = NULL,
 			    terminal_reason = NULL, snooze_count = snooze_count + 1,
 			    version = version + 1, updated_at = now()
 			WHERE id = $1 AND workspace_id = $2 AND agent_id = $3
@@ -588,11 +601,12 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), updated.WorkspaceID, updated.AgentID)
 	h.projectReminderUpsert(r.Context(), updated)
+	h.recordReminderActivity(r.Context(), updated, "reminder_snoozed", "Agent snoozed a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(updated))
 }
 
 func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Request) {
-	source, ok := h.requireAgentTransportSource(w, r)
+	source, ok := h.requireReminderAgentCredential(w, r)
 	if !ok {
 		return
 	}
@@ -690,9 +704,6 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusConflict, "reminder cannot be updated in its current state")
 		return
 	}
-	if !h.authorizeNaturalLanguageReminderMutation(w, r, tx, source, previous) {
-		return
-	}
 	nextTitle := previous.Title
 	if title != "" {
 		nextTitle = title
@@ -771,11 +782,12 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), updated.WorkspaceID, updated.AgentID)
 	h.projectReminderUpsert(r.Context(), updated)
+	h.recordReminderActivity(r.Context(), updated, "reminder_updated", "Agent updated a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(updated))
 }
 
 func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Request) {
-	source, ok := h.requireAgentTransportSource(w, r)
+	source, ok := h.requireReminderAgentCredential(w, r)
 	if !ok {
 		return
 	}
@@ -808,9 +820,6 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusConflict, "reminder cannot be cancelled in its current state")
 		return
 	}
-	if !h.authorizeNaturalLanguageReminderMutation(w, r, tx, source, previous) {
-		return
-	}
 	terminalReason := "cancelled_by_author"
 	row := tx.QueryRow(r.Context(), `
 		UPDATE agent_reminder
@@ -841,6 +850,7 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), cancelled.WorkspaceID, cancelled.AgentID)
 	h.projectReminderCancel(r.Context(), cancelled)
+	h.recordReminderActivity(r.Context(), cancelled, "reminder_cancelled", "Agent cancelled a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(cancelled))
 }
 
@@ -966,6 +976,24 @@ func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, 
 		return pgtype.UUID{}, false
 	}
 	return ids[0], true
+}
+
+func (h *Handler) recordReminderActivity(ctx context.Context, reminder agentReminder, eventType, message string) {
+	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, true)
+	h.recordAgentActivityEvent(ctx, h.DB,
+		reminder.WorkspaceID, reminder.AgentID, pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, eventType, "info",
+		targetKind, targetID, targetSlug,
+		"", message,
+		map[string]any{"reminder_id": uuidToString(reminder.ID), "fire_at": timestampToString(reminder.FireAt)},
+	)
+}
+
+func reminderActivityTarget(reminder agentReminder, anchorAvailable bool) (string, pgtype.UUID, string) {
+	if anchorAvailable && reminder.AnchorThreadRootMessageID.Valid {
+		return "thread", reminder.AnchorThreadRootMessageID, uuidToString(reminder.AnchorChannelID)
+	}
+	return "channel", reminder.AnchorChannelID, ""
 }
 
 func reminderTargetKind(threadRootID pgtype.UUID) string {
@@ -1664,22 +1692,19 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID pgtype.UUID) error {
 	var occurrenceStatus string
 	var cadenceSlot pgtype.Timestamptz
-	var existingTaskID pgtype.UUID
+	var existingReceiptID pgtype.UUID
 	if err := tx.QueryRow(ctx, `
-		SELECT status, cadence_scheduled_for, fired_task_id
+		SELECT status, cadence_scheduled_for, receipt_message_id
 		FROM agent_reminder_occurrence
 		WHERE id = $1 AND reminder_id = $2
-		FOR UPDATE`, occurrenceID, reminder.ID).Scan(&occurrenceStatus, &cadenceSlot, &existingTaskID); err != nil {
+		FOR UPDATE`, occurrenceID, reminder.ID).Scan(&occurrenceStatus, &cadenceSlot, &existingReceiptID); err != nil {
 		return err
 	}
 	if occurrenceStatus == "fired" || occurrenceStatus == "cancelled" {
 		return tx.Commit(ctx)
 	}
-	// Migration 210 converges every pre-cutover firing row before this runtime
-	// can serve. A non-terminal occurrence with a task therefore violates the
-	// post-cutover state machine; fail closed instead of repairing it here.
-	if existingTaskID.Valid {
-		return fmt.Errorf("reminder occurrence invariant violation: non-terminal occurrence has fired_task_id")
+	if existingReceiptID.Valid {
+		return fmt.Errorf("reminder occurrence invariant violation: non-terminal occurrence has receipt_message_id")
 	}
 
 	var channelName, channelKind string
@@ -1698,13 +1723,13 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "channel_archived")
 	}
 
-	var agentRuntimeID, agentOwnerID pgtype.UUID
+	var agentRuntimeID pgtype.UUID
 	var agentArchivedAt pgtype.Timestamptz
 	if err := tx.QueryRow(ctx, `
-		SELECT runtime_id, owner_id, archived_at
+		SELECT runtime_id, archived_at
 		FROM agent
 		WHERE id = $1 AND workspace_id = $2
-		FOR UPDATE`, reminder.AgentID, reminder.WorkspaceID).Scan(&agentRuntimeID, &agentOwnerID, &agentArchivedAt); err != nil {
+		FOR UPDATE`, reminder.AgentID, reminder.WorkspaceID).Scan(&agentRuntimeID, &agentArchivedAt); err != nil {
 		if errorsIsNoRows(err) {
 			return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "agent_deleted")
 		}
@@ -1735,52 +1760,33 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		}
 		return err
 	}
-	txQueries := h.Queries.WithTx(tx)
 	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
 	anchor, err := loadReminderAnchorSnapshot(ctx, tx, reminder)
 	if err != nil {
 		return err
 	}
-	anchorExcerpt := anchor.Excerpt
 	anchorAvailable := anchor.Available
 
-	var threadID *string
-	if anchorAvailable {
-		threadID = reminderThreadID(ctx, tx, reminder.AnchorThreadRootMessageID)
-	}
-	trigger := ChannelMessageResponse{
-		TriggerDepth: 1,
-	}
-	if anchorAvailable {
-		trigger.ID = uuidToString(reminder.AnchorMessageID)
-	}
-	if anchorAvailable && reminder.AnchorThreadRootMessageID.Valid {
-		root := uuidToString(reminder.AnchorThreadRootMessageID)
-		trigger.ThreadRootMessageID = &root
-		trigger.ThreadID = threadID
-	}
-	creatorID, err := reminderFireCreatorID(ctx, tx, reminder.WorkspaceID, reminder.InitiatorUserID, agentOwnerID)
+	agent, err := h.Queries.WithTx(tx).GetAgent(ctx, reminder.AgentID)
 	if err != nil {
 		return err
 	}
-	agent, err := txQueries.GetAgent(ctx, reminder.AgentID)
+	receipt, err := insertReminderFiredReceiptExec(ctx, tx, ch, reminder, occurrenceID, anchorAvailable)
 	if err != nil {
 		return err
 	}
-	prompt := buildReminderPrompt(ch, reminder, occurrenceID, anchorExcerpt, anchorAvailable)
-	// LRM-1079: reminder fires are channel-only wakes (no chat_session).
-	promptResult, err := h.enqueueChannelAgentPromptWithTx(
-		ctx, txQueries, tx, ch, agent, trigger, creatorID, prompt, "reminder", channelDirectedWakePriority,
-	)
+	delivery, delivered, err := persistCanonicalMessageDelivery(ctx, tx, ch, receipt, agent)
 	if err != nil {
-		return err
+		return fmt.Errorf("persist reminder author delivery: %w", err)
 	}
-	task := promptResult.Event
+	if !delivered {
+		return fmt.Errorf("reminder author has no runtime delivery target")
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_reminder_occurrence
-		SET status = 'fired', fired_task_id = $2, anchor_available = $3,
+		SET status = 'fired', receipt_message_id = $2, anchor_available = $3,
 		    fired_at = now(), updated_at = now()
-		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID, task.ID, anchorAvailable); err != nil {
+		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID, parseUUID(receipt.ID), anchorAvailable); err != nil {
 		return err
 	}
 
@@ -1802,19 +1808,19 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		if err := tx.QueryRow(ctx, `
 			UPDATE agent_reminder
 			SET status = 'scheduled', fire_at = $2, cadence_next_at = $2,
-			    current_occurrence_id = NULL, fired_task_id = $3, fired_at = now(),
+			    current_occurrence_id = NULL, fired_receipt_message_id = $3, fired_at = now(),
 			    version = version + 1, updated_at = now()
 			WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $4
-			RETURNING version`, reminder.ID, next, task.ID, occurrenceID).Scan(&reminder.Version); err != nil {
+			RETURNING version`, reminder.ID, next, parseUUID(receipt.ID), occurrenceID).Scan(&reminder.Version); err != nil {
 			return err
 		}
 	} else {
 		if err := tx.QueryRow(ctx, `
 			UPDATE agent_reminder
 			SET status = 'fired', current_occurrence_id = NULL,
-			    fired_task_id = $2, fired_at = now(), version = version + 1, updated_at = now()
+			    fired_receipt_message_id = $2, fired_at = now(), version = version + 1, updated_at = now()
 			WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $3
-			RETURNING version`, reminder.ID, task.ID, occurrenceID).Scan(&reminder.Version); err != nil {
+			RETURNING version`, reminder.ID, parseUUID(receipt.ID), occurrenceID).Scan(&reminder.Version); err != nil {
 			return err
 		}
 	}
@@ -1843,7 +1849,16 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		reminder.Status = "fired"
 		h.projectReminderCancel(ctx, reminder)
 	}
-	h.TaskService.PublishChatTaskQueued(ctx, task, false)
+	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "system", "", parseUUID(ch.ID), receipt)
+	h.notifyCanonicalMessageDelivery(ch, agent, delivery)
+	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, anchorAvailable)
+	h.recordAgentActivityEvent(ctx, h.DB,
+		reminder.WorkspaceID, reminder.AgentID, agentRuntimeID, pgtype.UUID{},
+		activityKindCustom, "reminder_fired", "info",
+		targetKind, targetID, targetSlug,
+		"", "Reminder fired and woke the agent",
+		map[string]any{"reminder_id": uuidToString(reminder.ID), "occurrence_id": uuidToString(occurrenceID)},
+	)
 	return nil
 }
 
@@ -1851,9 +1866,9 @@ func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, remin
 	if !reminder.AnchorMessageID.Valid {
 		return reminderAnchorSnapshot{}, nil
 	}
-	var excerpt string
+	var available bool
 	err := q.QueryRow(ctx, `
-		SELECT anchor.content
+		SELECT true
 		FROM channel_message anchor
 		WHERE anchor.id = $1
 		  AND anchor.channel_id = $2
@@ -1870,47 +1885,55 @@ func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, remin
 		        AND root.deleted_at IS NULL
 		    )
 		  )`, reminder.AnchorMessageID, reminder.AnchorChannelID, reminder.WorkspaceID,
-		reminder.AnchorThreadRootMessageID).Scan(&excerpt)
+		reminder.AnchorThreadRootMessageID).Scan(&available)
 	if err != nil {
 		if errorsIsNoRows(err) {
 			return reminderAnchorSnapshot{}, nil
 		}
 		return reminderAnchorSnapshot{}, err
 	}
-	return reminderAnchorSnapshot{Excerpt: excerpt, Available: true}, nil
+	return reminderAnchorSnapshot{Available: available}, nil
 }
 
-func reminderFireCreatorID(ctx context.Context, exec db.DBTX, workspaceID, initiatorUserID, agentOwnerID pgtype.UUID) (pgtype.UUID, error) {
-	// Prefer optional audit initiator, then agent owner, then oldest workspace
-	// owner. P1: fire must not fail solely because initiator_user_id is NULL.
-	candidates := []pgtype.UUID{initiatorUserID, agentOwnerID}
-	var wsOwner pgtype.UUID
-	_ = exec.QueryRow(ctx, `
-		SELECT m.user_id FROM member m
-		WHERE m.workspace_id = $1 AND m.role = 'owner'
-		ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
-		LIMIT 1`, workspaceID).Scan(&wsOwner)
-	if wsOwner.Valid {
-		candidates = append(candidates, wsOwner)
+// insertReminderFiredReceiptExec writes the quiet typed receipt that is visible
+// to humans and is the one canonical Message delivered to the Reminder author.
+// The recipient is selected separately; this system row must never use normal
+// channel or thread recipient resolution.
+func insertReminderFiredReceiptExec(ctx context.Context, exec dbExecutor, ch ChannelResponse, reminder agentReminder, occurrenceID pgtype.UUID, anchorAvailable bool) (ChannelMessageResponse, error) {
+	paramsJSON, err := json.Marshal(reminderFiredReceiptParams{
+		ReminderID:      uuidToString(reminder.ID),
+		OccurrenceID:    uuidToString(occurrenceID),
+		Title:           reminder.Title,
+		AnchorAvailable: anchorAvailable,
+	})
+	if err != nil {
+		return ChannelMessageResponse{}, fmt.Errorf("marshal reminder fired receipt: %w", err)
 	}
-	for _, candidate := range candidates {
-		if !candidate.Valid {
-			continue
-		}
-		var exists bool
-		if err := exec.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM member
-				WHERE workspace_id = $1 AND user_id = $2
-			)`, workspaceID, candidate).Scan(&exists); err != nil {
-			return pgtype.UUID{}, fmt.Errorf("validate reminder fire creator: %w", err)
-		}
-		if exists {
-			return candidate, nil
-		}
+	content := "Reminder fired: " + reminder.Title
+	if !anchorAvailable {
+		content += " · Anchor unavailable"
 	}
-	return pgtype.UUID{}, fmt.Errorf("reminder fire creator is not a current workspace member")
+	var threadRootID pgtype.UUID
+	var threadID *string
+	if anchorAvailable && reminder.AnchorThreadRootMessageID.Valid {
+		threadRootID = reminder.AnchorThreadRootMessageID
+		threadID = reminderThreadID(ctx, exec, threadRootID)
+	}
+	externalID := "reminder_occurrence:" + uuidToString(occurrenceID)
+	inserted, err := insertChannelMessageWithPartsExec(
+		ctx, exec, parseUUID(ch.ID), parseUUID(ch.WorkspaceID),
+		"system", pgtype.UUID{}, "system", content,
+		[]protocol.MessagePart{{
+			Type:        protocol.MessagePartTypeSystemEvent,
+			Event:       reminderFiredSystemEvent,
+			EventParams: paramsJSON,
+		}},
+		"multica", &externalID, nil, pgtype.UUID{}, pgtype.UUID{}, nil, threadRootID, threadID, 0,
+	)
+	if err != nil {
+		return ChannelMessageResponse{}, fmt.Errorf("insert reminder fired receipt: %w", err)
+	}
+	return inserted.Message, nil
 }
 
 func reminderThreadID(ctx context.Context, exec db.DBTX, threadRootID pgtype.UUID) *string {
@@ -1963,48 +1986,4 @@ func reminderCadenceTimezone(reminder agentReminder) string {
 		return ""
 	}
 	return reminder.ScheduleTimezone.String
-}
-
-func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceID pgtype.UUID, anchorExcerpt string, anchorAvailable bool) string {
-	var b strings.Builder
-	// Compact Raft-aligned brief: msg-id first, one channel line, short surface rule.
-	// Hard fan-out block is enforced on message send (enforceReminderAnchorSend).
-	b.WriteString("A self-scheduled reminder is due.\n")
-	fmt.Fprintf(&b, "Reminder id: %s\n", uuidToString(reminder.ID))
-	fmt.Fprintf(&b, "Occurrence id: %s\n", uuidToString(occurrenceID))
-	fmt.Fprintf(&b, "Reminder title: %s\n", reminder.Title)
-	// msg-id + readable context first (Frank/Parker: Raft-style, not empty channel pin)
-	if anchorAvailable && reminder.AnchorMessageID.Valid {
-		fmt.Fprintf(&b, "msg-id: %s\n", uuidToString(reminder.AnchorMessageID))
-		if strings.TrimSpace(anchorExcerpt) != "" {
-			fmt.Fprintf(&b, "Anchor excerpt: %s\n", truncateForActivity(anchorExcerpt, 500))
-		}
-	} else {
-		b.WriteString("msg-id: unavailable (deleted).\n")
-	}
-	// One channel line only — no ManagerChannels list.
-	// When the anchor is gone, omit #name (deleted-thread tests must not leak surface names).
-	if ch.Kind == "dm" {
-		fmt.Fprintf(&b, "Target channel id: %s (direct message)\n", ch.ID)
-	} else if anchorAvailable && strings.TrimSpace(ch.Name) != "" {
-		fmt.Fprintf(&b, "Target channel id: %s (#%s)\n", ch.ID, ch.Name)
-	} else {
-		fmt.Fprintf(&b, "Target channel id: %s\n", ch.ID)
-	}
-	b.WriteString("Reply only on that anchor surface (thread if anchored in a thread; main channel if not).\n")
-	if reminder.Cadence.Valid {
-		fmt.Fprintf(&b, "Cadence: %s\n", reminder.Cadence.String)
-	}
-	if reminderTimezonePtr(reminder.Cadence, reminder.ScheduleTimezone) != nil {
-		fmt.Fprintf(&b, "Locked schedule timezone: %s\n", reminder.ScheduleTimezone.String)
-	}
-	if anchorAvailable {
-		b.WriteString("Check the current state now. If nothing useful changed, reschedule or finish without noise.\n")
-	} else {
-		b.WriteString("Check the current state now. Send only if there is a useful update; otherwise reschedule or finish without noise.\n")
-	}
-	b.WriteString(channelOutputContractInstruction)
-	b.WriteString("\n")
-	b.WriteString(channelContinuationInstruction)
-	return b.String()
 }

@@ -161,9 +161,9 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("seed agent member %s: %v", agentID, err)
 		}
 	}
-	queuedRoot := dispatchThreadMentionForTest(t, channelID, agentD, "snapshot-inbox-queued-"+uuid.NewString())
+	queuedRoot := seedThreadProductInboxEventForTest(t, channelID, agentD, "snapshot-inbox-queued-"+uuid.NewString())
 	queuedInboxEventID := latestChannelAgentInboxEventForRootForTest(t, queuedRoot.ID, agentD)
-	runningRoot := dispatchThreadMentionForTest(t, channelID, agentE, "snapshot-inbox-running-"+uuid.NewString())
+	runningRoot := seedThreadProductInboxEventForTest(t, channelID, agentE, "snapshot-inbox-running-"+uuid.NewString())
 	runningInboxEventID := latestChannelAgentInboxEventForRootForTest(t, runningRoot.ID, agentE)
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_inbox_event
@@ -249,8 +249,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if !ok {
 		t.Fatalf("queued inbox event %s missing from snapshot", queuedInboxEventID)
 	}
-	if queuedInboxTask.Kind != "chat" || queuedInboxTask.ChannelID == "" || queuedInboxTask.TriggerSummary == nil || strings.TrimSpace(*queuedInboxTask.TriggerSummary) == "" {
-		t.Fatalf("queued inbox task = %+v, want channel wake (kind=chat) with trigger summary", queuedInboxTask)
+	if queuedInboxTask.Kind != "product_task" || queuedInboxTask.ChannelID == "" || queuedInboxTask.TriggerSummary == nil || strings.TrimSpace(*queuedInboxTask.TriggerSummary) == "" {
+		t.Fatalf("queued inbox task = %+v, want explicit product task with channel source and trigger summary", queuedInboxTask)
 	}
 	if queuedInboxTask.ChatSessionID != "" {
 		t.Fatalf("channel-only queued inbox leaked chat_session_id=%q", queuedInboxTask.ChatSessionID)
@@ -400,7 +400,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
 
-	root := dispatchThreadMentionForTest(t, channelID, agentID, "agent-task-inbox-source-"+uuid.NewString())
+	root := seedThreadProductInboxEventForTest(t, channelID, agentID, "agent-task-inbox-source-"+uuid.NewString())
 	inboxEventID := latestChannelAgentInboxEventForRootForTest(t, root.ID, agentID)
 	setAgentInboxTerminalOutcomeForTest(t, inboxEventID, "replied", false)
 
@@ -2333,8 +2333,8 @@ func TestSetWorkspaceOnboardingAgentIDIsConditionalOnNull(t *testing.T) {
 			Description: "cas test agent", RuntimeMode: "cloud", RuntimeConfig: []byte("{}"),
 			RuntimeID: runtimeID, MaxConcurrentTasks: 1, OwnerID: ownerID,
 			Instructions: "", CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-					Model:              pgtype.Text{String: "composer-1.5", Valid: true},
-})
+			Model: pgtype.Text{String: "composer-1.5", Valid: true},
+		})
 		if err != nil {
 			t.Fatalf("create agent %q: %v", name, err)
 		}

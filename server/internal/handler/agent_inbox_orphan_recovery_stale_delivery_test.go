@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestRecoverOrphanedTaskRetryIsImmediatelyClaimableAfterRecovery is task
@@ -31,12 +30,7 @@ func TestRecoverOrphanedTaskRetryIsImmediatelyClaimableAfterRecovery(t *testing.
 	}
 	ctx := context.Background()
 	runtimeID := handlerTestRuntimeID(t)
-	agentName := "Orphan Recovery Stale Delivery " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgentOnRuntime(t, agentName, runtimeID)
-	var agentHandle string
-	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, agentID).Scan(&agentHandle); err != nil {
-		t.Fatalf("load agent handle: %v", err)
-	}
+	agentID := createHandlerTestAgentOnRuntime(t, "Orphan Recovery Stale Delivery "+uuid.NewString()[:8], runtimeID)
 	channelID := seedChannelForTest(t, "orphan-stale-delivery-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -44,17 +38,7 @@ func TestRecoverOrphanedTaskRetryIsImmediatelyClaimableAfterRecovery(t *testing.
 		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
-	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
-		"user", parseUUID(testUserID), "Tester", "@"+agentHandle+" orphan stale delivery prompt",
-		"multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("orphan-stale-delivery-"+uuid.NewString()), 0)
-	if err != nil {
-		t.Fatalf("insert trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
+	createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
 
 	drain := func() (DrainAgentInboxResponse, int) {
 		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "orphan-stale-delivery-daemon")
@@ -135,7 +119,7 @@ func TestRecoverOrphanedTaskRetryIsImmediatelyClaimableAfterRecovery(t *testing.
 	// response-construction step — a fixture mismatch, not part of #107's
 	// stale-delivery mechanism.
 	var selectableEventID string
-	err = testPool.QueryRow(ctx, `
+	err := testPool.QueryRow(ctx, `
 		SELECT event.id
 		FROM agent_inbox_event event
 		JOIN agent_session session ON session.id = event.agent_session_id
@@ -196,18 +180,9 @@ func TestRecoverOrphanedTasksDoesNotExpireDeliveryForLiveRuntime(t *testing.T) {
 	deadRuntimeID := handlerTestRuntimeID(t)
 	deadAgentName := "Orphan Recovery Dead Runtime " + uuid.NewString()[:8]
 	deadAgentID := createHandlerTestAgentOnRuntime(t, deadAgentName, deadRuntimeID)
-	var deadAgentHandle string
-	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, deadAgentID).Scan(&deadAgentHandle); err != nil {
-		t.Fatalf("load dead-runtime agent handle: %v", err)
-	}
-
 	liveAgentID, liveRuntimeID := createHandlerTestAgentWithIsolatedRuntime(t)
-	var liveAgentHandle string
-	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, liveAgentID).Scan(&liveAgentHandle); err != nil {
-		t.Fatalf("load live-runtime agent handle: %v", err)
-	}
 
-	seedAndLease := func(runtimeID, agentID, agentHandle, daemonSuffix string) (eventID, deliveryID string) {
+	seedAndLease := func(runtimeID, agentID, daemonSuffix string) (eventID, deliveryID string) {
 		channelID := seedChannelForTest(t, "orphan-live-guard-"+uuid.NewString(), testUserID)
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -215,17 +190,7 @@ func TestRecoverOrphanedTasksDoesNotExpireDeliveryForLiveRuntime(t *testing.T) {
 			ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			t.Fatalf("seed agent member: %v", err)
 		}
-		channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-		if !found {
-			t.Fatal("channel not found after seed")
-		}
-		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
-			"user", parseUUID(testUserID), "Tester", "@"+agentHandle+" orphan live-guard prompt",
-			"multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("orphan-live-guard-"+uuid.NewString()), 0)
-		if err != nil {
-			t.Fatalf("insert trigger: %v", err)
-		}
-		testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
+		createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
 
 		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "orphan-live-guard-"+daemonSuffix)
 		req = withURLParam(req, "runtimeId", runtimeID)
@@ -247,8 +212,8 @@ func TestRecoverOrphanedTasksDoesNotExpireDeliveryForLiveRuntime(t *testing.T) {
 		return eventID, deliveryID
 	}
 
-	_, deadDeliveryID := seedAndLease(deadRuntimeID, deadAgentID, deadAgentHandle, "dead")
-	liveEventID, liveDeliveryID := seedAndLease(liveRuntimeID, liveAgentID, liveAgentHandle, "live")
+	_, deadDeliveryID := seedAndLease(deadRuntimeID, deadAgentID, "dead")
+	liveEventID, liveDeliveryID := seedAndLease(liveRuntimeID, liveAgentID, "live")
 
 	// Recover the dead runtime only.
 	recoverReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+deadRuntimeID+"/recover-orphans", nil, testWorkspaceID, "orphan-live-guard-dead-restarted")
@@ -289,4 +254,24 @@ func TestRecoverOrphanedTasksDoesNotExpireDeliveryForLiveRuntime(t *testing.T) {
 	if liveEventStatus != "draining" {
 		t.Fatalf("live-runtime event status=%s after recovering an unrelated dead runtime, want draining (untouched)", liveEventStatus)
 	}
+}
+
+func createProductInboxEventForRuntime(t *testing.T, runtimeID, agentID, channelID string) string {
+	t.Helper()
+	var eventID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_session_id, channel_id, agent_id, runtime_id,
+			reason, delivery_mode, response_mode, requires_wake, status, priority,
+			execution_config
+		)
+		VALUES (
+			$1, ensure_agent_wake_session($2), $3, $2, $4,
+			'product_task', 'execute', 'public_response', false, 'pending', 0,
+			'{}'::jsonb
+		)
+		RETURNING id::text`, testWorkspaceID, agentID, channelID, runtimeID).Scan(&eventID); err != nil {
+		t.Fatalf("create product inbox event: %v", err)
+	}
+	return eventID
 }

@@ -1257,24 +1257,19 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// channelAgentInboxCancelPathError tells clients that channel wake cancels must
-// use the explicit inbox contract (LRM-425), not POST /api/tasks/{id}/cancel.
-const channelAgentInboxCancelPathError = "channel agent inbox events must be cancelled via POST /api/channels/{channelId}/agent-inbox/events/{eventId}/cancel or POST /api/channels/{channelId}/agent-inbox/cancel-active"
-
 func (h *Handler) cancelAgentInboxEventByUser(w http.ResponseWriter, r *http.Request, workspaceUUID, inboxEventID pgtype.UUID, userID, workspaceID string) bool {
 	ctx := r.Context()
-	var eventAgentID, channelID, chatSessionID pgtype.UUID
+	var eventAgentID, chatSessionID pgtype.UUID
 	var eventStatus, terminalOutcome string
 	if err := h.DB.QueryRow(ctx, `
 		SELECT e.agent_id,
-		       e.channel_id,
 		       e.chat_session_id,
 		       e.status,
 		       COALESCE(e.terminal_outcome, '')
 		FROM agent_inbox_event e
 		WHERE e.id = $1
 		  AND e.workspace_id = $2
-		  AND e.requires_wake`, inboxEventID, workspaceUUID).Scan(&eventAgentID, &channelID, &chatSessionID, &eventStatus, &terminalOutcome); err != nil {
+		  AND e.requires_wake`, inboxEventID, workspaceUUID).Scan(&eventAgentID, &chatSessionID, &eventStatus, &terminalOutcome); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false
 		}
@@ -1282,18 +1277,7 @@ func (h *Handler) cancelAgentInboxEventByUser(w http.ResponseWriter, r *http.Req
 		return true
 	}
 
-	// Channel-scoped wakes no longer cancel through the tasks-cancel dual path
-	// (LRM-425 / LRM-238). Clients must call the channel agent-inbox cancel APIs.
-	if channelID.Valid {
-		writeError(w, http.StatusConflict, channelAgentInboxCancelPathError)
-		return true
-	}
-
 	if chatSessionID.Valid {
-		if sessionChannelID := h.channelIDForChatSession(ctx, chatSessionID); sessionChannelID != "" {
-			writeError(w, http.StatusConflict, channelAgentInboxCancelPathError)
-			return true
-		}
 		cs, err := h.Queries.GetChatSessionInWorkspace(ctx, db.GetChatSessionInWorkspaceParams{
 			ID:          chatSessionID,
 			WorkspaceID: workspaceUUID,

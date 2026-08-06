@@ -304,13 +304,12 @@ func agentAttachmentUploadSessionRequest(t *testing.T, method, path, taskID, age
 	return withAgentAttachmentSessionID(req)
 }
 
-func agentAttachmentUploadRawRequest(t *testing.T, method, path, taskID, agentID string, body []byte) *http.Request {
+func agentAttachmentUploadRawRequest(t *testing.T, method, path, _ string, agentID string, body []byte) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewReader(body))
 	req = withChatTestWorkspaceCtx(t, req)
-	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Actor-Source", "agent_credential")
 	req.Header.Set("X-Agent-ID", agentID)
-	req.Header.Set("X-Task-ID", taskID)
 	return withAgentAttachmentSessionID(req)
 }
 

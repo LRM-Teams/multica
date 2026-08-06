@@ -387,15 +387,10 @@ func (h *Handler) completeCollaborationTurnTx(ctx context.Context, tx pgx.Tx, ev
 	if deadline.Valid && !deadline.Time.After(time.Now()) {
 		return nil, errors.New("collaboration turn grant expired")
 	}
-	var resultMessageID pgtype.UUID
-	_ = tx.QueryRow(ctx, `
-		SELECT channel_message_id
-		FROM agent_task_transport_audit
-		WHERE inbox_event_id = $1
-		  AND action = 'message_send'
-		  AND channel_message_id IS NOT NULL
-		ORDER BY created_at ASC
-		LIMIT 1`, event.ID).Scan(&resultMessageID)
+	// Collaboration owns turn completion through its task lifecycle. A normal
+	// chat Message is independently delivered and must not be linked back via
+	// the retired task transport audit table.
+	resultMessageID := pgtype.UUID{}
 	if turnStatus == "granted" {
 		result, err := tx.Exec(ctx, `
 			UPDATE collaboration_turn

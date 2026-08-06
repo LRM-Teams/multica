@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestDrainAgentInbox_HealsStaleRuntimeAfterAgentReassignment is the
@@ -50,18 +49,9 @@ func TestDrainAgentInbox_HealsStaleRuntimeAfterAgentReassignment(t *testing.T) {
 		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
-	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
+	eventID := createProductInboxEventForRuntime(t, oldRuntimeID, agentID, channelID)
 
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+agentName+" please answer", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-runtime-heal"), 0)
-	if err != nil {
-		t.Fatalf("insert mention trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
-
-	var eventID, eventRuntimeID string
+	var eventRuntimeID string
 	if err := testPool.QueryRow(ctx, `
 		SELECT id, runtime_id
 		FROM agent_inbox_event
@@ -159,23 +149,7 @@ func TestUpdateAgent_ReassignsClaimableInboxEventsOnRuntimeMove(t *testing.T) {
 		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
-	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+agentName+" please answer", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-update-heal"), 0)
-	if err != nil {
-		t.Fatalf("insert mention trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
-
-	var eventID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT id FROM agent_inbox_event
-		WHERE agent_id = $1 AND status IN ('pending', 'failed')
-		ORDER BY created_at DESC LIMIT 1`, agentID).Scan(&eventID); err != nil {
-		t.Fatalf("load pending inbox event: %v", err)
-	}
+	eventID := createProductInboxEventForRuntime(t, oldRuntimeID, agentID, channelID)
 
 	body := map[string]any{"runtime_id": newRuntimeID}
 	w := httptest.NewRecorder()

@@ -146,14 +146,6 @@ func (bridge *VoiceCallAgentBridge) loadSpokenCompletionContent(
 	ctx context.Context,
 	dispatch voiceCallAgentDispatchResult,
 ) (string, error) {
-	transportContent, err := bridge.loadTransportCompletionContent(ctx, dispatch)
-	if err != nil {
-		return "", err
-	}
-	if transportContent != "" {
-		return transportContent, nil
-	}
-
 	rows, err := bridge.handler.DB.Query(ctx, `
 		SELECT content
 		FROM chat_message
@@ -180,46 +172,6 @@ func (bridge *VoiceCallAgentBridge) loadSpokenCompletionContent(
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("iterate voice call assistant completion: %w", err)
-	}
-	return strings.Join(parts, "\n"), nil
-}
-
-func (bridge *VoiceCallAgentBridge) loadTransportCompletionContent(
-	ctx context.Context,
-	dispatch voiceCallAgentDispatchResult,
-) (string, error) {
-	rows, err := bridge.handler.DB.Query(ctx, `
-		SELECT message.content
-		FROM agent_task_transport_audit audit
-		JOIN channel_message message
-		  ON message.id = audit.channel_message_id
-		WHERE audit.inbox_event_id = $1
-		  AND audit.action = 'message_send'
-		  AND audit.channel_id = $2
-		  AND message.channel_id = $2
-		  AND message.deleted_at IS NULL
-		  AND btrim(message.content) <> ''
-		ORDER BY audit.created_at ASC, audit.id ASC`,
-		dispatch.Event.ID,
-		parseUUID(dispatch.Scope.ChannelID),
-	)
-	if err != nil {
-		return "", fmt.Errorf("load voice call transport completion: %w", err)
-	}
-	defer rows.Close()
-
-	var parts []string
-	for rows.Next() {
-		var content string
-		if err := rows.Scan(&content); err != nil {
-			return "", fmt.Errorf("scan voice call transport completion: %w", err)
-		}
-		if content = strings.TrimSpace(content); content != "" {
-			parts = append(parts, content)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("iterate voice call transport completion: %w", err)
 	}
 	return strings.Join(parts, "\n"), nil
 }

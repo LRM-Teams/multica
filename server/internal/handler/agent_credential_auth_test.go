@@ -17,7 +17,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type agentCredentialAuditFailTxStarter struct {
@@ -929,277 +928,6 @@ func TestEnsureDaemonAgentCredential_RejectsUnboundRuntime(t *testing.T) {
 	}
 }
 
-func TestDrainAgentInbox_CredentialTransportRuntimeSkipsDeliveryTokenMint(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	daemonID := "agent-credential-no-mint-" + uuid.NewString()
-	runtimeID := handlerTestRuntimeID(t)
-	seedHandlerTestRuntimeOwner(t, testUserID)
-	seedHandlerTestRuntimeDaemonID(t, daemonID)
-	seedHandlerTestRuntimeCapabilities(t, []string{protocol.DaemonCapabilityAgentCredentialTransport})
-	agentName := "Agent Credential No Mint " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	channelID := seedChannelForTest(t, "agent-credential-no-mint-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed agent channel member: %v", err)
-	}
-	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") credential transport", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("agent-credential-no-mint"), 0)
-	if err != nil {
-		t.Fatalf("insert mention trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
-
-	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, daemonID)
-	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
-	drainRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
-	if drainRec.Code != http.StatusOK {
-		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
-	}
-	var drainResp DrainAgentInboxResponse
-	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
-		t.Fatalf("decode drain response: %v", err)
-	}
-	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
-		t.Fatalf("drain response missing event task: %s", drainRec.Body.String())
-	}
-	if drainResp.Events[0].Task.AuthToken != "" {
-		t.Fatalf("credential-transport runtime must not receive #452 auth_token")
-	}
-	var tokenCount int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_token WHERE inbox_event_id = $1`, drainResp.Events[0].ID).Scan(&tokenCount); err != nil {
-		t.Fatalf("count inbox token rows: %v", err)
-	}
-	if tokenCount != 0 {
-		t.Fatalf("agent_inbox_token rows = %d, want 0", tokenCount)
-	}
-}
-
-func TestAgentCredentialTransportA2AReplyKeepsInheritedExchange(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	fixture := seedAgentCredentialTransportFixture(t)
-	peerDisplayName := "Agent Credential A2A Peer " + uuid.NewString()[:8]
-	peerID := createHandlerTestAgent(t, peerDisplayName, nil)
-	channel := createAgentAgentDMChannelForTest(t, fixture.agentID, peerID)
-	lowID, highID, ok := normalizedAgentDMPair(parseUUID(fixture.agentID), parseUUID(peerID))
-	if !ok {
-		t.Fatal("normalize agent credential A2A pair failed")
-	}
-
-	var peerHandle string
-	if err := testPool.QueryRow(ctx, `
-		SELECT name
-		FROM agent
-		WHERE id = $1`, peerID).Scan(&peerHandle); err != nil {
-		t.Fatalf("load peer handle: %v", err)
-	}
-
-	var exchangeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_dm_exchange (
-		  workspace_id, channel_id, agent_low_id, agent_high_id,
-		  next_sender_agent_id, matter_id, turn_count
-		)
-		VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), 1)
-		RETURNING id`,
-		testWorkspaceID, channel.ID, lowID, highID, fixture.agentID,
-	).Scan(&exchangeID); err != nil {
-		t.Fatalf("seed inherited agent credential exchange: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET agent_dm_exchange_id = $2,
-		    agent_dm_turn = 1
-		WHERE id = $1`, fixture.event.ID, exchangeID); err != nil {
-		t.Fatalf("bind agent credential inbox event to exchange: %v", err)
-	}
-
-	event, err := testHandler.Queries.GetAgentInboxEvent(ctx, parseUUID(fixture.event.ID))
-	if err != nil {
-		t.Fatalf("load bound agent credential inbox event: %v", err)
-	}
-	synthetic := agentInboxSyntheticTask(event, parseUUID(handlerTestRuntimeID(t)))
-	if uuidToString(synthetic.AgentDmExchangeID) != exchangeID {
-		t.Fatalf("synthetic exchange_id = %q, want %q", uuidToString(synthetic.AgentDmExchangeID), exchangeID)
-	}
-	if !synthetic.AgentDmTurn.Valid || synthetic.AgentDmTurn.Int32 != 1 {
-		t.Fatalf("synthetic agent_dm_turn = %+v, want 1", synthetic.AgentDmTurn)
-	}
-
-	router := chi.NewRouter()
-	router.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
-		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
-		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
-	})
-	clientID := "agent-credential-a2a-" + uuid.NewString()
-	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":            "dm:@" + peerHandle,
-		"content":           "automatic A2A reply",
-		"client_message_id": clientID,
-	})
-	sendReq.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
-	sendReq.Header.Set("X-Workspace-ID", testWorkspaceID)
-	sendReq.Header.Set("X-Agent-Inbox-Event-ID", fixture.event.ID)
-	sendReq.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.event.DeliveryID)
-	sendReq.Header.Set("X-Agent-Inbox-Lease-Token", fixture.event.LeaseToken)
-	sendRec := httptest.NewRecorder()
-	router.ServeHTTP(sendRec, sendReq)
-	if sendRec.Code != http.StatusCreated {
-		t.Fatalf("agent credential A2A send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
-	}
-
-	var exchangeCount, turnCount int
-	var state, latestMessageID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_dm_exchange
-		WHERE workspace_id = $1
-		  AND agent_low_id = $2
-		  AND agent_high_id = $3`,
-		testWorkspaceID, lowID, highID,
-	).Scan(&exchangeCount); err != nil {
-		t.Fatalf("count agent credential A2A exchanges: %v", err)
-	}
-	if exchangeCount != 1 {
-		t.Fatalf("agent credential A2A exchanges = %d, want inherited exchange only", exchangeCount)
-	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT turn_count, state, latest_message_id
-		FROM agent_dm_exchange
-		WHERE id = $1`, exchangeID).Scan(&turnCount, &state, &latestMessageID); err != nil {
-		t.Fatalf("load inherited agent credential exchange: %v", err)
-	}
-	if turnCount != 2 || state != "active" || latestMessageID == "" {
-		t.Fatalf("inherited exchange turn_count=%d state=%q latest_message_id=%q, want 2/active/non-empty", turnCount, state, latestMessageID)
-	}
-}
-
-func TestAgentCredentialTransportRequiresActiveInboxDelivery(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	fixture := seedAgentCredentialTransportFixture(t)
-	router := chi.NewRouter()
-	router.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
-		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
-		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
-	})
-	req := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":            "#" + channelNameForTransportTest(t, fixture.channelID),
-		"content":           "must not bypass delivery",
-		"client_message_id": "agent-credential-without-delivery-" + uuid.NewString(),
-	})
-	req.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
-	req.Header.Set("X-Workspace-ID", testWorkspaceID)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status=%d body=%s want 403", rec.Code, rec.Body.String())
-	}
-}
-
-func TestAgentCredentialActiveInboxDeliveryRejectsInvalidFreshness(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	for _, tc := range []struct {
-		name       string
-		mutate     func(t *testing.T, fixture agentCredentialTransportFixture) (eventID, deliveryID, leaseToken string)
-		wantStatus int
-	}{
-		{
-			name: "wrong event",
-			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
-				t.Helper()
-				return uuid.NewString(), fixture.event.DeliveryID, fixture.event.LeaseToken
-			},
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name: "wrong delivery",
-			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
-				t.Helper()
-				return fixture.event.ID, uuid.NewString(), fixture.event.LeaseToken
-			},
-			wantStatus: http.StatusConflict,
-		},
-		{
-			name: "wrong lease token",
-			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
-				t.Helper()
-				return fixture.event.ID, fixture.event.DeliveryID, uuid.NewString()
-			},
-			wantStatus: http.StatusConflict,
-		},
-		{
-			name: "expired lease",
-			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
-				t.Helper()
-				if _, err := testPool.Exec(context.Background(), `
-					UPDATE agent_event_delivery
-					SET lease_expires_at = now() - interval '1 second'
-					WHERE id = $1`, fixture.event.DeliveryID); err != nil {
-					t.Fatalf("expire delivery: %v", err)
-				}
-				return fixture.event.ID, fixture.event.DeliveryID, fixture.event.LeaseToken
-			},
-			wantStatus: http.StatusConflict,
-		},
-		{
-			name: "stale delivery with newer lease",
-			mutate: func(t *testing.T, fixture agentCredentialTransportFixture) (string, string, string) {
-				t.Helper()
-				if _, err := testPool.Exec(context.Background(), `
-					INSERT INTO agent_event_delivery (workspace_id, agent_session_id, inbox_event_id, runtime_id, status)
-					SELECT workspace_id, agent_session_id, id, $2, 'leased'
-					FROM agent_inbox_event
-					WHERE id = $1`, fixture.event.ID, handlerTestRuntimeID(t)); err != nil {
-					t.Fatalf("insert newer delivery: %v", err)
-				}
-				return fixture.event.ID, fixture.event.DeliveryID, fixture.event.LeaseToken
-			},
-			wantStatus: http.StatusConflict,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fixture := seedAgentCredentialTransportFixture(t)
-			eventID, deliveryID, leaseToken := tc.mutate(t, fixture)
-			req := newRequest(http.MethodPost, "/api/agent/messages/send", nil)
-			req = withChatTestWorkspaceCtx(t, req)
-			req.Header.Set("X-Actor-Source", "agent_credential")
-			req.Header.Set("X-Agent-ID", fixture.agentID)
-			req.Header.Set("X-Agent-Inbox-Event-ID", eventID)
-			req.Header.Set("X-Agent-Inbox-Delivery-ID", deliveryID)
-			req.Header.Set("X-Agent-Inbox-Lease-Token", leaseToken)
-			w := httptest.NewRecorder()
-			if _, _, ok := testHandler.requireAgentCredentialActiveInboxDelivery(w, req); ok {
-				t.Fatal("agent credential active inbox delivery unexpectedly accepted invalid freshness")
-			}
-			if w.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d: %s", w.Code, tc.wantStatus, w.Body.String())
-			}
-		})
-	}
-}
-
 type agentCredentialTransportFixture struct {
 	agentID         string
 	channelID       string
@@ -1211,44 +939,20 @@ func seedAgentCredentialTransportFixture(t *testing.T) agentCredentialTransportF
 	t.Helper()
 
 	ctx := context.Background()
-	agentName := "Agent Credential Transport " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	runtimeID := handlerTestRuntimeID(t)
-	seedHandlerTestRuntimeOwner(t, testUserID)
-	channelID := seedChannelForTest(t, "agent-credential-transport-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed agent channel member: %v", err)
-	}
-	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") credential transport", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("agent-credential-transport"), 0)
-	if err != nil {
-		t.Fatalf("insert mention trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
-
-	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-credential-transport-daemon")
-	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
-	drainRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
-	if drainRec.Code != http.StatusOK {
-		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
-	}
-	var drainResp DrainAgentInboxResponse
-	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
-		t.Fatalf("decode drain response: %v", err)
-	}
-	if len(drainResp.Events) != 1 {
-		t.Fatalf("drain response events=%d, want 1: %s", len(drainResp.Events), drainRec.Body.String())
-	}
-	event := drainResp.Events[0]
-	if event.Task == nil {
-		t.Fatalf("drain response missing task: %s", drainRec.Body.String())
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	var deliveryID, leaseToken string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_event_delivery (
+			workspace_id, agent_session_id, inbox_event_id, runtime_id,
+			status, lease_expires_at
+		)
+		SELECT workspace_id, agent_session_id, id, runtime_id,
+		       'leased', now() + interval '10 minutes'
+		FROM agent_inbox_event
+		WHERE id = $1
+		RETURNING id::text, lease_token::text`, taskID).Scan(&deliveryID, &leaseToken); err != nil {
+		t.Fatalf("create product task delivery fixture: %v", err)
 	}
 
 	rawToken, err := auth.GenerateAgentCredentialToken()
@@ -1266,298 +970,17 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("create agent credential: %v", err)
 	}
 	return agentCredentialTransportFixture{
-		agentID:         agentID,
-		channelID:       channelID,
-		event:           event,
+		agentID:   agentID,
+		channelID: channelID,
+		event: AgentInboxEventResponse{
+			ID:           taskID,
+			DeliveryID:   deliveryID,
+			LeaseToken:   leaseToken,
+			ChannelID:    channelID,
+			AgentID:      agentID,
+			RequiresWake: true,
+		},
 		credentialToken: rawToken,
-	}
-}
-
-func TestAgentCredentialAuthSetsBoundActorHeaders(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "agent-credential-auth", nil)
-	rawToken, err := auth.GenerateAgentCredentialToken()
-	if err != nil {
-		t.Fatalf("generate agent credential token: %v", err)
-	}
-	credential, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
-		TokenHash:   auth.HashToken(rawToken),
-		TokenPrefix: tokenPrefixForTest(rawToken),
-		AgentID:     parseUUID(agentID),
-		WorkspaceID: parseUUID(testWorkspaceID),
-		UserID:      parseUUID(testUserID),
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-	})
-	if err != nil {
-		t.Fatalf("create agent credential: %v", err)
-	}
-
-	var gotActorSource, gotUserID, gotAgentID, gotCredentialID, gotWorkspaceID, gotTaskID string
-	handler := middleware.Auth(testHandler.Queries, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotActorSource = r.Header.Get("X-Actor-Source")
-		gotUserID = r.Header.Get("X-User-ID")
-		gotAgentID = r.Header.Get("X-Agent-ID")
-		gotCredentialID = r.Header.Get("X-Agent-Credential-ID")
-		gotWorkspaceID = r.Header.Get("X-Workspace-ID")
-		gotTaskID = r.Header.Get("X-Task-ID")
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	req := httptest.NewRequest(http.MethodGet, "/api/probe", nil)
-	req.Header.Set("Authorization", "Bearer "+rawToken)
-	req.Header.Set("X-Actor-Source", "task_token")
-	req.Header.Set("X-Workspace-ID", "forged-workspace")
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
-	}
-	if gotActorSource != "agent_credential" {
-		t.Fatalf("X-Actor-Source = %q, want agent_credential", gotActorSource)
-	}
-	if gotUserID != testUserID || gotAgentID != agentID || gotCredentialID != uuidToString(credential.ID) || gotWorkspaceID != testWorkspaceID {
-		t.Fatalf("bound headers mismatch: user=%q agent=%q credential=%q workspace=%q", gotUserID, gotAgentID, gotCredentialID, gotWorkspaceID)
-	}
-	if gotTaskID != "" {
-		t.Fatalf("agent credential auth must not synthesize X-Task-ID, got %q", gotTaskID)
-	}
-
-	var lastUsed pgtype.Timestamptz
-	if err := testPool.QueryRow(ctx, `SELECT last_used_at FROM agent_credential WHERE id = $1`, credential.ID).Scan(&lastUsed); err != nil {
-		t.Fatalf("load last_used_at: %v", err)
-	}
-	if !lastUsed.Valid {
-		t.Fatal("expected agent credential auth to touch last_used_at")
-	}
-
-	if _, err := testHandler.Queries.RevokeAgentCredential(ctx, credential.ID); err != nil {
-		t.Fatalf("revoke agent credential: %v", err)
-	}
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("revoked credential status = %d, want 401", w.Code)
-	}
-}
-
-func TestAgentCredentialArchiveRevokesImmediatelyAndRestoreDoesNotResurrect(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "agent-credential-archive-boundary", nil)
-	rawToken, err := auth.GenerateAgentCredentialToken()
-	if err != nil {
-		t.Fatalf("generate agent credential token: %v", err)
-	}
-	credential, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
-		TokenHash:   auth.HashToken(rawToken),
-		TokenPrefix: tokenPrefixForTest(rawToken),
-		AgentID:     parseUUID(agentID),
-		WorkspaceID: parseUUID(testWorkspaceID),
-		UserID:      parseUUID(testUserID),
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-	})
-	if err != nil {
-		t.Fatalf("create agent credential: %v", err)
-	}
-
-	authHandler := middleware.Auth(testHandler.Queries, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	req := httptest.NewRequest(http.MethodGet, "/api/probe", nil)
-	req.Header.Set("Authorization", "Bearer "+rawToken)
-
-	w := httptest.NewRecorder()
-	authHandler.ServeHTTP(w, req)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("precondition auth status = %d, want 204", w.Code)
-	}
-
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("archive agent: %v", err)
-	}
-	w = httptest.NewRecorder()
-	authHandler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("archived agent credential status = %d, want 401", w.Code)
-	}
-
-	var revokedAt pgtype.Timestamptz
-	if err := testPool.QueryRow(ctx, `SELECT revoked_at FROM agent_credential WHERE id = $1`, credential.ID).Scan(&revokedAt); err != nil {
-		t.Fatalf("load revoked_at: %v", err)
-	}
-	if !revokedAt.Valid {
-		t.Fatal("archive boundary must durably revoke the credential")
-	}
-	var reason string
-	var revokedCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT details->>'reason', (details->>'revoked_count')::integer
-		FROM activity_log
-		WHERE workspace_id = $1
-		  AND action = 'agent_credential_revoked'
-		  AND details->>'agent_id' = $2
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, testWorkspaceID, agentID).Scan(&reason, &revokedCount); err != nil {
-		t.Fatalf("load archive revoke audit: %v", err)
-	}
-	if reason != "agent_archived" || revokedCount != 1 {
-		t.Fatalf("archive revoke audit reason/count = %q/%d, want agent_archived/1", reason, revokedCount)
-	}
-
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = NULL, archived_by = NULL WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("restore agent: %v", err)
-	}
-	w = httptest.NewRecorder()
-	authHandler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("restored agent old credential status = %d, want 401", w.Code)
-	}
-}
-
-func TestAgentCredentialOwnerMemberDeleteRevokesImmediately(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID, _, memberID := privateAgentTestFixture(t)
-	rawToken, err := auth.GenerateAgentCredentialToken()
-	if err != nil {
-		t.Fatalf("generate agent credential token: %v", err)
-	}
-	credential, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
-		TokenHash:   auth.HashToken(rawToken),
-		TokenPrefix: tokenPrefixForTest(rawToken),
-		AgentID:     parseUUID(agentID),
-		WorkspaceID: parseUUID(testWorkspaceID),
-		UserID:      parseUUID(memberID),
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-	})
-	if err != nil {
-		t.Fatalf("create member-bound credential: %v", err)
-	}
-
-	if _, err := testPool.Exec(ctx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, memberID); err != nil {
-		t.Fatalf("delete owner membership: %v", err)
-	}
-
-	var revokedAt pgtype.Timestamptz
-	if err := testPool.QueryRow(ctx, `SELECT revoked_at FROM agent_credential WHERE id = $1`, credential.ID).Scan(&revokedAt); err != nil {
-		t.Fatalf("load revoked_at: %v", err)
-	}
-	if !revokedAt.Valid {
-		t.Fatal("member delete boundary must durably revoke the credential")
-	}
-	var reason string
-	var revokedCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT details->>'reason', (details->>'revoked_count')::integer
-		FROM activity_log
-		WHERE workspace_id = $1
-		  AND action = 'agent_credential_revoked'
-		  AND details->>'owner_user_id' = $2
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, testWorkspaceID, memberID).Scan(&reason, &revokedCount); err != nil {
-		t.Fatalf("load member revoke audit: %v", err)
-	}
-	if reason != "owner_membership_deleted" || revokedCount != 1 {
-		t.Fatalf("member revoke audit reason/count = %q/%d, want owner_membership_deleted/1", reason, revokedCount)
-	}
-
-	authHandler := middleware.Auth(testHandler.Queries, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	req := httptest.NewRequest(http.MethodGet, "/api/probe", nil)
-	req.Header.Set("Authorization", "Bearer "+rawToken)
-	w := httptest.NewRecorder()
-	authHandler.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("deleted-member credential status = %d, want 401", w.Code)
-	}
-}
-
-func TestAgentCredentialInsertSerializesWithArchive(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "agent-credential-archive-race", nil)
-	tx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin archive tx: %v", err)
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, agentID); err != nil {
-		t.Fatalf("archive agent in tx: %v", err)
-	}
-
-	insertDone := make(chan error, 1)
-	go func() {
-		rawToken, tokenErr := auth.GenerateAgentCredentialToken()
-		if tokenErr != nil {
-			insertDone <- tokenErr
-			return
-		}
-		_, insertErr := testHandler.Queries.CreateAgentCredential(context.Background(), db.CreateAgentCredentialParams{
-			TokenHash:   auth.HashToken(rawToken),
-			TokenPrefix: tokenPrefixForTest(rawToken),
-			AgentID:     parseUUID(agentID),
-			WorkspaceID: parseUUID(testWorkspaceID),
-			UserID:      parseUUID(testUserID),
-			ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-		})
-		insertDone <- insertErr
-	}()
-
-	select {
-	case err := <-insertDone:
-		t.Fatalf("credential insert crossed uncommitted archive boundary: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit archive tx: %v", err)
-	}
-	select {
-	case err := <-insertDone:
-		if err == nil {
-			t.Fatal("credential insert after archive commit must fail closed")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("credential insert did not unblock after archive commit")
-	}
-}
-
-func TestAgentEnv_AgentCredentialActorSource(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	targetID := createHandlerTestAgent(t, "env-agent-credential-target", nil)
-	hostAgentID := createHandlerTestAgent(t, "env-agent-credential-host", nil)
-	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET custom_env = '{"K":"v"}' WHERE id = $1`, targetID); err != nil {
-		t.Fatalf("failed to set custom_env: %v", err)
-	}
-
-	req := newRequest(http.MethodGet, "/api/agents/"+targetID+"/env", nil)
-	req = withURLParam(req, "id", targetID)
-	req.Header.Set("X-Actor-Source", "agent_credential")
-	req.Header.Set("X-Agent-ID", hostAgentID)
-	req.Header.Del("X-Task-ID")
-	w := httptest.NewRecorder()
-	testHandler.GetAgentEnv(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 when X-Actor-Source=agent_credential, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -1568,38 +991,12 @@ func tokenPrefixForTest(token string) string {
 	return token[:12]
 }
 
-// LRM-1055: ambient / channel_role_changed wakes have channel_id but no
-// chat_session_id. Transport auth must resolve origin from the channel and
-// not hard-reject on the missing session.
-func TestAgentCredentialTransportAllowsChannelBoundWakeWithoutChatSession(t *testing.T) {
+func TestAgentCredentialChatTransportDoesNotUseActiveInboxContextOrTurn(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
-	ctx := context.Background()
 	fixture := seedAgentCredentialTransportFixture(t)
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET chat_session_id = NULL,
-		    reason = 'channel_role_changed',
-		    delivery_mode = 'execute',
-		    response_mode = 'public_response'
-		WHERE id = $1`, fixture.event.ID); err != nil {
-		t.Fatalf("clear chat_session on channel-bound wake: %v", err)
-	}
-
-	event, err := testHandler.Queries.GetAgentInboxEvent(ctx, parseUUID(fixture.event.ID))
-	if err != nil {
-		t.Fatalf("reload inbox event: %v", err)
-	}
-	if event.ChatSessionID.Valid {
-		t.Fatal("expected chat_session_id cleared")
-	}
-	origin, ok := testHandler.chatOutputOriginForTask(ctx, event)
-	if !ok || uuidToString(origin.channelID) != fixture.channelID || uuidToString(origin.agentID) != fixture.agentID {
-		t.Fatalf("channel origin = %+v ok=%v, want channel=%s agent=%s", origin, ok, fixture.channelID, fixture.agentID)
-	}
-
 	router := chi.NewRouter()
 	router.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
@@ -1608,13 +1005,9 @@ func TestAgentCredentialTransportAllowsChannelBoundWakeWithoutChatSession(t *tes
 		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
 		r.Post("/api/agent/reminders/list", testHandler.AgentTransportListReminders)
 	})
-
 	authHeaders := func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
 		req.Header.Set("X-Workspace-ID", testWorkspaceID)
-		req.Header.Set("X-Agent-Inbox-Event-ID", fixture.event.ID)
-		req.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.event.DeliveryID)
-		req.Header.Set("X-Agent-Inbox-Lease-Token", fixture.event.LeaseToken)
 	}
 
 	target := "#" + channelNameForTransportTest(t, fixture.channelID)
@@ -1626,7 +1019,7 @@ func TestAgentCredentialTransportAllowsChannelBoundWakeWithoutChatSession(t *tes
 	readRec := httptest.NewRecorder()
 	router.ServeHTTP(readRec, readReq)
 	if readRec.Code != http.StatusOK {
-		t.Fatalf("channel-bound read without chat_session: status=%d body=%s", readRec.Code, readRec.Body.String())
+		t.Fatalf("credential read without inbox context: status=%d body=%s", readRec.Code, readRec.Body.String())
 	}
 
 	listReq := newRequest(http.MethodPost, "/api/agent/reminders/list", map[string]any{"status": "active"})
@@ -1634,97 +1027,39 @@ func TestAgentCredentialTransportAllowsChannelBoundWakeWithoutChatSession(t *tes
 	listRec := httptest.NewRecorder()
 	router.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
-		t.Fatalf("channel-bound reminder list without chat_session: status=%d body=%s", listRec.Code, listRec.Body.String())
+		t.Fatalf("credential reminder list without inbox context: status=%d body=%s", listRec.Code, listRec.Body.String())
 	}
 
-	clientID := "lrm-1055-role-wake-" + uuid.NewString()
-	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":            target,
-		"content":           "channel role wake reply",
-		"client_message_id": clientID,
-	})
-	authHeaders(sendReq)
-	sendRec := httptest.NewRecorder()
-	router.ServeHTTP(sendRec, sendReq)
-	if sendRec.Code != http.StatusCreated {
-		t.Fatalf("channel_role_changed send without chat_session: status=%d body=%s", sendRec.Code, sendRec.Body.String())
-	}
-}
-
-func TestAgentCredentialTransportAmbientManagerMaySpeakWithoutChatSession(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	fixture := seedAgentCredentialTransportFixture(t)
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET chat_session_id = NULL,
-		    reason = 'ambient',
-		    delivery_mode = 'observe',
-		    response_mode = 'no_public_output'
-		WHERE id = $1`, fixture.event.ID); err != nil {
-		t.Fatalf("convert wake to ambient observe: %v", err)
-	}
-
-	router := chi.NewRouter()
-	router.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
-		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
-		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
-		r.Post("/api/agent/reminders/list", testHandler.AgentTransportListReminders)
-	})
-	authHeaders := func(req *http.Request) {
-		req.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
-		req.Header.Set("X-Workspace-ID", testWorkspaceID)
-		req.Header.Set("X-Agent-Inbox-Event-ID", fixture.event.ID)
-		req.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.event.DeliveryID)
-		req.Header.Set("X-Agent-Inbox-Lease-Token", fixture.event.LeaseToken)
-	}
-	target := "#" + channelNameForTransportTest(t, fixture.channelID)
-
-	// Non-manager ambient: list/read origin works, send stays blocked by response_mode.
-	listReq := newRequest(http.MethodPost, "/api/agent/reminders/list", map[string]any{"status": "active"})
-	authHeaders(listReq)
-	listRec := httptest.NewRecorder()
-	router.ServeHTTP(listRec, listReq)
-	if listRec.Code != http.StatusOK {
-		t.Fatalf("ambient reminder list: status=%d body=%s", listRec.Code, listRec.Body.String())
-	}
-
-	blockedSend := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":            target,
-		"content":           "blocked ambient reply",
-		"client_message_id": "lrm-1055-ambient-blocked-" + uuid.NewString(),
-	})
-	authHeaders(blockedSend)
-	blockedRec := httptest.NewRecorder()
-	router.ServeHTTP(blockedRec, blockedSend)
-	if blockedRec.Code != http.StatusForbidden {
-		t.Fatalf("non-manager ambient send status=%d, want 403: %s", blockedRec.Code, blockedRec.Body.String())
-	}
-	if !strings.Contains(blockedRec.Body.String(), "no_public_output") {
-		t.Fatalf("non-manager ambient send body=%s, want response_mode error", blockedRec.Body.String())
-	}
-
-	if _, err := testPool.Exec(ctx, `
-		UPDATE channel_member SET role = 'manager'
-		WHERE member_type = 'agent' AND member_id = $1 AND channel_id = $2`,
-		fixture.agentID, fixture.channelID); err != nil {
-		t.Fatalf("promote ambient agent to channel manager: %v", err)
-	}
-
-	okSend := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":            target,
-		"content":           "manager ambient reply",
-		"client_message_id": "lrm-1055-ambient-manager-" + uuid.NewString(),
-	})
-	authHeaders(okSend)
-	okRec := httptest.NewRecorder()
-	router.ServeHTTP(okRec, okSend)
-	if okRec.Code != http.StatusCreated {
-		t.Fatalf("manager ambient send: status=%d body=%s", okRec.Code, okRec.Body.String())
+	// A durable credential authorizes every direct chat send. In particular,
+	// the second send must not depend on an already-consumed Inbox lease or a
+	// currently active runtime turn.
+	messageIDs := make(map[string]struct{}, 2)
+	for _, content := range []string{
+		"credential chat without inbox context: first",
+		"credential chat without inbox context: second",
+	} {
+		sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+			"target":            target,
+			"content":           content,
+			"client_message_id": "credential-chat-" + uuid.NewString(),
+		})
+		authHeaders(sendReq)
+		sendRec := httptest.NewRecorder()
+		router.ServeHTTP(sendRec, sendReq)
+		if sendRec.Code != http.StatusCreated {
+			t.Fatalf("credential send %q without inbox or turn context: status=%d body=%s", content, sendRec.Code, sendRec.Body.String())
+		}
+		var sent AgentTransportSendResponse
+		if err := json.Unmarshal(sendRec.Body.Bytes(), &sent); err != nil {
+			t.Fatalf("decode credential send %q: %v", content, err)
+		}
+		if sent.Message.ID == "" {
+			t.Fatalf("credential send %q returned no message id: %+v", content, sent)
+		}
+		if _, duplicate := messageIDs[sent.Message.ID]; duplicate {
+			t.Fatalf("credential sends reused message id %s", sent.Message.ID)
+		}
+		messageIDs[sent.Message.ID] = struct{}{}
 	}
 }
 

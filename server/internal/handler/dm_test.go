@@ -1041,16 +1041,15 @@ func listedDMItemForTest(t *testing.T, channelID string) *DMItem {
 	return nil
 }
 
-// TestSendChannelMessageDM_DispatchesAgent: a user message in an agent DM
-// auto-dispatches to the agent without any @-mention (LRM-1079: channel-only
-// inbox wake, no forced chat_session).
+// TestSendChannelMessageDM_DispatchesAgent verifies that a user message in an
+// agent DM reaches the peer through canonical delivery without an @-mention.
 func TestSendChannelMessageDM_DispatchesAgent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 	cleanupDMArtifacts(t)
-	agentID := createHandlerTestAgent(t, "DM Dispatch Bot", nil)
+	agentID := createHandlerTestAgentOnRuntime(t, "DM Dispatch Bot", handlerTestRuntimeID(t))
 
 	channelID := seedAgentDMChannel(t, agentID)
 
@@ -1062,18 +1061,19 @@ func TestSendChannelMessageDM_DispatchesAgent(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var eventID string
-	var chatSessionID pgtype.UUID
-	if err := testPool.QueryRow(ctx, `
-		SELECT id::text, chat_session_id
-		FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake = true
-		ORDER BY created_at DESC
-		LIMIT 1`, channelID, agentID).Scan(&eventID, &chatSessionID); err != nil {
-		t.Fatalf("DM did not auto-dispatch to the agent: %v", err)
+	var message ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &message); err != nil {
+		t.Fatalf("decode message: %v", err)
 	}
-	if chatSessionID.Valid {
-		t.Fatalf("DM wake must be channel-only; got chat_session_id=%s event=%s", uuidToString(chatSessionID), eventID)
+	var target string
+	if err := testPool.QueryRow(ctx, `
+		SELECT target
+		FROM agent_message_delivery
+		WHERE agent_id = $1 AND message_id = $2`, agentID, message.ID).Scan(&target); err != nil {
+		t.Fatalf("DM did not create canonical delivery: %v", err)
+	}
+	if target != "channel:"+channelID {
+		t.Fatalf("DM delivery target = %q, want channel:%s", target, channelID)
 	}
 }
 
@@ -1126,52 +1126,6 @@ func TestSendChannelMessage_RejectsArchivedPeer(t *testing.T) {
 	}
 }
 
-func TestSendChannelMessageDM_BypassesAmbientGateWithActiveAmbient(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	cleanupDMArtifacts(t)
-	withChannelAmbientGateTestConfig(t)
-	agentID := createHandlerTestAgent(t, "DM Ambient Gate Bypass "+uuid.NewString()[:8], nil)
-
-	ambientChannelID := seedChannelForTest(t, "dm-ambient-gate-bypass-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, ambientChannelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed ambient agent member: %v", err)
-	}
-	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(ambientChannelID))
-	if !found {
-		t.Fatal("ambient channel not found after seed")
-	}
-	ambient, err := testHandler.insertChannelMessage(ctx, parseUUID(ambientChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient work", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("insert ambient trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, ch, ambient, parseUUID(testUserID))
-	assertChannelAgentInboxEventCounts(t, ambientChannelID, agentID, 0, 1)
-	assertChannelAgentWakeReasonPriority(t, ambientChannelID, agentID, ambient.ID, channelMessageWakeReason, channelMessageWakePriority)
-
-	dmChannelID := seedAgentDMChannel(t, agentID)
-	req := newRequest("POST", "/api/channels/"+dmChannelID+"/messages", map[string]string{"content": "hey, still direct"})
-	req = withChatTestWorkspaceCtx(t, req)
-	req = withURLParam(req, "channelId", dmChannelID)
-	rec := httptest.NewRecorder()
-	testHandler.SendChannelMessage(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("send dm: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	assertChannelAgentInboxEventCounts(t, dmChannelID, agentID, 0, 1)
-}
-
-// TestPrivateAgentDMChannelAllowsAnyChannelMemberPostBatch908 supersedes the
-// old "private-agent DM channel rejects unauthorized member" regression: the
-// member here is a genuine participant of this specific DM channel (seeded
-// as a channel_member), so the only thing that used to deny them was the
-// agent's own private-visibility gate — which task #908 retires. DM
-// read/send is now unconditional for any member of the DM channel.
 func TestPrivateAgentDMChannelAllowsAnyChannelMemberPostBatch908(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -24,6 +25,8 @@ const (
 	pongWait                   = 60 * time.Second
 	pingPeriod                 = (pongWait * 9) / 10
 	agentDeliveryRetryInterval = time.Second
+	runnerInboundWatchdog      = 70 * time.Second
+	runnerPingInterval         = 20 * time.Second
 )
 
 // ClientIdentity captures the already-authenticated daemon connection scope.
@@ -42,6 +45,12 @@ type client struct {
 	done     chan struct{}
 	identity ClientIdentity
 	runtimes map[string]struct{}
+
+	// Set only after a valid `ready` frame. Until then a connection remains on
+	// the legacy runtime-multiplexed path and cannot receive Runner commands.
+	runnerDaemonInstanceID string
+	runnerLastInbound      atomic.Int64
+	runnerWatchdogOnce     sync.Once
 
 	dedupMu  sync.Mutex
 	seenIDs  map[string]struct{}
@@ -90,6 +99,11 @@ type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, 
 type AgentRecoveryHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error)
 type AgentMessageHandoffHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentMessageHandoffPayload) error
 
+// WorkspaceRunnerHandler receives only frames from the current ready
+// connection for one daemon and Workspace. It owns no Activity semantics;
+// later intake tickets install typed handlers behind this fenced boundary.
+type WorkspaceRunnerHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID, eventType string, payload json.RawMessage) error
+
 type ReminderOwnerGoneError struct {
 	AgentID             string
 	RuntimeID           string
@@ -114,6 +128,7 @@ type Hub struct {
 	mu        sync.RWMutex
 	clients   map[*client]bool
 	byRuntime map[string]map[*client]bool
+	byRunner  map[workspaceRunnerKey]*client
 
 	hbMu                    sync.RWMutex
 	onHeartbeat             HeartbeatHandler
@@ -128,6 +143,8 @@ type Hub struct {
 	onAgentDeliveryAck      AgentDeliveryAckHandler
 	onAgentRecovery         AgentRecoveryHandler
 	onAgentMessageHandoff   AgentMessageHandoffHandler
+	runnerMu                sync.RWMutex
+	onWorkspaceRunner       WorkspaceRunnerHandler
 
 	agentDeliveryMu            sync.Mutex
 	pendingAgentDeliveries     map[string]*pendingAgentDelivery
@@ -141,6 +158,11 @@ type Hub struct {
 	// channel; the caller unmarshals into the response type it expects.
 	pendMu  sync.Mutex
 	pending map[string]chan json.RawMessage
+}
+
+type workspaceRunnerKey struct {
+	daemonID    string
+	workspaceID string
 }
 
 type pendingAgentDelivery struct {
@@ -178,6 +200,26 @@ func (h *Hub) SetAgentMessageHandoffHandler(fn AgentMessageHandoffHandler) {
 	h.deliveryMu.Lock()
 	h.onAgentMessageHandoff = fn
 	h.deliveryMu.Unlock()
+}
+
+// SetWorkspaceRunnerHandler installs the dormant Runner inbound boundary.
+// Calling this does not activate any legacy routing or Activity contract.
+func (h *Hub) SetWorkspaceRunnerHandler(fn WorkspaceRunnerHandler) {
+	if h == nil {
+		return
+	}
+	h.runnerMu.Lock()
+	h.onWorkspaceRunner = fn
+	h.runnerMu.Unlock()
+}
+
+func (h *Hub) workspaceRunnerHandler() WorkspaceRunnerHandler {
+	if h == nil {
+		return nil
+	}
+	h.runnerMu.RLock()
+	defer h.runnerMu.RUnlock()
+	return h.onWorkspaceRunner
 }
 
 func (h *Hub) agentDeliveryAckHandler() AgentDeliveryAckHandler {
@@ -239,6 +281,7 @@ func NewHub() *Hub {
 		},
 		clients:                make(map[*client]bool),
 		byRuntime:              make(map[string]map[*client]bool),
+		byRunner:               make(map[workspaceRunnerKey]*client),
 		pending:                make(map[string]chan json.RawMessage),
 		pendingAgentDeliveries: make(map[string]*pendingAgentDelivery),
 		scheduleAgentDeliveryRetry: func(delay time.Duration, retry func()) {
@@ -536,7 +579,8 @@ func (h *Hub) messageKindRecorder() MessageKindRecorder {
 }
 
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, identity ClientIdentity) {
-	if len(identity.RuntimeIDs) == 0 {
+	hasRunnerScope := strings.TrimSpace(identity.DaemonID) != "" && strings.TrimSpace(identity.WorkspaceID) != ""
+	if len(identity.RuntimeIDs) == 0 && !hasRunnerScope {
 		http.Error(w, `{"error":"runtime_ids required"}`, http.StatusBadRequest)
 		return
 	}
@@ -553,7 +597,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, identity C
 			runtimes[runtimeID] = struct{}{}
 		}
 	}
-	if len(runtimes) == 0 {
+	if len(runtimes) == 0 && !hasRunnerScope {
 		conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"runtime_ids required"}`))
 		conn.Close()
 		return
@@ -732,6 +776,50 @@ func (h *Hub) RuntimeConnectionCount(runtimeID string) int {
 	return len(h.byRuntime[runtimeID])
 }
 
+// WorkspaceRunnerConnectionCount is zero or one: a ready connection is owned
+// by the daemon and Workspace pair, not by each provider registration.
+func (h *Hub) WorkspaceRunnerConnectionCount(daemonID, workspaceID string) int {
+	if h == nil {
+		return 0
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}] == nil {
+		return 0
+	}
+	return 1
+}
+
+// NotifyWorkspaceRunner routes a command only to the current ready connection
+// for the exact daemon and Workspace. It is deliberately separate from the
+// legacy runtime fan-out route and remains dormant until the hard cut.
+func (h *Hub) NotifyWorkspaceRunner(daemonID, workspaceID, eventType string, payload any) bool {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
+	h.mu.RLock()
+	c := h.byRunner[key]
+	if c == nil {
+		h.mu.RUnlock()
+		return false
+	}
+	select {
+	case c.send <- frame:
+		h.mu.RUnlock()
+		return true
+	default:
+		h.mu.RUnlock()
+		h.unregister(c)
+		_ = c.conn.Close()
+		return false
+	}
+}
+
 func (h *Hub) register(c *client) {
 	h.mu.Lock()
 	h.clients[c] = true
@@ -758,6 +846,88 @@ func (h *Hub) register(c *client) {
 	)
 }
 
+func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerReadyPayload) bool {
+	if c == nil || ready.Validate() != nil || ready.WorkspaceID != c.identity.WorkspaceID {
+		return false
+	}
+	key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
+	h.mu.Lock()
+	previous := h.byRunner[key]
+	c.runnerDaemonInstanceID = ready.DaemonInstanceID
+	c.runnerLastInbound.Store(time.Now().UnixNano())
+	h.byRunner[key] = c
+	h.mu.Unlock()
+	if previous != nil && previous != c {
+		// The map points to c before the old connection is closed, so old
+		// unregister cannot erase the current Runner ownership.
+		h.unregister(previous)
+		_ = previous.conn.Close()
+	}
+	c.startRunnerWatchdog()
+	return true
+}
+
+func (h *Hub) isCurrentWorkspaceRunner(c *client) bool {
+	if c == nil || c.runnerDaemonInstanceID == "" {
+		return false
+	}
+	key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.byRunner[key] == c
+}
+
+func (h *Hub) dispatchWorkspaceRunnerFrame(c *client, eventType string, payload json.RawMessage) {
+	if !h.isCurrentWorkspaceRunner(c) {
+		return
+	}
+	c.runnerLastInbound.Store(time.Now().UnixNano())
+	handler := h.workspaceRunnerHandler()
+	if handler == nil {
+		return
+	}
+	if err := handler(context.Background(), c.identity, c.runnerDaemonInstanceID, eventType, payload); err != nil {
+		slog.Warn("workspace runner frame rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "event_type", eventType)
+	}
+}
+
+func (c *client) startRunnerWatchdog() {
+	if c == nil {
+		return
+	}
+	c.runnerWatchdogOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(runnerPingInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-c.done:
+					return
+				case <-ticker.C:
+					lastInbound := time.Unix(0, c.runnerLastInbound.Load())
+					if time.Since(lastInbound) > runnerInboundWatchdog {
+						_ = c.conn.Close()
+						return
+					}
+					pingID := fmt.Sprintf("runner-%d", time.Now().UnixNano())
+					frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerPing, Payload: mustMarshalRaw(protocol.WorkspaceRunnerPingPayload{PingID: pingID})})
+					if err != nil {
+						continue
+					}
+					select {
+					case c.send <- frame:
+					case <-c.done:
+						return
+					default:
+						_ = c.conn.Close()
+						return
+					}
+				}
+			}
+		}()
+	})
+}
+
 func (h *Hub) unregister(c *client) {
 	h.mu.Lock()
 	if !h.clients[c] {
@@ -771,6 +941,12 @@ func (h *Hub) unregister(c *client) {
 			if len(conns) == 0 {
 				delete(h.byRuntime, runtimeID)
 			}
+		}
+	}
+	if c.runnerDaemonInstanceID != "" {
+		key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
+		if h.byRunner[key] == c {
+			delete(h.byRunner, key)
 		}
 	}
 	close(c.done)
@@ -834,6 +1010,37 @@ func (c *client) handleFrame(raw []byte) {
 		rec.RecordDaemonWSMessageReceived(kind)
 	}
 	switch msg.Type {
+	case protocol.EventWorkspaceRunnerReady:
+		var payload protocol.WorkspaceRunnerReadyPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || !c.hub.readyWorkspaceRunner(c, payload) {
+			slog.Warn("workspace runner ready rejected", "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID)
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventWorkspaceRunnerPong:
+		var payload protocol.WorkspaceRunnerPongPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventAgentStartAck:
+		var payload protocol.AgentStartAckPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventAgentStatus:
+		var payload protocol.AgentStatusPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventAgentSession:
+		var payload protocol.AgentSessionPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
 	case protocol.EventDaemonListFilesResponse,

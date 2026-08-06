@@ -33,8 +33,9 @@ func (h *Handler) scheduleCanonicalMessageDelivery(ctx context.Context, eventTyp
 
 // deliverCanonicalMessageToChannelAgents persists and projects one committed
 // canonical Message to exactly the Agents selected by the channel routing
-// policy. Offline delivery is intentionally harmless: startup/reconnect
-// recovery reads the same persisted Delivery mapping.
+// policy. The Workspace Runner, rather than a provider runtime socket, is the
+// live delivery address. Offline delivery is intentionally harmless:
+// startup/reconnect recovery reads the same persisted Delivery mapping.
 func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) {
 	if h == nil || h.DB == nil || strings.TrimSpace(message.ID) == "" || message.Seq <= 0 {
 		return
@@ -65,8 +66,13 @@ func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch
 				ID: message.ID, Target: target, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
 			},
 		}
-		if h.AgentDeliveryNotifier == nil || !h.AgentDeliveryNotifier.NotifyAgentDelivery(uuidToString(recipient.RuntimeID), delivery) {
-			slog.Debug("Agent Message live delivery deferred to recovery", "workspace_id", ch.WorkspaceID, "agent_id", agentIDString, "runtime_id", uuidToString(recipient.RuntimeID), "message_id", message.ID, "delivery_id", delivery.DeliveryID)
+		var daemonID *string
+		if err := h.DB.QueryRow(ctx, `SELECT daemon_id FROM agent_runtime WHERE id = $1`, recipient.RuntimeID).Scan(&daemonID); err != nil {
+			slog.Warn("load Agent Message delivery daemon failed", "workspace_id", ch.WorkspaceID, "agent_id", agentIDString, "runtime_id", uuidToString(recipient.RuntimeID), "message_id", message.ID, "error", err)
+			continue
+		}
+		if daemonID == nil || strings.TrimSpace(*daemonID) == "" || h.AgentDeliveryNotifier == nil || !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(ch.WorkspaceID, *daemonID, delivery) {
+			slog.Debug("Agent Message live delivery deferred to recovery", "workspace_id", ch.WorkspaceID, "agent_id", agentIDString, "daemon_id", daemonID, "message_id", message.ID, "delivery_id", delivery.DeliveryID)
 		}
 	}
 }

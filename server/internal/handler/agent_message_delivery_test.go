@@ -206,20 +206,23 @@ func TestAgentMessageHandoffReceiptIsIdempotent(t *testing.T) {
 }
 
 type capturedAgentDeliveryNotifier struct {
-	runtimeID  string
-	payload    protocol.AgentDeliverPayload
-	deliveries []capturedAgentDelivery
+	workspaceID string
+	daemonID    string
+	payload     protocol.AgentDeliverPayload
+	deliveries  []capturedAgentDelivery
 }
 
 type capturedAgentDelivery struct {
-	runtimeID string
-	payload   protocol.AgentDeliverPayload
+	workspaceID string
+	daemonID    string
+	payload     protocol.AgentDeliverPayload
 }
 
-func (n *capturedAgentDeliveryNotifier) NotifyAgentDelivery(runtimeID string, payload protocol.AgentDeliverPayload) bool {
-	n.runtimeID = runtimeID
+func (n *capturedAgentDeliveryNotifier) NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool {
+	n.workspaceID = workspaceID
+	n.daemonID = daemonID
 	n.payload = payload
-	n.deliveries = append(n.deliveries, capturedAgentDelivery{runtimeID: runtimeID, payload: payload})
+	n.deliveries = append(n.deliveries, capturedAgentDelivery{workspaceID: workspaceID, daemonID: daemonID, payload: payload})
 	return true
 }
 
@@ -228,7 +231,8 @@ func TestCanonicalMessageProjectsAgentDeliveryEnvelope(t *testing.T) {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
+	daemonID := "daemon-message-delivery-envelope-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "message delivery envelope")
 	agentID := createHandlerTestAgentOnRuntime(t, "message-delivery-envelope-"+uuid.NewString()[:8], runtimeID)
 	channelID := seedChannelForTest(t, "message-delivery-envelope-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id) VALUES ($1, $2, 'agent', $3) ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
@@ -251,8 +255,8 @@ func TestCanonicalMessageProjectsAgentDeliveryEnvelope(t *testing.T) {
 	}
 	want := protocol.AgentMessageProjection{ID: message.ID, Target: "channel:" + channelID, Seq: message.Seq, Content: "canonical body", Parts: message.Parts}
 	got := notifier.payload.Message
-	if notifier.runtimeID != runtimeID || notifier.payload.AgentID != agentID || notifier.payload.DeliveryID == "" || got.ID != want.ID || got.Target != want.Target || got.Seq != want.Seq || got.Content != want.Content || len(got.Parts) != len(want.Parts) {
-		t.Fatalf("delivery runtime=%q payload=%+v, want runtime=%q Message=%+v", notifier.runtimeID, notifier.payload, runtimeID, want)
+	if notifier.workspaceID != testWorkspaceID || notifier.daemonID != daemonID || notifier.payload.AgentID != agentID || notifier.payload.DeliveryID == "" || got.ID != want.ID || got.Target != want.Target || got.Seq != want.Seq || got.Content != want.Content || len(got.Parts) != len(want.Parts) {
+		t.Fatalf("delivery workspace=%q daemon=%q payload=%+v, want workspace=%q daemon=%q Message=%+v", notifier.workspaceID, notifier.daemonID, notifier.payload, testWorkspaceID, daemonID, want)
 	}
 }
 
@@ -261,7 +265,7 @@ func TestCanonicalAgentMessageLiveDeliveryMatchesRecoveryEligibility(t *testing.
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
+	runtimeID := seedMachineLockedRuntime(t, "daemon-message-live-delivery-"+uuid.NewString()[:8], "message live delivery")
 	authorAgentID := createHandlerTestAgentOnRuntime(t, "message-live-author-"+uuid.NewString()[:8], runtimeID)
 	recipientAgentID := createHandlerTestAgentOnRuntime(t, "message-live-recipient-"+uuid.NewString()[:8], runtimeID)
 	channelID := seedChannelForTest(t, "message-live-agent-"+uuid.NewString(), testUserID)
@@ -289,7 +293,7 @@ func TestCanonicalMessageDeliveryPreservesChannelMentionAndThreadRecipients(t *t
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
+	runtimeID := seedMachineLockedRuntime(t, "daemon-message-routing-"+uuid.NewString()[:8], "message routing")
 	firstAgentID := createHandlerTestAgentOnRuntime(t, "message-routing-first-"+uuid.NewString()[:8], runtimeID)
 	secondAgentID := createHandlerTestAgentOnRuntime(t, "message-routing-second-"+uuid.NewString()[:8], runtimeID)
 	channelID := seedChannelForTest(t, "message-routing-"+uuid.NewString(), testUserID)

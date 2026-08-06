@@ -235,11 +235,19 @@ func (h *Handler) requireAgentMessageDaemonScope(ctx context.Context, identity d
 		return errors.New("invalid agent id")
 	}
 	var workspaceID, runtimeID pgtype.UUID
-	if err := h.DB.QueryRow(ctx, `SELECT workspace_id, runtime_id FROM agent WHERE id = $1 AND archived_at IS NULL`, agentUUID).Scan(&workspaceID, &runtimeID); err != nil {
+	var daemonID *string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT agent.workspace_id, agent.runtime_id, runtime.daemon_id
+		FROM agent
+		LEFT JOIN agent_runtime runtime ON runtime.id = agent.runtime_id
+		WHERE agent.id = $1 AND agent.archived_at IS NULL`, agentUUID).Scan(&workspaceID, &runtimeID, &daemonID); err != nil {
 		return err
 	}
 	if uuidToString(workspaceID) != identity.WorkspaceID {
 		return errors.New("agent delivery workspace mismatch")
+	}
+	if daemonID != nil && *daemonID != "" && *daemonID == identity.DaemonID {
+		return nil
 	}
 	for _, candidate := range identity.RuntimeIDs {
 		if candidate == uuidToString(runtimeID) {

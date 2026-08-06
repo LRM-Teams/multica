@@ -236,6 +236,24 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			if err := writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil {
 				return err
 			}
+		case protocol.EventAgentDeliver:
+			var delivery protocol.AgentDeliverPayload
+			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {
+				continue
+			}
+			ack, err := d.acceptIdleAgentDelivery(context.Background(), delivery)
+			if err != nil {
+				if d.logger != nil {
+					d.logger.Warn("workspace Runner agent delivery not acknowledged", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+				}
+				continue
+			}
+			if err := writeFrame(protocol.EventAgentDeliverAck, ack); err != nil {
+				return err
+			}
+			if err := d.flushIdleAgentDelivery(context.Background(), delivery.AgentID); err != nil && d.logger != nil {
+				d.logger.Warn("workspace Runner idle agent Message handoff failed after delivery acknowledgement", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+			}
 		case protocol.EventAgentActivityProbe:
 			var probe protocol.AgentActivityProbePayload
 			if json.Unmarshal(message.Payload, &probe) != nil || probe.Validate() != nil {

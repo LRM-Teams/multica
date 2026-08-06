@@ -167,6 +167,8 @@ type workspaceRunnerKey struct {
 
 type pendingAgentDelivery struct {
 	runtimeID      string
+	workspaceID    string
+	daemonID       string
 	payload        protocol.AgentDeliverPayload
 	frame          []byte
 	retryScheduled bool
@@ -309,6 +311,25 @@ func (h *Hub) stageAgentDelivery(runtimeID string, payload protocol.AgentDeliver
 	return true
 }
 
+func (h *Hub) stageWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload, frame []byte) bool {
+	if h == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(payload.DeliveryID) == "" {
+		return false
+	}
+	h.agentDeliveryMu.Lock()
+	defer h.agentDeliveryMu.Unlock()
+	if existing := h.pendingAgentDeliveries[payload.DeliveryID]; existing != nil {
+		return existing.workspaceID == workspaceID && existing.daemonID == daemonID &&
+			existing.payload.AgentID == payload.AgentID && existing.payload.Seq == payload.Seq
+	}
+	h.pendingAgentDeliveries[payload.DeliveryID] = &pendingAgentDelivery{
+		workspaceID: workspaceID,
+		daemonID:    daemonID,
+		payload:     payload,
+		frame:       append([]byte(nil), frame...),
+	}
+	return true
+}
+
 func (h *Hub) activateAgentDeliveryRetry(deliveryID string) {
 	if h == nil {
 		return
@@ -339,10 +360,17 @@ func (h *Hub) retryAgentDelivery(deliveryID string) {
 	}
 	pending.retryScheduled = false
 	runtimeID := pending.runtimeID
+	workspaceID := pending.workspaceID
+	daemonID := pending.daemonID
 	frame := append([]byte(nil), pending.frame...)
 	h.agentDeliveryMu.Unlock()
 
-	delivered, _ := h.notifyFrame(runtimeID, frame, "")
+	delivered := false
+	if runtimeID != "" {
+		delivered, _ = h.notifyFrame(runtimeID, frame, "")
+	} else {
+		delivered = h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
+	}
 	if !delivered {
 		// Once the live connection is gone, reconnect recovery is the durable
 		// correctness path. Do not retain an unbounded in-memory retry ledger.
@@ -362,7 +390,11 @@ func (h *Hub) acknowledgeAgentDelivery(c *client, ack protocol.AgentDeliverAckPa
 	if pending == nil || pending.payload.AgentID != ack.AgentID || pending.payload.Seq != ack.Seq {
 		return
 	}
-	if _, authorizedRuntime := c.runtimes[pending.runtimeID]; !authorizedRuntime {
+	if pending.runtimeID != "" {
+		if _, authorizedRuntime := c.runtimes[pending.runtimeID]; !authorizedRuntime {
+			return
+		}
+	} else if pending.workspaceID != c.identity.WorkspaceID || pending.daemonID != c.identity.DaemonID || !h.isCurrentWorkspaceRunner(c) {
 		return
 	}
 	delete(h.pendingAgentDeliveries, ack.DeliveryID)
@@ -724,6 +756,35 @@ func (h *Hub) DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)
 	}
 }
 
+// DeliverDaemonWorkspaceRunner consumes a relayed Runner-scoped delivery.
+// The relay scope is an address only; payload authorization and receipt still
+// happen on the current fenced Runner connection.
+func (h *Hub) DeliverDaemonWorkspaceRunner(scopeID string, frame []byte, eventID string) {
+	if h == nil {
+		return
+	}
+	daemonID, workspaceID, ok := parseWorkspaceRunnerRelayScopeID(scopeID)
+	if !ok {
+		M.WakeupDeliveredMiss.Add(1)
+		return
+	}
+	var msg protocol.Message
+	if err := json.Unmarshal(frame, &msg); err != nil || msg.Type != protocol.EventAgentDeliver {
+		M.WakeupDeliveredMiss.Add(1)
+		return
+	}
+	var payload protocol.AgentDeliverPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil || strings.TrimSpace(payload.DeliveryID) == "" {
+		M.WakeupDeliveredMiss.Add(1)
+		return
+	}
+	if h.notifyWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame, eventID) {
+		M.WakeupDeliveredHit.Add(1)
+	} else {
+		M.WakeupDeliveredMiss.Add(1)
+	}
+}
+
 func (h *Hub) notifyFrame(runtimeID string, data []byte, eventID string) (delivered bool, deduped bool) {
 	h.mu.RLock()
 	clients := h.byRuntime[runtimeID]
@@ -801,6 +862,52 @@ func (h *Hub) NotifyWorkspaceRunner(daemonID, workspaceID, eventType string, pay
 	if err != nil {
 		return false
 	}
+	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
+	h.mu.RLock()
+	c := h.byRunner[key]
+	if c == nil {
+		h.mu.RUnlock()
+		return false
+	}
+	select {
+	case c.send <- frame:
+		h.mu.RUnlock()
+		return true
+	default:
+		h.mu.RUnlock()
+		h.unregister(c)
+		_ = c.conn.Close()
+		return false
+	}
+}
+
+// NotifyWorkspaceAgentDelivery sends an at-least-once canonical Message to
+// the sole current Runner for one daemon/workspace pair.
+func (h *Hub) NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool {
+	if h == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonID) == "" {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliver, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	return h.notifyWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame, "")
+}
+
+func (h *Hub) notifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload, frame []byte, _ string) bool {
+	if h == nil || !h.stageWorkspaceAgentDelivery(workspaceID, daemonID, payload, frame) {
+		return false
+	}
+	delivered := h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
+	if delivered {
+		h.activateAgentDeliveryRetry(payload.DeliveryID)
+	} else {
+		h.dropAgentDelivery(payload.DeliveryID)
+	}
+	return delivered
+}
+
+func (h *Hub) notifyWorkspaceRunnerFrame(daemonID, workspaceID string, frame []byte) bool {
 	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
 	h.mu.RLock()
 	c := h.byRunner[key]

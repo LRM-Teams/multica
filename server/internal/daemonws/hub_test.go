@@ -290,6 +290,83 @@ func waitForRunner(t *testing.T, hub *Hub, daemonID, workspaceID string) {
 	}
 }
 
+func TestWorkspaceRunnerDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing.T) {
+	hub := NewHub()
+	retries := make(chan func(), 2)
+	hub.scheduleAgentDeliveryRetry = func(_ time.Duration, retry func()) { retries <- retry }
+	hub.SetAgentDeliveryAckHandler(func(_ context.Context, identity ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
+		if identity.DaemonID != "daemon-1" || identity.WorkspaceID != "workspace-1" || ack.AgentID != "agent-1" {
+			t.Fatalf("unexpected Runner acknowledgement: identity=%+v ack=%+v", identity, ack)
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	delivery := protocol.AgentDeliverPayload{AgentID: "agent-1", Target: "channel:one", Seq: 7, DeliveryID: "delivery-1", Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 7, Content: "hello"}}
+	if !hub.NotifyWorkspaceAgentDelivery("workspace-1", "daemon-1", delivery) {
+		t.Fatal("Runner delivery was not queued")
+	}
+	readDelivery := func() protocol.AgentDeliverPayload {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != protocol.EventAgentDeliver {
+			t.Fatalf("Runner delivery frame = %+v, err=%v", msg, err)
+		}
+		var got protocol.AgentDeliverPayload
+		if err := json.Unmarshal(msg.Payload, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := readDelivery(); got.DeliveryID != delivery.DeliveryID {
+		t.Fatalf("initial Runner delivery = %+v", got)
+	}
+	(<-retries)()
+	if got := readDelivery(); got.DeliveryID != delivery.DeliveryID {
+		t.Fatalf("retried Runner delivery = %+v", got)
+	}
+	ack, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliverAck, Payload: mustMarshalRaw(protocol.AgentDeliverAckPayload{AgentID: delivery.AgentID, Seq: delivery.Seq, DeliveryID: delivery.DeliveryID})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		hub.agentDeliveryMu.Lock()
+		pending := len(hub.pendingAgentDeliveries)
+		hub.agentDeliveryMu.Unlock()
+		if pending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Runner acknowledgement did not clear pending delivery")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestAgentDeliveryRetriesUntilAuthorizedAcknowledgement(t *testing.T) {
 	hub := NewHub()
 	retries := make(chan func(), 4)

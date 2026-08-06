@@ -216,8 +216,12 @@ describe("CreateAgentDialog workspace runtime selection", () => {
     });
     renderDialog([onS144, alsoOnS144, onOther]);
 
-    // Default computer is the first usable machine (s144). Open the
-    // code-agent picker — other-box's Cursor must not appear.
+    // Default computer is the first machine in display order — machines sort
+    // by section/onlineCount then title, so "other-box" precedes "s144".
+    // Explicitly select s144, then open the code-agent picker — it must list
+    // s144's providers (Pi) and nothing from other machines.
+    fireEvent.click(screen.getByText("other-box", { selector: "div.truncate" }));
+    fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));
     fireEvent.click(
       screen.getByText("Cursor", { selector: "span.truncate" }),
     );
@@ -247,17 +251,17 @@ describe("CreateAgentDialog workspace runtime selection", () => {
     });
     renderDialog([onS144, onOther]);
 
-    // Open computer picker and switch to other-box.
-    fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));
+    // Default is other-box (title sort order). Switch to s144.
     fireEvent.click(screen.getByText("other-box", { selector: "div.truncate" }));
+    fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));
 
-    // Runtime trigger should now show the other machine's brand.
+    // Runtime trigger should now show the s144 machine's brand.
     expect(
-      screen.getByText("Pi", { selector: "span.truncate" }),
+      screen.getByText("Cursor", { selector: "span.truncate" }),
     ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByText("Pi", { selector: "span.truncate" }),
+      screen.getByText("Cursor", { selector: "span.truncate" }),
     );
-    expect(screen.queryByText("Cursor")).toBeNull();
+    expect(screen.queryByText("Pi")).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { configStore } from "@multica/core/config";
@@ -20,9 +20,26 @@ const openDMMocks = vi.hoisted(() => ({
 // admin — is covered by `canViewAgentSensitiveTabs` / `canEditAgent`
 // in packages/core/permissions/rules.test.ts, against the same context the
 // backend gates on. Defaulting both to denied keeps the read-only paths honest.
-const { permission, activityPermission, usageRows, mockRuntimes } = vi.hoisted(() => ({
+const {
+  permission,
+  activityPermission,
+  rolePermission,
+  usageRows,
+  mockRuntimes,
+  updateAgentWorkspaceRole,
+  setQueryData,
+  invalidateQueries,
+  roleDialogProps,
+} = vi.hoisted(() => ({
   permission: { allowed: false },
   activityPermission: { allowed: false },
+  rolePermission: { allowed: false },
+  updateAgentWorkspaceRole: vi.fn(
+    async (_workspaceId: string, _agentId: string, _role: "member" | "admin") => ({ status: "ok" }),
+  ),
+  setQueryData: vi.fn(),
+  invalidateQueries: vi.fn(),
+  roleDialogProps: vi.fn(),
   usageRows: [] as Array<{
     agent_id: string;
     model: string;
@@ -155,12 +172,35 @@ vi.mock("../../common/prop-row", () => ({
 vi.mock("../../agents/hooks/use-update-agent", () => ({
   useUpdateAgent: () => vi.fn(),
 }));
+vi.mock("../../settings/components/roles-dialog", () => ({
+  RolesDialog: (props: {
+    open: boolean;
+    onSave?: (role: "member" | "admin" | "owner") => Promise<void> | void;
+  }) => {
+    roleDialogProps(props);
+    return props.open ? (
+      <button type="button" data-testid="agent-workspace-role-save" onClick={() => void props.onSave?.("admin")}>
+        Save role
+      </button>
+    ) : null;
+  },
+}));
 vi.mock("../../common/use-open-dm", () => ({
   useOpenDM: () => openDMMocks,
+}));
+vi.mock("@multica/core/api", () => ({
+  api: {
+    updateAgentWorkspaceRole: (
+      workspaceId: string,
+      agentId: string,
+      role: "member" | "admin",
+    ) => updateAgentWorkspaceRole(workspaceId, agentId, role),
+  },
 }));
 vi.mock("@multica/core/permissions", () => ({
   useAgentPermissions: () => ({
     canEdit: permission,
+    canChangeRole: rolePermission,
     canViewSensitiveTabs: activityPermission,
   }),
 }));
@@ -184,6 +224,7 @@ vi.mock("@tanstack/react-query", () => ({
           : [],
     isLoading: false,
   }),
+  useQueryClient: () => ({ setQueryData, invalidateQueries }),
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
@@ -249,6 +290,13 @@ const RESOURCES = {
     description_label: "Description",
     info_section: "Info",
     actions_section: "Actions",
+  },
+  profile_card: {
+    role_label: "Role",
+    role_dialog_title: "Agent role",
+    role_dialog_subtitle: "Choose this agent's workspace role",
+    role_updated: "Role updated",
+    role_update_failed: "Failed to update role",
   },
   inspector: {
     section_properties: "Properties",
@@ -347,6 +395,7 @@ describe("AgentSidePanel", () => {
     configStore.setState({ agentProfileDevAccessEnabled: false });
     permission.allowed = false;
     activityPermission.allowed = false;
+    rolePermission.allowed = false;
     usageRows.length = 0;
     mockRuntimes.current = [];
   });
@@ -509,13 +558,26 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
 
-  it("does not render an Agent role pill in Info (LRM-469)", () => {
+  it("shows an agent's workspace role in Info", () => {
     renderPanel();
-    // Roles = workspace member roles (Admin/Member), not an "Agent" pill.
-    // The agent's identity is conveyed by avatar / handle / visibility, so
-    // the Profile Info section renders no Role row at all.
-    expect(screen.queryByText("Role")).not.toBeInTheDocument();
+    expect(screen.getByText("Role")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-workspace-role-value")).toHaveTextContent("Member");
     expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-workspace-role-edit")).not.toBeInTheDocument();
+  });
+
+  it("lets workspace owners and admins edit the workspace role", async () => {
+    rolePermission.allowed = true;
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId("agent-workspace-role-edit"));
+    fireEvent.click(screen.getByTestId("agent-workspace-role-save"));
+
+    await waitFor(() => {
+      expect(updateAgentWorkspaceRole).toHaveBeenCalledWith("ws-1", "agent-1", "admin");
+      expect(setQueryData).toHaveBeenCalledTimes(2);
+      expect(invalidateQueries).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("shows Usage as its own tab — not stacked in Profile (LRM-448)", () => {

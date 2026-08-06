@@ -2,11 +2,15 @@
 
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowLeft, BarChart3, Bell, FileText, Pencil, User } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AGENT_DESCRIPTION_MAX_LENGTH, agentDetailKeys } from "@multica/core/agents";
+import { api } from "@multica/core/api";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
 import { deriveRuntimeHealth, deriveRuntimeHealthPresentation, runtimeListOptions, type RuntimeHealthPresentation } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
+import { workspaceKeys } from "@multica/core/workspace/queries";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { toast } from "sonner";
 import {
   formatActorHandleLabel,
   resolveActorDisplayName,
@@ -30,6 +34,7 @@ import { AgentLifecycleStatusLine } from "../../agents/components/agent-lifecycl
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
+import { RolesDialog } from "../../settings/components/roles-dialog";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { ActorStyledName } from "../../common/actor-styled-name";
 import { AgentFilesPanel } from "./agent-files-panel";
@@ -327,7 +332,8 @@ function AgentProfileTabContent({
   const wsId = agent.workspace_id;
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const handleUpdate = useUpdateAgent(wsId);
-  const { canEdit } = useAgentPermissions(agent, wsId);
+  const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
+  const qc = useQueryClient();
   const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
   // Runtime config used to be editable by any workspace member when the agent
@@ -355,6 +361,45 @@ function AgentProfileTabContent({
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
   const displayName = resolveActorDisplayName(agent, agent.id);
   const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
+  const [roleDialogOpen, setRoleDialogOpen] = useState(false);
+  const [roleSaving, setRoleSaving] = useState(false);
+
+  const updateWorkspaceRole = async (role: "member" | "admin") => {
+    if (role === agent.workspace_role || roleSaving) return;
+
+    const listKey = workspaceKeys.agents(wsId);
+    const detailKey = agentDetailKeys.detail(wsId, agent.id);
+    const previousRole = agent.workspace_role;
+    const patchRole = (workspace_role: "member" | "admin") => {
+      qc.setQueryData<Agent[]>(listKey, (current) =>
+        current?.map((item) =>
+          item.id === agent.id ? { ...item, workspace_role } : item,
+        ),
+      );
+      qc.setQueryData<Agent>(detailKey, (current) =>
+        current ? { ...current, workspace_role } : current,
+      );
+    };
+
+    setRoleSaving(true);
+    patchRole(role);
+    try {
+      await api.updateAgentWorkspaceRole(wsId, agent.id, role);
+      toast.success(t(($) => $.profile_card.role_updated));
+      setRoleDialogOpen(false);
+    } catch (error) {
+      patchRole(previousRole);
+      showErrorToast(
+        error instanceof Error
+          ? error.message
+          : t(($) => $.profile_card.role_update_failed),
+      );
+    } finally {
+      setRoleSaving(false);
+      void qc.invalidateQueries({ queryKey: listKey });
+      void qc.invalidateQueries({ queryKey: detailKey });
+    }
+  };
 
   return (
     <div className="flex min-w-0 flex-col" data-testid="agent-profile-tab-content">
@@ -405,12 +450,25 @@ function AgentProfileTabContent({
             {t(($) => $.side_panel.info_section)}
           </h3>
           <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
-            {/* LRM-469: Roles = workspace member roles (Admin/Member), not an
-                "Agent" pill. Agents have no workspace Admin/Member role, so
-                the Profile Info section does not render a Role row — the
-                agent's identity is already conveyed by avatar / handle /
-                visibility. Mixing an "Agent" pill in here conflated agent
-                identity with workspace roles. */}
+            <span className="pt-0.5 text-muted-foreground">
+              {t(($) => $.profile_card.role_label)}
+            </span>
+            <div className="flex min-w-0 items-center gap-1">
+              <span className="truncate" data-testid="agent-workspace-role-value">
+                {agent.workspace_role === "admin" ? "Admin" : "Member"}
+              </span>
+              {canChangeRole.allowed && !agent.archived_at ? (
+                <button
+                  type="button"
+                  className="inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => setRoleDialogOpen(true)}
+                  aria-label={t(($) => $.profile_card.role_dialog_title)}
+                  data-testid="agent-workspace-role-edit"
+                >
+                  <Pencil className="size-3.5" aria-hidden />
+                </button>
+              ) : null}
+            </div>
             <span className="text-muted-foreground">{t(($) => $.side_panel.created_label)}</span>
             <span className="truncate" title={formatDate(agent.created_at)}>
               {formatDate(agent.created_at)}
@@ -425,6 +483,23 @@ function AgentProfileTabContent({
             </span>
           </div>
         </div>
+
+        <RolesDialog
+          open={roleDialogOpen}
+          onOpenChange={setRoleDialogOpen}
+          mode="select"
+          value={agent.workspace_role}
+          allowedRoles={["member", "admin"]}
+          saving={roleSaving}
+          onSave={(role) => {
+            if (role === "owner") {
+              return Promise.resolve();
+            }
+            return updateWorkspaceRole(role);
+          }}
+          title={t(($) => $.profile_card.role_dialog_title)}
+          subtitle={t(($) => $.profile_card.role_dialog_subtitle)}
+        />
 
         {/* LRM-470 — Runtime Config is its own section (not Info misc rows).
             LRM-1351 — summary always shows effective config; edits go through

@@ -112,9 +112,14 @@ type messageRecoveryState struct {
 }
 
 const (
-	messageFreshnessUnknown  = "unknown"
-	messageFreshnessComplete = "complete"
-	messageFreshnessFailed   = "failed"
+	messageFreshnessUnknown = "unknown"
+	// messageFreshnessReadyToHandoff means recovery has received its terminal
+	// snapshot page, but its recovered bodies have not yet crossed the runtime
+	// boundary and persisted Context Boundaries. It is intentionally not safe
+	// for callers to treat as fresh.
+	messageFreshnessReadyToHandoff = "ready_to_handoff"
+	messageFreshnessComplete       = "complete"
+	messageFreshnessFailed         = "failed"
 )
 
 func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
@@ -231,9 +236,10 @@ func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) 
 	if page.HasMore {
 		c.recovery.status = messageFreshnessUnknown
 	} else {
-		c.recovery.status = messageFreshnessComplete
+		c.recovery.status = messageFreshnessReadyToHandoff
 		// A complete snapshot rebuilds conservative coverage even when the file
-		// was previously missing or malformed.
+		// was previously missing or malformed. Freshness itself remains blocked
+		// until Flush hands recovered bodies to the runtime and persists them.
 		c.boundaryHealthy = true
 	}
 	return nil
@@ -481,13 +487,16 @@ func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool)
 	if c.closed {
 		return errors.New("Message coordinator is closed")
 	}
-	if c.recovery.status != messageFreshnessComplete {
+	if c.recovery.status != messageFreshnessComplete && c.recovery.status != messageFreshnessReadyToHandoff {
 		return errors.New("Message freshness is unknown until recovery completes")
 	}
 	for {
 		if c.handedOff == nil {
 			batch := c.pendingBatchLocked()
 			if len(batch) == 0 {
+				if c.recovery.status == messageFreshnessReadyToHandoff {
+					c.recovery.status = messageFreshnessComplete
+				}
 				return nil
 			}
 			if err := c.handoff(ctx, batch); err != nil {
@@ -527,6 +536,9 @@ func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool)
 			}
 		}
 		c.handedOff = nil
+		if c.recovery.status == messageFreshnessReadyToHandoff {
+			c.recovery.status = messageFreshnessComplete
+		}
 	}
 }
 

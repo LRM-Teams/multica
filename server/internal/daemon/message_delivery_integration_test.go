@@ -597,17 +597,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	// Phase B — fresh daemon, same Agent root. Recovery must re-read the acked
 	// Message (the boundary never advanced) and hand it over: nothing lost.
 	_, _, batchesB, teardownB := connect(&idleMessageFakeRuntime{})
-	var restartedBatches [][]agent.ResidentMessage
-	handoffDeadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(handoffDeadline) {
-		got := batchesB()
-		if len(got) == 1 && len(got[0]) == 1 && got[0][0].ID == idA {
-			restartedBatches = got
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if got := restartedBatches; len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
+	if got := batchesB(); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("restarted runtime batches = %+v, want canonical Message %s handed off", got, idA)
 	}
 	if got := readBoundary(); got[target] != seqA {

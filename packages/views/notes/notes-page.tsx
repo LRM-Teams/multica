@@ -28,6 +28,8 @@ import { useT } from "../i18n/use-t";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
 
+type NoteExportFormat = "html" | "pdf";
+
 function lastViewedNoteKey(workspaceId: string) {
   return `multica:last-viewed-note:${workspaceId}`;
 }
@@ -40,6 +42,138 @@ function readLastViewedNote(workspaceId: string) {
 function writeLastViewedNote(workspaceId: string, pageId: string) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(lastViewedNoteKey(workspaceId), pageId);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function safeExportFilename(title: string, extension: string) {
+  const basename = (title || "Untitled")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .slice(0, 80) || "Untitled";
+  return `${basename}.${extension}`;
+}
+
+function renderInlineMarkdown(value: string) {
+  const tokens: string[] = [];
+  let text = escapeHtml(value);
+  text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, src: string) => {
+    const token = `@@NOTE_IMAGE_${tokens.length}@@`;
+    tokens.push(`<img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" />`);
+    return token;
+  });
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => {
+    const token = `@@NOTE_LINK_${tokens.length}@@`;
+    tokens.push(`<a href="${escapeHtml(href)}">${label}</a>`);
+    return token;
+  });
+  text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  tokens.forEach((tokenHtml, index) => {
+    text = text.replace(`@@NOTE_IMAGE_${index}@@`, tokenHtml).replace(`@@NOTE_LINK_${index}@@`, tokenHtml);
+  });
+  return text;
+}
+
+function renderNoteMarkdown(content: string) {
+  const lines = content.split(/\r?\n/);
+  const html: string[] = [];
+  let paragraph: string[] = [];
+  let list: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    html.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (list.length === 0) return;
+    html.push(`<ul>${list.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+    list = [];
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1]?.length ?? 1;
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2] ?? "")}</h${level}>`);
+      continue;
+    }
+    const bullet = /^[-*]\s+(.+)$/.exec(trimmed);
+    if (bullet) {
+      flushParagraph();
+      list.push(bullet[1] ?? "");
+      continue;
+    }
+    flushList();
+    paragraph.push(trimmed);
+  }
+  flushParagraph();
+  flushList();
+  return html.join("\n");
+}
+
+function buildNoteExportHtml(page: NotePage) {
+  const title = escapeHtml(page.title || "Untitled");
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>${title}</title>
+<style>
+  body { color: #111827; font-family: Georgia, 'Times New Roman', serif; line-height: 1.65; margin: 48px auto; max-width: 820px; padding: 0 24px; }
+  h1 { font-size: 40px; line-height: 1.15; margin: 0 0 28px; }
+  h2, h3 { margin-top: 28px; }
+  p { margin: 14px 0; }
+  img { border-radius: 8px; display: block; height: auto; margin: 18px 0; max-width: 100%; }
+  code { background: #f3f4f6; border-radius: 4px; padding: 2px 5px; }
+  a { color: #2563eb; }
+  @media print { body { margin: 0 auto; } }
+</style>
+</head>
+<body>
+<h1>${title}</h1>
+${renderNoteMarkdown(page.content)}
+</body>
+</html>`;
+}
+
+function exportNoteAsHtml(page: NotePage) {
+  const blob = new Blob([buildNoteExportHtml(page)], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = safeExportFilename(page.title, "html");
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportNoteAsPdf(page: NotePage) {
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) return false;
+  printWindow.opener = null;
+  printWindow.document.write(buildNoteExportHtml(page));
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
+  return true;
 }
 
 function buildNoteTree(pages: NotePage[]): NoteTreeNode[] {
@@ -279,6 +413,66 @@ function ShareDialog({
   );
 }
 
+function ExportDialog({
+  page,
+  open,
+  onOpenChange,
+}: {
+  page: NotePage | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useT("layout");
+  const [format, setFormat] = useState<NoteExportFormat>("pdf");
+
+  const exportNote = () => {
+    if (!page) return;
+    if (format === "html") {
+      exportNoteAsHtml(page);
+      onOpenChange(false);
+      return;
+    }
+    if (!exportNoteAsPdf(page)) {
+      showErrorToast(t(($) => $.notes_page.export_popup_blocked));
+      return;
+    }
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t(($) => $.notes_page.export_title)}</DialogTitle>
+          <DialogDescription>{t(($) => $.notes_page.export_description)}</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2 py-2">
+          <button
+            type="button"
+            className={cn("rounded-lg border p-3 text-left text-sm hover:bg-muted/60", format === "pdf" && "border-primary bg-muted")}
+            onClick={() => setFormat("pdf")}
+          >
+            <div className="font-medium">{t(($) => $.notes_page.export_pdf)}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{t(($) => $.notes_page.export_pdf_description)}</div>
+          </button>
+          <button
+            type="button"
+            className={cn("rounded-lg border p-3 text-left text-sm hover:bg-muted/60", format === "html" && "border-primary bg-muted")}
+            onClick={() => setFormat("html")}
+          >
+            <div className="font-medium">{t(($) => $.notes_page.export_html)}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{t(($) => $.notes_page.export_html_description)}</div>
+          </button>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t(($) => $.notes_page.cancel)}</Button>
+          <Button onClick={exportNote}>{t(($) => $.notes_page.export_action)}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function NoteEditor({
   selected,
   childPages,
@@ -297,11 +491,18 @@ function NoteEditor({
   const { uploadWithToast, uploading } = useFileUpload(api, (error) => {
     showErrorToast(error.message || t(($) => $.notes_page.image_paste_failed));
   });
-  // react-doctor-disable-next-line react-doctor/no-derived-useState -- NoteEditor is keyed by selected.id, so each page gets an isolated editable draft.
-  const [draftTitle, setDraftTitle] = useState(selected.title);
-  // react-doctor-disable-next-line react-doctor/no-derived-useState -- Content is an explicit unsaved draft, not a mirrored server-state cache.
-  const [draftContent, setDraftContent] = useState(selected.content);
-  const dirty = draftTitle !== selected.title || draftContent !== selected.content;
+  const [draft, setDraft] = useState(() => ({
+    title: selected.title,
+    content: selected.content,
+    serverTitle: selected.title,
+    serverContent: selected.content,
+  }));
+  if (draft.serverTitle !== selected.title || draft.serverContent !== selected.content) {
+    const title = draft.title === draft.serverTitle ? selected.title : draft.title;
+    const content = draft.content === draft.serverContent ? selected.content : draft.content;
+    setDraft({ title, content, serverTitle: selected.title, serverContent: selected.content });
+  }
+  const dirty = draft.title !== draft.serverTitle || draft.content !== draft.serverContent;
   const [saveState, setSaveState] = useState<"saved" | "pending" | "saving" | "error">("saved");
 
   // react-doctor-disable-next-line react-doctor/no-cascading-set-state -- autosave status follows local draft dirtiness and async save lifecycle.
@@ -316,9 +517,11 @@ function NoteEditor({
     let active = true;
     const timeout = window.setTimeout(() => {
       setSaveState("saving");
-      updateNotePage({ id: selected.id, data: { title: draftTitle, content: draftContent } })
-        .then(() => {
-          if (active) setSaveState("saved");
+      updateNotePage({ id: selected.id, data: { title: draft.title, content: draft.content } })
+        .then((page) => {
+          if (!active) return;
+          setDraft((current) => ({ ...current, serverTitle: page.title, serverContent: page.content }));
+          setSaveState("saved");
         })
         .catch((error: unknown) => {
           if (!active) return;
@@ -330,7 +533,7 @@ function NoteEditor({
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [dirty, draftContent, draftTitle, selected.id, t, updateNotePage]);
+  }, [dirty, draft.content, draft.title, selected.id, t, updateNotePage]);
 
   return (
     <div className="mx-auto flex min-h-full max-w-4xl flex-col px-8 py-6">
@@ -350,8 +553,8 @@ function NoteEditor({
         )}
       </div>
       <Input
-        value={draftTitle}
-        onChange={(event) => setDraftTitle(event.target.value)}
+        value={draft.title}
+        onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
         className="border-0 px-0 text-3xl font-semibold shadow-none focus-visible:ring-0 md:text-4xl"
         placeholder="Untitled"
       />
@@ -373,7 +576,7 @@ function NoteEditor({
       )}
       <ContentEditor
         defaultValue={selected.content}
-        onUpdate={setDraftContent}
+        onUpdate={(content) => setDraft((current) => ({ ...current, content }))}
         onUploadFile={uploadWithToast}
         placeholder={t(($) => $.notes_page.content_placeholder)}
         className="mt-6 min-h-[55vh] px-0 py-2"
@@ -416,6 +619,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const permanentlyDeletePage = usePermanentlyDeleteNotePage();
   const restorePage = useRestoreNotePage();
   const [sharePage, setSharePage] = useState<NotePage | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const [showTrash, setShowTrash] = useState(false);
 
   useEffect(() => {
@@ -503,10 +707,18 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           <FileText className="size-4 text-muted-foreground" />
           <div className="truncate font-medium">{t(($) => $.notes_page.title)}</div>
         </div>
-        <Button size="sm" onClick={() => handleCreate(null)} disabled={createPage.isPending}>
-          <Plus className="size-4" />
-          {t(($) => $.notes_page.new_page)}
-        </Button>
+        {selected && !showTrash && (
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.page_menu)} />} className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setExportOpen(true)}>
+                {t(($) => $.notes_page.export_action)}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </PageHeader>
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-72 shrink-0 flex-col border-r bg-muted/20">
@@ -615,6 +827,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       <ShareDialog page={sharePage} members={members} open={!!sharePage} onOpenChange={(open) => {
         if (!open) setSharePage(null);
       }} />
+      <ExportDialog page={selected} open={exportOpen} onOpenChange={setExportOpen} />
     </div>
   );
 }

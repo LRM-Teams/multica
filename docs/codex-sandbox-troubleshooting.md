@@ -37,9 +37,11 @@ untouched so users can still tune Codex behavior.
 
 Decision matrix (see [`server/internal/daemon/execenv/codex_sandbox.go`](../server/internal/daemon/execenv/codex_sandbox.go)):
 
-| Host OS   | Codex version                                    | Managed block emits                                                       |
+| Host OS   | Codex version / capability                       | Managed block emits                                                       |
 | --------- | ------------------------------------------------ | ------------------------------------------------------------------------- |
-| non-darwin | any                                              | `sandbox_mode = "workspace-write"` + `sandbox_workspace_write.network_access = true` (dotted-key form) |
+| Linux     | bubblewrap namespace probe succeeds or is inconclusive | `sandbox_mode = "workspace-write"` + `sandbox_workspace_write.network_access = true` (dotted-key form) |
+| Linux     | uid-map or loopback namespace probe is denied    | `sandbox_mode = "danger-full-access"` + warn-level audit log              |
+| other non-darwin | any                                       | `sandbox_mode = "workspace-write"` + `sandbox_workspace_write.network_access = true` (dotted-key form) |
 | darwin    | ≥ `CodexDarwinNetworkAccessFixedVersion`         | same as above (upstream fix in effect)                                    |
 | darwin    | older / unknown (current default)                | `sandbox_mode = "danger-full-access"` + warn-level log                     |
 
@@ -56,12 +58,17 @@ upstream fix.
 When the daemon falls back to `danger-full-access`, it logs at `WARN`:
 
 ```
-codex sandbox: falling back to danger-full-access on macOS
+codex sandbox: falling back to danger-full-access
   reason=codex on macOS: seatbelt ignores sandbox_workspace_write.network_access (openai/codex#10390) ...
   codex_version=0.121.0
   hint=upgrade Codex CLI (e.g. `brew upgrade codex` or `npm i -g @openai/codex`) ...
   config_path=/.../codex-home/config.toml
 ```
+
+On Linux, the reason includes the exact bubblewrap probe failure and the hint
+points operators either to enabling user/network namespaces for the daemon
+runtime or to retaining `danger-full-access` on a trusted agent host. The
+probe runs once per daemon process.
 
 ## Quick self-check commands
 

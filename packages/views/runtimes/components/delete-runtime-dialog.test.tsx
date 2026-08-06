@@ -70,6 +70,11 @@ vi.mock("@multica/core/agents", () => ({
   // Empty presence map keeps the cell renderers honest without dragging in
   // the full presence pipeline.
   useWorkspacePresenceMap: () => ({ byAgent: new Map(), loading: false }),
+  useRunnerActivity: () => ({ data: undefined }),
+}));
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
 }));
 
 vi.mock("@multica/core/paths", () => ({

@@ -7,6 +7,7 @@ import type { Agent, RunnerActivityTimelineRow } from "@multica/core/types";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { useT } from "../../../i18n";
 
 const TONE_DOT: Record<string, string> = {
   neutral: "bg-muted-foreground",
@@ -23,6 +24,7 @@ function formatLocalTime(value: string): string {
 }
 
 function TimelineRow({ row }: { row: RunnerActivityTimelineRow }) {
+  const { t } = useT("agents");
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const body = row.body?.trim();
@@ -47,8 +49,8 @@ function TimelineRow({ row }: { row: RunnerActivityTimelineRow }) {
           <div className="mt-2 rounded-md bg-muted p-2 text-xs text-muted-foreground">
             <p className={expanded ? "whitespace-pre-wrap break-words" : "line-clamp-3 whitespace-pre-wrap break-words"}>{body}</p>
             <div className="mt-1 flex gap-2">
-              {canExpand ? <button type="button" className="text-xs font-medium text-foreground" onClick={() => setExpanded((value) => !value)}>{expanded ? "Collapse" : "Expand"}</button> : null}
-              <button type="button" className="inline-flex items-center gap-1 text-xs font-medium text-foreground" onClick={copy}><Copy className="size-3" />{copied ? "Copied" : "Copy"}</button>
+              {canExpand ? <button type="button" className="text-xs font-medium text-foreground" onClick={() => setExpanded((value) => !value)}>{expanded ? t(($) => $.tab_body.activity.collapse) : t(($) => $.tab_body.activity.expand)}</button> : null}
+              <button type="button" className="inline-flex items-center gap-1 text-xs font-medium text-foreground" onClick={copy}><Copy className="size-3" />{copied ? t(($) => $.tab_body.activity.command_copied) : t(($) => $.tab_body.activity.copy_command)}</button>
             </div>
           </div>
         ) : null}
@@ -60,12 +62,13 @@ function TimelineRow({ row }: { row: RunnerActivityTimelineRow }) {
 // ActivityTab renders only server-projected Runner presentation. It has no
 // task, presence, provider, session, or historical Activity-event fallback.
 export function ActivityTab({ agent }: { agent: Agent }) {
+  const { t } = useT("agents");
   const { data, isLoading, isError, refetch } = useRunnerActivity(agent.workspace_id, agent.id);
   const timeline = data?.timeline ?? [];
   if (isLoading) return <div className="space-y-3 p-6"><Skeleton className="h-12" /><Skeleton className="h-12" /></div>;
-  if (isError) return <div className="space-y-3 p-6 text-sm text-muted-foreground"><p>Could not load Activity.</p><Button size="sm" variant="outline" onClick={() => void refetch()}>Retry</Button></div>;
+  if (isError) return <div className="space-y-3 p-6 text-sm text-muted-foreground"><p>{t(($) => $.tab_body.activity.timeline_load_failed)}</p><Button size="sm" variant="outline" onClick={() => void refetch()}>{t(($) => $.tab_body.activity.retry)}</Button></div>;
   return <section className="p-6" data-testid="activity-tab">
     {data?.summary?.visibility === "visible" ? <p className="mb-4 text-sm font-medium">{data.summary.label}</p> : null}
-    {timeline.length === 0 ? <p className="text-sm text-muted-foreground">No activity yet.</p> : timeline.map((row) => <TimelineRow key={row.id} row={row} />)}
+    {timeline.length === 0 ? <p className="text-sm text-muted-foreground">{t(($) => $.tab_body.activity.timeline_empty)}</p> : timeline.map((row) => <TimelineRow key={row.id} row={row} />)}
   </section>;
 }

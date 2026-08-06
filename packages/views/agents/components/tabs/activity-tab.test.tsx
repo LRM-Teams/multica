@@ -1,5 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "@multica/core/i18n/react";
+import enAgents from "../../../locales/en/agents.json";
+import enCommon from "../../../locales/en/common.json";
 
 const runnerActivity = vi.fn();
 vi.mock("@multica/core/agents", () => ({ useRunnerActivity: (...args: unknown[]) => runnerActivity(...args) }));
@@ -9,6 +12,15 @@ import { ActivityTab } from "./activity-tab";
 import { copyText } from "@multica/ui/lib/clipboard";
 
 const agent = { id: "agent-1", workspace_id: "workspace-1" } as never;
+const TEST_RESOURCES = { en: { agents: enAgents, common: enCommon } };
+
+function renderActivityTab() {
+  return render(
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <ActivityTab agent={agent} />
+    </I18nProvider>,
+  );
+}
 
 describe("ActivityTab", () => {
   it("renders only the server-projected summary and timeline", () => {
@@ -21,7 +33,7 @@ describe("ActivityTab", () => {
       isError: false,
       refetch: vi.fn(),
     });
-    render(<ActivityTab agent={agent} />);
+    renderActivityTab();
     expect(runnerActivity).toHaveBeenCalledWith("workspace-1", "agent-1");
     expect(screen.getAllByText("Running command...")).toHaveLength(2);
     expect(screen.getByText("sanitized body")).toBeInTheDocument();
@@ -29,8 +41,8 @@ describe("ActivityTab", () => {
 
   it("does not invent a summary when the server withholds it", () => {
     runnerActivity.mockReturnValue({ data: { summary: null, timeline: [] }, isLoading: false, isError: false, refetch: vi.fn() });
-    render(<ActivityTab agent={agent} />);
-    expect(screen.getByText("No activity yet.")).toBeInTheDocument();
+    renderActivityTab();
+    expect(screen.getByText("No activity yet")).toBeInTheDocument();
   });
 
   it("safely renders unknown server presentation and supports expand and copy", async () => {
@@ -46,7 +58,7 @@ describe("ActivityTab", () => {
       refetch: vi.fn(),
     });
 
-    render(<ActivityTab agent={agent} />);
+    renderActivityTab();
     expect(screen.getByText("Future status")).toBeInTheDocument();
     expect(screen.getByText("not-a-date")).toBeInTheDocument();
     expect(screen.getByText("Future event")).toBeInTheDocument();

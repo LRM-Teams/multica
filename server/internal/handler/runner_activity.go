@@ -215,6 +215,13 @@ func (h *Handler) ReapStaleRunnerActivity(ctx context.Context, now time.Time) er
 }
 
 func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) error {
+	type staleRunnerActivity struct {
+		workspaceID      pgtype.UUID
+		agentID          pgtype.UUID
+		daemonID         string
+		daemonInstanceID string
+		launchID         string
+	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT s.workspace_id, s.agent_id, s.daemon_id, s.daemon_instance_id, s.launch_id
 		FROM agent_activity_snapshot s
@@ -225,13 +232,21 @@ func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) e
 	if err != nil {
 		return fmt.Errorf("list stale Runner Activity: %w", err)
 	}
-	defer rows.Close()
+	var stale []staleRunnerActivity
 	for rows.Next() {
-		var workspaceID, agentID pgtype.UUID
-		var daemonID, daemonInstanceID, launchID string
-		if err := rows.Scan(&workspaceID, &agentID, &daemonID, &daemonInstanceID, &launchID); err != nil {
+		var candidate staleRunnerActivity
+		if err := rows.Scan(&candidate.workspaceID, &candidate.agentID, &candidate.daemonID, &candidate.daemonInstanceID, &candidate.launchID); err != nil {
+			rows.Close()
 			return fmt.Errorf("scan stale Runner Activity: %w", err)
 		}
+		stale = append(stale, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate stale Runner Activity: %w", err)
+	}
+	rows.Close()
+	for _, candidate := range stale {
 		probeID := randomID()
 		command, err := h.DB.Exec(ctx, `
 			INSERT INTO agent_activity_probe (workspace_id, agent_id, daemon_id, daemon_instance_id, launch_id, probe_id, sent_at, deadline_at)
@@ -241,42 +256,57 @@ func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) e
 				WHERE s.workspace_id = $1 AND s.agent_id = $2 AND s.daemon_id = $3 AND s.daemon_instance_id = $4 AND s.launch_id = $5
 					AND s.activity_kind IN ('working', 'thinking') AND s.received_at <= $9 AND l.status = 'active'
 			)
-			ON CONFLICT (workspace_id, agent_id) DO NOTHING`, workspaceID, agentID, daemonID, daemonInstanceID, launchID, probeID, now, now.Add(runnerActivityProbeWindow), now.Add(-runnerActivityStaleAfter))
+			ON CONFLICT (workspace_id, agent_id) DO NOTHING`, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID, probeID, now, now.Add(runnerActivityProbeWindow), now.Add(-runnerActivityStaleAfter))
 		if err != nil {
 			return fmt.Errorf("record Runner Activity probe: %w", err)
 		}
 		if command.RowsAffected() != 1 {
 			continue
 		}
-		if h.DaemonHub == nil || !h.DaemonHub.NotifyWorkspaceRunner(daemonID, util.UUIDToString(workspaceID), protocol.EventAgentActivityProbe, protocol.AgentActivityProbePayload{AgentID: util.UUIDToString(agentID), LaunchID: launchID, ProbeID: probeID}) {
-			if err := h.markRunnerActivityDisconnected(ctx, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+		if h.DaemonHub == nil || !h.DaemonHub.NotifyWorkspaceRunner(candidate.daemonID, util.UUIDToString(candidate.workspaceID), protocol.EventAgentActivityProbe, protocol.AgentActivityProbePayload{AgentID: util.UUIDToString(candidate.agentID), LaunchID: candidate.launchID, ProbeID: probeID}) {
+			if err := h.markRunnerActivityDisconnected(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
 				return err
 			}
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (h *Handler) timeoutRunnerActivityProbes(ctx context.Context, now time.Time) error {
+	type timedOutRunnerActivityProbe struct {
+		workspaceID      pgtype.UUID
+		agentID          pgtype.UUID
+		daemonID         string
+		daemonInstanceID string
+		launchID         string
+	}
 	rows, err := h.DB.Query(ctx, `SELECT workspace_id, agent_id, daemon_id, daemon_instance_id, launch_id FROM agent_activity_probe WHERE deadline_at <= $1`, now)
 	if err != nil {
 		return fmt.Errorf("list timed out Runner Activity probes: %w", err)
 	}
-	defer rows.Close()
+	var timedOut []timedOutRunnerActivityProbe
 	for rows.Next() {
-		var workspaceID, agentID pgtype.UUID
-		var daemonID, daemonInstanceID, launchID string
-		if err := rows.Scan(&workspaceID, &agentID, &daemonID, &daemonInstanceID, &launchID); err != nil {
+		var candidate timedOutRunnerActivityProbe
+		if err := rows.Scan(&candidate.workspaceID, &candidate.agentID, &candidate.daemonID, &candidate.daemonInstanceID, &candidate.launchID); err != nil {
+			rows.Close()
 			return fmt.Errorf("scan timed out Runner Activity probe: %w", err)
 		}
+		timedOut = append(timedOut, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate timed out Runner Activity probes: %w", err)
+	}
+	rows.Close()
+	for _, candidate := range timedOut {
 		if h.DaemonHub != nil {
-			h.DaemonHub.CloseWorkspaceRunner(daemonID, util.UUIDToString(workspaceID), daemonInstanceID)
+			h.DaemonHub.CloseWorkspaceRunner(candidate.daemonID, util.UUIDToString(candidate.workspaceID), candidate.daemonInstanceID)
 		}
-		if err := h.markRunnerActivityDisconnected(ctx, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+		if err := h.markRunnerActivityDisconnected(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (h *Handler) markRunnerActivityDisconnected(ctx context.Context, workspaceID, agentID pgtype.UUID, daemonID, daemonInstanceID, launchID string) error {

@@ -501,7 +501,7 @@ function AgentRecentActivity({ agentId }: { agentId: string }) {
     );
   }
   if (!data?.timeline.length) {
-    return <p className="text-xs text-muted-foreground">No activity yet.</p>;
+    return <p className="text-xs text-muted-foreground">{t(($) => $.profile_popover.no_recent_activity)}</p>;
   }
   return (
     <ul className="space-y-1.5">

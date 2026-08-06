@@ -203,8 +203,7 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 // ReapStaleRunnerActivity drives timeout behavior from its explicit now
 // argument, which keeps the 90-second probe and five-second close deterministic
 // in integration tests and avoids treating a client-provided observed_at as a
-// trusted clock. It remains dormant until the coordinated hard cut schedules
-// it alongside Runner activation.
+// trusted clock.
 func (h *Handler) ReapStaleRunnerActivity(ctx context.Context, now time.Time) error {
 	if h == nil || h.DB == nil {
 		return errors.New("handler database is unavailable")

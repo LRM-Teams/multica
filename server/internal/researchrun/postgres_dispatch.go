@@ -208,9 +208,13 @@ func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID,
 		WHERE id = (SELECT attempt_id FROM research_dispatch_outbox WHERE id = $1::uuid)
 		  AND status = 'dispatching'
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
-		          attempt_number, assigned_agent_id::text, inbox_task_id::text,
+		          attempt_number, assigned_agent_id::text,
+		          execution_adapter, COALESCE(runtime_id::text, ''), provider, model,
+		          target_config_fingerprint, agent_config_fingerprint,
+		          runtime_config_fingerprint, provider_config_fingerprint,
+		          inbox_task_id::text,
 		          dispatch_key, COALESCE(client_request_id, ''), status,
-		          COALESCE(result_hash, ''), failure_class, diagnostics, dispatched_at,
+		          COALESCE(result_hash, ''), failure_class, source_failure_reason, diagnostics, dispatched_at,
 		          started_at, runtime_started_at, runtime_last_observed_at,
 		          runtime_lease_expires_at, cancellation_requested_at,
 		          cancellation_completed_at, pending_failure_class,
@@ -218,9 +222,13 @@ func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID,
 		          result_submitted_at, completed_at
 	`, intentID, inboxTaskID).Scan(&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID,
 		&attempt.TaskID, &attempt.AttemptNumber, &attempt.AssignedAgentID,
+		&attempt.ExecutionTarget.Adapter, &attempt.ExecutionTarget.RuntimeID,
+		&attempt.ExecutionTarget.Provider, &attempt.ExecutionTarget.Model,
+		&attempt.ExecutionTarget.ConfigFingerprint, &attempt.ExecutionTarget.AgentConfigFingerprint,
+		&attempt.ExecutionTarget.RuntimeConfigFingerprint, &attempt.ExecutionTarget.ProviderConfigFingerprint,
 		&attempt.InboxTaskID, &attempt.DispatchKey, &attempt.ClientRequestID,
 		&attempt.Status, &attempt.ResultHash, &attempt.FailureClass,
-		&attempt.Diagnostics, &attempt.DispatchedAt, &attempt.StartedAt,
+		&attempt.SourceFailureReason, &attempt.Diagnostics, &attempt.DispatchedAt, &attempt.StartedAt,
 		&attempt.RuntimeStartedAt, &attempt.RuntimeObservedAt, &attempt.RuntimeLeaseUntil,
 		&attempt.CancelRequestedAt, &attempt.CancelCompletedAt, &attempt.PendingFailure,
 		&attempt.PendingDiagnostics, &attempt.PendingRetryable,
@@ -228,6 +236,7 @@ func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID,
 	if err != nil {
 		return false, Attempt{}, RunEvent{}, err
 	}
+	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_dispatch_outbox
 		SET status = 'delivered', delivered_at = now(), lease_token = NULL,

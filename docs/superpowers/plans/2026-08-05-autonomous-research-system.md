@@ -717,6 +717,46 @@ Research Director 可以提出“自己的想法”，但必须具体化为 Ques
 
 不得用“创建一个新 Task 再试一次”统一处理所有失败。修复动作必须由失败类别和当前 canonical state 决定，并按目标幂等复用。
 
+### 12.3 执行失败、Circuit 与修复的实现契约
+
+Agent Inbox 的 `taskfailure.Reason` 是 Agent/Runtime 执行失败的输入真值。Research Run 只把该持久原因映射为研究执行动作，不再对相同错误文本维护第二套正则分类器。dispatch 建立 Inbox 之前的失败必须由 Adapter 返回结构化 `FailureClass`；未分类错误进入 `unknown`，只能使用较小的重试预算，不能被假定为网络故障。
+
+每个 Attempt 冻结实际执行目标：Agent、Runtime、model、provider、Adapter 和配置指纹。配置指纹只包含不可逆 hash，不保存凭据。目标在 dispatch 前改变时，本 Attempt 以 `target_changed` 结束；下一 Attempt 重新读取目标，旧 outbox payload 不允许原地改写。
+
+Circuit 以 workspace 为安全边界，并分别维护以下目标：
+
+- `agent`：只影响一个 Agent 的模型、进程、上下文和配置故障；
+- `provider`：key 包含 Runtime 与 provider，避免一个 workspace 内独立凭据的 Runtime 互相熔断；
+- `adapter`：影响同一接入实现，例如 `agent_inbox`；
+- `runtime`：只影响已经失联或不兼容的 Runtime。
+
+Circuit 使用持久 `closed | open | half_open` 状态、单调 generation 和带 token/过期时间的 probe lease：
+
+1. `closed` 在同一统计窗口内达到该类别阈值后转为 `open`；单次 credential、缺配置、Runtime 不兼容或不存在等确定性故障可直接打开对应目标；
+2. `open` 到达 `next_probe_at` 后只能由一个 owner 原子领取并转为 `half_open`；其他 Run/worker 继续跳过该目标；
+3. probe 成功且配置指纹未改变时关闭 circuit、清零连续失败；probe 失败按类别重新打开并增加 generation；
+4. probe owner 失联后，只有租约过期的 successor 能接管；旧 token/generation 的成功、失败和 release 均不得改写新 owner；
+5. 目标配置指纹改变会关闭该目标上由旧配置造成的 circuit，并记录 `configuration_changed` Transition；不得删除历史失败；
+6. `agent.provider_blocked_*` 继续作为额度锁定与 UI 状态事实，Research Run 读取它作为 Agent 不可调度条件，但 circuit 不复用这两个字段。
+
+运行策略按持久失败原因决定：
+
+| 输入原因 | Research FailureClass | 动作 |
+| --- | --- | --- |
+| `runtime_offline`、`runtime_recovery`、`queued_expired` | `runtime_lost` | Runtime circuit；旧执行按 lease/dispatch key 对账后有界重试 |
+| `timeout`、`agent_error.agent_timeout` | `timeout` | Agent circuit 统计；取消确认后才允许同 Task 新 Attempt |
+| `agent_error.provider_capacity_or_rate_limit` | `rate_limited` | provider circuit；优先使用 Retry-After，否则有 jitter 的有界退避 |
+| `agent_error.provider_server_error`、`agent_error.provider_network` | `provider_failure` / `network` | provider circuit；达到窗口阈值后打开 |
+| `agent_error.provider_auth_or_access`、`agent_error.provider_quota_limit` | `credential` | 直接打开 provider circuit；额度 reset 时间可作为 `next_probe_at` |
+| `agent_error.missing_config`、`agent_error.model_not_found_or_unavailable` | `configuration` | 直接打开 Agent circuit；配置指纹变化后才立即恢复 |
+| `agent_error.runtime_version_unsupported`、`agent_error.runtime_missing_executable` | `tool_failure` | 直接打开 Runtime circuit |
+| `api_invalid_request`、`agent_error.context_overflow`、`agent_error.empty_or_unparseable_output` | `result_invalid` | 不打开 provider circuit；执行目标修复后再试 |
+| `agent_error.process_failure` | `tool_failure` | Agent/Runtime circuit 统计，不归咎 provider |
+| `iteration_limit`、`agent_blocked` | `contract_blocked` | 不自动复制 Task，生成可定位的 Decision/用户动作 |
+| `agent_error.unknown` 或未知字符串 | `unknown` | 较小预算重试并记录原始持久原因；达到阈值后仅打开 Agent circuit |
+
+目标修复必须有 `repair_key = session + task + goal_version + plan_version + failure_fingerprint + repair_kind`。相同 canonical failure 重算时复用已有修复记录；只有状态版本、目标配置指纹或失败类别改变才允许产生新修复。修复只执行分类允许的动作：等待/探测、换同能力健康 Agent、建立新会话、请求配置或权限、重新规划；不能统一创建相同 Task。每次分类、Circuit Transition、probe claim/result、repair decision 和最终动作都写入可投影事件，并绑定原 Attempt。
+
 ## 13. 报告、评审与交付
 
 报告由当前 Integration Snapshot 生成，必须记录：
@@ -913,6 +953,10 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
     - [x] C1c-1：以 Agent Inbox provider start 和最新 delivery lease 作为 Attempt 执行事实；区分 dispatch、实际启动、取消请求、取消确认和失败结算，旧执行租约消失前禁止释放重试。
     - [x] C1c-2：为 Run reconcile claim 增加续租和 fencing token，使进程暂停超过 claim TTL 后的旧 owner 不能继续提交状态，并覆盖双 worker、长调用和进程暂停竞态。
 - [ ] 实现完整失败分类、provider/Adapter circuit state、有界重试和目标幂等修复。
+  - [x] C2a：冻结 Attempt 执行目标，复用 Agent Inbox `taskfailure.Reason` 建立结构化 Research FailureClass/Disposition，未知失败不得伪装成瞬时网络错误。
+  - [x] C2b：实现 workspace-bound Agent/Runtime/provider/Adapter 持久 circuit、失败窗口、带 generation 的 half-open probe lease、配置指纹恢复和 Transition 审计。
+  - [ ] C2c：让 dispatch 与 runtime reconcile 在选择、失败、成功路径驱动 circuit；有健康同能力 Agent 时换目标，无健康目标时等待最早 probe，不复制正在执行或取消中的 Task。
+  - [ ] C2d：实现按目标幂等的 repair record 与允许动作矩阵，覆盖配置修复、能力缺失、重复失败、重算和多 worker 竞态。
 - [ ] 增加并发、崩溃点、stale result、同 ID 异 payload、跨 workspace 和取消竞态测试。
 
 退出条件：每个事务提交点都可故障注入并恢复；不存在靠复制 Task 掩盖未知 dispatch 结果的路径。
@@ -1101,6 +1145,8 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [x] C1c-2 新增 migration 295：`reconcile_lease_generation` 每次 fresh claim 单调递增，token/expiry 必须同时为空或同时存在。claim 与 Run snapshot 在同一事务提交；续租只允许当前 token+generation 且尚未过期的 owner，过期 owner 即使无人接管也不能复活；release 同样要求当前 generation 和未过期 lease，旧 worker 不能清除 successor 或覆盖 `next_reconcile_at`。Engine 以 45 秒 lease/15 秒 heartbeat 续租，续租失败立即取消 reconcile Context；测试发现正常退出与正在执行的续租 SQL 竞态会误报 `context canceled`，现已把正常 heartbeat 停止与失租分开。所有 canonical reconcile 写事务均先锁 Run 并验证 generation/token/数据库时间，覆盖 Event、Task/Attempt、取消确认、Gate、budget、dispatch outbox、Node command 和 Result acceptance；用户命令或 Agent Result 等外部 canonical 写入会先撤销旧 reconcile lease。进程暂停后恢复的旧 worker 可以重放幂等 Inbox dispatch/cancel，但其数据库确认、失败、重试和投影确认全部被拒绝。Projection 在调用 Adapter、写 legacy audit node、每个 Graph WS 节点、状态及报告通知前重新验证 lease；Graph payload 增加 Event sequence 和 reconcile generation，为前端拒绝跨 generation 乱序保留事实。Pause/Cancel/Archive/Confirm 不再绕过 lease 直接投影，而是提交 canonical 命令后重新领取 Run；已提交的 Result/Node command 遇到 ownership handoff 不向调用方误报失败。真实 PostgreSQL 覆盖双 worker、续租阻止接管、过期 owner 不可复活、generation 接管、stale 写回滚、stale release、用户撤销、慢 dispatch 跨 TTL、接管取消旧调用及 migration 295 down/up；全包连续三轮通过。PR [#2403](https://github.com/LRM-Teams/multica/pull/2403)。
 - [x] 计划外诊断更正：共享 Handler 测试库出现 migration 257 已执行而 204/223 ledger 缺失。Git 历史证明 204、223 分别在 7 月 21/24 日进入仓库，257 在 7 月 31 日进入；正常迁移器会先执行 204/223。该状态只能由 ledger 损坏、手工挑拣迁移或长期残缺的开发库产生，不按真实正常部署 Bug 修改历史迁移。C1c 验证时一次未显式传入隔离 `DATABASE_URL` 的本地 down 命令命中该库并回滚了 ledger 中仍存在的 205–222；已依据命令日志只重放这 24 个刚回滚的 migration 并恢复原状态，没有补写原先缺失的 204/223，也没有把损坏 ledger 当作产品兼容目标。后续 294 down/up 由隔离数据库内的事务集成测试执行。若生产库出现同一状态，应先审计并修复该库迁移历史，不能用历史 migration 兼容损坏 ledger。
 - [x] C1c-2 验证命令更正：未设置隔离 `DATABASE_URL` 的 Handler 包测试和 migration hook 测试再次命中上述损坏测试库；前者的 migration 223 在事务内因依赖表缺失而失败，后者在残缺的旧 schema 上报告缺列/缺索引，均未据此修改产品代码或历史 migration。相同 migration hook 测试显式切到完整隔离库后立即通过，证明失败来自共享测试库状态。Handler 编译改用 `go test -c`，数据库测试显式指向已完整迁移到 295 的隔离库并通过。后续命令继续显式携带隔离数据库地址。
+- [x] C2a 新增 migration 296，在 Attempt 创建事务冻结 `execution_adapter`、Runtime、provider、model、配置指纹和原始 Inbox failure reason；数据库 Trigger 禁止事后改写执行目标。配置指纹只 hash Agent/Runtime 的模型、provider、runtime config、custom env/args、MCP、thinking level、pinned version 和 daemon provider fingerprint，不保存凭据，也不包含 heartbeat、状态或 `updated_at`，避免运行状态变化被误判为配置修复。新 dispatch request 的 target 参与语义 hash；历史无 target payload 的固定 hash 保持不变，已有 V1 outbox 可继续回放。Handler 在建立 Inbox 之前重新解析目标，模型/Runtime/provider/配置已改变时返回结构化 `target_changed`，不会把旧 Attempt 发给新配置。Research FailureClass/Disposition 复用 `taskfailure` 的 21 个持久原因，区分 runtime lost、timeout、rate limit、provider、network、credential、configuration、tool、result invalid、contract blocked 和 unknown；Agent Inbox 的 `retryable=false` 只能收紧动作，不能被 Research policy 覆盖。未知 dispatch 错误只允许两次 delivery，不能继续沿用“未知即瞬时故障”的八次假设。Attempt 画布 payload 同时输出执行目标、Research failure class、源 failure reason、诊断和现有 lease/cancel 时间。真实 PostgreSQL 验证了目标冻结、outbox 回放、不可变 Trigger、migration 296 down/up、完整 Research Run 和 race；Handler 验证了 target change、幂等重放、异 payload 拒绝和画布字段；`go vet`、Handler 编译、migration lint 与 migrate hook 通过。两次未带环境前缀的纯 Handler 定向命令仍命中已知损坏默认库并在 migration 223 失败，事务未迁移成功；相同命令显式指向隔离库通过，此结果没有触发产品代码或历史 migration 修改。PR [#2408](https://github.com/LRM-Teams/multica/pull/2408)。
+- [x] C2b 新增 migration 297，在 Attempt 上分别冻结 Agent、Runtime、provider 配置指纹，并扩展不可变 Trigger，单独改写任一分层指纹都会被数据库拒绝。`research_execution_circuit` 以 workspace、scope、target key 唯一保存 `closed/open/half_open`、generation、失败窗口、冷却时间和唯一 probe token/lease；`research_execution_circuit_transition` 为每次失败、配置变化、probe 领取及结果、普通成功保存不可改写的审计记录。Agent/Runtime 使用稳定身份 key 与独立配置指纹，provider key 包含 Runtime、provider 和 provider 配置身份，Adapter 以 workspace 内 Adapter 为域；不同 workspace 不共享熔断状态。失败策略按持久 FailureClass 设置阈值、窗口和冷却时间，credential/configuration/runtime 安装缺陷及内部不变量可立即打开，未知失败只有较小窗口。相同 Attempt 的失败/成功观察由数据库唯一索引和事务行锁幂等；普通成功只能清理 `closed` 状态的短暂失败计数，不能关闭 `open/half_open`，只有持有当前 generation、未过期 token 的 probe 可以关闭；probe 过期后允许一个继任者接管，旧 owner 的结果被拒绝。配置变化只有在新的冻结 Attempt 成功或失败与 circuit key 匹配后才复位，单纯携带某个目标快照申请 probe 不能伪造配置修复。每个 Transition 同事务写 `execution_circuit_transition` Run Event，包含目标域、配置指纹、前后状态、原因、失败类别、原始原因、诊断、连续失败数及窗口/冷却/lease 时间；Handler 将其投影为画布 `agent_activity` 节点。审查发现初稿改写了 C2a 总配置指纹公式，会使部署前已冻结但未投递的 Attempt 被误判为 `target_changed`；现由共享 `FingerprintExecutionTarget` 同时计算分层指纹并保持原总指纹协议，回归测试固定该兼容性。真实 PostgreSQL 覆盖窗口阈值、重复失败幂等、并发单 probe、冷却前拒绝、probe 成功关闭、失败重开、过期接管、旧 probe 拒写、配置变化复位、冻结目标拒绝、stale reconcile lease 拒写、workspace 隔离和 migration 296/297 连续 down/up；完整 Research Run、定向 Handler、race、vet 和 migration lint 通过。C2b 只提供持久状态机和审计 API；dispatch/runtime reconcile 驱动、健康目标重路由与等待最早 probe 属于 C2c，尚未宣称生效。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

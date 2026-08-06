@@ -750,6 +750,23 @@ export function machinePrimaryRuntimeId(
   return online?.id ?? machine.runtimes[0]?.id ?? null;
 }
 
+/**
+ * Select the runtime whose update observation must drive the machine-level
+ * Daemon row. A machine can have several online runtime rows; using the
+ * general primary runtime here can hide an update reported by one of its
+ * siblings. Other daemon-scoped actions should continue to use
+ * machinePrimaryRuntimeId.
+ */
+export function machineDaemonUpgradeRuntimeId(
+  machine: RuntimeMachine,
+  now: number,
+): string | null {
+  const updateAvailable = machine.runtimes.find(
+    (runtime) => runtime.runtime_health === "update_available",
+  );
+  return updateAvailable?.id ?? machinePrimaryRuntimeId(machine, now);
+}
+
 function machineSubtitle({
   title,
   deviceInfo,

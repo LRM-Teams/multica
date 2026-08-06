@@ -216,7 +216,11 @@
         "done": "完成",
         "failed": "失败",
         "stale": "停滞",
-        "idle": "空闲"
+        "idle": "空闲",
+        "waiting": "等待中",
+        "retrying": "重试中",
+        "offline": "离线",
+        "unknown": "未知"
       },
       "action": {
         "waiting": "等待开始当前任务",
@@ -224,7 +228,10 @@
         "recent_done": "最近任务已完成",
         "recent_failed": "最近任务执行失败",
         "stale": "执行状态已过期",
-        "idle": "当前没有可领取的小任务"
+        "idle": "当前没有可领取的小任务",
+        "retrying": "正在重试当前任务",
+        "offline": "无实时信号，视为未在岗",
+        "unknown": "执行状态未知"
       },
       "time": {
         "queued": "排队中",
@@ -232,15 +239,45 @@
         "recent": "最近更新",
         "failed": "执行失败",
         "stale": "长时间未更新",
-        "idle": "空闲"
+        "idle": "空闲",
+        "offline": "无实时信号",
+        "unknown": "未知",
+        "retrying": "重试中"
       },
       "failed_reason": "任务未完成，可查看最近活动后重试。",
       "active_count": "{{count}} 个智能体执行中",
       "no_active": "暂无智能体执行",
       "locate_aria": "定位{{name}}当前节点",
-      "view_aria": "查看{{name}}最近活动"
+      "view_aria": "查看{{name}}最近活动",
+      "recent_result": "最近已验收产出",
+      "started": "开始",
+      "updated": "更新",
+      "duration": "已持续",
+      "stage": "阶段",
+      "wait_reason": "等待原因",
+      "stale_reason": "过期原因",
+      "task": "任务",
+      "attempt": "尝试",
+      "waiting_reason": "已排队或等待名额，暂无执行信号。",
+      "offline_reason": "该成员暂无实时在场信号，视为未在岗。",
+      "unknown_reason": "无法从投影判定执行状态。",
+      "clock_time": "{{time}}",
+      "elapsed_sec": "{{count}} 秒",
+      "elapsed_min": "{{count}} 分钟",
+      "elapsed_hour": "{{count}} 小时",
+      "disconnected": "连接已断开 · 保留最后数据",
+      "data_expired": "数据可能已过期",
+      "synced": "实时",
+      "last_sync": "同步于 {{time}}",
+      "group_active": "执行中",
+      "group_waiting": "等待中",
+      "group_finished": "已完成",
+      "group_idle": "空闲",
+      "expand_aria": "展开{{name}}详情"
     },
-    "aux_close_sources": "关闭调研依据与协作分工"
+    "aux_close_sources": "关闭调研依据与协作分工",
+    "module_execution": "执行",
+    "module_execution_ico": "执"
   },
   "chat": {
     "you": "你",

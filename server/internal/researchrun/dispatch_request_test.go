@@ -30,3 +30,36 @@ func TestHashDispatchRequestUsesSemanticJSONAndExcludesHashField(t *testing.T) {
 		t.Fatalf("left=%q right=%q", leftHash, rightHash)
 	}
 }
+
+func TestHashDispatchRequestIncludesFrozenExecutionTarget(t *testing.T) {
+	base := DispatchRequest{
+		Run:  Run{SessionID: "session-1", WorkspaceID: "workspace-1"},
+		Task: Task{ID: "task-1"}, AttemptID: "attempt-1", AgentID: "agent-1",
+		Target: ExecutionTarget{Adapter: "agent_inbox", AgentID: "agent-1", RuntimeID: "runtime-1", Provider: "openai", Model: "gpt-5.4", ConfigFingerprint: "config-a"},
+		Prompt: "frozen", Key: "dispatch-1",
+	}
+	left, err := HashDispatchRequest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Target.Model = "gpt-5.5"
+	right, err := HashDispatchRequest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left == right {
+		t.Fatal("execution target change did not change request hash")
+	}
+}
+
+func TestHashDispatchRequestHistoricalPayloadHashIsUnchangedWithoutTarget(t *testing.T) {
+	request := DispatchRequest{Run: Run{SessionID: "session-1"}, Task: Task{ID: "task-1"}, AttemptID: "attempt-1", AgentID: "agent-1", Prompt: "frozen prompt", Key: "dispatch-1"}
+	got, err := HashDispatchRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const historical = "7bcc490a3d9c945b3ccee37f573631a5385eb09f7981c0d881ebddea45c5d2e0"
+	if got != historical {
+		t.Fatalf("historical hash changed: got %s want %s", got, historical)
+	}
+}

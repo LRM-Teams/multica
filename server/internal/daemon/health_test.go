@@ -313,6 +313,245 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	}
 }
 
+func TestCredentialProxyMessageSendSavesDraftBeforeNetworkAndClearsKnownSuccess(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+
+	var targetCalls, sendCalls int
+	var sent map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/messages/target":
+			targetCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"target": "#one", "context_target": "channel:one"})
+		case "/api/agent/messages/send":
+			sendCalls++
+			if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+				t.Errorf("decode send request: %v", err)
+			}
+			draft, found, err := coordinator.LoadMessageDraft("#one", time.Now())
+			if err != nil || !found || draft.ContextTarget != "channel:one" || draft.SeenUpToSeq != 0 || draft.ClientMessageID != sent["client_message_id"] {
+				t.Errorf("Draft was not atomically saved before upstream send: draft=%+v found=%v err=%v request=%+v", draft, found, err, sent)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"action": "message_send", "target": "#one", "created": true, "message": map[string]any{"id": "message-1", "client_message_id": "private"}, "transport_id": "private"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
+	rec := httptest.NewRecorder()
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","content":"hello"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message send status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if targetCalls != 1 || sendCalls != 1 {
+		t.Fatalf("target/send calls=%d/%d, want 1/1", targetCalls, sendCalls)
+	}
+	if sent["client_message_id"] == "" || sent["seen_up_to_seq"] != float64(0) || sent["context_target"] != "channel:one" {
+		t.Fatalf("upstream send = %+v", sent)
+	}
+	if _, found, err := d.CredentialProxy().LoadMessageDraft("agent-1", "#one", time.Now()); err != nil || found {
+		t.Fatalf("successful send Draft found=%v err=%v", found, err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode send response: %v", err)
+	}
+	if _, leaked := response["transport_id"]; leaked {
+		t.Fatalf("proxy leaked internal transport id: %+v", response)
+	}
+	if message, _ := response["message"].(map[string]any); message["client_message_id"] != nil {
+		t.Fatalf("proxy leaked internal message identity: %+v", response)
+	}
+}
+
+func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	for sequence := int64(1); sequence <= 4; sequence++ {
+		if _, err := coordinator.Accept(context.Background(), testDelivery(fmt.Sprintf("message-%d", sequence), "channel:one", sequence, fmt.Sprintf("delivery-%d", sequence))); err != nil {
+			t.Fatalf("Accept %d: %v", sequence, err)
+		}
+	}
+
+	var sends int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/agent/messages/target" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"target": "#one", "context_target": "channel:one"})
+			return
+		}
+		if r.URL.Path == "/api/agent/messages/send" {
+			sends++
+		}
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+
+	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
+	rec := httptest.NewRecorder()
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","content":"reply"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local hold status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if sends != 0 {
+		t.Fatalf("local Pending invoked upstream send %d times", sends)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode local hold: %v", err)
+	}
+	if response["state"] != "held" || response["newMessageCount"] != float64(4) {
+		t.Fatalf("local hold response=%+v", response)
+	}
+	if messages, _ := response["heldMessages"].([]any); len(messages) != 3 {
+		t.Fatalf("held Messages=%+v, want newest three", response["heldMessages"])
+	}
+	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 4 {
+		t.Fatalf("held boundary=%d known=%v, want 4 true", boundary, known)
+	}
+	if draft, found, err := d.CredentialProxy().LoadMessageDraft("agent-1", "#one", time.Now()); err != nil || !found || draft.SeenUpToSeq != 4 {
+		t.Fatalf("held Draft=%+v found=%v err=%v", draft, found, err)
+	}
+}
+
+func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	if err := coordinator.MarkRead("channel:one", 2); err != nil {
+		t.Fatalf("seed Context Boundary: %v", err)
+	}
+	var sent map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/messages/target":
+			_ = json.NewEncoder(w).Encode(map[string]any{"target": "#one", "context_target": "channel:one"})
+		case "/api/agent/messages/send":
+			if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+				t.Errorf("decode send request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"action": "message_send", "target": "#one", "state": "held", "outcome": "held",
+				"heldMessages": []map[string]any{{"id": "message-5", "seq": 5}}, "newMessageCount": 3,
+				"shownMessageCount": 1, "omittedMessageCount": 2, "seenUpToSeq": 2, "latestSeq": 5,
+				"transport_id": "private", "producerFactId": "private",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
+	rec := httptest.NewRecorder()
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","content":"reply"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("server race hold status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if sent["seen_up_to_seq"] != float64(2) || sent["context_target"] != "channel:one" {
+		t.Fatalf("server race preflight request=%+v", sent)
+	}
+	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 5 {
+		t.Fatalf("held boundary=%d known=%v, want 5 true", boundary, known)
+	}
+	draft, found, err := d.CredentialProxy().LoadMessageDraft("agent-1", "#one", time.Now())
+	if err != nil || !found || draft.SeenUpToSeq != 5 {
+		t.Fatalf("server-held Draft=%+v found=%v err=%v", draft, found, err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode server hold: %v", err)
+	}
+	for _, private := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId"} {
+		if _, leaked := response[private]; leaked {
+			t.Fatalf("proxy leaked %s: %+v", private, response)
+		}
+	}
+}
+
+func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	if err := coordinator.MarkRead("channel:one", 2); err != nil {
+		t.Fatalf("seed Context Boundary: %v", err)
+	}
+	if _, err := coordinator.SaveNormalMessageDraft(messageDraft{
+		Target: "#one", ContextTarget: "channel:one", Content: "saved reply", ClientMessageID: "stable-id", SeenUpToSeq: 2,
+	}, time.Now()); err != nil {
+		t.Fatalf("save Draft: %v", err)
+	}
+	var sent map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/send" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Errorf("decode replay request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"action": "message_send", "target": "#one", "created": true, "message": map[string]any{"id": "message-1"}})
+	}))
+	defer upstream.Close()
+
+	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
+	rec := httptest.NewRecorder()
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","send_draft":true,"anyway":true}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Draft replay status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if sent["client_message_id"] != "stable-id" || sent["content"] != "saved reply" || sent["bypass_freshness"] != true {
+		t.Fatalf("replay request=%+v", sent)
+	}
+	if _, found, err := d.CredentialProxy().LoadMessageDraft("agent-1", "#one", time.Now()); err != nil || found {
+		t.Fatalf("successful Draft replay found=%v err=%v", found, err)
+	}
+
+	invalid := httptest.NewRecorder()
+	d.credentialProxyMessageSendHandler().ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","anyway":true}`)))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("normal --anyway status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func credentialProxySendTestDaemon(t *testing.T, root, serverURL string, coordinator *MessageCoordinator) *Daemon {
+	t.Helper()
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: serverURL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
+		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("writeCachedAgentCredential: %v", err)
+	}
+	d := &Daemon{
+		cfg:                 cfg,
+		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
+		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(cfg, slog.Default()),
+	}
+	key := agentRuntimeTurnSlotKey{AgentID: "agent-1", RuntimeID: "runtime-1"}
+	if !d.agentRuntimeTurns.reserve(key, "task-1") {
+		t.Fatal("reserve active turn")
+	}
+	t.Cleanup(func() { d.agentRuntimeTurns.release(key, "task-1") })
+	return d
+}
+
 func assertActiveTaskCount(t *testing.T, h http.HandlerFunc, want int64) {
 	t.Helper()
 	rec := httptest.NewRecorder()

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -2046,29 +2047,26 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 		t.Fatalf("search results did not include seeded message %s: %+v", seeded.ID, searchBody.Results)
 	}
 
-	reactClientID := "transport-react-" + uuid.NewString()
 	reactRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
-		"target":            target,
-		"message_id":        seeded.ID,
-		"emoji":             "+1",
-		"client_message_id": reactClientID,
+		"message_id": seeded.ID,
+		"emoji":      "+1",
 	})
-	if reactRec.Code != http.StatusCreated {
+	if reactRec.Code != http.StatusOK {
 		t.Fatalf("transport react: status=%d body=%s", reactRec.Code, reactRec.Body.String())
 	}
 	var reactBody AgentTransportReactResponse
 	if err := json.Unmarshal(reactRec.Body.Bytes(), &reactBody); err != nil {
 		t.Fatalf("decode transport react: %v", err)
 	}
-	if reactBody.Reaction.MessageID != seeded.ID || reactBody.Reaction.ActorID != agentID || reactBody.Reaction.Emoji != "+1" {
-		t.Fatalf("reaction payload mismatch: %+v", reactBody.Reaction)
+	if !reactBody.Added || reactBody.Reaction == nil || reactBody.Reaction.MessageID != seeded.ID || reactBody.Reaction.ActorID != agentID || reactBody.Reaction.Emoji != "👍" {
+		t.Fatalf("reaction payload mismatch: %+v", reactBody)
 	}
 
 	var reactionRows int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM channel_message_reaction
-		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2 AND emoji = '+1'`,
+		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2 AND emoji = '👍'`,
 		seeded.ID, agentID).Scan(&reactionRows); err != nil {
 		t.Fatalf("count agent reaction: %v", err)
 	}
@@ -2077,7 +2075,6 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	}
 	assertAgentTransportAuditCount(t, taskID, agentTransportActionRead, 1)
 	assertAgentTransportAuditCount(t, taskID, agentTransportActionSearch, 1)
-	assertAgentTransportAuditCount(t, taskID, agentTransportActionReact, 1)
 }
 
 func TestAgentTransportResolveReturnsOneVisibleCanonicalMessage(t *testing.T) {
@@ -2194,7 +2191,235 @@ func TestAgentTransportResolveReturnsOneVisibleCanonicalMessage(t *testing.T) {
 	}
 }
 
-func TestAgentTransportRequiresExplicitTarget(t *testing.T) {
+func TestNormalizeAgentTransportReactionEmoji(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "trim and normalize plus one", input: " +1 ", want: "👍"},
+		{name: "text variation becomes emoji variation", input: "❤︎", want: "❤️"},
+		{name: "skin tone modifier", input: "👍🏽", want: "👍🏽"},
+		{name: "joined emoji", input: "🏳️‍🌈", want: "🏳️‍🌈"},
+		{name: "keycap", input: "1️⃣", want: "1️⃣"},
+		{name: "plain text", input: "ack", wantErr: true},
+		{name: "two reactions", input: "👍👎", wantErr: true},
+		{name: "empty", input: "  ", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeAgentTransportReactionEmoji(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("normalize(%q) = %q, want error", tt.input, got)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("normalize(%q) = %q, %v; want %q, nil", tt.input, got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentTransportReactUsesCanonicalIdentityIdempotently(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	message, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "react by exact canonical identity", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed reaction message: %v", err)
+	}
+
+	var addedEvents, removedEvents []events.Event
+	testHandler.Bus.Subscribe(protocol.EventChannelReactionAdded, func(event events.Event) {
+		payload, ok := event.Payload.(map[string]any)
+		if ok && payload["message_id"] == message.ID {
+			addedEvents = append(addedEvents, event)
+		}
+	})
+	testHandler.Bus.Subscribe(protocol.EventChannelReactionRemoved, func(event events.Event) {
+		payload, ok := event.Payload.(map[string]any)
+		if ok && payload["message_id"] == message.ID {
+			removedEvents = append(removedEvents, event)
+		}
+	})
+
+	invalidRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id": message.ID,
+		"emoji":      "not an emoji",
+	})
+	if invalidRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid emoji: status=%d body=%s", invalidRec.Code, invalidRec.Body.String())
+	}
+	targetRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id": message.ID,
+		"emoji":      "👍",
+		"target":     "#must-not-be-accepted",
+	})
+	if targetRec.Code != http.StatusBadRequest {
+		t.Fatalf("target-bearing reaction must be rejected: status=%d body=%s", targetRec.Code, targetRec.Body.String())
+	}
+	cursorRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id":        message.ID,
+		"emoji":             "👍",
+		"client_message_id": "must-not-be-accepted",
+	})
+	if cursorRec.Code != http.StatusBadRequest {
+		t.Fatalf("cursor-bearing reaction must be rejected: status=%d body=%s", cursorRec.Code, cursorRec.Body.String())
+	}
+
+	addRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id": message.ID[:8],
+		"emoji":      "+1",
+	})
+	if addRec.Code != http.StatusOK {
+		t.Fatalf("add by short id: status=%d body=%s", addRec.Code, addRec.Body.String())
+	}
+	var addedWire map[string]any
+	if err := json.Unmarshal(addRec.Body.Bytes(), &addedWire); err != nil {
+		t.Fatalf("decode added reaction wire response: %v", err)
+	}
+	for _, forbidden := range []string{"target", "transport_id", "client_message_id"} {
+		if _, found := addedWire[forbidden]; found {
+			t.Fatalf("canonical reaction must not expose %q: %#v", forbidden, addedWire)
+		}
+	}
+	var added AgentTransportReactResponse
+	if err := json.Unmarshal(addRec.Body.Bytes(), &added); err != nil {
+		t.Fatalf("decode added reaction: %v", err)
+	}
+	if !added.Added || added.Removed || added.ChannelID != channelID || added.MessageID != message.ID || added.Emoji != "👍" || added.Reaction == nil || added.Reaction.MessageID != message.ID || added.Reaction.ActorID != agentID {
+		t.Fatalf("added reaction response = %+v, want canonical added projection", added)
+	}
+	if len(addedEvents) != 1 || addedEvents[0].Type != protocol.EventChannelReactionAdded || addedEvents[0].WorkspaceID != testWorkspaceID || addedEvents[0].ActorType != "agent" || addedEvents[0].ActorID != agentID {
+		t.Fatalf("added realtime events = %+v, want one canonical agent projection", addedEvents)
+	}
+	addedPayload := addedEvents[0].Payload.(map[string]any)
+	if addedPayload["channel_id"] != channelID || addedPayload["message_id"] != message.ID {
+		t.Fatalf("added realtime payload = %#v, want channel/message identity", addedPayload)
+	}
+
+	duplicateAddRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id": message.ID,
+		"emoji":      "👍",
+	})
+	if duplicateAddRec.Code != http.StatusOK {
+		t.Fatalf("duplicate add: status=%d body=%s", duplicateAddRec.Code, duplicateAddRec.Body.String())
+	}
+	var duplicateAdded AgentTransportReactResponse
+	if err := json.Unmarshal(duplicateAddRec.Body.Bytes(), &duplicateAdded); err != nil {
+		t.Fatalf("decode duplicate added reaction: %v", err)
+	}
+	if duplicateAdded.Added || duplicateAdded.Reaction == nil || duplicateAdded.Reaction.ID != added.Reaction.ID || len(addedEvents) != 1 {
+		t.Fatalf("duplicate add must be idempotent: response=%+v events=%+v", duplicateAdded, addedEvents)
+	}
+
+	removeRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id": message.ID,
+		"emoji":      "+1",
+		"remove":     true,
+	})
+	if removeRec.Code != http.StatusOK {
+		t.Fatalf("remove: status=%d body=%s", removeRec.Code, removeRec.Body.String())
+	}
+	var removed AgentTransportReactResponse
+	if err := json.Unmarshal(removeRec.Body.Bytes(), &removed); err != nil {
+		t.Fatalf("decode removed reaction: %v", err)
+	}
+	if removed.Added || !removed.Removed || removed.Reaction != nil || removed.ChannelID != channelID || removed.MessageID != message.ID || removed.Emoji != "👍" {
+		t.Fatalf("removed reaction response = %+v, want canonical removal projection", removed)
+	}
+	if len(removedEvents) != 1 || removedEvents[0].Type != protocol.EventChannelReactionRemoved || removedEvents[0].WorkspaceID != testWorkspaceID || removedEvents[0].ActorType != "agent" || removedEvents[0].ActorID != agentID {
+		t.Fatalf("removed realtime events = %+v, want one canonical agent projection", removedEvents)
+	}
+	removedPayload := removedEvents[0].Payload.(map[string]any)
+	if removedPayload["channel_id"] != channelID || removedPayload["message_id"] != message.ID || removedPayload["emoji"] != "👍" || removedPayload["actor_type"] != "agent" || removedPayload["actor_id"] != agentID {
+		t.Fatalf("removed realtime payload = %#v, want channel/message/actor identity", removedPayload)
+	}
+
+	duplicateRemoveRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id": message.ID,
+		"emoji":      "👍",
+		"remove":     true,
+	})
+	if duplicateRemoveRec.Code != http.StatusOK {
+		t.Fatalf("duplicate remove: status=%d body=%s", duplicateRemoveRec.Code, duplicateRemoveRec.Body.String())
+	}
+	var duplicateRemoved AgentTransportReactResponse
+	if err := json.Unmarshal(duplicateRemoveRec.Body.Bytes(), &duplicateRemoved); err != nil {
+		t.Fatalf("decode duplicate removed reaction: %v", err)
+	}
+	if duplicateRemoved.Removed || len(removedEvents) != 1 {
+		t.Fatalf("duplicate remove must be idempotent: response=%+v events=%+v", duplicateRemoved, removedEvents)
+	}
+
+	var reactionRows, auditRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message_reaction
+		WHERE channel_message_id = $1 AND actor_type = 'agent' AND actor_id = $2 AND emoji = '👍'`, message.ID, agentID).Scan(&reactionRows); err != nil {
+		t.Fatalf("count canonical reactions: %v", err)
+	}
+	if reactionRows != 0 {
+		t.Fatalf("reaction rows after idempotent removal = %d, want 0", reactionRows)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_transport_audit WHERE task_id = $1`, taskID).Scan(&auditRows); err != nil {
+		t.Fatalf("count react transport side effects: %v", err)
+	}
+	if auditRows != 0 {
+		t.Fatalf("canonical reactions must not write transport audit rows; got %d", auditRows)
+	}
+
+	hiddenChannelID := seedChannelForTest(t, "hidden-react-"+uuid.NewString()[:8], testUserID)
+	hidden, err := testHandler.insertChannelMessage(ctx, parseUUID(hiddenChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "hidden reaction message", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed hidden reaction message: %v", err)
+	}
+	hiddenRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{"message_id": hidden.ID, "emoji": "👍"})
+	missingRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{"message_id": uuid.NewString(), "emoji": "👍"})
+	if hiddenRec.Code != http.StatusNotFound || missingRec.Code != http.StatusNotFound || hiddenRec.Body.String() != missingRec.Body.String() {
+		t.Fatalf("unauthorized/missing reaction must share one response: hidden=%d/%s missing=%d/%s", hiddenRec.Code, hiddenRec.Body.String(), missingRec.Code, missingRec.Body.String())
+	}
+
+	ambiguousPrefix := ""
+	for range 16 {
+		candidate := uuid.NewString()[:4]
+		var collisions int
+		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE workspace_id = $1 AND replace(id::text, '-', '') LIKE $2 || '%'`, testWorkspaceID, candidate).Scan(&collisions); err != nil {
+			t.Fatalf("check ambiguous reaction prefix collision: %v", err)
+		}
+		if collisions == 0 {
+			ambiguousPrefix = candidate
+			break
+		}
+	}
+	if ambiguousPrefix == "" {
+		t.Fatal("could not allocate an unambiguous reaction prefix")
+	}
+	for _, id := range []string{
+		ambiguousPrefix + "0000-0000-4000-8000-000000000001",
+		ambiguousPrefix + "0000-0000-4000-8000-000000000002",
+	} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_message (id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source)
+			VALUES ($1, $2, $3, 'user', $4, 'Tester', 'ambiguous reaction message', '[]'::jsonb, 'multica')`,
+			parseUUID(id), parseUUID(channelID), parseUUID(testWorkspaceID), parseUUID(testUserID)); err != nil {
+			t.Fatalf("seed ambiguous reaction message %s: %v", id, err)
+		}
+	}
+	ambiguousRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{"message_id": ambiguousPrefix, "emoji": "👍"})
+	if ambiguousRec.Code != http.StatusConflict || !strings.Contains(ambiguousRec.Body.String(), "ambiguous") {
+		t.Fatalf("react ambiguous short id: status=%d body=%s", ambiguousRec.Code, ambiguousRec.Body.String())
+	}
+}
+
+func TestAgentTransportTargetedCommandsRequireExplicitTarget(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2225,14 +2450,6 @@ func TestAgentTransportRequiresExplicitTarget(t *testing.T) {
 		t.Fatalf("search without target: status=%d body=%s", searchRec.Code, searchRec.Body.String())
 	}
 
-	reactRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
-		"message_id":        uuid.NewString(),
-		"emoji":             "+1",
-		"client_message_id": "missing-target-react-" + uuid.NewString(),
-	})
-	if reactRec.Code != http.StatusBadRequest {
-		t.Fatalf("react without target: status=%d body=%s", reactRec.Code, reactRec.Body.String())
-	}
 }
 
 func TestAgentTransportDMThreadTarget(t *testing.T) {

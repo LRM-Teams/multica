@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -947,5 +948,67 @@ func TestMessageCoordinatorRetriesRuntimeHandoffSafely(t *testing.T) {
 	}
 	if attempts != 2 || activities != 1 || coordinator.Boundaries()["channel-1"] != 1 {
 		t.Fatalf("attempts=%d activities=%d boundary=%d", attempts, activities, coordinator.Boundaries()["channel-1"])
+	}
+}
+
+func TestMessageCoordinatorPreflightHoldsCompletePendingRangeWithNewestThree(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	for sequence := int64(1); sequence <= 5; sequence++ {
+		if _, err := coordinator.Accept(context.Background(), testDelivery(fmt.Sprintf("message-%d", sequence), "channel:one", sequence, fmt.Sprintf("delivery-%d", sequence))); err != nil {
+			t.Fatalf("Accept %d: %v", sequence, err)
+		}
+	}
+
+	result, err := coordinator.PreflightMessageSend("channel:one")
+	if err != nil {
+		t.Fatalf("PreflightMessageSend: %v", err)
+	}
+	if !result.Held || result.NewMessageCount != 5 || result.Omitted != 2 || result.LatestSeq != 5 {
+		t.Fatalf("preflight result = %+v", result)
+	}
+	if got, want := []string{result.Messages[0].ID, result.Messages[1].ID, result.Messages[2].ID}, []string{"message-3", "message-4", "message-5"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("shown messages = %v, want %v", got, want)
+	}
+	if _, found := coordinator.pending["channel:one"]; found {
+		t.Fatalf("held Pending remains: %+v", coordinator.pending)
+	}
+	if got, ok := coordinator.ContextBoundary("channel:one"); !ok || got != 5 {
+		t.Fatalf("boundary = %d, known=%v; want 5, true", got, ok)
+	}
+}
+
+func TestMessageDraftExpiresAndSuccessfulClearDoesNotDeleteReplacement(t *testing.T) {
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	first, err := coordinator.SaveNormalMessageDraft(messageDraft{Target: "#one", Content: "first", ClientMessageID: "first-id"}, now)
+	if err != nil {
+		t.Fatalf("SaveNormalMessageDraft: %v", err)
+	}
+	if first.SavedAt != now {
+		t.Fatalf("saved at = %s, want %s", first.SavedAt, now)
+	}
+	if _, err := coordinator.SaveNormalMessageDraft(messageDraft{Target: "#one", Content: "second", ClientMessageID: "second-id"}, now.Add(time.Minute)); err != nil {
+		t.Fatalf("replace local Draft: %v", err)
+	}
+	if err := coordinator.ClearMessageDraft("#one", "first-id"); err != nil {
+		t.Fatalf("clear older Draft: %v", err)
+	}
+	if draft, found, err := coordinator.LoadMessageDraft("#one", now.Add(2*time.Minute)); err != nil || !found || draft.ClientMessageID != "second-id" {
+		t.Fatalf("replacement Draft = %+v found=%v err=%v", draft, found, err)
+	}
+	if _, found, err := coordinator.LoadMessageDraft("#one", now.Add(11*time.Minute)); err != nil || found {
+		t.Fatalf("expired Draft found=%v err=%v", found, err)
 	}
 }

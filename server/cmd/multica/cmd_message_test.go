@@ -25,6 +25,27 @@ func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
 			t.Errorf("message send exposes cursor flag %q", flag.Name)
 		}
 	})
+	if cmd.Flags().Lookup("client-message-id") != nil || cmd.Flags().Lookup("idempotency-key") != nil {
+		t.Fatal("message send exposes an Agent-controlled idempotency flag")
+	}
+}
+
+func TestRunAgentMessageSendDraftPathRejectsReplacementPayloadAndNormalAnyway(t *testing.T) {
+	withMessage := newMessageSendCmd()
+	_ = withMessage.Flags().Set("target", "#one")
+	_ = withMessage.Flags().Set("send-draft", "true")
+	_ = withMessage.Flags().Set("message", "replacement")
+	if err := runAgentMessageSend(withMessage, nil); err == nil || !strings.Contains(err.Error(), "does not accept --message") {
+		t.Fatalf("send-draft replacement error = %v", err)
+	}
+
+	normalAnyway := newMessageSendCmd()
+	_ = normalAnyway.Flags().Set("target", "#one")
+	_ = normalAnyway.Flags().Set("message", "replacement")
+	_ = normalAnyway.Flags().Set("anyway", "true")
+	if err := runAgentMessageSend(normalAnyway, nil); err == nil || !strings.Contains(err.Error(), "only valid with --send-draft") {
+		t.Fatalf("normal --anyway error = %v", err)
+	}
 }
 
 func TestMessageReadUsesOnlyCanonicalTargetFlag(t *testing.T) {
@@ -93,6 +114,65 @@ func TestRunAgentMessageResolvePostsOneIdentity(t *testing.T) {
 	}
 	if len(body) != 1 || body["message_id"] != "11111111" {
 		t.Fatalf("resolve request body = %#v, want only message_id", body)
+	}
+}
+
+func TestMessageReactUsesCanonicalIdentityWithoutTargetOrCursor(t *testing.T) {
+	cmd := newMessageReactCmd()
+	for _, name := range []string{"message-id", "emoji", "remove", "output"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("message react is missing --%s", name)
+		}
+	}
+	for _, name := range []string{"target", "client-message-id", "channel"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Errorf("message react must not expose --%s", name)
+		}
+	}
+}
+
+func TestRunAgentMessageReactPostsTargetFreeIdentity(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/react" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action": "message_react", "channel_id": "channel-1", "message_id": "11111111-2222-3333-4444-555555555555", "emoji": "👍", "removed": true,
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	readOut, writeOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	oldOut := os.Stdout
+	os.Stdout = writeOut
+	cmd := newMessageReactCmd()
+	_ = cmd.Flags().Set("message-id", "11111111")
+	_ = cmd.Flags().Set("emoji", "+1")
+	_ = cmd.Flags().Set("remove", "true")
+	err = runAgentMessageReact(cmd, nil)
+	writeOut.Close()
+	os.Stdout = oldOut
+	_, readErr := io.ReadAll(readOut)
+	readOut.Close()
+	if err != nil {
+		t.Fatalf("runAgentMessageReact: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	if len(body) != 3 || body["message_id"] != "11111111" || body["emoji"] != "+1" || body["remove"] != true {
+		t.Fatalf("react request body = %#v, want target-free canonical identity", body)
 	}
 }
 
@@ -265,7 +345,7 @@ func TestRunAgentMessageSendVoiceRequiresTranscript(t *testing.T) {
 func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/send" {
+		if r.URL.Path != "/credential-proxy/messages/send" {
 			http.NotFound(w, r)
 			return
 		}
@@ -280,16 +360,20 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv("MULTICA_TASK_ID", "task-1")
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("server port: %v", err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
 	_ = cmd.Flags().Set("message", "here's the file")
 	_ = cmd.Flags().Set("attachment-id", "att-a")
 	_ = cmd.Flags().Set("attachment-id", "att-b")
-	_ = cmd.Flags().Set("client-message-id", "cli-msg-1")
 	if err := runAgentMessageSend(cmd, nil); err != nil {
 		t.Fatalf("runAgentMessageSend: %v", err)
 	}
@@ -381,7 +465,7 @@ func TestRunAgentMessageA2AControlPostsOwnerControl(t *testing.T) {
 func TestRunAgentMessageSendPostsVoiceMarkerAfterTranscript(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/send" {
+		if r.URL.Path != "/credential-proxy/messages/send" {
 			http.NotFound(w, r)
 			return
 		}
@@ -396,9 +480,14 @@ func TestRunAgentMessageSendPostsVoiceMarkerAfterTranscript(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv("MULTICA_TASK_ID", "task-1")
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("server port: %v", err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
@@ -496,14 +585,6 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 				cmd := newMessageSendCmd()
 				_ = cmd.Flags().Set("message", "hello")
 				return runAgentMessageSend(cmd, nil)
-			},
-		},
-		{
-			name: "react",
-			run: func() error {
-				cmd := newMessageReactCmd()
-				_ = cmd.Flags().Set("emoji", "+1")
-				return runAgentMessageReact(cmd, nil)
 			},
 		},
 		{

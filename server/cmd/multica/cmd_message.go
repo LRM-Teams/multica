@@ -40,7 +40,7 @@ func newMessageSendCmd() *cobra.Command {
 			"human used voice input or explicitly requested spoken output, add --voice; " +
 			"the message text remains the accessible transcript. Do not generate or " +
 			"attach an audio file for a voice reply; Multica synthesizes the transcript. If the " +
-			"server holds a send because newer messages arrived, it remains an unsent " +
+			"freshness check holds a send because newer messages arrived, it remains an unsent " +
 			"draft. Do not automatically retry it or send it later; after reviewing the newer " +
 			"context, compose a fresh response if one is still needed.",
 		RunE: runAgentMessageSend,
@@ -52,7 +52,8 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
 	cmd.Flags().Bool("voice", false, "Deliver the message text as synthesized speech and an accessible transcript")
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
-	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
+	cmd.Flags().Bool("send-draft", false, "Send the current local Draft for this target")
+	cmd.Flags().Bool("anyway", false, "Send a saved Draft despite the freshness check")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
 }
@@ -60,17 +61,16 @@ func newMessageSendCmd() *cobra.Command {
 func newMessageReactCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "react",
-		Short: "React to a channel or thread message from the running agent task",
-		Long: "Add a reaction from the running agent task to an explicit target. " +
-			"Target syntax: #channel, #channel:<threadId>, dm:@handle, " +
-			"or dm:@handle:<threadId>. Omit --message-id to react to the message " +
-			"that triggered the task when the task context provides one.",
+		Short: "React to one visible canonical message from the running agent task",
+		Long: "Add or remove the running agent task's reaction on one visible canonical " +
+			"message. Use a full message UUID or a unique short ID prefix; no target is " +
+			"accepted or inferred.",
+		Args: cobra.NoArgs,
 		RunE: runAgentMessageReact,
 	}
-	cmd.Flags().String("target", "", messageTargetFlagUsage())
-	cmd.Flags().String("message-id", "", "Message UUID to react to; omit to use the triggering message when available")
-	cmd.Flags().String("emoji", "", "Emoji reaction to add")
-	cmd.Flags().String("client-message-id", "", "Idempotency/audit key; generated automatically when omitted")
+	cmd.Flags().String("message-id", "", "Full message UUID or unique short ID prefix")
+	cmd.Flags().String("emoji", "", "Emoji reaction to add or remove")
+	cmd.Flags().Bool("remove", false, "Remove this reaction instead of adding it")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
 }
@@ -346,6 +346,30 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	sendDraft, _ := cmd.Flags().GetBool("send-draft")
+	anyway, _ := cmd.Flags().GetBool("anyway")
+	if anyway && !sendDraft {
+		return fmt.Errorf("--anyway is only valid with --send-draft")
+	}
+	if sendDraft {
+		for _, name := range []string{"message", "message-stdin", "message-file", "sticker", "voice", "attachment-id"} {
+			if cmd.Flags().Changed(name) {
+				return fmt.Errorf("--send-draft does not accept --%s; it reuses the saved payload", name)
+			}
+		}
+		body := map[string]any{"target": target, "send_draft": true}
+		if anyway {
+			body["anyway"] = true
+		}
+		var out map[string]any
+		if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
+			return err
+		}
+		if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
+			return fmt.Errorf("send saved Draft: %w", err)
+		}
+		return printAgentTransportOutput(cmd, out, agentMessageSendTextFallback(out))
+	}
 	content, contentOK, err := resolveTextFlag(cmd, "message")
 	if err != nil {
 		return err
@@ -365,17 +389,8 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("message, sticker, or attachment is required; pass --message, --message-stdin, --message-file, --sticker, and/or --attachment-id")
 	}
 
-	client, err := newAPIClient(cmd)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
-	defer cancel()
-
 	body := map[string]any{
-		"target":            target,
-		"client_message_id": clientMessageIDFlag(cmd),
+		"target": target,
 	}
 	if text != "" {
 		body["content"] = content
@@ -390,7 +405,7 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
 		return err
 	}
-	if err := client.PostJSON(ctx, "/api/agent/messages/send", body, &out); err != nil {
+	if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, agentMessageSendTextFallback(out))
@@ -459,28 +474,29 @@ func buildAgentSendParts(stickerID, text string, attachmentIDs []string, voice b
 }
 
 func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
-	target, err := requiredMessageTarget(cmd)
-	if err != nil {
-		return err
+	messageID := strings.TrimSpace(flagString(cmd, "message-id"))
+	if messageID == "" {
+		return fmt.Errorf("message-id is required; pass --message-id")
 	}
 	emoji := strings.TrimSpace(flagString(cmd, "emoji"))
 	if emoji == "" {
 		return fmt.Errorf("emoji is required; pass --emoji")
 	}
+	remove, _ := cmd.Flags().GetBool("remove")
 	body := map[string]any{
-		"target":            target,
-		"message_id":        flagString(cmd, "message-id"),
-		"emoji":             emoji,
-		"client_message_id": clientMessageIDFlag(cmd),
+		"message_id": messageID,
+		"emoji":      emoji,
+		"remove":     remove,
 	}
 	var out map[string]any
-	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
-		return err
-	}
 	if err := postAgentTransport(cmd, "/api/agent/messages/react", body, &out); err != nil {
 		return fmt.Errorf("react to message: %w", err)
 	}
-	return printAgentTransportOutput(cmd, out, "Reaction sent.")
+	fallback := "Reaction sent."
+	if remove {
+		fallback = "Reaction removed."
+	}
+	return printAgentTransportOutput(cmd, out, fallback)
 }
 
 func runAgentMessageAskChoice(cmd *cobra.Command, _ []string) error {
@@ -610,16 +626,24 @@ func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
 }
 
 func postAgentMessageReadThroughCredentialProxy(body map[string]any, out any) error {
+	return postAgentMessageThroughCredentialProxy("read", body, out)
+}
+
+func postAgentMessageSendThroughCredentialProxy(body map[string]any, out any) error {
+	return postAgentMessageThroughCredentialProxy("send", body, out)
+}
+
+func postAgentMessageThroughCredentialProxy(operation string, body map[string]any, out any) error {
 	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
 	taskID := strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
 	workspaceID := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACE_ID"))
 	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
 	if agentID == "" || taskID == "" || workspaceID == "" {
-		return errors.New("message read requires an active daemon Agent turn")
+		return fmt.Errorf("message %s requires an active daemon Agent turn", operation)
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return errors.New("message read requires a valid MULTICA_DAEMON_PORT")
+		return fmt.Errorf("message %s requires a valid MULTICA_DAEMON_PORT", operation)
 	}
 	requestBody := make(map[string]any, len(body)+6)
 	for key, value := range body {
@@ -639,27 +663,27 @@ func postAgentMessageReadThroughCredentialProxy(body map[string]any, out any) er
 	}
 	raw, err := json.Marshal(requestBody)
 	if err != nil {
-		return fmt.Errorf("encode message read request: %w", err)
+		return fmt.Errorf("encode message %s request: %w", operation, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/read", portNumber), bytes.NewReader(raw))
+		fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/%s", portNumber, operation), bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("prepare message read: %w", err)
+		return fmt.Errorf("prepare message %s: %w", operation, err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := (&http.Client{Timeout: cli.APITimeout()}).Do(request)
 	if err != nil {
-		return fmt.Errorf("message read through Credential Proxy: %w", err)
+		return fmt.Errorf("message %s through Credential Proxy: %w", operation, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
-		return fmt.Errorf("message read through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+		return fmt.Errorf("message %s through Credential Proxy: %s: %s", operation, response.Status, strings.TrimSpace(string(detail)))
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
-		return fmt.Errorf("decode message read response: %w", err)
+		return fmt.Errorf("decode message %s response: %w", operation, err)
 	}
 	return nil
 }

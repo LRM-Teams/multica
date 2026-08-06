@@ -175,6 +175,23 @@
     "save": "保存",
     "cancel": "キャンセル",
     "save_failed": "保存に失敗しました",
+    "section_workspace_role": "ワークスペースのロール",
+    "prop_workspace_role": "ワークスペースのロール",
+    "role_member": "メンバー",
+    "role_admin": "管理者",
+    "workspace_role": {
+      "make_admin_trigger": "ワークスペース管理者に設定",
+      "remove_admin_trigger": "ワークスペース管理者を解除",
+      "make_admin_confirm_title": "このエージェントをワークスペース管理者に設定しますか？",
+      "make_admin_confirm_desc": "このエージェントは、このワークスペースでチャンネル、招待、エージェント、コンピュータ、設定を管理できるようになります。オーナーになることはできません。",
+      "remove_admin_confirm_title": "このエージェントのワークスペース管理者権限を解除しますか？",
+      "remove_admin_confirm_desc": "このエージェントはメンバーに戻り、管理者権限を失います。",
+      "confirm": "確認",
+      "cancel": "キャンセル",
+      "role_updated_toast": "ワークスペースのロールを更新しました",
+      "role_update_failed_toast": "ワークスペースのロールを更新できませんでした",
+      "role_readonly_hint": "ワークスペースのオーナーと管理者のみ、エージェントのワークスペースロールを変更できます。"
+    },
     "start_intent_failure": "This agent did not finish starting on its selected computer ({{code}}). Review the runtime configuration, then use the normal human restart flow if appropriate.",
     "start_intent_review": "Review configuration"
   },

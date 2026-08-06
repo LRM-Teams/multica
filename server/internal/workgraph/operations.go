@@ -3,9 +3,11 @@ package workgraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -61,7 +63,7 @@ func (s *Store) UpdateNode(ctx context.Context, in NodeUpdateInput) (Node, error
 		_, _ = s.ReconcileReady(ctx, in.WorkspaceID, in.GraphID)
 	}
 	if out.ExecutionStatus == "failed" {
-		_, _ = s.InvalidateFrom(ctx, in.WorkspaceID, in.NodeID, in.Reason)
+		_, _ = s.InvalidateFrom(ctx, in.WorkspaceID, in.GraphID, in.NodeID, in.Reason)
 	}
 	return out, nil
 }
@@ -161,8 +163,11 @@ func (s *Store) AddArtifact(ctx context.Context, in ArtifactInput) (ArtifactRevi
 	}
 	var out ArtifactRevision
 	var metadata []byte
-	err = tx.QueryRow(ctx, `INSERT INTO work_artifact_revision(workspace_id,graph_id,artifact_id,producer_node_id,revision,digest,kind,locator,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text,artifact_id::text,producer_node_id::text,revision,digest,kind,locator,metadata,validity_status,created_at`, w, g, artifactID, producer, revision, in.Digest, in.Kind, in.Locator, in.Metadata).Scan(&out.ID, &out.ArtifactID, &out.ProducerNodeID, &out.Revision, &out.Digest, &out.Kind, &out.Locator, &metadata, &out.ValidityStatus, &out.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO work_artifact_revision(workspace_id,graph_id,artifact_id,producer_node_id,revision,digest,kind,locator,metadata) SELECT $1,$2,$3,n.id,$5,$6,$7,$8,$9 FROM work_graph_node n WHERE n.workspace_id=$1 AND n.graph_id=$2 AND n.id=$4 RETURNING id::text,artifact_id::text,producer_node_id::text,revision,digest,kind,locator,metadata,validity_status,created_at`, w, g, artifactID, producer, revision, in.Digest, in.Kind, in.Locator, in.Metadata).Scan(&out.ID, &out.ArtifactID, &out.ProducerNodeID, &out.Revision, &out.Digest, &out.Kind, &out.Locator, &metadata, &out.ValidityStatus, &out.CreatedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ArtifactRevision{}, ErrInvalidGraph
+		}
 		return ArtifactRevision{}, err
 	}
 	out.Metadata = metadata
@@ -170,7 +175,7 @@ func (s *Store) AddArtifact(ctx context.Context, in ArtifactInput) (ArtifactRevi
 		return ArtifactRevision{}, err
 	}
 	if revision > 1 {
-		_, _ = s.InvalidateFrom(ctx, in.WorkspaceID, in.ProducerNodeID, "artifact revision changed")
+		_, _ = s.InvalidateFrom(ctx, in.WorkspaceID, in.GraphID, in.ProducerNodeID, "artifact revision changed")
 		// The new revision is valid output from the producer. Only consumers need
 		// recomputation; keep the producer itself eligible as their dependency.
 		_, _ = s.pool.Exec(ctx, `UPDATE work_graph_node SET validity_status='valid',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, producer)
@@ -210,9 +215,17 @@ func (s *Store) AddVerification(ctx context.Context, in VerificationInput) (stri
 	if !json.Valid(in.Findings) || !json.Valid(in.EvidenceRefs) {
 		return "", ErrInvalidGraph
 	}
-	var id string
-	err = s.pool.QueryRow(ctx, `INSERT INTO work_verification_attempt(workspace_id,graph_id,verifier_node_id,subject_artifact_revision_id,scope_digest,verdict,findings,evidence_refs) SELECT $1,$2,$3,$4,$5,$6,$7,$8 WHERE EXISTS(SELECT 1 FROM work_graph_node WHERE id=$3 AND graph_id=$2 AND role='verifier') AND EXISTS(SELECT 1 FROM work_artifact_revision WHERE id=$4 AND graph_id=$2 AND validity_status='valid' AND producer_node_id<>$3) RETURNING id::text`, w, g, verifier, artifact, in.ScopeDigest, in.Verdict, in.Findings, in.EvidenceRefs).Scan(&id)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	var id string
+	err = tx.QueryRow(ctx, `INSERT INTO work_verification_attempt(workspace_id,graph_id,verifier_node_id,subject_artifact_revision_id,scope_digest,verdict,findings,evidence_refs) SELECT $1,$2,$3,$4,$5,$6,$7,$8 WHERE EXISTS(SELECT 1 FROM work_graph_node WHERE workspace_id=$1 AND id=$3 AND graph_id=$2 AND role='verifier') AND EXISTS(SELECT 1 FROM work_artifact_revision WHERE workspace_id=$1 AND id=$4 AND graph_id=$2 AND validity_status='valid' AND producer_node_id<>$3) RETURNING id::text`, w, g, verifier, artifact, in.ScopeDigest, in.Verdict, in.Findings, in.EvidenceRefs).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrInvalidGraph
+		}
 		return "", err
 	}
 	review := map[string]string{"PASS": "accepted", "FAIL": "rejected", "BLOCKED": "blocked"}[in.Verdict]
@@ -220,8 +233,15 @@ func (s *Store) AddVerification(ctx context.Context, in VerificationInput) (stri
 	if in.Verdict == "BLOCKED" {
 		execution = "waiting"
 	}
-	_, _ = s.pool.Exec(ctx, `UPDATE work_graph_node SET review_status=$2,execution_status=$3,updated_at=now() WHERE id=$1`, verifier, review, execution)
-	_ = s.RefreshDelivery(ctx, in.WorkspaceID, in.GraphID)
+	if _, err = tx.Exec(ctx, `UPDATE work_graph_node SET review_status=$4,execution_status=$5,updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, verifier, review, execution); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE work_graph SET status='deliverable',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND status='active' AND NOT EXISTS(SELECT 1 FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND (execution_status NOT IN('succeeded','cancelled') OR validity_status<>'valid' OR (role='verifier' AND review_status<>'accepted')))`, w, g); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 

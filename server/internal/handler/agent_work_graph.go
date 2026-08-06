@@ -82,7 +82,7 @@ func (h *Handler) InvalidateAgentWorkGraphNode(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "reason is required")
 		return
 	}
-	ids, err := h.WorkGraph.InvalidateFrom(r.Context(), p.WorkspaceID, chi.URLParam(r, "nodeId"), body.Reason)
+	ids, err := h.WorkGraph.InvalidateFrom(r.Context(), p.WorkspaceID, chi.URLParam(r, "graphId"), chi.URLParam(r, "nodeId"), body.Reason)
 	if err != nil {
 		writeWorkGraphError(w, err)
 		return

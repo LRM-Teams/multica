@@ -1246,48 +1246,6 @@ describe("ApiClient", () => {
     });
   });
 
-  describe("getAgentActivityEvents", () => {
-    it("returns the #302 pagination envelope (not a bare array) so callers unwrap `.events`", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            events: [
-              {
-                id: "e1",
-                agent_id: "a1",
-                kind: "text",
-                event_type: "text",
-                occurred_at: "2026-07-11T00:00:00Z",
-                visibility: "user_facing",
-                label: "Replied",
-                tone: "action",
-                target_ref: { kind: "agent", id: "a1" },
-              },
-            ],
-            limit: 50,
-            has_more: false,
-            next_cursor: null,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-
-      const client = new ApiClient("https://api.example.test");
-      const page = await client.getAgentActivityEvents("a1");
-
-      // The route is an envelope — the empty-timeline regression was the FE
-      // treating this object as an array. Lock the shape here.
-      expect(Array.isArray(page)).toBe(false);
-      expect(page.has_more).toBe(false);
-      expect(page.events).toHaveLength(1);
-      expect(page.events[0]?.id).toBe("e1");
-      expect(fetchMock.mock.calls[0]![0]).toEqual(
-        expect.stringContaining("/api/agents/a1/activity/events"),
-      );
-    });
-  });
-
   it("reads and updates the memory curator profile through workspace routes", async () => {
     const profile = {
       id: "profile-1",

@@ -43,13 +43,3 @@ func TestProviderSubagentStartedMessage(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
-
-func TestSubagentStartedIsNarrativeUserFacing(t *testing.T) {
-	t.Parallel()
-	if got := activityVisibilityFor(activityKindCustom, "subagent_started", "info", "provider_lineage"); got != "user_facing" {
-		t.Fatalf("visibility = %q, want user_facing", got)
-	}
-	if !customActivityEventIsNarrative("subagent_started", "provider_lineage") {
-		t.Fatal("subagent_started must be narrative for Activity FE")
-	}
-}

@@ -94,11 +94,17 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
-	messageCoordinatorMu sync.RWMutex
-	messageCoordinators  map[string]*MessageCoordinator
-	messageRuntimeIDs    map[string]string
-	messageSendMu        sync.Mutex
-	messageSends         map[string]int
+	messageCoordinatorMu    sync.RWMutex
+	messageCoordinators     map[string]*MessageCoordinator
+	messageRuntimeIDs       map[string]string
+	messageSendMu           sync.Mutex
+	messageSends            map[string]int
+	agentProcessManagers    map[string]*agentProcessManager
+	agentActivityProducers  map[string]*agentActivityProducer
+	runnerMessageTransports map[string]workspaceRunnerMessageTransport
+	runnerMessageGeneration map[string]uint64
+	lifecycleDiagnostics    *lifecycleDiagnosticWriter
+	runnerInstanceID        string
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -306,6 +312,16 @@ func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, agentID string) err
 }
 
 func (d *Daemon) beginMessageRecovery(writes chan<- []byte) {
+	d.beginMessageRecoveryWithSend(func(request protocol.AgentRecoveryRequest) error {
+		d.enqueueMessageRecoveryRequest(request, writes)
+		return nil
+	})
+}
+
+func (d *Daemon) beginMessageRecoveryWithSend(send func(protocol.AgentRecoveryRequest) error) {
+	if send == nil {
+		return
+	}
 	d.messageCoordinatorMu.RLock()
 	coordinators := make(map[string]*MessageCoordinator, len(d.messageCoordinators))
 	for agentID, coordinator := range d.messageCoordinators {
@@ -313,7 +329,9 @@ func (d *Daemon) beginMessageRecovery(writes chan<- []byte) {
 	}
 	d.messageCoordinatorMu.RUnlock()
 	for agentID, coordinator := range coordinators {
-		d.enqueueMessageRecoveryRequest(coordinator.BeginRecovery(agentID, 100), writes)
+		if err := send(coordinator.BeginRecovery(agentID, 100)); err != nil && d.logger != nil {
+			d.logger.Warn("agent Message recovery request failed", "error", err, "agent_id", agentID)
+		}
 	}
 }
 
@@ -329,7 +347,7 @@ func (d *Daemon) beginAgentMessageRecovery(agentID string, writes chan<- []byte)
 		d.enqueueMessageRecoveryRequest(request, writes)
 		return
 	}
-	d.queueReminderFrame(protocol.EventAgentRecoveryRequest, request)
+	d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentRecoveryRequest, request)
 }
 
 func (d *Daemon) enqueueMessageRecoveryRequest(request protocol.AgentRecoveryRequest, writes chan<- []byte) {
@@ -346,6 +364,16 @@ func (d *Daemon) enqueueMessageRecoveryRequest(request protocol.AgentRecoveryReq
 }
 
 func (d *Daemon) handleMessageRecoveryPage(ctx context.Context, page protocol.AgentRecoveryPage, writes chan<- []byte) error {
+	return d.handleMessageRecoveryPageWithSend(ctx, page, func(request protocol.AgentRecoveryRequest) error {
+		d.enqueueMessageRecoveryRequest(request, writes)
+		return nil
+	})
+}
+
+func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
+	if send == nil {
+		return errors.New("Message recovery sender is unavailable")
+	}
 	d.messageCoordinatorMu.RLock()
 	defer d.messageCoordinatorMu.RUnlock()
 	coordinator := d.messageCoordinators[page.AgentID]
@@ -356,8 +384,7 @@ func (d *Daemon) handleMessageRecoveryPage(ctx context.Context, page protocol.Ag
 		return err
 	}
 	if page.HasMore {
-		d.enqueueMessageRecoveryRequest(coordinator.RecoveryRequest(page.AgentID, 100), writes)
-		return nil
+		return send(coordinator.RecoveryRequest(page.AgentID, 100))
 	}
 	return coordinator.Flush(ctx)
 }
@@ -388,8 +415,13 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
 		messageCoordinators:       make(map[string]*MessageCoordinator),
 		messageRuntimeIDs:         make(map[string]string),
+		agentProcessManagers:      make(map[string]*agentProcessManager),
+		agentActivityProducers:    make(map[string]*agentActivityProducer),
+		runnerMessageTransports:   make(map[string]workspaceRunnerMessageTransport),
+		runnerMessageGeneration:   make(map[string]uint64),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		machineUpgradeGeneration:  uuid.NewString(),
+		runnerInstanceID:          uuid.NewString(),
 	}
 	d.canonicalRuntimes.setMaxAgentProcesses(cfg.MaxAgentProcesses)
 	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
@@ -399,6 +431,9 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		d.clearAgentProviderCrashedOnServer(runtimeID, agentID)
 	})
 	d.updateObservation = newUpdateObservationCoordinator(cfg, logger)
+	if cfg.WorkspacesRoot != "" {
+		d.lifecycleDiagnostics = newLifecycleDiagnosticWriter(filepath.Join(cfg.WorkspacesRoot, ".multica", "lifecycle-diagnostics"), time.Now)
+	}
 	d.agentLifecycleExecutor = &agentLifecycleExecutor{
 		workspacesRoot: cfg.WorkspacesRoot,
 		runtimes:       d.canonicalRuntimes,
@@ -909,6 +944,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(ctx, taskWakeups)
+	go d.workspaceRunnerLoop(ctx)
+	go d.lifecycleDiagnosticsCleanupLoop(ctx)
 	go d.heartbeatLoop(ctx)
 	go d.residentCrashWatchLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
@@ -3201,6 +3238,10 @@ func (d *Daemon) watchInboxLease(ctx context.Context, lease AgentInboxLease, int
 }
 
 func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
+	// The Runner, rather than the legacy Activity API, is the only execution
+	// observation channel. Keep this narrative deliberately generic: detailed
+	// failures remain in the authorized task result, never in Activity.
+	d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "task_failed", "Agent execution failed")
 	if !task.isInboxTask() {
 		taskLog.Error("failed task is missing its canonical inbox lease")
 		return
@@ -4204,6 +4245,28 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 	return taskfailure.Classify(errMsg).String()
 }
 
+func (d *Daemon) publishTaskRunnerActivity(task Task, activityKind, detailKind, narrative string) {
+	if d == nil || task.AgentID == "" || task.WorkspaceID == "" {
+		return
+	}
+	d.mu.Lock()
+	producer := d.agentActivityProducers[task.WorkspaceID]
+	d.mu.Unlock()
+	if producer == nil {
+		return
+	}
+	var entries []protocol.AgentActivityEntry
+	if narrative != "" {
+		body, err := json.Marshal(map[string]string{"text": narrative})
+		if err == nil {
+			entries = []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: body}}
+		}
+	}
+	if err := producer.PublishForManagedAgent(task.AgentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
+		d.logger.Debug("workspace Runner task Activity publish deferred", "error", err, "agent_id", task.AgentID, "task_id", task.ID)
+	}
+}
+
 func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
 	taskID := task.ID
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
@@ -4359,6 +4422,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						pinCancel()
 					}
 				case agent.MessageToolUse:
+					d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "running_command", "Running command")
 					n := toolCount.Add(1)
 					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
@@ -4433,12 +4497,18 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					})
 					mu.Unlock()
 				case agent.MessageThinking:
+					d.publishTaskRunnerActivity(task, protocol.ActivityKindThinking, "", "Thinking")
 					if msg.Content != "" {
 						mu.Lock()
 						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageCompactionStarted, agent.MessageCompactionFinished:
+					if msg.Type == agent.MessageCompactionStarted {
+						d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compacting_context", "Compacting context")
+					} else {
+						d.publishTaskRunnerActivity(task, protocol.ActivityKindOnline, "idle", "Context compaction finished")
+					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
 					s := seq.Add(1)
@@ -4456,6 +4526,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						mu.Unlock()
 					}
 				case agent.MessageError:
+					d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "", "Runtime error")
 					taskLog.Error("agent error", "content", msg.Content)
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)

@@ -63,7 +63,6 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_memory_curation_watermark_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_watermark_agent ON memory_curation_watermark (agent_id)`},
 		{"idx_evolution_unit_feedback_event_agent", `CREATE INDEX CONCURRENTLY idx_evolution_unit_feedback_event_agent ON evolution_unit_feedback_event (agent_id)`},
 		{"idx_memory_curation_evidence_cursor_agent", `CREATE INDEX CONCURRENTLY idx_memory_curation_evidence_cursor_agent ON memory_curation_evidence_cursor (agent_id)`},
-		{"idx_agent_activity_event_agent", `CREATE INDEX CONCURRENTLY idx_agent_activity_event_agent ON agent_activity_event (agent_id)`},
 		{"idx_memory_curator_target_agent", `CREATE INDEX CONCURRENTLY idx_memory_curator_target_agent ON memory_curator_target (agent_id)`},
 		{"idx_task_token_agent", `CREATE INDEX CONCURRENTLY idx_task_token_agent ON task_token (agent_id)`},
 		{"idx_wendy_nudge_ladder_agent", `CREATE INDEX CONCURRENTLY idx_wendy_nudge_ladder_agent ON wendy_nudge_ladder (agent_id)`},

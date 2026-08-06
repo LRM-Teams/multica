@@ -414,6 +414,8 @@
       "timeline_load_failed": "活动加载失败",
       "timeline_load_failed_hint": "连接中断或服务异常",
       "retry": "重试",
+      "expand": "展开",
+      "collapse": "收起",
       "loading": "加载中",
       "jump_to_latest": "回到最新",
       "labels": {

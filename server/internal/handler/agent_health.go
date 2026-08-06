@@ -2,14 +2,12 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -70,13 +68,6 @@ const (
 	agentRuntimeStartingTTL = 60 * time.Second
 )
 
-var agentHealthEventTypes = []string{
-	agentHealthEventServerPing,
-	agentHealthEventLivenessProbe,
-	agentHealthEventProbeTimeout,
-	agentHealthEventTransportRecover,
-}
-
 type AgentHealthResponse struct {
 	Summary AgentHealthSummary `json:"health_summary"`
 	Events  []AgentHealthEvent `json:"health_events"`
@@ -103,45 +94,6 @@ type AgentHealthEvent struct {
 	OccurredAt string         `json:"occurred_at"`
 	Details    map[string]any `json:"details,omitempty"`
 	Synthetic  bool           `json:"synthetic,omitempty"`
-}
-
-type RuntimeHealthEventExecutor interface {
-	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
-}
-
-// RecordRuntimeHealthEventForRuntimeAgents writes a lifecycle event for each
-// active agent bound to a runtime. Runtimes are the liveness source, but the
-// Activity Health surface is agent-scoped, so persisted rows stay agent-scoped
-// and can reuse the existing agent_activity_event visibility model.
-func RecordRuntimeHealthEventForRuntimeAgents(ctx context.Context, exec RuntimeHealthEventExecutor, workspaceID, runtimeID pgtype.UUID, eventType, stateAfter, reasonCode, message string, details map[string]any) error {
-	if exec == nil {
-		return nil
-	}
-	if details == nil {
-		details = map[string]any{}
-	}
-	details["state_after"] = stateAfter
-	payload, err := json.Marshal(details)
-	if err != nil {
-		return fmt.Errorf("marshal runtime health event details: %w", err)
-	}
-	_, err = exec.Exec(ctx, `
-		INSERT INTO agent_activity_event (
-			workspace_id, agent_id, runtime_id, event_kind, event_type, severity,
-			target_kind, target_id, reason_code, message, details, visibility
-		)
-		SELECT
-			a.workspace_id, a.id, a.runtime_id, 'transport', $3, 'info',
-			'agent', a.id, $4, $5, $6::jsonb, $7
-		FROM agent a
-		WHERE a.workspace_id = $1
-		  AND a.runtime_id = $2
-		  AND a.archived_at IS NULL
-	`, workspaceID, runtimeID, eventType, reasonCode, message, string(payload), activityVisibilityFor(activityKindTransport, eventType, "info", reasonCode))
-	if err != nil {
-		return fmt.Errorf("insert runtime health event: %w", err)
-	}
-	return nil
 }
 
 func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
@@ -211,75 +163,10 @@ func (h *Handler) GetAgentHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) recordRuntimeHealthEventForActiveAgents(ctx context.Context, rt db.AgentRuntime, eventType, stateAfter, reasonCode, message string, details map[string]any) {
-	if err := RecordRuntimeHealthEventForRuntimeAgents(ctx, h.DB, rt.WorkspaceID, rt.ID, eventType, stateAfter, reasonCode, message, details); err != nil {
-		slog.Warn("record runtime health event failed",
-			"runtime_id", uuidToString(rt.ID),
-			"workspace_id", uuidToString(rt.WorkspaceID),
-			"event_type", eventType,
-			"error", err)
-	}
 }
 
 func (h *Handler) listAgentHealthEvents(ctx context.Context, agent db.Agent, runtimeID pgtype.UUID, limit int) ([]AgentHealthEvent, error) {
-	if h.DB == nil {
-		return []AgentHealthEvent{}, nil
-	}
-	if limit <= 0 || limit > defaultAgentHealthEventLimit {
-		limit = defaultAgentHealthEventLimit
-	}
-	rows, err := h.DB.Query(ctx, `
-		SELECT id, runtime_id, event_type, reason_code, message, details, created_at
-		FROM agent_activity_event
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND runtime_id = $3
-		  AND event_type = ANY($4::text[])
-		ORDER BY created_at DESC, id DESC
-		LIMIT $5
-	`, agent.WorkspaceID, agent.ID, runtimeID, agentHealthEventTypes, int32(limit))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	events := make([]AgentHealthEvent, 0, limit)
-	for rows.Next() {
-		var (
-			id         pgtype.UUID
-			rowRT      pgtype.UUID
-			eventType  string
-			reasonCode string
-			message    string
-			detailsRaw []byte
-			createdAt  pgtype.Timestamptz
-		)
-		if err := rows.Scan(&id, &rowRT, &eventType, &reasonCode, &message, &detailsRaw, &createdAt); err != nil {
-			return nil, err
-		}
-		details := map[string]any{}
-		if len(detailsRaw) > 0 {
-			_ = json.Unmarshal(detailsRaw, &details)
-		}
-		state := agentHealthEventState(eventType)
-		if fromDetails, ok := details["state_after"].(string); ok && fromDetails != "" {
-			state = fromDetails
-		}
-		events = append(events, AgentHealthEvent{
-			ID:         uuidToString(id),
-			AgentID:    uuidToString(agent.ID),
-			RuntimeID:  uuidToPtr(rowRT),
-			Type:       eventType,
-			StateAfter: state,
-			ReasonCode: reasonCode,
-			Message:    message,
-			OccurredAt: timestampToString(createdAt),
-			Details:    details,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return events, nil
+	return []AgentHealthEvent{}, nil
 }
 
 func agentHealthMissingRuntimeSummary(agent db.Agent) AgentHealthSummary {

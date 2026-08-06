@@ -18,7 +18,6 @@ func TestGetAgentHealth_MapsRuntimeAndHealthEvents(t *testing.T) {
 	}
 
 	agentID, runtimeID := createAgentHealthFixture(t, "online", time.Now().Add(-20*time.Second), time.Now().Add(-15*time.Second))
-	eventID := createAgentHealthEvent(t, agentID, runtimeID, agentHealthEventTransportRecover, agentHealthStateRecovered, "transport_reconnected")
 
 	w := httptest.NewRecorder()
 	testHandler.GetAgentHealth(w, withURLParam(newRequest("GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
@@ -36,55 +35,14 @@ func TestGetAgentHealth_MapsRuntimeAndHealthEvents(t *testing.T) {
 	if resp.Summary.RuntimeID == nil || *resp.Summary.RuntimeID != runtimeID {
 		t.Fatalf("summary runtime_id = %#v, want %s", resp.Summary.RuntimeID, runtimeID)
 	}
-	if resp.Summary.State != agentHealthStateRecovered {
-		t.Fatalf("summary state = %q, want %q", resp.Summary.State, agentHealthStateRecovered)
+	if resp.Summary.State != agentHealthStateOnline {
+		t.Fatalf("summary state = %q, want %q", resp.Summary.State, agentHealthStateOnline)
 	}
-	if len(resp.Events) == 0 {
-		t.Fatalf("expected health events")
+	if len(resp.Events) != 1 || !resp.Events[0].Synthetic {
+		t.Fatalf("expected one synthetic health event, got %+v", resp.Events)
 	}
-	if resp.Events[0].ID != eventID {
-		t.Fatalf("first event id = %q, want persisted event %q", resp.Events[0].ID, eventID)
-	}
-	if resp.Events[0].Type != agentHealthEventTransportRecover || resp.Events[0].StateAfter != agentHealthStateRecovered {
-		t.Fatalf("first event = %s/%s, want recovered transport event", resp.Events[0].Type, resp.Events[0].StateAfter)
-	}
-}
-
-func TestRecordRuntimeHealthEventForRuntimeAgents_DiagnosticVisibility(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID, runtimeID := createAgentHealthFixture(t, "online", time.Now().Add(-20*time.Second), time.Now().Add(-15*time.Second))
-	if err := RecordRuntimeHealthEventForRuntimeAgents(ctx,
-		testHandler.DB,
-		parseUUID(testWorkspaceID),
-		parseUUID(runtimeID),
-		agentHealthEventTransportRecover,
-		agentHealthStateRecovered,
-		"transport_reconnected",
-		"runtime transport reconnected",
-		nil,
-	); err != nil {
-		t.Fatalf("record runtime health event: %v", err)
-	}
-
-	var visibility, eventKind string
-	if err := testPool.QueryRow(ctx, `
-		SELECT visibility, event_kind
-		FROM agent_activity_event
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND runtime_id = $3
-		  AND event_type = $4
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, testWorkspaceID, agentID, runtimeID, agentHealthEventTransportRecover).Scan(&visibility, &eventKind); err != nil {
-		t.Fatalf("load health activity event: %v", err)
-	}
-	if eventKind != activityKindTransport || visibility != "diagnostic_only" {
-		t.Fatalf("health activity = kind %q visibility %q, want transport diagnostic_only", eventKind, visibility)
+	if resp.Events[0].Type != agentHealthEventServerPing || resp.Events[0].StateAfter != agentHealthStateOnline {
+		t.Fatalf("first event = %s/%s, want synthetic online event", resp.Events[0].Type, resp.Events[0].StateAfter)
 	}
 }
 
@@ -123,9 +81,6 @@ func TestGetAgentHealth_SummaryUnconditionalEventsGated(t *testing.T) {
 	}
 
 	agentID, ownerID, memberID := privateAgentTestFixture(t)
-	runtimeID := handlerTestRuntimeID(t)
-	createAgentHealthEvent(t, agentID, runtimeID, agentHealthEventServerPing, agentHealthStateOnline, "heartbeat_received")
-
 	w := httptest.NewRecorder()
 	testHandler.GetAgentHealth(w, withURLParam(newRequestAs(ownerID, "GET", "/api/agents/"+agentID+"/health", nil), "id", agentID))
 	if w.Code != http.StatusOK {
@@ -135,8 +90,8 @@ func TestGetAgentHealth_SummaryUnconditionalEventsGated(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &ownerResp); err != nil {
 		t.Fatalf("decode owner response: %v", err)
 	}
-	if len(ownerResp.Events) == 0 {
-		t.Fatalf("GetAgentHealth as owner: events = %+v, want at least the seeded event", ownerResp.Events)
+	if len(ownerResp.Events) == 0 || !ownerResp.Events[0].Synthetic {
+		t.Fatalf("GetAgentHealth as owner: events = %+v, want a synthetic current event", ownerResp.Events)
 	}
 
 	w = httptest.NewRecorder()
@@ -356,32 +311,10 @@ func createAgentHealthFixtureWithRuntimeAccess(t *testing.T, status string, last
 		t.Fatalf("create health agent: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_activity_event WHERE agent_id = $1`, agentID)
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
 		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 	})
 	return agentID, runtimeID
-}
-
-func createAgentHealthEvent(t *testing.T, agentID, runtimeID, eventType, state, reasonCode string) string {
-	t.Helper()
-	var eventID string
-	details := map[string]any{"state_after": state}
-	raw, err := json.Marshal(details)
-	if err != nil {
-		t.Fatalf("marshal event details: %v", err)
-	}
-	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_activity_event (
-			workspace_id, agent_id, runtime_id, event_kind, event_type, severity,
-			target_kind, target_id, reason_code, message, details
-		)
-		VALUES ($1, $2, $3, 'transport', $4, 'info', 'agent', $2, $5, 'health event', $6::jsonb)
-		RETURNING id
-	`, testWorkspaceID, agentID, runtimeID, eventType, reasonCode, string(raw)).Scan(&eventID); err != nil {
-		t.Fatalf("create health event: %v", err)
-	}
-	return eventID
 }
 
 func dbAgentForHealthTest(t *testing.T) db.Agent {

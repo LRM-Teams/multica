@@ -1987,6 +1987,9 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		msg.Content = redact.Text(msg.Content)
 		msg.Output = redact.Text(msg.Output)
 		msg.Input = redact.InputMap(msg.Input)
+		if canonicalTool, known := taskMessageCanonicalToolName(msg.Tool, msg.Input); known {
+			msg.Tool = canonicalTool
+		}
 		visibility := taskMessageRequestVisibility(msg)
 
 		var inputJSON []byte
@@ -2010,74 +2013,9 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if workspaceID != "" {
-			if eventKind, eventType, message, ok := taskMessageCompactionActivity(msg.Type); ok {
-				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
-				details := map[string]any{"task_message_id": uuidToString(created.ID), "seq": msg.Seq}
-				if msg.Type == "compaction_finished" && strings.TrimSpace(msg.Content) != "" {
-					details["checkpoint_summary"] = msg.Content
-				}
-				// LRM-985: attach active channel goal so compaction can be
-				// audited against the Goal anchor (resume evidence).
-				if task.ChannelID.Valid {
-					if goal, err := h.currentChannelGoal(r.Context(), parseUUID(workspaceID), task.ChannelID); err == nil {
-						if goalCtx := channelGoalContextForClaim(goal); goalCtx != nil {
-							details["goal_id"] = goalCtx.ID
-							details["goal_version"] = goalCtx.Version
-							details["channel_id"] = uuidToString(task.ChannelID)
-						}
-					}
-				}
-				h.recordAgentActivityEvent(r.Context(), h.DB,
-					parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-					eventKind, eventType, "info",
-					targetKind, targetID, targetSlug,
-					"", message,
-					details,
-				)
-				if msg.Type == "compaction_finished" {
-					if goalID, _ := details["goal_id"].(string); goalID != "" {
-						h.recordAgentActivityEvent(r.Context(), h.DB,
-							parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-							activityKindCustom, "channel_goal_anchor_after_compaction", "info",
-							targetKind, targetID, targetSlug,
-							"", "Channel goal still anchored after context compaction",
-							map[string]any{
-								"goal_id":         goalID,
-								"goal_version":    details["goal_version"],
-								"channel_id":      details["channel_id"],
-								"compaction_seq":  msg.Seq,
-								"task_message_id": uuidToString(created.ID),
-							},
-						)
-					}
-				}
-				continue
-			}
 			if visibility == "user_facing" {
 				h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
 					taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
-				// Thinking (empty phase or with body) is delivered on the task-message
-				// stream for transcript/status. Do not also fan out as Activity
-				// realtime — Activity has no "Thinking" line product surface.
-				if created.Type != "thinking" {
-					event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
-					h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
-				}
-			}
-			if msg.Type == "tool_use" && strings.TrimSpace(msg.Tool) != "" && !taskMessageToolIsMapped(msg.Type, msg.Tool, msg.Input) {
-				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
-				h.recordAgentActivityEvent(r.Context(), h.DB,
-					parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-					activityKindCustom, "unmapped_tool_name", "warning",
-					targetKind, targetID, targetSlug,
-					"unmapped_tool_name", "Unmapped runtime tool name",
-					map[string]any{
-						"raw_tool":        strings.TrimSpace(msg.Tool),
-						"task_message_id": uuidToString(created.ID),
-						"task_id":         taskID,
-						"seq":             msg.Seq,
-					},
-				)
 			}
 		}
 	}
@@ -2168,9 +2106,7 @@ func taskMessageVisibleToUser(messageType, content, visibility string) bool {
 }
 
 func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any) string {
-	if _, _, _, ok := taskMessageCompactionActivity(msgType); ok {
-		// Context compaction belongs to the Activity timeline, never the task
-		// transcript. ReportTaskMessages persists a dedicated Activity row.
+	if msgType == "compaction_started" || msgType == "compaction_finished" {
 		return "diagnostic_only"
 	}
 	// Provider thinking and tool_result / log are diagnostic-only. Tool-use
@@ -2182,17 +2118,6 @@ func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any)
 		return "diagnostic_only"
 	}
 	return "user_facing"
-}
-
-func taskMessageCompactionActivity(messageType string) (eventKind, eventType, message string, ok bool) {
-	switch messageType {
-	case "compaction_started":
-		return activityKindCompactionStarted, "compaction_started", activityCompactingContextMessage, true
-	case "compaction_finished":
-		return activityKindCompactionFinished, "compaction_finished", activityContextCompactionFinishedText, true
-	default:
-		return "", "", "", false
-	}
 }
 
 // ListTaskMessages returns the persisted messages for a task (for catch-up after reconnect).
@@ -2286,15 +2211,6 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
-
-	// Record a task-cancelled activity event.
-	h.recordAgentActivityEvent(r.Context(), h.DB,
-		issue.WorkspaceID, task.AgentID, task.RuntimeID, task.ID,
-		activityKindBlocked, "task_cancelled", "info",
-		"issue", task.IssueID, "",
-		"", "Task cancelled by user",
-		nil,
-	)
 
 	writeJSON(w, http.StatusOK, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
 }
@@ -2449,99 +2365,15 @@ func (h *Handler) listInboxEventTaskMessagesByUser(ctx context.Context, eventID 
 }
 
 func (h *Handler) projectInboxEventTaskMessages(ctx context.Context, eventID pgtype.UUID, taskID string, workspaceUUID pgtype.UUID, sinceStr string) ([]protocol.TaskMessagePayload, error) {
-	var sinceArg any
 	if sinceStr != "" {
-		sinceSeq, err := strconv.Atoi(sinceStr)
-		if err != nil {
+		if _, err := strconv.Atoi(sinceStr); err != nil {
 			return nil, errInvalidTaskMessageSince
 		}
-		sinceArg = sinceSeq
 	}
-
-	rows, err := h.DB.Query(ctx, `
-		WITH activity AS (
-			SELECT
-				aae.id,
-				aae.event_kind,
-				aae.message,
-				aae.details,
-				aae.visibility,
-				aae.created_at,
-				CASE
-					WHEN COALESCE(aae.details->>'seq', '') ~ '^[0-9]+$'
-						THEN (aae.details->>'seq')::int
-					ELSE NULL
-				END AS reported_seq
-			FROM agent_activity_event aae
-			WHERE aae.workspace_id = $2
-			  AND aae.details->>'inbox_event_id' = $1::text
-			  AND aae.event_kind IN ('thinking', 'text', 'tool_call', 'error')
-			  AND COALESCE(NULLIF(aae.visibility, ''), 'user_facing') = 'user_facing'
-		),
-		numbered AS (
-			SELECT
-				COALESCE(
-					reported_seq,
-					ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int
-				)::int AS seq,
-				event_kind,
-				message,
-				details,
-				visibility,
-				created_at,
-				id
-			FROM activity
-		)
-		SELECT
-			seq,
-			CASE
-				WHEN event_kind = 'tool_call' THEN 'tool_use'
-				WHEN event_kind = 'error' THEN 'error'
-				WHEN event_kind = 'thinking' THEN 'thinking'
-				ELSE 'text'
-			END AS type,
-			COALESCE(details->>'tool', '') AS tool,
-			CASE
-				WHEN event_kind IN ('thinking', 'text', 'error') THEN COALESCE(message, '')
-				ELSE ''
-			END AS content,
-			CASE
-				WHEN jsonb_typeof(details->'input') = 'object' THEN details->'input'
-				ELSE NULL
-			END AS input,
-			''::text AS output,
-			COALESCE(NULLIF(visibility, ''), 'user_facing') AS visibility,
-			created_at
-		FROM numbered
-		WHERE ($3::int IS NULL OR seq > $3::int)
-		ORDER BY seq ASC, created_at ASC, id ASC
-	`, eventID, workspaceUUID, sinceArg)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	payloads := []protocol.TaskMessagePayload{}
-	for rows.Next() {
-		var row inboxEventTaskMessageRow
-		if err := rows.Scan(
-			&row.Seq,
-			&row.Type,
-			&row.Tool,
-			&row.Content,
-			&row.Input,
-			&row.Output,
-			&row.Visibility,
-			&row.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		payloads = append(payloads, inboxEventTaskMessageToPayload(row, taskID))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return payloads, nil
+	// The legacy table-backed projection is intentionally gone. Runner
+	// snapshots and entries are the Activity history; task transcripts retain
+	// only their dedicated task-message storage.
+	return []protocol.TaskMessagePayload{}, nil
 }
 
 // GetIssueUsage returns aggregated token usage for all tasks belonging to an issue.

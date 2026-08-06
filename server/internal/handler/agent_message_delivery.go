@@ -46,14 +46,11 @@ func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemon
 	if err := h.requireAgentMessageDaemonScope(ctx, identity, payload.AgentID); err != nil {
 		return err
 	}
-	allowedRuntime := false
-	for _, runtimeID := range identity.RuntimeIDs {
-		if runtimeID == payload.RuntimeID {
-			allowedRuntime = true
-			break
-		}
+	var boundRuntimeID pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1 AND workspace_id = $2`, parseUUID(payload.AgentID), parseUUID(identity.WorkspaceID)).Scan(&boundRuntimeID); err != nil {
+		return err
 	}
-	if !allowedRuntime {
+	if uuidToString(boundRuntimeID) != payload.RuntimeID {
 		return errors.New("agent Message handoff runtime mismatch")
 	}
 	if h.TxStarter == nil {
@@ -67,37 +64,19 @@ func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemon
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('agent_message_handoff'), hashtext($1))`, payload.HandoffID); err != nil {
 		return err
 	}
-	var exists bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM agent_activity_event
-			WHERE workspace_id = $1 AND agent_id = $2
-			  AND event_type = 'message_received'
-			  AND details->>'handoff_id' = $3
-		)`, parseUUID(identity.WorkspaceID), parseUUID(payload.AgentID), payload.HandoffID).Scan(&exists); err != nil {
-		return err
+	targets, err := json.Marshal(payload.Targets)
+	if err != nil {
+		return fmt.Errorf("encode Message handoff targets: %w", err)
 	}
-	if exists {
-		return tx.Commit(ctx)
-	}
-	eventID, inserted := insertAgentActivityEvent(ctx, tx,
-		parseUUID(identity.WorkspaceID), parseUUID(payload.AgentID), parseUUID(payload.RuntimeID), pgtype.UUID{},
-		activityKindWakeAttempt, "message_received", "info",
-		"none", pgtype.UUID{}, "",
-		"runtime_message_handoff", "", map[string]any{
-			"handoff_id": payload.HandoffID,
-			"count":      payload.Count,
-			"targets":    payload.Targets,
-		})
-	if !inserted {
-		return errors.New("persist Message received Activity")
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_message_handoff_receipt (workspace_id, agent_id, handoff_id, message_count, targets)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (workspace_id, agent_id, handoff_id) DO NOTHING`,
+		parseUUID(identity.WorkspaceID), parseUUID(payload.AgentID), payload.HandoffID, payload.Count, targets); err != nil {
+		return fmt.Errorf("persist Message handoff receipt: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
-	}
-	if h.Bus != nil {
-		event := h.hydrateAgentActivityTimelineEvent(ctx, identity.WorkspaceID, parseUUID(payload.AgentID), eventID)
-		h.publishAgentActivityRealtimeEvent(ctx, identity.WorkspaceID, payload.AgentID, uuidToString(eventID), event, AgentActivityTargetRef{Kind: "none"})
 	}
 	return nil
 }
@@ -253,18 +232,21 @@ func (h *Handler) requireAgentMessageDaemonScope(ctx context.Context, identity d
 		return errors.New("invalid agent id")
 	}
 	var workspaceID, runtimeID pgtype.UUID
-	if err := h.DB.QueryRow(ctx, `SELECT workspace_id, runtime_id FROM agent WHERE id = $1 AND archived_at IS NULL`, agentUUID).Scan(&workspaceID, &runtimeID); err != nil {
+	var daemonID *string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT agent.workspace_id, agent.runtime_id, runtime.daemon_id
+		FROM agent
+		LEFT JOIN agent_runtime runtime ON runtime.id = agent.runtime_id
+		WHERE agent.id = $1 AND agent.archived_at IS NULL`, agentUUID).Scan(&workspaceID, &runtimeID, &daemonID); err != nil {
 		return err
 	}
 	if uuidToString(workspaceID) != identity.WorkspaceID {
 		return errors.New("agent delivery workspace mismatch")
 	}
-	for _, candidate := range identity.RuntimeIDs {
-		if candidate == uuidToString(runtimeID) {
-			return nil
-		}
+	if daemonID == nil || *daemonID == "" || identity.DaemonID == "" || *daemonID != identity.DaemonID {
+		return errors.New("agent delivery daemon mismatch")
 	}
-	return errors.New("agent delivery runtime mismatch")
+	return nil
 }
 
 func validateAgentRecoveryBoundaries(boundaries map[string]int64) error {

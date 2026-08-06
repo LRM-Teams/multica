@@ -448,6 +448,9 @@ func completeCoordinatorRecovery(t *testing.T, coordinator *MessageCoordinator) 
 	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "fence-1"}); err != nil {
 		t.Fatalf("complete recovery: %v", err)
 	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("finalize recovery: %v", err)
+	}
 }
 
 func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T) {
@@ -791,11 +794,14 @@ func TestMessageCoordinatorRecoveryMergesLiveAndPagedMessagesBeforeFlush(t *test
 	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snap", HighWatermark: "42", Messages: []protocol.AgentMessageProjection{{ID: "message-2", Target: "channel-1", Seq: 2, Content: "two"}}}); err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("freshness remains unknown after terminal page")
+	if coordinator.FreshnessKnown() {
+		t.Fatal("freshness became known before terminal recovery handoff")
 	}
 	if err := coordinator.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
+	}
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("freshness remains unknown after terminal recovery handoff")
 	}
 	if want := []string{"message-1", "message-2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("handoff = %v, want %v", got, want)
@@ -828,8 +834,14 @@ func TestMessageCoordinatorRejectsDelayedPageFromPreviousReconnect(t *testing.T)
 	}); err != nil {
 		t.Fatalf("current recovery page was poisoned by stale page: %v", err)
 	}
+	if coordinator.FreshnessKnown() {
+		t.Fatal("current recovery became fresh before terminal handoff")
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("finalize current recovery: %v", err)
+	}
 	if !coordinator.FreshnessKnown() {
-		t.Fatal("current recovery page did not complete after stale page was ignored")
+		t.Fatal("current recovery did not complete after terminal handoff")
 	}
 }
 

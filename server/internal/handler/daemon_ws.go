@@ -6,7 +6,13 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
+
+// MinWorkspaceRunnerProtocolCLIVersion is the first release that speaks the
+// hard-cut Runner Activity protocol. Older daemons must not enter a connection
+// where frame names and Activity ownership have changed.
+const MinWorkspaceRunnerProtocolCLIVersion = "0.4.13"
 
 func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 	if h.DaemonHub == nil {
@@ -16,7 +22,26 @@ func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	runtimeIDs := parseRuntimeIDs(r)
 	if len(runtimeIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "runtime_ids required")
+		// A Workspace Runner is deliberately not a runtime registration: it
+		// remains connected while a workspace has no provider runtime at all.
+		// Its workspace must nevertheless be the exact authenticated daemon
+		// token scope; accepting an arbitrary query value here would turn the
+		// Runner into a cross-workspace command channel.
+		workspaceID := strings.TrimSpace(r.URL.Query().Get("workspace_id"))
+		if workspaceID == "" || workspaceID != middleware.DaemonWorkspaceIDFromContext(r.Context()) {
+			writeError(w, http.StatusNotFound, "workspace not found")
+			return
+		}
+		if err := agent.CheckCLIVersionAtLeast(r.Header.Get("X-Client-Version"), MinWorkspaceRunnerProtocolCLIVersion); err != nil {
+			writeJSON(w, http.StatusUpgradeRequired, map[string]any{"code": "workspace_runner_protocol_unsupported", "min_version": MinWorkspaceRunnerProtocolCLIVersion})
+			return
+		}
+		h.DaemonHub.HandleWebSocket(w, r, daemonws.ClientIdentity{
+			DaemonID:      middleware.DaemonIDFromContext(r.Context()),
+			UserID:        requestUserID(r),
+			WorkspaceID:   workspaceID,
+			ClientVersion: r.Header.Get("X-Client-Version"),
+		})
 		return
 	}
 

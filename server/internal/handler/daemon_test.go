@@ -1517,143 +1517,6 @@ func TestListTaskMessagesByUser_InvalidTaskIDReturnsBadRequest(t *testing.T) {
 	}
 }
 
-func TestListTaskMessagesByUser_InboxEventProjectsActivityMessages(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "inbox-live-status-"+uuid.NewString(), []byte(`{}`))
-	runtimeID := handlerTestRuntimeID(t)
-
-	var eventID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (
-			workspace_id, agent_id, reason, requires_wake, status,
-			priority, seq_from, seq_to
-		)
-		VALUES ($1, $2, 'dm', true, 'draining', 100, 1, 3)
-		RETURNING id
-	`, testWorkspaceID, agentID).Scan(&eventID); err != nil {
-		t.Fatalf("insert inbox event: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
-		testPool.Exec(context.Background(), `DELETE FROM agent_activity_event WHERE details->>'inbox_event_id' = $1`, eventID)
-	})
-
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_activity_event (
-			workspace_id, agent_id, runtime_id, event_kind, event_type,
-			severity, target_kind, message, details, visibility, created_at
-		)
-		VALUES
-			($1, $2, $3, 'thinking', 'runtime_phase', 'info', 'dm', '',
-			 jsonb_build_object('inbox_event_id', $4::text, 'seq', 1),
-			 'diagnostic_only', now() - interval '2 seconds'),
-			($1, $2, $3, 'thinking', 'thinking', 'info', 'dm', 'Planning',
-			 jsonb_build_object(
-				'inbox_event_id', $4::text,
-				'seq', 2,
-				'lineage', 'main'
-			 ),
-			 'diagnostic_only', now() - interval '1 second'),
-			($1, $2, $3, 'tool_call', 'tool_use', 'info', 'dm', '',
-			 jsonb_build_object(
-				'inbox_event_id', $4::text,
-				'seq', 3,
-				'tool', 'bash',
-				'input', jsonb_build_object('cmd', 'raft message send --send-draft')
-			 ),
-			 'user_facing', now()),
-			($1, $2, $3, 'text', 'text', 'info', 'dm', 'Done',
-			 jsonb_build_object('inbox_event_id', $4::text, 'seq', 4),
-			 'user_facing', now() + interval '1 second'),
-			($1, $2, $3, 'text', 'runtime_text', 'info', 'dm', 'diagnostic wrapper',
-			 jsonb_build_object('inbox_event_id', $4::text, 'seq', 5),
-			 'diagnostic_only', now() + interval '2 seconds')
-	`, testWorkspaceID, agentID, runtimeID, eventID); err != nil {
-		t.Fatalf("insert inbox activity rows: %v", err)
-	}
-
-	req := withURLParam(newRequest(http.MethodGet, "/api/tasks/"+eventID+"/messages", nil), "taskId", eventID)
-	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{Role: "owner"}))
-	w := httptest.NewRecorder()
-
-	testHandler.ListTaskMessagesByUser(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp []protocol.TaskMessagePayload
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp) != 2 {
-		t.Fatalf("expected tool + text without diagnostic thinking, got %d: %+v", len(resp), resp)
-	}
-	if resp[0].TaskID != eventID || resp[0].Seq != 3 || resp[0].Type != "tool_use" || resp[0].Tool != "bash" {
-		t.Fatalf("unexpected tool projection: %+v", resp[0])
-	}
-	if got := fmt.Sprint(resp[0].Input["cmd"]); got != "raft message send --send-draft" {
-		t.Fatalf("projected tool input cmd = %q", got)
-	}
-	if resp[1].Seq != 4 || resp[1].Type != "text" || resp[1].Content != "Done" {
-		t.Fatalf("unexpected text projection: %+v", resp[1])
-	}
-
-	req = withURLParam(newRequest(http.MethodGet, "/api/tasks/"+eventID+"/messages?since=1", nil), "taskId", eventID)
-	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{Role: "owner"}))
-	w = httptest.NewRecorder()
-	testHandler.ListTaskMessagesByUser(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for since query, got %d: %s", w.Code, w.Body.String())
-	}
-	resp = nil
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode since response: %v", err)
-	}
-	if len(resp) != 2 || resp[0].Seq != 3 || resp[1].Seq != 4 {
-		t.Fatalf("unexpected since projection: %+v", resp)
-	}
-}
-
-func TestListTaskMessagesByUser_ShowsThinkingContentHidesDiagnosticRows(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createWorkspaceVisibleActivityAgent(t, "task-message-visibility-"+uuid.NewString())
-	sessionID := createActivityChatSession(t, agentID, testUserID, "task message visibility")
-	taskID := createActivityRunTask(t, agentID, sessionID, "running", "")
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO task_message (task_id, seq, type, content, visibility)
-		VALUES
-			($1, 1, 'thinking', 'legacy raw thought', 'diagnostic_only'),
-			($1, 2, 'thinking', '', 'diagnostic_only'),
-			($1, 3, 'text', 'diagnostic wrapper', 'diagnostic_only'),
-			($1, 4, 'text', 'visible answer', 'user_facing')
-	`, taskID); err != nil {
-		t.Fatalf("insert task messages: %v", err)
-	}
-
-	req := withURLParam(newRequest(http.MethodGet, "/api/tasks/"+taskID+"/messages", nil), "taskId", taskID)
-	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{Role: "owner"}))
-	w := httptest.NewRecorder()
-	testHandler.ListTaskMessagesByUser(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp []protocol.TaskMessagePayload
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp) != 1 || resp[0].Seq != 4 || resp[0].Type != "text" || resp[0].Content != "visible answer" {
-		t.Fatalf("diagnostic thinking leaked into user projection: %+v", resp)
-	}
-}
-
 func TestTaskMessageToPayload_LeavesNarrativeProjectionToActivityUI(t *testing.T) {
 	payload := taskMessageToPayload(db.TaskMessage{
 		Seq:  1,
@@ -1712,31 +1575,6 @@ func TestTaskMessageVisibleToUser_HidesDiagnosticThinking(t *testing.T) {
 	}
 }
 
-func TestTaskMessageCompactionActivityUsesRaftCanonicalLifecycle(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		messageType string
-		wantKind    string
-		wantMessage string
-	}{
-		{"compaction_started", activityKindCompactionStarted, "Compacting context"},
-		{"compaction_finished", activityKindCompactionFinished, "Context compaction finished"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.messageType, func(t *testing.T) {
-			kind, eventType, message, ok := taskMessageCompactionActivity(tc.messageType)
-			if !ok || kind != tc.wantKind || eventType != tc.messageType || message != tc.wantMessage {
-				t.Fatalf("taskMessageCompactionActivity(%q) = (%q, %q, %q, %t)", tc.messageType, kind, eventType, message, ok)
-			}
-			if got := taskMessageVisibilityForMessage(tc.messageType, "", nil); got != "diagnostic_only" {
-				t.Fatalf("compaction transcript visibility = %q, want diagnostic_only", got)
-			}
-		})
-	}
-}
-
 func TestAgentInboxTaskMessagePayload_HidesThinking(t *testing.T) {
 	eventID := uuid.New()
 	event := db.AgentInboxEvent{ID: pgtype.UUID{Bytes: eventID, Valid: true}}
@@ -1745,7 +1583,7 @@ func TestAgentInboxTaskMessagePayload_HidesThinking(t *testing.T) {
 		{Seq: 1, Type: "thinking"},
 		{Seq: 2, Type: "thinking", Content: "raw thought"},
 	} {
-		if payload, ok := agentInboxTaskMessagePayload(event, msg, activityKindThinking, nil); ok {
+		if payload, ok := agentInboxTaskMessagePayload(event, msg, "thinking", nil); ok {
 			t.Fatalf("thinking payload must not reach clients: %+v", payload)
 		}
 	}

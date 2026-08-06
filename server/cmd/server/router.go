@@ -432,6 +432,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
 	daemonHub.SetAgentRecoveryHandler(h.HandleAgentMessageRecovery)
 	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
+	// The Runner contract remains dormant until the coordinated hard cut; this
+	// installs its fenced server intake without changing legacy WS routing.
+	daemonHub.SetWorkspaceRunnerHandler(h.HandleWorkspaceRunnerFrame)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()
@@ -1109,11 +1112,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/lifecycle", h.GetAgentLifecycle)
 					r.Post("/lifecycle", h.CreateAgentLifecycleOperation)
 					r.Get("/lifecycle/{operationId}", h.GetAgentLifecycleOperation)
-					r.Get("/activity", h.ListAgentActivity)
-					r.Get("/activity/events", h.ListAgentActivityEvents)
-					r.Get("/activity/{activityId}", h.GetAgentActivity)
-					r.Get("/activity/{activityId}/steps", h.ListAgentActivitySteps)
-					r.Get("/activity/{activityId}/diagnostic", h.GetAgentActivityDiagnostic)
+					// Workspace Runner Activity is the only public Agent Activity
+					// contract. It is a server-owned presentation read model; there is
+					// no compatibility translation from the removed event timeline.
+					r.Get("/runner-activity", h.GetRunnerActivity)
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/reminders", h.ListAgentReminders)
 					r.Get("/skills", h.ListAgentSkills)

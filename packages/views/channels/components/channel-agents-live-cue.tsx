@@ -28,7 +28,7 @@ import {
 import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { formatDuration } from "../../agents/components/agent-activity-hover-content";
-import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
+import { RUNNER_ACTIVITY_LABEL_EN } from "../../agents/runner-activity-labels";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { useT } from "../../i18n";
 import { isCompactActivityLabel } from "./is-compact-activity-label";
@@ -130,7 +130,7 @@ function useWorkingRowActivityVerb(
   }
 
   // No compact projection: Waiting (never invent Thinking) — LRM-1288.
-  const base = ACTIVITY_LABEL_EN.waiting;
+  const base = RUNNER_ACTIVITY_LABEL_EN.waiting;
   const verb = duration
     ? t(($) => $.header.working_verb_with_duration, { verb: base, duration })
     : base;

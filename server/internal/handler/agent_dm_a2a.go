@@ -98,16 +98,14 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 
 	matterID := source.inboxEventID
 	if !matterID.Valid {
-		matterID = source.legacyTaskID()
+		matterID = source.task.ID
 	}
 	exchangeID := pgtype.UUID{}
 	sourceChannelID := pgtype.UUID{}
 	sourceMessageID := pgtype.UUID{}
-	if source.legacyTask != nil {
-		exchangeID = source.legacyTask.AgentDmExchangeID
-		sourceChannelID = source.legacyTask.ChannelID
-		sourceMessageID = source.legacyTask.SourceMessageID
-	}
+	exchangeID = source.task.AgentDmExchangeID
+	sourceChannelID = source.task.ChannelID
+	sourceMessageID = source.task.SourceMessageID
 	if exchangeID.Valid {
 		var exchangeLowID, exchangeHighID, exchangeChannelID pgtype.UUID
 		if err := exec.QueryRow(ctx, `

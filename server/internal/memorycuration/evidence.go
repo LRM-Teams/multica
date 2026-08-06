@@ -136,12 +136,13 @@ func collectTaskEvidence(ctx context.Context, db EvidenceDB, workspaceID, agentI
 
 func collectActivityEvidence(ctx context.Context, db EvidenceDB, workspaceID, agentID string, start, end time.Time) ([]EvidenceItem, error) {
 	rows, err := db.Query(ctx, `
-		SELECT id::text, 'agent_activity_event' AS kind, event_type AS title, message AS snippet, created_at
-		  FROM agent_activity_event
+		SELECT id::text, 'agent_activity_entry' AS kind, entry_kind AS title,
+		       COALESCE(entry_body->>'text', '') AS snippet, observed_at
+		  FROM agent_activity_entry
 		 WHERE workspace_id = $1
 		   AND agent_id = $2
-		   AND created_at >= $3 AND created_at < $4
-		 ORDER BY created_at ASC
+		   AND observed_at >= $3 AND observed_at < $4
+		 ORDER BY observed_at ASC
 		 LIMIT 25
 	`, workspaceID, agentID, start, end)
 	if err != nil {

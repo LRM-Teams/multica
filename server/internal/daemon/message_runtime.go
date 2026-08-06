@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
@@ -64,9 +65,26 @@ func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages
 		targets = append(targets, target)
 	}
 	sort.Strings(targets)
-	d.queueReminderFrame(protocol.EventAgentMessageHandoff, protocol.AgentMessageHandoffPayload{
+	d.mu.Lock()
+	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+	producer := d.agentActivityProducers[workspaceID]
+	d.mu.Unlock()
+	if producer != nil {
+		entryBody, err := json.Marshal(map[string]string{"text": "Message received"})
+		if err == nil {
+			if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, protocol.ActivityKindWorking, "message_received", []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: entryBody}}); err != nil && d.logger != nil {
+				d.logger.Debug("workspace Runner Message Activity publish deferred", "error", err, "agent_id", agentID)
+			}
+		}
+	}
+	payload := protocol.AgentMessageHandoffPayload{
 		AgentID: agentID, RuntimeID: runtimeID, HandoffID: hex.EncodeToString(sum[:]), Count: len(messages), Targets: targets,
-	})
+	}
+	// Handoff is an observation after concrete bodies crossed the local
+	// boundary. It belongs to the same Workspace Runner as delivery/recovery;
+	// if the Runner is absent we intentionally drop this best-effort fact rather
+	// than revive the retired runtime socket path.
+	d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentMessageHandoff, payload)
 }
 
 // CredentialProxy is the machine-local freshness boundary. The first repair

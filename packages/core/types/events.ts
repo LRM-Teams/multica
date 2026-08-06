@@ -21,6 +21,7 @@ export type WSEventType =
   | "comment:resolved"
   | "comment:unresolved"
   | "agent:status"
+  | "agent:activity"
   | "agent:created"
   | "agent:archived"
   | "agent:restored"
@@ -33,7 +34,6 @@ export type WSEventType =
   | "task:completed"
   | "task:failed"
   | "task:message"
-  | "agent_activity:event"
   | "agent_reminder:changed"
   | "task:cancelled"
   | "inbox:new"
@@ -271,104 +271,37 @@ export interface TaskMessagePayload {
   created_at?: string;
 }
 
-export type AgentActivityKind =
-  | "thinking"
-  | "tool_call"
-  | "tool_output"
-  | "turn_end"
-  | "session_init"
-  | "compaction_started"
-  | "compaction_finished"
-  | "wake_attempt"
-  | "error"
-  | "text"
-  | "system"
-  | "transport"
-  | "telemetry"
-  | "blocked"
-  // Raft diagnostic kinds (#389) — naturally diagnostic/raw, never mainline
-  // narrative. The BE prefilters these out of the default page; the FE predicate
-  // keeps them out defensively.
-  | "internal_progress"
-  | "runtime_diagnostic"
-  | "custom";
-
-export interface AgentActivitySourceRef {
-  kind: string;
-  id?: string;
-  seq?: number;
-}
-
-export interface AgentActivityTargetRef {
-  kind: string;
-  id?: string;
-  slug?: string;
-}
-
-/**
- * One normalized narrative display fragment inside an event (#389). The BE
- * projects raft's `entries` from source-backed safe fields; the FE renders them
- * (e.g. the command two-tier: `tool_target` compact / redacted `command` full).
- */
-export interface AgentActivityEntry {
-  kind: string;
-  tool?: string;
-  tool_target?: string;
-  summary_kind?: string;
-  command?: string;
-}
-
-export interface AgentActivityTimelineEvent {
-  id: string;
-  agent_id: string;
-  runtime_id?: string;
-  task_id?: string;
-  // Raft-aligned primary fields (#389): `activity_kind` = raft activityKind
-  // (mainline/diagnostic driver), `detail_kind` = raft detailKind. The legacy
-  // `kind`/`event_type`/`visibility` were removed in the raft-alignment cutover
-  // — the mainline/diagnostic split is driven by kind semantics, not a
-  // `visibility` flag.
-  activity_kind: AgentActivityKind;
-  detail_kind: string;
-  /** Backend canonical EN label for compact/list surfaces; no raw command detail. */
-  display_label?: string;
-  /** Stable key for display_label, matching the Activity EN label contract. */
-  label_key?: string;
-  occurred_at: string;
-  text?: string;
-  tool?: string;
-  tool_target?: string;
-  status?: string;
-  reason_code?: string;
-  details?: Record<string, unknown>;
-  entries?: AgentActivityEntry[];
-  target_ref: AgentActivityTargetRef;
-  source_refs?: AgentActivitySourceRef[];
-}
-
-export interface AgentActivityEventRealtimePayload {
-  agent_id: string;
-  event_id: string;
-  event?: AgentActivityTimelineEvent;
-}
-
 /** `agent_reminder:changed` — a pure invalidate signal (schedule/snooze/update/cancel/fire/terminalize, emitted post-commit). Minimal on purpose: no title/anchor/reminder data broadcast, just the scope to refetch. */
 export interface AgentReminderChangedPayload {
   agent_id: string;
 }
 
-/**
- * REST response for `GET /api/agents/{id}/activity/events` — an intentional
- * pagination envelope (#474/#389), NOT a bare array. `next_cursor` is an
- * OPAQUE STRING keyset token (the BE keys on `occurred_at+id` internally, but
- * that is not exposed on the wire); the FE echoes it back verbatim as
- * `?before=<token>` for the next page and never parses it.
- */
-export interface AgentActivityEventsPage {
-  events: AgentActivityTimelineEvent[];
-  limit: number;
-  has_more: boolean;
-  next_cursor?: string | null;
+// The Workspace Runner Activity read-model is presentation-safe: callers must
+// display these fields as supplied and never infer runtime state.
+export interface RunnerActivitySummary {
+  label: string;
+  tone: string;
+  visibility: string;
+}
+
+export interface RunnerActivityTimelineRow {
+  id: string;
+  occurred_at: string;
+  title: string;
+  subtext?: string;
+  tone: string;
+  body_kind: string;
+  body?: string;
+}
+
+export interface RunnerActivityResponse {
+  summary: RunnerActivitySummary | null;
+  timeline: RunnerActivityTimelineRow[];
+}
+
+export interface RunnerActivityRealtimePayload {
+  agent_id: string;
+  activity: RunnerActivityResponse;
 }
 
 export interface TaskQueuedPayload {
@@ -595,7 +528,7 @@ export interface WSEventPayloadMap {
   "task:completed": TaskCompletedPayload;
   "task:failed": TaskFailedPayload;
   "task:message": TaskMessagePayload;
-  "agent_activity:event": AgentActivityEventRealtimePayload;
+  "agent:activity": RunnerActivityRealtimePayload;
   "agent_reminder:changed": AgentReminderChangedPayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": unknown;

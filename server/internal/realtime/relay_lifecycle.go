@@ -87,7 +87,7 @@ func (r *MirroredRelay) Broadcast(message []byte) {
 
 func (r *MirroredRelay) PublishWithID(scopeType, scopeID, exclude string, frame []byte, id string) error {
 	primaryErr := r.primary.PublishWithID(scopeType, scopeID, exclude, frame, id)
-	if scopeType == ScopeDaemonRuntime {
+	if scopeType == ScopeDaemonRuntime || scopeType == ScopeDaemonWorkspaceRunner {
 		return primaryErr
 	}
 	mirrorErr := r.mirror.PublishWithID(scopeType, scopeID, exclude, frame, id)

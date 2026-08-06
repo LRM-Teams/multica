@@ -21,6 +21,7 @@ import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
 import {
   agentHonorOptions,
   memberProfileOptions,
+  useRunnerActivity,
 } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import type { MemberProfile } from "@multica/core/types";
@@ -40,8 +41,6 @@ import { useHonorBadgeCopy } from "../honor/use-honor-badge-copy";
 import { useAgentAchievementCopy } from "../agents/hooks/use-agent-achievement-copy";
 import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
 import { AgentPresenceOverlay } from "./actor-avatar";
-import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
-import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n/use-t";
 
@@ -492,17 +491,27 @@ function ProfileSection({
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function AgentRecentActivity({ agentId }: { agentId: string }) {
   const { t } = useT("channels");
-  const { events, isLoading } = useAgentActivityEvents(agentId);
-  // Guard only the first paint so the section doesn't flash the empty state
-  // before the REST first-paint lands; ActivityTimeline owns empty + populated.
-  if (isLoading && events.length === 0) {
+  const workspaceId = useWorkspaceId();
+  const { data, isLoading } = useRunnerActivity(workspaceId, agentId);
+  if (isLoading && !data) {
     return (
       <div className="rounded-md bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground">
         {t(($) => $.profile_popover.loading)}
       </div>
     );
   }
-  return <ActivityTimeline events={events} compact />;
+  if (!data?.timeline.length) {
+    return <p className="text-xs text-muted-foreground">{t(($) => $.profile_popover.no_recent_activity)}</p>;
+  }
+  return (
+    <ul className="space-y-1.5">
+      {data.timeline.slice(0, 3).map((row) => (
+        <li key={row.id} className="truncate text-xs text-muted-foreground">
+          {row.title}{row.subtext ? ` · ${row.subtext}` : ""}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)

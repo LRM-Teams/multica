@@ -59,30 +59,18 @@ export function agentTaskSnapshotOptions(wsId: string) {
   });
 }
 
-// #302 Activity: per-agent tagged event timeline. Keyed by agent (not
-// workspace) — one agent's stream. WS `agent_activity:event` upserts full
-// events straight into this cache by id; the 30s staleTime is a reconnect
-// safety net.
-export const agentActivityEventsKeys = {
-  all: (agentId: string) => ["agent-activity-events", agentId] as const,
+// Runner Activity is server-projected presentation keyed by both Workspace and
+// Agent. It intentionally does not share a cache with the historical raw fact
+// timeline, so the hard cut can delete the latter without a compatibility path.
+export const runnerActivityKeys = {
+  all: (wsId: string, agentId: string) =>
+    ["workspaces", wsId, "runner-activity", agentId] as const,
 };
 
-export function agentActivityEventsOptions(agentId: string) {
-  return infiniteQueryOptions({
-    queryKey: agentActivityEventsKeys.all(agentId),
-    // The REST route is cursor-paginated, newest-first (`{ events, has_more,
-    // next_cursor }`). We keep every fetched page in the infinite cache and the
-    // hook flattens `pages[].events` through the id-keyed reducer, so scrolling
-    // up to read history loads OLDER pages instead of the first ~50 being a
-    // permanent ceiling (#620: a high-frequency agent's newer status/thinking
-    // rows had pushed old `Running command` rows past the first page, so they
-    // looked "gone"). WS live events stay in the hook's own buffer (never
-    // written into this cache), so this page shape is read-only REST.
-    queryFn: ({ pageParam }) =>
-      api.getAgentActivityEvents(agentId, pageParam ?? undefined),
-    initialPageParam: null as string | null,
-    getNextPageParam: (lastPage) =>
-      lastPage.has_more ? (lastPage.next_cursor ?? undefined) : undefined,
+export function runnerActivityOptions(wsId: string, agentId: string) {
+  return queryOptions({
+    queryKey: runnerActivityKeys.all(wsId, agentId),
+    queryFn: () => api.getRunnerActivity(agentId),
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
   });
@@ -94,8 +82,7 @@ export function agentActivityEventsOptions(agentId: string) {
 // ordered by next_fire_at and the same response may include one dormant
 // managed patrol without a next fire. Fired human history remains
 // cursor-paginated occurrences,
-// newest-first, same infinite-query shape as `agentActivityEventsOptions`
-// above. Both invalidate on the `agent_reminder:changed` WS event (see
+// newest-first. Both invalidate on the `agent_reminder:changed` WS event (see
 // `use-agent-reminders-realtime.ts`) — the 30s staleTime below is just a
 // safety net, not the live-refresh mechanism.
 export const agentRemindersKeys = {

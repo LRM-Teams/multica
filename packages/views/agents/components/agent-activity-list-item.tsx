@@ -1,27 +1,25 @@
 "use client";
 
-import { ChevronRight, Clock, Loader2 } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { AgentPresenceDetail } from "@multica/core/agents";
+import { useRunnerActivity } from "@multica/core/agents";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
-import {
-  presentAgentActivityBand,
-  resolveAgentActivityBand,
-} from "../resolve-agent-live-status";
 
 /**
- * Shared Activity mark for agent list surfaces (Idle / Working / Disconnected…).
- * Same vocabulary as `AgentActivityListItem` — do not hand-roll another path.
+ * Shared list Activity mark. Labels and tones are supplied by the server-owned
+ * Workspace Runner projection; presence and task state are never interpreted.
  */
 export function AgentActivityStatus({
-  presence,
+  agentId,
   className,
   alignEnd = false,
   unknownLabel,
   testId = "agent-activity-status",
 }: {
-  presence?: AgentPresenceDetail | null;
+  agentId: string;
   className?: string;
   /** Raft desktop list: push mark to the trailing edge. */
   alignEnd?: boolean;
@@ -29,8 +27,10 @@ export function AgentActivityStatus({
   unknownLabel?: string;
   testId?: string;
 }) {
-  const band = resolveAgentActivityBand(presence ?? null);
-  if (!band) {
+  const workspaceId = useWorkspaceId();
+  const { data } = useRunnerActivity(workspaceId, agentId);
+  const summary = data?.summary;
+  if (!summary || summary.visibility !== "visible") {
     return (
       <span
         className={cn(
@@ -44,10 +44,6 @@ export function AgentActivityStatus({
       </span>
     );
   }
-  const view = presentAgentActivityBand(band, true);
-  const isWorking = band === "working" && presence?.workload !== "queued";
-  const isQueued = presence?.workload === "queued";
-
   return (
     <span
       className={cn(
@@ -56,21 +52,10 @@ export function AgentActivityStatus({
         className,
       )}
       data-testid={testId}
-      data-activity-band={band}
+      data-activity-tone={summary.tone}
     >
-      {isWorking ? (
-        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-running" />
-      ) : null}
-      {isQueued ? (
-        <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
-      ) : null}
-      {!isWorking && !isQueued ? (
-        <span
-          className={cn("size-1.5 shrink-0 rounded-full", view.dotClass)}
-          aria-hidden
-        />
-      ) : null}
-      <span className="truncate text-[13px]">{view.label}</span>
+      <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground" aria-hidden />
+      <span className="truncate text-[13px]">{summary.label}</span>
     </span>
   );
 }
@@ -116,6 +101,7 @@ export function AgentActivityListItem({
   /** Optional trailing text (e.g. "View agent" in delete dialogs). */
   trailingLabel?: string;
 }) {
+	void presence;
   const size = avatarSize ?? (layout === "stacked" ? 28 : 22);
   const trailing = trailingLabel ? (
     <span className="shrink-0 text-primary">{trailingLabel}</span>
@@ -123,7 +109,7 @@ export function AgentActivityListItem({
 
   const activity = (
     <AgentActivityStatus
-      presence={presence}
+      agentId={agentId}
       alignEnd={layout === "inline"}
       className={layout === "inline" ? undefined : "max-w-none"}
       testId="agent-activity-list-item-activity"

@@ -69,6 +69,304 @@ func TestNotifyTaskAvailable(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerRoutesOnlyWithinDaemonWorkspaceScope(t *testing.T) {
+	hub := NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		workspaceID := r.URL.Query().Get("workspace")
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: workspaceID, RuntimeIDs: []string{"runtime-1", "runtime-2"}})
+	}))
+	defer server.Close()
+	dial := func(workspaceID string) *websocket.Conn {
+		t.Helper()
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"?workspace="+workspaceID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	ready := func(conn *websocket.Conn, workspaceID string) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: workspaceID, DaemonInstanceID: "instance-" + workspaceID})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspaceA := dial("workspace-a")
+	defer workspaceA.Close()
+	workspaceB := dial("workspace-b")
+	defer workspaceB.Close()
+	ready(workspaceA, "workspace-a")
+	ready(workspaceB, "workspace-b")
+	waitForRunner(t, hub, "daemon-1", "workspace-a")
+	waitForRunner(t, hub, "daemon-1", "workspace-b")
+
+	if !hub.NotifyWorkspaceRunner("daemon-1", "workspace-a", protocol.EventDaemonAgentStart, protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"}) {
+		t.Fatal("workspace-a command was not routed")
+	}
+	workspaceA.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := workspaceA.ReadMessage()
+	if err != nil {
+		t.Fatalf("read workspace-a command: %v", err)
+	}
+	var message protocol.Message
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Type != protocol.EventDaemonAgentStart {
+		t.Fatalf("workspace-a event = %q", message.Type)
+	}
+	workspaceB.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, _, err := workspaceB.ReadMessage(); err == nil {
+		t.Fatal("workspace-b received a workspace-a command")
+	}
+}
+
+func TestWorkspaceRunnerAllowsNoProviderRegistrations(t *testing.T) {
+	hub := NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+}
+
+func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing.T) {
+	hub := NewHub()
+	var accepted atomic.Int64
+	var runnerReady atomic.Int64
+	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, _ json.RawMessage) error {
+		if eventType == protocol.EventAgentStartAck {
+			accepted.Add(1)
+		}
+		if eventType == protocol.EventWorkspaceRunnerReady {
+			runnerReady.Add(1)
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	dial := func() *websocket.Conn {
+		t.Helper()
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	write := func(conn *websocket.Conn, eventType string, payload any) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := dial()
+	defer first.Close()
+	// An acknowledgement before ready must not reach the new boundary.
+	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
+	time.Sleep(20 * time.Millisecond)
+	if accepted.Load() != 0 {
+		t.Fatal("unready connection mutated Runner state")
+	}
+	write(first, protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
+	deadline := time.Now().Add(time.Second)
+	for accepted.Load() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("ready Runner acknowledgement was not delivered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	second := dial()
+	defer second.Close()
+	write(second, protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2"})
+	for runnerReady.Load() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("replacement Runner did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !hub.NotifyWorkspaceRunner("daemon-1", "workspace-1", protocol.EventWorkspaceRunnerPing, protocol.WorkspaceRunnerPingPayload{PingID: "ping-1"}) {
+		t.Fatal("current Runner did not receive ping")
+	}
+	second.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := second.ReadMessage(); err != nil {
+		t.Fatalf("current Runner did not receive ping: %v", err)
+	}
+}
+
+func TestCloseWorkspaceRunnerFencesReplacementDaemonInstance(t *testing.T) {
+	hub := NewHub()
+	var readyCount atomic.Int64
+	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, _ json.RawMessage) error {
+		if eventType == protocol.EventWorkspaceRunnerReady {
+			readyCount.Add(1)
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	dial := func() *websocket.Conn {
+		conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	write := func(conn *websocket.Conn, payload protocol.WorkspaceRunnerReadyPayload) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(payload)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := dial()
+	defer first.Close()
+	write(first, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	second := dial()
+	defer second.Close()
+	write(second, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2"})
+	deadline := time.Now().Add(time.Second)
+	for readyCount.Load() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("replacement Runner did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if hub.CloseWorkspaceRunner("daemon-1", "workspace-1", "instance-1") {
+		t.Fatal("stale daemon instance closed the replacement Runner")
+	}
+	if hub.WorkspaceRunnerConnectionCount("daemon-1", "workspace-1") != 1 {
+		t.Fatal("stale close removed the current Runner")
+	}
+	if !hub.CloseWorkspaceRunner("daemon-1", "workspace-1", "instance-2") {
+		t.Fatal("current daemon instance was not closed")
+	}
+	deadline = time.Now().Add(time.Second)
+	for hub.WorkspaceRunnerConnectionCount("daemon-1", "workspace-1") != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("current Runner remained registered after close")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForRunner(t *testing.T, hub *Hub, daemonID, workspaceID string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Workspace Runner %s/%s was not ready", daemonID, workspaceID)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestWorkspaceRunnerDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing.T) {
+	hub := NewHub()
+	retries := make(chan func(), 2)
+	hub.scheduleAgentDeliveryRetry = func(_ time.Duration, retry func()) { retries <- retry }
+	hub.SetAgentDeliveryAckHandler(func(_ context.Context, identity ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
+		if identity.DaemonID != "daemon-1" || identity.WorkspaceID != "workspace-1" || ack.AgentID != "agent-1" {
+			t.Fatalf("unexpected Runner acknowledgement: identity=%+v ack=%+v", identity, ack)
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	delivery := protocol.AgentDeliverPayload{AgentID: "agent-1", Target: "channel:one", Seq: 7, DeliveryID: "delivery-1", Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 7, Content: "hello"}}
+	if !hub.NotifyWorkspaceAgentDelivery("workspace-1", "daemon-1", delivery) {
+		t.Fatal("Runner delivery was not queued")
+	}
+	readDelivery := func() protocol.AgentDeliverPayload {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != protocol.EventAgentDeliver {
+			t.Fatalf("Runner delivery frame = %+v, err=%v", msg, err)
+		}
+		var got protocol.AgentDeliverPayload
+		if err := json.Unmarshal(msg.Payload, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := readDelivery(); got.DeliveryID != delivery.DeliveryID {
+		t.Fatalf("initial Runner delivery = %+v", got)
+	}
+	(<-retries)()
+	if got := readDelivery(); got.DeliveryID != delivery.DeliveryID {
+		t.Fatalf("retried Runner delivery = %+v", got)
+	}
+	ack, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliverAck, Payload: mustMarshalRaw(protocol.AgentDeliverAckPayload{AgentID: delivery.AgentID, Seq: delivery.Seq, DeliveryID: delivery.DeliveryID})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		hub.agentDeliveryMu.Lock()
+		pending := len(hub.pendingAgentDeliveries)
+		hub.agentDeliveryMu.Unlock()
+		if pending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Runner acknowledgement did not clear pending delivery")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestAgentDeliveryRetriesUntilAuthorizedAcknowledgement(t *testing.T) {
 	hub := NewHub()
 	retries := make(chan func(), 4)

@@ -60,16 +60,16 @@ type humanReminderCursor struct {
 }
 
 type humanReminderPage struct {
-	Definitions []humanReminderDefinition     `json:"definitions"`
-	Occurrences []humanReminderOccurrence     `json:"occurrences"`
-	Limit       int                           `json:"limit"`
-	HasMore     bool                          `json:"has_more"`
-	NextCursor  *string                       `json:"next_cursor,omitempty"`
-	Realtime    AgentActivityRealtimeContract `json:"realtime"`
+	Definitions []humanReminderDefinition `json:"definitions"`
+	Occurrences []humanReminderOccurrence `json:"occurrences"`
+	Limit       int                       `json:"limit"`
+	HasMore     bool                      `json:"has_more"`
+	NextCursor  *string                   `json:"next_cursor,omitempty"`
+	Realtime    AgentRealtimeContract     `json:"realtime"`
 }
 
 func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
-	request, ok := h.prepareAgentActivityRequest(w, r)
+	request, ok := h.prepareAgentInternalRequest(w, r)
 	if !ok {
 		return
 	}
@@ -269,8 +269,8 @@ func reminderScheduleKind(cadence pgtype.Text) string {
 	return "one_shot"
 }
 
-func agentReminderRealtime(agentID string) AgentActivityRealtimeContract {
-	return AgentActivityRealtimeContract{
+func agentReminderRealtime(agentID string) AgentRealtimeContract {
+	return AgentRealtimeContract{
 		Scope: "agent", ID: agentID, EventType: "agent_reminder:changed", Payload: "agent_id",
 	}
 }

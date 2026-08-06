@@ -246,7 +246,6 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	if firstBody.Message.Content != content || firstBody.Message.ClientMessageID == nil || *firstBody.Message.ClientMessageID != clientID {
 		t.Fatalf("first message payload mismatch: %+v", firstBody.Message)
 	}
-	assertAgentMessageSentActivityText(t, firstBody.Message.ID, content)
 
 	second := agentTransportSendForTest(t, taskID, agentID, map[string]any{
 		"target":            target,
@@ -266,7 +265,6 @@ func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.
 	if secondBody.Message.ID != firstBody.Message.ID {
 		t.Fatalf("idempotent replay message id=%s, want %s", secondBody.Message.ID, firstBody.Message.ID)
 	}
-	assertAgentMessageSentActivityCount(t, firstBody.Message.ID, 1)
 
 	var messageRows int
 	if err := testPool.QueryRow(ctx, `
@@ -533,7 +531,7 @@ func TestAgentDMConcurrentDuplicateTurnStaysActiveNotPausedAtOldBudget(t *testin
 	}
 
 	source := agentTransportSource{
-		legacyTask: &db.AgentInboxEvent{
+		task: db.AgentInboxEvent{
 			ID:                parseUUID(uuid.NewString()),
 			AgentDmExchangeID: parseUUID(exchangeID),
 		},
@@ -635,7 +633,7 @@ func TestAgentDMFrequencyAndBudgetNeverPauseAcrossMatters(t *testing.T) {
 				task.AgentDmExchangeID = parseUUID(exchangeID)
 			}
 			source := agentTransportSource{
-				legacyTask: &task,
+				task: task,
 				origin: chatOutputOrigin{
 					workspaceID: parseUUID(testWorkspaceID),
 					agentID:     parseUUID(senderID),
@@ -776,7 +774,6 @@ func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *test
 	}
 	assertNoChannelMessageContent(t, channelID, draftContent)
 	assertAgentTransportDraftContent(t, agentID, target, draftContent)
-	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 1)
 	assertAgentTransportVisibleOutputAuditCount(t, taskID, 0)
 
 	revised := "revised held draft " + uuid.NewString()
@@ -797,7 +794,6 @@ func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *test
 		t.Fatalf("fresh message must not resolve or publish the held draft: %+v", replacedBody)
 	}
 	assertAgentTransportDraftMissing(t, agentID, target)
-	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 1)
 	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
 }
 
@@ -1067,7 +1063,7 @@ func TestAgentTransportFreshnessDraftSQLBranchesAreScopedToTaskOrInbox(t *testin
 		t.Fatal("resolve transport task origin")
 	}
 	targetName := "#" + channelNameForTransportTest(t, channelID)
-	target, err := testHandler.resolveAgentTransportTarget(ctx, &task, origin, targetName, true)
+	target, err := testHandler.resolveAgentTransportTarget(ctx, task, origin, targetName, true)
 	if err != nil {
 		t.Fatalf("resolve transport target: %v", err)
 	}
@@ -1093,8 +1089,8 @@ func TestAgentTransportFreshnessDraftSQLBranchesAreScopedToTaskOrInbox(t *testin
 		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, inboxEventID)
 	})
 
-	taskSource := agentTransportSource{legacyTask: &task, origin: origin}
-	inboxSource := agentTransportSource{legacyTask: &task, origin: origin, inboxEventID: parseUUID(inboxEventID)}
+	taskSource := agentTransportSource{task: task, origin: origin}
+	inboxSource := agentTransportSource{task: task, origin: origin, inboxEventID: parseUUID(inboxEventID)}
 	for _, tc := range []struct {
 		name      string
 		source    agentTransportSource
@@ -1207,7 +1203,6 @@ func TestAgentTransportFreshnessHoldSameRangeEmitsOneActivityUnderConcurrency(t 
 			t.Fatalf("concurrent freshness hold: status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	}
-	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 1)
 }
 
 func TestAgentTransportFreshnessHoldLoserReturnsPersistedWinnerDecision(t *testing.T) {
@@ -1225,7 +1220,7 @@ func TestAgentTransportFreshnessHoldLoserReturnsPersistedWinnerDecision(t *testi
 	if !ok {
 		t.Fatal("resolve transport task origin")
 	}
-	target, err := testHandler.resolveAgentTransportTarget(ctx, &task, origin, "#"+channelNameForTransportTest(t, channelID), true)
+	target, err := testHandler.resolveAgentTransportTarget(ctx, task, origin, "#"+channelNameForTransportTest(t, channelID), true)
 	if err != nil {
 		t.Fatalf("resolve transport target: %v", err)
 	}
@@ -1241,7 +1236,7 @@ func TestAgentTransportFreshnessHoldLoserReturnsPersistedWinnerDecision(t *testi
 	if err != nil {
 		t.Fatalf("seed winner newer: %v", err)
 	}
-	source := agentTransportSource{legacyTask: &task, origin: origin}
+	source := agentTransportSource{task: task, origin: origin}
 	winnerDecision, err := testHandler.agentTransportFreshnessDecisionWithSeen(ctx, testHandler.DB, source, target, winnerSeen.Seq)
 	if err != nil || !winnerDecision.Hold {
 		t.Fatalf("winner freshness decision = %+v, err=%v", winnerDecision, err)
@@ -1264,7 +1259,6 @@ func TestAgentTransportFreshnessHoldLoserReturnsPersistedWinnerDecision(t *testi
 	if loser.ProducerID != winner.ProducerID || loser.SeenUpToSeq != winnerSeen.Seq || loser.LatestSeq != latest.Seq || loser.TotalNewer != 1 {
 		t.Fatalf("loser response = %+v, want persisted winner fact=%q seen=%d latest=%d total=1", loser, winner.ProducerID, winnerSeen.Seq, latest.Seq)
 	}
-	assertAgentTransportFreshnessHoldActivity(t, taskID, target.raw, 1)
 }
 
 func TestAgentTransportFreshnessDecisionFactIsScopedToTaskOrInboxSource(t *testing.T) {
@@ -1273,13 +1267,13 @@ func TestAgentTransportFreshnessDecisionFactIsScopedToTaskOrInboxSource(t *testi
 	target := agentTransportTarget{raw: "#same-target"}
 	baseTask := db.AgentInboxEvent{ID: parseUUID(uuid.NewString())}
 	base := agentTransportSource{
-		legacyTask: &baseTask,
-		origin:     chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
+		task:   baseTask,
+		origin: chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
 	}
 	otherTask := base
-	otherTaskEvent := *otherTask.legacyTask
+	otherTaskEvent := otherTask.task
 	otherTaskEvent.ID = parseUUID(uuid.NewString())
-	otherTask.legacyTask = &otherTaskEvent
+	otherTask.task = otherTaskEvent
 	inbox := base
 	inbox.inboxEventID = parseUUID(uuid.NewString())
 	otherInbox := inbox
@@ -3428,109 +3422,6 @@ func assertAgentTransportDraftMissing(t *testing.T, agentID, target string) {
 	}
 	if exists {
 		t.Fatalf("transport draft still exists for agent=%s target=%s", agentID, target)
-	}
-}
-
-func assertAgentTransportFreshnessHoldActivity(t *testing.T, taskID, target string, newMessages int) {
-	t.Helper()
-	var holdCount, obsoleteDetailCount int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*)
-		FROM agent_activity_event
-		WHERE task_id = $1
-		  AND event_type = 'send_freshness_hold'
-		  AND message = 'Send held by freshness check'
-		  AND target_slug = $2
-		  AND details->>'new_message_count' = $3
-		  AND details->>'decision' = 'local_hold'
-		  AND details->>'recommended_action' = 'review_newer_messages'`, taskID, target, fmt.Sprint(newMessages)).Scan(&holdCount); err != nil {
-		t.Fatalf("count freshness hold activity: %v", err)
-	}
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*)
-		FROM agent_activity_event
-		WHERE task_id = $1
-		  AND event_type = 'send_freshness_hold_detail'`, taskID).Scan(&obsoleteDetailCount); err != nil {
-		t.Fatalf("count obsolete freshness hold detail activity: %v", err)
-	}
-	if holdCount != 1 || obsoleteDetailCount != 0 {
-		t.Fatalf("freshness hold activity=%d obsolete detail=%d, want 1/0", holdCount, obsoleteDetailCount)
-	}
-}
-
-func TestAgentTransportFreshnessResolutionActivityMessage(t *testing.T) {
-	for _, tc := range []struct {
-		outcome string
-		want    string
-	}{
-		{outcome: "abandoned", want: "Held message was not sent"},
-		{outcome: "revised_send", want: "Freshness hold resolved"},
-	} {
-		t.Run(tc.outcome, func(t *testing.T) {
-			if got := agentTransportFreshnessResolutionActivityMessage(tc.outcome); got != tc.want {
-				t.Fatalf("message = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func assertAgentTransportFreshnessResolutionActivity(t *testing.T, taskID, target, producerFactID, outcome string) {
-	t.Helper()
-	var count int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*)
-		FROM agent_activity_event
-		WHERE task_id = $1
-		  AND event_type = 'send_freshness_resolved'
-		  AND message = CASE
-		    WHEN $4 = 'abandoned' THEN 'Held message was not sent'
-		    ELSE 'Freshness hold resolved'
-		  END
-		  AND target_slug = $2
-		  AND details->>'producer_fact_id' = $3
-		  AND details->>'outcome' = $4
-		  AND details ? 'freshness_hold_resolution_seconds'
-		  AND details ? 'resolution_ms'`,
-		taskID, target, producerFactID, outcome).Scan(&count); err != nil {
-		t.Fatalf("count freshness resolution activity: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("freshness resolution activity count=%d, want 1 for fact=%s outcome=%s", count, producerFactID, outcome)
-	}
-}
-
-func assertAgentMessageSentActivityText(t *testing.T, messageID, want string) {
-	t.Helper()
-	var got string
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT message
-		FROM agent_activity_event
-		WHERE event_type = 'message_sent'
-		  AND details->>'message_id' = $1
-		ORDER BY created_at DESC
-		LIMIT 1`, messageID).Scan(&got); err != nil {
-		t.Fatalf("load message_sent activity for message %s: %v", messageID, err)
-	}
-	if got != want {
-		t.Fatalf("message_sent activity text = %q, want %q", got, want)
-	}
-	if strings.Contains(got, "Agent sent a visible message") {
-		t.Fatalf("message_sent activity leaked legacy machine phrase: %q", got)
-	}
-}
-
-func assertAgentMessageSentActivityCount(t *testing.T, messageID string, want int) {
-	t.Helper()
-	var got int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*)
-		FROM agent_activity_event
-		WHERE event_type = 'message_sent'
-		  AND details->>'message_id' = $1`, messageID).Scan(&got); err != nil {
-		t.Fatalf("count message_sent activity for message %s: %v", messageID, err)
-	}
-	if got != want {
-		t.Fatalf("message_sent activity count for message %s = %d, want %d", messageID, got, want)
 	}
 }
 

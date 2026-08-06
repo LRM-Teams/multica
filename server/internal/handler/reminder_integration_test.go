@@ -2677,7 +2677,6 @@ func TestAgentReminderHandlersAcceptModernAgentTransportSources(t *testing.T) {
 				_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
 			})
 			var initiatorUserID string
-			var activityRows, activityTaskRows int
 			if err := testPool.QueryRow(context.Background(), `
 				SELECT initiator_user_id
 				FROM agent_reminder
@@ -2713,18 +2712,6 @@ func TestAgentReminderHandlersAcceptModernAgentTransportSources(t *testing.T) {
 				t.Fatalf("cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
 			}
 
-			if err := testPool.QueryRow(context.Background(), `
-				SELECT count(*), count(*) FILTER (WHERE task_id IS NOT NULL)
-				FROM agent_activity_event
-				WHERE agent_id = $1
-				  AND details->>'reminder_id' = $2
-				  AND event_type IN ('reminder_scheduled', 'reminder_updated', 'reminder_snoozed', 'reminder_cancelled')`,
-				fixture.agentID, scheduled.ID).Scan(&activityRows, &activityTaskRows); err != nil {
-				t.Fatalf("load reminder activity rows: %v", err)
-			}
-			if activityRows != 4 || activityTaskRows != 0 {
-				t.Fatalf("modern reminder activity rows/task rows=%d/%d, want 4/0", activityRows, activityTaskRows)
-			}
 		})
 	}
 }

@@ -2,12 +2,9 @@ package handler
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 )
 
@@ -103,73 +100,5 @@ func TestEvolutionSkillInjectionAndUsedAttribution(t *testing.T) {
 	}
 	if injected != 1 || used != 1 || succeeded != 1 {
 		t.Fatalf("skill attribution injected=%d used=%d success=%d, want 1/1/1", injected, used, succeeded)
-	}
-}
-
-// LRM-985: Goal reinjection / post-compaction anchor events are auditable by
-// event_type + goal_id (claim path and compaction_finished path).
-func TestChannelGoalAnchorActivityEventsAreQueryable(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	channel := createGoalTestChannel(t)
-	created := httptest.NewRecorder()
-	testHandler.CreateChannelGoal(created, goalRequest(t, testUserID, http.MethodPost, channel.ID, map[string]any{
-		"title":            "Resume after compaction",
-		"objective":        "Stay on channel goal across wakes",
-		"success_criteria": []string{"goal_injected", "anchor_after_compaction"},
-	}))
-	if created.Code != http.StatusCreated {
-		t.Fatalf("CreateChannelGoal = %d: %s", created.Code, created.Body.String())
-	}
-	goal := decodeGoalEnvelope(t, created).Goal
-	if goal == nil || goal.ID == "" {
-		t.Fatalf("created goal = %#v", goal)
-	}
-
-	agentID := createHandlerTestAgent(t, "goal-anchor-"+randomID(), nil)
-	// task_id FK → agent_task_queue; leave null in unit test (claim path uses a real inbox id).
-	inboxEventID := uuid.NewString()
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_activity_event WHERE agent_id=$1`, agentID)
-	})
-
-	testHandler.recordAgentActivityEvent(ctx, testHandler.DB,
-		parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
-		activityKindCustom, "channel_goal_injected", "info",
-		"channel", parseUUID(channel.ID), "",
-		"", "Channel goal reinjected for this wake",
-		map[string]any{
-			"goal_id":        goal.ID,
-			"goal_version":   goal.Version,
-			"inbox_event_id": inboxEventID,
-			"channel_id":     channel.ID,
-			"trigger":        "claim",
-		},
-	)
-	testHandler.recordAgentActivityEvent(ctx, testHandler.DB,
-		parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
-		activityKindCustom, "channel_goal_anchor_after_compaction", "info",
-		"channel", parseUUID(channel.ID), "",
-		"", "Channel goal still anchored after context compaction",
-		map[string]any{
-			"goal_id":      goal.ID,
-			"goal_version": goal.Version,
-			"channel_id":   channel.ID,
-		},
-	)
-
-	var injected, anchored int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FILTER (WHERE event_type='channel_goal_injected'),
-		       count(*) FILTER (WHERE event_type='channel_goal_anchor_after_compaction')
-		FROM agent_activity_event
-		WHERE agent_id=$1 AND details->>'goal_id'=$2
-	`, agentID, goal.ID).Scan(&injected, &anchored); err != nil {
-		t.Fatalf("load goal activity: %v", err)
-	}
-	if injected != 1 || anchored != 1 {
-		t.Fatalf("goal activity injected=%d anchored=%d, want 1/1", injected, anchored)
 	}
 }

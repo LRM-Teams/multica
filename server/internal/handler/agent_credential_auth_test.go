@@ -985,69 +985,6 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 }
 
-func TestAgentCredentialChatTransportDoesNotRequireInboxLease(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	req := newRequest(http.MethodPost, "/api/agent/messages/send", nil)
-	req = withChatTestWorkspaceCtx(t, req)
-	req.Header.Set("X-Actor-Source", "agent_credential")
-	req.Header.Set("X-Agent-ID", "00000000-0000-0000-0000-000000000001")
-	w := httptest.NewRecorder()
-	source, ok := testHandler.requireAgentTransportSource(w, req)
-	if !ok {
-		t.Fatalf("agent_credential chat transport was rejected: status=%d body=%s", w.Code, w.Body.String())
-	}
-	if !source.durableCredential || source.inboxEventID.Valid || source.legacyTask != nil {
-		t.Fatalf("credential source = %+v, want durable chat identity without inbox/task", source)
-	}
-}
-
-func TestAgentCredentialChatTransportSendsThroughMiddlewareWithoutInboxLease(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	fixture := seedAgentCredentialTransportFixture(t)
-	router := chi.NewRouter()
-	router.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
-		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
-		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
-	})
-
-	clientID := "agent-credential-transport-" + uuid.NewString()
-	body := map[string]any{
-		"target":            "#" + channelNameForTransportTest(t, fixture.channelID),
-		"content":           "credential transport delivery",
-		"client_message_id": clientID,
-	}
-	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", body)
-	sendReq.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
-	sendReq.Header.Set("X-Workspace-ID", testWorkspaceID)
-	sendRec := httptest.NewRecorder()
-	router.ServeHTTP(sendRec, sendReq)
-	if sendRec.Code != http.StatusCreated {
-		t.Fatalf("agent credential transport send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
-	}
-
-	var taskAuditRows, inboxAuditRows int
-	if err := testPool.QueryRow(ctx, `
-		SELECT
-			count(*) FILTER (WHERE task_id IS NOT NULL),
-			count(*) FILTER (WHERE inbox_event_id = $1)
-		FROM agent_task_transport_audit
-		WHERE agent_id = $2 AND action = 'message_send' AND client_message_id = $3`,
-		fixture.event.ID, fixture.agentID, clientID).Scan(&taskAuditRows, &inboxAuditRows); err != nil {
-		t.Fatalf("count transport audit rows: %v", err)
-	}
-	if taskAuditRows != 0 || inboxAuditRows != 0 {
-		t.Fatalf("chat transport must not write task/inbox audit rows, got %d/%d", taskAuditRows, inboxAuditRows)
-	}
-}
-
 func TestAgentCredentialTransportA2AReplyKeepsInheritedExchange(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1149,6 +1086,32 @@ func TestAgentCredentialTransportA2AReplyKeepsInheritedExchange(t *testing.T) {
 	}
 	if turnCount != 2 || state != "active" || latestMessageID == "" {
 		t.Fatalf("inherited exchange turn_count=%d state=%q latest_message_id=%q, want 2/active/non-empty", turnCount, state, latestMessageID)
+	}
+}
+
+func TestAgentCredentialTransportRequiresActiveInboxDelivery(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	fixture := seedAgentCredentialTransportFixture(t)
+	router := chi.NewRouter()
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
+		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
+		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
+	})
+	req := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"target":            "#" + channelNameForTransportTest(t, fixture.channelID),
+		"content":           "must not bypass delivery",
+		"client_message_id": "agent-credential-without-delivery-" + uuid.NewString(),
+	})
+	req.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s want 403", rec.Code, rec.Body.String())
 	}
 }
 

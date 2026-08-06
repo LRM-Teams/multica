@@ -7,7 +7,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { MemberProfile } from "@multica/core/types";
 import type { AgentLiveStatusView } from "../agents/resolve-agent-live-status";
-import type { ActivityEvent } from "../agents/components/tabs/activity-event";
 import enAgents from "../locales/en/agents.json";
 import enSettings from "../locales/en/settings.json";
 import { ActorProfileContentLoaded } from "./actor-profile-popover";
@@ -18,14 +17,9 @@ const mockLiveStatus = vi.hoisted(
   () => ({ current: null as AgentLiveStatusView | null }),
 );
 
-// Recent activity now consumes the shared #302 ActivityEvent read-model
-// (#383). Stub the hook so the popover test drives the wiring without a
-// QueryClient/WS, and stub the shared ActivityTimeline — it has its own test;
-// here we only assert the popover feeds it the live stream in compact mode.
 const mockActivity = vi.hoisted(() => ({
   current: {
-    events: [] as ActivityEvent[],
-    latest: null as ActivityEvent | null,
+    data: { summary: null, timeline: [] as Array<{ id: string; title: string; subtext?: string }> } as { summary: null; timeline: Array<{ id: string; title: string; subtext?: string }> } | undefined,
     isLoading: false,
   },
 }));
@@ -36,6 +30,11 @@ const mockHonorApi = vi.hoisted(() => ({
 
 vi.mock("@multica/core/api", () => ({
   api: mockHonorApi,
+}));
+
+vi.mock("@multica/core/agents", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/agents")>()),
+  useRunnerActivity: () => mockActivity.current,
 }));
 
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
@@ -60,23 +59,6 @@ vi.mock("../agents/use-agent-live-status", () => ({
   useAgentLiveStatus: () => mockLiveStatus.current,
 }));
 
-vi.mock("../agents/components/tabs/use-agent-activity-events", () => ({
-  useAgentActivityEvents: () => mockActivity.current,
-}));
-
-vi.mock("../agents/components/tabs/activity-timeline", () => ({
-  ActivityTimeline: ({
-    events,
-    compact,
-  }: {
-    events: ActivityEvent[];
-    compact?: boolean;
-  }) => (
-    <div data-testid="activity-timeline" data-compact={compact ? "true" : "false"}>
-      {events.length} events
-    </div>
-  ),
-}));
 
 // Namespace-aware i18n stub: only the channels profile_popover copy is needed
 // for layout/description tests (live status labels come from the hook stub).
@@ -138,18 +120,6 @@ function render(ui: React.ReactNode) {
   );
 }
 
-function makeEvent(index: number): ActivityEvent {
-  return {
-    id: `event-${index}`,
-    agent_id: "agent-1",
-    activity_kind: "text",
-    detail_kind: "text",
-    occurred_at: `2026-06-30T12:0${index}:0${index}Z`,
-    text: `Activity ${index}`,
-    target_ref: { kind: "agent", id: "agent-1" },
-  };
-}
-
 function makeProfile(): MemberProfile {
   return {
     member_type: "agent",
@@ -183,7 +153,7 @@ function live(
 beforeEach(() => {
   cleanup();
   mockLiveStatus.current = live("Idle");
-  mockActivity.current = { events: [], latest: null, isLoading: false };
+  mockActivity.current = { data: { summary: null, timeline: [] }, isLoading: false };
   mockHonorApi.getAgentHonor.mockReset();
   mockHonorApi.getUserHonor.mockReset();
   mockHonorApi.getAgentHonor.mockImplementation(
@@ -195,29 +165,24 @@ beforeEach(() => {
 });
 
 describe("ActorProfileContentLoaded", () => {
-  it("renders the shared compact ActivityTimeline for agents, wired to the live event stream", () => {
+  it("renders recent Runner-projected Activity for agents", () => {
     mockActivity.current = {
-      events: [makeEvent(1), makeEvent(2), makeEvent(3)],
-      latest: null,
+      data: { summary: null, timeline: [{ id: "row-1", title: "Thinking...", subtext: "Safe detail" }] },
       isLoading: false,
     };
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
-    const timeline = screen.getByTestId("activity-timeline");
-    // The profile Recent Activity surface reuses the ONE Activity renderer in
-    // compact mode — no second local presentation.
-    expect(timeline).toHaveAttribute("data-compact", "true");
-    expect(timeline).toHaveTextContent("3 events");
+    expect(screen.getByText("Thinking... · Safe detail")).toBeInTheDocument();
   });
 
   it("shows a loading hint before the first activity paint (no timeline flash)", () => {
-    mockActivity.current = { events: [], latest: null, isLoading: true };
+    mockActivity.current = { data: undefined, isLoading: true };
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
     expect(screen.getByText("Loading")).toBeInTheDocument();
-    expect(screen.queryByTestId("activity-timeline")).toBeNull();
+    expect(screen.queryByText("No activity yet.")).toBeNull();
   });
 
   it("does not render a name-row Online/Offline label (avatar badge only, LRM-248)", () => {
@@ -253,11 +218,7 @@ describe("ActorProfileContentLoaded", () => {
     // explicit "Channel-only" label (LRM-238: no silent omission).
     const profile = makeProfile();
     profile.profile_access = "identity_only";
-    mockActivity.current = {
-      events: [makeEvent(1), makeEvent(2)],
-      latest: null,
-      isLoading: false,
-    };
+    mockActivity.current = { data: { summary: null, timeline: [{ id: "row-1", title: "Thinking..." }] }, isLoading: false };
 
     render(<ActorProfileContentLoaded profile={profile} />);
 
@@ -267,7 +228,7 @@ describe("ActorProfileContentLoaded", () => {
     // Protected live panels are not live-rendered — no live mark, no timeline —
     // even though the activity stub has events.
     expect(screen.queryByTestId("agent-live-status")).toBeNull();
-    expect(screen.queryByTestId("activity-timeline")).toBeNull();
+    expect(screen.queryByText("Thinking...")).toBeNull();
     expect(screen.queryByText("Recent activity")).toBeNull();
     // Sensitive blocks are explicit (greyed + channel-only), not silent.
     expect(screen.getByText("Runtime")).toBeInTheDocument();

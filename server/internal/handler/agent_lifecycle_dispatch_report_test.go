@@ -59,25 +59,6 @@ func TestReportAgentLifecycleOperationResultUpdatesOperationStatus(t *testing.T)
 		t.Fatal("expected finished_at to be set")
 	}
 
-	var eventType, message, visibility string
-	err = testPool.QueryRow(context.Background(), `
-		SELECT event_type, message, visibility
-		FROM agent_activity_event
-		WHERE agent_id = $1
-		  AND event_type = $2
-		  AND details->>'operation_id' = $3
-	`, agentID, agentLifecycleSucceededActivityEventType, operation.ID).Scan(
-		&eventType, &message, &visibility,
-	)
-	if err != nil {
-		t.Fatalf("success activity event: %v", err)
-	}
-	if eventType != agentLifecycleSucceededActivityEventType || message != "Restart prepared" {
-		t.Fatalf("activity event = type=%q message=%q", eventType, message)
-	}
-	if visibility != "user_facing" {
-		t.Fatalf("activity visibility = %q, want user_facing", visibility)
-	}
 }
 
 // TestReportAgentLifecycleOperationResultFailedClearsHealthOverlay pins

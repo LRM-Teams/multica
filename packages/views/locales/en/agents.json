@@ -422,6 +422,8 @@
       "timeline_load_failed": "Couldn't load activity",
       "timeline_load_failed_hint": "Connection interrupted or the service is unavailable.",
       "retry": "Retry",
+      "expand": "Expand",
+      "collapse": "Collapse",
       "loading": "Loading",
       "jump_to_latest": "Jump to latest",
       "labels": {

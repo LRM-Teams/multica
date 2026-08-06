@@ -1,1 +1,0 @@
--- Historical system-message normalization is intentionally irreversible.

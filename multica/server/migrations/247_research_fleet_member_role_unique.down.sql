@@ -1,1 +1,0 @@
-DROP INDEX IF EXISTS research_fleet_member_fleet_role_active_uidx;

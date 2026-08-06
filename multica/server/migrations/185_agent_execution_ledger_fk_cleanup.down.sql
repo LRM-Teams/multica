@@ -1,2 +1,0 @@
--- The old queue foreign key cannot be restored safely once inbox executions
--- exist, so this intentionally remains a no-op.

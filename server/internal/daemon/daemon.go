@@ -140,20 +140,32 @@ type Daemon struct {
 	reregisterNextAttempt     map[string]time.Time // workspace_id -> earliest time the next re-register attempt may run
 	reregisterLastCompletedAt map[string]time.Time // workspace_id -> wall-clock at which the last SUCCESSFUL re-register call returned (failures intentionally not stamped — see recordRegisterCompletion)
 
-	cancelFunc        context.CancelFunc            // set by Run(); called by triggerRestart
-	rootCtx           context.Context               // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
-	restartBinary     string                        // non-empty after a successful update; path to the new binary
-	updating          atomic.Bool                   // prevents concurrent update attempts
-	activeTasks       atomic.Int64                  // number of tasks currently in handleTask; exposed via /health
-	taskSlotCounter   atomic.Int64                  // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, tasks are not capacity-limited — see nextTaskSlot)
-	ready             atomic.Bool                   // false until preflight completes; gates /health status (starting -> running)
-	updateObservation *updateObservationCoordinator // daemon-resolved auto/server update truth shared by every transport
+	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
+	rootCtx       context.Context    // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
+	restartBinary string             // non-empty after a successful update; path to the new binary
+	updating      atomic.Bool        // prevents concurrent update attempts
+	activeTasks   atomic.Int64       // number of tasks currently in handleTask; exposed via /health
+	// machineUpgradeTaskCancels contains only task contexts created by this
+	// daemon. A Machine Upgrade may ask those managed turns to stop; it must
+	// never infer ownership of, or signal, an arbitrary local process.
+	machineUpgradeTaskMu      sync.Mutex
+	machineUpgradeTaskCancels map[int64]context.CancelFunc
+	taskSlotCounter           atomic.Int64                  // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, tasks are not capacity-limited — see nextTaskSlot)
+	ready                     atomic.Bool                   // false until preflight completes; gates /health status (starting -> running)
+	updateObservation         *updateObservationCoordinator // daemon-resolved auto/server update truth shared by every transport
+	// machineUpgradeGeneration is a fresh process identity. The server records
+	// it when this daemon accepts a machine operation and accepts convergence
+	// attestations only from that same process generation.
+	machineUpgradeGeneration string
+	machineUpgradeTarget     string // exact target staged by the active Machine Upgrade
+	machineUpgradeID         string
+	machineUpgradeRuntimeID  string
 
 	// serverReleaseManifestBaseURL caches the most recent non-empty
 	// ReleaseManifestBaseURL seen on a heartbeat ack (task #815 step 2: the
 	// server-dispatched top layer over the daemon-side env var from #1526).
-	// atomic.Value (not a mutex+field) because reads (auto-update loop) and
-	// writes (heartbeat loop) never need a compound read-then-write; a plain
+	// atomic.Value (not a mutex+field) because reads by explicit Machine
+	// Upgrade execution and writes by the heartbeat loop never need a compound read-then-write; a plain
 	// swap/load is sufficient. Holds only string, or is unset (zero Value)
 	// before the first heartbeat ack arrives. A later ack that omits the
 	// field intentionally does NOT clear a previously cached value — a
@@ -163,13 +175,13 @@ type Daemon struct {
 
 	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
 	// microseconds it takes to make a decision; ClaimTask itself runs without
-	// the lock so a slow per-runtime claim cannot stall auto-update or any
-	// other poller.
+	// the lock so a slow per-runtime claim cannot stall a Machine Upgrade or
+	// any other poller.
 	//
-	// The pair is the auto-update path's barrier against the issue's
-	// requirement that "升级过程中如果有 task 进来，会延后升级而不是中断 task":
+	// The pair is the Machine Upgrade handoff barrier against the requirement
+	// that "升级过程中如果有 task 进来，会延后升级而不是中断 task":
 	// runRuntimePoller refuses to call ClaimTask while pauseClaims is set, and
-	// tryAutoUpdate refuses to flip pauseClaims while any poller is mid-claim
+	// the explicit lifecycle refuses to flip pauseClaims while any poller is mid-claim
 	// or any task is in handleTask. Together that closes the fetch-then-claim
 	// race where a new task slipping in during the release-metadata fetch
 	// would be cancelled by triggerRestart's root-ctx cancel.
@@ -193,8 +205,7 @@ type Daemon struct {
 	resolveExecutable   func() (string, error)
 	prepareCLITransport func(Config, string, string, string, string, string) (string, string, error)
 	// runUpdateFn executes the release-download upgrade. Set to d.runUpdate by
-	// New() and overridable in tests so the auto-update poller can be exercised
-	// without touching the real network.
+	// New() and overridable in tests for explicit Machine Upgrade staging.
 	runUpdateFn func(targetVersion string) (string, error)
 	// verifyUpdatedBinaryFn checks the stable binary path that triggerRestart
 	// would re-exec and confirms it already reports targetVersion. Set to
@@ -203,6 +214,10 @@ type Daemon struct {
 	// activateStagedFn CAS-commits staged Active and returns re-exec path.
 	// Nil → commitStagedActivation. Tests may no-op with ("", nil).
 	activateStagedFn func(ctx context.Context, updateID, updateOutput string) (string, error)
+	// Machine Upgrade handoff seams keep the bounded drain deterministic in
+	// tests. Production defaults are installed by the helper methods.
+	machineUpgradeNow  func() time.Time
+	machineUpgradeWait func(context.Context, time.Duration) error
 
 	sharedSkillScanMu    sync.Mutex
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
@@ -382,6 +397,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		messageCoordinators:       make(map[string]*MessageCoordinator),
 		messageRuntimeIDs:         make(map[string]string),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
+		machineUpgradeGeneration:  uuid.NewString(),
 	}
 	d.canonicalRuntimes.setMaxAgentProcesses(cfg.MaxAgentProcesses)
 	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
@@ -856,7 +872,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"agent_timeout", d.cfg.AgentTimeout,
 		"max_agent_processes", d.cfg.MaxAgentProcesses,
 		"idle_watchdog", d.cfg.AgentIdleWatchdog,
-		"auto_update", d.cfg.AutoUpdateEnabled,
+		"machine_upgrade_mode", "explicit_only",
 		"launched_by", d.cfg.LaunchedBy,
 	)
 	if err := d.reminderCache.stateError(); err != nil {
@@ -887,6 +903,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.preflightAuth(ctx); err != nil {
 		return err
 	}
+	// A target successor records local readiness only after it has completed
+	// normal authenticated registration/preflight. This is durable recovery
+	// evidence, not remote completion: the server still requires the exact
+	// accepted sibling set to attest before it marks the operation completed.
+	if err := d.markMachineUpgradeCandidateReady(); err != nil {
+		d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)
+	}
 
 	// Deregister runtimes on shutdown (uses a fresh context since ctx will be cancelled).
 	defer d.deregisterRuntimes()
@@ -898,7 +921,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.heartbeatLoop(ctx)
 	go d.residentCrashWatchLoop(ctx)
-	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
 
@@ -908,7 +930,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// readiness wait blocks on, so success is reported only after startup
 	// actually completed, not merely because the health port came up.
 	d.ready.Store(true)
-	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, auto-update, token-renewal, shared-skills); health now reporting ready")
+	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, token-renewal, shared-skills); machine upgrades are explicit-only; health now reporting ready")
 	err = d.pollLoop(ctx, taskWakeups)
 	d.logger.Debug("daemon main loop returning", "error", err)
 	return err
@@ -918,6 +940,48 @@ func (d *Daemon) Run(ctx context.Context) error {
 // after a successful update, or empty string if no restart is needed.
 func (d *Daemon) RestartBinary() string {
 	return d.restartBinary
+}
+
+// MachineUpgradeTarget is the exact candidate version the foreground launcher
+// must observe before treating a detached successor as locally taken over.
+func (d *Daemon) MachineUpgradeTarget() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.machineUpgradeTarget
+}
+
+// ReportMachineUpgradeTakeoverFailure leaves a durable typed failure instead
+// of allowing a standalone candidate startup error to look like convergence.
+// It is called by the foreground launcher after the daemon has stopped, while
+// its authenticated runtime credentials are still available.
+func (d *Daemon) ReportMachineUpgradeTakeoverFailure(cause error) {
+	if cause == nil || d.client == nil {
+		return
+	}
+	d.mu.Lock()
+	upgradeID, runtimeID := d.machineUpgradeID, d.machineUpgradeRuntimeID
+	d.mu.Unlock()
+	if upgradeID == "" || runtimeID == "" {
+		return
+	}
+	d.failMachineUpgrade(context.Background(), runtimeID, upgradeID, "candidate_takeover_failed", cause)
+}
+
+func (d *Daemon) BeginMachineUpgradeRollback(cause error) error {
+	if cause == nil || d.client == nil {
+		return nil
+	}
+	if err := d.MarkMachineUpgradeRollbackPending(); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	upgradeID, runtimeID := d.machineUpgradeID, d.machineUpgradeRuntimeID
+	d.mu.Unlock()
+	generation := d.machineUpgradeRollbackGenerationID()
+	if upgradeID == "" || runtimeID == "" || generation == "" {
+		return fmt.Errorf("machine upgrade rollback identity is incomplete")
+	}
+	return d.client.ReportMachineUpgradeRollback(context.Background(), runtimeID, upgradeID, generation, "candidate_takeover_failed", cause.Error())
 }
 
 // deregisterRuntimes notifies the server that all runtimes are going offline.
@@ -989,6 +1053,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityRestrictedExecution,
 		protocol.DaemonCapabilityReminderVersionedCache,
 		protocol.DaemonCapabilityAgentLifecycleActions,
+		protocol.DaemonCapabilityMachineUpgrade,
 	}
 	if includeCredentialTransport {
 		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)
@@ -1064,15 +1129,17 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 
 	includeCredentialTransport := d.client.WorkspaceDaemonTokenAvailable(workspaceID, time.Now())
 	req := map[string]any{
-		"workspace_id":      workspaceID,
-		"daemon_id":         d.cfg.DaemonID,
-		"legacy_daemon_ids": d.cfg.LegacyDaemonIDs,
-		"device_name":       d.cfg.DeviceName,
-		"cli_version":       d.cfg.CLIVersion,
-		"launched_by":       d.cfg.LaunchedBy,
-		"capabilities":      daemonRegistrationCapabilities(includeCredentialTransport),
-		"runtimes":          runtimes,
-		"pinned_version":    d.cfg.PinnedVersion,
+		"workspace_id":                        workspaceID,
+		"daemon_id":                           d.cfg.DaemonID,
+		"legacy_daemon_ids":                   d.cfg.LegacyDaemonIDs,
+		"device_name":                         d.cfg.DeviceName,
+		"cli_version":                         d.cfg.CLIVersion,
+		"launched_by":                         d.cfg.LaunchedBy,
+		"capabilities":                        daemonRegistrationCapabilities(includeCredentialTransport),
+		"runtimes":                            runtimes,
+		"pinned_version":                      d.cfg.PinnedVersion,
+		"machine_upgrade_generation":          d.machineUpgradeGenerationID(),
+		"machine_upgrade_rollback_generation": d.machineUpgradeRollbackGenerationID(),
 	}
 	if d.updateObservation != nil {
 		if snapshot := d.updateObservation.PublishedSnapshot(); snapshot != nil {
@@ -1504,10 +1571,11 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.ReleaseManifestBaseURL != "" {
 		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
 	}
-	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 || len(resp.PendingAgentStartIntents) > 0 {
+	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 || len(resp.PendingAgentStartIntents) > 0 {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
+			"machine_upgrade", resp.PendingMachineUpgrade != nil,
 			"model_list", resp.PendingModelList != nil,
 			"local_skills", resp.PendingLocalSkills != nil,
 			"local_skill_import", resp.PendingLocalSkillImport != nil,
@@ -1519,6 +1587,9 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	}
 	if resp.PendingUpdate != nil {
 		go d.handleUpdate(ctx, runtimeID, resp.PendingUpdate)
+	}
+	if resp.PendingMachineUpgrade != nil {
+		go d.handleMachineUpgrade(ctx, runtimeID, resp.PendingMachineUpgrade)
 	}
 	if resp.PendingRestart != nil {
 		d.logger.Info("remote restart requested", "runtime_id", runtimeID, "restart_id", resp.PendingRestart.ID)
@@ -2219,7 +2290,7 @@ func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, upd
 }
 
 // tryEnterClaim records the intent to call ClaimTask. Returns true if the
-// caller may proceed, false if the auto-update barrier is in effect. Every
+// caller may proceed, false if the Machine Upgrade handoff barrier is in effect. Every
 // successful call MUST be paired with an exitClaim() on every exit path —
 // either right after a failed/empty claim, or via the handleTask goroutine's
 // defer once the task is handed off.
@@ -2244,9 +2315,7 @@ func (d *Daemon) exitClaim() {
 // fully idle (no claims in flight, no tasks running). Returns true if the
 // caller now holds the barrier and must release it with releaseClaimBarrier
 // on every non-restart exit path; false if the daemon is busy and the caller
-// should defer to the next tick. Used by tryAutoUpdate to close the race
-// where a task slips in between the cheap pre-fetch idle check and the
-// actual upgrade kick-off.
+// should defer until the explicit lifecycle can safely begin handoff.
 func (d *Daemon) trySetClaimBarrier() bool {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
@@ -2277,7 +2346,7 @@ func (d *Daemon) claimBarrierDrained() bool {
 	return d.pauseClaims && d.claimsInFlight == 0 && d.activeTasks.Load() == 0
 }
 
-// releaseClaimBarrier clears the auto-update claim barrier so pollers may
+// releaseClaimBarrier clears the Machine Upgrade claim barrier so pollers may
 // resume claiming. Called on failure paths only — a successful upgrade leaves
 // the barrier set because triggerRestart is about to take the process down
 // and clearing it would open a window for new claims during shutdown.
@@ -2493,11 +2562,9 @@ func (d *Daemon) runRuntimePoller(
 			return
 		}
 
-		// Refuse new claims while an auto-update is preparing to roll the
-		// process. The barrier is paired with a re-check of claimsInFlight +
-		// activeTasks inside tryAutoUpdate, so once we get past tryEnterClaim
-		// the auto-update path is guaranteed to defer until this poller has
-		// handed the task off (or given up).
+		// Refuse new claims while an explicit Machine Upgrade handoff is
+		// preparing to roll the process. The lifecycle re-checks the same
+		// counters before handoff, so claims remain accounted for.
 		if !d.tryEnterClaim() {
 			if err := sleepAfterIdleClaim(); err != nil {
 				return
@@ -2544,7 +2611,13 @@ func (d *Daemon) runRuntimePoller(
 			defer taskWG.Done()
 			defer d.exitClaim()
 			defer d.activeTasks.Add(-1)
-			d.handleTask(parentCtx, t, slot)
+			taskCtx, cancel := context.WithCancel(parentCtx)
+			d.registerMachineUpgradeTask(slot, cancel)
+			defer func() {
+				d.unregisterMachineUpgradeTask(slot)
+				cancel()
+			}()
+			d.handleTask(taskCtx, t, slot)
 		}(*task, slot)
 		// Loop immediately: more tasks may already be queued for this runtime.
 	}

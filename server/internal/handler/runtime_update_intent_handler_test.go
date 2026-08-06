@@ -50,16 +50,24 @@ func createUpdateIntentTestRuntime(t *testing.T, ownerID string) string {
 		t.Skip("database not available")
 	}
 	runtimeID := newPostgresUpdateTestRuntime(t)
+	daemonID := "legacy-intent-test-" + runtimeID
 	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_runtime SET owner_id = $1 WHERE id = $2
-	`, ownerID, runtimeID); err != nil {
-		t.Fatalf("set runtime owner: %v", err)
+		UPDATE agent_runtime SET owner_id = $1, daemon_id = $2 WHERE id = $3
+	`, ownerID, daemonID, runtimeID); err != nil {
+		t.Fatalf("set runtime owner and daemon identity: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID)
+	})
 	return runtimeID
 }
 
 func doInitiateUpdate(t *testing.T, userID, runtimeID string) *httptest.ResponseRecorder {
 	t.Helper()
+	// #2377 retires runtime-owned intent creation. The callers below remain as
+	// historical coverage for the legacy materializer, but its public trigger
+	// no longer exists; MachineUpgrade_* tests cover the replacement API seam.
+	t.Skip("runtime-owned UpdateIntent initiation retired by Machine Upgrade #2377")
 	req := newRequestAsUser(userID, http.MethodPost, "/api/runtimes/"+runtimeID+"/update", nil)
 	req = withURLParam(req, "runtimeId", runtimeID)
 	w := httptest.NewRecorder()

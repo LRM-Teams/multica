@@ -944,6 +944,38 @@ func (p *canonicalAgentRuntimePool) closeAll() error {
 	return nil
 }
 
+// forceTerminateAll interrupts only processes owned by this pool. A backend
+// without the explicit concurrent ForceKill contract is deliberately left
+// alone and makes the caller fail closed rather than guessing how to kill it.
+func (p *canonicalAgentRuntimePool) forceTerminateAll() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	slots := make([]*canonicalAgentRuntimeSlot, 0, len(p.slots))
+	for _, slot := range p.slots {
+		slots = append(slots, slot)
+	}
+	p.mu.Unlock()
+	for _, slot := range slots {
+		slot.mu.Lock()
+		backend := slot.backend
+		running := slot.running
+		slot.mu.Unlock()
+		if !running || backend == nil {
+			continue
+		}
+		killable, ok := backend.(agent.ResidentRuntimeForceKillable)
+		if !ok {
+			return ErrCanonicalAgentRuntimeBusy
+		}
+		if err := killable.ForceKill(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func defaultCanonicalRuntimeFactory(provider string, mode canonicalRuntimeMode) canonicalRuntimeBackendFactory {
 	return func(config agent.Config) (agent.Backend, func(), error) {
 		if mode == canonicalRuntimeResident {

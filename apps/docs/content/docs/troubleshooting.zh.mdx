@@ -287,7 +287,6 @@ netstat -ano | findstr :8080    # Windows
 
 ## CLI / daemon 卡在旧版本、页面也不提示升级
 
-常见原因：self-host 默认关闭自动升级、老二进制编译进了错误的 release feed、或版本不是三段 `x.y.z`。
+常见原因：Machine Upgrade 已改为仅显式触发、老二进制编译进了错误的 release feed、或版本不是三段 `x.y.z`。
 
-**处理**：不要等旧进程自己升。按 [CLI Installation — Stuck on an old CLI](/docs/cli/installation#stuck-on-an-old-cli-auto-update-never-runs) 用 OSS `install.sh` / `latest.json` **带外装包**，再 `multica daemon install-service`（或 `daemon restart`）。
-
+**处理**：不要等旧进程自己升。按 [CLI Installation](/docs/cli/installation) 的旧版本处理章节用 OSS `install.sh` / `latest.json` **带外装包**，再 `multica daemon install-service`（或 `daemon restart`）。

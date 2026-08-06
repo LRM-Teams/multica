@@ -44,8 +44,11 @@ export function MachineDaemonUpgrade({
   const isManaged = launchedBy === "desktop";
   const isSandbox = isSandboxRuntime(runtime);
   const currentVersion = cliVersion ?? runtimeCurrentVersion(runtime);
+  const machineUpgrade = runtime.machine_upgrade ?? null;
+  const machineTarget =
+    machineUpgrade?.resolved_target?.trim() || machineUpgrade?.requested_target?.trim() || null;
   const targetVersion =
-    updateTargetVersion ?? runtimeTargetVersion(runtime) ?? null;
+    updateTargetVersion ?? machineTarget ?? runtimeTargetVersion(runtime) ?? null;
   const updateState = runtime.update_state;
   const runtimeHealth = runtime.runtime_health;
   const pinnedVersion =
@@ -129,8 +132,34 @@ export function MachineDaemonUpgrade({
     }
   };
 
+  const projectedMachineStatus: RuntimeUpdateStatus | null = (() => {
+    switch (machineUpgrade?.phase) {
+      case "queued":
+        return "queued";
+      case "starting":
+      case "staging":
+      case "verifying":
+      case "handoff":
+      case "converging":
+      case "rollback_pending":
+        return "running";
+      case "completed":
+        return "completed";
+      case "failed":
+      case "rolled_back":
+      case "cancelled":
+        return "failed";
+      case "timeout":
+        return "timeout";
+      default:
+        return null;
+    }
+  })();
+  // A runtime page is a projection: no sibling needs to have initiated the
+  // request locally to render the daemon's canonical queued/active operation.
+  const effectiveStatus = status ?? projectedMachineStatus;
   const derivedStatus = deriveUpdateStatus({
-    pollStatus: status,
+    pollStatus: effectiveStatus,
     updateState,
     runtimeHealth,
   });
@@ -154,7 +183,7 @@ export function MachineDaemonUpgrade({
     derivedStatus === "pending" ||
     derivedStatus === "running" ||
     // poll may report "queued" before pending (older type packages omit it)
-    (status as string | null) === "queued" ||
+    effectiveStatus === "queued" ||
     isApplying;
   // Health may flip off `update_available` after a failed attempt — still failed.
   const isFailed =
@@ -191,8 +220,8 @@ export function MachineDaemonUpgrade({
   const progressLabel = (() => {
     if (
       derivedStatus === "pending" ||
-      (status as string | null) === "queued" ||
-      status === "pending"
+      effectiveStatus === "queued" ||
+      effectiveStatus === "pending"
     ) {
       return t(($) => $.machine.ops.upgrade_progress_pending);
     }
@@ -260,7 +289,7 @@ export function MachineDaemonUpgrade({
   if (isFailed) {
     const reason =
       formatRuntimeUpdateError({
-        rawError: updateError,
+        rawError: machineUpgrade?.error_message ?? updateError,
         currentVersion,
         targetVersion: displayTarget,
         t,

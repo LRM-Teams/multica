@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,8 @@ import (
 // ActivationAttemptEnv is passed into candidate probes so recovery never
 // identifies a candidate by PID alone (design §3.3.2).
 const ActivationAttemptEnv = "MULTICA_ACTIVATION_ATTEMPT_ID"
+
+var probeStagedCandidate = probeCandidateVersion
 
 // OfflineActivateStaged CAS-commits a staged release tag as Active after a real
 // candidate --version probe (not a fake healthy). Used by offline CLI update
@@ -61,7 +64,7 @@ func (s *VersionStore) OfflineActivateStaged(
 
 	// Real candidate probe: run staged binary --version with attempt_id in env.
 	// This is not full health+register, but it is not a no-op "fake healthy".
-	if err := probeCandidateVersion(ctx, staged.BinaryPath, staged.Version, attemptID); err != nil {
+	if err := probeStagedCandidate(ctx, staged.BinaryPath, staged.Version, attemptID); err != nil {
 		abort("candidate_probe_failed")
 		return ActivationState{}, "", fmt.Errorf("candidate probe: %w", err)
 	}
@@ -92,6 +95,24 @@ func (s *VersionStore) OfflineActivateStaged(
 	}
 
 	return next, staged.BinaryPath, nil
+}
+
+// RollbackToPreviousActive restores the retained previous generation through
+// the same probe+journal+CAS path as a forward activation. It intentionally
+// says nothing about a live daemon or remote Machine Upgrade convergence;
+// callers must obtain that evidence separately before reporting rolled_back.
+func (s *VersionStore) RollbackToPreviousActive(ctx context.Context, attemptID string) (ActivationState, string, error) {
+	if s == nil {
+		return ActivationState{}, "", fmt.Errorf("version store is required")
+	}
+	state, err := s.ReadActivationState()
+	if err != nil {
+		return ActivationState{}, "", err
+	}
+	if strings.TrimSpace(state.PreviousVersion) == "" {
+		return ActivationState{}, "", errors.New("previous Active version is unavailable for rollback")
+	}
+	return s.OfflineActivateStaged(ctx, state.PreviousVersion, attemptID)
 }
 
 func probeCandidateVersion(ctx context.Context, binaryPath, expectedVersion, attemptID string) error {

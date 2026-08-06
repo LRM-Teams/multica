@@ -383,7 +383,7 @@
     "initiate_failed": "Failed to initiate update",
     "last_update_not_applied": "Last update did not take effect. Still running {{currentVersion}} after attempting {{targetVersion}}. Retry or view the reason.",
     "offline": "Daemon offline",
-    "manual_hint": "If the automatic update cannot write to the install location, update from a terminal on that computer.",
+    "manual_hint": "Upgrades are explicit machine operations. If this computer cannot complete one, update it from a terminal on that computer.",
     "manual_action": "Manual commands",
     "manual_dialog_title": "Update this runtime manually",
     "manual_dialog_description": "Run the command that matches the runtime computer. The macOS/Linux command reinstalls the CLI from the current Multica release source.",

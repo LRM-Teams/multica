@@ -1,0 +1,426 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
+)
+
+type createMachineUpgradeRequest struct {
+	TargetVersion string `json:"target_version"`
+	RequestID     string `json:"request_id"`
+}
+
+type acceptMachineUpgradeRequest struct {
+	GenerationID   string `json:"generation_id"`
+	CLIVersion     string `json:"cli_version"`
+	ResolvedTarget string `json:"resolved_target"`
+}
+
+type machineUpgradeProgressRequest struct {
+	Phase        MachineUpgradePhase `json:"phase"`
+	Generation   string              `json:"generation_id,omitempty"`
+	ErrorCode    string              `json:"error_code,omitempty"`
+	ErrorMessage string              `json:"error_message,omitempty"`
+}
+
+// AcceptMachineUpgrade is daemon-authenticated. The daemon may accept an
+// action only through a capable sibling runtime; the server snapshots every
+// sibling identity before accepting so a later partial re-registration cannot
+// make the machine look converged.
+func (h *Handler) AcceptMachineUpgrade(w http.ResponseWriter, r *http.Request) {
+	if h.MachineUpgradeStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
+		return
+	}
+	runtimeID := strings.TrimSpace(chi.URLParam(r, "runtimeId"))
+	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	if !agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMachineUpgrade) {
+		writeCodedError(w, http.StatusConflict, "unsupported_runtime_capability", "runtime does not support machine upgrades")
+		return
+	}
+	var req acceptMachineUpgradeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	runtimeIDs, err := h.machineUpgradeRuntimeIDs(r.Context(), rt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve machine runtimes")
+		return
+	}
+	op, err := h.MachineUpgradeStore.Accept(r.Context(), runtimeDaemonKey(rt), chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion, req.ResolvedTarget, runtimeIDs)
+	if err != nil {
+		h.writeMachineUpgradeDaemonError(w, err)
+		return
+	}
+	h.publishMachineUpgradeProjection(r, rt)
+	writeJSON(w, http.StatusOK, op)
+}
+
+// ReportMachineUpgradeProgress projects durable daemon execution phases.
+// Completion is deliberately absent: only full successor registration can
+// complete a machine upgrade.
+func (h *Handler) ReportMachineUpgradeProgress(w http.ResponseWriter, r *http.Request) {
+	if h.MachineUpgradeStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
+		return
+	}
+	runtimeID := strings.TrimSpace(chi.URLParam(r, "runtimeId"))
+	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	var req machineUpgradeProgressRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var op *MachineUpgrade
+	var err error
+	if req.Phase == MachineUpgradeRollbackPending {
+		op, err = h.MachineUpgradeStore.BeginRollback(r.Context(), runtimeDaemonKey(rt), chi.URLParam(r, "upgradeId"), req.Generation, req.ErrorCode, req.ErrorMessage)
+	} else {
+		op, err = h.MachineUpgradeStore.Progress(r.Context(), runtimeDaemonKey(rt), chi.URLParam(r, "upgradeId"), req.Phase, req.ErrorCode, req.ErrorMessage)
+	}
+	if err != nil {
+		h.writeMachineUpgradeDaemonError(w, err)
+		return
+	}
+	if op == nil {
+		writeCodedError(w, http.StatusConflict, "machine_upgrade_phase_conflict", "machine upgrade phase cannot advance from its current state")
+		return
+	}
+	h.publishMachineUpgradeProjection(r, rt)
+	writeJSON(w, http.StatusOK, op)
+}
+
+// CreateMachineUpgrade is the canonical daemon-identity endpoint. The
+// workspace header selects an authorization context; the operation itself is
+// nevertheless keyed only by daemon_id, so sibling runtime/provider surfaces
+// cannot acquire independent lineages.
+func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
+	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
+	rt, member, ok := h.requireMachineUpgradeOwner(w, r, daemonID)
+	if !ok {
+		return
+	}
+	var req createMachineUpgradeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.RequestID) == "" {
+		writeError(w, http.StatusBadRequest, "request_id is required")
+		return
+	}
+	op, _, err := h.createMachineUpgrade(r, rt, member, req, false)
+	if err != nil {
+		h.writeMachineUpgradeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
+}
+
+func (h *Handler) GetMachineUpgrade(w http.ResponseWriter, r *http.Request) {
+	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
+	_, _, ok := h.requireMachineUpgradeOwner(w, r, daemonID)
+	if !ok {
+		return
+	}
+	op, err := h.MachineUpgradeStore.Get(r.Context(), daemonID, chi.URLParam(r, "upgradeId"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load machine upgrade: "+err.Error())
+		return
+	}
+	if op == nil {
+		writeError(w, http.StatusNotFound, "machine upgrade not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
+}
+
+func (h *Handler) CancelMachineUpgrade(w http.ResponseWriter, r *http.Request) {
+	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
+	rt, _, ok := h.requireMachineUpgradeOwner(w, r, daemonID)
+	if !ok {
+		return
+	}
+	op, err := h.MachineUpgradeStore.Cancel(r.Context(), daemonID, chi.URLParam(r, "upgradeId"))
+	if err != nil {
+		switch {
+		case errors.Is(err, errMachineUpgradeNotFound):
+			writeError(w, http.StatusNotFound, "machine upgrade not found")
+		case errors.Is(err, errMachineUpgradeAlreadyAccepted):
+			writeCodedError(w, http.StatusConflict, "machine_upgrade_already_accepted", err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to cancel machine upgrade: "+err.Error())
+		}
+		return
+	}
+	h.publishMachineUpgradeProjection(r, rt)
+	writeJSON(w, http.StatusOK, op)
+}
+
+func (h *Handler) createMachineUpgrade(
+	r *http.Request,
+	rt db.AgentRuntime,
+	member db.Member,
+	req createMachineUpgradeRequest,
+	allowImplicitRequestID bool,
+) (*MachineUpgrade, bool, error) {
+	if h.MachineUpgradeStore == nil {
+		return nil, false, errors.New("machine upgrade store is not configured")
+	}
+	daemonID := runtimeDaemonKey(rt)
+	if daemonID == "" {
+		return nil, false, &machineUpgradeInputError{code: "machine_upgrade_identity_missing", message: "runtime has no daemon identity"}
+	}
+	if pinnedVersion, pinned := runtimePinnedVersion(rt); pinned {
+		return nil, false, &machineUpgradeInputError{code: "runtime_pinned", message: "this computer is pinned to version " + pinnedVersion}
+	}
+	if launchedBy(runtimeMetadata(rt)) == "desktop" {
+		return nil, false, &machineUpgradeInputError{code: "desktop_managed", message: "this computer is managed by the Desktop updater"}
+	}
+	target := strings.TrimSpace(req.TargetVersion)
+	if target == "" {
+		target = "latest"
+	}
+	requestID := strings.TrimSpace(req.RequestID)
+	if requestID == "" {
+		if !allowImplicitRequestID {
+			return nil, false, &machineUpgradeInputError{code: "request_id_required", message: "request_id is required"}
+		}
+		// Installed runtime clients predate request IDs. They are adapters, not
+		// independent mutation owners: a same-target retry projects the active
+		// canonical operation, while a different target is a real conflict.
+		active, err := h.MachineUpgradeStore.LatestForDaemon(r.Context(), daemonID)
+		if err != nil {
+			return nil, false, err
+		}
+		if active != nil && !active.Phase.terminal() {
+			if active.RequestedTarget == target {
+				return active, false, nil
+			}
+			return nil, false, &machineUpgradeConflictError{active: active}
+		}
+		requestID = randomID()
+	}
+	op, created, err := h.MachineUpgradeStore.Create(r.Context(), daemonID, uuidToString(member.UserID), requestID, target)
+	if err != nil {
+		return nil, false, err
+	}
+	if created {
+		h.publishMachineUpgradeProjection(r, rt)
+	}
+	return op, created, nil
+}
+
+type machineUpgradeInputError struct {
+	code    string
+	message string
+}
+
+func (e *machineUpgradeInputError) Error() string { return e.message }
+
+func (h *Handler) writeMachineUpgradeError(w http.ResponseWriter, err error) {
+	var input *machineUpgradeInputError
+	var conflict *machineUpgradeConflictError
+	switch {
+	case errors.As(err, &input):
+		writeCodedError(w, http.StatusConflict, input.code, input.message)
+	case errors.As(err, &conflict):
+		body := map[string]any{"code": "upgrade_already_in_progress", "error": conflict.Error()}
+		if active := conflict.Active(); active != nil {
+			body["operation"] = active
+		}
+		writeJSON(w, http.StatusConflict, body)
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to create machine upgrade: "+err.Error())
+	}
+}
+
+func (h *Handler) writeMachineUpgradeDaemonError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errMachineUpgradeNotFound):
+		writeError(w, http.StatusNotFound, "machine upgrade not found")
+	case errors.Is(err, errMachineUpgradeAcceptanceConflict), errors.Is(err, errMachineUpgradeAttestationRejected):
+		writeCodedError(w, http.StatusConflict, "machine_upgrade_attestation_rejected", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "machine upgrade operation failed: "+err.Error())
+	}
+}
+
+func (h *Handler) machineUpgradeRuntimeIDs(ctx context.Context, rt db.AgentRuntime) ([]string, error) {
+	daemonID := runtimeDaemonKey(rt)
+	if daemonID == "" {
+		return nil, errMachineUpgradeAttestationRejected
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id FROM agent_runtime
+		WHERE workspace_id = $1 AND daemon_id = $2
+		ORDER BY id ASC`, rt.WorkspaceID, daemonID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, uuidToString(id))
+	}
+	return normalizedMachineRuntimeIDs(ids), rows.Err()
+}
+
+// attestMachineUpgradeRegistration runs after a register transaction has
+// committed. A registration is proof only for an accepted generation and its
+// captured sibling set; unrelated, stale, and partial registrations are
+// deliberately ignored rather than completing an operation.
+func (h *Handler) attestMachineUpgradeRegistration(r *http.Request, rt db.AgentRuntime, cliVersion, generation string) {
+	if h == nil || h.MachineUpgradeStore == nil || strings.TrimSpace(generation) == "" {
+		return
+	}
+	op, err := h.MachineUpgradeStore.LatestForDaemon(r.Context(), runtimeDaemonKey(rt))
+	if err != nil || op == nil || (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) {
+		return
+	}
+	runtimeIDs, err := h.machineUpgradeRuntimeIDs(r.Context(), rt)
+	if err != nil {
+		slog.Warn("machine upgrade registration runtime set failed", "error", err, "runtime_id", uuidToString(rt.ID))
+		return
+	}
+	updated, err := h.MachineUpgradeStore.Attest(r.Context(), runtimeDaemonKey(rt), op.ID, generation, uuidToString(rt.ID), cliVersion, runtimeIDs)
+	if err != nil {
+		if !errors.Is(err, errMachineUpgradeAttestationRejected) {
+			slog.Warn("machine upgrade registration attestation failed", "error", err, "runtime_id", uuidToString(rt.ID), "upgrade_id", op.ID)
+		}
+		return
+	}
+	if updated != nil {
+		h.publishMachineUpgradeProjection(r, rt)
+	}
+}
+
+func (h *Handler) attestMachineUpgradeRollbackRegistration(r *http.Request, rt db.AgentRuntime, cliVersion, generation string) {
+	if h == nil || h.MachineUpgradeStore == nil || strings.TrimSpace(generation) == "" {
+		return
+	}
+	op, err := h.MachineUpgradeStore.LatestForDaemon(r.Context(), runtimeDaemonKey(rt))
+	if err != nil || op == nil || op.Phase != MachineUpgradeRollbackPending {
+		return
+	}
+	runtimeIDs, err := h.machineUpgradeRuntimeIDs(r.Context(), rt)
+	if err != nil {
+		return
+	}
+	updated, err := h.MachineUpgradeStore.AttestRollback(r.Context(), runtimeDaemonKey(rt), op.ID, generation, uuidToString(rt.ID), cliVersion, runtimeIDs)
+	if err != nil && !errors.Is(err, errMachineUpgradeAttestationRejected) {
+		slog.Warn("machine upgrade rollback registration attestation failed", "error", err, "runtime_id", uuidToString(rt.ID), "upgrade_id", op.ID)
+	}
+	if updated != nil {
+		h.publishMachineUpgradeProjection(r, rt)
+	}
+}
+
+// requireMachineUpgradeOwner preserves the established runtime boundary: an
+// unknown runtime/daemon is 404, a workspace member who does not own the
+// computer is 403.  The canonical endpoint receives daemon_id directly, while
+// the compatibility route already has the runtime row and calls create directly.
+func (h *Handler) requireMachineUpgradeOwner(w http.ResponseWriter, r *http.Request, daemonID string) (db.AgentRuntime, db.Member, bool) {
+	if daemonID == "" {
+		writeError(w, http.StatusBadRequest, "daemon_id is required")
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+	workspaceID := h.resolveWorkspaceID(r)
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+	var runtimeID pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT id FROM agent_runtime
+		WHERE workspace_id = $1 AND daemon_id = $2
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1`, workspaceUUID, daemonID).Scan(&runtimeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "daemon not found")
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load daemon")
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "daemon not found")
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "daemon not found")
+	if !ok {
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can update this daemon")
+		return db.AgentRuntime{}, db.Member{}, false
+	}
+	return rt, member, true
+}
+
+func (h *Handler) publishMachineUpgradeProjection(r *http.Request, rt db.AgentRuntime) {
+	h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
+		"runtime": h.runtimeToResponse(r.Context(), rt),
+	})
+}
+
+func runtimeUpdateFromMachineUpgrade(op *MachineUpgrade, runtimeID string) *UpdateRequest {
+	if op == nil {
+		return nil
+	}
+	status := UpdateQueued
+	switch op.Phase {
+	case MachineUpgradeStarting, MachineUpgradeStaging, MachineUpgradeVerifying, MachineUpgradeHandoff, MachineUpgradeConverging:
+		status = UpdateRunning
+	case MachineUpgradeCompleted:
+		status = UpdateCompleted
+	case MachineUpgradeFailed, MachineUpgradeRolledBack, MachineUpgradeCancelled:
+		status = UpdateFailed
+	case MachineUpgradeTimeout:
+		status = UpdateTimeout
+	}
+	target := op.RequestedTarget
+	if op.ResolvedTarget != nil && strings.TrimSpace(*op.ResolvedTarget) != "" {
+		target = *op.ResolvedTarget
+	}
+	errMsg := ""
+	if op.ErrorMessage != nil {
+		errMsg = *op.ErrorMessage
+	}
+	if op.Phase == MachineUpgradeCancelled && errMsg == "" {
+		errMsg = "machine upgrade cancelled"
+	}
+	return &UpdateRequest{
+		ID:            op.ID,
+		RuntimeID:     runtimeID,
+		Status:        status,
+		TargetVersion: target,
+		Error:         errMsg,
+		CreatedAt:     op.CreatedAt,
+		UpdatedAt:     op.UpdatedAt,
+	}
+}

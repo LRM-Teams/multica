@@ -567,6 +567,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
+		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/accept", h.AcceptMachineUpgrade)
+		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/progress", h.ReportMachineUpgradeProgress)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
@@ -1190,6 +1192,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// cascade plan.
 					r.Post("/archive-agents-and-delete", h.ArchiveAgentsAndDeleteRuntime)
 				})
+			})
+
+			// Canonical daemon-identity Machine Upgrade lifecycle. Runtime-scoped
+			// update routes remain compatibility adapters for installed clients.
+			r.Route("/api/daemons/{daemonId}/upgrades", func(r chi.Router) {
+				r.Post("/", h.CreateMachineUpgrade)
+				r.Get("/{upgradeId}", h.GetMachineUpgrade)
+				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
 			// Cloud Runtime fleet proxy. The remote service URL is configured

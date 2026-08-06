@@ -78,6 +78,47 @@ func TestHealthHandlerReportsCLIVersionAndActiveTaskCount(t *testing.T) {
 	}
 }
 
+func TestLocalMachineUpgradeControlRequiresProfileSecretAndUsesCanonicalOperation(t *testing.T) {
+	var upstreamRequest map[string]string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemons/daemon-1/upgrades" {
+			t.Fatalf("upstream path = %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer daemon-owner-token" {
+			t.Fatalf("upstream authorization = %q", got)
+		}
+		if got := r.Header.Get("X-Workspace-ID"); got != "workspace-1" {
+			t.Fatalf("upstream workspace = %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&upstreamRequest); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(MachineUpgradeControlOperation{ID: "upgrade-1", DaemonID: "daemon-1", RequestedTarget: "v10.0.0", Phase: "queued"})
+	}))
+	defer upstream.Close()
+	client := NewClient(upstream.URL)
+	client.SetToken("daemon-owner-token")
+	d := &Daemon{cfg: Config{DaemonID: "daemon-1", WorkspaceID: "workspace-1", LocalControlToken: "profile-secret"}, client: client}
+	handler := d.localMachineUpgradeHandler()
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/machine-upgrades", bytes.NewBufferString(`{"request_id":"same-request","target_version":"v10.0.0"}`)))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated mutation status = %d, want 401", unauthorized.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/machine-upgrades", bytes.NewBufferString(`{"request_id":"same-request","target_version":"v10.0.0"}`))
+	req.Header.Set("X-Multica-Control-Token", "profile-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authenticated mutation status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if upstreamRequest["request_id"] != "same-request" || upstreamRequest["target_version"] != "v10.0.0" {
+		t.Fatalf("canonical request = %#v", upstreamRequest)
+	}
+}
+
 // TestHealthHandlerReportsStartingUntilReady pins the liveness/readiness split:
 // the health server binds and answers before preflight finishes, but it must
 // report "starting" until d.ready is set, and only then "running". Otherwise a

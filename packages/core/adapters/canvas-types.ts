@@ -1,0 +1,138 @@
+/**
+ * Unified research-canvas projection model (FE-04).
+ *
+ * Both the V5 and V6 research backends are reduced to a single render-layer
+ * graph through adapters. The canonical fields here are the ONLY fields any
+ * renderer may read — every field is either copied straight from the backend
+ * projection contract or explicitly derived from a documented projection field.
+ * No renderer ever guesses a research fact from summary/title text.
+ *
+ * Field provenance contract (§7.1 of the autonomous-research-system plan):
+ *   - `id`            → stable projection node id derived from
+ *                        `(run_id, entity_kind, entity_id)` (V6) or the
+ *                        server node id (V5).
+ *   - `kind/subtype`  → backend `node_kind`/`node_subtype` (V6) or `node_type`
+ *                        (V5). Unknown future kinds degrade to `kind:"generic"`.
+ *   - `title/summary` → backend title + bounded summary. Never parsed.
+ *   - `status`        → backend status verbatim.
+ *   - `importance`    → 0..1, from a documented backend field when present,
+ *                        else a stable neutral default (never derived from
+ *                        prose).
+ *   - `freshness`     → 0..1, from a documented backend field when present,
+ *                        else derived deterministically from timestamps only.
+ *   - `detailRef`     → stable canonical entity reference for the by-id detail
+ *                        read. Never fabricated.
+ */
+
+/** Stable projection node identity — opaque, renderers must not parse it. */
+export type CanvasNodeId = string;
+
+/** Typed edge relation — one of the stable relation families in §7.1. */
+export type CanvasRelation = string;
+
+export interface CanvasNode {
+  /** Stable projection identity (see header contract). */
+  id: CanvasNodeId;
+  /** node_kind (V6) / node_type (V5), or "generic" for unknown future kinds. */
+  kind: string;
+  /** node_subtype when the backend provides one. */
+  subtype?: string;
+  /** Backend schema version when provided. */
+  schemaVersion?: string;
+  title: string;
+  /** Bounded summary — display copy only, never a research fact source. */
+  summary: string;
+  status: string;
+  /** 0..1 importance rank (documented field or stable neutral). */
+  importance: number;
+  /** 0..1 freshness (documented field or timestamp-derived). */
+  freshness: number;
+  /** Stable canonical entity reference for the by-id detail read. */
+  detailRef: string;
+  /** Actor Agent id when the projection reports one. */
+  actor?: string | null;
+  /** Contract/plan/strategy version binding when the projection reports one. */
+  planVersion?: string | null;
+  /** created / updated event sequences when the projection reports them. */
+  createdAtSequence?: number;
+  updatedAtSequence?: number;
+  /** Raw node_kind union for generic degradation and typed styling. */
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CanvasEdge {
+  /** Stable edge identity (idempotent upserts across deltas). */
+  id: string;
+  from: CanvasNodeId;
+  to: CanvasNodeId;
+  /** Typed relation, verbatim from the projection. */
+  relation: CanvasRelation;
+  createdAt: string;
+}
+
+/**
+ * Server-committed snapshot (§7.2). All pages of one logical snapshot share
+ * the same `snapshotId` + `throughEventSequence` + `graphContentHash`.
+ */
+export interface CanvasSnapshot {
+  snapshotId: string;
+  throughEventSequence: number;
+  graphContentHash: string;
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+}
+
+/**
+ * Incremental projection delta (§7.2).
+ *   - `fromSequenceExclusive` … `throughSequence` frame the delta.
+ *   - `upsert*` are idempotent by stable id (duplicate deltas never duplicate).
+ *   - `tombstone*` are visibility tombstones: they remove view nodes and
+ *     dangling edges; the client must only recompute the affected subgraphs.
+ *   - `affectedRootIds` are the canonical roots annexed by this delta.
+ *   - `transitionKind` expresses the committed semantic change only (no
+ *     coordinates/animation), one of the §7.2 transition kinds.
+ */
+export interface CanvasDelta {
+  fromSequenceExclusive: number;
+  throughSequence: number;
+  upsertNodes: CanvasNode[];
+  upsertEdges: CanvasEdge[];
+  tombstoneNodeIds: CanvasNodeId[];
+  tombstoneEdgeIds: string[];
+  affectedRootIds: CanvasNodeId[];
+  transitionKind: CanvasTransitionKind;
+}
+
+/** §7.2 committed transition kinds — semantic only. */
+export type CanvasTransitionKind =
+  | "branch_spawned"
+  | "task_dispatched"
+  | "result_accepted"
+  | "integration_formed"
+  | "insight_staled"
+  | "dispute_opened"
+  | "deliberation_progressed"
+  | "lead_escalated"
+  | "team_membership_changed"
+  | "report_revised";
+
+/**
+ * A bounded projection slice (§7.2). Every node also carries the unloaded
+ * neighborhood / descendant / expandability hints shown to the renderer so it
+ * can decide how much to fetch without inferring graph structure.
+ */
+export interface CanvasSlice {
+  rootId: CanvasNodeId;
+  direction: "out" | "in" | "both";
+  relationTypes?: readonly string[];
+  maxDepth?: number;
+  statusFilter?: readonly string[];
+  importanceFloor?: number;
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+  unloadedCountByNode: Record<string, number>;
+  descendantCountByNode: Record<string, number>;
+  expandableByNode: Record<string, boolean>;
+}

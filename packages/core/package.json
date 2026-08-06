@@ -108,6 +108,8 @@
     "./research": "./research/index.ts",
     "./research/queries": "./research/queries.ts",
     "./research-v6-slice": "./hooks/research-v6-slice/index.ts",
+    "./adapters": "./adapters/index.ts",
+    "./adapters/fixtures": "./adapters/fixtures.ts",
     "./realtime": "./realtime/index.ts",
     "./navigation": "./navigation/index.ts",
     "./modals": "./modals/index.ts",

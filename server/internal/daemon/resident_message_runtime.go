@@ -104,7 +104,6 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("resolve multica executable: %w", err)
 	}
 	agentEnv := map[string]string{
-		"MULTICA_SERVER_URL":   d.cfg.ServerBaseURL,
 		"MULTICA_DAEMON_PORT":  fmt.Sprintf("%d", d.cfg.HealthPort),
 		"MULTICA_WORKSPACE_ID": config.WorkspaceID,
 		"MULTICA_AGENT_NAME":   config.Agent.Name,

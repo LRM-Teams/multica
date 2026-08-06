@@ -233,8 +233,14 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 	}
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "system", "", scope.ChannelID, msg)
 
-	// A structured Agent reference is resolved by the committed channel:message
-	// Delivery boundary above. System rows otherwise remain observable only.
+	// Issue backflow is an explicit product-task transition, not ordinary chat.
+	// Keep its directed Inbox wake separate from canonical channel:message
+	// delivery: a system row does not itself fan out to conversation members.
+	if scope.DirectSource && targetAgent.ID.Valid && scope.InitiatorUserID.Valid {
+		if _, err := h.enqueueIssueThreadBackflowTask(ctx, ch, targetAgent, msg, scope.InitiatorUserID); err != nil {
+			slog.Warn("issue thread backflow: dispatch target agent", "issue", identifier, "event", event, "agent", uuidToString(targetAgent.ID), "error", err)
+		}
+	}
 }
 
 // tryMergeIssueThreadBackflow folds a new aggregatable transition into an open
@@ -333,7 +339,33 @@ func (h *Handler) tryMergeIssueThreadBackflow(ctx context.Context, ch ChannelRes
 
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessageUpdated, ch.WorkspaceID, "system", "", scope.ChannelID, msg)
 
+	// Only the newly added issue transition wakes its explicit target.
+	if scope.DirectSource && targetAgent.ID.Valid && scope.InitiatorUserID.Valid {
+		if _, err := h.enqueueIssueThreadBackflowTask(ctx, ch, targetAgent, msg, scope.InitiatorUserID); err != nil {
+			slog.Warn("issue thread backflow: dispatch target agent on merge", "issue", incoming.IssueIdentifier, "event", event, "agent", uuidToString(targetAgent.ID), "error", err)
+		}
+	}
 	return true
+}
+
+// enqueueIssueThreadBackflowTask preserves the explicit Issue workflow wake.
+// It intentionally does not participate in ordinary channel Message delivery:
+// the inbox task is created only by a directed Issue state transition.
+func (h *Handler) enqueueIssueThreadBackflowTask(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error) {
+	if trigger.TriggerDepth >= channelRunTriggerLimit {
+		return db.AgentInboxEvent{}, errors.New("issue thread backflow trigger limit reached")
+	}
+	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
+		return db.AgentInboxEvent{}, errors.New("agent cannot trigger itself")
+	}
+	if trigger.ThreadRootMessageID != nil {
+		h.ensureChannelThreadAgentWakeParticipant(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
+	}
+	rootID := h.channelThreadRootForTrigger(ch, trigger)
+	facilitatorState := h.loadChannelFacilitatorState(ctx, rootID, agent.ID, trigger)
+	actorType, actorID := channelPromptActor(trigger, initiatorUserID)
+	prompt := h.buildChannelMentionPromptForActor(ctx, ch, trigger, facilitatorState, actorType, actorID)
+	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, prompt, "issue thread backflow", true, "mention", channelDirectedWakePriority)
 }
 
 func issueThreadEventAggregatable(event string) bool {

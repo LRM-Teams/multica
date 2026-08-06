@@ -256,6 +256,14 @@ func terminalizeActiveChannelOnboardingForReminderRace(onboardingID, channelID, 
 
 func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{status: "offline"}, {}})
+	// Runtime state may be offline when the reminder fires, but placement on a
+	// Workspace Runner is still enough for the canonical delivery to be offered
+	// live and recovered durably if that runner cannot accept it.
+	daemonID := "reminder-delivery-" + uuid.NewString()[:8]
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime SET daemon_id = $2 WHERE id = $1`, fixture.runtimeIDs[0], daemonID); err != nil {
+		t.Fatalf("place reminder runtime on Workspace Runner: %v", err)
+	}
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
 	var channelMessagesBefore, authorInboxBefore int
@@ -339,7 +347,7 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	if receiptNull || !anchorAvailable || deliveredAgentID != fixture.agentIDs[0] || target != "channel:"+fixture.channel.ID {
 		t.Fatalf("fired occurrence receipt_null=%v anchor_available=%v delivered_agent=%q target=%q", receiptNull, anchorAvailable, deliveredAgentID, target)
 	}
-	if content != "Reminder fired: "+title || notifier.payload.AgentID != fixture.agentIDs[0] || notifier.payload.Message.ID != receiptID {
+	if content != "Reminder fired: "+title || notifier.workspaceID != testWorkspaceID || notifier.daemonID != daemonID || notifier.payload.AgentID != fixture.agentIDs[0] || notifier.payload.Message.ID != receiptID {
 		t.Fatalf("reminder receipt/live delivery content=%q notifier=%+v", content, notifier.payload)
 	}
 	var parts []protocol.MessagePart
@@ -2529,7 +2537,6 @@ func TestAgentReminderHandlersUseAgentCredentialTransport(t *testing.T) {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
 	})
 	var initiatorUserID string
-	var activityRows, activityTaskRows int
 	if err := testPool.QueryRow(context.Background(), `
 				SELECT initiator_user_id
 				FROM agent_reminder
@@ -2565,18 +2572,6 @@ func TestAgentReminderHandlersUseAgentCredentialTransport(t *testing.T) {
 		t.Fatalf("cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
 	}
 
-	if err := testPool.QueryRow(context.Background(), `
-				SELECT count(*), count(*) FILTER (WHERE task_id IS NOT NULL)
-				FROM agent_activity_event
-				WHERE agent_id = $1
-				  AND details->>'reminder_id' = $2
-				  AND event_type IN ('reminder_scheduled', 'reminder_updated', 'reminder_snoozed', 'reminder_cancelled')`,
-		fixture.agentID, scheduled.ID).Scan(&activityRows, &activityTaskRows); err != nil {
-		t.Fatalf("load reminder activity rows: %v", err)
-	}
-	if activityRows != 4 || activityTaskRows != 0 {
-		t.Fatalf("modern reminder activity rows/task rows=%d/%d, want 4/0", activityRows, activityTaskRows)
-	}
 }
 
 func TestAgentReminderCredentialFirePreservesTimezoneWithoutInitiatorDependency(t *testing.T) {

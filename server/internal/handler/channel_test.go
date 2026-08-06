@@ -748,133 +748,6 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("live file tool payloads = %+v, want write/read file without thinking or unmapped status", liveTaskMessages)
 	}
 
-	rows, err := testPool.Query(ctx, `
-		SELECT event_kind, event_type, visibility, COALESCE(reason_code, ''), COALESCE(message, ''), details
-		FROM agent_activity_event
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND details->>'inbox_event_id' = $3
-		  AND details ? 'seq'
-		ORDER BY (details->>'seq')::int ASC`, testWorkspaceID, agentID, got.ID)
-	if err != nil {
-		t.Fatalf("query activity rows: %v", err)
-	}
-	defer rows.Close()
-
-	type activityRow struct {
-		kind       string
-		eventType  string
-		visibility string
-		reasonCode string
-		message    string
-		details    map[string]any
-	}
-	var activity []activityRow
-	for rows.Next() {
-		var row activityRow
-		var raw []byte
-		if err := rows.Scan(&row.kind, &row.eventType, &row.visibility, &row.reasonCode, &row.message, &raw); err != nil {
-			t.Fatalf("scan activity row: %v", err)
-		}
-		if err := json.Unmarshal(raw, &row.details); err != nil {
-			t.Fatalf("decode activity details: %v", err)
-		}
-		activity = append(activity, row)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("activity rows error: %v", err)
-	}
-	if len(activity) != 9 {
-		t.Fatalf("activity rows = %+v, want 9", activity)
-	}
-	if activity[0].kind != activityKindThinking || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "diagnostic_only" {
-		t.Fatalf("thinking row = %+v, want diagnostic thinking/runtime_thinking", activity[0])
-	}
-	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
-		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])
-	}
-	if activity[1].details["tool"] != "bash" || activity[1].details["raw_tool"] != "terminal" || activity[1].details["tool_target"] != "cat secret" || activity[1].details["summary_kind"] != "command" || activity[1].details["command"] != "cat secret" {
-		t.Fatalf("tool details = %+v, want canonical bash/raw terminal/command summary", activity[1].details)
-	}
-	if strings.Contains(fmt.Sprint(activity[1].details), "/tmp/hello_world.txt") {
-		t.Fatalf("tool details leaked path-backed shell command target: %+v", activity[1].details)
-	}
-	if activity[2].kind != activityKindToolOutput || activity[2].visibility != "diagnostic_only" {
-		t.Fatalf("tool result row = %+v, want diagnostic tool_output", activity[2])
-	}
-	if activity[3].kind != activityKindCustom || activity[3].eventType != "runtime_text" || activity[3].visibility != "diagnostic_only" {
-		t.Fatalf("runtime log row = %+v, want diagnostic runtime_text", activity[3])
-	}
-	if activity[4].kind != activityKindCustom || activity[4].eventType != "runtime_text" || activity[4].visibility != "diagnostic_only" {
-		t.Fatalf("runtime text row = %+v, want diagnostic runtime_text", activity[4])
-	}
-	if activity[5].kind != activityKindCustom || activity[5].eventType != "unmapped_tool_name" || activity[5].visibility != "diagnostic_only" || activity[5].reasonCode != "unmapped_tool_name" {
-		t.Fatalf("status-like missing command row = %+v, want diagnostic unmapped gap", activity[5])
-	}
-	if activity[5].details["unmapped_tool_name"] != "running" || activity[5].details["tool"] != nil || activity[5].details["tool_target"] != nil {
-		t.Fatalf("status-like missing command details = %+v, want unmapped running without user-facing tool/target", activity[5].details)
-	}
-	if activity[5].details["inbox_event_id"] != got.ID || activity[5].details["delivery_id"] != got.DeliveryID || activity[5].details["source_message_id"] != trigger.ID || activity[5].details["seq"] == nil {
-		t.Fatalf("status-like missing command source details = %+v, want inbox/delivery/source/seq refs", activity[5].details)
-	}
-	if activity[6].kind != activityKindToolCall || activity[6].eventType != "tool_use" || activity[6].visibility != "user_facing" {
-		t.Fatalf("write file row = %+v, want user-facing tool_use", activity[6])
-	}
-	writeTarget, _ := activity[6].details["tool_target"].(string)
-	if activity[6].details["tool"] != "write_file" || !strings.HasSuffix(writeTarget, "/Code/multica/server/internal/handler/channel_test.go") || activity[6].details["summary_kind"] != "file_path" {
-		t.Fatalf("write file details = %+v, want redacted source-backed file path", activity[6].details)
-	}
-	if activity[7].kind != activityKindToolCall || activity[7].eventType != "tool_use" || activity[7].visibility != "user_facing" {
-		t.Fatalf("read file row = %+v, want user-facing tool_use", activity[7])
-	}
-	if activity[7].details["tool"] != "read_file" || activity[7].details["raw_tool"] != "read" || activity[7].details["tool_target"] != "/tmp/test.go" || activity[7].details["summary_kind"] != "file_path" || activity[7].details["command"] != nil || activity[7].details["path"] != "/tmp/test.go" || activity[7].details["scope"] != "/repo" {
-		t.Fatalf("read file details = %+v, want read source facts without invented command", activity[7].details)
-	}
-	if activity[8].kind != activityKindThinking || activity[8].eventType != "runtime_phase" || activity[8].visibility != "diagnostic_only" || activity[8].message != "" || activity[8].details["phase_status"] != true {
-		t.Fatalf("legacy phase row = %+v, want diagnostic-only", activity[8])
-	}
-}
-
-func TestOutputClaimsFileDeliveryDetectsCreatedArtifacts(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    bool
-	}{
-		{
-			name:    "antigravity created file wording",
-			content: "I have created hello_antigravity.txt",
-			want:    true,
-		},
-		{
-			name:    "generated artifact wording",
-			content: "Generated report.csv for you.",
-			want:    true,
-		},
-		{
-			name:    "chinese created file wording",
-			content: "已创建 hello_world.txt",
-			want:    true,
-		},
-		{
-			name:    "filename without delivery marker",
-			content: "hello_world.txt",
-			want:    false,
-		},
-		{
-			name:    "marker without filename",
-			content: "I have created the file",
-			want:    false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := outputClaimsFileDelivery(tt.content); got != tt.want {
-				t.Fatalf("outputClaimsFileDelivery(%q) = %v, want %v", tt.content, got, tt.want)
-			}
-		})
-	}
 }
 
 func TestChannelAgentInboxFileClaimWithoutTransportIsSuppressed(t *testing.T) {
@@ -925,34 +798,6 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
 	assertChannelMessageContentCount(t, channelID, "给你，hello_world.txt", 0)
-
-	var artifactRows int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_activity_event
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND event_type = 'artifact_missing'
-		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&artifactRows); err != nil {
-		t.Fatalf("count artifact boundary activity: %v", err)
-	}
-	if artifactRows != 0 {
-		t.Fatalf("artifact_missing rows = %d, want 0 for suppressed final output", artifactRows)
-	}
-
-	var outputRows int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_activity_event
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND event_type = 'message_sent'
-		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&outputRows); err != nil {
-		t.Fatalf("count output rows: %v", err)
-	}
-	if outputRows != 0 {
-		t.Fatalf("message_sent rows = %d, want 0 for missing attachment boundary", outputRows)
-	}
 }
 
 func TestChannelAgentInboxDrainReclaimsExpiredDelivery(t *testing.T) {
@@ -1137,22 +982,6 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	if chatDoneEvents != 0 {
 		t.Fatalf("chat:done events for failed inbox event = %d, want 0 (terminal failure should not synthesize chat completion)", chatDoneEvents)
-	}
-
-	var activityReason, activityFailureReason, activityMessage string
-	if err := testPool.QueryRow(ctx, `
-		SELECT reason_code, details->>'failure_reason', message
-		FROM agent_activity_event
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND event_type = 'agent_inbox_failed'
-		  AND details->>'inbox_event_id' = $3
-		ORDER BY created_at DESC
-		LIMIT 1`, testWorkspaceID, agentID, got.ID).Scan(&activityReason, &activityFailureReason, &activityMessage); err != nil {
-		t.Fatalf("load inbox failure activity event: %v", err)
-	}
-	if activityReason != "provider_auth_required" || activityFailureReason != "agent_error.provider_auth_or_access" || !strings.Contains(activityMessage, "grok not logged in") {
-		t.Fatalf("activity event = reason:%q failure:%q message:%q, want provider_auth_required/provider_auth/grok not logged in", activityReason, activityFailureReason, activityMessage)
 	}
 
 	drainReq = newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-fail-daemon")
@@ -4860,25 +4689,6 @@ func assertChannelAgentWakeReasonPriority(t *testing.T, channelID, agentID, sour
 	}
 	if reason != wantReason || !requiresWake || priority != wantPriority {
 		t.Fatalf("wake inbox event = reason:%q requires_wake:%v priority:%d, want %q/true/%d", reason, requiresWake, priority, wantReason, wantPriority)
-	}
-}
-
-func assertChannelAgentWakeActivity(t *testing.T, agentID, sourceMessageID, wantReason string) {
-	t.Helper()
-	ctx := context.Background()
-	var eventKind, eventType, reasonCode string
-	if err := testPool.QueryRow(ctx, `
-		SELECT event_kind, event_type, reason_code
-		FROM agent_activity_event
-		WHERE agent_id = $1
-		  AND reason_code = $2
-		  AND details->>'trigger_message_id' = $3
-		ORDER BY created_at DESC
-		LIMIT 1`, agentID, wantReason, sourceMessageID).Scan(&eventKind, &eventType, &reasonCode); err != nil {
-		t.Fatalf("load wake activity event: %v", err)
-	}
-	if eventKind != activityKindTransport || eventType != "task_dispatched" || reasonCode != wantReason {
-		t.Fatalf("wake activity = kind:%q type:%q reason:%q, want transport/task_dispatched/%q", eventKind, eventType, reasonCode, wantReason)
 	}
 }
 

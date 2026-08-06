@@ -358,7 +358,7 @@ func TestBoundary_MessageSend_UsesMachineLocalProxy(t *testing.T) {
 	}
 	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_AGENT_ID", "agent-boundary")
-	t.Setenv("MULTICA_TASK_ID", "task-boundary")
+	t.Setenv("MULTICA_TASK_ID", "")
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
@@ -485,30 +485,27 @@ func TestBoundary_IssueGet_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
-// boundaryCLIEnvTokenFile mimics daemon agent execution: unset MULTICA_TOKEN,
-// inject mat_* via MULTICA_TOKEN_FILE only (cli_transport / daemon.go).
-func boundaryCLIEnvTokenFile(t *testing.T, srvURL string) {
+// boundaryCLIEnvProxy mimics an agent command behind the daemon-owned
+// machine-local credential proxy. The command receives neither a service token
+// nor task/inbox identity.
+func boundaryCLIEnvProxy(t *testing.T, srvURL string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("MULTICA_TOKEN", "")
+	t.Setenv("MULTICA_TOKEN", "must-not-leave-agent-process")
 	t.Setenv("MULTICA_TOKEN_FILE", "")
-	dir := t.TempDir()
-	tokenFile := filepath.Join(dir, "mat_token")
-	if err := os.WriteFile(tokenFile, []byte("mat_daemon_token_file_only\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srvURL, "http://"))
+	if err != nil {
+		t.Fatalf("parse local proxy URL %q: %v", srvURL, err)
 	}
-	t.Setenv("MULTICA_TOKEN_FILE", tokenFile)
+	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-boundary")
-	t.Setenv("MULTICA_SERVER_URL", srvURL)
-	// Agent execution context so resolveToken does not fall through to human profile.
+	// A remote server URL must be ignored for agent API calls.
+	t.Setenv("MULTICA_SERVER_URL", "https://server.example.invalid")
 	t.Setenv("MULTICA_AGENT_ID", "agent-boundary")
-	t.Setenv("MULTICA_TASK_ID", "task-boundary")
+	t.Setenv("MULTICA_TASK_ID", "")
 }
 
-// TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI is the Frank
-// 2026-07-28 regression: list worked (resolveToken reads TOKEN_FILE) but get
-// 403'd because agentAPITokenFromEnv only checked MULTICA_TOKEN (unset by daemon).
-func TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+func TestBoundary_IssueGet_UsesLocalProxyDedicatedAgentAPI(t *testing.T) {
 	wantPath := "/api/agent/issues/" + boundaryContractIssueID
 	var gotPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -525,7 +522,7 @@ func TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
 		http.Error(w, "human issue path forbidden", http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
-	boundaryCLIEnvTokenFile(t, srv.URL)
+	boundaryCLIEnvProxy(t, srv.URL)
 
 	cmd := &cobra.Command{Use: "get"}
 	cmd.Flags().String("server-url", "", "")
@@ -534,7 +531,7 @@ func TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
 	cmd.Flags().String("output", "json", "")
 
 	if err := runIssueGet(cmd, []string{boundaryContractIssueID}); err != nil {
-		t.Fatalf("runIssueGet TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+		t.Fatalf("runIssueGet through local proxy: %v (paths=%v)", err, gotPaths)
 	}
 	if len(gotPaths) == 0 {
 		t.Fatal("no HTTP calls")
@@ -542,7 +539,7 @@ func TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
 	for _, p := range gotPaths {
 		path := strings.SplitN(p, " ", 2)[1]
 		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
-			t.Fatalf("TOKEN_FILE-only hit human path %q; full=%v", p, gotPaths)
+			t.Fatalf("local proxy hit human path %q; full=%v", p, gotPaths)
 		}
 		if !strings.HasPrefix(path, "/api/agent/issues") {
 			t.Fatalf("path %q not under /api/agent/issues; full=%v", p, gotPaths)
@@ -550,9 +547,7 @@ func TestBoundary_IssueGet_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
-// TestBoundary_IssueStatus_TokenFileOnly_HitsDedicatedAgentAPI covers status
-// mutate under daemon TOKEN_FILE injection (same root cause as get).
-func TestBoundary_IssueStatus_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+func TestBoundary_IssueStatus_UsesLocalProxyDedicatedAgentAPI(t *testing.T) {
 	wantPath := "/api/agent/issues/" + boundaryContractIssueID
 	var gotPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -569,7 +564,7 @@ func TestBoundary_IssueStatus_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) 
 		http.Error(w, "human issue path forbidden", http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
-	boundaryCLIEnvTokenFile(t, srv.URL)
+	boundaryCLIEnvProxy(t, srv.URL)
 
 	cmd := &cobra.Command{Use: "status"}
 	cmd.Flags().String("server-url", "", "")
@@ -578,19 +573,17 @@ func TestBoundary_IssueStatus_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) 
 	cmd.Flags().String("output", "json", "")
 
 	if err := runIssueStatus(cmd, []string{boundaryContractIssueID, "in_progress"}); err != nil {
-		t.Fatalf("runIssueStatus TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+		t.Fatalf("runIssueStatus through local proxy: %v (paths=%v)", err, gotPaths)
 	}
 	for _, p := range gotPaths {
 		path := strings.SplitN(p, " ", 2)[1]
 		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
-			t.Fatalf("TOKEN_FILE-only status hit human path %q; full=%v", p, gotPaths)
+			t.Fatalf("local proxy status hit human path %q; full=%v", p, gotPaths)
 		}
 	}
 }
 
-// TestBoundary_IssueCommentAdd_TokenFileOnly_HitsDedicatedAgentAPI covers comment
-// write under daemon TOKEN_FILE injection.
-func TestBoundary_IssueCommentAdd_TokenFileOnly_HitsDedicatedAgentAPI(t *testing.T) {
+func TestBoundary_IssueCommentAdd_UsesLocalProxyDedicatedAgentAPI(t *testing.T) {
 	wantGet := "/api/agent/issues/" + boundaryContractIssueID
 	wantPost := "/api/agent/issues/" + boundaryContractIssueID + "/comments"
 	var gotPaths []string
@@ -613,7 +606,7 @@ func TestBoundary_IssueCommentAdd_TokenFileOnly_HitsDedicatedAgentAPI(t *testing
 		}
 	}))
 	t.Cleanup(srv.Close)
-	boundaryCLIEnvTokenFile(t, srv.URL)
+	boundaryCLIEnvProxy(t, srv.URL)
 
 	cmd := &cobra.Command{Use: "add"}
 	cmd.Flags().String("server-url", "", "")
@@ -628,12 +621,12 @@ func TestBoundary_IssueCommentAdd_TokenFileOnly_HitsDedicatedAgentAPI(t *testing
 	_ = cmd.Flags().Set("content", "daemon token file comment")
 
 	if err := runIssueCommentAdd(cmd, []string{boundaryContractIssueID}); err != nil {
-		t.Fatalf("runIssueCommentAdd TOKEN_FILE-only: %v (paths=%v)", err, gotPaths)
+		t.Fatalf("runIssueCommentAdd through local proxy: %v (paths=%v)", err, gotPaths)
 	}
 	for _, p := range gotPaths {
 		path := strings.SplitN(p, " ", 2)[1]
 		if strings.HasPrefix(path, "/api/issues") && !strings.HasPrefix(path, "/api/agent/issues") {
-			t.Fatalf("TOKEN_FILE-only comment hit human path %q; full=%v", p, gotPaths)
+			t.Fatalf("local proxy comment hit human path %q; full=%v", p, gotPaths)
 		}
 	}
 }
@@ -1222,7 +1215,7 @@ func TestBoundary_IssuePullRequests_HitsDedicatedAgentAPI(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	boundaryCLIEnvTokenFile(t, srv.URL)
+	boundaryCLIEnvProxy(t, srv.URL)
 
 	cmd := &cobra.Command{Use: "pull-requests"}
 	cmd.Flags().String("server-url", "", "")
@@ -1264,7 +1257,7 @@ func TestBoundary_IssueRunMessages_HitsDedicatedAgentAPI(t *testing.T) {
 		http.Error(w, "human task messages path forbidden", http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
-	boundaryCLIEnvTokenFile(t, srv.URL)
+	boundaryCLIEnvProxy(t, srv.URL)
 
 	cmd := &cobra.Command{Use: "run-messages"}
 	cmd.Flags().String("server-url", "", "")
@@ -1312,7 +1305,7 @@ func TestBoundary_IssueCancelTask_HitsDedicatedAgentAPI(t *testing.T) {
 		http.Error(w, "human task cancel path forbidden", http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
-	boundaryCLIEnvTokenFile(t, srv.URL)
+	boundaryCLIEnvProxy(t, srv.URL)
 
 	cmd := &cobra.Command{Use: "cancel-task"}
 	cmd.Flags().String("server-url", "", "")

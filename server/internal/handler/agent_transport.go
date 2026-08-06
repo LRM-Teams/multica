@@ -423,20 +423,6 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		TransportID:         result.TransportID,
 		FreshnessResolution: result.FreshnessResolution,
 	})
-	// Record a message-sent activity event (agent replied via multica message send).
-	if !result.Created {
-		return
-	}
-	h.recordAgentActivityEvent(r.Context(), h.DB,
-		source.origin.workspaceID, source.origin.agentID, pgtype.UUID{}, pgtype.UUID{},
-		activityKindText, "message_sent", "info",
-		"channel", parseUUID(target.channel.ID), target.raw,
-		"", agentVisibleOutputActivityText(result.Message.Content, result.Message.Parts, result.Message.Attachments),
-		map[string]any{
-			"message_id": result.Message.ID,
-			"created":    result.Created,
-		},
-	)
 }
 
 func agentTransportAttachmentMessageParts(content string, attachmentIDs []pgtype.UUID) []protocol.MessagePart {
@@ -1391,7 +1377,6 @@ func (h *Handler) insertAgentTransportMessage(ctx context.Context, source agentT
 			if err := tx.Commit(ctx); err != nil {
 				return agentTransportMessageResult{}, err
 			}
-			h.recordAgentTransportFreshnessHoldActivity(ctx, source, target, decision, "")
 			return agentTransportMessageResult{}, &agentTransportFreshnessHoldError{decision: decision}
 		}
 	}
@@ -2084,97 +2069,6 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 			OlderBoundary: olderBoundary,
 			NewerBoundary: "No newer.",
 		},
-	})
-}
-
-func (h *Handler) recordAgentTransportFreshnessHoldActivity(ctx context.Context, source agentTransportSource, target agentTransportTarget, decision agentTransportFreshnessDecision, transportID string) {
-	if h == nil || h.TxStarter == nil {
-		return
-	}
-	details := map[string]any{
-		"reason":                "newer_messages_available",
-		"decision":              "local_hold",
-		"producer_fact_id":      decision.ProducerID,
-		"transport_id":          transportID,
-		"seen_up_to_seq":        decision.SeenUpToSeq,
-		"latest_seq":            decision.LatestSeq,
-		"new_message_count":     decision.TotalNewer,
-		"shown_message_count":   len(decision.Messages),
-		"omitted_message_count": decision.Omitted,
-		"target":                target.raw,
-		"recommended_action":    "review_newer_messages",
-	}
-	payload, err := json.Marshal(details)
-	if err != nil {
-		return
-	}
-
-	// A concurrent resend can observe the same newer range twice. The blocked
-	// Activity is an audit of that range, not one record per HTTP attempt.
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		slog.Warn("agent transport freshness activity transaction failed", "error", err)
-		return
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
-		uuidToString(source.origin.workspaceID)+":"+uuidToString(source.origin.agentID), target.raw); err != nil {
-		slog.Warn("agent transport freshness activity lock failed", "error", err)
-		return
-	}
-	var exists bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_activity_event
-			WHERE workspace_id = $1
-			  AND agent_id = $2
-			  AND event_type = 'send_freshness_hold'
-			  AND target_slug = $3
-			  AND details->>'producer_fact_id' = $4
-		)`, source.origin.workspaceID, source.origin.agentID, target.raw, decision.ProducerID).Scan(&exists); err != nil {
-		slog.Warn("agent transport freshness activity lookup failed", "error", err)
-		return
-	}
-	if exists {
-		if err := tx.Commit(ctx); err != nil {
-			slog.Warn("agent transport freshness activity duplicate commit failed", "error", err)
-		}
-		return
-	}
-
-	var id pgtype.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO agent_activity_event (
-			workspace_id, agent_id, runtime_id, task_id,
-			event_kind, event_type, severity,
-			target_kind, target_id, target_slug,
-			reason_code, message, details, visibility
-		)
-		VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, $8, '', $9, $10::jsonb, $11)
-		RETURNING id`,
-		source.origin.workspaceID, source.origin.agentID,
-		activityKindBlocked, "send_freshness_hold", "info",
-		"channel", parseUUID(target.channel.ID), target.raw,
-		"Send held by freshness check", string(payload),
-		activityVisibilityFor(activityKindBlocked, "send_freshness_hold", "info", "")).Scan(&id)
-	if err != nil {
-		slog.Warn("agent transport freshness activity insert failed", "error", err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		slog.Warn("agent transport freshness activity commit failed", "error", err)
-		return
-	}
-	if h.Bus == nil {
-		return
-	}
-	workspaceID := uuidToString(source.origin.workspaceID)
-	event := h.hydrateAgentActivityTimelineEvent(ctx, workspaceID, source.origin.agentID, id)
-	h.publishAgentActivityRealtimeEvent(ctx, workspaceID, uuidToString(source.origin.agentID), uuidToString(id), event, AgentActivityTargetRef{
-		Kind: "channel",
-		ID:   uuidToPtr(parseUUID(target.channel.ID)),
-		Slug: stringPtr(target.raw),
 	})
 }
 

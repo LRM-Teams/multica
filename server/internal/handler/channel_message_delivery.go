@@ -58,7 +58,7 @@ func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch
 			continue
 		}
 		if ok {
-			h.notifyCanonicalMessageDelivery(ch, recipient, delivery)
+			h.notifyCanonicalMessageDelivery(ctx, ch, recipient, delivery)
 		}
 	}
 }
@@ -105,9 +105,17 @@ func canonicalMessageDeliveryTarget(ch ChannelResponse, message ChannelMessageRe
 	return "channel:" + ch.ID
 }
 
-func (h *Handler) notifyCanonicalMessageDelivery(ch ChannelResponse, recipient db.Agent, delivery protocol.AgentDeliverPayload) {
-	if h == nil || h.AgentDeliveryNotifier == nil || !h.AgentDeliveryNotifier.NotifyAgentDelivery(uuidToString(recipient.RuntimeID), delivery) {
-		slog.Debug("Agent Message live delivery deferred to recovery", "workspace_id", ch.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", uuidToString(recipient.RuntimeID), "message_id", delivery.Message.ID, "delivery_id", delivery.DeliveryID)
+func (h *Handler) notifyCanonicalMessageDelivery(ctx context.Context, ch ChannelResponse, recipient db.Agent, delivery protocol.AgentDeliverPayload) {
+	if h == nil || h.DB == nil || h.AgentDeliveryNotifier == nil || !recipient.RuntimeID.Valid {
+		return
+	}
+	var daemonID *string
+	if err := h.DB.QueryRow(ctx, `SELECT daemon_id FROM agent_runtime WHERE id = $1`, recipient.RuntimeID).Scan(&daemonID); err != nil {
+		slog.Warn("load Agent Message delivery daemon failed", "workspace_id", ch.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", uuidToString(recipient.RuntimeID), "message_id", delivery.Message.ID, "error", err)
+		return
+	}
+	if daemonID == nil || strings.TrimSpace(*daemonID) == "" || !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(ch.WorkspaceID, *daemonID, delivery) {
+		slog.Debug("Agent Message live delivery deferred to recovery", "workspace_id", ch.WorkspaceID, "agent_id", delivery.AgentID, "daemon_id", daemonID, "message_id", delivery.Message.ID, "delivery_id", delivery.DeliveryID)
 	}
 }
 

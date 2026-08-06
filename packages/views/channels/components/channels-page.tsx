@@ -1451,14 +1451,6 @@ export function ChannelsPage({
       ),
     [active?.id, typingActors],
   );
-  const rosterSummary = useMemo(
-    () => {
-      const memberCount = channelMembers.filter((m) => m.member_type === "user").length;
-      const agentCount = channelMembers.filter((m) => m.member_type === "agent").length;
-      return { memberCount, agentCount };
-    },
-    [channelMembers],
-  );
   // Pinned conversations live in the unified PINNED section (Slack-style),
   // not floated to the top of Channels / Direct messages.
   //

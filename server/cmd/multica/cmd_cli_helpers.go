@@ -89,7 +89,7 @@ func normalizeAPIBaseURL(raw string) string {
 // user last configured, which is how cross-workspace contamination happens
 // when multiple workspaces share a host.
 func inAgentExecutionContext() bool {
-	return os.Getenv("MULTICA_AGENT_ID") != "" || os.Getenv("MULTICA_TASK_ID") != ""
+	return strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID")) != ""
 }
 
 func resolveWorkspaceID(cmd *cobra.Command) string {

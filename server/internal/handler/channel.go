@@ -5454,24 +5454,6 @@ func (h *Handler) coalesceDirectedIssueInboxEventTx(ctx context.Context, qtx *db
 
 func (h *Handler) recordChannelAgentPromptWake(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, reason string, result channelAgentPromptTxResult) {
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, result.Event, agent.RuntimeID, "queued")
-	// Record why scheduling happened without claiming that Message bodies have
-	// crossed the runtime input boundary. Only agent:message_handoff emits the
-	// wake_attempt that the UI labels "Message received".
-	h.recordAgentActivityEvent(ctx, h.DB,
-		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, pgtype.UUID{},
-		activityKindTransport, "task_dispatched", "info",
-		"channel", parseUUID(ch.ID), ch.Name,
-		reason, "Agent woken by "+reason,
-		map[string]any{
-			"trigger_message_id": trigger.ID,
-			"trigger_author":     trigger.AuthorName,
-			"trigger_content":    truncateForActivity(trigger.Content, 100),
-			"thread_root":        trigger.ThreadRootMessageID,
-			"message_seq":        trigger.Seq,
-			"agent_session_id":   uuidToString(result.AgentSession.ID),
-			"inbox_event_id":     uuidToString(result.Event.ID),
-		},
-	)
 }
 
 // notifyChannelMemberMentions creates a "mentioned" inbox item for every human

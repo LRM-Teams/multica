@@ -173,7 +173,7 @@ export const ACTIVITY_SUBTEXT_EN: Record<ActivitySubtextKey, string> = {
 
 // Activity chrome (non-event UI: empty state, command Copy, jump-to-latest,
 // diagnostics toggle) is English-only too (Frank 2026-07-14 "整条 Activity 全英文"),
-// so a zh/ja/ko viewer never sees English event rows framed by localized controls.
+// so a zh viewer never sees English event rows framed by localized controls.
 // One canonical map, shared by every Activity chrome render site (timeline empty +
 // command Copy here, jump-to-latest / diagnostics toggle in their own components).
 // The `locales/*/agents.json` chrome keys stay in place for a future one-layer

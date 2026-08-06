@@ -194,9 +194,9 @@ describe("ComposerPendingVoice — LRM-1354 (design gate LRM-1352)", () => {
 
   // AC10 — exactly one new key, in every shipped language, carrying the same
   // interpolation as the copy it replaces.
-  it("AC10: voice_unsent_retrying exists in all four locales with {{duration}}", () => {
+  it("AC10: voice_unsent_retrying exists in every locale with {{duration}}", () => {
     const here = dirname(fileURLToPath(import.meta.url));
-    for (const lang of ["zh-Hans", "en", "ja", "ko"]) {
+    for (const lang of ["zh-Hans", "en"]) {
       const dict = JSON.parse(
         readFileSync(resolve(here, "../../locales", lang, "channels.json"), "utf8"),
       ) as { composer: Record<string, string> };

@@ -15,10 +15,10 @@ import { isSafeExternalHttpUrl, openExternalSafely } from "./external-url";
 // Custom (non-role) link items below are NOT auto-localized by Electron —
 // roles like "copy" pull labels from the OS, but a custom MenuItem only
 // shows the `label` you give it. We translate by OS-preferred language so
-// the link items at least track Chinese / Japanese / Korean speakers
-// alongside the English default; everything else falls through to English,
+// the link items track Chinese speakers alongside the English default;
+// everything else falls through to English,
 // which matches Chrome's behavior on those locales without app-level
-// translation files.
+// matching the two locales shipped by the app.
 export function installContextMenu(webContents: WebContents): void {
   webContents.on("context-menu", (_event, params) => {
     const { editFlags, selectionText, isEditable, linkURL } = params;
@@ -93,7 +93,7 @@ export function installContextMenu(webContents: WebContents): void {
 // language, with English as the fallback. Kept inline because the main
 // process has no shared i18n loader (the renderer's i18next is per-window
 // and not reachable from here), and pulling one in for two strings would
-// be more rope than payload. Matches the four locales the renderer ships.
+// be more rope than payload. Matches the two locales the renderer ships.
 type ContextMenuLabels = {
   openLink: string;
   copyLinkAddress: string;
@@ -108,17 +108,9 @@ const labelsByLocale: Record<string, ContextMenuLabels> = {
     openLink: "在浏览器中打开链接",
     copyLinkAddress: "复制链接地址",
   },
-  ja: {
-    openLink: "ブラウザでリンクを開く",
-    copyLinkAddress: "リンクのアドレスをコピー",
-  },
-  ko: {
-    openLink: "브라우저에서 링크 열기",
-    copyLinkAddress: "링크 주소 복사",
-  },
 };
 
-// pickLabels resolves the OS-preferred language to one of the four
+// pickLabels resolves the OS-preferred language to one of the two
 // locales we ship copy for. We say "Open Link in Browser" rather than
 // "Open Link in New Window" because the link is opened via
 // shell.openExternal — it lands in the user's default browser, not in
@@ -132,7 +124,5 @@ function pickLabels(): ContextMenuLabels {
     // worse than reading Simplified Chinese.
     return labelsByLocale["zh-Hans"];
   }
-  if (preferred.startsWith("ja")) return labelsByLocale.ja;
-  if (preferred.startsWith("ko")) return labelsByLocale.ko;
   return labelsByLocale.en;
 }

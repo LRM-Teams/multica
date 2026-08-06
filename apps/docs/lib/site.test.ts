@@ -12,12 +12,8 @@ vi.mock("node:fs", () => ({
 const pages = new Map<string, { url: string }>([
   ["en:", { url: "/" }],
   ["zh:", { url: "/zh" }],
-  ["ko:", { url: "/ko" }],
-  ["ja:", { url: "/ja" }],
   ["en:agents", { url: "/agents" }],
   ["zh:agents", { url: "/zh/agents" }],
-  ["ko:agents", { url: "/ko/agents" }],
-  ["ja:agents", { url: "/ja/agents" }],
 ]);
 
 vi.mock("@/lib/source", () => ({
@@ -37,7 +33,7 @@ beforeEach(() => {
 });
 
 describe("docsAlternates", () => {
-  it("omits Korean hreflang when no Korean MDX file exists for the page", async () => {
+  it("includes only shipped locales", async () => {
     const { docsAlternates } = await import("./site");
 
     expect(docsAlternates(["agents"])).toEqual({
@@ -45,42 +41,6 @@ describe("docsAlternates", () => {
       languages: {
         en: "https://www.leagent.me/docs/agents",
         zh: "https://www.leagent.me/docs/zh/agents",
-        "x-default": "https://www.leagent.me/docs/agents",
-      },
-    });
-  });
-
-  it("omits Korean hreflang even when source.getPage returns a page for Korean", async () => {
-    const { docsAlternates } = await import("./site");
-
-    expect(docsAlternates(["agents"]).languages).not.toHaveProperty("ko");
-  });
-
-  it("includes Korean hreflang when a real *.ko.mdx page exists", async () => {
-    existingDocs.add("agents.ko.mdx");
-    const { docsAlternates } = await import("./site");
-
-    expect(docsAlternates(["agents"])).toEqual({
-      canonical: "https://www.leagent.me/docs/agents",
-      languages: {
-        en: "https://www.leagent.me/docs/agents",
-        zh: "https://www.leagent.me/docs/zh/agents",
-        ko: "https://www.leagent.me/docs/ko/agents",
-        "x-default": "https://www.leagent.me/docs/agents",
-      },
-    });
-  });
-
-  it("includes Japanese hreflang when a real *.ja.mdx page exists", async () => {
-    existingDocs.add("agents.ja.mdx");
-    const { docsAlternates } = await import("./site");
-
-    expect(docsAlternates(["agents"])).toEqual({
-      canonical: "https://www.leagent.me/docs/agents",
-      languages: {
-        en: "https://www.leagent.me/docs/agents",
-        zh: "https://www.leagent.me/docs/zh/agents",
-        ja: "https://www.leagent.me/docs/ja/agents",
         "x-default": "https://www.leagent.me/docs/agents",
       },
     });

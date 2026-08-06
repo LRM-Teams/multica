@@ -76,7 +76,7 @@ describe("use case source locale fallback", () => {
     };
 
     vi.mocked(useCasesSource.getPages).mockImplementation((lang?: string) => {
-      if (lang === "ko") {
+      if (lang === "zh") {
         return [localizedPage] as ReturnType<typeof useCasesSource.getPages>;
       }
       if (lang === "en") {
@@ -89,32 +89,7 @@ describe("use case source locale fallback", () => {
     });
 
     expect(
-      getUseCasePagesForLocale("ko").map((page) => page.slugs.join("/")),
-    ).toEqual(["localized", "english-only"]);
-  });
-
-  it("maps the ja locale to the ja use-case lang and keeps the English fallback", () => {
-    const localizedPage = {
-      slugs: ["localized"],
-      data: { title: "ローカライズ済み" },
-    };
-    const englishOnly = {
-      slugs: ["english-only"],
-      data: { title: "English only" },
-    };
-
-    vi.mocked(useCasesSource.getPages).mockImplementation((lang?: string) => {
-      if (lang === "ja") {
-        return [localizedPage] as ReturnType<typeof useCasesSource.getPages>;
-      }
-      if (lang === "en") {
-        return [englishOnly] as ReturnType<typeof useCasesSource.getPages>;
-      }
-      return [] as ReturnType<typeof useCasesSource.getPages>;
-    });
-
-    expect(
-      getUseCasePagesForLocale("ja").map((page) => page.slugs.join("/")),
+      getUseCasePagesForLocale("zh-Hans").map((page) => page.slugs.join("/")),
     ).toEqual(["localized", "english-only"]);
   });
 
@@ -131,7 +106,7 @@ describe("use case source locale fallback", () => {
     vi.mocked(useCasesSource.getPage).mockImplementation(
       (slugs: string[] | undefined, lang?: string) => {
         const key = `${lang}:${slugs?.join("/") ?? ""}`;
-        if (key === "ko:localized") {
+        if (key === "zh:localized") {
           return localizedPage as ReturnType<typeof useCasesSource.getPage>;
         }
         if (key === "en:english-only") {
@@ -141,7 +116,7 @@ describe("use case source locale fallback", () => {
       },
     );
 
-    expect(getUseCasePageForLocale(["localized"], "ko")).toBe(localizedPage);
-    expect(getUseCasePageForLocale(["english-only"], "ko")).toBe(englishOnly);
+    expect(getUseCasePageForLocale(["localized"], "zh-Hans")).toBe(localizedPage);
+    expect(getUseCasePageForLocale(["english-only"], "zh-Hans")).toBe(englishOnly);
   });
 });

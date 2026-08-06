@@ -12,8 +12,7 @@ import { uiTranslations, localeLabels } from "@/lib/translations";
 import { DocsSettings } from "@/components/docs-settings";
 
 // Inter (Latin UI face) is exposed under `--font-inter`. The full `--font-sans`
-// stack — Inter + the per-locale CJK fallback chain, including the Japanese-first
-// override scoped to `<html lang="ja">` — is composed in static CSS in
+// stack — Inter + the CJK fallback chain — is composed in static CSS in
 // ./global.css (CSP-safe, no inline <style>). Mirrors apps/web/app/layout.tsx.
 const inter = Inter({
   subsets: ["latin"],

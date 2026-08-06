@@ -9,7 +9,7 @@ import type {
 // The panel chrome (status badge, fallback action, last-update label, failure
 // reason) is locale-independent: this view-model only carries semantic codes
 // and the UI component translates them against the active locale. Hardcoding
-// Chinese here is what leaked 混文 into en/ja/ko. Live `signal.activity` text
+// Chinese here is what leaked mixed-language text into English. Live `signal.activity` text
 // (server-provided, already locale-appropriate) remains the primary action.
 const STATUS_ACTION_KEY: Record<ResearchExecutionAgent["status"], ResearchExecutionActionKey> = {
   queued: "waiting",

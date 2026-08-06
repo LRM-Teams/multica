@@ -15,6 +15,7 @@ import java from "highlight.js/lib/languages/java";
 import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
 import markdown from "highlight.js/lib/languages/markdown";
+import plaintext from "highlight.js/lib/languages/plaintext";
 import python from "highlight.js/lib/languages/python";
 import rust from "highlight.js/lib/languages/rust";
 import sql from "highlight.js/lib/languages/sql";
@@ -34,6 +35,8 @@ export const sharedLowlight = createLowlight({
   json,
   markdown,
   md: markdown,
+  plaintext,
+  text: plaintext,
   python,
   py: python,
   rust,

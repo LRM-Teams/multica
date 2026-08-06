@@ -63,22 +63,11 @@
   background: color-mix(in srgb, white 15%, transparent);
 }
 
-/* Mermaid lightbox — full-screen preview (ESC or click backdrop to close) */
-.mermaid-diagram-lightbox {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, black 80%, transparent);
-  cursor: zoom-out;
-}
-
+/* Mermaid fullscreen — iframe fills the Dialog content surface.
+ * Close / ESC / backdrop are owned by Dialog (see MermaidDiagram).
+ * Background uses muted gray so the diagram separates from the chrome. */
 .mermaid-diagram-lightbox-frame {
   border: 0;
-  width: 90vw;
-  height: 90vh;
-  background: transparent;
-  cursor: default;
+  display: block;
+  background: var(--muted);
 }

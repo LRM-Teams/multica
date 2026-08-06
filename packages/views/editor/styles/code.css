@@ -23,6 +23,27 @@
 }
 
 /* Code blocks */
+.rich-text-editor .code-block-frame {
+  border: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.rich-text-editor .code-block-frame .mermaid-diagram {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.rich-text-editor .code-block-frame .mermaid-diagram-toolbar {
+  /* Diagram chrome is owned by the code-block hover toolbar when embedded. */
+  display: none;
+}
+
+.rich-text-editor .code-block-toolbar {
+  pointer-events: auto;
+}
+
 .rich-text-editor pre,
 pre.rich-text-editor {
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -36,6 +57,34 @@ pre.rich-text-editor {
   max-height: 300px;
   overflow-x: auto;
   overflow-y: auto;
+}
+
+.rich-text-editor .code-block-source {
+  border-radius: 0;
+  margin: 0;
+}
+
+.rich-text-editor .code-block-source-attached {
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+/*
+ * Visually hide source while keeping the <pre> mounted for ProseMirror's
+ * contentDOM. Plain Tailwind `sr-only` loses to `.rich-text-editor pre`
+ * (padding / overflow / max-height), so diagram-only mode looked broken.
+ */
+.rich-text-editor pre.code-block-source-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border-width: 0 !important;
+  max-height: none !important;
+  pointer-events: none;
 }
 
 .rich-text-editor pre code,

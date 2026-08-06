@@ -582,6 +582,8 @@ function NoteEditor({
         className="mt-6 min-h-[55vh] px-0 py-2"
         debounceMs={150}
         disableMentions
+        enableSlashCommands
+        slashCommandMode="block"
         showBubbleMenu
       />
     </div>

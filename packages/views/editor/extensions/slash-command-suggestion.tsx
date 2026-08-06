@@ -24,7 +24,7 @@ import { createSuggestionPopupRender } from "./suggestion-popup";
 const MAX_ITEMS = 20;
 
 /** Known built-in command ids — the keys under editor `slash_command.commands`. */
-export type BuiltinCommandKey = "note";
+export type BuiltinCommandKey = "note" | "code" | "mermaid" | "python" | "javascript";
 
 export interface SlashCommandItem {
   id: string;
@@ -37,6 +37,8 @@ export interface SlashCommandItem {
    * so the visible string stays localized (the typed `/label` does not).
    */
   descriptionKey?: BuiltinCommandKey;
+  /** Optional block command payload for Notion-style insertions. */
+  block?: { type: "codeBlock"; language?: string };
 }
 
 interface SlashCommandListProps {
@@ -250,12 +252,26 @@ export const BUILTIN_COMMANDS: SlashCommandItem[] = [
   { id: "note", label: "note", descriptionKey: "note" },
 ];
 
+// react-doctor-disable-next-line react-doctor/only-export-components -- suggestion factories consume this static command table and tests import it directly.
+export const BLOCK_COMMANDS: SlashCommandItem[] = [
+  { id: "code", label: "code", descriptionKey: "code", block: { type: "codeBlock" } },
+  { id: "mermaid", label: "mermaid", descriptionKey: "mermaid", block: { type: "codeBlock", language: "mermaid" } },
+  { id: "python", label: "python", descriptionKey: "python", block: { type: "codeBlock", language: "python" } },
+  { id: "javascript", label: "javascript", descriptionKey: "javascript", block: { type: "codeBlock", language: "javascript" } },
+];
+
 // Match on the command label as a prefix only — the description is for display,
 // not search. With a single command this keeps the menu predictable (typing
 // `/no` surfaces `note`; an unrelated `/deploy` shows nothing).
 export function buildBuiltinCommandItems(query: string): SlashCommandItem[] {
   const q = query.toLowerCase();
   return BUILTIN_COMMANDS.filter((c) => c.label.toLowerCase().startsWith(q));
+}
+
+// react-doctor-disable-next-line react-doctor/only-export-components -- pure command filtering helper used by the suggestion factory/tests.
+export function buildBlockCommandItems(query: string): SlashCommandItem[] {
+  const q = query.toLowerCase();
+  return BLOCK_COMMANDS.filter((c) => c.label.toLowerCase().startsWith(q));
 }
 
 export function createBuiltinCommandSuggestion(): Omit<
@@ -280,6 +296,40 @@ export function createBuiltinCommandSuggestion(): Omit<
         .run();
 
       window.getSelection()?.collapseToEnd();
+    },
+    render: createSuggestionPopupRender<SlashCommandItem, SlashCommandItem, SlashCommandListRef, SlashCommandListProps>({
+      pluginKey,
+      component: SlashCommandList,
+      getProps: (props) => ({
+        items: props.items,
+        query: props.query,
+        command: props.command,
+        hideOnEmpty: true,
+      }),
+      onKeyDown: (ref, props) => ref?.onKeyDown(props) ?? false,
+    }),
+  };
+}
+
+// react-doctor-disable-next-line react-doctor/only-export-components -- Tiptap suggestion factory, not a React component.
+export function createBlockCommandSuggestion(): Omit<
+  SuggestionOptions<SlashCommandItem>,
+  "editor"
+> {
+  const pluginKey = new PluginKey("blockCommandSuggestion");
+
+  return {
+    char: "/",
+    pluginKey,
+    items: ({ query }) => buildBlockCommandItems(query),
+    command: ({ editor, range, props }) => {
+      if (props.block?.type !== "codeBlock") return;
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .setCodeBlock({ language: props.block.language })
+        .run();
     },
     render: createSuggestionPopupRender<SlashCommandItem, SlashCommandItem, SlashCommandListRef, SlashCommandListProps>({
       pluginKey,

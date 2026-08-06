@@ -241,10 +241,8 @@ type Daemon struct {
 	// instead of silently retried forever.
 	residentCrashBackoff *residentCrashBackoffTracker
 	// agentLifecycleExecutor carries out dispatched /api/agents/{id}/lifecycle
-	// operations (task #52). sessionReset is left nil: only "restart" is
-	// wired end-to-end for now, so reset_session_restart/full_reset_restart
-	// fail closed with a clear "session reset client is not configured"
-	// error instead of doing nothing silently.
+	// operations (task #52). The daemon client clears server-owned provider
+	// resume pointers before the runtime is recreated.
 	agentLifecycleExecutor *agentLifecycleExecutor
 	// canonicalChatFactoryOverride is test-only; production uses
 	// defaultCanonicalRuntimeFactory for grok/pi resident adapters.
@@ -412,6 +410,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		workspacesRoot: cfg.WorkspacesRoot,
 		turns:          d.agentRuntimeTurns,
 		runtimes:       d.canonicalRuntimes,
+		sessionReset:   d.client,
 		logger:         logger,
 	}
 	d.runner = taskRunnerFunc(d.runTask)
@@ -1054,6 +1053,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityReminderVersionedCache,
 		protocol.DaemonCapabilityAgentLifecycleActions,
 		protocol.DaemonCapabilityMachineUpgrade,
+		protocol.DaemonCapabilityAgentSessionReset,
 	}
 	if includeCredentialTransport {
 		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)

@@ -71,15 +71,18 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	case agentLifecycleActionRestart:
 		return e.forceInvalidateRuntime(request)
 	case agentLifecycleActionResetSessionRestart:
-		if err := e.resetSession(ctx, request); err != nil {
-			return err
-		}
-		return e.forceInvalidateRuntime(request)
-	case agentLifecycleActionFullResetRestart:
-		if err := e.resetSession(ctx, request); err != nil {
-			return err
-		}
 		if err := e.forceInvalidateRuntime(request); err != nil {
+			return err
+		}
+		if err := e.resetSession(ctx, request); err != nil {
+			return err
+		}
+		return nil
+	case agentLifecycleActionFullResetRestart:
+		if err := e.forceInvalidateRuntime(request); err != nil {
+			return err
+		}
+		if err := e.resetSession(ctx, request); err != nil {
 			return err
 		}
 		return e.resetWorkspace(request)

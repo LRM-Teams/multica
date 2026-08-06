@@ -70,6 +70,7 @@ import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchRunGateBlockers } from "./research-run-gate-blockers";
 import type { RunV2GateBlocker } from "../lib/run-v2-canvas-view-model";
 import { useT } from "../../i18n/use-t";
+import { useResearchCamera } from "../canvas/camera/use-research-camera";
 
 const NODE_ENTER_MOTION_CSS = nodeEnterMotionCss();
 const REORG_TRANSITION_CSS = reorgTransitionCss();
@@ -183,7 +184,8 @@ function ResearchCanvasInner({
   const topology = canvasLayout.topology;
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState(laid.nodes);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(laid.edges);
-  const { fitView, zoomIn, zoomOut, getZoom, setCenter, getNode } = useReactFlow();
+  const { fitView, zoomIn, zoomOut, getZoom, getNode, getViewport, setViewport } =
+    useReactFlow();
   const isMobile = useIsMobile();
   const [ui, dispatch] = useReducer(canvasUiReducer, initialCanvasUi);
   const { detailPinned, pinnedNodeId, menuNodeId, zoomPct, liveText } = ui;
@@ -210,6 +212,23 @@ function ResearchCanvasInner({
     // Retrigger polite live region for identical strings.
     requestAnimationFrame(() => dispatch({ type: "setLive", text }));
   }, []);
+
+  // FE-05: safe-centre camera (interruption-safe focus, drag hand-off, reduced
+  // motion). Replaced the ad-hoc `setCenter` focus path below.
+  const camera = useResearchCamera({
+    getViewport: () => getViewport(),
+    setViewport: (vp) => {
+      void setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom });
+    },
+    getContainerSize: () => {
+      const root = canvasRootRef.current;
+      return root
+        ? { width: Math.max(1, root.clientWidth), height: Math.max(1, root.clientHeight) }
+        : { width: 1, height: 1 };
+    },
+    reducedMotion: prefersReducedMotion(),
+    announce,
+  });
 
   // LRM-1335: reorg orchestration — classify delta and set data-reorg attr
   const startReorg = useCallback(
@@ -401,25 +420,31 @@ function ResearchCanvasInner({
       focusIdRef.current = id;
       const topo = topology.get(id);
       const research = nodes.find((n) => n.id === id);
-      if (research) {
-        announce(
-          t(($) => $.a11y.focus_node, {
+      const label = research
+        ? t(($) => $.a11y.focus_node, {
             title: research.title,
             branch: topo?.branchId ?? "main",
-          }),
-        );
-      }
+          })
+        : undefined;
       const rfNode = getNode(id);
       if (rfNode) {
         const w = (rfNode.measured?.width ?? rfNode.width ?? 240) as number;
         const h = (rfNode.measured?.height ?? rfNode.height ?? 76) as number;
-        void setCenter(rfNode.position.x + w / 2, rfNode.position.y + h / 2, {
-          zoom: getZoom(),
-          duration: prefersReducedMotion() ? 0 : 180,
-        });
+        camera.focus(
+          {
+            x: rfNode.position.x,
+            y: rfNode.position.y,
+            width: w,
+            height: h,
+          },
+          label,
+        );
+      } else if (label) {
+        // Node not yet measured/renderable — still announce the move target.
+        announce(label);
       }
     },
-    [topology, nodes, announce, t, getNode, setCenter, getZoom],
+    [topology, nodes, t, getNode, camera, announce],
   );
 
   const locateNode = useCallback(
@@ -666,7 +691,11 @@ function ResearchCanvasInner({
         edges={rfEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
-        onMoveStart={abortReorgOnMove}
+        onMoveStart={() => {
+          abortReorgOnMove();
+          // FE-05: a real user pan/drag always wins over any auto-focus.
+          camera.userInteracted();
+        }}
         onMoveEnd={() => {
           dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
         }}
@@ -681,6 +710,8 @@ function ResearchCanvasInner({
           const research = node.data?.research as ResearchGraphNode | undefined;
           if (!research) return;
           focusIdRef.current = research.id;
+          // FE-05 AC1: a mouse click moves the target node into the safe centre.
+          focusNode(research.id);
           if (isLogicEndNode(research)) {
             onOpenDelivery?.();
             return;

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
+import * as fs from "node:fs";
 import { ExecutionOverlayPanel } from "../execution-overlay-panel";
 import type { ExecutionRow } from "../execution-adapter";
 
@@ -100,7 +101,6 @@ describe("execution-overlay SSR preview renderer (node)", () => {
     expect(narrow).toContain("disconnected");
 
     if (process.env.RENDER_OVERLAY_PREVIEW === "1") {
-      const fs = require("fs");
       fs.mkdirSync("artifacts", { recursive: true });
       fs.writeFileSync(
         "artifacts/execution-overlay-preview.html",

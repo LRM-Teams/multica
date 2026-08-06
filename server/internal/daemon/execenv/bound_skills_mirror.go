@@ -124,7 +124,10 @@ func writeBoundSkillMirror(enabledDir, slug string, skill SkillContextForEnv) er
 		if skillpkg.IsReservedContentPath(f.Path) {
 			continue
 		}
-		fpath := filepath.Join(dir, filepath.FromSlash(f.Path))
+		fpath, err := safeSkillFilePath(dir, f.Path)
+		if err != nil {
+			return fmt.Errorf("invalid supporting file path %q: %w", f.Path, err)
+		}
 		if err := os.MkdirAll(filepath.Dir(fpath), 0o755); err != nil {
 			return err
 		}

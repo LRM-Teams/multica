@@ -80,7 +80,7 @@ func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemon
 	if exists {
 		return tx.Commit(ctx)
 	}
-	eventID, inserted := insertAgentActivityEvent(ctx, tx,
+	_, inserted := insertAgentActivityEvent(ctx, tx,
 		parseUUID(identity.WorkspaceID), parseUUID(payload.AgentID), parseUUID(payload.RuntimeID), pgtype.UUID{},
 		activityKindWakeAttempt, "message_received", "info",
 		"none", pgtype.UUID{}, "",
@@ -94,10 +94,6 @@ func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemon
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
-	}
-	if h.Bus != nil {
-		event := h.hydrateAgentActivityTimelineEvent(ctx, identity.WorkspaceID, parseUUID(payload.AgentID), eventID)
-		h.publishAgentActivityRealtimeEvent(ctx, identity.WorkspaceID, payload.AgentID, uuidToString(eventID), event, AgentActivityTargetRef{Kind: "none"})
 	}
 	return nil
 }

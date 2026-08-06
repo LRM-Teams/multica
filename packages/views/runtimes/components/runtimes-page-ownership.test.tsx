@@ -39,6 +39,7 @@ import {
 import {
   defaultDesktopSelectedMachineId,
   isMineMachine,
+  machineDaemonUpgradeRuntimeId,
 } from "./runtime-machines";
 
 function makeMachine(
@@ -207,6 +208,24 @@ describe("defaultDesktopSelectedMachineId — LRM-1094", () => {
   it("returns null when there is no Mine machine (no Team fallback)", () => {
     const machines = [makeMachine("team", "Team box", "user-other")];
     expect(defaultDesktopSelectedMachineId(machines, "user-mine")).toBeNull();
+  });
+});
+
+describe("machineDaemonUpgradeRuntimeId", () => {
+  it("uses the update-available runtime instead of an unrelated online runtime", () => {
+    const machine = makeMachine("mine", "Mine", "user-mine");
+    const primary = machine.runtimes[0]!;
+    const updateAvailable: AgentRuntime = {
+      ...primary,
+      id: "mine-update-available",
+      runtime_health: "update_available",
+      target_version: "1.1.0",
+    };
+    machine.runtimes = [primary, updateAvailable];
+
+    expect(
+      machineDaemonUpgradeRuntimeId(machine, Date.parse("2026-08-01T00:00:05Z")),
+    ).toBe(updateAvailable.id);
   });
 });
 

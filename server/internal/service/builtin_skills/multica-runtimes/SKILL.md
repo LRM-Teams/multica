@@ -32,6 +32,11 @@ The chain is:
 5. the daemon starts the provider CLI in the Agent's durable workspace;
 6. the daemon reports completion.
 
+Machine Upgrade is daemon-scoped: use the canonical daemon upgrade API for new
+work. Installed clients may still call the legacy runtime-scoped HTTP update
+paths; those are compatibility adapters over the same daemon operation and do
+not create runtime-owned update state.
+
 ## CLI
 
 ```bash

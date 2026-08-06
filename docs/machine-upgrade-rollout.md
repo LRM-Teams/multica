@@ -20,8 +20,11 @@ set captured at acceptance.
    capability.
 4. Deploy the web/desktop UI. A runtime is a projection of its daemon's
    canonical operation; sibling status must agree.
-5. The legacy runtime-owned HTTP update routes have been retired. New callers
-   must use the daemon-scoped machine-upgrade API.
+5. New callers must use the daemon-scoped machine-upgrade API. The three
+   legacy runtime-scoped HTTP update routes remain temporary compatibility
+   adapters: they resolve the runtime's daemon and project or cancel that
+   daemon's canonical operation. They must never recreate runtime-owned update
+   state.
 
 ## Bootstrap limitation
 

@@ -62,7 +62,6 @@ import {
 } from "../lib/completion-guide";
 import { deliveryContentCount } from "../lib/delivery-mode";
 import {
-  buildExplorationDimensions,
   buildHumanBoundary,
   buildSourceStrategy,
   dimensionFamilyOf,
@@ -86,7 +85,7 @@ import {
 import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
-import { ExplorationRail } from "./exploration-rail";
+import { TrajectoryExplorer } from "../trajectory-explorer";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchAuxDrawer } from "./research-aux-drawer";
 import { ResearchEvidencePulse } from "./research-evidence-pulse";
@@ -306,10 +305,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   });
 
   // LRM-890 M2 visibility models — derived from graph nodes / sources / report.
-  const explorationDims = useMemo(
-    () => buildExplorationDimensions(data?.nodes ?? []),
-    [data?.nodes],
-  );
   const sourceStrategy = useMemo(
     () => buildSourceStrategy(data?.sources ?? []),
     [data?.sources],
@@ -727,19 +722,32 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             onClose={() => setAuxPanel(null)}
           >
             {auxPanel === "trajectory" ? (
-              <ExplorationRail
-                className="!static !h-auto !w-full !border-0 !bg-transparent"
-                dimensions={explorationDims}
+              <TrajectoryExplorer
+                nodes={data.nodes}
                 sessionStatus={session.status}
-                selectedFamily={ui.selectedFamily}
-                selectedQuestionId={selectedNode?.id}
-                onSelectFamily={(family) =>
-                  dispatch({ type: "setFamily", family })
-                }
-                onSelectQuestion={(id) => {
+                selectedId={selectedNode?.id ?? null}
+                onSelect={(id) => {
+                  const node = id
+                    ? data.nodes.find((n) => n.id === id) ?? null
+                    : null;
+                  dispatch({ type: "select", node });
+                }}
+                onJumpToCanvas={(id) => {
                   const node = data.nodes.find((n) => n.id === id) ?? null;
                   dispatch({ type: "select", node });
-                  setAuxPanel("detail");
+                  setAuxPanel(null);
+                }}
+                onOpenNodeDetail={(id) => {
+                  const node = data.nodes.find((n) => n.id === id) ?? null;
+                  if (node) {
+                    dispatch({ type: "select", node });
+                    setAuxPanel("detail");
+                  }
+                }}
+                loading={isLoading || (isFetching && !data)}
+                error={error ? (error as Error).message || "Failed to load trajectory" : null}
+                onRetry={() => {
+                  void refetch();
                 }}
               />
             ) : null}

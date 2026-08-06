@@ -40,9 +40,10 @@ type UploadSessionDestination struct {
 // Agent upload session is completed. The Server compares it with the session
 // declaration before creating an Attachment resource.
 type UploadedObject struct {
-	URL         string
-	SizeBytes   int64
-	ContentType string
+	URL            string
+	SizeBytes      int64
+	ContentType    string
+	ChecksumSHA256 string
 }
 
 // UploadSessionStorage supports the Agent Upload Session direct-upload and
@@ -50,6 +51,6 @@ type UploadedObject struct {
 // Storage so unrelated storage test doubles do not accidentally claim that
 // they can issue upload capabilities.
 type UploadSessionStorage interface {
-	PresignUpload(ctx context.Context, key string, ttl time.Duration, contentType, filename string) (UploadSessionDestination, error)
+	PresignUpload(ctx context.Context, key string, ttl time.Duration, contentType, filename, checksumSHA256 string) (UploadSessionDestination, error)
 	VerifyUpload(ctx context.Context, key string) (UploadedObject, error)
 }

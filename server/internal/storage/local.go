@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -156,7 +158,7 @@ func (s *LocalStorage) Upload(ctx context.Context, key string, data []byte, cont
 // PresignUpload reports the headers a client must use for a direct upload.
 // Local storage has no public object endpoint, so the Server supplies its
 // authenticated local upload route as the destination URL for the session.
-func (s *LocalStorage) PresignUpload(_ context.Context, _ string, _ time.Duration, contentType, _ string) (UploadSessionDestination, error) {
+func (s *LocalStorage) PresignUpload(_ context.Context, _ string, _ time.Duration, contentType, _, _ string) (UploadSessionDestination, error) {
 	return UploadSessionDestination{
 		Method:  http.MethodPut,
 		Headers: map[string]string{"Content-Type": contentType},
@@ -184,10 +186,20 @@ func (s *LocalStorage) VerifyUpload(_ context.Context, key string) (UploadedObje
 	if meta, ok := readLocalMeta(filePath); ok {
 		contentType = meta.ContentType
 	}
-	if s.baseURL != "" {
-		return UploadedObject{URL: fmt.Sprintf("%s/uploads/%s", s.baseURL, key), SizeBytes: info.Size(), ContentType: contentType}, nil
+	f, err := os.Open(filePath)
+	if err != nil {
+		return UploadedObject{}, fmt.Errorf("local VerifyUpload: %w", err)
 	}
-	return UploadedObject{URL: fmt.Sprintf("/uploads/%s", key), SizeBytes: info.Size(), ContentType: contentType}, nil
+	defer f.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return UploadedObject{}, fmt.Errorf("local VerifyUpload checksum: %w", err)
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	if s.baseURL != "" {
+		return UploadedObject{URL: fmt.Sprintf("%s/uploads/%s", s.baseURL, key), SizeBytes: info.Size(), ContentType: contentType, ChecksumSHA256: digest}, nil
+	}
+	return UploadedObject{URL: fmt.Sprintf("/uploads/%s", key), SizeBytes: info.Size(), ContentType: contentType, ChecksumSHA256: digest}, nil
 }
 
 func (s *LocalStorage) GetFilePath(key string) string {

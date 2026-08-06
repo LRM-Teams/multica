@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"mime"
@@ -62,7 +64,8 @@ func init() {
 
 	attachmentUploadCmd.Flags().String("path", "", "Absolute or relative path to the local file to upload (required)")
 	attachmentUploadCmd.Flags().String("target", "", "Agent upload target (required for Agent tokens): #channel, #channel:<threadId>, dm:@handle, or dm:@handle:<threadId>")
-	_ = attachmentUploadCmd.MarkFlagRequired("path")
+	attachmentUploadCmd.Flags().String("resume-session", "", "Retry a pending Agent upload session with --path")
+	attachmentUploadCmd.Flags().String("cancel-session", "", "Cancel a pending Agent upload session")
 
 	attachmentListCmd.Flags().String("issue", "", "Issue id or key (list issue attachments)")
 	attachmentListCmd.Flags().String("channel", "", "Channel name or UUID (list channel attachments)")
@@ -154,6 +157,28 @@ func runAttachmentView(cmd *cobra.Command, args []string) error {
 }
 
 func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
+	resumeSession, _ := cmd.Flags().GetString("resume-session")
+	cancelSession, _ := cmd.Flags().GetString("cancel-session")
+	resumeSession = strings.TrimSpace(resumeSession)
+	cancelSession = strings.TrimSpace(cancelSession)
+	if resumeSession != "" && cancelSession != "" {
+		return fmt.Errorf("pass either --resume-session or --cancel-session, not both")
+	}
+	if cancelSession != "" {
+		if _, err := uuid.Parse(cancelSession); err != nil {
+			return fmt.Errorf("--cancel-session must be a UUID")
+		}
+		if !isAgentAPIToken(cmd) {
+			return fmt.Errorf("--cancel-session is available only with an Agent token")
+		}
+		client, err := newAPIClient(cmd)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+		defer cancel()
+		return runAgentAttachmentUploadSessionCancel(ctx, client, cancelSession)
+	}
 	path, _ := cmd.Flags().GetString("path")
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -171,8 +196,16 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 	}
 	target, _ := cmd.Flags().GetString("target")
 	target = strings.TrimSpace(target)
-	if isAgentAPIToken(cmd) && target == "" {
+	if isAgentAPIToken(cmd) && target == "" && resumeSession == "" {
 		return fmt.Errorf("--target is required for attachment upload")
+	}
+	if resumeSession != "" {
+		if _, err := uuid.Parse(resumeSession); err != nil {
+			return fmt.Errorf("--resume-session must be a UUID")
+		}
+		if !isAgentAPIToken(cmd) {
+			return fmt.Errorf("--resume-session is available only with an Agent token")
+		}
 	}
 
 	client, err := newAPIClient(cmd)
@@ -183,6 +216,9 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
 	defer cancel()
 	if isAgentAPIToken(cmd) {
+		if resumeSession != "" {
+			return runAgentAttachmentUploadSessionResume(ctx, client, resumeSession, path, st.Size())
+		}
 		return runAgentAttachmentUploadSession(ctx, client, path, st.Size(), target)
 	}
 
@@ -224,10 +260,15 @@ type agentAttachmentUploadCapabilities struct {
 }
 
 type agentAttachmentUploadSession struct {
-	ID        string            `json:"id"`
-	UploadURL string            `json:"upload_url"`
-	Method    string            `json:"method"`
-	Headers   map[string]string `json:"headers"`
+	ID             string            `json:"id"`
+	UploadURL      string            `json:"upload_url"`
+	Method         string            `json:"method"`
+	Headers        map[string]string `json:"headers"`
+	State          string            `json:"state"`
+	ContentType    string            `json:"content_type"`
+	SizeBytes      int64             `json:"size_bytes"`
+	ChecksumSHA256 string            `json:"checksum_sha256"`
+	AttachmentID   string            `json:"attachment_id"`
 }
 
 func runAgentAttachmentUploadSession(ctx context.Context, client *cli.APIClient, filePath string, sizeBytes int64, target string) error {
@@ -253,20 +294,84 @@ func runAgentAttachmentUploadSession(ctx context.Context, client *cli.APIClient,
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind file: %w", err)
 	}
+	checksumSHA256, err := attachmentUploadChecksum(file)
+	if err != nil {
+		return err
+	}
+	clientRequestID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("create upload request id: %w", err)
+	}
 	var session agentAttachmentUploadSession
 	if err := client.PostJSON(ctx, "/api/agent/attachment-upload-sessions", map[string]any{
-		"target":       target,
-		"filename":     filepath.Base(filePath),
-		"content_type": contentType,
-		"size_bytes":   sizeBytes,
+		"target":            target,
+		"filename":          filepath.Base(filePath),
+		"content_type":      contentType,
+		"size_bytes":        sizeBytes,
+		"checksum_sha256":   checksumSHA256,
+		"client_request_id": clientRequestID.String(),
 	}, &session); err != nil {
 		return fmt.Errorf("create attachment upload session: %w", err)
 	}
+	return completeAgentAttachmentUploadSession(ctx, client, file, filePath, sizeBytes, session)
+}
+
+func runAgentAttachmentUploadSessionResume(ctx context.Context, client *cli.APIClient, sessionID, filePath string, sizeBytes int64) error {
+	var session agentAttachmentUploadSession
+	if err := client.GetJSON(ctx, "/api/agent/attachment-upload-sessions/"+sessionID, &session); err != nil {
+		return fmt.Errorf("get attachment upload session: %w", err)
+	}
+	if session.State == "completed" && strings.TrimSpace(session.AttachmentID) != "" {
+		fmt.Fprintf(os.Stderr, "Upload session already completed. Attachment ID: %s\n", session.AttachmentID)
+		return cli.PrintJSON(os.Stdout, map[string]any{"id": session.AttachmentID, "session_id": sessionID})
+	}
+	if session.State != "pending" {
+		return fmt.Errorf("upload session is %s and cannot be retried", session.State)
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+	contentType, err := detectAttachmentUploadContentType(file, filepath.Base(filePath))
+	if err != nil {
+		return err
+	}
+	checksumSHA256, err := attachmentUploadChecksum(file)
+	if err != nil {
+		return err
+	}
+	if sizeBytes != session.SizeBytes || !strings.EqualFold(contentType, session.ContentType) || !strings.EqualFold(checksumSHA256, session.ChecksumSHA256) {
+		return fmt.Errorf("local file does not match the declared upload session metadata")
+	}
+	if err := client.PostJSON(ctx, "/api/agent/attachment-upload-sessions/"+sessionID+"/retry", map[string]any{}, &session); err != nil {
+		return fmt.Errorf("retry attachment upload session: %w", err)
+	}
+	return completeAgentAttachmentUploadSession(ctx, client, file, filePath, sizeBytes, session)
+}
+
+func runAgentAttachmentUploadSessionCancel(ctx context.Context, client *cli.APIClient, sessionID string) error {
+	var session agentAttachmentUploadSession
+	if err := client.PostJSON(ctx, "/api/agent/attachment-upload-sessions/"+sessionID+"/cancel", map[string]any{}, &session); err != nil {
+		return fmt.Errorf("cancel attachment upload session: %w", err)
+	}
+	if session.State != "cancelled" {
+		return fmt.Errorf("cancel attachment upload session returned state %q", session.State)
+	}
+	fmt.Fprintf(os.Stderr, "Upload session cancelled: %s\n", session.ID)
+	return cli.PrintJSON(os.Stdout, map[string]any{"id": session.ID, "state": session.State})
+}
+
+func completeAgentAttachmentUploadSession(ctx context.Context, client *cli.APIClient, file *os.File, filePath string, sizeBytes int64, session agentAttachmentUploadSession) error {
 	if strings.TrimSpace(session.ID) == "" || strings.TrimSpace(session.UploadURL) == "" {
 		return fmt.Errorf("attachment upload session returned no destination")
 	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind file: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Upload session: %s\n", session.ID)
 	if err := client.UploadToDestination(ctx, session.UploadURL, session.Method, session.Headers, file, sizeBytes); err != nil {
-		return fmt.Errorf("upload attachment bytes: %w", err)
+		return fmt.Errorf("upload attachment bytes for session %s: %w (retry with multica attachment upload --path %q --resume-session %s)", session.ID, err, filePath, session.ID)
 	}
 	var attachment map[string]any
 	if err := client.PostJSON(ctx, "/api/agent/attachment-upload-sessions/"+session.ID+"/complete", map[string]any{}, &attachment); err != nil {
@@ -280,6 +385,20 @@ func runAgentAttachmentUploadSession(ctx context.Context, client *cli.APIClient,
 	fmt.Fprintf(os.Stderr, "Attachment ID: %s\n\n", id)
 	fmt.Fprintf(os.Stderr, "Use this ID with multica message send --attachment-id %s.\n", id)
 	return cli.PrintJSON(os.Stdout, attachment)
+}
+
+func attachmentUploadChecksum(file *os.File) (string, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewind file: %w", err)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("hash file: %w", err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewind file: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func detectAttachmentUploadContentType(file *os.File, filename string) (string, error) {

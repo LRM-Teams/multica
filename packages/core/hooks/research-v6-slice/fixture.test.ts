@@ -219,8 +219,7 @@ describe("Scaling fixture (10k protection)", () => {
     const seenIds = new Set<string>();
     let pages = 0;
     let sentOverWireNodes = 0;
-    let hasMore = true;
-    while (hasMore) {
+    for (;;) {
       const res = await collect(gw, req);
       // Every page is bounded: never the whole 10k graph.
       expect(res.nodes.length).toBeLessThanOrEqual(500);
@@ -230,10 +229,8 @@ describe("Scaling fixture (10k protection)", () => {
         // cursor repeats must never duplicate a page
       }
       pages += 1;
-      hasMore = res.hasMore === true;
-      if (hasMore) {
-        req = { ...req, cursor: res.nextCursor ?? undefined };
-      }
+      if (!res.hasMore) break;
+      req = { ...req, cursor: res.nextCursor ?? undefined };
       if (pages > 100) throw new Error("infinite pagination");
     }
 
@@ -259,17 +256,14 @@ describe("Scaling fixture (10k protection)", () => {
     const seen = new Set<string>();
     let duplicates = 0;
     let guard = 0;
-    let hasMore = true;
-    while (hasMore) {
+    for (;;) {
       const res = await collect(gw, req);
       for (const n of res.nodes) {
         if (seen.has(n.node.id)) duplicates += 1;
         seen.add(n.node.id);
       }
-      hasMore = res.hasMore === true;
-      if (hasMore) {
-        req = { ...req, cursor: res.nextCursor ?? undefined };
-      }
+      if (!res.hasMore) break;
+      req = { ...req, cursor: res.nextCursor ?? undefined };
       guard += 1;
       if (guard > 200) throw new Error("infinite pagination");
     }
@@ -308,14 +302,11 @@ describe("Scaling fixture perf (LRM-1465 AC2: no long main-thread slice)", () =>
     };
     let pages = 0;
     let guard = 0;
-    let hasMore = true;
-    while (hasMore) {
+    for (;;) {
       const res = await collect(gw, req);
       pages += 1;
-      hasMore = res.hasMore === true;
-      if (hasMore) {
-        req = { ...req, cursor: res.nextCursor ?? undefined };
-      }
+      if (!res.hasMore) break;
+      req = { ...req, cursor: res.nextCursor ?? undefined };
       guard += 1;
       if (guard > 200) throw new Error("infinite pagination");
     }

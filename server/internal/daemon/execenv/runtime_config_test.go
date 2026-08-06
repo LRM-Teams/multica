@@ -486,7 +486,7 @@ func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
 				for _, want := range []string{
 					"Thread attention is explicit.",
 					"`ChannelID` target present",
-					"task-scoped Multica CLI transport",
+					"durable agent-credential Multica CLI transport",
 					"final assistant output, is not delivered",
 				} {
 					if !strings.Contains(out, want) {
@@ -535,7 +535,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 
 	for _, want := range []string{
 		"## Delivery",
-		"task-scoped Multica CLI transport",
+		"durable agent-credential Multica CLI transport",
 		"Context boundaries:",
 		"Common chat command forms are listed here so you can use them directly",
 		"Do NOT run `multica message send --help`",
@@ -564,7 +564,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"the held draft is never retried or sent later",
 		"a freshness `held` result exits non-zero",
 		"multica message react --message-id <id> --emoji \"...\" [--remove]",
-		"multica message read [--target ...] [--limit N] --output json",
+		"multica message read [--target ...] [--limit N]",
 		"multica message search [query] [--target ...] [--sender user:<uuid>|agent:<uuid>]",
 		"multica message resolve <message-id>",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
@@ -784,7 +784,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	// Ambient conversation delivery still carries the CLI instructions.
 	for _, want := range []string{
 		"## Delivery",
-		"task-scoped Multica CLI transport",
+		"durable agent-credential Multica CLI transport",
 		"multica message send",
 	} {
 		if !strings.Contains(out, want) {
@@ -793,7 +793,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	}
 }
 
-func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
+func TestChatRuntimeBriefAlwaysAdvertisesCredentialCLITransport(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID:                    "chat-1",
@@ -807,7 +807,7 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 
 	for _, want := range []string{
 		"## Delivery",
-		"task-scoped Multica CLI transport",
+		"durable agent-credential Multica CLI transport",
 		"multica message send",
 		"multica message react",
 		"pipe a non-empty body",
@@ -837,7 +837,7 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 
 	for _, banned := range []string{
 		"This runtime has no chat CLI transport.",
-		"No visible chat reply can be delivered without the task-scoped CLI transport.",
+		"No visible chat reply can be delivered without the durable agent-credential CLI transport.",
 		"Do not try to find, install, or discuss chat send/react commands",
 	} {
 		if strings.Contains(out, banned) {
@@ -1795,7 +1795,7 @@ func TestChannelChatRuntimeBriefNeverLeaksStandaloneFinalOutputContract(t *testi
 	})
 
 	for _, want := range []string{
-		"`ChannelID` target present: visible output is delivered only by the task-scoped Multica CLI transport",
+		"`ChannelID` target present: visible output is delivered only by the durable agent-credential Multica CLI transport",
 		"Visible reply required for human DM/@mention/direct question/task/continuation.",
 		"For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds",
 	} {

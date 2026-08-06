@@ -1077,6 +1077,7 @@ function AgentRailRow({
   selected: boolean;
   onClick: () => void;
 }) {
+	void presence;
   const { t } = useT("agents");
   const displayName = resolveActorDisplayName(agent, agent.name);
   const isArchived = !!agent.archived_at;
@@ -1135,7 +1136,7 @@ function AgentRailRow({
         </div>
         {!isArchived ? (
           <AgentActivityStatus
-            presence={presence}
+            agentId={agent.id}
             alignEnd
             className="max-w-[36%]"
           />

@@ -18,7 +18,11 @@ type Engine struct {
 	clock      Clock
 }
 
-func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
+func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) ResearchRun {
+	return newEngine(store, dispatcher, projector)
+}
+
+func newEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
 	return &Engine{store: store, dispatcher: dispatcher, projector: projector, clock: systemClock{}}
 }
 

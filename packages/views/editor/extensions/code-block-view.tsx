@@ -139,11 +139,11 @@ function CodeBlockToolbar({
   const currentLanguage = normalizeLanguage(language || "plaintext");
 
   return (
+    /* react-doctor-disable-next-line react-doctor/no-static-element-interactions -- mousedown stopPropagation only; keeps TipTap from stealing focus. Real actions are the buttons inside. */
     <div
       data-testid="code-block-toolbar"
       className="code-block-toolbar flex items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm"
       onMouseDown={stopToolbarBubble}
-      onClick={stopToolbarBubble}
     >
       <DropdownMenu onOpenChange={onMenuOpenChange}>
         <DropdownMenuTrigger
@@ -429,6 +429,8 @@ function CodeBlockView({ node, updateAttributes, deleteNode }: NodeViewProps) {
   );
 }
 
-export { CodeBlockView, CodeBlockToolbar, languageLabel };
+export { CodeBlockView };
+// react-doctor-disable-next-line react-doctor/only-export-components -- toolbar + label helpers are unit-tested beside the NodeView that owns them.
+export { CodeBlockToolbar, languageLabel };
 export type { CodeLanguage };
 export type { MermaidViewMode } from "./code-block-fence";

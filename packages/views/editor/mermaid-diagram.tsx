@@ -16,7 +16,6 @@
  */
 
 import {
-  forwardRef,
   useEffect,
   useId,
   useImperativeHandle,
@@ -24,6 +23,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type Ref,
 } from "react";
 import { Maximize2 } from "lucide-react";
 import {
@@ -235,10 +235,16 @@ function useThemeVersion() {
   return themeVersion;
 }
 
-export const MermaidDiagram = forwardRef<
-  MermaidDiagramHandle,
-  { chart: string; showToolbar?: boolean }
->(function MermaidDiagram({ chart, showToolbar = true }, ref) {
+export function MermaidDiagram({
+  chart,
+  showToolbar = true,
+  ref,
+}: {
+  chart: string;
+  showToolbar?: boolean;
+  ref?: Ref<MermaidDiagramHandle>;
+  // react-doctor-disable-next-line react-doctor/prefer-useReducer -- sandboxed docs / layout / error / lightbox are independent async stages; a reducer would batch unrelated updates without clearer ownership.
+}) {
   const { t } = useT("editor");
   const reactId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -247,7 +253,9 @@ export const MermaidDiagram = forwardRef<
     [reactId],
   );
   const themeVersion = useThemeVersion();
-  const [svg, setSvg] = useState<string | null>(null);
+  // SVG markup is only needed by the imperative download handler — keep it off
+  // the render path so setting it after mermaid.render doesn't re-paint.
+  const svgRef = useRef<string | null>(null);
   const [sandboxedDocument, setSandboxedDocument] = useState<string | null>(null);
   const [expandedDocument, setExpandedDocument] = useState<string | null>(null);
   // Lazy initial value: if we've rendered this exact chart already in the
@@ -263,10 +271,10 @@ export const MermaidDiagram = forwardRef<
     () => ({
       openFullscreen: () => setLightboxOpen(true),
       downloadSvg: () => {
-        if (svg) downloadSvgFile(svg, "mermaid-diagram.svg");
+        if (svgRef.current) downloadSvgFile(svgRef.current, "mermaid-diagram.svg");
       },
     }),
-    [svg],
+    [],
   );
 
   useEffect(() => {
@@ -275,7 +283,7 @@ export const MermaidDiagram = forwardRef<
     async function renderDiagram() {
       try {
         setError(null);
-        setSvg(null);
+        svgRef.current = null;
         setSandboxedDocument(null);
         setExpandedDocument(null);
         // Seed layout from cache (if any) so the skeleton sizes correctly
@@ -294,7 +302,7 @@ export const MermaidDiagram = forwardRef<
           const measured = getMermaidLayout(renderedSvg);
           setLayout(measured);
           writeCachedLayout(chart, measured);
-          setSvg(renderedSvg);
+          svgRef.current = renderedSvg;
           setSandboxedDocument(
             buildSandboxedMermaidDocument(renderedSvg, containerRef.current),
           );
@@ -387,4 +395,4 @@ export const MermaidDiagram = forwardRef<
       )}
     </div>
   );
-});
+}

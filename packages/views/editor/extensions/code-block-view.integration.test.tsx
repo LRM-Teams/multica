@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { Editor } from "@tiptap/core";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { createEditorExtensions } from "./index";
 
@@ -44,7 +45,7 @@ function CodeBlockEditorHarness({
   onEditor,
 }: {
   markdown: string;
-  onEditor?: (editor: ReturnType<typeof useEditor>) => void;
+  onEditor?: (editor: Editor) => void;
 }) {
   const editor = useEditor({
     extensions: createEditorExtensions({}),
@@ -67,7 +68,7 @@ afterEach(() => {
 describe("CodeBlockView controls (TipTap integration)", () => {
   it("changes the fenced language when a language menu item is chosen", async () => {
     const user = userEvent.setup();
-    let editor: ReturnType<typeof useEditor> | null = null;
+    let editor: Editor | null = null;
 
     render(
       <CodeBlockEditorHarness
@@ -111,7 +112,7 @@ describe("CodeBlockView controls (TipTap integration)", () => {
 
   it("persists mermaid diagram-only mode across markdown reload", async () => {
     const user = userEvent.setup();
-    let editor: ReturnType<typeof useEditor> | null = null;
+    let editor: Editor | null = null;
 
     const { unmount } = render(
       <CodeBlockEditorHarness

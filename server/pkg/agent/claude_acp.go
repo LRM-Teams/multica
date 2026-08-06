@@ -114,12 +114,21 @@ func (b *claudeACPBackend) runtimeAlive() (bool, bool) {
 }
 
 func (b *claudeACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+	hadResidentProcess := b.process.Load() != nil
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
 		if b.forceKilled.CompareAndSwap(true, false) {
 			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
 		}
 		return Result{Status: "failed", Error: err.Error()}
+	}
+	if hadResidentProcess && shouldProactivelyCompact(p.client.currentRuntimeStats()) {
+		trySend(msgCh, Message{Type: MessageCompactionStarted})
+		if err := b.compactRuntime(ctx, p); err != nil {
+			b.cfg.Logger.Warn("proactive runtime context compaction failed; continuing turn", "provider", "claude", "error", err)
+		} else {
+			trySend(msgCh, Message{Type: MessageCompactionFinished})
+		}
 	}
 
 	var output strings.Builder
@@ -176,6 +185,22 @@ func (b *claudeACPBackend) executeTurn(ctx context.Context, prompt string, opts 
 		return Result{Status: status, Error: fmt.Sprintf("claude ACP session/prompt: %v", err), SessionID: sessionID}
 	}
 	return Result{Status: "completed", Output: output.String(), SessionID: p.sessionID}
+}
+
+func (b *claudeACPBackend) compactRuntime(ctx context.Context, p *claudeACPProcess) error {
+	p.client.acceptNotification = func(string) bool { return true }
+	defer func() { p.client.acceptNotification = nil }()
+	_, err := p.client.request(ctx, "session/prompt", map[string]any{
+		"sessionId": p.sessionID,
+		"prompt": []map[string]any{{
+			"type": "text",
+			"text": "/compact " + proactiveContextCompactionInstructions,
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("claude /compact: %w", err)
+	}
+	return nil
 }
 
 func (b *claudeACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*claudeACPProcess, error) {

@@ -1166,6 +1166,9 @@ type codexClient struct {
 	usageMu sync.Mutex
 	usage   TokenUsage // accumulated from turn events
 
+	runtimeStatsMu sync.Mutex
+	runtimeStats   *RuntimeTokenStats
+
 	turnErrorMu sync.Mutex
 	turnError   string // captured from turn/completed status=failed or terminal error notifications
 
@@ -1526,6 +1529,9 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 	}
 
 	switch method {
+	case "thread/tokenUsage/updated":
+		c.updateRuntimeStats(params)
+
 	case "turn/started":
 		c.setActiveTurn(true, extractNestedString(params, "turn", "id"))
 		if c.onMessage != nil {
@@ -1609,6 +1615,36 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 			c.handleItemNotification(method, params)
 		}
 	}
+}
+
+func (c *codexClient) updateRuntimeStats(params map[string]any) {
+	tokenUsage, _ := params["tokenUsage"].(map[string]any)
+	total, _ := tokenUsage["total"].(map[string]any)
+	contextTokens := codexInt64(total, "totalTokens", "total_tokens")
+	contextWindow := codexInt64(tokenUsage, "modelContextWindow", "model_context_window")
+	if contextTokens < 0 || contextWindow <= 0 {
+		return
+	}
+	percent := float64(contextTokens) * 100 / float64(contextWindow)
+	c.runtimeStatsMu.Lock()
+	c.runtimeStats = &RuntimeTokenStats{
+		Provider:       "codex",
+		TotalTokens:    contextTokens,
+		ContextTokens:  &contextTokens,
+		ContextWindow:  &contextWindow,
+		ContextPercent: &percent,
+	}
+	c.runtimeStatsMu.Unlock()
+}
+
+func (c *codexClient) currentRuntimeStats() *RuntimeTokenStats {
+	c.runtimeStatsMu.Lock()
+	defer c.runtimeStatsMu.Unlock()
+	if c.runtimeStats == nil {
+		return nil
+	}
+	copy := *c.runtimeStats
+	return &copy
 }
 
 func (c *codexClient) handleItemNotification(method string, params map[string]any) {

@@ -445,9 +445,18 @@ func (b *piRPCBackend) runtimeAlive() (bool, bool) {
 }
 
 func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+	hadResidentProcess := b.hasProcess()
 	p, err := b.ensureProcess(opts)
 	if err != nil {
 		return Result{Status: "failed", Error: err.Error()}
+	}
+	if hadResidentProcess && shouldProactivelyCompact(p.queryRuntimeStats(ctx, nil, opts.Model)) {
+		trySend(msgCh, Message{Type: MessageCompactionStarted})
+		if compacted, err := b.Compact(ctx, proactiveContextCompactionInstructions); err != nil {
+			b.cfg.Logger.Warn("proactive runtime context compaction failed; continuing turn", "provider", "pi", "error", err)
+		} else {
+			trySend(msgCh, Message{Type: MessageCompactionFinished, Content: compacted.Summary})
+		}
 	}
 
 	var output strings.Builder
@@ -513,6 +522,12 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 		b.dispose(p)
 		return piRPCContextResult(ctx)
 	}
+}
+
+func (b *piRPCBackend) hasProcess() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.process != nil
 }
 
 func piRPCContextResult(ctx context.Context) Result {

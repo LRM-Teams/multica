@@ -122,12 +122,18 @@ func (b *codexAppServerBackend) runtimeAlive() (bool, bool) {
 }
 
 func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+	hadResidentProcess := b.process.Load() != nil
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
 		if b.forceKilled.CompareAndSwap(true, false) {
 			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
 		}
 		return Result{Status: "failed", Error: err.Error()}
+	}
+	if hadResidentProcess && shouldProactivelyCompact(p.client.currentRuntimeStats()) {
+		if err := b.compactRuntime(ctx, p, msgCh); err != nil {
+			b.cfg.Logger.Warn("proactive runtime context compaction failed; continuing turn", "provider", "codex", "error", err)
+		}
 	}
 
 	var outputMu sync.Mutex
@@ -369,6 +375,33 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 		Output:    finalOutput,
 		SessionID: threadID,
 		Usage:     usageMap,
+	}
+}
+
+func (b *codexAppServerBackend) compactRuntime(ctx context.Context, p *codexAppServerProcess, msgCh chan<- Message) error {
+	finished := make(chan struct{}, 1)
+	p.client.onMessage = func(msg Message) {
+		if msg.Type != MessageCompactionStarted && msg.Type != MessageCompactionFinished {
+			return
+		}
+		trySend(msgCh, msg)
+		if msg.Type == MessageCompactionFinished {
+			select {
+			case finished <- struct{}{}:
+			default:
+			}
+		}
+	}
+	defer func() { p.client.onMessage = nil }()
+
+	if _, err := p.client.request(ctx, "thread/compact/start", map[string]any{"threadId": p.threadID}); err != nil {
+		return fmt.Errorf("codex thread/compact/start: %w", err)
+	}
+	select {
+	case <-finished:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

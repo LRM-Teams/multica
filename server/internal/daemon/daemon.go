@@ -4435,7 +4435,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					if msg.Type == agent.MessageCompactionFinished {
 						messageType = "compaction_finished"
 					}
-					batch = append(batch, TaskMessageData{Seq: int(s), Type: messageType})
+					batch = append(batch, TaskMessageData{Seq: int(s), Type: messageType, Content: msg.Content})
 					mu.Unlock()
 				case agent.MessageText:
 					if msg.Content != "" {

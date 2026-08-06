@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // ensureSystemGeneralForTest creates the workspace #general system channel if it
@@ -127,9 +129,10 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 
 	// Action is executed with result + committer recorded.
 	var status, resultAgent string
+	var finalPayloadRaw []byte
 	if err := testPool.QueryRow(ctx, `
-		SELECT status, COALESCE(result_agent_id::text, '')
-		FROM agent_action WHERE channel_message_id = $1`, parseUUID(messageID)).Scan(&status, &resultAgent); err != nil {
+		SELECT status, COALESCE(result_agent_id::text, ''), final_payload
+		FROM agent_action WHERE channel_message_id = $1`, parseUUID(messageID)).Scan(&status, &resultAgent, &finalPayloadRaw); err != nil {
 		t.Fatalf("load action: %v", err)
 	}
 	if status != "executed" {
@@ -137,6 +140,39 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 	}
 	if resultAgent != uuidToString(created.ID) {
 		t.Fatalf("result_agent mismatched: %q vs %q", resultAgent, uuidToString(created.ID))
+	}
+	var finalPayload map[string]any
+	if err := json.Unmarshal(finalPayloadRaw, &finalPayload); err != nil {
+		t.Fatalf("decode final payload: %v", err)
+	}
+	if finalPayload["runtime_id"] != testRuntimeID || finalPayload["model"] != "composer-1.5" {
+		t.Fatalf("final payload missing committed configuration: %#v", finalPayload)
+	}
+	for _, forbidden := range []string{"instructions", "runtime_config", "custom_env", "custom_args", "mcp_config"} {
+		if _, leaked := finalPayload[forbidden]; leaked {
+			t.Fatalf("final payload must not persist %s: %#v", forbidden, finalPayload)
+		}
+	}
+
+	var partsRaw []byte
+	if err := testPool.QueryRow(ctx, `SELECT parts FROM channel_message WHERE id = $1`, parseUUID(messageID)).Scan(&partsRaw); err != nil {
+		t.Fatalf("load committed proposal parts: %v", err)
+	}
+	var parts []protocol.MessagePart
+	if err := json.Unmarshal(partsRaw, &parts); err != nil || len(parts) != 1 {
+		t.Fatalf("decode committed proposal parts: parts=%#v err=%v", parts, err)
+	}
+	var partParams map[string]any
+	if err := json.Unmarshal(parts[0].Params, &partParams); err != nil {
+		t.Fatalf("decode committed proposal params: %v", err)
+	}
+	if partParams["status"] != agentActionStatusExecuted || partParams["result_agent_id"] != uuidToString(created.ID) {
+		t.Fatalf("message proposal part was not marked executed: %#v", partParams)
+	}
+	for _, forbidden := range []string{"runtime_id", "model", "thinking_level", "custom_env", "credentials"} {
+		if _, leaked := partParams[forbidden]; leaked {
+			t.Fatalf("public proposal part leaked %s: %#v", forbidden, partParams)
+		}
 	}
 
 	// Agent is a member of system #general.
@@ -146,6 +182,16 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 		WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2`,
 		parseUUID(generalID), created.ID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("expected agent in #general, got n=%d err=%v", n, err)
+	}
+
+	var dispatchID, dispatchStatus string
+	if err := testPool.QueryRow(ctx, `
+		SELECT start_dispatch_id::text, status
+		FROM agent_start_intent WHERE agent_id = $1`, created.ID).Scan(&dispatchID, &dispatchStatus); err != nil {
+		t.Fatalf("load durable start intent: %v", err)
+	}
+	if dispatchID == "" || dispatchStatus != "pending" {
+		t.Fatalf("start intent = id=%q status=%q, want stable pending intent", dispatchID, dispatchStatus)
 	}
 
 	// Idempotent replay: same final payload returns the same Agent.
@@ -164,6 +210,44 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 		t.Fatalf("expected 409 conflict on different final payload, got nil")
 	} else if ce, ok := err.(*codedActionCommitError); !ok || ce.status != 409 {
 		t.Fatalf("expected coded 409, got %v", err)
+	}
+}
+
+func TestCreateAgentManagedCommitAtomicallyCreatesGeneralMembershipAndStartIntent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	ws := parseUUID(testWorkspaceID)
+	generalID := ensureSystemGeneralForTest(t)
+	params := db.CreateAgentParams{
+		WorkspaceID:        ws,
+		Description:        "manual create",
+		RuntimeMode:        "cloud",
+		RuntimeConfig:      []byte("{}"),
+		RuntimeID:          parseUUID(testRuntimeID),
+		MaxConcurrentTasks: 6,
+		OwnerID:            parseUUID(testUserID),
+		CustomEnv:          []byte("{}"),
+		CustomArgs:         []byte("[]"),
+		Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+	}
+	created, err := testHandler.createAgentManagedCommit(ctx, ws, params, "Manual Intent Agent")
+	if err != nil {
+		t.Fatalf("manual managed commit: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, created.ID) })
+
+	var memberships int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2`,
+		parseUUID(generalID), created.ID).Scan(&memberships); err != nil || memberships != 1 {
+		t.Fatalf("manual general membership = %d, err=%v", memberships, err)
+	}
+	var intentCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_start_intent WHERE agent_id = $1`, created.ID).Scan(&intentCount); err != nil || intentCount != 1 {
+		t.Fatalf("manual start intent count = %d, err=%v", intentCount, err)
 	}
 }
 

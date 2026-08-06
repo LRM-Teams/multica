@@ -8,33 +8,23 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// agent:create action cards (Frank/Parker 2026-08-04 hire hard-cut, no draft bridge).
-//
-// Agents prepare a card (name + optional description). Humans open
-// CreateAgentDialog bound to card id, POST /api/agents with action_card_id,
-// and the card is marked done. No agent_creation_draft / draft_id hire path.
+// agent:create Proposals are canonical channel Messages. Agents prepare a
+// message with a non-sensitive proposal snapshot; a human later supplies final
+// runtime configuration while committing that Message exactly once.
 
 const (
-	agentActionTypeCreate      = "agent:create"
-	agentActionStatusPrepared  = "prepared"
-	agentActionStatusDone      = "done"
-	agentActionStatusDismissed = "dismissed"
-	agentActionStatusExecuted  = "executed"
-
-	agentActionLookupOK          = "ok"
-	agentActionLookupNotFound    = "agent_action_not_found"
-	agentActionLookupNotPrepared = "agent_action_not_prepared"
+	agentActionTypeCreate     = "agent:create"
+	agentActionStatusPrepared = "prepared"
+	agentActionStatusExecuted = "executed"
 )
 
 type agentActionPrepareRequest struct {
@@ -44,13 +34,8 @@ type agentActionPrepareRequest struct {
 	// PreferredComputer is the Raft-style preferred Computer suggestion. It is
 	// a suggestion the human can change, never a required binding (LRM-2343).
 	PreferredComputer *string `json:"preferred_computer,omitempty"`
-	DraftHint         string  `json:"draft_hint"` // UI-only; not stored
-	// ChannelID is the legacy explicit channel target for the card row.
-	ChannelID *string `json:"channel_id"`
-	// Target is the canonical channel/DM/thread the proposal card Message is
-	// posted to (same spelling as message send). When set, prepare creates the
-	// canonical Message in the same operation and returns message_id.
-	Target *string `json:"target,omitempty"`
+	// Target is the canonical channel/DM/thread where the Proposal is posted.
+	Target string `json:"target"`
 	// ClientRequestID is the CLI/agent-generated stable idempotency key. Same
 	// proposer/workspace + same normalized target/action returns the original
 	// message_id; same key with different input returns 409 (LRM-2343 stories 4-6).
@@ -62,27 +47,16 @@ type agentActionCreatePayload struct {
 	Description string `json:"description"`
 }
 
-type agentActionCardResponse struct {
-	ActionType string                   `json:"action_type"`
-	ID         string                   `json:"id"`
-	Status     string                   `json:"status"`
-	Payload    agentActionCreatePayload `json:"payload"`
-	// MessageID is the canonical channel_message id that carries the
-	// agent:create action part. Non-empty when a target was provided.
-	MessageID *string `json:"message_id,omitempty"`
-	// Part is the structured message reference for send (issue-like, not multica://).
-	Part              *protocol.MessagePart `json:"part,omitempty"`
-	PreparedByAgentID *string               `json:"prepared_by_agent_id,omitempty"`
-	ChannelID         *string               `json:"channel_id,omitempty"`
-	CommittedByUserID *string               `json:"committed_by_user_id,omitempty"`
-	CommittedAgentID  *string               `json:"committed_agent_id,omitempty"`
-	CreatedAt         string                `json:"created_at"`
-	UpdatedAt         string                `json:"updated_at"`
-	DoneAt            *string               `json:"done_at,omitempty"`
+type agentActionProposalResponse struct {
+	ActionType        string                   `json:"action_type"`
+	MessageID         string                   `json:"message_id"`
+	Status            string                   `json:"status"`
+	Payload           agentActionCreatePayload `json:"payload"`
+	PreparedByAgentID string                   `json:"prepared_by_agent_id"`
 }
 
-// AgentTransportPrepareAction prepares a human-confirmable action card.
-// Only action_type=agent:create is supported.
+// AgentTransportPrepareAction atomically prepares a human-confirmable
+// agent:create Proposal Message and its server-side commit record.
 func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Request) {
 	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
@@ -91,7 +65,9 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 	task, origin := source.task, source.origin
 
 	var req agentActionPrepareRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -119,227 +95,72 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("description must be %d characters or fewer", maxAgentDescriptionLength))
 		return
 	}
-	if utf8.RuneCountInString(strings.TrimSpace(req.DraftHint)) > windyMaxDraftTextLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("draft_hint must be %d characters or fewer", windyMaxDraftTextLen))
+	targetRaw := strings.TrimSpace(req.Target)
+	if targetRaw == "" {
+		writeError(w, http.StatusBadRequest, "target is required")
+		return
+	}
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, targetRaw, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
+		return
+	}
+	clientRequestID := ""
+	if req.ClientRequestID != nil {
+		clientRequestID = strings.TrimSpace(*req.ClientRequestID)
+	}
+	if clientRequestID == "" {
+		writeError(w, http.StatusBadRequest, "client_request_id is required")
+		return
+	}
+	if len([]rune(clientRequestID)) > channelClientMessageIDMaxLen {
+		writeError(w, http.StatusBadRequest, "client_request_id is too long")
 		return
 	}
 
-	var channelID pgtype.UUID
-	if req.ChannelID != nil && strings.TrimSpace(*req.ChannelID) != "" {
-		parsed, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(*req.ChannelID), "channel_id")
-		if !ok {
+	actionPart := agentActionMessagePart(name, description, req.PreferredComputer)
+	result, err := h.createAgentTransportMessage(
+		r.Context(), source, target, buildAgentCreationProposalContent(name), []protocol.MessagePart{actionPart}, nil,
+		clientRequestID, 0, pgtype.UUID{},
+		func(ctx context.Context, tx pgx.Tx, message ChannelMessageResponse) error {
+			return seedAgentActionMessageTx(ctx, tx, origin.workspaceID, message.ID, task.AgentID, name, description, req.PreferredComputer)
+		},
+	)
+	if err != nil {
+		if errors.Is(err, errChannelClientMessageConflict) {
+			slog.Warn("agent action prepare idempotency payload conflict", "agent_id", uuidToString(task.AgentID), "client_request_id", clientRequestID, "target", target.raw)
+			writeError(w, http.StatusConflict, "client_request_id conflicts with an existing action message")
 			return
 		}
-		var n int
-		if err := h.DB.QueryRow(r.Context(), `
-			SELECT count(*) FROM channel_member
-			WHERE channel_id = $1 AND workspace_id = $2
-			  AND member_type = 'agent' AND member_id = $3`,
-			parsed, origin.workspaceID, task.AgentID).Scan(&n); err != nil || n == 0 {
-			writeError(w, http.StatusForbidden, "agent is not a member of channel_id")
-			return
-		}
-		channelID = parsed
+		slog.Warn("agent action prepare create message failed", "agent_id", uuidToString(task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to prepare agent:create proposal")
+		return
 	}
-
-	// LRM-2343: prepare must already create the canonical Message carrying the
-	// agent:create action part so the human can read the card through the normal
-	// message path (story 2/3) — the CLI no longer issues a second send. The
-	// canonical Message is the唯一 identity; the legacy agent_action_card row
-	// remains only as the transitional commit seam until the S4 cutover removes
-	// it. Supported targets span group channels, DMs and threads.
-	var messageID string
-	if req.Target != nil && strings.TrimSpace(*req.Target) != "" {
-		target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, strings.TrimSpace(*req.Target), true)
+	if !actionPartPayloadMatches(result.Message.Parts, name, description, req.PreferredComputer) {
+		writeError(w, http.StatusConflict, "client_request_id conflicts with a different agent:create proposal")
+		return
+	}
+	proposalStatus := agentActionStatusPrepared
+	if !result.Created {
+		proposal, exists, err := h.loadAgentActionForCommit(r.Context(), origin.workspaceID, parseUUID(result.Message.ID))
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
+			writeError(w, http.StatusInternalServerError, "failed to load existing agent:create proposal")
 			return
 		}
-		clientRequestID := ""
-		if req.ClientRequestID != nil {
-			clientRequestID = strings.TrimSpace(*req.ClientRequestID)
-		}
-		if clientRequestID == "" {
-			writeError(w, http.StatusBadRequest, "client_request_id is required when target is provided")
-			return
-		}
-		if len([]rune(clientRequestID)) > channelClientMessageIDMaxLen {
-			writeError(w, http.StatusBadRequest, "client_request_id is too long")
-			return
-		}
-		actionPart := agentActionMessagePart(name, description, req.PreferredComputer)
-		content := buildActionCardContent(name)
-		result, err := h.createAgentTransportMessage(r.Context(), source, target, content, []protocol.MessagePart{actionPart}, nil, clientRequestID, 0, pgtype.UUID{})
-		if err != nil {
-			if errors.Is(err, errChannelClientMessageConflict) {
-				slog.Warn("agent action prepare idempotency payload conflict", "agent_id", uuidToString(task.AgentID), "client_request_id", clientRequestID, "target", target.raw)
-				writeError(w, http.StatusConflict, "client_request_id conflicts with an existing action message")
-				return
-			}
-			slog.Warn("agent action prepare create message failed", "agent_id", uuidToString(task.AgentID), "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to create action card message")
-			return
-		}
-		// LRM-2343 story 6: same client_request_id reused with different
-		// normalized action input must conflict, not silently reuse the old Message.
-		if !result.Created && !actionPartPayloadMatches(result.Message.Parts, name, description, req.PreferredComputer) {
+		if !exists || !agentActionProposalMatches(proposal.proposed, name, description, req.PreferredComputer) {
 			writeError(w, http.StatusConflict, "client_request_id conflicts with a different agent:create proposal")
 			return
 		}
-		messageID = result.Message.ID
-		if !channelID.Valid && result.Message.ChannelID != "" {
-			if mid, err := util.ParseUUID(result.Message.ChannelID); err == nil && mid.Valid {
-				channelID = mid
-			}
-		}
-		// LRM-2343 S2: seed the canonical commit state keyed by the Message id.
-		// The legacy agent_action_card row below remains only for rollback of the
-		// old two-step path; the canonical path's prepared/executed + snapshots
-		// now live here (agent_action) so CreateAgent can commit atomically.
-		if err := h.seedAgentActionMessage(r.Context(), origin.workspaceID, result.Message.ID, task.AgentID, name, description, req.PreferredComputer); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to record agent:create action")
-			return
-		}
+		proposalStatus = proposal.status
 	}
 
-	payloadBytes, err := json.Marshal(agentActionCreatePayload{Name: name, Description: description})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to prepare agent:create action")
-		return
-	}
-
-	var (
-		id, preparedBy, chID pgtype.UUID
-		status               string
-		payloadRaw           []byte
-		createdAt, updatedAt pgtype.Timestamptz
-	)
-	err = h.DB.QueryRow(r.Context(), `
-		INSERT INTO agent_action_card (
-			workspace_id, action_type, status, payload, prepared_by_agent_id, channel_id
-		) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-		RETURNING id, action_type, status, payload, prepared_by_agent_id, channel_id, created_at, updated_at`,
-		origin.workspaceID, agentActionTypeCreate, agentActionStatusPrepared, payloadBytes,
-		task.AgentID, nullableUUID(channelID),
-	).Scan(&id, &actionType, &status, &payloadRaw, &preparedBy, &chID, &createdAt, &updatedAt)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to prepare agent:create action")
-		return
-	}
-
-	cardID := uuidToString(id)
-	part := actionCardMessagePart(cardID, name)
-	resp := agentActionCardResponse{
-		ActionType:        actionType,
-		ID:                cardID,
-		Status:            status,
+	writeJSON(w, http.StatusCreated, agentActionProposalResponse{
+		ActionType:        agentActionTypeCreate,
+		MessageID:         result.Message.ID,
+		Status:            proposalStatus,
 		Payload:           agentActionCreatePayload{Name: name, Description: description},
-		Part:              &part,
-		PreparedByAgentID: uuidToPtr(preparedBy),
-		ChannelID:         uuidToPtr(chID),
-		CreatedAt:         timestampToString(createdAt),
-		UpdatedAt:         timestampToString(updatedAt),
-	}
-	if messageID != "" {
-		resp.MessageID = &messageID
-	}
-	writeJSON(w, http.StatusCreated, resp)
-}
-
-// GetActionCard loads a prepared/done/dismissed action card for workspace members (FE Dialog).
-func (h *Handler) GetActionCard(w http.ResponseWriter, r *http.Request) {
-	if _, ok := requireUserID(w, r); !ok {
-		return
-	}
-	workspaceID := h.resolveWorkspaceID(r)
-	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
-		return
-	}
-	cardID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "action card id")
-	if !ok {
-		return
-	}
-	card, code := h.loadActionCard(r, workspaceID, cardID)
-	if code != agentActionLookupOK {
-		writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, card)
-}
-
-// DismissActionCard marks a prepared card dismissed (human cancel).
-func (h *Handler) DismissActionCard(w http.ResponseWriter, r *http.Request) {
-	if _, ok := requireUserID(w, r); !ok {
-		return
-	}
-	workspaceID := h.resolveWorkspaceID(r)
-	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
-		return
-	}
-	cardID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "action card id")
-	if !ok {
-		return
-	}
-	tag, err := h.DB.Exec(r.Context(), `
-		UPDATE agent_action_card
-		SET status = $3, updated_at = now()
-		WHERE id = $1 AND workspace_id = $2 AND status = $4`,
-		cardID, parseUUID(workspaceID), agentActionStatusDismissed, agentActionStatusPrepared)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to dismiss action card")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
-		return
-	}
-	card, code := h.loadActionCard(r, workspaceID, cardID)
-	if code != agentActionLookupOK {
-		writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, card)
-}
-
-func (h *Handler) loadActionCard(r *http.Request, workspaceID string, cardID pgtype.UUID) (agentActionCardResponse, string) {
-	var empty agentActionCardResponse
-	if h == nil || h.DB == nil || !cardID.Valid {
-		return empty, agentActionLookupNotFound
-	}
-	var (
-		id, preparedBy, chID, committedBy, committedAgent pgtype.UUID
-		actionType, status                                string
-		payloadRaw                                        []byte
-		createdAt, updatedAt, doneAt                      pgtype.Timestamptz
-	)
-	err := h.DB.QueryRow(r.Context(), `
-		SELECT id, action_type, status, payload, prepared_by_agent_id, channel_id,
-		       committed_by_user_id, committed_agent_id, created_at, updated_at, done_at
-		FROM agent_action_card
-		WHERE id = $1 AND workspace_id = $2`,
-		cardID, parseUUID(workspaceID),
-	).Scan(&id, &actionType, &status, &payloadRaw, &preparedBy, &chID, &committedBy, &committedAgent, &createdAt, &updatedAt, &doneAt)
-	if err != nil {
-		return empty, agentActionLookupNotFound
-	}
-	var payload agentActionCreatePayload
-	_ = json.Unmarshal(payloadRaw, &payload)
-	idStr := uuidToString(id)
-	part := actionCardMessagePart(idStr, payload.Name)
-	return agentActionCardResponse{
-		ActionType:        actionType,
-		ID:                idStr,
-		Status:            status,
-		Payload:           payload,
-		Part:              &part,
-		PreparedByAgentID: uuidToPtr(preparedBy),
-		ChannelID:         uuidToPtr(chID),
-		CommittedByUserID: uuidToPtr(committedBy),
-		CommittedAgentID:  uuidToPtr(committedAgent),
-		CreatedAt:         timestampToString(createdAt),
-		UpdatedAt:         timestampToString(updatedAt),
-		DoneAt:            timestampToPtr(doneAt),
-	}, agentActionLookupOK
+		PreparedByAgentID: uuidToString(task.AgentID),
+	})
 }
 
 // extractActionMessageID reads the optional canonical action_message_id from
@@ -364,78 +185,6 @@ func extractActionMessageID(rawFields map[string]json.RawMessage) (pgtype.UUID, 
 		return empty, true, fmt.Errorf("action_message_id must be a UUID")
 	}
 	return id, true, nil
-}
-
-// extractActionCardID reads optional action_card_id from CreateAgent raw JSON.
-func extractActionCardID(rawFields map[string]json.RawMessage) (pgtype.UUID, bool, error) {
-	var empty pgtype.UUID
-	raw, ok := rawFields["action_card_id"]
-	if !ok {
-		return empty, false, nil
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return empty, true, fmt.Errorf("action_card_id must be a UUID")
-	}
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return empty, false, nil
-	}
-	id, err := util.ParseUUID(s)
-	if err != nil || !id.Valid {
-		return empty, true, fmt.Errorf("action_card_id must be a UUID")
-	}
-	return id, true, nil
-}
-
-// markActionCardDone transitions prepared → done after human CreateAgent.
-// Returns false when the card is missing or not in prepared state.
-func (h *Handler) markActionCardDone(r *http.Request, workspaceID string, cardID, userID, createdAgentID pgtype.UUID) (string, error) {
-	if h == nil || h.DB == nil || !cardID.Valid {
-		return agentActionLookupNotFound, nil
-	}
-	tag, err := h.DB.Exec(r.Context(), `
-		UPDATE agent_action_card
-		SET status = $4,
-		    committed_by_user_id = $5,
-		    committed_agent_id = $6,
-		    done_at = $7,
-		    updated_at = $7
-		WHERE id = $1
-		  AND workspace_id = $2
-		  AND action_type = $3
-		  AND status = $8`,
-		cardID, parseUUID(workspaceID), agentActionTypeCreate, agentActionStatusDone,
-		userID, createdAgentID, time.Now().UTC(), agentActionStatusPrepared,
-	)
-	if err != nil {
-		return "", err
-	}
-	if tag.RowsAffected() == 0 {
-		// Distinguish not found vs already used.
-		var status string
-		qerr := h.DB.QueryRow(r.Context(), `
-			SELECT status FROM agent_action_card WHERE id = $1 AND workspace_id = $2`,
-			cardID, parseUUID(workspaceID)).Scan(&status)
-		if qerr != nil {
-			if qerr == pgx.ErrNoRows {
-				return agentActionLookupNotFound, nil
-			}
-			return "", qerr
-		}
-		return agentActionLookupNotPrepared, nil
-	}
-	return agentActionLookupOK, nil
-}
-
-func actionCardMessagePart(cardID, name string) protocol.MessagePart {
-	return protocol.MessagePart{
-		Type:       protocol.MessagePartTypeReference,
-		RefType:    "action_card",
-		RefSubType: "agent:create",
-		RefID:      cardID,
-		Label:      name,
-	}
 }
 
 // agentActionMessagePart builds the canonical agent:create action part attached
@@ -501,9 +250,10 @@ func actionPartPayloadMatches(parts []protocol.MessagePart, name, description st
 	return p.Name == name && p.Description == description && strings.TrimSpace(p.PreferredComputer) == wantedComputer
 }
 
-// buildActionCardContent returns the canonical proposal Message content. It is
-// kept in lock-step with the UTF-16 anchor computed by agentActionMessagePart.
-func buildActionCardContent(name string) string {
+// buildAgentCreationProposalContent returns the canonical proposal Message
+// content. It is kept in lock-step with the UTF-16 anchor computed by
+// agentActionMessagePart.
+func buildAgentCreationProposalContent(name string) string {
 	return "[agent:create proposal] " + name
 }
 
@@ -512,7 +262,7 @@ func buildActionCardContent(name string) string {
 // (LRM-2343 S2). The proposed payload is the non-sensitive proposal snapshot
 // (name/description/preferred Computer); status starts at prepared and is CAS'd
 // to executed by CreateAgent inside the same commit transaction.
-func (h *Handler) seedAgentActionMessage(ctx context.Context, workspaceID pgtype.UUID, messageID string, preparedByAgentID pgtype.UUID, name, description string, preferredComputer *string) error {
+func seedAgentActionMessageTx(ctx context.Context, tx pgx.Tx, workspaceID pgtype.UUID, messageID string, preparedByAgentID pgtype.UUID, name, description string, preferredComputer *string) error {
 	proposed := map[string]any{
 		"name":        name,
 		"description": description,
@@ -532,7 +282,7 @@ func (h *Handler) seedAgentActionMessage(ctx context.Context, workspaceID pgtype
 	if !wsID.Valid {
 		return fmt.Errorf("invalid workspace id")
 	}
-	_, err = h.DB.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO agent_action (
 			channel_message_id, workspace_id, action_type, status,
 			proposed_payload, prepared_by_agent_id, prepared_at
@@ -540,4 +290,20 @@ func (h *Handler) seedAgentActionMessage(ctx context.Context, workspaceID pgtype
 		ON CONFLICT (channel_message_id) DO NOTHING`,
 		mid, wsID, agentActionTypeCreate, agentActionStatusPrepared, proposedRaw, nullableUUID(preparedByAgentID))
 	return err
+}
+
+func agentActionProposalMatches(proposed map[string]any, name, description string, preferredComputer *string) bool {
+	if strings.TrimSpace(asString(proposed["name"])) != name || strings.TrimSpace(asString(proposed["description"])) != description {
+		return false
+	}
+	wantedComputer := ""
+	if preferredComputer != nil {
+		wantedComputer = strings.TrimSpace(*preferredComputer)
+	}
+	return strings.TrimSpace(asString(proposed["preferred_computer"])) == wantedComputer
+}
+
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
 }

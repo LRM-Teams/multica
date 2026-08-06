@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // Directories to symlink from the shared ~/.codex/ into the Agent-scoped CODEX_HOME.
@@ -45,6 +46,10 @@ type CodexHomeOptions struct {
 	// uses this to let Codex update the provider-neutral agent memory root,
 	// which lives outside the Agent-scoped workdir.
 	WritableRoots []string
+	// LinuxSandboxFailure overrides the automatic bubblewrap capability probe.
+	// Nil runs the probe; a non-nil empty string forces workspace-write. Tests
+	// use the latter to stay independent of the host running the test suite.
+	LinuxSandboxFailure *string
 }
 
 // prepareCodexHome is a thin wrapper around prepareCodexHomeWithOpts kept for
@@ -52,7 +57,8 @@ type CodexHomeOptions struct {
 // assumes a Linux-like environment where workspace-write + network_access
 // works correctly.
 func prepareCodexHome(codexHome string, logger *slog.Logger) error {
-	return prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{GOOS: "linux"}, logger)
+	noFailure := ""
+	return prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{GOOS: "linux", LinuxSandboxFailure: &noFailure}, logger)
 }
 
 // prepareCodexHomeWithOpts creates a Agent-scoped CODEX_HOME directory and seeds
@@ -116,7 +122,19 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 	// Write a daemon-managed sandbox block into config.toml. On macOS we may
 	// need to fall back to danger-full-access because of openai/codex#10390;
 	// see codex_sandbox.go for the full rationale.
-	policy := codexSandboxPolicyFor(opts.GOOS, opts.CodexVersion)
+	goos := opts.GOOS
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	linuxSandboxFailure := ""
+	if goos == "linux" {
+		if opts.LinuxSandboxFailure != nil {
+			linuxSandboxFailure = *opts.LinuxSandboxFailure
+		} else {
+			linuxSandboxFailure = probeCodexLinuxSandbox()
+		}
+	}
+	policy := codexSandboxPolicyFor(goos, opts.CodexVersion, linuxSandboxFailure)
 	policy.WritableRoots = append([]string(nil), opts.WritableRoots...)
 	if err := ensureCodexSandboxConfig(filepath.Join(codexHome, "config.toml"), policy, opts.CodexVersion, logger); err != nil {
 		logger.Warn("execenv: codex-home ensure sandbox config failed", "error", err)

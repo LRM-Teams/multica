@@ -22,7 +22,7 @@ removed). Use real replacements:
 |---|---|
 | List agents | `multica workspace info --agents` / `--output json` |
 | Create / edit / archive | Multica **Web UI** → `POST/PUT/DELETE /api/agents` |
-| Hire (agent → human) | **agent:create action card** (product path in flight) → human opens CreateAgentDialog |
+| Hire (agent → human) | agent-created **agent:create Proposal Message** → owner/admin opens CreateAgentDialog |
 | Skill binding | Web UI agent settings → `POST/PUT /api/agents/{id}/skills…` |
 | Env secrets (owner/admin) | Web UI → `GET/PUT /api/agents/{id}/env` (agent actors denied plaintext) |
 
@@ -35,8 +35,8 @@ multica workspace info --agents --output json
 ## Core model
 
 An agent is a workspace-scoped row (table `agent`). Creation is a single
-`POST /api/agents` from the Web UI (or a human-confirmed action card that opens
-the same dialog). At task claim time the daemon re-reads the agent row and
+`POST /api/agents` from the Web UI (or a human-confirmed Proposal Message that
+opens the same dialog). At task claim time the daemon re-reads the agent row and
 assembles the runtime payload — so the **persisted** fields, not create-time
 CLI output, are what the agent runs on.
 
@@ -52,14 +52,17 @@ Two distinct text fields, often confused:
 
 ## Create entry points
 
-Human create goes through Web UI Create Agent (or agent:create card → same
-dialog). The dialog posts to `POST /api/agents`.
+Human create goes through Web UI Create Agent (or agent:create Proposal Message
+→ same dialog). The dialog posts to `POST /api/agents`; the server requires the
+human `manageAgents` capability (workspace owner/admin) and rejects agent
+principals on this route.
 
 On current servers, `name` is the stable handle (`@handle`) in persisted API
-responses. Create accepts legacy `name` or new `display_name` as display seed;
-the server derives a unique workspace-scoped handle in `agent.name`.
+responses. Create accepts `display_name` as the display seed and optional
+`username` as an explicit handle; the server otherwise derives a unique
+workspace-scoped handle in `agent.name`.
 
-The HTTP body (`CreateAgentRequest`) accepts: `name`, `display_name`,
+The HTTP body (`CreateAgentRequest`) accepts: `username`, `display_name`,
 `description`, `instructions`, `runtime_id`, `runtime_config`,
 `avatar_selection`, `custom_env`, `custom_args`, `model`, `thinking_level`,
 `visibility`, `max_concurrent_tasks`, `mcp_config`.
@@ -152,12 +155,12 @@ bindings.
 
 State-changing (require explicit human instruction — do not run speculatively):
 
-- Web UI / agent:create action card → inserts a new agent row.
+- Web UI / committed agent:create Proposal Message → inserts a new agent row.
 - Skill add / set → mutate bindings (`set` is destructive).
 - Env set → overwrites full `custom_env` and writes an audit row.
 
-Agents do **not** create other agents via CLI. Hire path = action card for a
-human. Research fleet hire is a separate specialty path.
+Agents do **not** create other agents via CLI. Hire path = Proposal Message for
+a human with `manageAgents`. Research fleet hire is a separate specialty path.
 
 ## Common wrong assumptions
 

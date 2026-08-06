@@ -208,8 +208,9 @@ function renderReferenceToken({
     return <ChannelRefLink channelId={reference.ref_id} label={reference.label ?? text} />;
   }
 
-  // Block hire cards render in MessagePartsRenderer, not as inline tokens.
-  if (reference.ref_type === "action_card") {
+  // Block agent:create Proposals render in MessagePartsRenderer, not as
+  // inline tokens.
+  if (reference.ref_type === "agent:create") {
     return <span className="text-muted-foreground">{reference.label ?? text}</span>;
   }
 

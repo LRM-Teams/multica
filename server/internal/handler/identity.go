@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/identityhandle"
@@ -103,16 +104,8 @@ func (h *Handler) createUserWithIdentity(ctx context.Context, email, displaySeed
 }
 
 func (h *Handler) createAgentWithIdentity(ctx context.Context, q *db.Queries, params db.CreateAgentParams, handleSeed, displaySeed string) (db.Agent, error) {
-	displayName := strings.TrimSpace(displaySeed)
-	if displayName == "" {
-		displayName = strings.TrimSpace(handleSeed)
-	}
-	if displayName == "" {
-		displayName = "Agent"
-	}
-	base := identityHandleBase(handleSeed, displayName)
-	base = identityhandle.Truncate(base, maxIdentityHandleLength)
-	if err := validateIdentityHandle(base); err != nil {
+	base, displayName, err := agentIdentityPlan(handleSeed, displaySeed)
+	if err != nil {
 		return db.Agent{}, err
 	}
 	for attempt := 1; attempt <= 100; attempt++ {
@@ -127,6 +120,59 @@ func (h *Handler) createAgentWithIdentity(ctx context.Context, q *db.Queries, pa
 		}
 	}
 	return db.Agent{}, errIdentityHandleExhausted
+}
+
+// createAgentWithIdentityTx keeps a duplicate handle attempt from aborting its
+// caller's larger provisioning transaction. Agent creation now commonly shares
+// that transaction with #general membership and a first-start intent, so a
+// PostgreSQL savepoint is required before retrying a unique-constraint conflict.
+func (h *Handler) createAgentWithIdentityTx(ctx context.Context, tx pgx.Tx, q *db.Queries, params db.CreateAgentParams, handleSeed, displaySeed string) (db.Agent, error) {
+	base, displayName, err := agentIdentityPlan(handleSeed, displaySeed)
+	if err != nil {
+		return db.Agent{}, err
+	}
+	for attempt := 1; attempt <= 100; attempt++ {
+		if _, err := tx.Exec(ctx, "SAVEPOINT create_agent_identity"); err != nil {
+			return db.Agent{}, err
+		}
+
+		params.Name = identityHandleCandidate(base, attempt)
+		params.DisplayName = displayName
+		created, createErr := q.CreateAgent(ctx, params)
+		if createErr == nil {
+			if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT create_agent_identity"); err != nil {
+				return db.Agent{}, err
+			}
+			return created, nil
+		}
+
+		if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT create_agent_identity"); err != nil {
+			return db.Agent{}, err
+		}
+		if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT create_agent_identity"); err != nil {
+			return db.Agent{}, err
+		}
+		if !identityUniqueViolation(createErr, "agent_workspace_name_unique") {
+			return db.Agent{}, createErr
+		}
+	}
+	return db.Agent{}, errIdentityHandleExhausted
+}
+
+func agentIdentityPlan(handleSeed, displaySeed string) (base, displayName string, err error) {
+	displayName = strings.TrimSpace(displaySeed)
+	if displayName == "" {
+		displayName = strings.TrimSpace(handleSeed)
+	}
+	if displayName == "" {
+		displayName = "Agent"
+	}
+	base = identityHandleBase(handleSeed, displayName)
+	base = identityhandle.Truncate(base, maxIdentityHandleLength)
+	if err := validateIdentityHandle(base); err != nil {
+		return "", "", err
+	}
+	return base, displayName, nil
 }
 
 func emailLocalPart(email string) string {

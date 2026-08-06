@@ -1,13 +1,17 @@
 package execenv
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Background
@@ -48,17 +52,25 @@ type codexSandboxPolicy struct {
 // codexSandboxPolicyFor picks the right policy for the given platform and
 // detected Codex CLI version.
 //
-//   - Non-darwin: always workspace-write with network access (Landlock is not
-//     affected by the macOS Seatbelt bug).
+//   - Linux: workspace-write with network access unless the bubblewrap
+//     capability probe found a known namespace-policy failure.
+//   - Other non-darwin: workspace-write with network access.
 //   - darwin with a version at or above CodexDarwinNetworkAccessFixedVersion:
 //     workspace-write with network access (upstream bug fixed).
 //   - darwin otherwise (including when the version is unknown): fall back to
 //     danger-full-access so the Multica CLI can reach the API.
-func codexSandboxPolicyFor(goos, detectedVersion string) codexSandboxPolicy {
+func codexSandboxPolicyFor(goos, detectedVersion string, linuxSandboxFailure ...string) codexSandboxPolicy {
 	if goos == "" {
 		goos = runtime.GOOS
 	}
 	if goos != "darwin" {
+		if goos == "linux" && len(linuxSandboxFailure) > 0 && linuxSandboxFailure[0] != "" {
+			return codexSandboxPolicy{
+				Mode:          "danger-full-access",
+				NetworkAccess: false,
+				Reason:        "codex on Linux: bubblewrap namespace probe failed: " + linuxSandboxFailure[0],
+			}
+		}
 		return codexSandboxPolicy{
 			Mode:          "workspace-write",
 			NetworkAccess: true,
@@ -83,6 +95,54 @@ func codexSandboxPolicyFor(goos, detectedVersion string) codexSandboxPolicy {
 	}
 }
 
+var (
+	codexLinuxSandboxProbeOnce sync.Once
+	codexLinuxSandboxFailure   string
+)
+
+// probeCodexLinuxSandbox checks the namespace operations Codex's Linux
+// workspace-write sandbox requires. Some nested runtimes allow ordinary
+// processes but deny bubblewrap's uid-map write or loopback setup; then every
+// Codex tool call fails before it can even read the workdir.
+//
+// Missing bubblewrap and unknown failures are inconclusive because Codex may
+// use another sandbox backend. Only the known namespace-policy signatures
+// trigger the less restrictive fallback.
+func probeCodexLinuxSandbox() string {
+	codexLinuxSandboxProbeOnce.Do(func() {
+		path, err := exec.LookPath("bwrap")
+		if err != nil {
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, path,
+			"--unshare-user", "--unshare-net",
+			"--uid", "0", "--gid", "0",
+			"--ro-bind", "/", "/",
+			"--proc", "/proc", "--dev", "/dev",
+			"--", "/bin/true",
+		)
+		output, runErr := cmd.CombinedOutput()
+		if runErr == nil {
+			return
+		}
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = runErr.Error()
+		}
+		lower := strings.ToLower(message)
+		knownNamespaceFailure := strings.Contains(lower, "setting up uid map") ||
+			strings.Contains(lower, "failed rtm_newaddr") ||
+			(strings.Contains(lower, "loopback") && strings.Contains(lower, "operation not permitted"))
+		if knownNamespaceFailure {
+			codexLinuxSandboxFailure = message
+		}
+	})
+	return codexLinuxSandboxFailure
+}
+
 // codexDarwinNetworkAccessFixed returns true if the given detected version is
 // known to honor `network_access = true` under Seatbelt on macOS.
 func codexDarwinNetworkAccessFixed(detectedVersion string) bool {
@@ -104,6 +164,13 @@ func codexDarwinNetworkAccessFixed(detectedVersion string) bool {
 // version that suffers from the macOS network_access bug.
 func codexUpgradeHint() string {
 	return "upgrade Codex CLI (e.g. `brew upgrade codex` or `npm i -g @openai/codex`) once a release including openai/codex#10390 is available to restore workspace-write + network_access"
+}
+
+func codexSandboxFallbackHint(policy codexSandboxPolicy) string {
+	if strings.Contains(policy.Reason, "bubblewrap namespace probe failed") {
+		return "allow unprivileged user/network namespaces for the daemon runtime, or keep danger-full-access for this trusted agent host"
+	}
+	return codexUpgradeHint()
 }
 
 // multicaManagedBeginMarker / multicaManagedEndMarker delimit the block the
@@ -261,10 +328,10 @@ func ensureCodexSandboxConfig(configPath string, policy codexSandboxPolicy, dete
 		if version == "" {
 			version = "unknown"
 		}
-		logger.Warn("codex sandbox: falling back to danger-full-access on macOS",
+		logger.Warn("codex sandbox: falling back to danger-full-access",
 			"reason", policy.Reason,
 			"codex_version", version,
-			"hint", codexUpgradeHint(),
+			"hint", codexSandboxFallbackHint(policy),
 			"config_path", configPath,
 		)
 	}

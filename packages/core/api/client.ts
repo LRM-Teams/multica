@@ -19,7 +19,6 @@ import type {
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
-  AgentActionCard,
   EnsureWindyResponse,
   AgentTemplate,
   AgentTemplateSummary,
@@ -1238,18 +1237,6 @@ export class ApiClient {
 
   async getAgentDraft(id: string): Promise<AgentCreationDraft> {
     return this.fetch(`/api/agents/drafts/${encodeURIComponent(id)}`);
-  }
-
-  /** Load a prepared/done/dismissed agent:create action card (hire path). */
-  async getAgentActionCard(id: string): Promise<AgentActionCard> {
-    return this.fetch(`/api/agents/action-cards/${encodeURIComponent(id)}`);
-  }
-
-  /** Human cancel of a prepared agent:create action card. */
-  async dismissAgentActionCard(id: string): Promise<AgentActionCard> {
-    return this.fetch(`/api/agents/action-cards/${encodeURIComponent(id)}/dismiss`, {
-      method: "POST",
-    });
   }
 
   async listAgentTemplates(): Promise<AgentTemplateSummary[]> {
@@ -4510,5 +4497,39 @@ export class ApiClient {
     round: number,
   ): Promise<import("../types/research").ResearchProductRoundCard> {
     return this.fetch(`/api/research/sessions/${sessionId}/product-rounds/${round}`);
+  }
+
+  // ---- Research V6 Graph Projection (design doc 7.1 / 7.2) ----
+
+  async getResearchV6ProjectionSnapshot(
+    runId: string,
+  ): Promise<import("../types/research-v6").ResearchV6Snapshot> {
+    const { parseResearchV6Snapshot } = await import("./research-v6-schemas");
+    const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/snapshot`);
+    return parseResearchV6Snapshot(raw);
+  }
+
+  async getResearchV6ProjectionDeltaPage(
+    runId: string,
+    fromSequenceExclusive: number,
+  ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
+    const { parseResearchV6Delta } = await import("./research-v6-schemas");
+    const raw = await this.fetch(
+      `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
+    );
+    if (raw == null) return null;
+    return parseResearchV6Delta(raw);
+  }
+
+  async resumeResearchV6Projection(
+    runId: string,
+    lastConfirmedSequence: number,
+  ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
+    const { parseResearchV6ResumeVerdict } = await import("./research-v6-schemas");
+    const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
+      method: "POST",
+      body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),
+    });
+    return parseResearchV6ResumeVerdict(raw);
   }
 }

@@ -11,17 +11,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// multica action prepare — Raft-aligned hire card prepare (agent:create).
-// Posts the card as a structured message part when --target is set.
+// multica action prepare — Raft-aligned agent:create Proposal prepare.
+// Posts one canonical Message-backed Proposal at the required target.
 
 var actionCmd = &cobra.Command{
 	Use:   "action",
-	Short: "Prepare human-confirmable action cards",
+	Short: "Prepare human-confirmable agent creation proposals",
 }
 
 var actionPrepareCmd = &cobra.Command{
 	Use:   "prepare",
-	Short: "Prepare an agent:create hire card (canonical Message when --target is set)",
+	Short: "Prepare an agent:create proposal Message",
 	RunE:  runActionPrepare,
 }
 
@@ -31,10 +31,9 @@ func init() {
 	actionPrepareCmd.Flags().String("name", "", "Agent display name seed (required)")
 	actionPrepareCmd.Flags().String("description", "", "Optional short catalog description")
 	actionPrepareCmd.Flags().String("preferred-computer", "", "Optional preferred Computer suggestion (human may change)")
-	actionPrepareCmd.Flags().String("target", "", "Channel/DM/thread to post the card (same as message send)")
+	actionPrepareCmd.Flags().String("target", "", "Required channel/DM/thread target (same as message send)")
 	actionPrepareCmd.Flags().String("client-request-id", "", "Stable idempotency key; reused on retry to return the same message_id")
 	actionPrepareCmd.Flags().String("output", "json", "Output format: json or text")
-	actionPrepareCmd.Flags().String("channel-id", "", "Optional channel_id for the card row")
 }
 
 func runActionPrepare(cmd *cobra.Command, _ []string) error {
@@ -52,7 +51,9 @@ func runActionPrepare(cmd *cobra.Command, _ []string) error {
 	description := strings.TrimSpace(flagString(cmd, "description"))
 	preferredComputer := strings.TrimSpace(flagString(cmd, "preferred-computer"))
 	target := strings.TrimSpace(flagString(cmd, "target"))
-	channelID := strings.TrimSpace(flagString(cmd, "channel-id"))
+	if target == "" {
+		return fmt.Errorf("--target is required")
+	}
 	clientRequestID := strings.TrimSpace(flagString(cmd, "client-request-id"))
 	if clientRequestID == "" {
 		clientRequestID = uuid.NewString()
@@ -76,12 +77,7 @@ func runActionPrepare(cmd *cobra.Command, _ []string) error {
 	if preferredComputer != "" {
 		body["preferred_computer"] = preferredComputer
 	}
-	if channelID != "" {
-		body["channel_id"] = channelID
-	}
-	if target != "" {
-		body["target"] = target
-	}
+	body["target"] = target
 
 	var prepared map[string]any
 	if err := client.PostJSON(ctx, "/api/agent/actions/prepare", body, &prepared); err != nil {
@@ -95,9 +91,8 @@ func runActionPrepare(cmd *cobra.Command, _ []string) error {
 	case output == "" || output == "json":
 		return cli.PrintJSON(os.Stdout, prepared)
 	case output == "text":
-		id, _ := prepared["id"].(string)
 		messageID, _ := prepared["message_id"].(string)
-		fmt.Fprintf(os.Stdout, "Prepared agent:create card %s\n", id)
+		fmt.Fprintf(os.Stdout, "Prepared agent:create proposal\n")
 		if messageID != "" {
 			fmt.Fprintf(os.Stdout, "Message %s (target %s)\n", messageID, target)
 		}

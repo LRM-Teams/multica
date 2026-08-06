@@ -24,7 +24,7 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
-  AgentActionCard,
+  AgentCreationProposal,
   AgentAvatarSelection,
   RuntimeDevice,
   MemberWithUser,
@@ -56,7 +56,7 @@ export function CreateAgentDialog({
   currentUserId,
   template,
   draft,
-  actionCard,
+  proposal,
   defaultMachineId = null,
   onClose,
   onCreate,
@@ -73,10 +73,10 @@ export function CreateAgentDialog({
   // Skills are copied separately by the caller after createAgent
   // succeeds — they're not part of CreateAgentRequest.
   template?: Agent | null;
-  // Research / legacy seed only. Hire path uses actionCard (no draft bridge).
+  // Research / legacy seed only. Proposal commit uses canonical Message state.
   draft?: AgentCreationDraft | null;
-  /** Hire hard-cut: prepared agent:create card — prefills name/desc, binds action_card_id. */
-  actionCard?: AgentActionCard | null;
+  /** Canonical agent:create Proposal — prefills proposal fields and binds action_message_id. */
+  proposal?: AgentCreationProposal | null;
   /** Prefer this group as home when opening on「仅本群」(channel context). */
   defaultHomeChannelId?: string | null;
   /** Prefill computer (machine id from buildRuntimeMachines). */
@@ -90,19 +90,19 @@ export function CreateAgentDialog({
 }) {
   const { t } = useT("agents");
   const isDuplicate = !!template;
-  const hireCard = actionCard && !isDuplicate ? actionCard : null;
-  const isHireCard = !!hireCard;
-  const isDraft = !!draft && !isDuplicate && !isHireCard;
+  const creationProposal = proposal && !isDuplicate ? proposal : null;
+  const isProposal = !!creationProposal;
+  const isDraft = !!draft && !isDuplicate && !isProposal;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
   // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
     template
       ? `${resolveActorDisplayName(template, template.id)}${t(($) => $.create_dialog.duplicate_copy_suffix)}`
-      : hireCard?.payload.name ?? draft?.name ?? "",
+      : creationProposal?.name ?? draft?.name ?? "",
   );
   const [description, setDescription] = useState(
-    template?.description ?? hireCard?.payload.description ?? draft?.description ?? "",
+    template?.description ?? creationProposal?.description ?? draft?.description ?? "",
   );
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
@@ -111,7 +111,7 @@ export function CreateAgentDialog({
   // present; create with draft_id lets the server apply it as assigned. User
   // uploads go through avatar_selection; clearing a draft preview sends a
   // random picked preset so create does not re-apply the draft face.
-  // Hire action cards have no avatar payload — server assigns preset.
+  // Proposals have no avatar payload — server assigns a preset.
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(
     () => (draft?.avatar_url?.trim() ? draft.avatar_url : null),
   );
@@ -136,8 +136,9 @@ export function CreateAgentDialog({
   );
   const [creating, setCreating] = useState(false);
 
-  // Computer → runtime selection (Frank 2026-08-01). Duplicate mode seeds
-  // from the template's workspace runtime; otherwise use the first machine.
+  // Computer → runtime selection. A Proposal's preferred Computer is only a
+  // default: if it is unavailable, leave the selector blank so the human must
+  // explicitly correct it rather than silently falling back to another machine.
   const initialMachines = buildRuntimeMachines(runtimes, {
     now: Date.now(),
     currentUserId,
@@ -152,7 +153,7 @@ export function CreateAgentDialog({
     if (defaultMachineId && initialMachines.some((m) => m.id === defaultMachineId)) {
       return defaultMachineId;
     }
-    return machineForRuntime(runtimes[0], initialMachines)?.id ?? "";
+    return "";
   });
   const [selectedRuntimeId, setSelectedRuntimeId] = useState(() => {
     const templateRuntime = template?.runtime_id
@@ -161,18 +162,27 @@ export function CreateAgentDialog({
     if (templateRuntime) {
       return templateRuntime.id;
     }
-    const machine =
-      initialMachines.find((m) => m.id === selectedMachineId) ?? null;
-    return firstRuntimeIdOnMachine(machine);
+    return "";
   });
 
   const machines = useMemo(
     () => buildRuntimeMachines(runtimes, { now: Date.now(), currentUserId }),
     [runtimes, currentUserId],
   );
+  const preferredMachine = creationProposal?.preferred_computer?.trim()
+    ? machines.find(
+        (machine) =>
+          machine.id === creationProposal.preferred_computer ||
+          machine.daemonId === creationProposal.preferred_computer ||
+          machine.title === creationProposal.preferred_computer ||
+          machine.runtimes.some((runtime) => runtime.id === creationProposal.preferred_computer),
+      ) ?? null
+    : null;
   const effectiveMachineId =
     selectedMachineId ||
-    firstRuntimeMachine(machines)?.id ||
+    (creationProposal?.preferred_computer
+      ? preferredMachine?.id ?? ""
+      : firstRuntimeMachine(machines)?.id || "") ||
     "";
   const selectedMachine =
     machines.find((m) => m.id === effectiveMachineId) ?? null;
@@ -215,9 +225,9 @@ export function CreateAgentDialog({
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
         avatar_selection: avatarSelectionRef.current ?? undefined,
-        // Hire path: action_card_id only (mutually exclusive with draft_id on BE).
-        ...(hireCard
-          ? { action_card_id: hireCard.id }
+        // Proposal commits use the canonical Message identity only.
+        ...(creationProposal
+          ? { action_message_id: creationProposal.message_id }
           : draft?.id
             ? { draft_id: draft.id }
             : {}),
@@ -270,7 +280,7 @@ export function CreateAgentDialog({
 
   const headerTitle = isDuplicate
     ? t(($) => $.create_dialog.title_duplicate)
-    : isHireCard || isDraft
+    : isProposal || isDraft
       ? t(($) => $.windy.create_agent)
       : t(($) => $.create_dialog.title_create);
 
@@ -284,12 +294,12 @@ export function CreateAgentDialog({
               {t(($) => $.create_dialog.description_duplicate, { name: resolveActorDisplayName(template, template.id) })}
             </DialogDescription>
           )}
-          {!isDuplicate && !isDraft && !isHireCard && (
+          {!isDuplicate && !isDraft && !isProposal && (
             <DialogDescription className="mt-1 text-xs">
               {t(($) => $.create_dialog.description_create)}
             </DialogDescription>
           )}
-          {(isHireCard || isDraft) && (
+          {(isProposal || isDraft) && (
             <DialogDescription className="mt-1 text-xs">
               {t(($) => $.windy.draft_description)}
             </DialogDescription>

@@ -501,39 +501,35 @@ func TestUnwrapStructuredMessageSendLeavesExistingPartsAlone(t *testing.T) {
 
 func intPtr(v int) *int { return &v }
 
-func TestNormalizeActionCardReference(t *testing.T) {
-	id := "11111111-1111-1111-1111-111111111111"
+func TestNormalizeAgentCreateProposalReference(t *testing.T) {
+	seed := "Hiree Bot"
 	_, parts, err := Normalize("hire", []protocol.MessagePart{{
-		Type:       protocol.MessagePartTypeReference,
-		RefType:    "action_card",
-		RefSubType: "agent:create",
-		RefID:      id,
-		Label:      "Hiree Bot",
+		Type:    protocol.MessagePartTypeReference,
+		RefType: "agent:create",
+		RefID:   seed,
+		Label:   "Hiree Bot",
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(parts) != 1 || parts[0].RefType != "action_card" || parts[0].RefSubType != "agent:create" || parts[0].RefID != id {
+	if len(parts) != 1 || parts[0].RefType != "agent:create" || parts[0].RefSubType != "" || parts[0].RefID != seed {
 		t.Fatalf("parts=%+v", parts)
 	}
-	// default subtype
-	_, parts, err = Normalize("", []protocol.MessagePart{{
-		Type:    protocol.MessagePartTypeReference,
-		RefType: "action_card",
-		RefID:   id,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parts[0].RefSubType != "agent:create" {
-		t.Fatalf("default subtype=%q", parts[0].RefSubType)
-	}
-	// reject bad uuid
+	// A legacy action-card sidecar and ref subtypes are rejected: only the
+	// canonical Message-backed Proposal survives the hard cut.
 	if _, _, err := Normalize("", []protocol.MessagePart{{
 		Type:    protocol.MessagePartTypeReference,
 		RefType: "action_card",
-		RefID:   "not-a-uuid",
+		RefID:   "legacy-id",
 	}}); err == nil {
-		t.Fatal("expected uuid error")
+		t.Fatal("expected legacy action card rejection")
+	}
+	if _, _, err := Normalize("", []protocol.MessagePart{{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "agent:create",
+		RefSubType: "legacy",
+		RefID:      seed,
+	}}); err == nil {
+		t.Fatal("expected agent:create ref_subtype rejection")
 	}
 }

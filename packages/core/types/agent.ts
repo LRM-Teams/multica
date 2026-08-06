@@ -424,6 +424,10 @@ export interface Agent {
    */
   provider_blocked_until?: string | null;
   provider_block_detail?: string | null;
+  /** Durable first-start lifecycle reported by the selected Computer. */
+  start_intent_status?: "pending" | "accepted" | "queued" | "ready" | "failed";
+  /** Sanitized local failure category when `start_intent_status` is failed. */
+  start_intent_failure_code?: string;
   runtime_config: Record<string, unknown>;
   custom_args: string[];
   /**
@@ -576,30 +580,15 @@ export interface AgentCreationDraft {
   used_at?: string | null;
 }
 
-/**
- * Human-confirmable agent:create action card (hire hard-cut, no draft bridge).
- * Prepared by agents via POST /api/agent/actions/prepare; humans open
- * CreateAgentDialog bound to card id and POST /api/agents with action_card_id.
- */
-export interface AgentActionCardPayload {
+/** Canonical Message-backed agent:create Proposal shown in shared timelines. */
+export interface AgentCreationProposal {
+  message_id: string;
+  status: "prepared" | "executed";
   name: string;
   description: string;
-}
-
-export type AgentActionCardStatus = "prepared" | "done" | "dismissed";
-
-export interface AgentActionCard {
-  id: string;
-  action_type: "agent:create";
-  status: AgentActionCardStatus;
-  payload: AgentActionCardPayload;
-  prepared_by_agent_id?: string | null;
-  channel_id?: string | null;
-  committed_by_user_id?: string | null;
-  committed_agent_id?: string | null;
-  created_at: string;
-  updated_at: string;
-  done_at?: string | null;
+  preferred_computer?: string;
+  committer_user_id?: string;
+  result_agent_id?: string;
 }
 
 export interface CreateAgentDraftRequest {
@@ -657,11 +646,8 @@ export interface CreateAgentRequest {
   /** Optional template slug used by the onboarding agent picker. Surfaced
    *  as the `template` property on the `agent_created` PostHog event. */
   template?: string;
-  /**
-   * Hire path: prepared agent:create action card id. Mutually exclusive with
-   * draft_id. Server marks the card done after create.
-   */
-  action_card_id?: string;
+  /** Canonical agent:create Proposal Message to atomically commit. */
+  action_message_id?: string;
   /** Research / legacy seed only — not the hire path (agent drafts create is 410). */
   draft_id?: string;
 }

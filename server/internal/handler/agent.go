@@ -65,6 +65,11 @@ type AgentResponse struct {
 	// gating is a separate card.
 	ProviderBlockedUntil *string `json:"provider_blocked_until,omitempty"`
 	ProviderBlockDetail  string  `json:"provider_block_detail,omitempty"`
+	// StartIntentStatus is the durable Computer lifecycle for an Agent's first
+	// start. It is intentionally separate from receipt/acceptance and from the
+	// regular task-derived Agent status.
+	StartIntentStatus      string `json:"start_intent_status,omitempty"`
+	StartIntentFailureCode string `json:"start_intent_failure_code,omitempty"`
 	// RuntimePinnedVersion (task #81) is non-nil when the daemon's
 	// MULTICA_PINNED_VERSION reported this machine as pinned. This only
 	// reflects the daemon's local intent — the server does not yet enforce
@@ -203,8 +208,12 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		return
 	}
 	runtimeIDs := make([]pgtype.UUID, 0, len(resps))
+	agentIDs := make([]pgtype.UUID, 0, len(resps))
 	byRuntimeID := map[string][]int{}
 	for i := range resps {
+		if agentID := parseUUID(resps[i].ID); agentID.Valid {
+			agentIDs = append(agentIDs, agentID)
+		}
 		if strings.TrimSpace(resps[i].RuntimeName) == "" {
 			resps[i].RuntimeName = defaultAgentRuntimeName(resps[i].RuntimeMode)
 		}
@@ -221,6 +230,39 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		}
 		byRuntimeID[key] = append(byRuntimeID[key], i)
 	}
+
+	// The durable first-start lifecycle is an Agent read-model fact. Load it
+	// before any runtime cursor so a single-connection pool cannot deadlock,
+	// and keep it independent from runtime heartbeat reachability.
+	if len(agentIDs) > 0 {
+		rows, err := h.DB.Query(ctx, `
+			SELECT agent_id::text, status, COALESCE(failure_code, '')
+			FROM agent_start_intent
+			WHERE agent_id = ANY($1::uuid[])`, agentIDs)
+		if err != nil {
+			slog.Warn("failed to load agent start intent statuses", "error", err)
+		} else {
+			statuses := make(map[string]struct{ status, failure string })
+			for rows.Next() {
+				var agentID, status, failure string
+				if err := rows.Scan(&agentID, &status, &failure); err != nil {
+					slog.Warn("scan agent start intent status", "error", err)
+					continue
+				}
+				statuses[agentID] = struct{ status, failure string }{status, failure}
+			}
+			if err := rows.Err(); err != nil {
+				slog.Warn("iterate agent start intent statuses", "error", err)
+			}
+			rows.Close()
+			for i := range resps {
+				if status, ok := statuses[resps[i].ID]; ok {
+					resps[i].StartIntentStatus = status.status
+					resps[i].StartIntentFailureCode = status.failure
+				}
+			}
+		}
+	}
 	if len(runtimeIDs) == 0 {
 		return
 	}
@@ -235,12 +277,6 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 	// Load BEFORE the runtime Query below: holding an open rows cursor while
 	// acquiring another pool connection deadlocks under concurrent CreateAgent
 	// (CI: TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete).
-	agentIDs := make([]pgtype.UUID, 0, len(resps))
-	for i := range resps {
-		if id := parseUUID(resps[i].ID); id.Valid {
-			agentIDs = append(agentIDs, id)
-		}
-	}
 	crashedByAgent := map[string]pgtype.Timestamptz{}
 	providerBlockByAgent := map[string]db.ListAgentProviderBlockByIDsRow{}
 	if len(agentIDs) > 0 && h.Queries != nil {
@@ -958,6 +994,9 @@ func decodeJSONBodyWithRawFields(body io.Reader, dst any) (map[string]json.RawMe
 
 func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
+	if rejectAgentOnHumanRoute(w, r, "CreateAgent") {
+		return
+	}
 
 	var req CreateAgentRequest
 	rawFields, err := decodeJSONBodyWithRawFields(r.Body, &req)
@@ -971,6 +1010,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := rawFields["avatar_url"]; ok {
 		writeError(w, http.StatusBadRequest, "avatar_url is no longer accepted; use avatar_selection")
+		return
+	}
+	if _, ok := rawFields["action_card_id"]; ok {
+		writeError(w, http.StatusBadRequest, "action_card_id has been retired; use action_message_id")
 		return
 	}
 
@@ -1063,33 +1106,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
 
-	// Hire hard-cut: agent:create cards use action_card_id (no draft_id bridge).
-	actionCardID, hasActionCardID, err := extractActionCardID(rawFields)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if hasActionCardID {
-		card, code := h.loadActionCard(r, workspaceID, actionCardID)
-		switch code {
-		case agentActionLookupOK:
-			if card.Status != agentActionStatusPrepared {
-				writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
-				return
-			}
-			if card.ActionType != agentActionTypeCreate {
-				writeError(w, http.StatusBadRequest, "action_card_id is not an agent:create card")
-				return
-			}
-		case agentActionLookupNotFound:
-			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
-			return
-		default:
-			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
-			return
-		}
-	}
-	// LRM-2343 S2: canonical Message-backed commit seam. The agent:create
+	// LRM-2343: canonical Message-backed commit. The agent:create
 	// proposal lives on a channel_message; CreateAgent carries its id and the
 	// whole commit (CAS prepared->executed + Agent + snapshots) is one tx.
 	actionMessageID, hasActionMessageID, err := extractActionMessageID(rawFields)
@@ -1097,19 +1114,11 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if hasActionMessageID && hasActionCardID {
-		writeError(w, http.StatusBadRequest, "action_message_id and action_card_id are mutually exclusive")
-		return
-	}
 	// Research / legacy seed only: draft_id still loads initial notes/memory when
 	// present. Agent hire must not use drafts (agent draft create is 410).
 	draftID, hasDraftID, err := extractDraftID(rawFields)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if hasDraftID && hasActionCardID {
-		writeError(w, http.StatusBadRequest, "action_card_id and draft_id are mutually exclusive")
 		return
 	}
 	if hasDraftID && hasActionMessageID {
@@ -1169,7 +1178,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	applyCreateAgentAvatar(&createParams, avatar)
 
 	var created db.Agent
-	createdViaActionMessage := false
 	if hasActionMessageID {
 		// LRM-2343 S2: commit the prepared proposal Message atomically. This path
 		// creates the Agent, adds the system #general membership and CAS's the
@@ -1187,21 +1195,20 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		createdViaActionMessage = true
-	} else if req.Username != nil {
-		if err := validateIdentityHandle(*req.Username); err != nil {
-			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
-			return
+	} else {
+		if req.Username != nil {
+			if err := validateIdentityHandle(*req.Username); err != nil {
+				writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
+				return
+			}
+			createParams.Name = *req.Username
+			createParams.DisplayName = firstNonEmpty(displayName, *req.Username)
 		}
-		createParams.Name = *req.Username
-		createParams.DisplayName = firstNonEmpty(displayName, *req.Username)
-		created, err = h.Queries.CreateAgent(r.Context(), createParams)
+		created, err = h.createAgentManagedCommit(r.Context(), wsUUID, createParams, displayName)
 		if identityUniqueViolation(err, "agent_workspace_name_unique") {
 			writeError(w, http.StatusConflict, "username is already in use")
 			return
 		}
-	} else {
-		created, err = h.createAgentWithIdentity(r.Context(), h.Queries, createParams, displayName, displayName)
 	}
 	if err != nil {
 		if errors.Is(err, errIdentityHandleInvalid) {
@@ -1217,18 +1224,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
-	if !createdViaActionMessage && hasActionCardID {
-		code, markErr := h.markActionCardDone(r, workspaceID, actionCardID, parseUUID(ownerID), created.ID)
-		if markErr != nil {
-			slog.Warn("mark action card done failed", append(logger.RequestAttrs(r), "error", markErr, "action_card_id", uuidToString(actionCardID))...)
-		} else if code == agentActionLookupNotPrepared {
-			// Card raced to non-prepared; agent row already created — report conflict.
-			writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
-			return
-		} else if code == agentActionLookupNotFound {
-			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
-			return
-		}
+	if hasActionMessageID {
+		h.publishAgentActionMessageUpdated(r.Context(), wsUUID, actionMessageID, parseUUID(ownerID))
 	}
 	if hasDraftID {
 		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
@@ -1247,9 +1244,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
-	if created.RuntimeID.Valid {
-		h.projectReminderOwnerStart(r.Context(), uuidToString(created.ID), uuidToString(created.RuntimeID))
-	}
+	// LRM-2343 deliberately does not project the legacy owner-start event
+	// here. The transaction wrote one durable agent_start_intent; heartbeat
+	// delivery is its only first-start transport, so an unavailable Computer
+	// cannot lose (or duplicate) the initial local setup.
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AgentCreated(
 		ownerID,

@@ -28,8 +28,8 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 |---|---|---|
 | `maxAgentDescriptionLength = 255` | 31 | Cap is 255 **Unicode code points** (`utf8.RuneCountInString`) |
 | `AgentResponse` no plaintext `custom_env` | 36–147 | Only `has_custom_env`, `custom_env_key_count`; avatar truth persisted |
-| `CreateAgentRequest` fields | ~787–813 | name/display_name, description, instructions, runtime_id, model, thinking_level, custom_env, mcp_config, … |
-| identity seed required | ~654–658 | `name` or `display_name` required |
+| `CreateAgentRequest` fields | `agent.go:CreateAgentRequest` | username/display_name, description, instructions, runtime_id, model, thinking_level, custom_env, mcp_config, … |
+| identity seed required | `agent.go:CreateAgent` | `username` or `display_name` required; raw legacy `name` → 400 |
 | `description` ≤ 255 | ~660–662 | excess → 400 |
 | `runtime_id` required + workspace resolve | ~664–679 | missing/unknown → 400 |
 | `thinking_level` provider validation | ~702–708 | unknown literal → 400; model-specific gaps deferred to daemon |
@@ -38,6 +38,20 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | Avatar verification | `agent.go` + `agent_avatar.go` | omit → assigned; picked/uploaded verified; raw URL rejected |
 | `UpdateAgent` rejects `custom_env` | ~929–938 / 1476 | 400 → use `PUT /api/agents/{id}/env` |
 | `UpdateAgent` treats `name` as display rename | ~944–958 | stable handle unchanged |
+
+## LRM-2343 Proposal and first-start lifecycle
+
+| Contract | Source | Behavior |
+|---|---|---|
+| Human create authorization | `handler/agent.go`, `handler/agent_template.go`, `handler.go:requireManageAgents` | owner/admin only; AgentPrincipal on the human route → 403 |
+| Canonical Proposal | `handler/agent_action.go`, `channel_message.parts`, `agent_action` | `agent:create` is one visible Message plus an atomically seeded commit record; no action-card row or dismiss state |
+| Commit idempotency | `handler/agent_action_commit.go` | action Message ID + non-secret final-payload hash returns the same Agent on a safe replay and rejects divergent payloads |
+| Atomic provisioning | `createAgentManagedCommit`, template create transaction | Agent identity, system `#general` membership/onboarding, and one `agent_start_intent` commit together |
+| Durable first start | migrations 288–289, `handler/agent_start_intent.go`, `daemon/agent_start_intent.go` | stable dispatch ID retries until Computer acceptance; `ready`/`failed` are later sequence-guarded observations, and failed work is not auto-restarted |
+| Human read model | `AgentResponse.StartIntentStatus`, `EventAgentStatus` | agent list/detail and realtime invalidation expose `pending|accepted|queued|ready|failed` plus a sanitized failure code |
+
+See `docs/agent-creation-proposal-cutover.md` for the production migration
+preflight and post-deploy verification commands.
 
 ## Env — `server/internal/handler/agent_env.go`
 

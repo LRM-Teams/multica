@@ -208,7 +208,7 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if !assistant.ID.Valid {
-		assistant, err = h.createAgentWithIdentity(r.Context(), qtx, db.CreateAgentParams{
+		assistant, err = h.createAgentWithIdentityTx(r.Context(), tx, qtx, db.CreateAgentParams{
 			WorkspaceID:        wsUUID,
 			Description:        onboardingAssistantDescription,
 			AvatarUrl:          pgtype.Text{String: onboardingAssistantAvatarURL, Valid: true},

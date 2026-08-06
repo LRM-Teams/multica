@@ -199,7 +199,9 @@
       "role_updated_toast": "工作区角色已更新",
       "role_update_failed_toast": "更新工作区角色失败",
       "role_readonly_hint": "仅工作区 owner/admin 可更改 agent 的工作区角色。"
-    }
+    },
+    "start_intent_failure": "此 Agent 未能在所选电脑上完成启动（{{code}}）。请检查运行配置；如合适，再通过正常的人类重启流程处理。",
+    "start_intent_review": "检查配置"
   },
   "skill_attach": {
     "trigger_aria": "附加工作区 skill",
@@ -959,17 +961,19 @@
   "windy": {
     "draft_description": "Wendy 已准备好这份招聘草稿。核对字段、选择 runtime，然后创建。",
     "create_title": "创建 Agent @{{name}}",
-    "create_description": "核对 Wendy 招聘卡，选择 runtime/模型，在这里启动 Agent。",
+    "create_description": "核对 Wendy 的提案，选择 runtime/模型，在这里启动 Agent。",
     "runtime_required": "请先连接或共享一个 runtime，再创建此 Agent。",
     "cancel": "取消",
     "create_agent": "创建 Agent",
     "created_toast": "已创建 {{name}}",
-    "hiring_card_badge": "招聘",
+    "hiring_card_badge": "提案",
+    "preferred_computer": "首选电脑：{{computer}}",
+    "creation_not_authorized": "仅工作区 owner 和 admin 可创建此 Agent。",
     "generated_hint": "由 Wendy 根据当前对话生成。",
     "avatar_from_draft_hint": "已带上 Wendy 草稿头像——可更换；清除后创建时用随机预设。",
     "avatar_random_hint": "未指定头像——创建时随机分配，也可在此上传。",
-    "loading_card": "正在加载招聘卡…",
-    "load_card_failed": "加载招聘卡失败",
+    "loading_card": "正在加载提案…",
+    "load_card_failed": "加载提案失败",
     "card_created": "已创建：{{name}}",
     "card_dismissed": "已忽略"
   }

@@ -153,6 +153,20 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 		}
 	})
 	defer producer.DetachTransport(transportGeneration)
+	activityTickerDone := make(chan struct{})
+	defer close(activityTickerDone)
+	go func() {
+		ticker := time.NewTicker(agentActivityHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-activityTickerDone:
+				return
+			case <-ticker.C:
+				producer.Tick()
+			}
+		}
+	}()
 	for _, frame := range reconnectFrames {
 		if err := writeFrame(frame.EventType, frame.Payload); err != nil {
 			return err
@@ -197,6 +211,17 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 				return err
 			}
 			if err := writeFrame(protocol.EventAgentSession, session); err != nil {
+				return err
+			}
+			// A managed launch becomes immediately observable as online. This is
+			// an actual Manager fact, not an inferred UI fallback; later provider
+			// observations replace it with working or thinking snapshots.
+			if err := producer.Publish(protocol.AgentActivitySnapshot{
+				AgentID:          ack.AgentID,
+				LaunchID:         ack.LaunchID,
+				DaemonInstanceID: d.runnerInstanceID,
+				ActivityKind:     protocol.ActivityKindOnline,
+			}, nil); err != nil {
 				return err
 			}
 		case protocol.EventDaemonAgentStop:

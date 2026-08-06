@@ -50,7 +50,7 @@ func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 
 func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	frames := make(chan protocol.Message, 5)
+	frames := make(chan protocol.Message, 6)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("workspace_id") != "ws-1" || r.Header.Get("Authorization") != "Bearer workspace-token" {
 			http.Error(w, "unexpected runner scope", http.StatusForbidden)
@@ -79,7 +79,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		var accepted protocol.AgentStartAckPayload
-		for i := 0; i < 3; i++ {
+		for i := 0; i < 4; i++ {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -125,8 +125,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, "ws-1") }()
-	var ready, ack, status, inactive, session protocol.Message
-	for i := 0; i < 5; i++ {
+	var ready, ack, status, inactive, session, activity protocol.Message
+	for i := 0; i < 6; i++ {
 		select {
 		case msg := <-frames:
 			switch msg.Type {
@@ -146,6 +146,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				}
 			case protocol.EventAgentSession:
 				session = msg
+			case protocol.EventAgentActivity:
+				activity = msg
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for Runner frames")
@@ -168,6 +170,13 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	}
 	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive || reportedSession.LaunchID != accepted.LaunchID {
 		t.Fatalf("ack=%+v status=%+v session=%+v", accepted, active, reportedSession)
+	}
+	var snapshot protocol.AgentActivityPayload
+	if err := json.Unmarshal(activity.Payload, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Snapshot.AgentID != accepted.AgentID || snapshot.Snapshot.LaunchID != accepted.LaunchID || snapshot.Snapshot.ActivityKind != protocol.ActivityKindOnline || snapshot.Snapshot.ClientSequence != 1 {
+		t.Fatalf("initial Activity = %+v, want online snapshot for launch %q", snapshot.Snapshot, accepted.LaunchID)
 	}
 	var stopped protocol.AgentStatusPayload
 	if err := json.Unmarshal(inactive.Payload, &stopped); err != nil {

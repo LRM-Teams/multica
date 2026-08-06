@@ -228,7 +228,7 @@ func (s *PostgresMachineUpgradeStore) expireStaleLegacy(ctx context.Context) err
 				WHEN 'starting' THEN 'daemon did not confirm update receipt within 120 seconds'
 				WHEN 'staging' THEN 'daemon did not complete the update within 150 seconds'
 				WHEN 'verifying' THEN 'daemon did not complete the update within 150 seconds'
-				ELSE 'updated daemon did not re-register within 20 minutes'
+				ELSE 'updated daemon did not re-register within 90 seconds; if this is a standalone v0.4.13 daemon, run multica daemon restart on the computer'
 			END,
 			completed_at = now(), updated_at = now()
 		WHERE accepted_generation = $1
@@ -236,7 +236,7 @@ func (s *PostgresMachineUpgradeStore) expireStaleLegacy(ctx context.Context) err
 		  AND (
 			(phase = 'starting' AND updated_at < now() - interval '120 seconds')
 			OR (phase IN ('staging', 'verifying') AND updated_at < now() - interval '150 seconds')
-			OR (phase IN ('handoff', 'converging') AND updated_at < now() - interval '20 minutes')
+			OR (phase IN ('handoff', 'converging') AND updated_at < now() - interval '90 seconds')
 		  )`, legacyMachineUpgradeAcceptanceMarker)
 	if err != nil {
 		return fmt.Errorf("expire stale legacy machine upgrades: %w", err)

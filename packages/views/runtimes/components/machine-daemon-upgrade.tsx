@@ -7,7 +7,6 @@ import {
   isSandboxRuntime,
   runtimeCurrentVersion,
   runtimeLaunchedBy,
-  runtimeTargetVersion,
   isNewerCliVersion,
 } from "@multica/core/runtimes";
 import { api, ApiError } from "@multica/core/api";
@@ -27,14 +26,14 @@ import { formatRuntimeUpdateError } from "./update-error";
 export function MachineDaemonUpgrade({
   runtime,
   cliVersion,
-  updateTargetVersion,
+  daemonTargetVersion,
   updateError,
   isOnline,
   canUpdate,
 }: {
   runtime: AgentRuntime;
   cliVersion: string | null;
-  updateTargetVersion: string | null;
+  daemonTargetVersion: string | null;
   updateError: string | null;
   isOnline: boolean;
   canUpdate: boolean;
@@ -48,8 +47,7 @@ export function MachineDaemonUpgrade({
   const machineUpgrade = runtime.machine_upgrade ?? null;
   const machineTarget =
     machineUpgrade?.resolved_target?.trim() || machineUpgrade?.requested_target?.trim() || null;
-  const targetVersion =
-    updateTargetVersion ?? machineTarget ?? runtimeTargetVersion(runtime) ?? null;
+  const targetVersion = machineTarget ?? daemonTargetVersion ?? null;
   const updateState = runtime.update_state;
   const runtimeHealth = runtime.runtime_health;
   const pinnedVersion =

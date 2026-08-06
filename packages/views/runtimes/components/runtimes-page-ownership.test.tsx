@@ -81,7 +81,7 @@ function makeMachine(
     health: opts.health ?? "online",
     runtimeHealth: "ok",
     updateError: null,
-    updateTargetVersion: null,
+    daemonTargetVersion: null,
     runtimes: [runtime],
     onlineCount: 1,
     issueCount: 0,

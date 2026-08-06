@@ -93,7 +93,7 @@ function makeMachine(
     health: "online",
     runtimeHealth: "ok",
     updateError: null,
-    updateTargetVersion: null,
+    daemonTargetVersion: null,
     runtimes,
     onlineCount: 1,
     issueCount: 0,
@@ -151,7 +151,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
       <MachineDaemonUpgrade
         runtime={runtime}
         cliVersion="0.3.94"
-        updateTargetVersion={null}
+        daemonTargetVersion={null}
         updateError={null}
         isOnline
         canUpdate
@@ -166,13 +166,13 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
   it("shows outline Upgrade when an update is available", () => {
     const runtime = makeRuntime({
       runtime_health: "update_available",
-      target_version: "1.5.0",
+      target_version: null,
     });
     wrap(
       <MachineDaemonUpgrade
         runtime={runtime}
         cliVersion="0.3.94"
-        updateTargetVersion="1.5.0"
+        daemonTargetVersion="1.5.0"
         updateError={null}
         isOnline
         canUpdate
@@ -184,6 +184,24 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
       "0.3.94",
     );
+  });
+
+  it("does not read an individual runtime target", () => {
+    const runtime = makeRuntime({
+      runtime_health: "update_available",
+      target_version: "v0.4.14",
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.4.13"
+        daemonTargetVersion={null}
+        updateError="drain_timeout"
+        isOnline
+        canUpdate
+      />,
+    );
+    expect(screen.queryByTestId("machine-daemon-upgrade-btn")).not.toBeInTheDocument();
   });
 
   it("projects a sibling's queued machine upgrade as active", () => {
@@ -204,7 +222,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
       <MachineDaemonUpgrade
         runtime={runtime}
         cliVersion="0.3.99"
-        updateTargetVersion={null}
+        daemonTargetVersion={null}
         updateError={null}
         isOnline
         canUpdate
@@ -234,7 +252,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
       <MachineDaemonUpgrade
         runtime={runtime}
         cliVersion="0.3.99"
-        updateTargetVersion={null}
+        daemonTargetVersion={null}
         updateError={null}
         isOnline
         canUpdate

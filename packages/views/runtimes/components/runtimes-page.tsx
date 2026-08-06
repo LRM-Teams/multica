@@ -1002,7 +1002,7 @@ function MachineDetailView({
                   <MachineDaemonUpgrade
                     runtime={daemonUpgradeRuntime}
                     cliVersion={machine.cliVersion}
-                    updateTargetVersion={machine.updateTargetVersion}
+                    daemonTargetVersion={machine.daemonTargetVersion}
                     updateError={machine.updateError}
                     isOnline={machine.health === "online"}
                     canUpdate={canUpgrade}

@@ -1,0 +1,4 @@
+-- This is a one-time data fix (see .up.sql), not a schema change — there is
+-- no prior state to restore. Which exchanges/pairs/owners were paused before
+-- the up migration ran, and why, is not recoverable: rolling back the
+-- migration framework marker does not and cannot un-resume them.

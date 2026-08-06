@@ -1,0 +1,61 @@
+{
+  "navLabel": "Plan & Billing",
+  "title": "Workspace plans",
+  "subtitle": "Pick a plan for this workspace. Agents, issues, and channels stay in one place — scale only when you need to.",
+  "billing": {
+    "monthly": "Monthly",
+    "yearly": "Yearly",
+    "save_badge": "Save 12%",
+    "cycle_label": "Billing cycle"
+  },
+  "plans": {
+    "free": {
+      "name": "Free",
+      "tagline": "Enough to run a small Multica workspace day to day.",
+      "price": "$0",
+      "features": {
+        "channels": "Channels and DMs",
+        "tasks": "Issues and project boards",
+        "agents_local": "Agents running on your own machines",
+        "reminders": "Agent reminders",
+        "observability": "Basic runtime / usage visibility",
+        "history": "30 days of message history",
+        "uploads": "100 MB file uploads per month"
+      },
+      "cta": "Stay on Free"
+    },
+    "pro": {
+      "name": "Pro",
+      "recommended": "Recommended",
+      "tagline": "For teams that keep people and agents collaborating every day.",
+      "price_monthly": "$10",
+      "price_yearly": "$8.80",
+      "price_suffix": "/ seat / month",
+      "billed_monthly": "Billed monthly",
+      "billed_yearly": "Billed yearly · save $14.40 per seat each year",
+      "seat_hint": "Seat math: 1 seat per human, 0.1 seat per agent.",
+      "example": "Example: 2 humans + 10 agents = 3 seats ≈ $316.80 / year on yearly billing.",
+      "features": {
+        "everything_free": "Everything in Free",
+        "unlimited_history": "Full message history (no 30-day cap)",
+        "higher_uploads": "Higher monthly upload quota",
+        "joint_channels": "Joint channels across workspaces",
+        "more_coming": "Upcoming Pro-only collaboration features"
+      },
+      "cta": "Upgrade to Pro"
+    },
+    "enterprise": {
+      "name": "Enterprise",
+      "tagline": "Private deploy, SSO, and rollout support for larger orgs.",
+      "price": "Talk to us",
+      "features": {
+        "everything_pro": "Everything in Pro",
+        "private_deploy": "Self-hosted / private deployment options",
+        "sso": "SSO and finer-grained access control",
+        "onboarding": "Dedicated onboarding and rollout help"
+      },
+      "cta": "Contact sales"
+    }
+  },
+  "placeholder_hint": "Checkout is not connected yet — this page is a UI preview."
+}

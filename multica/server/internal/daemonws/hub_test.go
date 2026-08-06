@@ -1,0 +1,654 @@
+package daemonws
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/pkg/protocol"
+)
+
+func TestNotifyTaskAvailable(t *testing.T) {
+	M.Reset()
+	defer M.Reset()
+
+	hub := NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for hub.RuntimeConnectionCount("runtime-1") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("runtime connection was not registered")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	hub.NotifyTaskAvailable("runtime-1", "task-1")
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+
+	var msg protocol.Message
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	if msg.Type != protocol.EventDaemonTaskAvailable {
+		t.Fatalf("message type = %q, want %q", msg.Type, protocol.EventDaemonTaskAvailable)
+	}
+
+	var payload protocol.TaskAvailablePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.RuntimeID != "runtime-1" || payload.TaskID != "task-1" {
+		t.Fatalf("payload = %+v, want runtime/task IDs", payload)
+	}
+}
+
+func TestRelayNotifierPublishesDaemonRuntimeScope(t *testing.T) {
+	M.Reset()
+	defer M.Reset()
+
+	relay := &recordingRelayPublisher{}
+	notifier := NewRelayNotifier(nil, relay)
+
+	notifier.NotifyTaskAvailable("runtime-1", "task-1")
+
+	if relay.scopeType != realtime.ScopeDaemonRuntime {
+		t.Fatalf("scopeType = %q, want %q", relay.scopeType, realtime.ScopeDaemonRuntime)
+	}
+	if relay.scopeID != "task-1" {
+		t.Fatalf("scopeID = %q, want task_id shard key", relay.scopeID)
+	}
+	if relay.eventID == "" {
+		t.Fatal("expected event id")
+	}
+	if M.WakeupPublishedTotal.Load() != 1 {
+		t.Fatalf("published metric = %d, want 1", M.WakeupPublishedTotal.Load())
+	}
+
+	var msg protocol.Message
+	if err := json.Unmarshal(relay.frame, &msg); err != nil {
+		t.Fatalf("unmarshal frame: %v", err)
+	}
+	if msg.Type != protocol.EventDaemonTaskAvailable {
+		t.Fatalf("message type = %q, want %q", msg.Type, protocol.EventDaemonTaskAvailable)
+	}
+	var payload protocol.TaskAvailablePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.RuntimeID != "runtime-1" || payload.TaskID != "task-1" {
+		t.Fatalf("payload = %+v, want runtime/task IDs", payload)
+	}
+}
+
+func TestRelayNotifierDedupsLocalRedisLoopback(t *testing.T) {
+	M.Reset()
+	defer M.Reset()
+
+	hub := NewHub()
+	client := attachDaemonTestClient(hub, "runtime-1")
+	relay := &localFirstDaemonRelayPublisher{t: t, client: client}
+	notifier := NewRelayNotifier(hub, relay)
+
+	notifier.NotifyTaskAvailable("runtime-1", "task-1")
+
+	if !relay.called {
+		t.Fatal("expected relay publish to be invoked")
+	}
+	if relay.eventID == "" {
+		t.Fatal("expected event id")
+	}
+	if M.WakeupDeliveredHit.Load() != 1 {
+		t.Fatalf("delivered hit metric = %d, want 1", M.WakeupDeliveredHit.Load())
+	}
+
+	hub.DeliverDaemonRuntime(relay.scopeID, relay.frame, relay.eventID)
+
+	select {
+	case duplicate := <-client.send:
+		t.Fatalf("expected redis loopback to be deduped, got duplicate %s", duplicate)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if M.WakeupDeliveredHit.Load() != 1 {
+		t.Fatalf("delivered hit metric after loopback = %d, want 1", M.WakeupDeliveredHit.Load())
+	}
+	if M.WakeupDeliveredMiss.Load() != 0 {
+		t.Fatalf("delivered miss metric after dedup = %d, want 0", M.WakeupDeliveredMiss.Load())
+	}
+}
+
+// TestHeartbeatRoundTrip pins the WS heartbeat contract: a daemon:heartbeat
+// frame invokes the registered HeartbeatHandler with the runtime ID, and the
+// hub serializes the returned ack as a daemon:heartbeat_ack on the wire.
+func TestHeartbeatRoundTrip(t *testing.T) {
+	M.Reset()
+	defer M.Reset()
+
+	hub := NewHub()
+	var calls atomic.Int32
+	hub.SetHeartbeatHandler(func(_ context.Context, identity ClientIdentity, payload protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
+		calls.Add(1)
+		if identity.WorkspaceID != "ws-1" {
+			t.Errorf("identity workspace = %q, want ws-1", identity.WorkspaceID)
+		}
+		if !payload.SupportsMemoryCuration || payload.ActiveMemoryCurationRunID != "run-1" {
+			t.Errorf("memory curation heartbeat fields = %+v", payload)
+		}
+		return &protocol.DaemonHeartbeatAckPayload{
+			RuntimeID: payload.RuntimeID,
+			Status:    "ok",
+			PendingUpdate: &protocol.DaemonHeartbeatPendingUpdate{
+				ID:            "update-1",
+				TargetVersion: "0.1.99",
+			},
+		}, nil
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{
+			WorkspaceID: "ws-1",
+			RuntimeIDs:  []string{"runtime-1"},
+		})
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	hbFrame, err := json.Marshal(protocol.Message{
+		Type: protocol.EventDaemonHeartbeat,
+		Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{
+			RuntimeID: "runtime-1", SupportsMemoryCuration: true, ActiveMemoryCurationRunID: "run-1",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("marshal heartbeat: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, hbFrame); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+
+	var msg protocol.Message
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatalf("unmarshal ack envelope: %v", err)
+	}
+	if msg.Type != protocol.EventDaemonHeartbeatAck {
+		t.Fatalf("ack type = %q, want %q", msg.Type, protocol.EventDaemonHeartbeatAck)
+	}
+	var ack protocol.DaemonHeartbeatAckPayload
+	if err := json.Unmarshal(msg.Payload, &ack); err != nil {
+		t.Fatalf("unmarshal ack payload: %v", err)
+	}
+	if ack.RuntimeID != "runtime-1" {
+		t.Fatalf("ack runtime_id = %q, want runtime-1", ack.RuntimeID)
+	}
+	if ack.PendingUpdate == nil || ack.PendingUpdate.ID != "update-1" {
+		t.Fatalf("ack pending_update = %+v, want update-1", ack.PendingUpdate)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("HeartbeatHandler invocations = %d, want 1", got)
+	}
+}
+
+// TestHeartbeatHandlerCtxNotTimeBounded pins the PopPending invariant: the
+// hub must not wrap the handler ctx with a short WithTimeout, otherwise the
+// Redis Lua claim script can be cancelled mid-flight after its side effects
+// have already landed. We assert by stalling the handler past any timeout
+// the hub might be tempted to add and verifying the ack still arrives.
+func TestHeartbeatHandlerCtxNotTimeBounded(t *testing.T) {
+	M.Reset()
+	defer M.Reset()
+
+	hub := NewHub()
+	const stall = 250 * time.Millisecond
+	hub.SetHeartbeatHandler(func(ctx context.Context, _ ClientIdentity, payload protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
+		select {
+		case <-time.After(stall):
+		case <-ctx.Done():
+			t.Errorf("handler ctx was cancelled (deadline=%v) — PopPending invariant violated", ctx.Err())
+			return nil, ctx.Err()
+		}
+		if _, ok := ctx.Deadline(); ok {
+			t.Errorf("handler ctx must not carry a deadline; PopPending side effects cannot be safely un-run")
+		}
+		return &protocol.DaemonHeartbeatAckPayload{RuntimeID: payload.RuntimeID, Status: "ok"}, nil
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	hbFrame, err := json.Marshal(protocol.Message{
+		Type:    protocol.EventDaemonHeartbeat,
+		Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{RuntimeID: "runtime-1"}),
+	})
+	if err != nil {
+		t.Fatalf("marshal heartbeat: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, hbFrame); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(stall + 2*time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+	var msg protocol.Message
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatalf("unmarshal ack: %v", err)
+	}
+	if msg.Type != protocol.EventDaemonHeartbeatAck {
+		t.Fatalf("ack type = %q, want %q", msg.Type, protocol.EventDaemonHeartbeatAck)
+	}
+}
+
+// TestHeartbeatRejectsUnauthorizedRuntime verifies that a heartbeat for a
+// runtime outside the connection's authenticated set is dropped silently —
+// no handler call, no ack frame.
+func TestHeartbeatRejectsUnauthorizedRuntime(t *testing.T) {
+	M.Reset()
+	defer M.Reset()
+
+	hub := NewHub()
+	var called atomic.Bool
+	hub.SetHeartbeatHandler(func(context.Context, ClientIdentity, protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
+		called.Store(true)
+		return &protocol.DaemonHeartbeatAckPayload{Status: "ok"}, nil
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	hbFrame, err := json.Marshal(protocol.Message{
+		Type:    protocol.EventDaemonHeartbeat,
+		Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{RuntimeID: "runtime-other"}),
+	})
+	if err != nil {
+		t.Fatalf("marshal heartbeat: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, hbFrame); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatalf("expected no ack for unauthorized runtime, got message")
+	}
+	if called.Load() {
+		t.Fatalf("HeartbeatHandler invoked for unauthorized runtime")
+	}
+}
+
+func TestReminderSnapshotTransientErrorClosesConnectionWithoutTerminalStop(t *testing.T) {
+	hub := NewHub()
+	hub.SetReminderHandlers(func(context.Context, ClientIdentity, protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error) {
+		return nil, errors.New("transient snapshot query failure")
+	}, nil, nil, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	request, err := json.Marshal(protocol.Message{
+		Type: protocol.EventReminderSnapshotRequest,
+		Payload: mustMarshalRaw(protocol.ReminderSnapshotRequestPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-1", PlacementGeneration: 1,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, raw, err := conn.ReadMessage(); err == nil {
+		var msg protocol.Message
+		if json.Unmarshal(raw, &msg) == nil && msg.Type == protocol.EventDaemonAgentStop {
+			t.Fatalf("transient snapshot error emitted terminal stop: %s", raw)
+		}
+		t.Fatalf("transient snapshot error left connection open: %s", raw)
+	}
+}
+
+// TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry pins
+// task #68's hub.go fix: unlike the snapshot path above, a transient
+// fire-attempt processing failure must NOT force-close the connection. The
+// daemon now keeps a locally-retryable in-flight record and resends the
+// fire_attempt itself on a short backoff (reminder_cache.go), so tearing
+// down the WS connection here would only add an unnecessary reconnect on
+// top of a retry that was already going to happen.
+func TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry(t *testing.T) {
+	hub := NewHub()
+	hub.SetReminderHandlers(nil, func(context.Context, ClientIdentity, protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error) {
+		return nil, errors.New("transient fire processing failure")
+	}, nil, nil)
+	hub.SetHeartbeatHandler(func(context.Context, ClientIdentity, protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
+		return &protocol.DaemonHeartbeatAckPayload{RuntimeID: "runtime-1", Status: "ok"}, nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	request, err := json.Marshal(protocol.Message{
+		Type: protocol.EventReminderFireAttempt,
+		Payload: mustMarshalRaw(protocol.ReminderFireAttemptPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-1", PlacementGeneration: 1, ReminderID: "reminder-1", Version: 1,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	// A single read call after both writes, not two separate reads: gorilla's
+	// ReadMessage is not reliably reusable after a prior call returns any
+	// error (including a deadline timeout) — this proves both "no frame for
+	// the failure itself" and "connection survives" in one read, avoiding
+	// that pitfall. The heartbeat ack is the only frame that should arrive.
+	heartbeat, err := json.Marshal(protocol.Message{
+		Type:    protocol.EventDaemonHeartbeat,
+		Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{RuntimeID: "runtime-1"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, heartbeat); err != nil {
+		t.Fatalf("connection unusable after transient fire-attempt failure: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, raw, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("connection closed instead of surviving to answer a heartbeat: %v", err)
+	} else {
+		var msg protocol.Message
+		if json.Unmarshal(raw, &msg) != nil || msg.Type != protocol.EventDaemonHeartbeatAck {
+			t.Fatalf("post-failure frame = %s, want a heartbeat ack proving the connection survived", raw)
+		}
+	}
+}
+
+func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
+	hub := NewHub()
+	const eventCount = 40
+	hub.SetReminderHandlers(nil, nil, func(_ context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error) {
+		if len(identity.RuntimeIDs) != 1 || identity.RuntimeIDs[0] != "runtime-1" {
+			t.Fatalf("identity runtimes = %#v", identity.RuntimeIDs)
+		}
+		if payload.RuntimeCursors["runtime-1"] != 0 {
+			t.Fatalf("request cursors = %#v", payload.RuntimeCursors)
+		}
+		events := make([]protocol.DaemonAgentLifecycleEvent, 0, eventCount)
+		for i := 1; i <= eventCount; i++ {
+			events = append(events, protocol.DaemonAgentLifecycleEvent{
+				EventType: "start", AgentID: "agent-" + strconv.Itoa(i), RuntimeID: "runtime-1", WorkspaceID: "workspace-1",
+				PlacementGeneration: int64(i), LifecycleSeq: int64(i),
+			})
+		}
+		return events, map[string]int64{"runtime-1": eventCount}, nil
+	}, nil)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	request, err := json.Marshal(protocol.Message{
+		Type:    protocol.EventDaemonAgentLifecycleReq,
+		Payload: mustMarshalRaw(protocol.DaemonAgentLifecycleRequestPayload{RuntimeCursors: map[string]int64{"runtime-1": 0}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= eventCount; i++ {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read replay event %d: %v", i, err)
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != protocol.EventDaemonAgentStart {
+			t.Fatalf("event %d type = %q", i, msg.Type)
+		}
+		var payload protocol.DaemonAgentStartPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.LifecycleSeq != int64(i) || !payload.Replay {
+			t.Fatalf("event %d payload = %+v", i, payload)
+		}
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read replay end: %v", err)
+	}
+	var end protocol.Message
+	if err := json.Unmarshal(raw, &end); err != nil {
+		t.Fatal(err)
+	}
+	if end.Type != protocol.EventDaemonAgentLifecycleEnd {
+		t.Fatalf("final type = %q", end.Type)
+	}
+}
+
+func TestReminderProjectionReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
+	hub := NewHub()
+	const eventCount = 40
+	hub.SetReminderProjectionHandlers(func(_ context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error) {
+		if len(identity.RuntimeIDs) != 1 || identity.RuntimeIDs[0] != "runtime-1" {
+			t.Fatalf("identity runtimes = %#v", identity.RuntimeIDs)
+		}
+		if payload.RuntimeCursors["runtime-1"] != 0 {
+			t.Fatalf("request cursors = %#v", payload.RuntimeCursors)
+		}
+		events := make([]protocol.ReminderProjectionEvent, 0, eventCount)
+		for i := 1; i <= eventCount; i++ {
+			events = append(events, protocol.ReminderProjectionEvent{
+				Seq: int64(i), RuntimeID: "runtime-1", AgentID: "agent-1", EventType: "upsert",
+				ReminderID: "reminder-" + strconv.Itoa(i), Version: 1,
+				FireAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano),
+			})
+		}
+		return events, protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-1": eventCount}}, nil
+	}, nil)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	request, err := json.Marshal(protocol.Message{
+		Type:    protocol.EventReminderProjectionReq,
+		Payload: mustMarshalRaw(protocol.ReminderProjectionRequestPayload{RuntimeCursors: map[string]int64{"runtime-1": 0}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= eventCount; i++ {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read projection event %d: %v", i, err)
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != protocol.EventReminderProjection {
+			t.Fatalf("event %d type = %q", i, msg.Type)
+		}
+		var event protocol.ReminderProjectionEvent
+		if err := json.Unmarshal(msg.Payload, &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Seq != int64(i) {
+			t.Fatalf("event %d seq = %d", i, event.Seq)
+		}
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read projection replay end: %v", err)
+	}
+	var end protocol.Message
+	if err := json.Unmarshal(raw, &end); err != nil {
+		t.Fatal(err)
+	}
+	if end.Type != protocol.EventReminderProjectionEnd {
+		t.Fatalf("final type = %q", end.Type)
+	}
+}
+
+func attachDaemonTestClient(hub *Hub, runtimeID string) *client {
+	c := &client{
+		send:     make(chan []byte, 2),
+		done:     make(chan struct{}),
+		runtimes: map[string]struct{}{runtimeID: {}},
+	}
+
+	hub.mu.Lock()
+	hub.clients[c] = true
+	hub.byRuntime[runtimeID] = map[*client]bool{c: true}
+	hub.mu.Unlock()
+
+	return c
+}
+
+type recordingRelayPublisher struct {
+	scopeType string
+	scopeID   string
+	exclude   string
+	frame     []byte
+	eventID   string
+}
+
+func (r *recordingRelayPublisher) PublishWithID(scopeType, scopeID, exclude string, frame []byte, id string) error {
+	r.scopeType = scopeType
+	r.scopeID = scopeID
+	r.exclude = exclude
+	r.frame = append([]byte(nil), frame...)
+	r.eventID = id
+	return nil
+}
+
+type localFirstDaemonRelayPublisher struct {
+	t      *testing.T
+	client *client
+
+	called     bool
+	scopeType  string
+	scopeID    string
+	exclude    string
+	frame      []byte
+	eventID    string
+	localFrame []byte
+}
+
+func (p *localFirstDaemonRelayPublisher) PublishWithID(scopeType, scopeID, exclude string, frame []byte, id string) error {
+	p.called = true
+	p.scopeType = scopeType
+	p.scopeID = scopeID
+	p.exclude = exclude
+	p.frame = append([]byte(nil), frame...)
+	p.eventID = id
+
+	select {
+	case p.localFrame = <-p.client.send:
+	default:
+		p.t.Fatal("expected local fanout to happen before relay publish")
+	}
+	return nil
+}

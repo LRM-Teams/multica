@@ -1262,6 +1262,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// completed_at). Backs the Agents-list sparkline (trailing 7d
 			// slice) AND the agent detail "Last 30 days" panel.
 			r.Get("/api/agent-activity-30d", h.GetWorkspaceAgentActivity30d)
+			r.Get("/api/work-graphs/{graphId}", h.GetWorkGraph)
 
 			// Workspace-wide 30-day run counts per agent for the Agents-list RUNS column.
 			r.Get("/api/agent-run-counts", h.GetWorkspaceAgentRunCounts)
@@ -1300,6 +1301,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/channels/{channelId}/goal/checkpoint", h.CheckpointAgentChannelGoal)
 				r.Get("/channels/{channelId}/goal/subgoals", h.ListAgentChannelGoalSubgoals)
 				r.Post("/channels/{channelId}/goal/subgoals", h.CreateAgentChannelGoalSubgoal)
+				r.Post("/work-graphs", h.CreateAgentWorkGraph)
+				r.Get("/work-graphs/{graphId}", h.GetAgentWorkGraph)
+				r.Post("/work-graphs/{graphId}/reconcile", h.ReconcileAgentWorkGraph)
+				r.Post("/work-graphs/{graphId}/nodes/{nodeId}/invalidate", h.InvalidateAgentWorkGraphNode)
+				r.Patch("/work-graphs/{graphId}/nodes/{nodeId}", h.UpdateAgentWorkGraphNode)
+				r.Post("/work-graphs/{graphId}/artifacts", h.AddAgentWorkGraphArtifact)
+				r.Post("/work-graphs/{graphId}/verifications", h.AddAgentWorkGraphVerification)
+				r.Post("/work-graphs/{graphId}/revisions", h.ReviseAgentWorkGraph)
 				r.Get("/channels/{channelId}/goal/process", h.ListAgentChannelGoalProcesses)
 				r.Put("/channels/{channelId}/goal/process", h.PutAgentChannelGoalProcess)
 				r.Get("/channels/{channelId}/goal/process/{agentId}", h.GetAgentChannelGoalProcess)

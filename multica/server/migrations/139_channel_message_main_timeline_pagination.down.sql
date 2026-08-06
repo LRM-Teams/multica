@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_channel_message_main_timeline_page;

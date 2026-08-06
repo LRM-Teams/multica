@@ -16,26 +16,38 @@ import (
 )
 
 type ChannelGoalResponse struct {
-	ID                string     `json:"id"`
-	WorkspaceID       string     `json:"workspace_id"`
-	ChannelID         string     `json:"channel_id"`
-	Title             string     `json:"title"`
-	Objective         string     `json:"objective"`
-	SuccessCriteria   []string   `json:"success_criteria"`
-	Status            string     `json:"status"`
-	Version           int64      `json:"version"`
-	ProgressSummary   string     `json:"progress_summary"`
-	CurrentStep       string     `json:"current_step"`
-	Blocker           string     `json:"blocker"`
-	EvidenceRefs      []string   `json:"evidence_refs"`
-	CompletedCriteria []string   `json:"completed_criteria"`
-	CreatedByType     string     `json:"created_by_type"`
-	CreatedByID       string     `json:"created_by_id"`
-	UpdatedByType     string     `json:"updated_by_type"`
-	UpdatedByID       string     `json:"updated_by_id"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	ID                string                       `json:"id"`
+	WorkspaceID       string                       `json:"workspace_id"`
+	ChannelID         string                       `json:"channel_id"`
+	Title             string                       `json:"title"`
+	Objective         string                       `json:"objective"`
+	SuccessCriteria   []string                     `json:"success_criteria"`
+	Status            string                       `json:"status"`
+	Version           int64                        `json:"version"`
+	ProgressSummary   string                       `json:"progress_summary"`
+	CurrentStep       string                       `json:"current_step"`
+	Blocker           string                       `json:"blocker"`
+	EvidenceRefs      []string                     `json:"evidence_refs"`
+	CompletedCriteria []string                     `json:"completed_criteria"`
+	CreatedByType     string                       `json:"created_by_type"`
+	CreatedByID       string                       `json:"created_by_id"`
+	UpdatedByType     string                       `json:"updated_by_type"`
+	UpdatedByID       string                       `json:"updated_by_id"`
+	CreatedAt         time.Time                    `json:"created_at"`
+	UpdatedAt         time.Time                    `json:"updated_at"`
+	CompletedAt       *time.Time                   `json:"completed_at,omitempty"`
+	WorkGraph         *channelGoalWorkGraphSummary `json:"work_graph,omitempty"`
+}
+
+type channelGoalWorkGraphSummary struct {
+	ID        string `json:"id"`
+	Version   int64  `json:"version"`
+	Status    string `json:"status"`
+	Total     int    `json:"total"`
+	Completed int    `json:"completed"`
+	Running   int    `json:"running"`
+	Waiting   int    `json:"waiting"`
+	Stale     int    `json:"stale"`
 }
 
 type channelGoalEnvelope struct {
@@ -167,7 +179,7 @@ func channelGoalContextForClaim(goal ChannelGoalResponse) *protocol.ChannelGoalC
 	if goal.Status != "active" {
 		return nil
 	}
-	return &protocol.ChannelGoalContext{
+	out := &protocol.ChannelGoalContext{
 		ID:                goal.ID,
 		Title:             goal.Title,
 		Objective:         goal.Objective,
@@ -179,6 +191,10 @@ func channelGoalContextForClaim(goal ChannelGoalResponse) *protocol.ChannelGoalC
 		EvidenceRefs:      goal.EvidenceRefs,
 		CompletedCriteria: goal.CompletedCriteria,
 	}
+	if goal.WorkGraph != nil {
+		out.WorkGraph = &protocol.ChannelWorkGraphContext{ID: goal.WorkGraph.ID, Version: goal.WorkGraph.Version, Status: goal.WorkGraph.Status, Completed: goal.WorkGraph.Completed, Running: goal.WorkGraph.Running, Waiting: goal.WorkGraph.Waiting, Stale: goal.WorkGraph.Stale}
+	}
+	return out
 }
 
 // Completing the main Goal must not cascade-close Issues / Needs You / other
@@ -206,7 +222,19 @@ func (h *Handler) GetChannelGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load channel goal")
 		return
 	}
+	h.hydrateChannelGoalWorkGraph(r.Context(), &goal)
 	writeJSON(w, http.StatusOK, channelGoalEnvelope{Goal: &goal})
+}
+
+func (h *Handler) hydrateChannelGoalWorkGraph(ctx context.Context, goal *ChannelGoalResponse) {
+	if goal == nil {
+		return
+	}
+	var s channelGoalWorkGraphSummary
+	err := h.DB.QueryRow(ctx, `SELECT g.id::text,g.current_version,g.status,count(n.id)::int,count(n.id) FILTER(WHERE n.execution_status='succeeded' AND n.validity_status='valid')::int,count(n.id) FILTER(WHERE n.execution_status='running')::int,count(n.id) FILTER(WHERE n.execution_status IN('draft','queued','ready','waiting'))::int,count(n.id) FILTER(WHERE n.validity_status IN('stale','invalidated'))::int FROM work_graph g LEFT JOIN work_graph_node n ON n.graph_id=g.id WHERE g.workspace_id=$1::uuid AND g.anchor_kind='channel_goal' AND g.anchor_id=$2::uuid GROUP BY g.id,g.current_version,g.status`, goal.WorkspaceID, goal.ID).Scan(&s.ID, &s.Version, &s.Status, &s.Total, &s.Completed, &s.Running, &s.Waiting, &s.Stale)
+	if err == nil {
+		goal.WorkGraph = &s
+	}
 }
 
 func (h *Handler) CreateChannelGoal(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +306,12 @@ func (h *Handler) openSubgoalsBlockMainGoalComplete(ctx context.Context, goalID 
 		SELECT count(*) FROM channel_goal_subgoal
 		WHERE goal_id = $1::uuid AND status IN ('captured','in_progress','waiting')`, goalID).Scan(&openSubgoals)
 	return err == nil && openSubgoals > 0
+}
+
+func (h *Handler) openWorkGraphBlocksMainGoalComplete(ctx context.Context, goalID string) bool {
+	var open int
+	err := h.DB.QueryRow(ctx, `SELECT count(*) FROM work_graph_node n JOIN work_graph g ON g.id=n.graph_id WHERE g.anchor_kind='channel_goal' AND g.anchor_id=$1::uuid AND g.status NOT IN('completed','cancelled') AND (n.execution_status NOT IN('succeeded','cancelled') OR n.validity_status<>'valid' OR (n.role='verifier' AND n.review_status<>'accepted'))`, goalID).Scan(&open)
+	return err == nil && open > 0
 }
 
 func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
@@ -400,6 +434,10 @@ func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "resolve or cancel open subgoals before completing the main goal")
 		return
 	}
+	if current.Status == "completed" && h.openWorkGraphBlocksMainGoalComplete(r.Context(), current.ID) {
+		writeError(w, http.StatusConflict, "complete and validate the work graph before completing the main goal")
+		return
+	}
 	criteriaJSON, _ := json.Marshal(current.SuccessCriteria)
 	evidenceJSON, _ := json.Marshal(current.EvidenceRefs)
 	completedJSON, _ := json.Marshal(current.CompletedCriteria)
@@ -425,6 +463,10 @@ func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publishChannelGoalUpdated(workspaceID, uuidToString(channelID), "member", userID, goal)
+	if h.WorkGraph != nil {
+		_ = h.WorkGraph.SyncGoalLifecycle(r.Context(), workspaceID, goal.ID, goal.Status)
+	}
+	h.hydrateChannelGoalWorkGraph(r.Context(), &goal)
 	writeJSON(w, http.StatusOK, channelGoalEnvelope{Goal: &goal})
 }
 
@@ -486,6 +528,7 @@ func (h *Handler) GetAgentChannelGoal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load channel goal")
 		return
 	}
+	h.hydrateChannelGoalWorkGraph(r.Context(), &goal)
 	writeJSON(w, http.StatusOK, channelGoalEnvelope{Goal: &goal})
 }
 
@@ -618,6 +661,10 @@ func (h *Handler) UpdateAgentChannelGoal(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusConflict, "resolve or cancel open subgoals before completing the main goal")
 		return
 	}
+	if current.Status == "completed" && h.openWorkGraphBlocksMainGoalComplete(r.Context(), current.ID) {
+		writeError(w, http.StatusConflict, "complete and validate the work graph before completing the main goal")
+		return
+	}
 	criteriaJSON, _ := json.Marshal(current.SuccessCriteria)
 	completedJSON, _ := json.Marshal(current.CompletedCriteria)
 	goal, err := scanChannelGoal(h.DB.QueryRow(r.Context(), `
@@ -639,6 +686,9 @@ func (h *Handler) UpdateAgentChannelGoal(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	h.publishChannelGoalUpdated(uuidToString(workspaceID), uuidToString(channelID), "agent", uuidToString(agentID), goal)
+	if h.WorkGraph != nil {
+		_ = h.WorkGraph.SyncGoalLifecycle(r.Context(), uuidToString(workspaceID), goal.ID, goal.Status)
+	}
 	writeJSON(w, http.StatusOK, channelGoalEnvelope{Goal: &goal})
 }
 

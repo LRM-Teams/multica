@@ -1,0 +1,42 @@
+{
+  "page": {
+    "title": "Agent Overview"
+  },
+  "kpi": {
+    "active_agents": "Active Agents",
+    "active_agents_detail": "{{idle}} idle, {{error}} errored",
+    "tasks_done": "Tasks Done",
+    "tasks_failed_detail": "{{count}} failed",
+    "success_rate": "Success Rate",
+    "spend": "Spend",
+    "budget_detail": "Daily budget: {{budget}}",
+    "pending_approval": "Pending Approval",
+    "longest_wait_detail": "Longest wait {{wait}}",
+    "vs_yesterday": "vs yesterday"
+  },
+  "my_tasks": {
+    "title": "Issues & messages for me",
+    "empty": "Nothing needs your attention",
+    "review_badge": "Review",
+    "channel_mention": "{{actor}} mentioned you in #{{channel}}"
+  },
+  "agent_status": {
+    "title": "My agents' activity",
+    "empty": "No agent activity yet",
+    "status": {
+      "running": "Running",
+      "waiting": "Waiting",
+      "done": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "fallback_task": "a task"
+  },
+  "priority": {
+    "high": "High",
+    "medium": "Med",
+    "low": "Low",
+    "mention": "@"
+  },
+  "placeholder_badge": "Demo data"
+}

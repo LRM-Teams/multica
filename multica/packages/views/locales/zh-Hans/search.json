@@ -1,0 +1,97 @@
+{
+  "title": "搜索",
+  "description": "搜索页面、issue、项目和成员",
+  "placeholder": "输入命令或关键词搜索...",
+  "groups": {
+    "pages": "页面",
+    "commands": "命令",
+    "members": "成员",
+    "agents": "智能体",
+    "projects": "项目",
+    "issues": "Issues",
+    "recent": "最近"
+  },
+  "actions": {
+    "send_message": "发消息"
+  },
+  "pages": {
+    "inbox": "活动",
+    "my_issues": "我的 issue",
+    "issues": "Issues",
+    "projects": "项目",
+    "agents": "智能体",
+    "computers": "电脑",
+    "skills": "Skills",
+    "settings": "设置"
+  },
+  "commands": {
+    "current_theme_aria": "当前主题",
+    "new_issue": "新建 issue",
+    "new_project": "新建项目",
+    "copy_issue_link": "复制 issue 链接",
+    "copy_identifier": "复制标识符 ({{identifier}})",
+    "switch_to_light": "切换到浅色主题",
+    "switch_to_dark": "切换到深色主题",
+    "use_system_theme": "跟随系统主题"
+  },
+  "toast": {
+    "link_copied": "已复制链接",
+    "copied_identifier": "已复制 {{identifier}}"
+  },
+  "empty": {
+    "no_results": "未找到结果。",
+    "type_to_search": "输入关键词搜索 issue 和项目"
+  },
+  "trigger": {
+    "label": "搜索..."
+  },
+  "globalSearch": {
+    "title": "全局搜索",
+    "description": "搜索群、DM、消息和成员",
+    "placeholder": "搜索群、DM 和消息…",
+    "from_placeholder": "再输入关键词（可选）…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "移除发送者筛选",
+    "range_channel": "本频道",
+    "range_workspace": "工作区",
+    "include_thread": "含 thread",
+    "mainline_only": "仅主线",
+    "scope": {
+      "all": "全部",
+      "messages": "消息",
+      "channels": "群",
+      "dms": "DM",
+      "people": "成员"
+    },
+    "groups": {
+      "channels": "群",
+      "dms": "私信",
+      "messages": "消息",
+      "people": "成员"
+    },
+    "states": {
+      "recent": "最近搜索",
+      "jump_to": "跳转到",
+      "empty": "没有匹配「{{query}}」的结果。试试更短的关键词，或调整过滤条件。",
+      "denied_title": "无法搜索此范围。",
+      "denied_body": "匹配内容你没有权限查看（例如未加入的私密频道）。请换关键词或去掉受限过滤。",
+      "error_title": "搜索失败。",
+      "retry": "重试",
+      "loading": "搜索中…"
+    },
+    "row": {
+      "thread_hits": "THREAD · {{count}} 命中",
+      "mainline": "主线",
+      "in_thread": "thread",
+      "members": "{{count}} 成员",
+      "joined": "你也在其中",
+      "dm_placeholder": "私信"
+    },
+    "actions": {
+      "open_channel": "打开频道",
+      "open_dm": "打开私信",
+      "open_message": "打开消息",
+      "view_profile": "查看资料"
+    }
+  }
+}

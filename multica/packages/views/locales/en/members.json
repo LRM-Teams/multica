@@ -1,0 +1,53 @@
+{
+  "role": {
+    "owner": "Owner",
+    "admin": "Admin",
+    "member": "Member"
+  },
+  "card": {
+    "unavailable": "Member unavailable",
+    "agents_section": "Agents ({{count}})",
+    "detail_link": "Detail →",
+    "more_agents_one": "and {{count}} other agent",
+    "more_agents_other": "and {{count}} other agents"
+  },
+  "panel": {
+    "description": "Description",
+    "no_description": "No description",
+    "description_placeholder": "Add a short description…",
+    "info": "Info",
+    "role": "Role",
+    "email": "Email",
+    "joined": "Joined",
+    "created_agents": "Created agents",
+    "no_agents": "No agents created yet",
+    "message_aria": "Send message",
+    "you_suffix": "(you)",
+    "edit_profile": "Edit profile",
+    "name_label": "Name",
+    "name_placeholder": "Enter your name",
+    "name_required": "Name cannot be empty",
+    "change_avatar_aria": "Change avatar",
+    "avatar_updated_toast": "Avatar updated",
+    "avatar_upload_failed": "Avatar upload failed, please retry",
+    "avatar_err_type": "Only PNG or JPG images are supported",
+    "avatar_err_size": "Image must be 5 MB or smaller",
+    "avatar_err_dimensions": "Image must be at least 256×256",
+    "honor_title": "Honor",
+    "honor_completion": "{{unlocked}} / {{total}} badges",
+    "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
+    "honor_showcase": "Showcase",
+    "honor_recent": "Recent unlocks",
+    "honor_compare": "Compare with you",
+    "honor_shared": "Shared badges",
+    "honor_you_only": "Only you",
+    "honor_them_only": "Only them"
+  },
+  "detail": {
+    "workspace_fallback": "Workspace",
+    "members_breadcrumb": "Members",
+    "breadcrumb_fallback": "Member",
+    "not_found_title": "Member not found",
+    "not_found_description": "This member may have left the workspace."
+  }
+}

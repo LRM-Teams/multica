@@ -1,0 +1,27 @@
+{
+  "header": {
+    "log_out": "退出登录"
+  },
+  "not_found": {
+    "title": "链接已失效或无效",
+    "description": "请回到终端重新运行 \"multica login\"，或者再次点击它打印出来的链接。"
+  },
+  "main": {
+    "title": "确认登录",
+    "requested_from": "来自 {{client_hint}} 的请求",
+    "requested_from_unknown": "来自未知设备的请求",
+    "deny": "拒绝",
+    "denying": "拒绝中...",
+    "approve": "批准",
+    "approving": "批准中..."
+  },
+  "done": {
+    "approved_title": "登录已批准",
+    "approved_description": "你可以关闭此标签页，返回终端。",
+    "denied_title": "登录已拒绝",
+    "denied_description": "CLI 的登录请求已被拒绝。"
+  },
+  "errors": {
+    "confirm_failed": "确认失败，请重试。"
+  }
+}

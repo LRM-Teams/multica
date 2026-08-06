@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS sandbox_job_one_active_delete_per_instance;

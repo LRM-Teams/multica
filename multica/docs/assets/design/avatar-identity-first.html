@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LRM-223 · 身份优先单一 Avatar 定稿</title>
+<style>
+  :root {
+    --bg:#f3f4f2; --ink:#1d1c1d; --muted:#616061; --line:#ddd; --card:#fff;
+    --ok:#007a5a; --accent:#1264a3; --warn:#b35c00;
+    --font:"Segoe UI","PingFang SC","Hiragino Sans GB","Noto Sans SC",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);color:var(--ink);background:
+    radial-gradient(720px 320px at 10% -10%,#e7efe9 0%,transparent 55%),
+    radial-gradient(640px 300px at 95% 0%,#e8eef5 0%,transparent 50%),var(--bg);
+    padding:32px 20px 56px}
+  .page{max-width:960px;margin:0 auto}
+  h1{margin:0 0 6px;font-size:22px;letter-spacing:-.02em}
+  h2{margin:0 0 10px;font-size:15px}
+  .lead{margin:0 0 16px;color:var(--muted);font-size:14px;line-height:1.55}
+  .chip{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:#e8f5fa;color:var(--accent);margin-right:6px}
+  .chip.ok{background:#e8f6ef;color:var(--ok)}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px}
+  .rec{background:#eef8f3;border-color:#b9e0cf}
+  ol,ul{margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.65}
+  li{margin:4px 0} strong{color:var(--ink)}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;background:#f7f7f5}
+  code{font-size:12px;background:#f4f4f2;padding:1px 4px;border-radius:3px}
+  .compare{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:720px){.compare{grid-template-columns:1fr}}
+  .phone{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#f7f7f5}
+  .ph{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line);font-size:12px;font-weight:700}
+  .row{display:flex;gap:10px;padding:10px 12px;align-items:flex-start}
+  .bubble{flex:1;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--muted)}
+  .av{width:36px;height:36px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;font-size:12px;font-weight:700;color:#fff;position:relative}
+  .av.bad{background:#eee;color:#c23b22;font-size:9px;width:auto;min-width:36px;padding:0 4px;border-radius:8px}
+  .av.ph{background:#5b8def}
+  .av.img{background:linear-gradient(135deg,#7aa2ff,#4b6cb7)}
+  .av.sk{background:linear-gradient(90deg,#e6e6e6,#f2f2f2,#e6e6e6);background-size:200% 100%}
+  .dot{position:absolute;right:-1px;bottom:-1px;width:10px;height:10px;border-radius:50%;border:2px solid #fff;background:#2bac76}
+  .dot.off{background:#9a9a9a}
+  .dot.busy{background:#e0a100}
+  .states{display:flex;flex-wrap:wrap;gap:16px;margin-top:10px}
+  .cap{font-size:11px;color:var(--muted);text-align:center;margin-top:6px}
+  .label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  .note{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
+</style>
+</head>
+<body>
+  <div class="page">
+    <h1>LRM-223 · 身份优先 · 单一 Avatar 定稿</h1>
+    <p class="lead">
+      <span class="chip ok">已冻结 · 可验收</span>
+      <span class="chip">父单 LRM-81</span>
+      Frank：不止血，直接走长期 B。对标 Slack：头像跟身份走，不跟每条消息载荷绑死。
+    </p>
+
+    <div class="panel rec">
+      <h2>定稿一句话</h2>
+      <p class="note" style="margin:0;color:var(--ink);font-size:14px">
+        全产品只认一个 Avatar：入参是 <code>actorType + actorId</code>；用身份目录/缓存出图；消息上的 URL 只是加速；缺了不清空；失败画色圆字母，禁止整词文字。
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>Before / After（聊天气泡）</h2>
+      <div class="compare">
+        <div>
+          <div class="label">Before · 绑消息字段</div>
+          <div class="phone">
+            <div class="ph">#multica-frank</div>
+            <div class="row"><div class="av img">F</div><div class="bubble">第一条有图</div></div>
+            <div class="row"><div class="av bad">前端</div><div class="bubble">WS 缺字段 → 整段文字</div></div>
+            <div class="row"><div class="av bad">前端</div><div class="bubble">连续消息继续坏</div></div>
+          </div>
+        </div>
+        <div>
+          <div class="label">After · 身份优先</div>
+          <div class="phone">
+            <div class="ph">#multica-frank</div>
+            <div class="row"><div class="av img">F</div><div class="bubble">第一条有图，写入缓存</div></div>
+            <div class="row"><div class="av img">F</div><div class="bubble">WS 缺 URL → 仍用缓存</div></div>
+            <div class="row"><div class="av img">A<span class="dot"></span></div><div class="bubble">Agent 同壳 + 状态点</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>组件态（必须全有）</h2>
+      <div class="states">
+        <div><div class="av sk" style="width:44px;height:44px"></div><div class="cap">加载骨架</div></div>
+        <div><div class="av img" style="width:44px;height:44px">图</div><div class="cap">真实头像</div></div>
+        <div><div class="av ph" style="width:44px;height:44px">AN</div><div class="cap">设计占位</div></div>
+        <div><div class="av ph" style="width:44px;height:44px">A<span class="dot"></span></div><div class="cap">在线</div></div>
+        <div><div class="av ph" style="width:44px;height:44px">A<span class="dot busy"></span></div><div class="cap">忙碌/执行中</div></div>
+        <div><div class="av ph" style="width:44px;height:44px">A<span class="dot off"></span></div><div class="cap">离线</div></div>
+      </div>
+      <p class="note">占位：色圆 + 1～2 字母（显示名首字）。禁止「前端」「Agent」等整词塞进头像位。状态点不替代头像。</p>
+    </div>
+
+    <div class="panel">
+      <h2>解析硬规则（对标 Slack）</h2>
+      <ol>
+        <li>按 <code>actorKey</code> 读进程缓存 / 身份目录</li>
+        <li>若消息带 <code>avatarUrl</code> → 刷新缓存（有值才写）</li>
+        <li>仍无 → 设计占位，后台拉目录；回来后同作者全表面更新</li>
+        <li><strong>缺字段 / null / undefined 不得覆盖已有 URL</strong></li>
+      </ol>
+    </div>
+
+    <div class="panel">
+      <h2>表面用法（全部同一组件）</h2>
+      <table>
+        <thead><tr><th>表面</th><th>尺寸建议</th><th>状态点</th><th>备注</th></tr></thead>
+        <tbody>
+          <tr><td>消息气泡 / Thread</td><td>32–36</td><td>Agent 开</td><td>首迁；连续消息不回落</td></tr>
+          <tr><td>顶栏头像堆</td><td>24–28</td><td>关</td><td>重叠裁切，缺则占位</td></tr>
+          <tr><td>Members / Add people / 设置成员</td><td>36–40</td><td>Agent 开</td><td>列表行</td></tr>
+          <tr><td>侧栏会话</td><td>28–32</td><td>可选</td><td>有则同规则</td></tr>
+          <tr><td>资料卡</td><td>64–80</td><td>Agent 开</td><td>目录真相展示</td></tr>
+          <tr><td>@提及 / 搜索</td><td>20–24</td><td>关</td><td>补全列表</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>给前端的实现要点</h2>
+      <ul>
+        <li>入参主字段：<code>actorType</code>、<code>actorId</code>；<code>avatarUrl?</code>、<code>name?</code>、<code>showStatusDot?</code></li>
+        <li>全局 sticky：<code>Map&lt;actorKey, {url, initials, presence}&gt;</code></li>
+        <li>迁移顺序：气泡+Thread → 成员类 → 侧栏/@ → 收掉旧多套 Avatar</li>
+        <li>本单不写代码；落地由前端子单（父 LRM-81）</li>
+      </ul>
+    </div>
+
+    <div class="panel rec">
+      <h2>验收清单</h2>
+      <ul>
+        <li>群聊/DM 连续消息、WS 推送缺 URL：头像不闪、不变文字</li>
+        <li>无头像作者：色圆字母占位，非整词</li>
+        <li>Agent：头像图 + 角标点（在线/忙碌/离线）</li>
+        <li>Members / 设置 / 资料卡与气泡视觉同源</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

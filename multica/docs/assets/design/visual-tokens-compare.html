@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LRM-226 · Token 对照图</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --surface: #fff; --ink: #1d1c1d; --ink-2: #616061; --ink-3: #868686;
+    --line: #e8e8e8; --line-strong: #d1d1d1; --hover: #f8f8f8;
+    --accent: #1264a3; --ok: #007a5a; --danger: #e01e5a; --online: #2bac76; --busy: #e8912d;
+    --font: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font); color: var(--ink); background: #ecece8; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 18px; }
+  .lead { margin: 0 0 14px; font-size: 12px; color: var(--ink-2); }
+  .swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .sw {
+    display: flex; align-items: center; gap: 6px; background: #fff; border: 1px solid var(--line);
+    border-radius: 8px; padding: 4px 8px 4px 4px; font-size: 11px;
+  }
+  .sw i { width: 18px; height: 18px; border-radius: 4px; display: block; border: 1px solid rgba(0,0,0,.08); }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 1080px; }
+  .mock { background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-height: 340px; display: flex; flex-direction: column; }
+  .mh { padding: 10px 12px; border-bottom: 1px solid var(--line); background: #f7f7f5; }
+  .mh b { font-size: 14px; display: block; }
+  .mh span { font-size: 11px; color: var(--ink-2); }
+  .mb { padding: 12px; flex: 1; background: linear-gradient(180deg,#fafafa,#f3f3f1); display: flex; flex-direction: column; gap: 10px; }
+  .av { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 700; flex: 0 0 auto; }
+  .msg { display: flex; gap: 8px; }
+  .name { font-size: 12px; font-weight: 700; }
+  .text { font-size: 12px; margin-top: 2px; }
+  .sub { font-size: 11px; color: var(--ink-2); }
+  .composer { margin-top: auto; border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--ink-3); background: #fff; }
+  .search { height: 32px; border: 1px solid var(--line-strong); border-radius: 8px; display: flex; align-items: center; padding: 0 10px; font-size: 12px; color: var(--ink-3); background: #fafafa; }
+  .list { background: #fff; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .row { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .row:last-child { border-bottom: 0; }
+  .n { font-weight: 650; }
+  .h { font-size: 11px; color: var(--ink-3); }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); background: #fff; margin: -12px -12px 0; padding: 0 6px; }
+  .tab { padding: 8px 10px; font-size: 11px; color: var(--ink-2); border-bottom: 2px solid transparent; }
+  .tab.on { color: var(--ink); font-weight: 700; border-bottom-color: var(--ink); }
+  .srow { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .srow .r { color: var(--ink-2); }
+  .danger { color: var(--danger); font-weight: 600; }
+  .tag { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+</style>
+</head>
+<body>
+  <h1>LRM-226 · 共用 Token · 三表面对照</h1>
+  <p class="lead">聊天 / 成员 / 设置 · 同一色板与字号 · 不做整站换肤</p>
+  <div class="swatches">
+    <div class="sw"><i style="background:#1d1c1d"></i>ink</div>
+    <div class="sw"><i style="background:#616061"></i>ink-2</div>
+    <div class="sw"><i style="background:#868686"></i>ink-3</div>
+    <div class="sw"><i style="background:#e8e8e8"></i>line</div>
+    <div class="sw"><i style="background:#1264a3"></i>accent</div>
+    <div class="sw"><i style="background:#007a5a"></i>ok</div>
+    <div class="sw"><i style="background:#e01e5a"></i>danger</div>
+    <div class="sw"><i style="background:#f6f6f4"></i>bg</div>
+  </div>
+  <div class="grid">
+    <div>
+      <div class="tag">Chat</div>
+      <div class="mock">
+        <div class="mh"><b># multica-frank</b><span>12 成员</span></div>
+        <div class="mb">
+          <div class="msg"><div class="av" style="background:#5b8def">F</div><div><div class="name">Frank An</div><div class="text">项目整体风格感觉很不一致</div></div></div>
+          <div class="msg"><div class="av" style="background:var(--accent)">U</div><div><div class="name">UI设计师</div><div class="text">小步统一 token</div><div class="sub">不做整站换肤</div></div></div>
+          <div class="msg"><div class="av" style="background:var(--ok)">前</div><div><div class="name">前端工程师</div><div class="text">拍板后替换硬编码</div></div></div>
+          <div class="composer">发消息…</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="tag">Members</div>
+      <div class="mock">
+        <div class="mh"><b>Members</b><span>12 people</span></div>
+        <div class="mb">
+          <div class="search">搜索成员</div>
+          <div class="list">
+            <div class="row"><div class="av" style="background:#5b8def;width:28px;height:28px">F</div><div><div class="n">Frank An</div><div class="h">@andong3</div></div></div>
+            <div class="row"><div class="av" style="background:var(--accent);width:28px;height:28px">U</div><div><div class="n">UI设计师</div><div class="h">agent</div></div></div>
+            <div class="row"><div class="av" style="background:var(--ok);width:28px;height:28px">前</div><div><div class="n">前端工程师</div><div class="h">agent</div></div></div>
+            <div class="row"><div class="av" style="background:#8b5a2b;width:28px;height:28px">S</div><div><div class="n">核心研发 Squad</div><div class="h">squad</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="tag">Settings</div>
+      <div class="mock">
+        <div class="mh"><b># multica-frank</b><span>频道详情</span></div>
+        <div class="mb" style="padding-top:0;background:#fff;gap:0">
+          <div class="tabs">
+            <div class="tab">关于</div><div class="tab">成员</div><div class="tab">文件</div><div class="tab on">设置</div>
+          </div>
+          <div style="padding:12px">
+            <div class="srow"><span>通知</span><span class="r">全部消息</span></div>
+            <div class="srow"><span>置顶</span><span class="r">关</span></div>
+            <div class="srow"><span>归档频道</span><span class="r">…</span></div>
+            <div class="srow" style="border:0"><span class="danger">移除成员…</span><span></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

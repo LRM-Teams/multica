@@ -17,6 +17,12 @@ func TestIsStickyProviderQuotaLock(t *testing.T) {
 	if IsStickyProviderQuotaLock("API Error: 429 Too Many Requests", string(ReasonAgentProviderCapacityOrRateLimit)) {
 		t.Fatal("bare transient 429 must not sticky-lock")
 	}
+	if IsStickyProviderQuotaLock(
+		"2026-08-04T09:34:14.402226Z model catalog refresh timed out",
+		"codex_semantic_inactivity",
+	) {
+		t.Fatal("fractional timestamp beginning with 402 must not sticky-lock")
+	}
 }
 
 func TestParseProviderBlockedUntil(t *testing.T) {

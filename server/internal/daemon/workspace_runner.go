@@ -199,6 +199,18 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			if err := writeFrame(protocol.EventAgentSession, session); err != nil {
 				return err
 			}
+		case protocol.EventDaemonAgentStop:
+			var stop protocol.WorkspaceRunnerAgentStopPayload
+			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
+				continue
+			}
+			if err := d.workspaceAgentProcessManager(workspaceID).Stop(agentProcessCallback{AgentID: stop.AgentID, LaunchID: stop.LaunchID}); err != nil {
+				continue
+			}
+			producer.RemoveManaged(stop.AgentID, stop.LaunchID)
+			if err := writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil {
+				return err
+			}
 		case protocol.EventAgentActivityProbe:
 			var probe protocol.AgentActivityProbePayload
 			if json.Unmarshal(message.Payload, &probe) != nil || probe.Validate() != nil {

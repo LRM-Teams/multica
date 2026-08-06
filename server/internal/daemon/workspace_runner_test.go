@@ -50,7 +50,7 @@ func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 
 func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	frames := make(chan protocol.Message, 4)
+	frames := make(chan protocol.Message, 5)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("workspace_id") != "ws-1" || r.Header.Get("Authorization") != "Bearer workspace-token" {
 			http.Error(w, "unexpected runner scope", http.StatusForbidden)
@@ -78,6 +78,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			t.Error(err)
 			return
 		}
+		var accepted protocol.AgentStartAckPayload
 		for i := 0; i < 3; i++ {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
@@ -89,8 +90,30 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				t.Error(err)
 				return
 			}
+			if msg.Type == protocol.EventAgentStartAck {
+				if err := json.Unmarshal(msg.Payload, &accepted); err != nil {
+					t.Error(err)
+					return
+				}
+			}
 			frames <- msg
 		}
+		stop, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStop, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStopPayload{AgentID: accepted.AgentID, LaunchID: accepted.LaunchID})})
+		if err := conn.WriteMessage(websocket.TextMessage, stop); err != nil {
+			t.Error(err)
+			return
+		}
+		_, raw, err = conn.ReadMessage()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var inactive protocol.Message
+		if err := json.Unmarshal(raw, &inactive); err != nil {
+			t.Error(err)
+			return
+		}
+		frames <- inactive
 	}))
 	defer server.Close()
 	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -102,8 +125,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, "ws-1") }()
-	var ready, ack, status, session protocol.Message
-	for i := 0; i < 4; i++ {
+	var ready, ack, status, inactive, session protocol.Message
+	for i := 0; i < 5; i++ {
 		select {
 		case msg := <-frames:
 			switch msg.Type {
@@ -112,7 +135,15 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			case protocol.EventAgentStartAck:
 				ack = msg
 			case protocol.EventAgentStatus:
-				status = msg
+				var candidate protocol.AgentStatusPayload
+				if err := json.Unmarshal(msg.Payload, &candidate); err != nil {
+					t.Fatal(err)
+				}
+				if candidate.Status == protocol.AgentStatusActive {
+					status = msg
+				} else {
+					inactive = msg
+				}
 			case protocol.EventAgentSession:
 				session = msg
 			}
@@ -137,6 +168,13 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	}
 	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive || reportedSession.LaunchID != accepted.LaunchID {
 		t.Fatalf("ack=%+v status=%+v session=%+v", accepted, active, reportedSession)
+	}
+	var stopped protocol.AgentStatusPayload
+	if err := json.Unmarshal(inactive.Payload, &stopped); err != nil {
+		t.Fatal(err)
+	}
+	if stopped.LaunchID != accepted.LaunchID || stopped.Status != protocol.AgentStatusInactive {
+		t.Fatalf("inactive status=%+v, want launch %q", stopped, accepted.LaunchID)
 	}
 	<-errCh
 }

@@ -88,6 +88,17 @@ func (p *agentActivityProducer) SetConnected(agentID, launchID string, connected
 	}
 }
 
+// RemoveManaged forgets a stopped launch so a later reconnect cannot report a
+// stale active status, session, or Snapshot for it.
+func (p *agentActivityProducer) RemoveManaged(agentID, launchID string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.states, agentActivityProducerKey{agentID: agentID, launchID: launchID})
+}
+
 // AttachTransport makes a newly established Workspace Runner connection the
 // only destination for best-effort Activity. It returns the current managed
 // state for ready reconciliation and a lease that prevents an older replaced

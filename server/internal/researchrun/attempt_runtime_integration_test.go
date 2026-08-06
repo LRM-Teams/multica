@@ -118,7 +118,7 @@ func TestAttemptRuntimeLeaseSeparatesQueueExecutionAndCancellationSettlement(t *
 		t.Fatalf("timeout events=%+v err=%v", events, err)
 	}
 	attempts, err = store.ListAttempts(ctx, fixture.sessionID)
-	if err != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusCancelling || attempts[0].PendingFailure != "task_timeout" || attempts[0].CancelCompletedAt != nil ||
+	if err != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusCancelling || attempts[0].PendingFailure != string(FailureTimeout) || attempts[0].CancelCompletedAt != nil ||
 		attempts[0].RuntimeStartedAt == nil || attempts[0].RuntimeStartedAt.Sub(startedAt).Abs() > time.Millisecond {
 		t.Fatalf("timed out attempt=%+v err=%v", attempts, err)
 	}
@@ -142,7 +142,7 @@ func TestAttemptRuntimeLeaseSeparatesQueueExecutionAndCancellationSettlement(t *
 		t.Fatalf("pending=%v err=%v", pending, cancelErr)
 	}
 	attempts, err = store.ListAttempts(ctx, fixture.sessionID)
-	if err != nil || attempts[0].Status != AttemptStatusFailed || attempts[0].FailureClass != "task_timeout" || attempts[0].CancelCompletedAt == nil {
+	if err != nil || attempts[0].Status != AttemptStatusFailed || attempts[0].FailureClass != string(FailureTimeout) || attempts[0].CancelCompletedAt == nil {
 		t.Fatalf("settled attempt=%+v err=%v", attempts, err)
 	}
 	tasks, err = store.ListTasks(ctx, fixture.sessionID)

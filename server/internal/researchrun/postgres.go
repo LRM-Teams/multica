@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -523,9 +524,21 @@ func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID str
 
 func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspaceID string) ([]FleetMember, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.agent_id::text, m.role, m.status, m.is_lead
+		SELECT m.agent_id::text, m.role, m.status, m.is_lead,
+		       COALESCE(agent.runtime_id::text, ''), COALESCE(runtime.provider, ''),
+		       COALESCE(agent.model, ''), agent.runtime_mode,
+		       COALESCE(runtime.pinned_version, ''),
+		       COALESCE(runtime_state.provider_config_fingerprint, ''),
+		       COALESCE(agent.runtime_config::text, ''), COALESCE(agent.custom_env::text, ''),
+		       COALESCE(agent.custom_args::text, ''), COALESCE(agent.mcp_config::text, ''),
+		       COALESCE(agent.thinking_level, ''),
+		       COALESCE(agent.provider_block_detail, ''), agent.provider_blocked_until
 		FROM research_fleet_member m
 		JOIN research_session s ON s.fleet_id = m.fleet_id
+		JOIN agent ON agent.id = m.agent_id AND agent.workspace_id = m.workspace_id
+		LEFT JOIN agent_runtime runtime ON runtime.id = agent.runtime_id AND runtime.workspace_id = m.workspace_id
+		LEFT JOIN agent_runtime_state runtime_state
+		  ON runtime_state.agent_id = agent.id AND runtime_state.runtime_id = agent.runtime_id
 		WHERE s.id = $1::uuid AND s.workspace_id = $2::uuid AND m.workspace_id = s.workspace_id
 		ORDER BY m.is_lead DESC, m.created_at, m.id
 	`, sessionID, workspaceID)
@@ -536,8 +549,26 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 	out := []FleetMember{}
 	for rows.Next() {
 		var item FleetMember
-		if err := rows.Scan(&item.AgentID, &item.Role, &item.Status, &item.IsLead); err != nil {
+		var runtimeMode, pinnedVersion, providerFingerprint string
+		var runtimeConfig, customEnv, customArgs, mcpConfig, thinkingLevel string
+		var blockedUntil pgtype.Timestamptz
+		item.ExecutionTarget.Adapter = "agent_inbox"
+		if err := rows.Scan(&item.AgentID, &item.Role, &item.Status, &item.IsLead,
+			&item.ExecutionTarget.RuntimeID, &item.ExecutionTarget.Provider,
+			&item.ExecutionTarget.Model, &runtimeMode, &pinnedVersion,
+			&providerFingerprint, &runtimeConfig, &customEnv, &customArgs, &mcpConfig,
+			&thinkingLevel, &item.ProviderBlockDetail, &blockedUntil); err != nil {
 			return nil, err
+		}
+		item.ExecutionTarget.AgentID = item.AgentID
+		item.ExecutionTarget.ConfigFingerprint = ExecutionTargetFingerprint(
+			item.AgentID, item.ExecutionTarget.RuntimeID, item.ExecutionTarget.Provider,
+			item.ExecutionTarget.Model, runtimeMode, pinnedVersion, providerFingerprint,
+			runtimeConfig, customEnv, customArgs, mcpConfig, thinkingLevel,
+		)
+		if blockedUntil.Valid {
+			until := blockedUntil.Time
+			item.ProviderBlockedUntil = &until
 		}
 		out = append(out, item)
 	}
@@ -772,9 +803,11 @@ func scanTask(row scanner) (Task, error) {
 const attemptSelectSQL = `
 	SELECT a.id::text, a.session_id::text, a.workspace_id::text, a.task_id::text,
 	       a.attempt_number, a.assigned_agent_id::text,
+	       a.execution_adapter, COALESCE(a.runtime_id::text, ''), a.provider,
+	       a.model, a.target_config_fingerprint,
 	       COALESCE(a.inbox_task_id::text, ''), a.dispatch_key,
 	       COALESCE(a.client_request_id, ''), a.status, COALESCE(a.result_hash, ''),
-	       a.failure_class, a.diagnostics, a.dispatched_at, a.started_at,
+	       a.failure_class, a.source_failure_reason, a.diagnostics, a.dispatched_at, a.started_at,
 	       a.runtime_started_at, a.runtime_last_observed_at, a.runtime_lease_expires_at,
 	       a.cancellation_requested_at, a.cancellation_completed_at,
 	       a.pending_failure_class, a.pending_failure_diagnostics,
@@ -784,13 +817,17 @@ const attemptSelectSQL = `
 func scanAttempt(row scanner) (Attempt, error) {
 	var item Attempt
 	err := row.Scan(&item.ID, &item.SessionID, &item.WorkspaceID, &item.TaskID,
-		&item.AttemptNumber, &item.AssignedAgentID, &item.InboxTaskID, &item.DispatchKey,
+		&item.AttemptNumber, &item.AssignedAgentID, &item.ExecutionTarget.Adapter,
+		&item.ExecutionTarget.RuntimeID, &item.ExecutionTarget.Provider,
+		&item.ExecutionTarget.Model, &item.ExecutionTarget.ConfigFingerprint,
+		&item.InboxTaskID, &item.DispatchKey,
 		&item.ClientRequestID, &item.Status, &item.ResultHash, &item.FailureClass,
-		&item.Diagnostics, &item.DispatchedAt, &item.StartedAt, &item.RuntimeStartedAt,
+		&item.SourceFailureReason, &item.Diagnostics, &item.DispatchedAt, &item.StartedAt, &item.RuntimeStartedAt,
 		&item.RuntimeObservedAt, &item.RuntimeLeaseUntil, &item.CancelRequestedAt,
 		&item.CancelCompletedAt, &item.PendingFailure, &item.PendingDiagnostics,
 		&item.PendingRetryable, &item.ResultSubmittedAt,
 		&item.CompletedAt)
+	item.ExecutionTarget.AgentID = item.AssignedAgentID
 	return item, err
 }
 

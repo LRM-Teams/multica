@@ -72,12 +72,25 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	if !agent.RuntimeID.Valid {
 		return researchrun.DispatchResult{}, service.ErrChatTaskAgentNoRuntime
 	}
-	provider := ""
-	if runtime, runtimeErr := h.Queries.GetAgentRuntime(ctx, agent.RuntimeID); runtimeErr == nil {
-		provider = runtime.Provider
+	runtime, err := h.Queries.GetAgentRuntime(ctx, agent.RuntimeID)
+	if err != nil {
+		return researchrun.DispatchResult{}, researchrun.NewDispatchFailure(fmt.Errorf("load research agent runtime: %w", err), researchrun.FailureConfiguration, false)
 	}
-	if _, err = ensureAgentHasExplicitModel(ctx, h.Queries, agent, provider); err != nil {
+	agent, err = ensureAgentHasExplicitModel(ctx, h.Queries, agent, runtime.Provider)
+	if err != nil {
 		return researchrun.DispatchResult{}, fmt.Errorf("ensure research agent model: %w", err)
+	}
+	if request.Target != (researchrun.ExecutionTarget{}) {
+		currentTarget, targetErr := researchExecutionTarget(ctx, h, agent, runtime)
+		if targetErr != nil {
+			return researchrun.DispatchResult{}, targetErr
+		}
+		if currentTarget != request.Target {
+			return researchrun.DispatchResult{}, researchrun.NewDispatchFailure(
+				fmt.Errorf("research execution target changed after attempt creation"),
+				researchrun.FailureTargetChanged, true,
+			)
+		}
 	}
 	session, err := h.Queries.GetResearchSession(ctx, db.GetResearchSessionParams{
 		ID:          parseUUID(request.Run.SessionID),
@@ -173,16 +186,51 @@ func classifyResearchDispatchError(err error) error {
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "42") {
-		return researchrun.NonRetryableDispatchError(err)
+		return researchrun.NewDispatchFailure(err, researchrun.FailureInternal, false)
 	}
 	var wakeErr *researchwake.Error
-	if errors.As(err, &wakeErr) ||
-		errors.Is(err, service.ErrChatTaskAgentArchived) ||
+	if errors.As(err, &wakeErr) {
+		switch wakeErr.Reason {
+		case researchwake.ReasonAgentNoRuntime, researchwake.ReasonAgentModelRequired:
+			return researchrun.NewDispatchFailure(err, researchrun.FailureConfiguration, false)
+		case researchwake.ReasonRuntimeOffline:
+			return researchrun.NewDispatchFailure(err, researchrun.FailureRuntimeLost, true)
+		default:
+			return researchrun.NewDispatchFailure(err, researchrun.FailureCapability, false)
+		}
+	}
+	if errors.Is(err, service.ErrChatTaskAgentArchived) ||
 		errors.Is(err, service.ErrChatTaskAgentNoRuntime) ||
 		errors.Is(err, service.ErrAgentModelRequired) {
-		return researchrun.NonRetryableDispatchError(err)
+		return researchrun.NewDispatchFailure(err, researchrun.FailureConfiguration, false)
 	}
 	return err
+}
+
+func researchExecutionTarget(ctx context.Context, h *Handler, agent db.Agent, runtime db.AgentRuntime) (researchrun.ExecutionTarget, error) {
+	providerFingerprint := ""
+	err := h.DB.QueryRow(ctx, `
+		SELECT COALESCE(provider_config_fingerprint, '')
+		FROM agent_runtime_state
+		WHERE agent_id = $1 AND runtime_id = $2
+	`, agent.ID, runtime.ID).Scan(&providerFingerprint)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return researchrun.ExecutionTarget{}, fmt.Errorf("load research target configuration: %w", err)
+	}
+	target := researchrun.ExecutionTarget{
+		Adapter:   "agent_inbox",
+		AgentID:   uuidToString(agent.ID),
+		RuntimeID: uuidToString(runtime.ID),
+		Provider:  runtime.Provider,
+		Model:     strings.TrimSpace(agent.Model.String),
+	}
+	target.ConfigFingerprint = researchrun.ExecutionTargetFingerprint(
+		target.AgentID, target.RuntimeID, target.Provider, target.Model,
+		agent.RuntimeMode, runtime.PinnedVersion.String, providerFingerprint,
+		string(agent.RuntimeConfig), string(agent.CustomEnv), string(agent.CustomArgs),
+		string(agent.McpConfig), agent.ThinkingLevel.String,
+	)
+	return target, nil
 }
 
 func (d *researchRunDispatcher) Inspect(ctx context.Context, keys []string) (map[string]researchrun.InboxTaskState, error) {

@@ -97,6 +97,13 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		strings.TrimSpace(in.TaskID) == "" || strings.TrimSpace(in.AgentID) == "" {
 		return Attempt{}, RunEvent{}, fmt.Errorf("%w: incomplete dispatch intent", ErrInvalidTransition)
 	}
+	target := in.Target
+	if target == (ExecutionTarget{}) {
+		target = ExecutionTarget{Adapter: "agent_inbox", AgentID: in.AgentID}
+	}
+	if in.Request.Target != (ExecutionTarget{}) && (in.Request.Target != target || ValidateExecutionTarget(target, in.AgentID) != nil) {
+		return Attempt{}, RunEvent{}, fmt.Errorf("%w: dispatch execution target mismatch", ErrInvalidTransition)
+	}
 	encodedRequest, requestHash, err := encodeDispatchRequest(in.Request)
 	if err != nil {
 		return Attempt{}, RunEvent{}, fmt.Errorf("encode dispatch request: %w", err)
@@ -195,20 +202,30 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_task_attempt (
 			id, workspace_id, session_id, task_id, attempt_number, assigned_agent_id,
+			execution_adapter, runtime_id, provider, model, target_config_fingerprint,
 			dispatch_key, status
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid, $7, 'dispatching')
+		) VALUES (
+			$1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid,
+			$8, NULLIF($9, '')::uuid, $10, $11, $12, $7, 'dispatching'
+		)
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
-		          attempt_number, assigned_agent_id::text, '', dispatch_key, '', status,
-		          '', failure_class, diagnostics, dispatched_at, started_at,
+		          attempt_number, assigned_agent_id::text,
+		          execution_adapter, COALESCE(runtime_id::text, ''), provider, model,
+		          target_config_fingerprint, '', dispatch_key, '', status,
+		          '', failure_class, source_failure_reason, diagnostics, dispatched_at, started_at,
 		          runtime_started_at, runtime_last_observed_at, runtime_lease_expires_at,
 		          cancellation_requested_at, cancellation_completed_at,
 		          pending_failure_class, pending_failure_diagnostics,
 		          pending_failure_retryable, result_submitted_at, completed_at
-	`, in.AttemptID, workspaceID, in.SessionID, in.TaskID, attemptNumber, in.AgentID, in.Request.Key).Scan(
+	`, in.AttemptID, workspaceID, in.SessionID, in.TaskID, attemptNumber, in.AgentID, in.Request.Key,
+		target.Adapter, target.RuntimeID, target.Provider, target.Model, target.ConfigFingerprint).Scan(
 		&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID, &attempt.TaskID,
-		&attempt.AttemptNumber, &attempt.AssignedAgentID, &attempt.InboxTaskID,
+		&attempt.AttemptNumber, &attempt.AssignedAgentID,
+		&attempt.ExecutionTarget.Adapter, &attempt.ExecutionTarget.RuntimeID,
+		&attempt.ExecutionTarget.Provider, &attempt.ExecutionTarget.Model,
+		&attempt.ExecutionTarget.ConfigFingerprint, &attempt.InboxTaskID,
 		&attempt.DispatchKey, &attempt.ClientRequestID, &attempt.Status,
-		&attempt.ResultHash, &attempt.FailureClass, &attempt.Diagnostics,
+		&attempt.ResultHash, &attempt.FailureClass, &attempt.SourceFailureReason, &attempt.Diagnostics,
 		&attempt.DispatchedAt, &attempt.StartedAt, &attempt.RuntimeStartedAt,
 		&attempt.RuntimeObservedAt, &attempt.RuntimeLeaseUntil, &attempt.CancelRequestedAt,
 		&attempt.CancelCompletedAt, &attempt.PendingFailure, &attempt.PendingDiagnostics,
@@ -218,6 +235,7 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	if err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
+	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_dispatch_outbox (
 			workspace_id, session_id, task_id, attempt_id, dispatch_key,
@@ -234,7 +252,7 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "task_dispatching", in.Request.Key, "system", "", map[string]any{
 		"task_id": in.TaskID, "attempt_id": attempt.ID, "attempt_number": attemptNumber, "agent_id": in.AgentID,
-		"request_hash": requestHash,
+		"request_hash": requestHash, "execution_target": target,
 	})
 	if err != nil {
 		return Attempt{}, RunEvent{}, err
@@ -266,9 +284,11 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 		SET inbox_task_id = $2::uuid, updated_at = now()
 		WHERE id = $1::uuid AND status = 'dispatching'
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
-		          attempt_number, assigned_agent_id::text, inbox_task_id::text,
+		          attempt_number, assigned_agent_id::text,
+		          execution_adapter, COALESCE(runtime_id::text, ''), provider, model,
+		          target_config_fingerprint, inbox_task_id::text,
 		          dispatch_key, COALESCE(client_request_id, ''), status,
-		          COALESCE(result_hash, ''), failure_class, diagnostics, dispatched_at,
+		          COALESCE(result_hash, ''), failure_class, source_failure_reason, diagnostics, dispatched_at,
 		          started_at, runtime_started_at, runtime_last_observed_at,
 		          runtime_lease_expires_at, cancellation_requested_at,
 		          cancellation_completed_at, pending_failure_class,
@@ -276,13 +296,17 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 		          result_submitted_at, completed_at
 	`, attemptID, inboxTaskID).Scan(&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID,
 		&attempt.TaskID, &attempt.AttemptNumber, &attempt.AssignedAgentID,
+		&attempt.ExecutionTarget.Adapter, &attempt.ExecutionTarget.RuntimeID,
+		&attempt.ExecutionTarget.Provider, &attempt.ExecutionTarget.Model,
+		&attempt.ExecutionTarget.ConfigFingerprint,
 		&attempt.InboxTaskID, &attempt.DispatchKey, &attempt.ClientRequestID,
 		&attempt.Status, &attempt.ResultHash, &attempt.FailureClass,
-		&attempt.Diagnostics, &attempt.DispatchedAt, &attempt.StartedAt,
+		&attempt.SourceFailureReason, &attempt.Diagnostics, &attempt.DispatchedAt, &attempt.StartedAt,
 		&attempt.RuntimeStartedAt, &attempt.RuntimeObservedAt, &attempt.RuntimeLeaseUntil,
 		&attempt.CancelRequestedAt, &attempt.CancelCompletedAt, &attempt.PendingFailure,
 		&attempt.PendingDiagnostics, &attempt.PendingRetryable,
 		&attempt.ResultSubmittedAt, &attempt.CompletedAt)
+	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
 	if errors.Is(err, pgx.ErrNoRows) {
 		row := tx.QueryRow(ctx, attemptSelectSQL+` WHERE a.id = $1::uuid`, attemptID)
 		attempt, err = scanAttempt(row)
@@ -370,7 +394,7 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task_attempt
-		SET status = 'failed', failure_class = $2, diagnostics = $3,
+		SET status = 'failed', failure_class = $2, source_failure_reason = $4, diagnostics = $3,
 		    cancellation_completed_at = CASE
 		      WHEN status = 'cancelling' THEN COALESCE(cancellation_completed_at, now())
 		      ELSE cancellation_completed_at
@@ -379,7 +403,7 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 		    pending_failure_retryable = false,
 		    completed_at = now(), updated_at = now()
 		WHERE id = $1::uuid
-	`, in.AttemptID, truncateBytes(in.FailureClass, 160), diagnostics); err != nil {
+	`, in.AttemptID, truncateBytes(in.FailureClass, 160), diagnostics, truncateBytes(in.SourceReason, 160)); err != nil {
 		return RunEvent{}, err
 	}
 	nextStatus := TaskStatusFailed
@@ -398,7 +422,8 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "task_attempt_failed", "attempt-failed:"+in.AttemptID, "system", "", map[string]any{
 		"task_id": taskID, "attempt_id": in.AttemptID, "failure_class": in.FailureClass,
-		"agent_id": assignedAgentID, "diagnostics": diagnostics, "retryable": nextStatus == TaskStatusReady,
+		"source_failure_reason": in.SourceReason, "agent_id": assignedAgentID,
+		"diagnostics": diagnostics, "retryable": nextStatus == TaskStatusReady,
 	})
 	if err != nil {
 		return RunEvent{}, err

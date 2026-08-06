@@ -71,10 +71,7 @@ func (module executionModule) SyncAttempts(ctx context.Context, sessionID string
 	return module.ActivateReadyTasks(ctx, sessionID)
 }
 
-const (
-	dispatchLeaseDuration = 45 * time.Second
-	maxDispatchDeliveries = 8
-)
+const dispatchLeaseDuration = 45 * time.Second
 
 // DeliverPending resumes frozen external mutations. Dispatcher.Dispatch is
 // idempotent by request Key, so a crash after the external commit but before
@@ -89,9 +86,14 @@ func (module executionModule) DeliverPending(ctx context.Context, sessionID stri
 	for _, intent := range intents {
 		result, dispatchErr := module.dispatcher.Dispatch(ctx, intent.Request)
 		if dispatchErr != nil {
-			retryable := dispatchErrorRetryable(dispatchErr)
+			policy := DispatchFailurePolicy(dispatchErr)
+			retryable := policy.Retryable
+			maxDeliveries := policy.MaxAttempts
+			if maxDeliveries < 1 {
+				maxDeliveries = 1
+			}
 			mutationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-			if retryable && intent.DeliveryAttempts < maxDispatchDeliveries {
+			if retryable && intent.DeliveryAttempts < maxDeliveries {
 				next := module.clock.Now().Add(dispatchDeliveryBackoff(intent.DeliveryAttempts))
 				_, err = module.store.RescheduleDispatchIntent(mutationCtx, intent.ID, token, dispatchErr.Error(), next)
 				cancel()
@@ -101,7 +103,7 @@ func (module executionModule) DeliverPending(ctx context.Context, sessionID stri
 				continue
 			}
 			_, _, err = module.store.FailDispatchIntent(mutationCtx, intent.ID, token, AttemptFailure{
-				AttemptID: intent.AttemptID, FailureClass: "dispatch_failed",
+				AttemptID: intent.AttemptID, FailureClass: string(policy.Class),
 				Diagnostics: dispatchErr.Error(), Retryable: retryable,
 			})
 			cancel()
@@ -304,8 +306,10 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 		}
 		attemptID := uuid.NewString()
 		dispatchKey := fmt.Sprintf("research:%s:task:%s:attempt:%s", snapshot.Run.SessionID, currentTask.ID, attemptID)
+		target := selectedExecutionTarget(agentID, members)
 		attempt := Attempt{ID: attemptID, SessionID: snapshot.Run.SessionID, WorkspaceID: snapshot.Run.WorkspaceID,
-			TaskID: currentTask.ID, AssignedAgentID: agentID, DispatchKey: dispatchKey, Status: AttemptStatusDispatching}
+			TaskID: currentTask.ID, AssignedAgentID: agentID, ExecutionTarget: target,
+			DispatchKey: dispatchKey, Status: AttemptStatusDispatching}
 		prompt, err := module.prompts.Build(snapshot.Run, currentTask, attempt, snapshot, members)
 		if err != nil {
 			return dispatched, err
@@ -315,6 +319,7 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 			Task:      currentTask,
 			AttemptID: attempt.ID,
 			AgentID:   agentID,
+			Target:    target,
 			Key:       attempt.DispatchKey,
 			Prompt:    prompt,
 		}
@@ -324,7 +329,7 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 		}
 		_, _, err = module.store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
 			AttemptID: attemptID, SessionID: snapshot.Run.SessionID, TaskID: currentTask.ID,
-			AgentID: agentID, ExpectedStateVersion: snapshot.Run.StateVersion, Request: request,
+			AgentID: agentID, Target: target, ExpectedStateVersion: snapshot.Run.StateVersion, Request: request,
 		})
 		if errors.Is(err, ErrInvalidTransition) {
 			continue
@@ -341,6 +346,21 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 		}
 	}
 	return dispatched, nil
+}
+
+func selectedExecutionTarget(agentID string, members []FleetMember) ExecutionTarget {
+	for _, member := range members {
+		if member.AgentID != agentID {
+			continue
+		}
+		target := member.ExecutionTarget
+		if strings.TrimSpace(target.Adapter) == "" {
+			target.Adapter = "agent_inbox"
+		}
+		target.AgentID = agentID
+		return target
+	}
+	return ExecutionTarget{Adapter: "agent_inbox", AgentID: agentID}
 }
 
 func hasActiveCapability(task Task, members []FleetMember) bool {

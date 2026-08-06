@@ -546,6 +546,12 @@ func projectResearchEvent(event researchrun.RunEvent, session db.ResearchSession
 			valueString(payload, "cause"),
 		}, " · ")
 		return "agent_activity", "执行目标健康状态变化", summary, "done"
+	case "target_repair_decided":
+		summary := strings.Join([]string{
+			valueString(payload, "failure_class"),
+			valueString(payload, "repair_kind"),
+		}, " · ")
+		return "agent_activity", "已确定执行失败修复动作", summary, "done"
 	case "task_blocked":
 		return "dead_end", "调研任务因前置失败而阻塞", valueString(payload, "task_id"), "done"
 	case "control_task_created":

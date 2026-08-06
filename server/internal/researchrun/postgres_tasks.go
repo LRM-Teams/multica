@@ -444,6 +444,9 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 	if err = settleAttemptCircuitFailureTx(ctx, tx, in); err != nil {
 		return RunEvent{}, err
 	}
+	if _, _, err = recordTargetRepairTx(ctx, tx, in); err != nil {
+		return RunEvent{}, err
+	}
 	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "task_attempt_failed", "attempt-failed:"+in.AttemptID, "system", "", map[string]any{
 		"task_id": taskID, "attempt_id": in.AttemptID, "failure_class": in.FailureClass,
 		"source_failure_reason": in.SourceReason, "agent_id": assignedAgentID,

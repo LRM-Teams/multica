@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -394,40 +395,19 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rtID := uuidToString(rt.ID)
-
-	// Pin wins (task #81) — reject immediately rather than create an intent
-	// that maybeMaterializeUpdateIntent will refuse to ever materialize. The
-	// caller gets instant feedback instead of a "queued" state that silently
-	// never progresses.
-	if pinnedVersion, pinned := runtimePinnedVersion(rt); pinned {
-		writeCodedError(w, http.StatusConflict, "runtime_pinned",
-			fmt.Sprintf("this computer is pinned to version %s", pinnedVersion))
+	var req createMachineUpgradeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	// An attempt already in flight (delivered on a prior heartbeat) takes
-	// priority — creating a new intent wouldn't change anything until that
-	// attempt resolves, and the caller should see its real progress, not a
-	// "queued" state that's misleading given delivery already happened.
-	if existing, err := h.UpdateStore.LatestForRuntime(r.Context(), rtID); err == nil && existing != nil && updateRequestBlocksNewRequest(existing.Status) {
-		writeCodedError(w, http.StatusConflict, "update_already_in_progress", errUpdateInProgress.Error())
-		return
-	}
-
-	intent, err := h.UpdateIntentStore.Create(r.Context(), rtID, uuidToString(member.ID), UpdateIntentTTL)
+	op, _, err := h.createMachineUpgrade(r, rt, member, req, true)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record update intent: "+err.Error())
+		h.writeMachineUpgradeError(w, err)
 		return
 	}
-
-	h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "member", uuidToString(member.UserID), map[string]any{
-		"runtime": h.runtimeToResponse(r.Context(), rt),
-	})
-
-	// A freshly created intent is never given up (Create always resets that
-	// bookkeeping) — no last-attempt error to thread through here.
-	writeJSON(w, http.StatusOK, queuedUpdateFromIntent(intent, ""))
+	// Compatibility shape: installed clients still poll a runtime endpoint, but
+	// the returned ID is the one canonical machine operation for every sibling.
+	writeJSON(w, http.StatusOK, runtimeUpdateFromMachineUpgrade(op, uuidToString(rt.ID)))
 }
 
 // CancelUpdateIntent withdraws a not-yet-delivered update intent (protected
@@ -454,6 +434,27 @@ func (h *Handler) CancelUpdateIntent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.MachineUpgradeStore != nil {
+		if op, err := h.MachineUpgradeStore.LatestForDaemon(r.Context(), runtimeDaemonKey(rt)); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load machine upgrade: "+err.Error())
+			return
+		} else if op != nil && !op.Phase.terminal() {
+			if _, err := h.MachineUpgradeStore.Cancel(r.Context(), op.DaemonID, op.ID); err != nil {
+				if errors.Is(err, errMachineUpgradeAlreadyAccepted) {
+					writeCodedError(w, http.StatusConflict, "machine_upgrade_already_accepted", err.Error())
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "failed to cancel machine upgrade: "+err.Error())
+				return
+			}
+			h.publishMachineUpgradeProjection(r, rt)
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			return
+		}
+	}
+
+	// Legacy intent rows can still exist during rollout. This is deliberately a
+	// read/cleanup compatibility path only; InitiateUpdate no longer writes one.
 	if err := h.UpdateIntentStore.Cancel(r.Context(), uuidToString(rt.ID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to cancel update intent: "+err.Error())
 		return
@@ -488,6 +489,18 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 
 	rtID := uuidToString(rt.ID)
 	updateID := chi.URLParam(r, "updateId")
+
+	if h.MachineUpgradeStore != nil && !strings.HasPrefix(updateID, intentUpdateIDPrefix) {
+		op, err := h.MachineUpgradeStore.Get(r.Context(), runtimeDaemonKey(rt), updateID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load machine upgrade: "+err.Error())
+			return
+		}
+		if op != nil {
+			writeJSON(w, http.StatusOK, runtimeUpdateFromMachineUpgrade(op, rtID))
+			return
+		}
+	}
 
 	if updateID == intentUpdateID(rtID) {
 		intent, err := h.UpdateIntentStore.Get(r.Context(), rtID)

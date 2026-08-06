@@ -42,6 +42,26 @@ func TestDaemonAlive(t *testing.T) {
 	}
 }
 
+func TestRemoveDaemonPIDIfMatchesNeverDeletesSuccessorPID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	profile := "upgrade"
+	path := daemonPIDPathForProfile(profile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("2002"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removeDaemonPIDIfMatches(profile, 1001)
+	if data, err := os.ReadFile(path); err != nil || string(data) != "2002" {
+		t.Fatalf("successor pid after incumbent cleanup = %q, %v", data, err)
+	}
+	removeDaemonPIDIfMatches(profile, 2002)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("matching pid file remains: %v", err)
+	}
+}
+
 func TestPrintDaemonStatusIncludesCLIVersion(t *testing.T) {
 	t.Parallel()
 

@@ -175,13 +175,15 @@ type DaemonRegisterRequest struct {
 	// may have registered under before switching to a persistent UUID. The
 	// handler merges any matching runtime rows into the new row so agents
 	// and tasks keep working without manual intervention.
-	LegacyDaemonIDs   []string                          `json:"legacy_daemon_ids"`
-	DeviceName        string                            `json:"device_name"`
-	CLIVersion        string                            `json:"cli_version"` // multica CLI version
-	LaunchedBy        string                            `json:"launched_by"` // "desktop" when spawned by the Electron app
-	Capabilities      []string                          `json:"capabilities"`
-	SandboxInstanceID string                            `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
-	UpdateObservation *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
+	LegacyDaemonIDs                  []string                          `json:"legacy_daemon_ids"`
+	DeviceName                       string                            `json:"device_name"`
+	CLIVersion                       string                            `json:"cli_version"` // multica CLI version
+	LaunchedBy                       string                            `json:"launched_by"` // "desktop" when spawned by the Electron app
+	Capabilities                     []string                          `json:"capabilities"`
+	MachineUpgradeGeneration         string                            `json:"machine_upgrade_generation,omitempty"`
+	MachineUpgradeRollbackGeneration string                            `json:"machine_upgrade_rollback_generation,omitempty"`
+	SandboxInstanceID                string                            `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
+	UpdateObservation                *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
 	// PinnedVersion mirrors the daemon's MULTICA_PINNED_VERSION (task #81);
 	// empty means not pinned. Sent unconditionally on every register so
 	// unpinning a machine clears the stale value server-side too.
@@ -244,6 +246,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	req.WorkspaceID = strings.TrimSpace(req.WorkspaceID)
 	req.DaemonID = strings.TrimSpace(req.DaemonID)
 	req.DeviceName = strings.TrimSpace(req.DeviceName)
+	req.MachineUpgradeGeneration = strings.TrimSpace(req.MachineUpgradeGeneration)
+	req.MachineUpgradeRollbackGeneration = strings.TrimSpace(req.MachineUpgradeRollbackGeneration)
 
 	if req.DaemonID == "" {
 		writeError(w, http.StatusBadRequest, "daemon_id is required")
@@ -369,6 +373,9 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			"launched_by":  req.LaunchedBy,
 			"capabilities": capabilities,
 		}
+		if req.MachineUpgradeGeneration != "" {
+			metadataMap["machine_upgrade_generation"] = req.MachineUpgradeGeneration
+		}
 		// Persist the structured device_name the daemon already sends so the
 		// API can expose it without re-parsing the glued device_info string.
 		if req.DeviceName != "" {
@@ -464,6 +471,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	h.cacheDaemonRegisterToken(r.Context(), daemonToken, wsUUID, req.DaemonID)
 	for _, registered := range registeredRuntimes {
 		h.completeRuntimeUpdateOnTargetRegister(r, registered.runtime, req.CLIVersion)
+		h.attestMachineUpgradeRegistration(r, registered.runtime, req.CLIVersion, req.MachineUpgradeGeneration)
+		h.attestMachineUpgradeRollbackRegistration(r, registered.runtime, req.CLIVersion, req.MachineUpgradeRollbackGeneration)
 		// Inserted is false for normal daemon reconnects/upserts, so
 		// runtime_ready is a first-ready-per-runtime-row signal.
 		if registered.inserted {
@@ -504,12 +513,14 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func negotiatedDaemonCapabilities(capabilities []string) []string {
+	negotiated := make([]string, 0, 2)
 	for _, capability := range capabilities {
-		if capability == protocol.DaemonCapabilityReminderVersionedCache {
-			return []string{protocol.DaemonCapabilityReminderVersionedCache}
+		switch capability {
+		case protocol.DaemonCapabilityReminderVersionedCache, protocol.DaemonCapabilityMachineUpgrade:
+			negotiated = append(negotiated, capability)
 		}
 	}
-	return []string{}
+	return negotiated
 }
 
 func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.AgentRuntime, cliVersion string) {
@@ -939,6 +950,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if ack.PendingUpdate != nil {
 		resp["pending_update"] = ack.PendingUpdate
 	}
+	if ack.PendingMachineUpgrade != nil {
+		resp["pending_machine_upgrade"] = ack.PendingMachineUpgrade
+	}
 	if ack.PendingModelList != nil {
 		resp["pending_model_list"] = ack.PendingModelList
 	}
@@ -1120,6 +1134,17 @@ func (h *Handler) processHeartbeat(
 			return nil, m, err
 		}
 		ack.PendingMemoryCuration = pendingCuration
+	}
+	if agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMachineUpgrade) && h.MachineUpgradeStore != nil {
+		pending, err := h.MachineUpgradeStore.ClaimQueued(ctx, runtimeDaemonKey(rt))
+		if err != nil {
+			return nil, m, err
+		}
+		if pending != nil {
+			target := pending.RequestedTarget
+			ack.PendingMachineUpgrade = &protocol.DaemonHeartbeatPendingMachineUpgrade{ID: pending.ID, TargetVersion: target}
+			h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{"runtime": h.runtimeToResponse(ctx, rt)})
+		}
 	}
 
 	// A heartbeat arriving IS the runtime being reachable right now — this is

@@ -185,6 +185,64 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
       "0.3.94",
     );
   });
+
+  it("projects a sibling's queued machine upgrade as active", () => {
+    const runtime = makeRuntime({
+      runtime_health: "ok",
+      target_version: null,
+      machine_upgrade: {
+        id: "machine-upgrade-1",
+        daemon_id: "daemon-1",
+        request_id: "request-1",
+        requested_target: "0.4.0",
+        phase: "queued",
+        created_at: "2026-08-06T00:00:00Z",
+        updated_at: "2026-08-06T00:00:00Z",
+      },
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.3.99"
+        updateTargetVersion={null}
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+    expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
+    expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
+  });
+
+  it("keeps rollback recovery active until every sibling has attested", () => {
+    const runtime = makeRuntime({
+      runtime_health: "ok",
+      target_version: null,
+      machine_upgrade: {
+        id: "machine-upgrade-1",
+        daemon_id: "daemon-1",
+        request_id: "request-1",
+        requested_target: "0.4.0",
+        resolved_target: "0.4.0",
+        phase: "rollback_pending",
+        error_message: "candidate failed; restoring the previous version",
+        created_at: "2026-08-06T00:00:00Z",
+        updated_at: "2026-08-06T00:00:00Z",
+      },
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.3.99"
+        updateTargetVersion={null}
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+    expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
+    expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
+  });
 });
 
 describe("MachineDangerZone (LRM-1071 / v5)", () => {

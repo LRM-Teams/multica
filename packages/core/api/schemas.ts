@@ -299,6 +299,32 @@ export const AgentRuntimeSchema = z.object({
     .enum(["ok", "update_available", "updating", "failed", "offline"])
     .catch("offline"),
   update_error: z.string().nullable().optional(),
+  machine_upgrade: z
+    .object({
+      id: z.string(),
+      daemon_id: z.string(),
+      request_id: z.string(),
+      requested_target: z.string(),
+      resolved_target: z.string().nullable().optional(),
+      phase: z.string(),
+      result: z.string().nullable().optional(),
+      error_code: z.string().nullable().optional(),
+      error_message: z.string().nullable().optional(),
+      accepted_at: z.string().nullable().optional(),
+      accepted_generation: z.string().nullable().optional(),
+      accepted_runtime_ids: z.array(z.string()).optional(),
+      attested_runtime_ids: z.array(z.string()).optional(),
+      source_version: z.string().nullable().optional(),
+      rollback_generation: z.string().nullable().optional(),
+      rollback_runtime_ids: z.array(z.string()).optional(),
+      completed_at: z.string().nullable().optional(),
+      created_at: z.string(),
+      updated_at: z.string(),
+    })
+    .loose()
+    .nullable()
+    .optional()
+    .catch(null),
   // Unknown/malformed future update observations degrade only this optional
   // field. The runtime row remains usable by older installed desktop builds.
   auto_update: DaemonUpdateStatusSchema.nullable().optional().catch(null),

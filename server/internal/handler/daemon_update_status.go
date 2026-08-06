@@ -79,10 +79,10 @@ func normalizeDaemonUpdateObservation(observation protocol.DaemonUpdateObservati
 	if err != nil {
 		return daemonUpdateStatusParams{}, errors.New("auto_update.observed_at must be RFC3339")
 	}
-	if !daemonUpdateValueAllowed(observation.ConfigSource, "official_host_default", "self_host_default", "env_enabled", "env_disabled", "cli_disabled") {
+	if !daemonUpdateValueAllowed(observation.ConfigSource, "official_host_default", "self_host_default", "env_enabled", "env_disabled", "cli_disabled", "deprecated_noop") {
 		return daemonUpdateStatusParams{}, fmt.Errorf("invalid auto_update.config_source %q", observation.ConfigSource)
 	}
-	if observation.IneligibleReason != "" && !daemonUpdateValueAllowed(observation.IneligibleReason, "desktop_managed", "non_release_build") {
+	if observation.IneligibleReason != "" && !daemonUpdateValueAllowed(observation.IneligibleReason, "desktop_managed", "non_release_build", "explicit_only") {
 		return daemonUpdateStatusParams{}, fmt.Errorf("invalid auto_update.ineligible_reason %q", observation.IneligibleReason)
 	}
 	if observation.CheckIntervalSeconds <= 0 {
@@ -102,7 +102,7 @@ func normalizeDaemonUpdateObservation(observation protocol.DaemonUpdateObservati
 		}
 		lastAttemptAt = pgtype.Timestamptz{Time: parsed, Valid: true}
 	}
-	if !daemonUpdateValueAllowed(observation.LastOutcome, "never_checked", "up_to_date", "busy", "fetch_failed", "update_failed", "verification_failed", "update_succeeded", "interrupted") {
+	if !daemonUpdateValueAllowed(observation.LastOutcome, "never_checked", "up_to_date", "busy", "fetch_failed", "verification_failed", "update_failed", "update_succeeded", "interrupted", "explicit_only") {
 		return daemonUpdateStatusParams{}, fmt.Errorf("invalid auto_update.last_outcome %q", observation.LastOutcome)
 	}
 	if len(observation.ErrorCode) > 80 {

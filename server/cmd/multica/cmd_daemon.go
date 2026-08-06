@@ -68,8 +68,8 @@ func init() {
 	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	f.Bool("no-auto-update", false, "Disable periodic CLI self-update (env: MULTICA_DAEMON_AUTO_UPDATE=false)")
-	f.Duration("auto-update-interval", 0, "How often to poll GitHub for a newer release (env: MULTICA_DAEMON_AUTO_UPDATE_INTERVAL)")
+	f.Bool("no-auto-update", false, "Deprecated no-op; upgrades are explicit Machine Upgrade operations")
+	f.Duration("auto-update-interval", 0, "Deprecated no-op; periodic release polling is disabled")
 
 	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
 	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
@@ -86,8 +86,8 @@ func init() {
 	rf.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	rf.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	rf.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	rf.Bool("no-auto-update", false, "Disable periodic CLI self-update (env: MULTICA_DAEMON_AUTO_UPDATE=false)")
-	rf.Duration("auto-update-interval", 0, "How often to poll GitHub for a newer release (env: MULTICA_DAEMON_AUTO_UPDATE_INTERVAL)")
+	rf.Bool("no-auto-update", false, "Deprecated no-op; upgrades are explicit Machine Upgrade operations")
+	rf.Duration("auto-update-interval", 0, "Deprecated no-op; periodic release polling is disabled")
 
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
@@ -112,6 +112,17 @@ func daemonPIDPathForProfile(profile string) string {
 
 func daemonLogPathForProfile(profile string) string {
 	return filepath.Join(daemonDirForProfile(profile), "daemon.log")
+}
+
+// removeDaemonPIDIfMatches avoids an incumbent's deferred cleanup deleting a
+// detached successor's freshly published PID during a Machine Upgrade handoff.
+func removeDaemonPIDIfMatches(profile string, pid int) {
+	path := daemonPIDPathForProfile(profile)
+	data, err := os.ReadFile(path)
+	if err != nil || strings.TrimSpace(string(data)) != strconv.Itoa(pid) {
+		return
+	}
+	_ = os.Remove(path)
 }
 
 // healthPortForProfile returns the health check port for the given profile.
@@ -398,6 +409,11 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		return err
 	}
 	cfg.CLIVersion = version
+	controlToken, err := ensureMachineUpgradeControlToken(profile)
+	if err != nil {
+		return err
+	}
+	cfg.LocalControlToken = controlToken
 	// Set by the Electron Desktop app when it spawns the CLI so the server
 	// can mark those runtimes as "managed" and hide CLI self-update UI.
 	cfg.LaunchedBy = os.Getenv("MULTICA_LAUNCHED_BY")
@@ -413,7 +429,7 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		os.MkdirAll(dir, 0o755)
 		os.WriteFile(daemonPIDPathForProfile(profile), []byte(strconv.Itoa(os.Getpid())), 0o644)
 	}
-	defer os.Remove(daemonPIDPathForProfile(profile))
+	defer removeDaemonPIDIfMatches(profile, os.Getpid())
 
 	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
@@ -436,15 +452,47 @@ func runDaemonForeground(cmd *cobra.Command) error {
 			// startup; do not duplicate cleanup here.
 			os.Exit(daemonHandoffExitCode)
 		}
-		// Outside supervision there's no one to catch a worker that exits
-		// and doesn't come back, so this deliberately does not try to
-		// self-restart (Parker's call, task #815): the daemon has already
-		// gracefully drained for this update and stops here; a human
-		// applies it with `daemon restart`.
-		logger.Warn("a newer version is staged but this daemon is not running under supervision; it will stay stopped until you run `multica daemon restart`",
-			"staged_version_path", restartBin)
+		// A standalone Machine Upgrade cannot end at stage-and-stop. Wait for
+		// the incumbent's control listener to disappear, then launch the exact
+		// committed binary as a detached foreground daemon. Its startup bind is
+		// the local exclusive-ownership gate; server-side completion still waits
+		// for the same journal generation plus every accepted runtime to attest.
+		if err := spawnDetachedDaemonBinary(restartBin, profile, d.MachineUpgradeTarget()); err != nil {
+			if rollbackStateErr := d.BeginMachineUpgradeRollback(err); rollbackStateErr != nil {
+				return fmt.Errorf("record detached takeover rollback: %w", rollbackStateErr)
+			}
+			if recoveryErr := rollbackDetachedMachineUpgrade(profile, d); recoveryErr != nil {
+				return fmt.Errorf("start detached machine-upgrade successor: %w; rollback recovery: %v", err, recoveryErr)
+			}
+			return fmt.Errorf("start detached machine-upgrade successor: %w; previous Active generation restored", err)
+		}
+		logger.Info("started detached machine-upgrade successor", "path", restartBin)
 	}
 
+	return nil
+}
+
+func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
+	if d == nil {
+		return errors.New("daemon is required for detached rollback")
+	}
+	store, err := cli.OpenVersionStore("")
+	if err != nil {
+		return fmt.Errorf("open version store: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	state, _, err := store.RollbackToPreviousActive(ctx, "machine-upgrade-rollback")
+	if err != nil {
+		return fmt.Errorf("restore previous Active: %w", err)
+	}
+	incumbent, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve incumbent binary: %w", err)
+	}
+	if err := spawnDetachedDaemonBinary(incumbent, profile, state.ActiveVersion); err != nil {
+		return fmt.Errorf("start restored incumbent: %w", err)
+	}
 	return nil
 }
 

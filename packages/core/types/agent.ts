@@ -139,6 +139,8 @@ export interface RuntimeDevice {
   update_state: RuntimeUpdateState;
   runtime_health: RuntimeHealthState;
   update_error?: string | null;
+  /** Canonical machine lifecycle; siblings with one daemon share this value. */
+  machine_upgrade?: MachineUpgrade | null;
   /** Daemon-resolved update truth. Null/absent means an older daemon. */
   auto_update?: DaemonUpdateStatus | null;
   owner_id: string | null;
@@ -1164,6 +1166,43 @@ export type RuntimeUpdateStatus =
   | "ready_to_apply"
   | "failed"
   | "timeout";
+
+export type MachineUpgradePhase =
+  | "queued"
+  | "starting"
+  | "staging"
+  | "verifying"
+  | "handoff"
+  | "converging"
+  | "rollback_pending"
+  | "completed"
+  | "failed"
+  | "rolled_back"
+  | "timeout"
+  | "cancelled";
+
+/** The daemon-scoped source of truth projected by every sibling runtime. */
+export interface MachineUpgrade {
+  id: string;
+  daemon_id: string;
+  request_id: string;
+  requested_target: string;
+  resolved_target?: string | null;
+  phase: MachineUpgradePhase;
+  result?: "completed" | "failed" | "rolled_back" | "timeout" | "cancelled" | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  accepted_at?: string | null;
+  accepted_generation?: string | null;
+  accepted_runtime_ids?: string[];
+  attested_runtime_ids?: string[];
+  source_version?: string | null;
+  rollback_generation?: string | null;
+  rollback_runtime_ids?: string[];
+  completed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface RuntimeUpdate {
   id: string;

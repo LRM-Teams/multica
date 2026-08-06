@@ -129,6 +129,7 @@ type Handler struct {
 	EnvCheckpointService        EnvCheckpointServiceAPI
 	UpdateStore                 UpdateStore
 	UpdateIntentStore           UpdateIntentStore
+	MachineUpgradeStore         MachineUpgradeStore
 	RestartStore                RestartStore
 	AgentLifecycleDispatchStore AgentLifecycleDispatchStore
 	RuntimeReleaseSource        RuntimeReleaseSource
@@ -303,6 +304,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		EmailService:                emailService,
 		UpdateStore:                 NewPostgresUpdateStore(updateDB),
 		UpdateIntentStore:           NewPostgresUpdateIntentStore(updateDB),
+		MachineUpgradeStore:         NewPostgresMachineUpgradeStore(updateDB),
 		RestartStore:                NewInMemoryRestartStore(),
 		AgentLifecycleDispatchStore: NewInMemoryAgentLifecycleDispatchStore(executor),
 		RuntimeReleaseSource:        NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),

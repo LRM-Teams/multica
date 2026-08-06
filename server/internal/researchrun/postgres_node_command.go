@@ -21,9 +21,9 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 	defer tx.Rollback(ctx)
 
 	var (
-		workspaceID, status, orchestratorVersion string
+		workspaceID, status, orchestratorVersion                 string
 		goalVersion, planVersion, maxTasks, maxAttempts, timeout int
-		stateVersion int64
+		stateVersion                                             int64
 	)
 	err = tx.QueryRow(ctx, `
 		SELECT workspace_id::text, status, orchestrator_version,
@@ -418,13 +418,13 @@ func (s *PostgresStore) nodeCommandRetry(
 	}
 
 	payload := map[string]any{
-		"command":            outcome,
-		"action":             NodeActionRetry,
-		"client_request_id":  in.ClientRequestID,
-		"source_node_id":     in.NodeID,
-		"task_id":            taskID,
+		"command":             outcome,
+		"action":              NodeActionRetry,
+		"client_request_id":   in.ClientRequestID,
+		"source_node_id":      in.NodeID,
+		"task_id":             taskID,
 		"previous_attempt_id": lineage.PreviousAttemptID,
-		"queued":             true,
+		"queued":              true,
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "node_command_retry", nodeCommandClientKey(in.ClientRequestID, "event"), in.ActorType, in.ActorID, payload)
 	if err != nil {
@@ -467,10 +467,29 @@ func (s *PostgresStore) nodeCommandReassign(
 	// Cancel in-flight attempt so a new assignee can take over; keep the row.
 	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning) {
 		if _, err = tx.Exec(ctx, `
+			UPDATE research_task_attempt attempt
+			SET cancellation_completed_at = now(), updated_at = now()
+			FROM research_dispatch_outbox outbox
+			WHERE attempt.id = $1::uuid
+			  AND outbox.attempt_id = attempt.id
+			  AND outbox.status = 'pending'
+			  AND outbox.delivery_attempts = 0
+		`, latest.ID); err != nil {
+			return NodeCommandOutcome{}, err
+		}
+		if _, err = tx.Exec(ctx, `
 			UPDATE research_task_attempt
 			SET status = 'cancelled', failure_class = 'reassigned',
 			    diagnostics = '改派取消原执行', completed_at = now(), updated_at = now()
 			WHERE id = $1::uuid
+		`, latest.ID); err != nil {
+			return NodeCommandOutcome{}, err
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_dispatch_outbox
+			SET status = 'cancelled', lease_token = NULL, lease_expires_at = NULL,
+			    last_error = 'reassigned', updated_at = now()
+			WHERE attempt_id = $1::uuid AND status IN ('pending', 'delivering')
 		`, latest.ID); err != nil {
 			return NodeCommandOutcome{}, err
 		}

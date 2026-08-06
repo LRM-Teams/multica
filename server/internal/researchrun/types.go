@@ -376,12 +376,30 @@ type SteerInput struct {
 }
 
 type DispatchRequest struct {
-	Run       Run
-	Task      Task
-	AttemptID string
-	AgentID   string
-	Prompt    string
-	Key       string
+	Run         Run    `json:"run"`
+	Task        Task   `json:"task"`
+	AttemptID   string `json:"attempt_id"`
+	AgentID     string `json:"agent_id"`
+	Prompt      string `json:"prompt"`
+	Key         string `json:"key"`
+	RequestHash string `json:"request_hash"`
+}
+
+type CreateDispatchIntentInput struct {
+	AttemptID            string
+	SessionID            string
+	TaskID               string
+	AgentID              string
+	ExpectedStateVersion int64
+	Request              DispatchRequest
+}
+
+type DispatchIntent struct {
+	ID               string
+	AttemptID        string
+	SessionID        string
+	Request          DispatchRequest
+	DeliveryAttempts int
 }
 
 type DispatchResult struct {

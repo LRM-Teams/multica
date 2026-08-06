@@ -907,6 +907,9 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 ### C. 完成运行事务和故障语义
 
 - [ ] 统一 Task/Attempt 状态机、dispatch outbox、lease、heartbeat、cancel acknowledgment 和 reconcile。
+  - [x] C1a：事务内同时创建 Attempt 与版本化 dispatch outbox，冻结请求 payload/V1 语义哈希；投递者以 45 秒租约领取、有界退避重试，并用原 dispatch key 重放。外部 Inbox 创建在 advisory transaction lock 内二次检查 key，已存在请求必须匹配哈希。外部提交后、outbox 确认前崩溃不会复制 Task/Attempt；确认数据库失败不取消可恢复的外部任务。
+  - [ ] C1b：冻结 Task/Attempt/Outbox 的合法转换矩阵，在全部写路径统一执行并增加非法转换穷举测试。
+  - [ ] C1c：实现运行中 Attempt heartbeat/lease、明确 cancel acknowledgment、timeout 与 reconcile 的统一时间语义，并覆盖租约续期和进程暂停竞态。
 - [ ] 实现完整失败分类、provider/Adapter circuit state、有界重试和目标幂等修复。
 - [ ] 增加并发、崩溃点、stale result、同 ID 异 payload、跨 workspace 和取消竞态测试。
 
@@ -1084,12 +1087,13 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [x] B1 把 committed Event 的 outbox 消费、顺序投影、成功确认、失败退避和 500 条批次上限迁入 `projectionModule`；Module 的持久化输入仅包含三项 Projection 操作，Projection output 仍使用现有 `Projector` Adapter。新增成功、失败、批次上限和禁用输出测试；该项没有改变 canonical Event schema 或生产投影 payload。
 - [x] B2 把 Result 提交的运行/任务读取、Attempt 与 Inbox 绑定预检、V1–V5 解码、计划能力检查和 `AcceptResultInput` 构造迁入 `resultAcceptanceModule`；PostgreSQL `AcceptResult` 仍负责事务内的 Agent 身份、状态、幂等 replay 和物化验证。新增合法接纳、Attempt/Inbox 错配、能力缺失和未知版本测试；Engine 只处理成功后 Reconcile 及“已接纳但推进失败”的错误语义。
 - [x] B3 把 orchestrator version 分派、V1–V5 Prompt builder 和 `compactJSON` 迁入 `taskPromptModule`；`engine.go` 不再包含 Prompt 文本。`TestOrchestratorContractsMatchGoldenFixtures` 明确执行五个版本并保持完整 Prompt SHA-256 不变，未知版本仍拒绝；该项不修改任何历史 Prompt 字节。
-- [x] B4 把运行态 Attempt 检查、依赖激活、取消确认、Ready Task 选择、能力路由、Attempt 创建、Prompt Module 调用、Inbox 分派和身份挂接迁入 `executionModule`。已挂接 Attempt 只用 Inbox Task ID 检查；尚未挂接的 Attempt 只用稳定 dispatch key 恢复。取消仅在 Runtime 确认成功或未挂接派发超过 stale 时确认，派发成功但 Inbox 身份挂接失败时立即取消对应 Runtime Task。模块测试覆盖同步失败不修改状态、三类取消身份、取消失败不确认、成功派发与身份挂接；现有真实 PostgreSQL 调度回归继续验证持久化状态机。
+- [x] B4 把运行态 Attempt 检查、依赖激活、取消确认、Ready Task 选择、能力路由、Attempt 创建、Prompt Module 调用、Inbox 分派和身份挂接迁入 `executionModule`。已挂接 Attempt 只用 Inbox Task ID 检查；尚未挂接的历史 Attempt 用稳定 dispatch key 恢复。C1a 已把新 Attempt 改为先持久化 outbox 再派发：确认数据库失败时保留外部任务供幂等重放，只有并发控制动作已使 Attempt 终止时才取消外部任务。
 - [x] B5 把确定性 dispatch 错误分类、预算耗尽后的 Gate 决策顺序、Run 失败转换、Attempt 取消和失败事件投影迁入 `failureModule`。未知或明确可重试的 dispatch 错误不修改 Run；能力缺失和不可重试错误才结束 Run。失败路径固定先提交 `MarkFailed`，再请求 Runtime 取消，取消未确认时不投影已静止的终态；预算事件必须先提交，随后才判断可交付或失败。模块测试覆盖可重试无状态修改、不可重试失败顺序、取消失败延迟投影、预算通过和预算失败；真实 PostgreSQL 的永久 dispatch 与计划耗尽回归继续通过。
 - [x] B6 把交付 Gate 评估、finding 优先级、最小补救动作、question 绑定、控制任务创建、并发目标变化、等待用户确认和确认时复检迁入 `deliveryGateModule`。Module 只创建一个可寻址补救 Task 并把执行交回 `executionModule`；`ErrControlTargetChanged` 不失败 Run，而是在投影并等待一秒后用新状态重算。模块测试覆盖通过、目标补救、并发变化、预算转交、失败计划防循环和确认复检；真实 PostgreSQL 全流程、补救路由、V1–V5 golden 与竞态测试通过。`engine.go` 已不包含 Prompt 文本、Dispatcher/Attempt 状态组合、Result 接纳规则、失败转换、Gate 路由或 Projection outbox 算法。
 - [x] B7 删除 `researchrun.Store` 的 44 方法全能接口。`NewEngine` 和 `Engine` 明确接受具体 `*PostgresStore`；`projectionEventStore`、`resultAcceptanceStore`、`executionStore`、`failureStore`、`deliveryGateStore` 分别声明各 Module 所需的最小方法集，并由编译期断言验证 `PostgresStore` 实现。没有创建包含这些接口的全能组合接口，模块测试继续使用最小替身，Engine 全流程只用真实 PostgreSQL 验证。
 - [x] B8 新增固定 `ResearchRun` 外部用例接口，只暴露 Create/Snapshot/Fleet read、运行级生命周期命令、Steer/NodeCommand、task-scoped SubmitResult 和 scheduler ReconcileDue。`NewEngine` 返回该接口，Handler 字段不再持有 `*Engine`；内部 `Start`、`ReconcileSession`、Module、Store 和子实体写方法不在接口中。反射回归锁定 12 个方法，Handler 纯编译、`go vet`、真实 PostgreSQL 全包和竞态测试通过。
 - [x] B9 新增 `legacy_result_contracts.json` 和统一 golden runner，固定 V1–V5 的 Plan、Evidence、Report、Quality Evaluation、Citation Audit 五类 canonical Result hash，并逐例拒绝未属于旧 schema 的未来字段。原有 Prompt hash、Plan hash、六类行为 golden、canonical state/重放和生产回归继续通过；没有修改生产 Prompt、Result schema、迁移或运行状态机。PR [#2388](https://github.com/LRM-Teams/multica/pull/2388)。
+- [x] C1a 新增 `research_dispatch_outbox`，Attempt、冻结请求和 `task_dispatching` Event 在同一事务提交；创建事务以 Run→Task 顺序加锁并校验 `state_version`，并发 steering/replan 的旧 Prompt 不会入库。领取使用 `SKIP LOCKED` 与过期租约恢复；可重试投递失败不消耗 Attempt，八次投递后才进入原有有界 Attempt 失败路径。Inbox Adapter 对同 key 使用 advisory transaction lock，V1 指纹只覆盖不可变投递语义，未来扩展 Run/Task 字段不会破坏存量 outbox。pause/steer/reassign 同事务取消未交付 outbox；从未领取的请求直接确认无需外部取消，投递结果未知的请求继续 Inspect/Cancel。单元测试覆盖冻结请求重放、确认失败不误取消、可重试投递不消耗 Attempt 和 JSON 语义哈希；真实 PostgreSQL 覆盖旧状态版本原子拒绝、租约不可抢占/过期恢复、请求冻结、取消竞争及状态一致；Handler 集成测试覆盖同 key 同 payload 重放和异 payload 拒绝。PR [#2393](https://github.com/LRM-Teams/multica/pull/2393)。
 - [x] 计划外诊断更正：共享 Handler 测试库出现 migration 257 已执行而 204/223 ledger 缺失。Git 历史证明 204、223 分别在 7 月 21/24 日进入仓库，257 在 7 月 31 日进入；正常迁移器会先执行 204/223。该状态只能由 ledger 损坏、手工挑拣迁移或长期残缺的开发库产生，不按真实正常部署 Bug 修改历史迁移；为此产生的未提交迁移和测试改动已全部撤销。若生产库出现同一状态，应先审计并修复该库迁移历史，不能用历史 migration 兼容损坏 ledger。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。

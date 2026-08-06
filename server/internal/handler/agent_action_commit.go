@@ -143,7 +143,11 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 	if err != nil {
 		return db.Agent{}, err
 	}
-	hash := canonicalJSONHash(finalPayload)
+	// Keep the persisted audit record non-sensitive, while the idempotency key
+	// still covers the complete final configuration. Replays compare against
+	// agentActionFinalPayloadHash below, so storing the summary hash here would
+	// make an otherwise identical replay look like a conflicting commit.
+	hash := agentActionFinalPayloadHash(createParams, preExisting.proposed)
 	tag, err := tx.Exec(ctx, `
 		UPDATE agent_action
 		SET status = 'executed',

@@ -967,6 +967,8 @@
     "create_agent": "创建 Agent",
     "created_toast": "已创建 {{name}}",
     "hiring_card_badge": "提案",
+    "preferred_computer": "首选电脑：{{computer}}",
+    "creation_not_authorized": "仅工作区 owner 和 admin 可创建此 Agent。",
     "generated_hint": "由 Wendy 根据当前对话生成。",
     "avatar_from_draft_hint": "已带上 Wendy 草稿头像——可更换；清除后创建时用随机预设。",
     "avatar_random_hint": "未指定头像——创建时随机分配，也可在此上传。",

@@ -83,7 +83,7 @@ export function AgentCreationProposalCard({
               ) : null}
               {proposal.preferred_computer ? (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Preferred computer: {proposal.preferred_computer}
+                  {t(($) => $.windy.preferred_computer, { computer: proposal.preferred_computer })}
                 </p>
               ) : null}
               {isExecuted ? (
@@ -93,7 +93,7 @@ export function AgentCreationProposalCard({
               ) : null}
               {proposal.status === "prepared" && !canManageAgents ? (
                 <p className="mt-1.5 text-xs text-muted-foreground">
-                  Only workspace owners and admins can create this agent.
+                  {t(($) => $.windy.creation_not_authorized)}
                 </p>
               ) : null}
             </div>

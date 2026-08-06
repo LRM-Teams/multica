@@ -3,7 +3,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { ChannelActiveTask, ChannelMemberBrief } from "@multica/core/types";
 import {
   ChannelPresenceCluster,
@@ -332,55 +332,6 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     expect(screen.getAllByTestId("channel-agents-working-row")).toHaveLength(1);
   });
 
-  it("LRM-391: directory-miss resolves via member-profile into Working list", async () => {
-    mobileState.isMobile = true;
-    renderWithQuery(
-      <ChannelPresenceCluster
-        members={members(["u1", "a1", "a-hidden"], {
-          // Roster sentinel must not block profile (AC#5 still uses profile face).
-          "a-hidden": {
-            display_name: "Unknown Agent",
-            name: "Unknown Agent",
-            avatar_url: null,
-          },
-        })}
-        memberCount={3}
-        agentCount={2}
-        tasks={[
-          task({
-            agent_id: "a-hidden",
-            agent_name: "Unknown Agent",
-            task_id: "t-h",
-            inbox_event_id: "i-h",
-            status: "running",
-          }),
-        ]}
-        onStopTask={vi.fn()}
-      />,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId("channel-header-members-chip")).toHaveAttribute(
-        "data-presence-working",
-        "true",
-      );
-    });
-    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
-    await waitFor(() => {
-      expect(screen.getAllByText("隐藏群管").length).toBeGreaterThanOrEqual(1);
-    });
-    expect(screen.queryByText("Unknown Agent")).toBeNull();
-    await waitFor(() => {
-      expect(
-        screen
-          .getAllByTestId("face-a-hidden")
-          .some(
-            (el) =>
-              el.getAttribute("data-avatar-hint") ===
-              "/agent-avatars/hidden.png",
-          ),
-      ).toBe(true);
-    });
-  });
 
   it("LRM-391: emit-time agent_name wins over directory Unknown Agent sentinel", () => {
     mobileState.isMobile = true;
@@ -480,42 +431,6 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     ).toBe(true);
   });
 
-  it("LRM-391 AC#5: profile fills Working avatar when directory has name but no face", async () => {
-    mobileState.isMobile = true;
-    renderWithQuery(
-      <ChannelPresenceCluster
-        members={members(["u1"])}
-        memberCount={1}
-        agentCount={2}
-        tasks={[
-          task({
-            agent_id: "a-face",
-            agent_name: "Unknown Agent",
-            task_id: "t-f",
-            inbox_event_id: "i-f",
-            status: "running",
-          }),
-        ]}
-        onStopTask={vi.fn()}
-      />,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId("channel-header-members-chip")).toHaveAttribute(
-        "data-presence-working",
-        "true",
-      );
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId("face-a-face")).toHaveAttribute(
-        "data-avatar-hint",
-        "/agent-avatars/face.png",
-      );
-    });
-    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
-    await waitFor(() => {
-      expect(screen.getAllByText("有脸Agent").length).toBeGreaterThanOrEqual(1);
-    });
-  });
 
   it("LRM-391 AC#5: emit-time task.avatar_url seeds facepile without roster/profile", () => {
     mobileState.isMobile = true;

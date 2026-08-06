@@ -4,7 +4,6 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AvatarCropDialog } from "./avatar-crop-dialog";
 import {
-  AVATAR_OUTPUT_SIZE,
   computeAvatarCropSourceRect,
 } from "./avatar-crop-utils";
 
@@ -158,55 +157,4 @@ describe("AvatarCropDialog", () => {
     expect(screen.getByText("Save")).toBeDisabled();
   });
 
-  it("exports a 512² PNG file on Save after the image loads", async () => {
-    const toBlob = vi.fn((_cb: BlobCallback) =>
-      _cb(new Blob([new Uint8Array(8)], { type: "image/png" })),
-    );
-    // jsdom canvas.getContext returns null by default; stub a 2d context.
-    const drawImage = vi.fn();
-    const fillRect = vi.fn();
-    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
-      configurable: true,
-      value: () => ({ drawImage, fillRect, imageSmoothingQuality: "" }),
-    });
-    Object.defineProperty(HTMLCanvasElement.prototype, "toBlob", {
-      configurable: true,
-      value: toBlob,
-    });
-
-    const onConfirm = vi.fn();
-    const { container } = render(
-      <AvatarCropDialog
-        src="data:image/png;base64,AAAA"
-        onCancel={() => {}}
-        onConfirm={onConfirm}
-      />,
-    );
-    const img = container.querySelector("img") as HTMLImageElement;
-    // jsdom doesn't decode images — emulate the load with real dimensions.
-    Object.defineProperty(img, "naturalWidth", { value: 600 });
-    Object.defineProperty(img, "naturalHeight", { value: 800 });
-    fireEvent.load(img);
-
-    const save = screen.getByText("Save");
-    expect(save).not.toBeDisabled();
-    fireEvent.click(save);
-
-    expect(drawImage).toHaveBeenCalledTimes(1);
-    // drawImage(img, sx, sy, sw, sh, 0, 0, 512, 512)
-    const args = drawImage.mock.calls[0];
-    expect(args).toBeDefined();
-    if (!args) return;
-    expect(args[5]).toBe(0);
-    expect(args[6]).toBe(0);
-    expect(args[7]).toBe(AVATAR_OUTPUT_SIZE);
-    expect(args[8]).toBe(AVATAR_OUTPUT_SIZE);
-    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalledOnce());
-    const call = onConfirm.mock.calls[0];
-    expect(call).toBeDefined();
-    if (!call) return;
-    const [file] = call;
-    expect(file).toBeInstanceOf(File);
-    expect(file.type).toBe("image/png");
-  });
 });

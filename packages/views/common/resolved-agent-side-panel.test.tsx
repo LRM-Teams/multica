@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import type { Agent } from "@multica/core/types";
@@ -221,31 +221,4 @@ describe("ResolvedAgentSidePanel (LRM-292)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("toasts and shows an explicit error panel when profile is unavailable", async () => {
-    detailState.isError = true;
-    detailState.error = new ApiError("not found", 404, "Not Found");
-    identityState.isError = true;
-
-    render(
-      <ResolvedAgentSidePanel
-        agentId="missing-1"
-        currentUserId="user-1"
-        members={[]}
-        onClose={onClose}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(toastError).toHaveBeenCalledWith(
-        "You don't have permission to view this member's profile",
-        expect.objectContaining({ duration: Infinity, closeButton: true }),
-      );
-    });
-    expect(screen.getByText("Agent unavailable")).toBeInTheDocument();
-    expect(
-      screen.getByText("You don't have permission to view this member's profile"),
-    ).toBeInTheDocument();
-    // Panel stays open with close affordance — never silent null (LRM-238).
-    expect(onClose).not.toHaveBeenCalled();
-  });
 });

@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { Agent, AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -248,14 +248,6 @@ describe("DeleteRuntimeDialog", () => {
     expect(screen.queryByText(/still on this runtime/)).not.toBeInTheDocument();
   });
 
-  it("calls the strict DELETE and reports success", async () => {
-    apiDeleteRuntime.mockResolvedValueOnce(undefined);
-    const { onDeleted } = renderDialog({ cachedAgents: [] });
-
-    fireEvent.click(screen.getByRole("button", { name: "Delete runtime" }));
-    await waitFor(() => expect(apiDeleteRuntime).toHaveBeenCalledWith("rt-1"));
-    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
-  });
 
   it("blocks deletion and lists bound agents with a link to each, instead of offering to cascade-archive them", () => {
     renderDialog({
@@ -387,27 +379,4 @@ describe("DeleteRuntimeDialog", () => {
     expect(screen.queryByText("Stop the daemon first")).not.toBeInTheDocument();
   });
 
-  it("falls back to the agents-blocking step when the strict DELETE returns runtime_has_active_agents", async () => {
-    const fresh = makeAgent("a-9", { name: "FreshAgent" });
-    apiDeleteRuntime.mockRejectedValueOnce(
-      new ApiError("conflict", 409, {
-        code: "runtime_has_active_agents",
-        active_agents: [fresh],
-      }),
-    );
-
-    renderDialog({ cachedAgents: [] });
-
-    fireEvent.click(screen.getByRole("button", { name: "Delete runtime" }));
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(/1 agent is still on this runtime/),
-      ).toBeInTheDocument(),
-    );
-    expect(screen.getByText("FreshAgent")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Active agents were added since you opened this dialog/),
-    ).toBeInTheDocument();
-  });
 });

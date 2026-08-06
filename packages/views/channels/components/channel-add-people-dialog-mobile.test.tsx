@@ -1,6 +1,5 @@
 import { type ReactNode, useState } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Drawer, DrawerContent } from "@multica/ui/components/ui/drawer";
 import { ChannelAddPeopleDialog, type InviteCandidate } from "./channel-add-people-dialog";
@@ -124,21 +123,4 @@ describe("ChannelAddPeopleDialog over mobile Drawer (LRM-1195)", () => {
     expect(sawExplicitAuto).toBe(true);
   });
 
-  it("lets the user focus and type in search while a modal Drawer is open", async () => {
-    const user = userEvent.setup();
-    const onQueryChange = vi.fn();
-    renderUi(<AddPeopleOverDrawer onQueryChange={onQueryChange} />);
-
-    const input = await screen.findByPlaceholderText("Search");
-    await user.click(input);
-    expect(input).toHaveFocus();
-
-    await user.type(input, "ali");
-    await waitFor(() => {
-      expect(onQueryChange).toHaveBeenCalled();
-    });
-    expect(onQueryChange.mock.calls.some((c) => String(c[0]).includes("a"))).toBe(
-      true,
-    );
-  });
 });

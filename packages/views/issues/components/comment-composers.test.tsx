@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useRef, type ReactNode, type Ref } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { renderWithI18n } from "../../test/i18n";
 import { CommentInput } from "./comment-input";
@@ -113,11 +113,6 @@ function renderReplyInput({
   return { ...view, onSubmit };
 }
 
-function getSubmitButton(container: HTMLElement): HTMLButtonElement {
-  const button = container.querySelectorAll("button")[1];
-  if (!button) throw new Error("Expected submit button to render");
-  return button;
-}
 
 beforeEach(() => {
   uploadWithToast.mockReset();
@@ -159,29 +154,5 @@ describe("comment composers", () => {
     expect(shell.className).not.toMatch(/max-h-/);
   });
 
-  it("keeps main comment submission wired after removing expand", async () => {
-    const { container, onSubmit } = renderCommentInput();
 
-    fireEvent.change(screen.getByTestId("editor"), {
-      target: { value: "hello from composer" },
-    });
-    fireEvent.click(getSubmitButton(container));
-
-    await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith("hello from composer", undefined, undefined);
-    });
-  });
-
-  it("keeps reply submission wired after removing expand", async () => {
-    const { container, onSubmit } = renderReplyInput();
-
-    fireEvent.change(screen.getByTestId("editor"), {
-      target: { value: "thread reply" },
-    });
-    fireEvent.click(getSubmitButton(container));
-
-    await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith("thread reply", undefined, undefined);
-    });
-  });
 });

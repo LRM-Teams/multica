@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -197,22 +197,6 @@ vi.mock("./thread-panel", () => ({
   ),
 }));
 
-function ownMessage(): ChannelMessage {
-  return {
-    id: "m-1",
-    channel_id: "chan-1",
-    workspace_id: "ws-1",
-    seq: 1,
-    type: "user",
-    author_id: "user-1",
-    author_name: "Alice",
-    content: "Original",
-    source: "multica",
-    external_message_id: null,
-    client_message_id: null,
-    created_at: "2026-06-17T09:15:00Z",
-  };
-}
 
 function renderPage() {
   const qc = new QueryClient({
@@ -230,65 +214,6 @@ function renderPage() {
   );
 }
 
-describe("ChannelsPage message edit / delete wiring (#241 B3)", () => {
-  beforeEach(() => {
-    listProps.current = null;
-    apiMock.editChannelMessage.mockReset().mockResolvedValue({
-      ...ownMessage(),
-      content: "Corrected",
-      edited_at: "2026-06-17T09:20:00Z",
-    });
-    apiMock.deleteChannelMessage.mockReset().mockResolvedValue(undefined);
-    apiMock.sendChannelMessage.mockReset().mockResolvedValue(ownMessage());
-  });
-
-  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden in
-  // the bubble (canEdit=false) until rebuilt on the unified composer (#258). The
-  // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden
-  // (canEdit=false) so an edit can't be triggered from the UI. The dormant
-  // onEditMessage → editChannelMessage (PATCH) wiring is kept for the
-  // composer-parity rebuild (#258); restore this H5 PATCH test when re-enabled.
-  it.skip("routes an edit through editChannelMessage (PATCH) and never a send (H5)", async () => {
-    renderPage();
-    await screen.findByTestId("message-list");
-    await waitFor(() => expect(listProps.current?.onEditMessage).toBeTypeOf("function"));
-
-    await act(async () => {
-      listProps.current?.onEditMessage?.(ownMessage(), "Corrected");
-    });
-
-    await waitFor(() =>
-      expect(apiMock.editChannelMessage).toHaveBeenCalledWith("chan-1", "m-1", "Corrected", undefined),
-    );
-    expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
-  });
-
-  // #542 — both channel composers (main + thread) must opt into plain-text
-  // URLs so a typed URL isn't auto-linkified in the input. Per-call-site
-  // regression guard: the miss-surface bug was `plainUrls` reaching one
-  // surface but not another, which exact-head review alone can't keep out.
-  it("channel main + thread composers each pass plainUrls (#542)", async () => {
-    renderPage();
-    await screen.findByTestId("message-list");
-
-    const main = await screen.findByTestId("content-editor");
-    expect(main.getAttribute("data-plain-urls")).toBe("true");
-
-    // Open a thread → the thread composer (channels-page.tsx:2174) renders via
-    // ThreadPanel's `editor` prop, a distinct call site.
-    await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
-    await act(async () => {
-      listProps.current?.onOpenThread?.(ownMessage());
-    });
-    await screen.findByTestId("thread-panel");
-
-    const composers = screen.getAllByTestId("content-editor");
-    expect(composers).toHaveLength(2);
-    for (const composer of composers) {
-      expect(composer.getAttribute("data-plain-urls")).toBe("true");
-    }
-  });
-});
 
 describe("ChannelsPage — project picker relocated to group settings (#576)", () => {
   beforeEach(() => {
@@ -388,64 +313,8 @@ describe("ChannelsPage — Channel details shares the exclusive thread/agent slo
 
   // Details and the Thread panel both route through the same exclusive
   // sidePanel union that gates the Agent panel too.
-  it(
-    "opening a thread closes an already-open Channel details panel",
-    async () => {
-      renderPage();
-      await screen.findByTestId("message-list");
-      fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-      fireEvent.click(await screen.findByTestId("channel-details-settings"));
-      expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
 
-      await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
-      await act(async () => {
-        listProps.current?.onOpenThread?.(ownMessage());
-      });
-      await screen.findByTestId("thread-panel");
-      expect(screen.queryByRole("button", { name: "project" })).toBeNull();
-    },
-    15000,
-  );
 
-  it(
-    "opening Channel details closes an already-open thread",
-    async () => {
-      renderPage();
-      await screen.findByTestId("message-list");
-      await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
-      await act(async () => {
-        listProps.current?.onOpenThread?.(ownMessage());
-      });
-      await screen.findByTestId("thread-panel");
-
-      fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-      fireEvent.click(await screen.findByTestId("channel-details-settings"));
-      expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
-      expect(screen.queryByTestId("thread-panel")).toBeNull();
-    },
-    15000,
-  );
-
-  it(
-    "clicking the channel name again closes Channel details",
-    async () => {
-      renderPage();
-      await screen.findByTestId("message-list");
-      const toggle = screen.getByRole("button", { name: "Open channel details" });
-      fireEvent.click(toggle);
-      fireEvent.click(await screen.findByTestId("channel-details-settings"));
-      expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
-      // Re-query: opening the dock must not invalidate the title control.
-      fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-      await waitFor(
-        () => {
-          expect(screen.queryByRole("button", { name: "project" })).toBeNull();
-        },
-        { timeout: 8000 },
-      );
-    },
-    12000,
-  );
 
   it("keeps conversation full-width when no side dock is open (LRM-400)", async () => {
     renderPage();

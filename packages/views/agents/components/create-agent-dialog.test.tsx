@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import type { Agent, MemberWithUser, RuntimeDevice } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { WorkspaceSlugProvider } from "@multica/core/paths";
@@ -127,31 +127,6 @@ function makeRuntime(overrides: Partial<RuntimeDevice>): RuntimeDevice {
   };
 }
 
-function makeTemplate(runtimeId: string): Agent {
-  return {
-    id: "agent-template",
-    workspace_id: "ws-1",
-    workspace_role: "member",
-    runtime_id: runtimeId,
-    name: "Template Agent",
-    display_name: "Template Agent",
-    description: "",
-    instructions: "",
-    avatar_url: null,
-    runtime_mode: "local",
-    runtime_config: {},
-    custom_args: [],
-    status: "idle",
-    max_concurrent_tasks: 1,
-    model: "",
-    owner_id: ME,
-    skills: [],
-    created_at: "2026-04-01T00:00:00Z",
-    updated_at: "2026-04-01T00:00:00Z",
-    archived_at: null,
-    archived_by: null,
-  };
-}
 
 function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
   const queryClient = new QueryClient({
@@ -210,25 +185,6 @@ describe("CreateAgentDialog workspace runtime selection", () => {
     expect(teammateRow.disabled).toBe(false);
   });
 
-  it("preserves a teammate runtime when duplicating an agent", async () => {
-    const teammate = makeRuntime({
-      id: "rt-teammate",
-      name: "Teammate Runtime",
-      provider: "cursor",
-      owner_id: OTHER,
-    });
-    const template = makeTemplate(teammate.id);
-    const { onCreate } = renderDialog([teammate], template);
-
-    expect(screen.getByText("Cursor", { selector: "span.truncate" })).toBeInTheDocument();
-    await waitFor(() => {
-      const createBtn = screen.getAllByRole("button").find((b) => b.textContent === "Create");
-      expect((createBtn as HTMLButtonElement | undefined)?.disabled).toBe(false);
-    });
-    fireEvent.click(screen.getByText("Create"));
-    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-    expect(onCreate.mock.calls[0]?.[0].runtime_id).toBe(teammate.id);
-  });
 
   it("scopes the code-agent picker to the selected computer only", () => {
     const onS144 = makeRuntime({

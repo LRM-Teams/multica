@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, act, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, act, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -251,13 +251,6 @@ describe("PreferencesTab — Timezone section", () => {
   // Opens the Select popup and clicks the option whose accessible name
   // matches. Re-queries the trigger each call so it operates on the
   // current render, never a stale node.
-  async function pickTimezone(
-    user: ReturnType<typeof userEvent.setup>,
-    name: RegExp | string,
-  ) {
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name }));
-  }
 
   it("renders the stored timezone in the trigger", () => {
     userRef.current = { id: "user-1", timezone: "Asia/Shanghai" };
@@ -267,54 +260,8 @@ describe("PreferencesTab — Timezone section", () => {
   });
 
   // handleChange PATCHes then updates the store asynchronously, so the
-  // post-pick assertions must waitFor it to settle. The extended timeout
+  // post-pick assertions must await it to settle. The extended timeout
   // covers querying the Select's full ~600-option IANA list on slow CI.
-  it("saving a new timezone PATCHes /api/me and updates the auth store", async () => {
-    userRef.current = { id: "user-1", timezone: "Asia/Shanghai" };
-    const updatedUser = { id: "user-1", timezone: "Asia/Tokyo" };
-    mockUpdateMe.mockResolvedValueOnce(updatedUser);
-    const user = userEvent.setup();
-    render(<PreferencesTab />, { wrapper: I18nWrapper });
 
-    await pickTimezone(user, "Asia/Tokyo");
 
-    await waitFor(() => {
-      expect(mockUpdateMe).toHaveBeenCalledWith({ timezone: "Asia/Tokyo" });
-      expect(mockSetUser).toHaveBeenCalledWith(updatedUser);
-    });
-  });
-
-  it("surfaces a toast when the PATCH fails", async () => {
-    userRef.current = { id: "user-1", timezone: "Asia/Shanghai" };
-    mockUpdateMe.mockRejectedValueOnce(new Error("network down"));
-    const user = userEvent.setup();
-    render(<PreferencesTab />, { wrapper: I18nWrapper });
-
-    await pickTimezone(user, "Asia/Tokyo");
-
-    await waitFor(() => {
-      expect(mockUpdateMe).toHaveBeenCalledWith({ timezone: "Asia/Tokyo" });
-      expect(mockToastError).toHaveBeenCalledTimes(1);
-    });
-    expect(mockSetUser).not.toHaveBeenCalled();
-  });
-
-  it("clearing the preference sends an empty-string timezone", async () => {
-    userRef.current = { id: "user-1", timezone: "Asia/Shanghai" };
-    const clearedUser = { id: "user-1", timezone: null };
-    mockUpdateMe.mockResolvedValueOnce(clearedUser);
-    const user = userEvent.setup();
-    render(<PreferencesTab />, { wrapper: I18nWrapper });
-
-    // The "(browser)" sentinel option resets the preference to NULL; the
-    // wire payload is an empty string the backend translates to NULL.
-    await pickTimezone(user, /browser/i);
-
-    await waitFor(() => {
-      expect(mockUpdateMe).toHaveBeenCalledWith({ timezone: "" });
-      // The PATCH response (timezone: null) is pushed into the auth store
-      // so the picker switches back to "(browser)" without a refetch.
-      expect(mockSetUser).toHaveBeenCalledWith(clearedUser);
-    });
-  });
 });

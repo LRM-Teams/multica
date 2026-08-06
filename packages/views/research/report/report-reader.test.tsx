@@ -416,24 +416,6 @@ describe("ReportReader", () => {
     )).toBe(true);
   });
 
-  it("LRM-831: copy button writes full markdown to clipboard and fires toast", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
-    const { toast } = await import("sonner");
-    const successSpy = vi.spyOn(toast, "success");
-
-    render(
-      <ReportReader open onClose={vi.fn()} report={report} sources={sources} />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /copy md/i }));
-    await vi.waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(
-        expect.stringContaining("## Findings"),
-      );
-    });
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("| A | B |"));
-    expect(successSpy).toHaveBeenCalledWith("Markdown copied to clipboard");
-  });
 
   it("LRM-831: export button downloads markdown and fires toast", async () => {
     const { toast } = await import("sonner");

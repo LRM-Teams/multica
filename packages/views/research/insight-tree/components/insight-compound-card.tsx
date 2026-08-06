@@ -23,7 +23,7 @@ import type {
 } from "../insight-derivation-contract";
 import type { StaleAffectKind } from "../insight-tree-stale";
 
-export type InsightStaleBadge = {
+type InsightStaleBadge = {
   /** 是否位于受影响的 stale 路径上。 */
   stale: boolean;
   /** 受影响程度（direct / inherited）。 */
@@ -103,6 +103,11 @@ export function InsightCompoundCard({
     .join("，");
 
   return (
+    // LRM-1476: card body is selectable via role=button + full keyboard handling
+    // (Enter/Space, focus-visible ring). An inner <button> cannot wrap the card
+    // because it also contains the nested expand-toggle button (invalid nested
+    // interactive), so the container keeps role=button like issue-detail.tsx.
+    // react-doctor-disable-next-line react-doctor/no-static-element-interactions
     <div
       role={onSelect ? "button" : undefined}
       tabIndex={onSelect ? 0 : undefined}

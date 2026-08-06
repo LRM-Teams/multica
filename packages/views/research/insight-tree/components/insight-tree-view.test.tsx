@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { insightDerivationFixture } from "../insight-derivation-fixture";
-import {
-  InsightTreeView,
-  countExpandedVisible,
-} from "./insight-tree-view";
+import { InsightTreeView } from "./insight-tree-view";
+import { countExpandedVisible } from "./insight-tree-visibility";
 
 const fixture = insightDerivationFixture;
 

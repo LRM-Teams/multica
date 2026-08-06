@@ -27,6 +27,7 @@ import { planSummary, preserveViewContext, type CollapsedGroup } from "../insigh
 import { computeStalePaths, type ReIntegrationTarget } from "../insight-tree-stale";
 import { InsightCompoundCard } from "./insight-compound-card";
 import { DisplayGroupCard } from "./display-group-card";
+import { countExpandedVisible } from "./insight-tree-visibility";
 
 export type InsightViewMode = "summary" | "expanded";
 
@@ -34,25 +35,6 @@ export type ViewportContext = {
   viewportCenter: { x: number; y: number };
   zoom: number;
 };
-
-/** 计数：展开态下整棵可展开 DAG 的可见节点行数。 */
-export function countExpandedVisible(
-  nodes: readonly InsightDerivationNode[],
-  expandedIds: ReadonlySet<string>,
-): number {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const consumed = new Set<string>();
-  for (const n of nodes) for (const p of n.inputIds) consumed.add(p);
-  const roots = nodes.filter((n) => !consumed.has(n.id)).map((n) => n.id);
-  let count = 0;
-  const walk = (id: string) => {
-    count += 1;
-    const n = byId.get(id);
-    if (n && expandedIds.has(id)) for (const c of n.inputIds) walk(c);
-  };
-  for (const r of roots) walk(r);
-  return count;
-}
 
 export function InsightTreeView({
   nodes,
@@ -74,6 +56,12 @@ export function InsightTreeView({
   onReintegrate?: (target: ReIntegrationTarget) => void;
   cardLabels?: InsightCompoundCardLabels;
   labels?: Partial<InsightTreeViewLabels>;
+  // LRM-1476: mode/expanded/groups/selected/viewport are 5 quasi-independent
+  // UI state slices with no single logical update; consolidating into a single
+  // useReducer would fan one reducer across unrelated concerns, and the parent
+  // passes initializers for each. Kept as useState per repo convention for
+  // large views with orthogonal state.
+  // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const L = labels ?? {};
   const summaryToggleLabel = L.summaryToggleLabel ?? "摘要";
@@ -103,7 +91,9 @@ export function InsightTreeView({
   const roots = useMemo(() => {
     const consumed = new Set<string>();
     for (const n of nodes) for (const p of n.inputIds) consumed.add(p);
-    return nodes.filter((n) => !consumed.has(n.id)).map((n) => n.id);
+    const rootIds: string[] = [];
+    for (const n of nodes) if (!consumed.has(n.id)) rootIds.push(n.id);
+    return rootIds;
   }, [nodes]);
 
   const stalePaths = useMemo(() => computeStalePaths(nodes), [nodes]);
@@ -174,6 +164,11 @@ export function InsightTreeView({
     let cursor = selectedId;
     for (let guard = 0; guard < nodes.length; guard++) {
       const node = byId.get(cursor);
+      // LRM-1476: this walk moves one level up per iteration and each check
+      // excludes already-visited ids (seen grows every pass), so the predicate
+      // is not a stable lookup a prebuilt Map could serve; chain is short and
+      // terminates early. Suppressed per repo convention.
+      // react-doctor-disable-next-line react-doctor/js-index-maps
       const parentId = node?.inputIds.find((p) => byId.has(p) && !seen.has(p));
       if (!parentId) break;
       chain.unshift(parentId);
@@ -209,6 +204,11 @@ export function InsightTreeView({
           >
             {node.inputIds.map((childId) => (
               <div key={childId}>
+                {/* LRM-1476: no-render-in-render — recursive tree row helper; rows
+                    carry no own state (all state lives in the parent), so remount
+                    loses nothing. Suppressed per repo convention for recursive
+                    tree helpers. */}
+                {/* react-doctor-disable-next-line react-doctor/no-render-in-render */}
                 {renderNodeCard(childId, depth + 1)}
               </div>
             ))}

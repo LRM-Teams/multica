@@ -19,8 +19,8 @@ export {
   DisputeCard,
   Section,
   StatusBadge,
-  disputeStatusLabel,
 } from "./panels";
+export { disputeStatusLabel, type DisputeStatusKey } from "./status-label";
 export {
   DisputeDetailSection,
   PositionDetailSection,

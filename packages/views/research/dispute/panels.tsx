@@ -19,34 +19,7 @@ import { disputeNodeGlyph } from "./encode";
 import type { DecisionView, DisputeSubgraphModel, TurnView } from "./model";
 import type { FocusNodeHandler } from "./parts";
 import { EvidenceRelation, PositionFan } from "./parts";
-
-/** Known dispute-domain statuses mapped to the `dispute.status.*` label space. */
-const DISPUTE_STATUS_KEYS = [
-  "open",
-  "investigating",
-  "deadlocked",
-  "escalated",
-  "resolved",
-  "conditionally_resolved",
-  "irreducible",
-  "reopened",
-  "cancelled",
-  "converged",
-  "unresolved",
-  "pending",
-  "discussing",
-] as const;
-
-export function disputeStatusLabel(
-  status: string,
-  t: ReturnType<typeof useT<"research">>["t"],
-): string {
-  const key = (status || "").toLowerCase().trim() as (typeof DISPUTE_STATUS_KEYS)[number];
-  if ((DISPUTE_STATUS_KEYS as readonly string[]).includes(key)) {
-    return t(($) => $.dispute.status[key]);
-  }
-  return status || "—";
-}
+import { disputeStatusLabel } from "./status-label";
 
 /** Status chip with data-status-key for non-color verification. */
 export function StatusBadge({

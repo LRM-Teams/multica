@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os";
 import { defineConfig } from "vitest/config";
 
 // Environment is happy-dom (2026-08-06), replacing jsdom. The suite's cost was
@@ -13,11 +14,13 @@ import { defineConfig } from "vitest/config";
 // getComputedStyle) opt out per file with `// @vitest-environment jsdom`,
 // which is why jsdom stays in devDependencies.
 //
-// Worker count stays at vitest's default (`availableParallelism() - 1`, i.e.
-// one worker on the 2-vCPU runner). The jsdom-era measurement (run
-// 30445676119) showed extra workers just slicing the same CPU finer; that
-// conclusion predates happy-dom and may be worth re-measuring on CI, but the
-// default is kept until a CI run says otherwise.
+// Worker count: at least 2 workers even on the 2-vCPU runner (where vitest's
+// default `availableParallelism() - 1` would give 1). The jsdom-era
+// measurement (run 30445676119) showed a second worker doubling every phase
+// for zero wall gain — that was jsdom saturating both cores from one worker.
+// Re-measured on the happy-dom + threads stack in a --cpus=2 container:
+// 1 worker 119.1s, 2 workers 88.5s (-26%), 3 workers 103.3s (oversubscribed).
+// Multi-core dev machines keep the default (availableParallelism - 1).
 
 export default defineConfig({
   test: {
@@ -25,6 +28,7 @@ export default defineConfig({
     // same per-file isolation, lower worker spawn/IPC cost. Measured locally
     // on the full suite: 56.3s → 46.1s wall, identical pass set.
     pool: "threads",
+    maxWorkers: Math.max(2, availableParallelism() - 1),
     environment: "happy-dom",
     environmentOptions: {
       happyDOM: {

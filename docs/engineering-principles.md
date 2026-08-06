@@ -420,4 +420,19 @@
 - 游戏仅是验收面，存储、API、CLI 与内置技能只表达通用 coordination；不得出现狼人、法官、卧底等产品模型。
 - **物**：migration 255 的 provenance/temporary/idempotency 约束；`POST /api/agent/channels`；`multica channel create`；`multica-multi-agent-coordination` 技能及 source map；通用设计见 `docs/superpowers/specs/2026-07-31-general-multi-agent-coordination-design.md`。
 
+---
+
+## 8. 前端测试清零重建（2026-08-06,Frank 拍板）
+
+- **前端测试体系整体清零**:单测套件(529 文件/~3,700 用例)、Playwright `e2e/`、
+  vitest 配置、setup、测量脚本、测试依赖全部删除;前端正确性门禁收敛为
+  build + typecheck + lint + **React Doctor** — `可执行`(物:ci.yml frontend job)。
+- 清零不是终点:**重建规矩、层级预算、钦定测试栈(happy-dom + threads + isolate,含配置模板与已知坑)
+  与全部被否路线的实测数据**见 [`docs/frontend-testing.md`](frontend-testing.md) —
+  加任何 `*.test.*` / `*.spec.*` 文件前必读。
+- API 契约韧性测试(CLAUDE.md《API Response Compatibility》的配套装置)是清零期间唯一裸奔的、
+  已出过三次事故(#2143/#2147/#2192)的防线,**重建从它开始** — `仅文档`,欠 owner。
+- 优化决策链与被否路线(vmThreads/isolate:false/optimizer/合并文件/并行拆分)的原始测量:
+  `docs/superpowers/specs/2026-07-29-frontend-test-cost-design.md`(2026-08-06 addendum)。
+
 维护人：Parker（产品）。规矩变更走 PR；`可执行` 升降档需 owner 签字。

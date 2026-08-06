@@ -21,7 +21,6 @@
     "ios:mobile:device:prod:release": "pnpm -C apps/mobile ios:device:prod:release",
     "build": "turbo build --filter=@multica/web...",
     "typecheck": "turbo typecheck --filter=@multica/web...",
-    "test": "turbo test --filter=@multica/web...",
     "lint": "turbo lint --filter=@multica/web...",
     "clean": "turbo clean && rm -rf node_modules",
     "ui:add": "cd packages/ui && npx shadcn@latest add",
@@ -68,7 +67,6 @@
     }
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
     "@types/node": "catalog:",
     "@types/pg": "^8.20.0",
     "pg": "^8.20.0",

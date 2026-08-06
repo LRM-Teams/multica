@@ -121,8 +121,8 @@ pnpm dev:desktop      # Electron dev (electron-vite, HMR)
 pnpm build            # Build all frontend apps
 pnpm typecheck        # TypeScript check (all packages + apps via turbo)
 pnpm lint             # ESLint
-pnpm test             # TS tests (Vitest, all packages + apps via turbo)
 pnpm react:doctor     # Required after frontend code changes; scans changed React code against origin/dev
+# NOTE: no frontend TS tests exist — the suite was reset 2026-08-06; see Testing Rules below
 
 # Backend (Go)
 make server           # Run Go server only (port 8080)
@@ -134,16 +134,8 @@ make sqlc             # Regenerate sqlc code after editing SQL in server/pkg/db/
 make migrate-up       # Run database migrations
 make migrate-down     # Rollback migrations
 
-# Run a single TS test (works for any package with a test script)
-pnpm --filter @multica/views exec vitest run auth/login-page.test.tsx
-pnpm --filter @multica/core exec vitest run runtimes/version.test.ts
-pnpm --filter @multica/web exec vitest run app/\(auth\)/login/page.test.tsx
-
 # Run a single Go test
 cd server && go test ./internal/handler/ -run TestName
-
-# Run a single E2E test (requires backend + frontend running)
-pnpm exec playwright test e2e/tests/specific-test.spec.ts
 
 # Mobile (Expo) — two environments only: dev and staging
 pnpm dev:mobile                  # Metro, dev env       (reads apps/mobile/.env.development.local)
@@ -174,7 +166,7 @@ CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL serv
 
 ### Frontend PR Gate
 
-Every PR that writes or changes frontend code must include a React Doctor result in the PR/task thread in addition to the relevant lint, typecheck, and test output. Run:
+Every PR that writes or changes frontend code must include a React Doctor result in the PR/task thread in addition to the relevant lint and typecheck output. Run:
 
 ```bash
 pnpm react:doctor
@@ -219,7 +211,7 @@ When writing code that consumes an API response, follow these rules:
 - **Optional-chain and default everywhere downstream.** Treat every field as possibly missing. Use explicit boolean checks (`=== true`) over truthy/falsy negation, which silently treats `undefined` and `null` as `false`.
 - **Don't pin a UI affordance to a single backend field.** If a button or indicator depends on exactly one boolean from the server, a backend bug deletes it. Combine signals (cursor presence, page length, etc.) so the affordance stays available in the worst case.
 - **Enum drift downgrades, not crashes.** A new server-side enum value should render a generic fallback. `switch` statements on server-driven strings must have a `default` branch.
-- **When you add or change an endpoint:** add the schema in the same PR, and write at least one test that feeds a malformed response through it (missing field, wrong type, `null` array). The test fails closed if a future change breaks the contract.
+- **When you add or change an endpoint:** add the schema in the same PR. The malformed-response test that used to be mandatory here (missing field, wrong type, `null` array — failing closed) is suspended by the 2026-08-06 testing reset; it is the FIRST category to come back (`docs/frontend-testing.md` L2), so write the schema as if that test existed.
 
 This is not premature defense — it is the *only* defense for an installed-app architecture. CSR-only browser apps can ship a fix in minutes; an Electron build sitting on a developer's laptop cannot.
 
@@ -334,71 +326,28 @@ Every full-window desktop view (anything outside the dashboard shell) must mount
 
 ## Testing Rules
 
-### Where to write tests
+**Frontend testing was reset on 2026-08-06 (Frank's ruling).** The entire
+frontend test system — unit suites in `packages/core` / `packages/views` /
+`apps/web`, the Playwright `e2e/` suite, vitest configs, setup files, and
+test devDependencies — was deleted wholesale. Frontend testing restarts
+from scratch.
 
-Tests follow the code, not the app. This is the most important testing principle in this monorepo:
-
-| What you're testing | Where the test lives | Why |
-|---|---|---|
-| Shared business logic (stores, queries, hooks) | `packages/core/*.test.ts` | No DOM needed, pure logic |
-| Shared UI components (pages, forms, modals) | `packages/views/*.test.tsx` | happy-dom, no framework mocks |
-| Platform-specific wiring (cookies, redirects, searchParams) | `apps/web/*.test.tsx` or `apps/desktop/` | Needs framework-specific mocks |
-| End-to-end user flows | `e2e/*.spec.ts` | Real browser, real backend |
-
-**Never test shared component behavior in an app's test file.** If a test requires mocking `next/navigation` or `react-router-dom` to test a component from `@multica/views`, the test is in the wrong place — move it to `packages/views/` and mock `@multica/core` instead.
-
-### Test infrastructure
-
-- `packages/core/` — Vitest, Node environment (no DOM)
-- `packages/views/` — Vitest, happy-dom environment, `@testing-library/react`. Files that assert jsdom-only behavior (CSSOM cascade in `getComputedStyle`) opt out per file with `// @vitest-environment jsdom`.
-- `apps/web/` — Vitest, happy-dom environment, framework-specific mocks
-- `e2e/` — Playwright
-- `server/` — Go standard `go test`
-
-All test deps are in the pnpm catalog for unified versioning.
-
-### Mocking conventions
-
-- Mock `@multica/core` stores with `vi.hoisted()` + `Object.assign(selectorFn, { getState })` pattern (Zustand stores are both callable and have `.getState()`).
-- Mock `@multica/core/api` for API calls.
-- In `packages/views/` tests: never mock `next/*` or `react-router-dom` — those don't exist here.
-- In `apps/web/` tests: mock framework-specific APIs only for platform-specific behavior.
-
-### TDD workflow
-
-1. Write failing test in the **correct package** first.
-2. Write implementation.
-3. Run `pnpm test` (Turborepo discovers all packages).
-4. Green → done.
+- **Do NOT add any `*.test.*` or `*.spec.*` file to the web surface without
+  reading `docs/frontend-testing.md` first.** It carries the reintroduction
+  rules: layer priorities (API contract resilience tests first), per-layer
+  CI time budgets, the measured test stack to rebuild on (happy-dom +
+  threads + per-file isolation), and the experimentally rejected approaches
+  that must not be re-walked.
+- Frontend correctness gates are **build + typecheck + lint + React Doctor**
+  (see `.github/workflows/ci.yml`).
+- `apps/desktop/` and `apps/mobile/` keep their own test setups — they were
+  not part of this reset and are outside the frontend CI job.
 
 ### Go tests
 
-Standard `go test`. Tests should create their own fixture data in a test database.
-
-### E2E tests
-
-E2E tests should be self-contained. Use the `TestApiClient` fixture for data setup/teardown:
-
-```typescript
-import { loginAsDefault, createTestApi } from "./helpers";
-import type { TestApiClient } from "./fixtures";
-
-let api: TestApiClient;
-
-test.beforeEach(async ({ page }) => {
-  api = await createTestApi();
-  await loginAsDefault(page);
-});
-
-test.afterEach(async () => {
-  await api.cleanup();
-});
-
-test("example", async ({ page }) => {
-  const issue = await api.createIssue("Test Issue");
-  await page.goto(`/issues/${issue.id}`);
-});
-```
+Unaffected by the frontend reset. Standard `go test`; tests create their own
+fixture data in a test database. CI runs the full backend suite on every PR
+and on the dev push.
 
 ## Commit Rules
 
@@ -408,26 +357,19 @@ test("example", async ({ page }) => {
 ## Minimum Pre-Push Checks
 
 ```bash
-make check    # Runs all checks: typecheck, unit tests, Go tests, E2E
+make check    # Runs all checks: typecheck, Go tests
 ```
 
-⚠️ **CI does not run the E2E step of `make check`.** GitHub Actions
-(`.github/workflows/ci.yml`) runs typecheck/lint/unit tests and Go tests on
-every PR, but never `pnpm exec playwright test` — there is no CI job for it.
-`make check` locally is the only thing that exercises E2E; a PR merging
-green has NOT had its E2E suite verified. No CI coverage, no assigned
-owner — bringing `e2e/` into CI needs a real backend+frontend environment
-running in the pipeline, which is a bigger lift than a config change and is
-tracked separately, not solved by this note. See task #12 (2026-08-01).
+(Frontend unit tests and Playwright E2E were removed from `make check` on
+2026-08-06 with the frontend testing reset — see Testing Rules above and
+`docs/frontend-testing.md`.)
 
 Run verification only when the user explicitly asks for it.
 
 For targeted checks when requested:
 ```bash
 pnpm typecheck        # TypeScript type errors only
-pnpm test             # TS unit tests only (Vitest, all packages)
 make test             # Go tests only
-pnpm exec playwright test   # E2E only (requires backend + frontend running)
 ```
 
 ## AI Agent Verification Loop

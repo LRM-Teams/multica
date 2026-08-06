@@ -8,8 +8,7 @@ on:
   # request; the only scope every PR can read is the base branch. With
   # pull_request as the sole trigger nothing ever wrote a current dev-scoped
   # entry, so every PR restored a stale one (the live entry dated from
-  # 2026-07-28) and turbo reported 0 of 9 tasks cached. Tests are skipped on
-  # this trigger — see the Test step.
+  # 2026-07-28) and turbo reported 0 of 9 tasks cached.
   push:
     branches: [dev]
 
@@ -131,36 +130,15 @@ jobs:
         #   yourself; CI won't.
         run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
 
-      - name: Report runner size
-        # One line, so the runner's core count is a measurement in the log
-        # rather than an assumption about GitHub's published spec. Vitest sizes
-        # its worker pool from this number (see packages/views/vitest.config.ts).
-        run: |
-          echo "nproc=$(nproc) availableParallelism=$(node -p 'require("node:os").availableParallelism()')"
-          echo "mem=$(free -g | awk '/^Mem:/{print $2}')GiB"
-
-      - name: Test
-        # Skipped on the dev push, which exists only to publish a base-branch
-        # Turbo cache for build/typecheck/lint. Re-running the suite after a
-        # merge produces no information the pull request did not already give,
-        # and it is the expensive half of the job.
-        if: github.event_name == 'pull_request'
-        # `test` is a separate turbo invocation pinned to one outer task at a
-        # time (#853/#855). Previously all four tasks shared one command, so
-        # turbo ran several packages' `test` concurrently and each spawned its
-        # own pool of Vitest file workers: outer concurrency x inner workers.
-        # That oversubscribed the runner and starved whichever test was mid-
-        # `waitFor`, reddening PRs whose diffs never touched views (#1243,
-        # #1232). `--concurrency=1` bounds only the OUTER task graph; each
-        # package keeps its own file workers, so views' files stay parallel.
-        #
-        # Deliberately NOT done here: raising any timeout. That would hide the
-        # symptom and turn a stable red into an intermittent one.
-        run: pnpm exec turbo test --filter='@multica/web...' --concurrency=1
+      # No Test step (Frank, 2026-08-06): the frontend unit suite was removed
+      # wholesale — after cutting its cost ~35% (#2394/#2401, happy-dom +
+      # threads) the job still could not reach the 10-minute wall target on
+      # one runner without deleting most page coverage anyway. Frontend
+      # correctness gates are build/typecheck/lint + React Doctor above.
+      # The measured infrastructure and the reintroduction bar live in
+      # docs/frontend-testing.md — read it before adding any test back.
   backend:
-    # Also runs on the dev push (unlike frontend's Test step above, which stays
-    # PR-only — it's the expensive half of that job and shares no cache with
-    # push). "The pull request already proved it" assumes no merge combination
+    # Also runs on the dev push. "The pull request already proved it" assumes no merge combination
     # can break tests both branches passed individually; #1457/#1459/#1455 hit
     # exactly that (2026-07-30): dev push had skipped backend since a day
     # earlier, so a bad merge sat undetected until an unrelated PR's CI hit it.

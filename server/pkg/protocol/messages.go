@@ -374,6 +374,10 @@ const (
 	// operation protocol. Older daemons continue to receive no machine action
 	// and therefore cannot accidentally claim or complete an operation.
 	DaemonCapabilityMachineUpgrade = "machine_upgrade_v1"
+	// DaemonCapabilityAgentSessionReset gates the server-backed clearing of
+	// canonical and legacy provider resume pointers. Older daemons advertised
+	// lifecycle actions but only implemented plain process restart.
+	DaemonCapabilityAgentSessionReset = "agent_session_reset_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by

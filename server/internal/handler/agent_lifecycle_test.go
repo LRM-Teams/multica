@@ -38,6 +38,9 @@ func TestAgentLifecycleContractPure(t *testing.T) {
 	if agentLifecycleCapabilityPresent([]string{"other"}) {
 		t.Fatal("missing lifecycle capability was accepted")
 	}
+	if !agentSessionResetCapabilityPresent([]string{"other", "agent_session_reset_v1"}) {
+		t.Fatal("session reset capability was not detected")
+	}
 }
 
 func TestAgentLifecyclePreflightIsPerActionAndFullResetIsIdleOnly(t *testing.T) {
@@ -78,6 +81,47 @@ func TestAgentLifecyclePreflightIsPerActionAndFullResetIsIdleOnly(t *testing.T) 
 	// Fixture provider is "lifecycle-test" — not ForceKillable → false.
 	if response.ProviderCapabilities.ForceRestart {
 		t.Fatalf("provider_capabilities.force_restart=%v, want false for non-ForceKillable fixture provider", response.ProviderCapabilities.ForceRestart)
+	}
+}
+
+func TestAgentLifecyclePreflightKeepsPlainRestartForLegacyDaemon(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime
+		SET metadata = jsonb_build_object('capabilities', '["agent_lifecycle_actions_v1"]'::jsonb)
+		WHERE id = $1
+	`, runtimeID); err != nil {
+		t.Fatalf("downgrade runtime capabilities: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := withURLParam(
+		newRequestAs(testUserID, http.MethodGet, "/api/agents/"+agentID+"/lifecycle", nil),
+		"id", agentID,
+	)
+	testHandler.GetAgentLifecycle(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preflight status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response AgentLifecyclePreflight
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode preflight: %v", err)
+	}
+	if !response.Actions[agentLifecycleRestart].Supported {
+		t.Fatal("legacy daemon lost plain restart support")
+	}
+	for _, action := range []AgentLifecycleActionKind{agentLifecycleResetSessionRestart, agentLifecycleFullResetRestart} {
+		state := response.Actions[action]
+		if state.Supported || state.DisabledReason != "unsupported_session_reset_capability" {
+			t.Fatalf("%s preflight = %+v", action, state)
+		}
+	}
+
+	create := invokeCreateAgentLifecycle(t, agentID, "81818181-8181-4181-8181-818181818181", agentLifecycleResetSessionRestart)
+	if create.Code != http.StatusConflict || !containsResponseBody(create, "unsupported_session_reset_capability") {
+		t.Fatalf("legacy daemon reset create status=%d body=%s", create.Code, create.Body.String())
 	}
 }
 
@@ -445,7 +489,7 @@ func createAgentLifecycleFixtureWithProvider(t *testing.T, capable bool, provide
 	t.Helper()
 	capabilities := `[]`
 	if capable {
-		capabilities = `["agent_lifecycle_actions_v1"]`
+		capabilities = `["agent_lifecycle_actions_v1","agent_session_reset_v1"]`
 	}
 	ctx := context.Background()
 	if err := testPool.QueryRow(ctx, `

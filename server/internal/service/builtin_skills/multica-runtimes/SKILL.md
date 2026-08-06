@@ -43,7 +43,13 @@ not create runtime-owned update state.
 multica runtime list --output json
 multica runtime usage <runtime-id> --output json
 multica runtime activity <runtime-id> --output json
+multica computer upgrade --target-version <version> --output json
 ```
+
+`computer upgrade` uses this profile's local computer identity and creates or
+polls the canonical daemon-scoped machine-upgrade operation. Omit
+`--target-version` to request the latest version. Computer owners and workspace
+owners/admins can perform this action.
 
 
 ## Debugging an Agent that did not run

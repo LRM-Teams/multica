@@ -165,6 +165,51 @@ func TestCanonicalAgentRuntimeIdentityFailsClosedOnCredentialOrUnknownMulticaEnv
 	}
 }
 
+func trainingCanonicalRuntimeIdentityForTest(t *testing.T, agentID, sessionKey string) canonicalAgentRuntimeIdentity {
+	t.Helper()
+	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID:    agentID,
+		RuntimeID:  "shared-runtime",
+		Provider:   "pi",
+		Executable: "/usr/local/bin/pi",
+		Model:      "openai/areal-default",
+		WorkDir:    "/var/lib/multica/training",
+		CustomArgs: []string{"--api-key", sessionKey},
+		Environment: map[string]string{
+			"MULTICA_SERVER_URL":   "https://multica.invalid",
+			"MULTICA_WORKSPACE_ID": "workspace-a",
+			"MULTICA_AGENT_ID":     agentID,
+		},
+		WorkspaceID: "workspace-a",
+	})
+	if err != nil {
+		t.Fatalf("build training identity: %v", err)
+	}
+	return identity
+}
+
+func TestCanonicalAgentRuntimeIdentitySeparatesTrainingAgentsAndSessionKeys(t *testing.T) {
+	first := trainingCanonicalRuntimeIdentityForTest(t, "training-agent-a", "synthetic-session-key-a")
+	second := trainingCanonicalRuntimeIdentityForTest(t, "training-agent-b", "synthetic-session-key-b")
+	if first.slotKey() == second.slotKey() {
+		t.Fatal("distinct training agents shared one canonical runtime slot")
+	}
+	if first.fingerprint() == second.fingerprint() {
+		t.Fatal("distinct task-scoped session arguments shared one process fingerprint")
+	}
+}
+
+func TestCanonicalAgentRuntimeIdentityKeyRotationChangesRestartBoundary(t *testing.T) {
+	before := trainingCanonicalRuntimeIdentityForTest(t, "training-agent", "synthetic-session-key-before")
+	after := trainingCanonicalRuntimeIdentityForTest(t, "training-agent", "synthetic-session-key-after")
+	if before.slotKey() != after.slotKey() {
+		t.Fatal("same-agent key rotation unexpectedly changed the logical slot")
+	}
+	if before.fingerprint() == after.fingerprint() {
+		t.Fatal("same-agent key rotation did not change the process restart boundary")
+	}
+}
+
 // Frank/Parker: agent×runtime long-lived across chats — no force-fresh on chat change.
 func TestCanonicalAgentRuntimePoolReusesAcrossChatSurfaces(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()

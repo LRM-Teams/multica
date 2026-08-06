@@ -817,5 +817,33 @@
   },
   "canvas": {
     "reorg_badge": "Reorganized · {{count}} updates · {{paths}} new paths"
+  },
+  "trajectory_explorer": {
+    "title": "Trajectory explorer",
+    "loading": "Loading trajectory",
+    "empty": "No exploration trajectory yet",
+    "empty_hint": "Start a new research or wait for results to appear.",
+    "error": "Failed to load trajectory",
+    "retry": "Retry",
+    "filter_by_branch": "Filter by branch",
+    "filter_by_agent": "Filter by agent",
+    "no_branches": "No branches",
+    "no_agents": "No agents",
+    "relations": "Relations",
+    "sort": "Sort",
+    "sort_time": "Time",
+    "sort_logical": "Logical",
+    "toggle_minimap": "Toggle minimap",
+    "minimap": "Mini",
+    "reset_zoom": "Reset zoom",
+    "filtering": "Filtering {count} of {total} items",
+    "jump_to_canvas": "Jump to canvas",
+    "expand_detail": "Open detail",
+    "merge": "merge",
+    "status_ok": "ok",
+    "status_run": "running",
+    "status_fail": "failed",
+    "status_wait": "waiting",
+    "status_mute": "muted"
   }
 }

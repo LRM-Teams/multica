@@ -21,6 +21,8 @@ function workspaceScoped(slug: string) {
     overview: () => `${ws}/overview`,
     usage: () => `${ws}/usage`,
     evolution: () => `${ws}/evolution`,
+    notes: () => `${ws}/notes`,
+    noteDetail: (id: string) => `${ws}/notes/${encode(id)}`,
     /** Member-visible memory Wiki (LRM-1001). Nav label: 知识 / Knowledge. */
     wiki: () => `${ws}/wiki`,
     wikiDetail: (id: string) => `${ws}/wiki/${encode(id)}`,

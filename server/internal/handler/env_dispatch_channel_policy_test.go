@@ -56,11 +56,55 @@ func TestEnvDispatchSandboxConfigCodec(t *testing.T) {
 		decoded.Runtime.Model != "model-a" {
 		t.Fatalf("decoded runtime mismatch: %+v", decoded.Runtime)
 	}
+	if decoded.ExecutionModel != "anthropic/model-a" {
+		t.Fatalf("decoded execution model = %q, want anthropic/model-a", decoded.ExecutionModel)
+	}
 }
 
 // TestEnvDispatchSandboxConfigCodec_RejectsMalformed verifies the codec rejects
 // malformed and partial stored policy rather than silently ignoring the error
 // (replacing the prior permissive json.Unmarshal pattern).
+
+func TestEnvDispatchSandboxConfigCodecRoundTripsSharedRuntimeAndExecutionModel(t *testing.T) {
+	sentinel := "synthetic-shared-key"
+	sharedRuntime := json.RawMessage(`{"providers":[{"provider":"env-leader-1","api_key":"` + sentinel + `","base_url":"https://route.invalid/v1","model":"glm-5.2"}],"default_provider":"env-leader-1","default_model":"glm-5.2"}`)
+	policy := service.ResolvedPerAgentSandboxPolicy{
+		Template:       "default",
+		Shared:         true,
+		SharedRuntime:  sharedRuntime,
+		ExecutionModel: "env-leader-1/glm-5.2",
+	}
+
+	raw, err := marshalEnvDispatchSandboxConfig(policy)
+	if err != nil {
+		t.Fatalf("marshal shared config: %v", err)
+	}
+	decoded, err := decodeEnvDispatchSandboxConfig(raw)
+	if err != nil {
+		t.Fatalf("decode shared config: %v", err)
+	}
+	if !decoded.Shared || string(decoded.SharedRuntime) != string(sharedRuntime) {
+		t.Fatal("aggregate shared runtime did not round-trip")
+	}
+	if decoded.ExecutionModel != policy.ExecutionModel {
+		t.Fatalf("execution model = %q, want %q", decoded.ExecutionModel, policy.ExecutionModel)
+	}
+	createInput, err := decoded.createInput("ws-1", "")
+	if err != nil {
+		t.Fatalf("create shared input: %v", err)
+	}
+	if string(createInput.Runtime) != string(sharedRuntime) {
+		t.Fatal("shared provisioning did not use the aggregate runtime catalog")
+	}
+
+	_, err = decodeEnvDispatchSandboxConfig(json.RawMessage(`{"template":"default","runtime":{"base_url":"https://route.invalid/v1","api_key":"` + sentinel + `","model":""}}`))
+	if err == nil {
+		t.Fatal("expected invalid runtime error")
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatal("decode error disclosed a runtime credential")
+	}
+}
 func TestEnvDispatchSandboxConfigCodec_RejectsMalformed(t *testing.T) {
 	cases := []struct {
 		name string

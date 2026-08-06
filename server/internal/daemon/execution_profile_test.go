@@ -87,12 +87,12 @@ func TestRestrictedExecutionConfigAppliesTighterBounds(t *testing.T) {
 }
 
 func TestRestrictedPiExecutionNeverReusesPersistentChatRuntime(t *testing.T) {
-	full := Task{ChatSessionID: "chat-1"}
+	full := Task{ChatMessage: "hello"}
 	if !usesPersistentPiChatRuntime("pi", full) {
 		t.Fatal("full Pi chat should reuse its persistent runtime")
 	}
 	restricted := Task{
-		ChatSessionID: "chat-1",
+		ChatMessage: "hello",
 		ExecutionConfig: &TaskExecutionConfig{
 			ExecutionProfile: executionProfileProtocolTurn,
 		},

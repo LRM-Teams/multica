@@ -935,7 +935,7 @@ func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
 		SourceProjectID: "source-proj-1",
 		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
-		AgentID: "leader", Message: &MessageInput{Content: "continue"},
+		AgentID: "leader", SharedSandbox: true, Message: &MessageInput{Content: "continue"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -956,13 +956,17 @@ func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
 	if f.channelRuns[0].RuntimeID == "" || f.channelRuns[0].RuntimeID == "source-runtime-1" {
 		t.Fatalf("channel run must use the new provisioned runtime, got %q", f.channelRuns[0].RuntimeID)
 	}
-	// Leader ready, peers pending (lazy first-mention provisioning).
-	if r.AgentSandboxes["leader"].Status != "ready" {
-		t.Fatalf("leader should be ready, got %q", r.AgentSandboxes["leader"].Status)
+	// Trigger ready; shared peers remain pending but expose the same complete
+	// sandbox/runtime/daemon correlation triple for client-side diagnosis.
+	leaderStatus := r.AgentSandboxes["leader"]
+	if leaderStatus.Status != "ready" || leaderStatus.SandboxInstanceID == "" || leaderStatus.RuntimeID == "" || leaderStatus.DaemonID == "" {
+		t.Fatalf("leader should be ready with a complete correlation triple, got %+v", leaderStatus)
 	}
 	for _, peer := range []string{"peerA", "peerB"} {
-		if r.AgentSandboxes[peer].Status != "pending" {
-			t.Fatalf("peer %s should be pending, got %q", peer, r.AgentSandboxes[peer].Status)
+		peerStatus := r.AgentSandboxes[peer]
+		if peerStatus.Status != "pending" || peerStatus.SandboxInstanceID != leaderStatus.SandboxInstanceID ||
+			peerStatus.RuntimeID != leaderStatus.RuntimeID || peerStatus.DaemonID != leaderStatus.DaemonID {
+			t.Fatalf("shared peer %s should carry the trigger correlation triple, got %+v", peer, peerStatus)
 		}
 	}
 }
@@ -1967,6 +1971,118 @@ func TestEnvDispatchPerAgentEnvSpecs_RuntimeValidation(t *testing.T) {
 	}
 }
 
+func TestApplySharedRuntimeCatalogBuildsDeterministicPerAgentRoutes(t *testing.T) {
+	roster := MessageRoster{
+		LeaderID: "leader.agent",
+		AgentIDs: []string{"leader.agent", "peer/agent", "inheriting-agent"},
+	}
+	leaderRuntime := &ExternalModelRuntime{
+		Provider: " OpenAI ", BaseURL: "https://route-a.invalid/v1",
+		APIKey: "synthetic-key-a", Model: "glm-5.2",
+	}
+	peerRuntime := &ExternalModelRuntime{
+		Provider: "openai", BaseURL: "https://route-b.invalid/v1",
+		APIKey: "synthetic-key-b", Model: "model-b",
+	}
+	newPolicies := func(reverse bool) map[string]ResolvedPerAgentSandboxPolicy {
+		policies := make(map[string]ResolvedPerAgentSandboxPolicy, 3)
+		if reverse {
+			policies["peer/agent"] = ResolvedPerAgentSandboxPolicy{Template: "default", Runtime: peerRuntime}
+			policies["leader.agent"] = ResolvedPerAgentSandboxPolicy{Template: "default", Runtime: leaderRuntime}
+		} else {
+			policies["leader.agent"] = ResolvedPerAgentSandboxPolicy{Template: "default", Runtime: leaderRuntime}
+			policies["peer/agent"] = ResolvedPerAgentSandboxPolicy{Template: "default", Runtime: peerRuntime}
+		}
+		policies["inheriting-agent"] = ResolvedPerAgentSandboxPolicy{Template: "default"}
+		return policies
+	}
+
+	forward := newPolicies(false)
+	if err := ApplySharedRuntimeCatalog(roster, forward); err != nil {
+		t.Fatalf("apply forward shared runtime catalog: %v", err)
+	}
+	reversed := newPolicies(true)
+	if err := ApplySharedRuntimeCatalog(roster, reversed); err != nil {
+		t.Fatalf("apply reversed shared runtime catalog: %v", err)
+	}
+
+	catalogBytes := forward[roster.LeaderID].SharedRuntime
+	if len(catalogBytes) == 0 {
+		t.Fatal("shared runtime catalog is empty")
+	}
+	for _, agentID := range roster.AgentIDs {
+		policy := forward[agentID]
+		if !policy.Shared {
+			t.Fatalf("agent %s policy is not marked shared", agentID)
+		}
+		if string(policy.SharedRuntime) != string(catalogBytes) {
+			t.Fatalf("agent %s did not receive the byte-identical catalog", agentID)
+		}
+		if string(reversed[agentID].SharedRuntime) != string(catalogBytes) {
+			t.Fatalf("agent %s catalog changed with policy insertion order", agentID)
+		}
+	}
+
+	var catalog struct {
+		Providers []struct {
+			Provider string `json:"provider"`
+			APIKey   string `json:"api_key"`
+			BaseURL  string `json:"base_url"`
+			Model    string `json:"model"`
+		} `json:"providers"`
+		DefaultProvider string `json:"default_provider"`
+		DefaultModel    string `json:"default_model"`
+	}
+	if err := json.Unmarshal(catalogBytes, &catalog); err != nil {
+		t.Fatalf("decode shared runtime catalog: %v", err)
+	}
+	if len(catalog.Providers) != 2 {
+		t.Fatalf("provider count = %d, want 2", len(catalog.Providers))
+	}
+	if catalog.Providers[0].Provider == catalog.Providers[1].Provider {
+		t.Fatal("distinct explicit routes received the same provider alias")
+	}
+	if catalog.Providers[0].BaseURL != "https://route-a.invalid/v1" ||
+		catalog.Providers[0].APIKey != "synthetic-key-a" ||
+		catalog.Providers[0].Model != "glm-5.2" ||
+		catalog.Providers[1].BaseURL != "https://route-b.invalid/v1" ||
+		catalog.Providers[1].APIKey != "synthetic-key-b" ||
+		catalog.Providers[1].Model != "model-b" {
+		t.Fatal("catalog did not preserve each normalized route independently")
+	}
+	leaderModel := forward[roster.LeaderID].ExecutionModel
+	peerModel := forward["peer/agent"].ExecutionModel
+	if leaderModel == "" || peerModel == "" || leaderModel == peerModel {
+		t.Fatal("explicit agents did not receive distinct alias/model selections")
+	}
+	if forward["inheriting-agent"].ExecutionModel != leaderModel {
+		t.Fatal("unspecified peer did not inherit the leader selection")
+	}
+	if catalog.DefaultProvider != catalog.Providers[0].Provider || catalog.DefaultModel != "glm-5.2" {
+		t.Fatal("leader route is not the catalog default")
+	}
+}
+
+func TestExternalRuntimeExecutionModel(t *testing.T) {
+	cases := []struct {
+		name    string
+		runtime *ExternalModelRuntime
+		want    string
+	}{
+		{name: "nil", runtime: nil, want: ""},
+		{name: "incomplete", runtime: &ExternalModelRuntime{Provider: "openai", Model: "glm-5.2"}, want: ""},
+		{name: "explicit provider", runtime: &ExternalModelRuntime{Provider: " OpenAI ", BaseURL: "https://route.invalid/v1", APIKey: "synthetic-key", Model: " glm-5.2 "}, want: "openai/glm-5.2"},
+		{name: "default provider", runtime: &ExternalModelRuntime{BaseURL: "https://route.invalid/v1", APIKey: "synthetic-key", Model: "model-b"}, want: "openai/model-b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExternalRuntimeExecutionModel(tc.runtime); got != tc.want {
+				t.Fatalf("execution model = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestEnvDispatchPerAgentRuntimePolicy_IsolatedPerAgent verifies that a
 // scratch squad dispatch with two different runtime objects passes one resolved
 // policy per agent to CreateEnvDispatchChannel, each isolated and each resolving
@@ -2262,6 +2378,38 @@ func TestScratchMessageProvisionsOnlyLeader(t *testing.T) {
 	}
 	if len(f.triggers) != 1 || f.triggers[0].AgentID != "leader" || f.triggers[0].RuntimeID != "rt-1" {
 		t.Fatalf("unexpected collaboration triggers: %+v", f.triggers)
+	}
+}
+
+func TestScratchSharedMessageAgentSandboxesIncludeDaemonID(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peer-a", "peer-b"}}
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 1)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "user", AgentID: "leader", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		SharedSandbox: true,
+		Message:       &MessageInput{Content: "start shared rollout"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(res.Rollouts) != 1 {
+		t.Fatalf("rollouts = %d, want 1", len(res.Rollouts))
+	}
+	statuses := res.Rollouts[0].AgentSandboxes
+	leader := statuses["leader"]
+	if leader.Status != "ready" || leader.SandboxInstanceID == "" || leader.RuntimeID == "" || leader.DaemonID == "" {
+		t.Fatal("ready leader is missing the complete sandbox/runtime/daemon identity")
+	}
+	for _, agentID := range []string{"peer-a", "peer-b"} {
+		peer := statuses[agentID]
+		if peer.Status != "pending" || peer.SandboxInstanceID != leader.SandboxInstanceID ||
+			peer.RuntimeID != leader.RuntimeID || peer.DaemonID != leader.DaemonID {
+			t.Fatalf("shared alias %s is missing the leader correlation identity", agentID)
+		}
 	}
 }
 

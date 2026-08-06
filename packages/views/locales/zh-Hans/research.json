@@ -817,5 +817,33 @@
   },
   "canvas": {
     "reorg_badge": "已按新需求重排 · {{count}} 处更新 · {{paths}} 条新路径"
+  },
+  "trajectory_explorer": {
+    "title": "轨迹探索器",
+    "loading": "正在加载轨迹",
+    "empty": "尚无探索轨迹",
+    "empty_hint": "开始新的研究或等待结果出现。",
+    "error": "轨迹加载失败",
+    "retry": "重试",
+    "filter_by_branch": "按分支筛选",
+    "filter_by_agent": "按负责人筛选",
+    "no_branches": "无分支",
+    "no_agents": "无负责人",
+    "relations": "关系",
+    "sort": "排序",
+    "sort_time": "时间",
+    "sort_logical": "逻辑",
+    "toggle_minimap": "切换小地图",
+    "minimap": "小图",
+    "reset_zoom": "重置缩放",
+    "filtering": "筛选 {count}/{total} 项",
+    "jump_to_canvas": "跳转画布",
+    "expand_detail": "展开详情",
+    "merge": "合并",
+    "status_ok": "完成",
+    "status_run": "进行中",
+    "status_fail": "失败",
+    "status_wait": "等待",
+    "status_mute": "已搁置"
   }
 }

@@ -3,7 +3,9 @@
 package daemon
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +53,36 @@ func TestArealProxyExecOverrideDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(args, []string{"--api-key", "pk"}) {
 		t.Errorf("args = %v, want [--api-key pk]", args)
+	}
+}
+
+func TestArealProxyExecOverrideKeepsSessionKeysDistinctAndRedacted(t *testing.T) {
+	const firstKey = "synthetic-session-key-a"
+	const secondKey = "synthetic-session-key-b"
+	first := &ArealProxy{
+		Provider: "openai", Model: "areal-default",
+		APIKey: firstKey, BaseURL: "https://proxy.invalid/v1",
+	}
+	second := &ArealProxy{
+		Provider: "openai", Model: "areal-default",
+		APIKey: secondKey, BaseURL: "https://proxy.invalid/v1",
+	}
+
+	_, firstArgs, _, _, firstOK := arealProxyExecOverride(first)
+	_, secondArgs, _, _, secondOK := arealProxyExecOverride(second)
+	if !firstOK || !secondOK || len(firstArgs) != 2 || len(secondArgs) != 2 {
+		t.Fatal("proxy overrides did not produce one credential argument each")
+	}
+	if firstArgs[1] != firstKey || secondArgs[1] != secondKey || firstArgs[1] == secondArgs[1] {
+		t.Fatal("proxy overrides did not retain their task-scoped credentials")
+	}
+
+	for _, rendered := range []string{
+		fmt.Sprint(first), fmt.Sprintf("%+v", first), fmt.Sprintf("%#v", first),
+		fmt.Sprint(second), fmt.Sprintf("%+v", second), fmt.Sprintf("%#v", second),
+	} {
+		if strings.Contains(rendered, firstKey) || strings.Contains(rendered, secondKey) {
+			t.Fatal("formatted ArealProxy disclosed a session credential")
+		}
 	}
 }

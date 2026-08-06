@@ -111,6 +111,7 @@ vi.mock("@multica/core/paths", () => ({
     agents: () => "/acme/agents",
     usage: () => "/acme/usage",
     evolution: () => "/acme/evolution",
+    notes: () => "/acme/notes",
     wiki: () => "/acme/wiki",
     planBilling: () => "/acme/plan-billing",
     computers: () => "/acme/computers",

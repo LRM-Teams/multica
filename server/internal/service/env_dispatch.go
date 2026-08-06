@@ -158,6 +158,126 @@ type ResolvedPerAgentSandboxPolicy struct {
 	// instead of claiming per-agent sandboxes (research D3). Persisted on the
 	// binding's sandbox_config as "shared".
 	Shared bool
+	// SharedRuntime is the deterministic aggregate runtime catalog persisted on
+	// every binding in a shared rollout. It may contain credentials and must
+	// never be returned in response DTOs or formatted in errors/logs.
+	SharedRuntime json.RawMessage
+	// ExecutionModel selects this binding's provider alias and model from the
+	// shared catalog. It never contains a URL or credential.
+	ExecutionModel string
+}
+
+type sharedRuntimeProvider struct {
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key"`
+	BaseURL  string `json:"base_url"`
+	Model    string `json:"model"`
+}
+
+type sharedRuntimeCatalog struct {
+	Providers       []sharedRuntimeProvider `json:"providers"`
+	DefaultProvider string                  `json:"default_provider"`
+	DefaultModel    string                  `json:"default_model"`
+}
+
+// ApplySharedRuntimeCatalog marks every roster binding shared and, when any
+// explicit runtime exists, assigns all bindings the same deterministic runtime
+// catalog. Explicit bindings select their own alias/model; bindings without a
+// runtime inherit the leader/default selection.
+func ApplySharedRuntimeCatalog(roster MessageRoster, policies map[string]ResolvedPerAgentSandboxPolicy) error {
+	orderedAgentIDs := make([]string, 0, len(roster.AgentIDs)+1)
+	seen := make(map[string]struct{}, len(roster.AgentIDs)+1)
+	if roster.LeaderID != "" {
+		orderedAgentIDs = append(orderedAgentIDs, roster.LeaderID)
+		seen[roster.LeaderID] = struct{}{}
+	}
+	for _, agentID := range roster.AgentIDs {
+		if _, exists := seen[agentID]; exists {
+			continue
+		}
+		orderedAgentIDs = append(orderedAgentIDs, agentID)
+		seen[agentID] = struct{}{}
+	}
+
+	catalog := sharedRuntimeCatalog{}
+	selections := make(map[string]string, len(orderedAgentIDs))
+	for ordinal, agentID := range orderedAgentIDs {
+		policy := policies[agentID]
+		policy.Shared = true
+		policies[agentID] = policy
+		if policy.Runtime == nil {
+			continue
+		}
+		runtime, err := NormalizeExternalModelRuntime(policy.Runtime)
+		if err != nil {
+			return fmt.Errorf("normalize shared runtime for agent %s: %w", agentID, err)
+		}
+		alias := sharedRuntimeProviderAlias(agentID, ordinal)
+		catalog.Providers = append(catalog.Providers, sharedRuntimeProvider{
+			Provider: alias,
+			APIKey:   runtime.APIKey,
+			BaseURL:  runtime.BaseURL,
+			Model:    runtime.Model,
+		})
+		selections[agentID] = alias + "/" + runtime.Model
+		policy.Runtime = runtime
+		policies[agentID] = policy
+	}
+	if len(catalog.Providers) == 0 {
+		return nil
+	}
+
+	defaultSelection := selections[roster.LeaderID]
+	if defaultSelection == "" {
+		first := catalog.Providers[0]
+		catalog.DefaultProvider = first.Provider
+		catalog.DefaultModel = first.Model
+		defaultSelection = first.Provider + "/" + first.Model
+	} else {
+		for _, provider := range catalog.Providers {
+			if defaultSelection == provider.Provider+"/"+provider.Model {
+				catalog.DefaultProvider = provider.Provider
+				catalog.DefaultModel = provider.Model
+				break
+			}
+		}
+	}
+	serialized, err := json.Marshal(catalog)
+	if err != nil {
+		return fmt.Errorf("encode shared runtime catalog: %w", err)
+	}
+	for _, agentID := range orderedAgentIDs {
+		policy := policies[agentID]
+		policy.SharedRuntime = serialized
+		policy.ExecutionModel = selections[agentID]
+		if policy.ExecutionModel == "" {
+			policy.ExecutionModel = defaultSelection
+		}
+		policies[agentID] = policy
+	}
+	return nil
+}
+
+func sharedRuntimeProviderAlias(agentID string, ordinal int) string {
+	var sanitized strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(agentID)) {
+		isAlphaNumeric := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
+		if isAlphaNumeric {
+			sanitized.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if sanitized.Len() > 0 && !lastDash {
+			sanitized.WriteByte('-')
+			lastDash = true
+		}
+	}
+	base := strings.Trim(sanitized.String(), "-")
+	if base == "" {
+		base = "agent"
+	}
+	return fmt.Sprintf("env-%s-%d", base, ordinal+1)
 }
 
 // NormalizeExternalModelRuntime trims whitespace and validates that the
@@ -188,6 +308,17 @@ func NormalizeExternalModelRuntime(in *ExternalModelRuntime) (*ExternalModelRunt
 		return nil, fmt.Errorf("base_url must be an absolute HTTP(S) URL")
 	}
 	return out, nil
+}
+
+// ExternalRuntimeExecutionModel returns the non-secret provider/model selector
+// for a complete external runtime. Incomplete runtimes return an empty override
+// so existing source-model copy behavior remains unchanged.
+func ExternalRuntimeExecutionModel(runtime *ExternalModelRuntime) string {
+	normalized, err := NormalizeExternalModelRuntime(runtime)
+	if err != nil || normalized == nil {
+		return ""
+	}
+	return normalized.Provider + "/" + normalized.Model
 }
 
 type IssueInput struct {
@@ -235,6 +366,7 @@ type AgentSandboxStatus struct {
 	Status            string `json:"status"`
 	SandboxInstanceID string `json:"sandbox_instance_id,omitempty"`
 	RuntimeID         string `json:"runtime_id,omitempty"`
+	DaemonID          string `json:"daemon_id,omitempty"`
 }
 
 // EnvRollout is one element of the response array (spec §6.3).
@@ -1308,10 +1440,9 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 				bindingSpecs[spec.AgentID] = policy
 			}
 			if in.SharedSandbox {
-				for _, agentID := range roster.AgentIDs {
-					policy := bindingSpecs[agentID]
-					policy.Shared = true
-					bindingSpecs[agentID] = policy
+				if err := ApplySharedRuntimeCatalog(roster, bindingSpecs); err != nil {
+					s.rollbackRollout(ctx, in.WorkspaceID, r)
+					return EnvRollout{}, fmt.Errorf("apply shared runtime catalog: %w", err)
 				}
 			}
 		}
@@ -1705,6 +1836,7 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 			// their first mention.
 			status.SandboxInstanceID = provisioned.SandboxInstanceID
 			status.RuntimeID = provisioned.RuntimeID
+			status.DaemonID = provisioned.DaemonID
 		}
 		r.AgentSandboxes[agentID] = status
 	}
@@ -1712,6 +1844,7 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		Status:            "ready",
 		SandboxInstanceID: provisioned.SandboxInstanceID,
 		RuntimeID:         provisioned.RuntimeID,
+		DaemonID:          provisioned.DaemonID,
 	}
 
 	messageID, err := s.deps.CreateChannelMessage(ctx, r.ChannelID, in.WorkspaceID, in.UserID, in.Message.Content)
@@ -1872,6 +2005,7 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 			// their first mention.
 			status.SandboxInstanceID = provisioned.SandboxInstanceID
 			status.RuntimeID = provisioned.RuntimeID
+			status.DaemonID = provisioned.DaemonID
 		}
 		r.AgentSandboxes[agentID] = status
 	}
@@ -1879,6 +2013,7 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		Status:            "ready",
 		SandboxInstanceID: provisioned.SandboxInstanceID,
 		RuntimeID:         provisioned.RuntimeID,
+		DaemonID:          provisioned.DaemonID,
 	}
 }
 

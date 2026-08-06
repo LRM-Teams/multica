@@ -23,6 +23,18 @@ type ProvisionEnvDispatchAgentInput struct {
 	SandboxConfig                                             json.RawMessage
 }
 
+func buildEnvDispatchCloneInput(in ProvisionEnvDispatchAgentInput, bindingID, runtimeID, executionModel string) service.CloneEnvDispatchAgentInput {
+	return service.CloneEnvDispatchAgentInput{
+		WorkspaceID:    in.WorkspaceID,
+		SourceAgentID:  in.AgentID,
+		RuntimeID:      runtimeID,
+		EnvID:          in.EnvID,
+		ChannelID:      in.ChannelID,
+		BindingID:      bindingID,
+		ExecutionModel: strings.TrimSpace(executionModel),
+	}
+}
+
 // routeEnvDispatchChannelAgent returns handled=false only for ordinary
 // channels. A bound EnvDispatch agent always receives its binding session and
 // never reaches ensureChannelAgentSessionWithDB, which could select the shared
@@ -226,7 +238,7 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 			return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("resolve shared env runtime: %w", sErr)
 		}
 		if found {
-			return h.attachEnvDispatchAgentToSharedRuntime(ctx, in, store, binding, shared)
+			return h.attachEnvDispatchAgentToSharedRuntime(ctx, in, store, binding, config, shared)
 		}
 	}
 	lifecycle := newEnvSandboxLifecycleService(h)
@@ -303,14 +315,9 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	if err != nil {
 		return cleanup(fmt.Errorf("wait for online sandbox runtime: %w", err))
 	}
-	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
-		WorkspaceID:   in.WorkspaceID,
-		SourceAgentID: in.AgentID,
-		RuntimeID:     runtimeRef.ID,
-		EnvID:         in.EnvID,
-		ChannelID:     in.ChannelID,
-		BindingID:     binding.ID,
-	})
+	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, buildEnvDispatchCloneInput(
+		in, binding.ID, runtimeRef.ID, config.ExecutionModel,
+	))
 	if err != nil {
 		return cleanup(fmt.Errorf("clone derived agent: %w", err))
 	}
@@ -344,7 +351,7 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 // with the shared identifiers. Compensation on failure touches only the
 // derived agent and the binding status — the shared sandbox/runtime is owned
 // by the leader binding and is never reclaimed here.
-func (h *Handler) attachEnvDispatchAgentToSharedRuntime(ctx context.Context, in ProvisionEnvDispatchAgentInput, store envDispatchChannelStore, binding envAgentSandboxBinding, shared envAgentSandboxBinding) (ProvisionEnvDispatchAgentResult, error) {
+func (h *Handler) attachEnvDispatchAgentToSharedRuntime(ctx context.Context, in ProvisionEnvDispatchAgentInput, store envDispatchChannelStore, binding envAgentSandboxBinding, config envDispatchSandboxConfig, shared envAgentSandboxBinding) (ProvisionEnvDispatchAgentResult, error) {
 	if shared.SandboxInstanceID == nil || shared.RuntimeID == nil || shared.DaemonID == nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "shared runtime incomplete")
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("shared env runtime anchor is incomplete")
@@ -359,14 +366,9 @@ func (h *Handler) attachEnvDispatchAgentToSharedRuntime(ctx context.Context, in 
 		return ProvisionEnvDispatchAgentResult{}, cause
 	}
 	var err error
-	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
-		WorkspaceID:   in.WorkspaceID,
-		SourceAgentID: in.AgentID,
-		RuntimeID:     runtimeID,
-		EnvID:         in.EnvID,
-		ChannelID:     in.ChannelID,
-		BindingID:     binding.ID,
-	})
+	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, buildEnvDispatchCloneInput(
+		in, binding.ID, runtimeID, config.ExecutionModel,
+	))
 	if err != nil {
 		return cleanup(fmt.Errorf("clone derived agent onto shared runtime: %w", err))
 	}
@@ -577,14 +579,9 @@ func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in Prov
 	if err != nil {
 		return cleanup(fmt.Errorf("wait for online sandbox runtime: %w", err))
 	}
-	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
-		WorkspaceID:   in.WorkspaceID,
-		SourceAgentID: in.AgentID,
-		RuntimeID:     runtimeRef.ID,
-		EnvID:         in.EnvID,
-		ChannelID:     in.ChannelID,
-		BindingID:     binding.ID,
-	})
+	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, buildEnvDispatchCloneInput(
+		in, binding.ID, runtimeRef.ID, "",
+	))
 	if err != nil {
 		return cleanup(fmt.Errorf("clone derived agent: %w", err))
 	}

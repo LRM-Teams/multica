@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // CloneEnvDispatchAgentInput identifies the source agent to clone for an
@@ -11,12 +12,13 @@ import (
 // See openspec change env-dispatch-agent-runtime-config Task 5.1 (derived-agent
 // clone service).
 type CloneEnvDispatchAgentInput struct {
-	WorkspaceID   string
-	SourceAgentID string
-	RuntimeID     string
-	EnvID         string
-	ChannelID     string
-	BindingID     string
+	WorkspaceID    string
+	SourceAgentID  string
+	RuntimeID      string
+	EnvID          string
+	ChannelID      string
+	BindingID      string
+	ExecutionModel string
 }
 
 // SourceAgent is the approved executable configuration copied from the source
@@ -42,6 +44,7 @@ type CreateDerivedAgentInput struct {
 	Name           string
 	Instructions   string
 	ApprovedConfig json.RawMessage
+	ExecutionModel string
 }
 
 // CloneDeps performs the transactional steps of derived-agent creation. The
@@ -103,6 +106,7 @@ func CloneEnvDispatchAgent(ctx context.Context, q CloneDeps, in CloneEnvDispatch
 		Name:           envDispatchDerivedAgentName(in.BindingID),
 		Instructions:   src.Instructions,
 		ApprovedConfig: src.ApprovedConfig,
+		ExecutionModel: strings.TrimSpace(in.ExecutionModel),
 	})
 	if err != nil {
 		return "", fmt.Errorf("create derived agent: %w", err)

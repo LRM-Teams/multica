@@ -660,7 +660,9 @@ func (s *PostgresStore) ReconcileAttempts(ctx context.Context, sessionID string,
 		FROM research_task_attempt a
 		JOIN research_task t ON t.id = a.task_id
 		JOIN research_session s ON s.id = a.session_id
+		LEFT JOIN research_dispatch_outbox outbox ON outbox.attempt_id = a.id
 		WHERE a.session_id = $1::uuid AND a.status IN ('dispatching', 'running')
+		  AND (outbox.id IS NULL OR outbox.status NOT IN ('pending', 'delivering'))
 		ORDER BY a.dispatched_at
 	`, sessionID)
 	if err != nil {

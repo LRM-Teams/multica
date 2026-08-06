@@ -25,6 +25,29 @@ func TestWorkspaceRunnerURLIsScopedWithoutRuntimeIDs(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
+	d := New(Config{MaxAgentProcesses: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	first := d.workspaceAgentProcessManager("ws-1")
+	if got := d.workspaceAgentProcessManager("ws-1"); got != first {
+		t.Fatal("same Workspace Runner did not retain its process manager")
+	}
+	second := d.workspaceAgentProcessManager("ws-2")
+	if second == first {
+		t.Fatal("different Workspace Runners unexpectedly share a process manager")
+	}
+	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"})
+	if err != nil {
+		t.Fatalf("start in first manager: %v", err)
+	}
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-2", StartDispatchID: "dispatch-1"})
+	if err != nil {
+		t.Fatalf("start in second manager: %v", err)
+	}
+	if firstAck.LaunchID == secondAck.LaunchID || firstAck.QueueState != protocol.AgentStartQueueStarting || secondAck.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("Workspace Runner managers were not isolated: first=%+v second=%+v", firstAck, secondAck)
+	}
+}
+
 func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	frames := make(chan protocol.Message, 3)

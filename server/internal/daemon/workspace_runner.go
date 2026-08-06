@@ -51,6 +51,29 @@ func (d *Daemon) workspaceRunnerWorkspaceIDs() []string {
 	return ids
 }
 
+// workspaceAgentProcessManager returns the sole lifecycle owner for one
+// Workspace Runner. Managers must not cross Workspace boundaries: their queue,
+// launch identities, process-cap accounting, and stale callbacks are local to
+// this Runner connection scope.
+func (d *Daemon) workspaceAgentProcessManager(workspaceID string) *agentProcessManager {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if manager := d.agentProcessManagers[workspaceID]; manager != nil {
+		return manager
+	}
+	manager := newAgentProcessManager(d.cfg.MaxAgentProcesses, time.Now, func(transition agentLifecycleTransition) {
+		if d.lifecycleDiagnostics == nil {
+			return
+		}
+		if err := d.lifecycleDiagnostics.Record(transition); err != nil && d.logger != nil {
+			// Local diagnostics are intentionally non-blocking for lifecycle.
+			d.logger.Debug("agent lifecycle diagnostic write failed", "error", err)
+		}
+	})
+	d.agentProcessManagers[workspaceID] = manager
+	return manager
+}
+
 func (d *Daemon) runWorkspaceRunner(ctx context.Context, workspaceID string) {
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -128,7 +151,7 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !d.ownsWorkspaceRunnerRuntime(workspaceID, start.RuntimeID) {
 				continue
 			}
-			ack, err := d.agentProcessManager.Start(agentProcessStartRequest{AgentID: start.AgentID, RuntimeID: start.RuntimeID, StartDispatchID: start.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
+			ack, err := d.workspaceAgentProcessManager(workspaceID).Start(agentProcessStartRequest{AgentID: start.AgentID, RuntimeID: start.RuntimeID, StartDispatchID: start.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
 			if err != nil {
 				continue
 			}

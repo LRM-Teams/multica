@@ -99,7 +99,7 @@ type Daemon struct {
 	messageRuntimeIDs    map[string]string
 	messageSendMu        sync.Mutex
 	messageSends         map[string]int
-	agentProcessManager  *agentProcessManager
+	agentProcessManagers map[string]*agentProcessManager
 	lifecycleDiagnostics *lifecycleDiagnosticWriter
 	runnerInstanceID     string
 
@@ -391,6 +391,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
 		messageCoordinators:       make(map[string]*MessageCoordinator),
 		messageRuntimeIDs:         make(map[string]string),
+		agentProcessManagers:      make(map[string]*agentProcessManager),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		machineUpgradeGeneration:  uuid.NewString(),
 		runnerInstanceID:          uuid.NewString(),
@@ -406,15 +407,6 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	if cfg.WorkspacesRoot != "" {
 		d.lifecycleDiagnostics = newLifecycleDiagnosticWriter(filepath.Join(cfg.WorkspacesRoot, ".multica", "lifecycle-diagnostics"), time.Now)
 	}
-	d.agentProcessManager = newAgentProcessManager(cfg.MaxAgentProcesses, time.Now, func(transition agentLifecycleTransition) {
-		if d.lifecycleDiagnostics == nil {
-			return
-		}
-		if err := d.lifecycleDiagnostics.Record(transition); err != nil {
-			// Local diagnostics are intentionally non-blocking for lifecycle.
-			logger.Debug("agent lifecycle diagnostic write failed", "error", err)
-		}
-	})
 	d.agentRuntimeTurns = newAgentRuntimeTurnCoordinator(cfg, logger)
 	d.agentLifecycleExecutor = &agentLifecycleExecutor{
 		workspacesRoot: cfg.WorkspacesRoot,

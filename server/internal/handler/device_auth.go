@@ -99,10 +99,7 @@ func (h *Handler) RequestDeviceCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	appURL := strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN"))
-	if appURL == "" {
-		appURL = "https://app.multica.ai"
-	}
+	appURL := deviceAuthAppURL()
 	verificationURI := appURL + "/device"
 	writeJSON(w, http.StatusOK, deviceCodeResponse{
 		DeviceCode:              rawDeviceCode,
@@ -114,6 +111,14 @@ func (h *Handler) RequestDeviceCode(w http.ResponseWriter, r *http.Request) {
 	})
 
 	_ = h.Queries.DeleteExpiredDeviceAuthorizations(r.Context())
+}
+
+func deviceAuthAppURL() string {
+	appURL := strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN"))
+	if appURL == "" {
+		return "https://leagent.me"
+	}
+	return appURL
 }
 
 type devicePendingResponse struct {

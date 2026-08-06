@@ -75,6 +75,18 @@ func TestRequestDeviceCode_ReturnsRFC8628Shape(t *testing.T) {
 	}
 }
 
+func TestDeviceAuthAppURLDefaultsToLeAgent(t *testing.T) {
+	t.Setenv("FRONTEND_ORIGIN", "")
+	if got := deviceAuthAppURL(); got != "https://leagent.me" {
+		t.Fatalf("deviceAuthAppURL() = %q, want https://leagent.me", got)
+	}
+
+	t.Setenv("FRONTEND_ORIGIN", "https://self-host.example")
+	if got := deviceAuthAppURL(); got != "https://self-host.example" {
+		t.Fatalf("deviceAuthAppURL() = %q, want configured self-host origin", got)
+	}
+}
+
 func TestDeviceAuth_PendingIsVisibleToAnyLoggedInUser(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

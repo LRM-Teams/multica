@@ -191,19 +191,19 @@ func TestIsOfficialCloudServer(t *testing.T) {
 		url  string
 		want bool
 	}{
-		{"canonical cloud https", "https://api.multica.ai", true},
-		{"canonical cloud with trailing slash stripped", "https://api.multica.ai/", true},
-		{"canonical cloud case-insensitive", "https://API.Multica.AI", true},
-		{"cloud over plain http (unusual but match host)", "http://api.multica.ai", true},
+		{"canonical cloud https", "https://leagent.me", true},
+		{"canonical cloud with trailing slash stripped", "https://leagent.me/", true},
+		{"canonical cloud case-insensitive", "https://LEAGENT.ME", true},
+		{"cloud over plain http (unusual but match host)", "http://leagent.me", true},
 		{"localhost is self-host", "http://localhost:8080", false},
 		{"loopback ip is self-host", "http://127.0.0.1:8080", false},
 		{"lan ip is self-host", "http://192.168.0.28:8080", false},
 		{"third-party host is self-host", "https://multica.example.com", false},
 		// Staging / preview / future subdomains deliberately follow the
 		// safer self-host default until explicitly opted in.
-		{"multica.ai apex is not the api host", "https://multica.ai", false},
-		{"staging subdomain is self-host", "https://staging.multica.ai", false},
-		{"preview subdomain is self-host", "https://api-preview.multica.ai", false},
+		{"legacy api host is self-host", "https://api.multica.ai", false},
+		{"staging subdomain is self-host", "https://staging.leagent.me", false},
+		{"preview subdomain is self-host", "https://api-preview.leagent.me", false},
 		// Malformed inputs must not falsely match.
 		{"empty string is self-host", "", false},
 		{"garbage string is self-host", "::not a url::", false},
@@ -295,7 +295,7 @@ func TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost(t *testing
 func TestLoadConfig_AutoUpdateDefault_CloudIsAlsoNoOp(t *testing.T) {
 	stageFakeAgent(t)
 	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "wss://api.multica.ai/ws",
+		ServerURL:      "wss://leagent.me/ws",
 		WorkspacesRoot: t.TempDir(),
 	})
 	if err != nil {
@@ -335,7 +335,7 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOffForCloud(t *testing.T) {
 	stageFakeAgent(t)
 	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "false")
 	cfg, err := LoadConfig(Overrides{
-		ServerURL:      "https://api.multica.ai",
+		ServerURL:      "https://leagent.me",
 		WorkspacesRoot: t.TempDir(),
 	})
 	if err != nil {
@@ -356,7 +356,7 @@ func TestLoadConfig_AutoUpdate_NoFlagWinsOverCloudDefault(t *testing.T) {
 	stageFakeAgent(t)
 	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "true")
 	cfg, err := LoadConfig(Overrides{
-		ServerURL:         "https://api.multica.ai",
+		ServerURL:         "https://leagent.me",
 		WorkspacesRoot:    t.TempDir(),
 		DisableAutoUpdate: true,
 	})

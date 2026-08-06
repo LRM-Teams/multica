@@ -11,6 +11,16 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 )
 
+func TestCloudCLIConfigUsesLeAgentOrigins(t *testing.T) {
+	cfg := cloudCLIConfig()
+	if cfg.ServerURL != "https://leagent.me" {
+		t.Fatalf("server_url = %q, want https://leagent.me", cfg.ServerURL)
+	}
+	if cfg.AppURL != "https://leagent.me" {
+		t.Fatalf("app_url = %q, want https://leagent.me", cfg.AppURL)
+	}
+}
+
 // TestPersistSelfHostConfigIfReachable verifies the fix for the
 // setup-wipes-token bug: a failed reachability probe must leave the existing
 // config (and its auth token) untouched, instead of overwriting it before the

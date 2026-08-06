@@ -890,13 +890,13 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 
 ### B. 深化 Module，缩小修改面
 
-- [ ] 把 `engine.go` 的 Prompt、dispatch、result acceptance、failure、Gate、projection 拆到拥有对应不变量的内部 Module。
+- [x] 把 `engine.go` 的 Prompt、dispatch、result acceptance、failure、Gate、projection 拆到拥有对应不变量的内部 Module。
   - [x] B1：建立 `projectionModule`，只读取 committed Event，按顺序调用 Projection output，成功后确认，失败后按 durable attempt count 写退避时间，单次最多处理 500 条。`engine.go` 只保留到 Module 的调用，不再拥有 outbox 消费规则。
   - [x] B2：建立 `resultAcceptanceModule`，拥有 Attempt/Task/Inbox 绑定预检、版本化 Result 解码、计划能力检查和原子 `AcceptResult` 输入构造；Engine 只在成功接纳后触发 Reconcile。
   - [x] B3：建立 `taskPromptModule`，拥有 orchestrator version 选择、V1–V5 不可变 Prompt builder 和 Prompt 专用 JSON 规范化；五版本完整 Prompt hash 不变。
   - [x] B4：建立 `executionModule`，拥有运行态 Attempt 同步、依赖激活、取消确认、Ready Task 排序、能力路由、Attempt 创建、Prompt 调用、Inbox 分派与身份挂接；Engine 只传入当前 Run 状态并调用 Module。
   - [x] B5：建立 `failureModule`，拥有确定性 dispatch 错误分类、预算耗尽决策顺序、Run 失败转换、Attempt 取消和失败事件投影顺序，并阻止永久失败的计划或同一补救任务无限重建。
-  - [ ] 迁出 Gate。
+  - [x] B6：建立 `deliveryGateModule`，拥有 Gate 评估、最小补救路由、控制任务创建、并发目标变化、等待确认和最终确认；新补救任务的激活与派发仍由 `executionModule` 执行。
 - [ ] 删除巨型 `Store` Interface；PostgreSQL 事务留在业务 Module 内。
 - [ ] 固定外部 `ResearchRun` Interface，禁止 Handler 直接写子实体状态。
 - [ ] 保持 V1–V5 字节级 Prompt/Result 兼容和行为回放一致。
@@ -1085,6 +1085,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [x] B3 把 orchestrator version 分派、V1–V5 Prompt builder 和 `compactJSON` 迁入 `taskPromptModule`；`engine.go` 不再包含 Prompt 文本。`TestOrchestratorContractsMatchGoldenFixtures` 明确执行五个版本并保持完整 Prompt SHA-256 不变，未知版本仍拒绝；该项不修改任何历史 Prompt 字节。
 - [x] B4 把运行态 Attempt 检查、依赖激活、取消确认、Ready Task 选择、能力路由、Attempt 创建、Prompt Module 调用、Inbox 分派和身份挂接迁入 `executionModule`。已挂接 Attempt 只用 Inbox Task ID 检查；尚未挂接的 Attempt 只用稳定 dispatch key 恢复。取消仅在 Runtime 确认成功或未挂接派发超过 stale 时确认，派发成功但 Inbox 身份挂接失败时立即取消对应 Runtime Task。模块测试覆盖同步失败不修改状态、三类取消身份、取消失败不确认、成功派发与身份挂接；现有真实 PostgreSQL 调度回归继续验证持久化状态机。
 - [x] B5 把确定性 dispatch 错误分类、预算耗尽后的 Gate 决策顺序、Run 失败转换、Attempt 取消和失败事件投影迁入 `failureModule`。未知或明确可重试的 dispatch 错误不修改 Run；能力缺失和不可重试错误才结束 Run。失败路径固定先提交 `MarkFailed`，再请求 Runtime 取消，取消未确认时不投影已静止的终态；预算事件必须先提交，随后才判断可交付或失败。模块测试覆盖可重试无状态修改、不可重试失败顺序、取消失败延迟投影、预算通过和预算失败；真实 PostgreSQL 的永久 dispatch 与计划耗尽回归继续通过。
+- [x] B6 把交付 Gate 评估、finding 优先级、最小补救动作、question 绑定、控制任务创建、并发目标变化、等待用户确认和确认时复检迁入 `deliveryGateModule`。Module 只创建一个可寻址补救 Task 并把执行交回 `executionModule`；`ErrControlTargetChanged` 不失败 Run，而是在投影并等待一秒后用新状态重算。模块测试覆盖通过、目标补救、并发变化、预算转交、失败计划防循环和确认复检；真实 PostgreSQL 全流程、补救路由、V1–V5 golden 与竞态测试通过。`engine.go` 已不包含 Prompt 文本、Dispatcher/Attempt 状态组合、Result 接纳规则、失败转换、Gate 路由或 Projection outbox 算法。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

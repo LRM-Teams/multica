@@ -2,7 +2,6 @@ import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
-import { useLastSelectedChannelStore } from "@multica/core/channels";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { ChannelsPage } from "./channels-page";
@@ -175,7 +174,6 @@ function renderPage(channelId?: string) {
 describe("ChannelsPage — channel sidebar preview (LRM-263)", () => {
   beforeEach(() => {
     window.sessionStorage.clear();
-    useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
     channelsFixture.current = [
       {
         id: "chan-with-preview",

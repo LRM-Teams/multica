@@ -179,7 +179,7 @@ func TestAgentMessageRecoveryRejectsCorruptStateAndWrongRuntime(t *testing.T) {
 	}
 }
 
-func TestAgentMessageHandoffActivityIsIdempotent(t *testing.T) {
+func TestAgentMessageHandoffReceiptIsIdempotent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -189,21 +189,19 @@ func TestAgentMessageHandoffActivityIsIdempotent(t *testing.T) {
 	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
 	payload := protocol.AgentMessageHandoffPayload{AgentID: agentID, RuntimeID: runtimeID, HandoffID: uuid.NewString(), Count: 2, Targets: []string{"channel:one"}}
 	if err := testHandler.HandleAgentMessageHandoff(ctx, identity, payload); err != nil {
-		t.Fatalf("first handoff Activity: %v", err)
+		t.Fatalf("first handoff receipt: %v", err)
 	}
 	if err := testHandler.HandleAgentMessageHandoff(ctx, identity, payload); err != nil {
-		t.Fatalf("duplicate handoff Activity: %v", err)
+		t.Fatalf("duplicate handoff receipt: %v", err)
 	}
 	var count int
 	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_activity_event
-		WHERE workspace_id = $1 AND agent_id = $2
-		  AND event_kind = 'wake_attempt' AND event_type = 'message_received'
-		  AND details->>'handoff_id' = $3`, testWorkspaceID, agentID, payload.HandoffID).Scan(&count); err != nil {
-		t.Fatalf("count handoff Activity: %v", err)
+		SELECT count(*) FROM agent_message_handoff_receipt
+		WHERE workspace_id = $1 AND agent_id = $2 AND handoff_id = $3`, testWorkspaceID, agentID, payload.HandoffID).Scan(&count); err != nil {
+		t.Fatalf("count handoff receipt: %v", err)
 	}
 	if count != 1 {
-		t.Fatalf("Message received Activity count = %d, want 1", count)
+		t.Fatalf("Message handoff receipt count = %d, want 1", count)
 	}
 }
 

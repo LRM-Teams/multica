@@ -67,30 +67,16 @@ func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemon
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('agent_message_handoff'), hashtext($1))`, payload.HandoffID); err != nil {
 		return err
 	}
-	var exists bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM agent_activity_event
-			WHERE workspace_id = $1 AND agent_id = $2
-			  AND event_type = 'message_received'
-			  AND details->>'handoff_id' = $3
-		)`, parseUUID(identity.WorkspaceID), parseUUID(payload.AgentID), payload.HandoffID).Scan(&exists); err != nil {
-		return err
+	targets, err := json.Marshal(payload.Targets)
+	if err != nil {
+		return fmt.Errorf("encode Message handoff targets: %w", err)
 	}
-	if exists {
-		return tx.Commit(ctx)
-	}
-	_, inserted := insertAgentActivityEvent(ctx, tx,
-		parseUUID(identity.WorkspaceID), parseUUID(payload.AgentID), parseUUID(payload.RuntimeID), pgtype.UUID{},
-		activityKindWakeAttempt, "message_received", "info",
-		"none", pgtype.UUID{}, "",
-		"runtime_message_handoff", "", map[string]any{
-			"handoff_id": payload.HandoffID,
-			"count":      payload.Count,
-			"targets":    payload.Targets,
-		})
-	if !inserted {
-		return errors.New("persist Message received Activity")
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_message_handoff_receipt (workspace_id, agent_id, handoff_id, message_count, targets)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (workspace_id, agent_id, handoff_id) DO NOTHING`,
+		parseUUID(identity.WorkspaceID), parseUUID(payload.AgentID), payload.HandoffID, payload.Count, targets); err != nil {
+		return fmt.Errorf("persist Message handoff receipt: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err

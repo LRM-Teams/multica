@@ -97,6 +97,8 @@ type Daemon struct {
 	messageCoordinatorMu sync.RWMutex
 	messageCoordinators  map[string]*MessageCoordinator
 	messageRuntimeIDs    map[string]string
+	messageSendMu        sync.Mutex
+	messageSends         map[string]int
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState

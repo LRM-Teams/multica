@@ -30,7 +30,7 @@ const (
 	agentTransportActionResolve        = "message_resolve"
 	agentTransportActionThreadUnfollow = "thread_unfollow"
 
-	agentTransportFreshnessHoldLimit = 5
+	agentTransportFreshnessHoldLimit = 3
 )
 
 type AgentTransportSendRequest struct {
@@ -39,6 +39,20 @@ type AgentTransportSendRequest struct {
 	Parts           []protocol.MessagePart `json:"parts"`
 	ClientMessageID string                 `json:"client_message_id"`
 	SeenUpToSeq     int64                  `json:"seen_up_to_seq,omitempty"`
+	ContextTarget   string                 `json:"context_target,omitempty"`
+	BypassFreshness bool                   `json:"bypass_freshness,omitempty"`
+}
+
+// AgentTransportTargetRequest is an internal Credential Proxy preflight. It
+// resolves the human-facing target spelling to the canonical coordinator key
+// without reading or consuming any Message bodies.
+type AgentTransportTargetRequest struct {
+	Target string `json:"target"`
+}
+
+type AgentTransportTargetResponse struct {
+	Target        string `json:"target"`
+	ContextTarget string `json:"context_target"`
 }
 
 type AgentTransportSendResponse struct {
@@ -428,6 +442,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
 		return
 	}
+	if expected := strings.TrimSpace(req.ContextTarget); expected != "" && expected != agentTransportCanonicalMessageTarget(target) {
+		writeError(w, http.StatusConflict, "canonical send target changed during freshness preflight")
+		return
+	}
 	if isChannelOnboarding && !channelOnboardingTargetMatches(onboarding, target) {
 		writeError(w, http.StatusBadRequest, "channel onboarding must send to the joined channel main timeline")
 		return
@@ -454,7 +472,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	seenUpToSeq := int64(-1)
-	if !isChannelOnboarding {
+	if !isChannelOnboarding && !req.BypassFreshness {
 		seenUpToSeq, err = h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
 		if err != nil {
 			slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
@@ -520,6 +538,37 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			"created":    result.Created,
 		},
 	)
+}
+
+func (h *Handler) AgentTransportResolveMessageTarget(w http.ResponseWriter, r *http.Request) {
+	source, ok := h.requireAgentTransportSource(w, r)
+	if !ok {
+		return
+	}
+	var req AgentTransportTargetRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.Target) == "" {
+		writeError(w, http.StatusBadRequest, "target is required")
+		return
+	}
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, true)
+	if err != nil {
+		if errors.Is(err, errReminderSendOutsideAnchor) {
+			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid or ambiguous target")
+		return
+	}
+	writeJSON(w, http.StatusOK, AgentTransportTargetResponse{
+		Target:        target.raw,
+		ContextTarget: agentTransportCanonicalMessageTarget(target),
+	})
 }
 
 // normalizeLegacyAgentAudioVoiceReply upgrades the one message shape emitted

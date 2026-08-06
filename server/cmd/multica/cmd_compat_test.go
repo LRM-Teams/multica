@@ -52,11 +52,14 @@ func TestMessageGroupedSendReactCommands(t *testing.T) {
 		}
 	})
 
-	t.Run("message send exposes sticker and attachment flags", func(t *testing.T) {
-		for _, name := range []string{"message", "message-stdin", "message-file", "sticker", "voice", "attachment-id", "target", "client-message-id"} {
+	t.Run("message send exposes Draft replay flags without an Agent idempotency key", func(t *testing.T) {
+		for _, name := range []string{"message", "message-stdin", "message-file", "sticker", "voice", "attachment-id", "target", "send-draft", "anyway"} {
 			if messageSendCmd.Flags().Lookup(name) == nil {
 				t.Fatalf("message send missing --%s", name)
 			}
+		}
+		if messageSendCmd.Flags().Lookup("client-message-id") != nil {
+			t.Fatal("message send must not expose an Agent-controlled idempotency key")
 		}
 	})
 

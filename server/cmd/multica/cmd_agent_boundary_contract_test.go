@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -324,13 +325,13 @@ func TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI(t *testing.T) {
 
 // --- already-dedicated regression (must stay green) ---
 
-// TestBoundary_MessageSend_AlreadyDedicated is a control: message send must
-// remain on /api/agent/messages/send (regression against re-mixing human path).
-func TestBoundary_MessageSend_AlreadyDedicated(t *testing.T) {
+// TestBoundary_MessageSend_UsesMachineLocalProxy keeps the Agent-facing send
+// surface on the daemon; only the Proxy may call the dedicated Server API.
+func TestBoundary_MessageSend_UsesMachineLocalProxy(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		if r.URL.Path != "/api/agent/messages/send" {
+		if r.URL.Path != "/credential-proxy/messages/send" {
 			http.NotFound(w, r)
 			return
 		}
@@ -342,6 +343,13 @@ func TestBoundary_MessageSend_AlreadyDedicated(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	boundaryCLIEnv(t, srv.URL)
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("server port: %v", err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
+	t.Setenv("MULTICA_AGENT_ID", "agent-boundary")
+	t.Setenv("MULTICA_TASK_ID", "task-boundary")
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
@@ -349,8 +357,8 @@ func TestBoundary_MessageSend_AlreadyDedicated(t *testing.T) {
 	if err := runAgentMessageSend(cmd, nil); err != nil {
 		t.Fatalf("runAgentMessageSend: %v", err)
 	}
-	if gotPath != "/api/agent/messages/send" {
-		t.Fatalf("path = %q, want /api/agent/messages/send", gotPath)
+	if gotPath != "/credential-proxy/messages/send" {
+		t.Fatalf("path = %q, want machine-local Credential Proxy", gotPath)
 	}
 }
 

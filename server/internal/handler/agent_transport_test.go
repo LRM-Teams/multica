@@ -2365,14 +2365,109 @@ func TestAgentTransportTargetedCommandsRequireExplicitTarget(t *testing.T) {
 		t.Fatalf("read without target: status=%d body=%s", readRec.Code, readRec.Body.String())
 	}
 
-	searchRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{
-		"query": "needle",
-		"limit": 5,
+	reactRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id":        uuid.NewString(),
+		"emoji":             "+1",
+		"client_message_id": "missing-target-react-" + uuid.NewString(),
 	})
-	if searchRec.Code != http.StatusBadRequest {
-		t.Fatalf("search without target: status=%d body=%s", searchRec.Code, searchRec.Body.String())
+	if reactRec.Code != http.StatusBadRequest {
+		t.Fatalf("react without target: status=%d body=%s", reactRec.Code, reactRec.Body.String())
+	}
+}
+
+func TestAgentTransportSearchFiltersVisibleCanonicalMessagesWithoutConsumption(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
 	}
 
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	needle := "canonical transport search filters " + uuid.NewString()
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", needle+" first", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed first visible message: %v", err)
+	}
+	otherUserID := seedWorkspaceUserForTransportTargetTest(t, "search-sender-"+uuid.NewString()[:8])
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(otherUserID), "Other", needle+" second", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed second visible message: %v", err)
+	}
+	system, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", needle+" system", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed system message: %v", err)
+	}
+	hiddenChannelID := seedChannelForTest(t, "hidden-search-"+uuid.NewString()[:8], testUserID)
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(hiddenChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", needle+" hidden", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed hidden message: %v", err)
+	}
+
+	globalRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"query": needle, "sort": "newest", "limit": 10})
+	if globalRec.Code != http.StatusOK {
+		t.Fatalf("global search: status=%d body=%s", globalRec.Code, globalRec.Body.String())
+	}
+	var global AgentTransportSearchResponse
+	if err := json.Unmarshal(globalRec.Body.Bytes(), &global); err != nil {
+		t.Fatalf("decode global search: %v", err)
+	}
+	if global.Target != "" || global.ChannelID != "" || global.Total != 2 || len(global.Results) != 2 {
+		t.Fatalf("global search = %+v, want two visible canonical results without a target", global)
+	}
+	if !transportSearchResultsContain(global.Results, first.ID, needle+" first") || !transportSearchResultsContain(global.Results, second.ID, needle+" second") {
+		t.Fatalf("global search did not return both visible messages: %+v", global.Results)
+	}
+	for _, result := range global.Results {
+		if result.ChannelID != channelID || result.MessageID == "" {
+			t.Fatalf("result lacks canonical identity/visible channel: %+v", result)
+		}
+		if result.MessageID == system.ID || strings.Contains(result.Content, "hidden") {
+			t.Fatalf("search exposed excluded message: %+v", result)
+		}
+	}
+
+	page0Rec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"target": target, "query": needle, "sort": "newest", "limit": 1, "offset": 0})
+	page1Rec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"target": target, "query": needle, "sort": "newest", "limit": 1, "offset": 1})
+	var page0, page1 AgentTransportSearchResponse
+	if err := json.Unmarshal(page0Rec.Body.Bytes(), &page0); err != nil || page0Rec.Code != http.StatusOK {
+		t.Fatalf("decode first page: status=%d err=%v body=%s", page0Rec.Code, err, page0Rec.Body.String())
+	}
+	if err := json.Unmarshal(page1Rec.Body.Bytes(), &page1); err != nil || page1Rec.Code != http.StatusOK {
+		t.Fatalf("decode second page: status=%d err=%v body=%s", page1Rec.Code, err, page1Rec.Body.String())
+	}
+	if len(page0.Results) != 1 || len(page1.Results) != 1 || page0.Results[0].MessageID != global.Results[0].MessageID || page1.Results[0].MessageID != global.Results[1].MessageID {
+		t.Fatalf("stable pagination mismatch: global=%+v page0=%+v page1=%+v", global.Results, page0.Results, page1.Results)
+	}
+
+	senderRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"target": target, "sender": "user:" + otherUserID, "sort": "oldest", "limit": 10})
+	var sender AgentTransportSearchResponse
+	if err := json.Unmarshal(senderRec.Body.Bytes(), &sender); err != nil || senderRec.Code != http.StatusOK {
+		t.Fatalf("decode filter-only sender search: status=%d err=%v body=%s", senderRec.Code, err, senderRec.Body.String())
+	}
+	if sender.Query != "" || sender.Total != 1 || len(sender.Results) != 1 || sender.Results[0].MessageID != second.ID {
+		t.Fatalf("filter-only sender search = %+v, want %s", sender, second.ID)
+	}
+
+	for name, body := range map[string]map[string]any{
+		"empty":              {},
+		"bad sort":           {"query": needle, "sort": "random"},
+		"bad sender":         {"query": needle, "sender": "user:not-a-uuid"},
+		"bad timestamp":      {"query": needle, "before": "yesterday"},
+		"negative offset":    {"query": needle, "offset": -1},
+		"reversed time span": {"query": needle, "after": "2026-01-03T00:00:00Z", "before": "2026-01-02T00:00:00Z"},
+	} {
+		rec := agentTransportSearchForTest(t, taskID, agentID, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s search: status=%d body=%s", name, rec.Code, rec.Body.String())
+		}
+	}
+
+	hiddenTarget := "#" + channelNameForTransportTest(t, hiddenChannelID)
+	hiddenRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"target": hiddenTarget, "query": needle})
+	if hiddenRec.Code != http.StatusBadRequest {
+		t.Fatalf("search private channel: status=%d body=%s", hiddenRec.Code, hiddenRec.Body.String())
+	}
+	assertAgentTransportAuditCount(t, taskID, agentTransportActionSearch, 4)
 }
 
 func TestAgentTransportDMThreadTarget(t *testing.T) {

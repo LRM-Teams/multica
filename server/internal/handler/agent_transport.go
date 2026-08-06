@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -202,14 +203,25 @@ type agentTransportFreshnessResolutionPublication struct {
 type AgentTransportSearchRequest struct {
 	Target string `json:"target"`
 	Query  string `json:"query"`
+	Sender string `json:"sender,omitempty"`
+	Sort   string `json:"sort,omitempty"`
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
 	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
 }
 
 type AgentTransportSearchResponse struct {
 	Action      string                       `json:"action"`
-	Target      string                       `json:"target"`
+	Target      string                       `json:"target,omitempty"`
 	ChannelID   string                       `json:"channel_id"`
 	Query       string                       `json:"query"`
+	Sender      string                       `json:"sender,omitempty"`
+	Sort        string                       `json:"sort"`
+	Before      string                       `json:"before,omitempty"`
+	After       string                       `json:"after,omitempty"`
+	Limit       int                          `json:"limit"`
+	Offset      int                          `json:"offset"`
 	Total       int                          `json:"total"`
 	Results     []ChannelMessageSearchResult `json:"results"`
 	TransportID string                       `json:"transport_id"`
@@ -229,6 +241,26 @@ type AgentTransportResolveResponse struct {
 	Target  AgentTransportResolveTarget `json:"target"`
 	Message ChannelMessageResponse      `json:"message"`
 }
+
+type agentTransportSearchOptions struct {
+	Target     *agentTransportTarget
+	Query      string
+	Sender     string
+	SenderType string
+	SenderID   pgtype.UUID
+	Sort       string
+	Before     time.Time
+	After      time.Time
+	Limit      int
+	Offset     int
+}
+
+const (
+	agentTransportSearchSortNewest   = "newest"
+	agentTransportSearchSortOldest   = "oldest"
+	agentTransportSearchDefaultLimit = 50
+	agentTransportSearchMaxOffset    = 10_000
+)
 
 type AgentTransportThreadUnfollowRequest struct {
 	Target string `json:"target"`
@@ -857,23 +889,26 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
-		writeError(w, http.StatusBadRequest, "query is required")
+	search, err := parseAgentTransportSearchOptions(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	limit := clampAgentTransportLimit(req.Limit, 50)
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
-	if err != nil {
-		if errors.Is(err, errReminderSendOutsideAnchor) {
-			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
+	if rawTarget := strings.TrimSpace(req.Target); rawTarget != "" {
+		target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, rawTarget, false)
+		if err != nil || !h.agentHasSurfaceAccess(r.Context(), source.origin.workspaceID, source.origin.agentID, parseUUID(target.channel.ID)) {
+			writeError(w, http.StatusBadRequest, "invalid target")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "invalid target")
+		search.Target = &target
+	}
+	if search.Query == "" && search.Target == nil && !search.SenderID.Valid && search.Before.IsZero() && search.After.IsZero() {
+		writeError(w, http.StatusBadRequest, "query or at least one filter is required")
 		return
 	}
-	total, results, err := h.searchAgentTransportMessages(r.Context(), target, query, limit)
+	total, results, err := h.searchAgentTransportMessages(r.Context(), source, search)
 	if err != nil {
+		slog.Warn("agent transport search failed", "task_id", uuidToString(source.task.ID), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to search messages")
 		return
 	}
@@ -881,13 +916,24 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 	for _, result := range results {
 		resultIDs = append(resultIDs, result.MessageID)
 	}
-	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionSearch, target.raw, parseUUID(target.channel.ID), pgtype.UUID{}, "", map[string]any{
-		"channel_id":   target.channel.ID,
-		"query":        query,
+	channelID := pgtype.UUID{}
+	targetRaw := ""
+	if search.Target != nil {
+		channelID = parseUUID(search.Target.channel.ID)
+		targetRaw = search.Target.raw
+	}
+	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionSearch, targetRaw, channelID, pgtype.UUID{}, "", map[string]any{
+		"channel_id":   uuidToString(channelID),
+		"query":        search.Query,
+		"sender":       search.Sender,
+		"sort":         search.Sort,
+		"before":       agentTransportSearchTimeString(search.Before),
+		"after":        agentTransportSearchTimeString(search.After),
 		"result_ids":   resultIDs,
 		"result_count": len(results),
 		"total":        total,
-		"limit":        limit,
+		"limit":        search.Limit,
+		"offset":       search.Offset,
 	})
 	if err != nil {
 		slog.Warn("agent transport search audit failed", "task_id", uuidToString(source.task.ID), "error", err)
@@ -896,9 +942,15 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 	}
 	writeJSON(w, http.StatusOK, AgentTransportSearchResponse{
 		Action:      agentTransportActionSearch,
-		Target:      target.raw,
-		ChannelID:   target.channel.ID,
-		Query:       query,
+		Target:      targetRaw,
+		ChannelID:   uuidToString(channelID),
+		Query:       search.Query,
+		Sender:      search.Sender,
+		Sort:        search.Sort,
+		Before:      agentTransportSearchTimeString(search.Before),
+		After:       agentTransportSearchTimeString(search.After),
+		Limit:       search.Limit,
+		Offset:      search.Offset,
 		Total:       total,
 		Results:     results,
 		TransportID: transportID,
@@ -2498,18 +2550,126 @@ func (h *Handler) decorateAgentTransportMessages(ctx context.Context, workspaceI
 	applyChannelMessageTombstoneReadModel(messages)
 }
 
-func (h *Handler) searchAgentTransportMessages(ctx context.Context, target agentTransportTarget, query string, limit int) (int, []ChannelMessageSearchResult, error) {
-	pattern := "%" + escapeLike(query) + "%"
-	threadRootID := nullableUUID(target.threadRootMessageID)
+func parseAgentTransportSearchOptions(req AgentTransportSearchRequest) (agentTransportSearchOptions, error) {
+	options := agentTransportSearchOptions{
+		Query:  strings.TrimSpace(req.Query),
+		Sender: strings.TrimSpace(req.Sender),
+		Sort:   strings.ToLower(strings.TrimSpace(req.Sort)),
+		Limit:  req.Limit,
+		Offset: req.Offset,
+	}
+	if options.Sort == "" {
+		options.Sort = agentTransportSearchSortNewest
+	}
+	if options.Sort != agentTransportSearchSortNewest && options.Sort != agentTransportSearchSortOldest {
+		return agentTransportSearchOptions{}, errors.New("sort must be newest or oldest")
+	}
+	if options.Limit == 0 {
+		options.Limit = agentTransportSearchDefaultLimit
+	}
+	if options.Limit < 1 || options.Limit > channelMessagesMaxLimit {
+		return agentTransportSearchOptions{}, fmt.Errorf("limit must be between 1 and %d", channelMessagesMaxLimit)
+	}
+	if options.Offset < 0 || options.Offset > agentTransportSearchMaxOffset {
+		return agentTransportSearchOptions{}, fmt.Errorf("offset must be between 0 and %d", agentTransportSearchMaxOffset)
+	}
+	if options.Sender != "" {
+		typ, rawID, ok := strings.Cut(options.Sender, ":")
+		typ = strings.ToLower(strings.TrimSpace(typ))
+		rawID = strings.TrimSpace(rawID)
+		if !ok || (typ != "user" && typ != "agent") || rawID == "" {
+			return agentTransportSearchOptions{}, errors.New("sender must be user:<uuid> or agent:<uuid>")
+		}
+		if _, err := uuid.Parse(rawID); err != nil {
+			return agentTransportSearchOptions{}, errors.New("sender must be user:<uuid> or agent:<uuid>")
+		}
+		options.SenderType = typ
+		options.SenderID = parseUUID(rawID)
+		options.Sender = typ + ":" + uuidToString(options.SenderID)
+	}
+	var err error
+	if options.Before, err = parseAgentTransportSearchTime(req.Before, "before"); err != nil {
+		return agentTransportSearchOptions{}, err
+	}
+	if options.After, err = parseAgentTransportSearchTime(req.After, "after"); err != nil {
+		return agentTransportSearchOptions{}, err
+	}
+	if !options.Before.IsZero() && !options.After.IsZero() && !options.After.Before(options.Before) {
+		return agentTransportSearchOptions{}, errors.New("after must be earlier than before")
+	}
+	return options, nil
+}
+
+func parseAgentTransportSearchTime(raw, name string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be an RFC3339 timestamp", name)
+	}
+	return parsed.UTC(), nil
+}
+
+func agentTransportSearchTimeString(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func (h *Handler) searchAgentTransportMessages(ctx context.Context, source agentTransportSource, options agentTransportSearchOptions) (int, []ChannelMessageSearchResult, error) {
+	args := []any{source.origin.workspaceID, source.origin.agentID}
+	where := []string{
+		"m.workspace_id = $1",
+		"m.author_type IN ('user', 'agent')",
+		"m.deleted_at IS NULL",
+		`EXISTS (
+			SELECT 1
+			FROM channel_member visible
+			WHERE visible.workspace_id = m.workspace_id
+			  AND visible.channel_id = m.channel_id
+			  AND visible.member_type = 'agent'
+			  AND visible.member_id = $2
+		)`,
+	}
+	if options.Target != nil {
+		args = append(args, parseUUID(options.Target.channel.ID))
+		where = append(where, fmt.Sprintf("m.channel_id = $%d", len(args)))
+		if options.Target.threadRootMessageID.Valid {
+			args = append(args, options.Target.threadRootMessageID)
+			where = append(where, fmt.Sprintf("(m.id = $%d OR m.thread_root_message_id = $%d)", len(args), len(args)))
+		} else {
+			where = append(where, "m.thread_root_message_id IS NULL")
+		}
+	}
+	if options.Query != "" {
+		args = append(args, "%"+escapeLike(options.Query)+"%")
+		where = append(where, fmt.Sprintf("m.content ILIKE $%d ESCAPE '\\'", len(args)))
+	}
+	if options.SenderID.Valid {
+		args = append(args, options.SenderType, options.SenderID)
+		where = append(where, fmt.Sprintf("m.author_type = $%d AND m.author_id = $%d", len(args)-1, len(args)))
+	}
+	if !options.Before.IsZero() {
+		args = append(args, options.Before)
+		where = append(where, fmt.Sprintf("m.created_at < $%d", len(args)))
+	}
+	if !options.After.IsZero() {
+		args = append(args, options.After)
+		where = append(where, fmt.Sprintf("m.created_at > $%d", len(args)))
+	}
+	whereSQL := strings.Join(where, " AND ")
 	var total int
-	if err := h.DB.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND deleted_at IS NULL AND content ILIKE $3 ESCAPE '\'
-		  AND ($4::uuid IS NULL OR id = $4 OR thread_root_message_id = $4)`,
-		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), pattern, threadRootID).Scan(&total); err != nil {
+	if err := h.DB.QueryRow(ctx, `SELECT count(*) FROM channel_message m WHERE `+whereSQL, args...).Scan(&total); err != nil {
 		return 0, nil, err
 	}
+	order := "m.created_at DESC, m.id DESC"
+	if options.Sort == agentTransportSearchSortOldest {
+		order = "m.created_at ASC, m.id ASC"
+	}
+	args = append(args, options.Limit, options.Offset)
 	rows, err := h.DB.Query(ctx, `
 		SELECT m.id, m.channel_id, m.thread_root_message_id, m.author_type, m.author_id, m.author_name,
 		       CASE WHEN m.author_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
@@ -2517,27 +2677,27 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, target agent
 		FROM channel_message m
 		LEFT JOIN "user" u ON m.author_type = 'user' AND u.id = m.author_id
 		LEFT JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id AND a.workspace_id = m.workspace_id
-		WHERE m.channel_id = $1 AND m.workspace_id = $2 AND m.author_type <> 'system' AND m.deleted_at IS NULL AND m.content ILIKE $3 ESCAPE '\'
-		  AND ($4::uuid IS NULL OR m.id = $4 OR m.thread_root_message_id = $4)
-		ORDER BY m.seq ASC
-		LIMIT $5`, parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), pattern, threadRootID, limit)
+		WHERE `+whereSQL+`
+		ORDER BY `+order+`
+		LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer rows.Close()
-	var results []ChannelMessageSearchResult
+	results := make([]ChannelMessageSearchResult, 0, options.Limit)
 	for rows.Next() {
-		var id, chID, rootID, authorID pgtype.UUID
+		var id, channelID, rootID, authorID pgtype.UUID
 		var authorType, authorName, content string
 		var avatarURL pgtype.Text
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &chID, &rootID, &authorType, &authorID, &authorName, &avatarURL, &content, &createdAt); err != nil {
+		if err := rows.Scan(&id, &channelID, &rootID, &authorType, &authorID, &authorName, &avatarURL, &content, &createdAt); err != nil {
 			return 0, nil, err
 		}
 		results = append(results, ChannelMessageSearchResult{
 			MessageID:           uuidToString(id),
-			ChannelID:           uuidToString(chID),
+			ChannelID:           uuidToString(channelID),
 			ThreadRootMessageID: uuidToPtr(rootID),
+			InThread:            rootID.Valid,
 			Type:                authorType,
 			AuthorID:            uuidToPtr(authorID),
 			AuthorName:          authorName,
@@ -2546,7 +2706,10 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, target agent
 			CreatedAt:           timestampToString(createdAt),
 		})
 	}
-	return total, results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return 0, nil, err
+	}
+	return total, results, nil
 }
 
 func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, seenUpToSeq int64) (agentTransportFreshnessDecision, error) {

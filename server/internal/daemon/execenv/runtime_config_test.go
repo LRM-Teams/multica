@@ -531,7 +531,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"a freshness `held` result exits non-zero",
 		"multica message react --message-id <id> --emoji \"...\" [--remove]",
 		"multica message read [--target ...] [--limit N] --output json",
-		"multica message search \"query\" [--target ...] --output json",
+		"multica message search [query] [--target ...] [--sender user:<uuid>|agent:<uuid>]",
 		"multica message resolve <message-id>",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
 		"issue list --mine --output json",

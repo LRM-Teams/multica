@@ -174,6 +174,21 @@ func TestRunAgentMessageReactPostsTargetFreeIdentity(t *testing.T) {
 	}
 }
 
+func TestMessageSearchUsesCanonicalFiltersWithoutLegacyChannelFlag(t *testing.T) {
+	cmd := newMessageSearchCmd()
+	for _, name := range []string{"target", "sender", "sort", "before", "after", "limit", "offset"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("message search missing --%s", name)
+		}
+	}
+	if cmd.Flags().Lookup("channel") != nil {
+		t.Fatal("message search must not expose legacy --channel")
+	}
+	if err := cmd.Args(cmd, nil); err != nil {
+		t.Fatalf("filter-only message search must be accepted: %v", err)
+	}
+}
+
 func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -501,13 +516,6 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 				return runAgentMessageRead(cmd, nil)
 			},
 		},
-		{
-			name: "search",
-			run: func() error {
-				cmd := newMessageSearchCmd()
-				return runAgentMessageSearch(cmd, []string{"needle"})
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -517,5 +525,90 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, want)
 			}
 		})
+	}
+}
+
+func TestRunAgentMessageSearchPostsCanonicalFiltersAndPermitsFilterOnly(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/search" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action": "message_search", "query": "", "sort": "oldest", "results": []any{}, "total": 0,
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := newMessageSearchCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("sender", "user:00000000-0000-4000-8000-000000000001")
+	_ = cmd.Flags().Set("sort", "oldest")
+	_ = cmd.Flags().Set("before", "2026-01-03T03:04:05Z")
+	_ = cmd.Flags().Set("after", "2026-01-02T03:04:05Z")
+	_ = cmd.Flags().Set("limit", "2")
+	_ = cmd.Flags().Set("offset", "4")
+
+	readOut, writeOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	oldOut := os.Stdout
+	os.Stdout = writeOut
+	err = runAgentMessageSearch(cmd, nil)
+	writeOut.Close()
+	os.Stdout = oldOut
+	_, readErr := io.ReadAll(readOut)
+	readOut.Close()
+	if err != nil {
+		t.Fatalf("runAgentMessageSearch: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	if body["query"] != "" || body["target"] != "#multica" || body["sender"] != "user:00000000-0000-4000-8000-000000000001" || body["sort"] != "oldest" {
+		t.Fatalf("search body = %#v", body)
+	}
+	if body["before"] != "2026-01-03T03:04:05Z" || body["after"] != "2026-01-02T03:04:05Z" || body["limit"] != float64(2) || body["offset"] != float64(4) {
+		t.Fatalf("search filters = %#v", body)
+	}
+	if _, ok := body["channel"]; ok {
+		t.Fatalf("legacy channel field leaked into search body: %#v", body)
+	}
+}
+
+func TestRunAgentMessageSearchReportsMalformedUpstreamResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	err := runAgentMessageSearch(newMessageSearchCmd(), []string{"needle"})
+	if err == nil || !strings.Contains(err.Error(), "search messages") {
+		t.Fatalf("error = %v, want malformed search response context", err)
+	}
+}
+
+func assertPartMap(t *testing.T, got any, want map[string]any) {
+	t.Helper()
+	m, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("part = %#v, want map", got)
+	}
+	for k, w := range want {
+		if m[k] != w {
+			t.Fatalf("part[%q] = %#v, want %#v (full=%#v)", k, m[k], w, m)
+		}
 	}
 }

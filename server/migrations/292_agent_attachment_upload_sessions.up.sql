@@ -27,5 +27,8 @@ CREATE INDEX idx_agent_attachment_upload_session_attachment
   ON agent_attachment_upload_session(workspace_id, agent_id, attachment_id)
   WHERE attachment_id IS NOT NULL;
 
+CREATE INDEX idx_agent_attachment_upload_session_agent
+  ON agent_attachment_upload_session(agent_id);
+
 CREATE INDEX idx_agent_attachment_upload_session_target
   ON agent_attachment_upload_session(workspace_id, agent_id, channel_id, thread_root_message_id, expires_at);

@@ -328,11 +328,10 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	runtimeID, ok := h.requireActiveAgentInboxDelivery(w, r, event, deliveryID, leaseToken)
+	_, ok = h.requireActiveAgentInboxDelivery(w, r, event, deliveryID, leaseToken)
 	if !ok {
 		return
 	}
-	targetKind, targetID := agentInboxActivityTarget(event)
 	for _, msg := range req.Messages {
 		msg.Content = redact.Text(msg.Content)
 		msg.Output = redact.Text(msg.Output)
@@ -345,29 +344,17 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		}
 		if lineage := strings.TrimSpace(msg.Lineage); lineage != "" {
 			details["lineage"] = lineage
-			// P0: Claude stream-json (and any provider that stamps Message.Lineage)
-			// surfaces nested trajectories. Emit one user-facing Activity row the
-			// first time we see each lineage on this inbox event — FE already
-			// treats event_type containing "subagent" as Subagent activity.
-			h.maybeRecordProviderSubagentStarted(r.Context(), event, runtimeID, deliveryID, lineage, details)
 		}
 		if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
 			// Legacy daemons may still report an empty thinking phase. Retain it
 			// as diagnostic data only; current daemons no longer emit this wire.
 			details["phase_status"] = true
-			insertAgentActivityEvent(r.Context(), h.DB,
-				event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
-				activityKindThinking, "runtime_phase", "info",
-				targetKind, targetID, "",
-				"", "", details,
-			)
 			if payload, ok := agentInboxTaskMessagePayload(event, msg, activityKindThinking, details); ok && h.Bus != nil {
 				h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
 			}
 			continue
 		}
-		kind, eventType, severity := agentInboxActivityMessageKind(msg.Type)
-		message := agentInboxActivityMessageText(msg)
+		kind, _, _ := agentInboxActivityMessageKind(msg.Type)
 		if callID := strings.TrimSpace(msg.CallID); callID != "" {
 			details["call_id"] = callID
 		}
@@ -392,13 +379,6 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 					details["tool_target"] = target
 					details["summary_kind"] = summaryKind
 				}
-				h.recordAgentActivityEvent(r.Context(), h.DB,
-					event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
-					activityKindCustom, "unmapped_tool_name", "warning",
-					targetKind, targetID, "",
-					"unmapped_tool_name", "Unmapped runtime tool name",
-					details,
-				)
 				continue
 			}
 			details["tool"] = canonicalTool
@@ -413,28 +393,7 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 				details["tool_target"] = target
 				details["summary_kind"] = summaryKind
 			}
-			// Cursor (and similar) launch nested agents as Task/subagent tools —
-			// same classification as packages/views/chat/lib/bubble-cursor-activity.
-			rawTool := strings.TrimSpace(msg.Tool)
-			if isCursorLikeSubagentTool(rawTool, msg.Input) {
-				h.maybeRecordCursorSubagentStarted(r.Context(), event, runtimeID, deliveryID, msg, details)
-			}
 		}
-		// Cursor often emits tool args only on completed (tool_result). The
-		// daemon already carries that Input (runtime_tool_event.go); merge it
-		// into the started tool_call row by call_id instead of inventing a
-		// second user-facing line. Existing facts are preserved.
-		if msg.Type == "tool_result" {
-			h.backfillAgentInboxToolCallFromResult(r.Context(), h.DB,
-				event.WorkspaceID, event.AgentID, uuidToString(deliveryID), msg)
-		}
-		h.recordAgentActivityEvent(r.Context(), h.DB,
-			event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
-			kind, eventType, severity,
-			targetKind, targetID, "",
-			"", message,
-			details,
-		)
 		if payload, ok := agentInboxTaskMessagePayload(event, msg, kind, details); ok && h.Bus != nil {
 			h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
 		}
@@ -1042,33 +1001,11 @@ func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.
 	if err != nil {
 		slog.Warn("agent inbox fail: failed to reload delivery for activity event", "delivery_id", uuidToString(deliveryID), "error", err)
 	}
-	targetKind := "agent"
-	targetID := event.AgentID
-	if event.ChannelID.Valid {
-		targetKind = "channel"
-		targetID = event.ChannelID
-	} else if event.ChatSessionID.Valid {
-		targetKind = "dm"
-		targetID = event.ChatSessionID
-	}
 	h.TaskService.RecordEvolutionSkillOutcome(ctx, event.ID, "failure", "failure")
 	h.refreshAgentHonor(ctx, event.WorkspaceID, event.AgentID, "task_failed")
 	if failureReason == "" {
 		failureReason = string(taskfailure.Classify(errText))
 	}
-	h.recordAgentActivityEvent(ctx, h.DB,
-		event.WorkspaceID, event.AgentID, delivery.RuntimeID, pgtype.UUID{},
-		activityKindError, "agent_inbox_failed", "error",
-		targetKind, targetID, "",
-		reasonCode, "Agent inbox delivery failed: "+truncateForActivity(errText, 200),
-		map[string]any{
-			"failure_reason":    failureReason,
-			"reason_code":       reasonCode,
-			"inbox_event_id":    uuidToString(event.ID),
-			"delivery_id":       uuidToString(deliveryID),
-			"source_message_id": uuidToString(event.SourceMessageID),
-		},
-	)
 	h.applyAgentProviderQuotaBlock(ctx, event.WorkspaceID, event.AgentID, delivery.RuntimeID, event.ID, errText, failureReason)
 }
 
@@ -1848,24 +1785,6 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			if resp.ChannelGoal != nil {
 				resp.ChannelGoal.Subgoals = h.channelSubgoalContextsForClaim(ctx, event.WorkspaceID, channelID, event.AgentID, resp.ChannelGoal.ID)
 			}
-			// LRM-985: auditable Goal reinjection on every wake that carries a goal.
-			if resp.ChannelGoal != nil {
-				h.recordAgentActivityEvent(ctx, h.DB,
-					event.WorkspaceID, event.AgentID, event.RuntimeID, event.ID,
-					activityKindCustom, "channel_goal_injected", "info",
-					"channel", channelID, "",
-					"", "Channel goal reinjected for this wake",
-					map[string]any{
-						"goal_id":                     resp.ChannelGoal.ID,
-						"goal_version":                resp.ChannelGoal.Version,
-						"inbox_event_id":              uuidToString(event.ID),
-						"channel_id":                  resp.ChannelID,
-						"prior_session_id":            resp.PriorSessionID,
-						"fresh_session_notice_reason": resp.FreshSessionNoticeReason,
-						"trigger":                     "claim",
-					},
-				)
-			}
 		}
 	}
 	if resp.WorkspaceID == "" || resp.WorkspaceID != runtimeWorkspaceID {
@@ -2081,84 +2000,7 @@ func (h *Handler) runtimeIDForAgentInboxEvent(ctx context.Context, event db.Agen
 	return runtimeID
 }
 
-func agentInboxActivityTarget(event db.AgentInboxEvent) (string, pgtype.UUID) {
-	if event.ChannelID.Valid {
-		return "channel", event.ChannelID
-	}
-	if event.ChatSessionID.Valid {
-		return "dm", event.ChatSessionID
-	}
-	return "agent", event.AgentID
-}
-
 func (h *Handler) recordAgentInboxStatusActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID, deliveryID pgtype.UUID, status string) {
-	if h == nil || h.DB == nil || !event.RequiresWake {
-		return
-	}
-	status = strings.TrimSpace(status)
-	if status == "" {
-		return
-	}
-	// The wake/source event already marks the start of work in the Activity
-	// timeline (for example, "Working · Message received"). Do not add a
-	// second generic "Working" row for the same transition.
-	if status == agentInboxStatusActivityWorking {
-		return
-	}
-	if h.agentInboxStatusActivityExists(ctx, event.WorkspaceID, event.AgentID, event.ID, status) {
-		return
-	}
-	targetKind, targetID := agentInboxActivityTarget(event)
-	details := map[string]any{
-		"status":            status,
-		"inbox_event_id":    uuidToString(event.ID),
-		"source_message_id": uuidToString(event.SourceMessageID),
-	}
-	if deliveryID.Valid {
-		details["delivery_id"] = uuidToString(deliveryID)
-	}
-	h.recordAgentActivityEvent(ctx, h.DB,
-		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
-		activityKindCustom, agentInboxStatusChangedEventType, "info",
-		targetKind, targetID, "",
-		"", agentInboxStatusActivityMessage(status),
-		details,
-	)
-}
-
-func (h *Handler) agentInboxStatusActivityExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, status string) bool {
-	if h == nil || h.DB == nil {
-		return false
-	}
-	var exists bool
-	err := h.DB.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_activity_event
-			WHERE workspace_id = $1
-			  AND agent_id = $2
-			  AND event_kind = $3
-			  AND event_type = $4
-			  AND details->>'inbox_event_id' = $5
-			  AND COALESCE(details->>'status', '') = $6
-		)
-	`, workspaceID, agentID, activityKindCustom, agentInboxStatusChangedEventType, uuidToString(inboxEventID), status).Scan(&exists)
-	if err != nil {
-		slog.Warn("agent inbox status activity: duplicate lookup failed", "agent_id", uuidToString(agentID), "inbox_event_id", uuidToString(inboxEventID), "status", status, "error", err)
-		return false
-	}
-	return exists
-}
-
-func agentInboxStatusActivityMessage(status string) string {
-	switch status {
-	case agentInboxStatusActivityWorking:
-		return "Working"
-	case agentInboxStatusActivityIdle:
-		return "Idle"
-	default:
-		return strings.TrimSpace(status)
-	}
 }
 
 func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageRequest, kind string, details map[string]any) (protocol.TaskMessagePayload, bool) {
@@ -2221,80 +2063,6 @@ func providerSubagentStartedMessage(subagentType string) string {
 	return "Subagent started: " + subagentType
 }
 
-// maybeRecordProviderSubagentStarted inserts one custom Activity event per
-// (inbox event, lineage) when a provider message carries Message.Lineage.
-// Fail-soft: duplicate lookup / insert errors never fail the message report.
-func (h *Handler) maybeRecordProviderSubagentStarted(
-	ctx context.Context,
-	event db.AgentInboxEvent,
-	runtimeID, deliveryID pgtype.UUID,
-	lineage string,
-	baseDetails map[string]any,
-) {
-	if h == nil || h.DB == nil {
-		return
-	}
-	subagentType, ok := parseProviderLineageSubagentType(lineage)
-	if !ok {
-		return
-	}
-	if h.providerSubagentStartedExists(ctx, event.WorkspaceID, event.AgentID, event.ID, lineage) {
-		return
-	}
-	targetKind, targetID := agentInboxActivityTarget(event)
-	details := map[string]any{
-		"lineage":           lineage,
-		"inbox_event_id":    uuidToString(event.ID),
-		"source_message_id": uuidToString(event.SourceMessageID),
-	}
-	if deliveryID.Valid {
-		details["delivery_id"] = uuidToString(deliveryID)
-	}
-	if subagentType != "" {
-		details["subagent_type"] = subagentType
-	}
-	// Preserve seq when the caller already had one on the message details.
-	if baseDetails != nil {
-		if seq, exists := baseDetails["seq"]; exists {
-			details["seq"] = seq
-		}
-	}
-	h.recordAgentActivityEvent(ctx, h.DB,
-		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
-		activityKindCustom, "subagent_started", "info",
-		targetKind, targetID, "",
-		"provider_lineage", providerSubagentStartedMessage(subagentType),
-		details,
-	)
-}
-
-func (h *Handler) providerSubagentStartedExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, lineage string) bool {
-	if h == nil || h.DB == nil {
-		return false
-	}
-	var exists bool
-	err := h.DB.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1
-  FROM agent_activity_event
-  WHERE workspace_id = $1
-    AND agent_id = $2
-    AND event_kind = $3
-    AND event_type = $4
-    AND details->>'inbox_event_id' = $5
-    AND COALESCE(details->>'lineage', '') = $6
-)
-`, workspaceID, agentID, activityKindCustom, "subagent_started", uuidToString(inboxEventID), lineage).Scan(&exists)
-	if err != nil {
-		slog.Warn("provider subagent activity: duplicate lookup failed",
-			"agent_id", uuidToString(agentID),
-			"inbox_event_id", uuidToString(inboxEventID),
-			"error", err)
-		return false
-	}
-	return exists
-}
-
 // isCursorLikeSubagentTool mirrors packages/views/chat/lib/bubble-cursor-activity
 // classifyBubbleToolKind === "task": Task / subagent / best-of-n / launch-agent
 // tools, or any tool whose input carries subagent_type.
@@ -2335,24 +2103,13 @@ func normalizeActivityToolSlug(tool string) string {
 	return b.String()
 }
 
-// cursorSubagentStartedMessage matches bubble title preference: description /
-// name / subagent_type / short prompt / tool name.
 func cursorSubagentStartedMessage(tool string, input map[string]any) string {
 	title := ""
 	if input != nil {
 		for _, key := range []string{"description", "name", "subagent_type"} {
-			if v, ok := input[key].(string); ok && strings.TrimSpace(v) != "" {
-				title = strings.TrimSpace(v)
+			if value, ok := input[key].(string); ok && strings.TrimSpace(value) != "" {
+				title = strings.TrimSpace(value)
 				break
-			}
-		}
-		if title == "" {
-			if v, ok := input["prompt"].(string); ok && strings.TrimSpace(v) != "" {
-				p := strings.TrimSpace(v)
-				if len(p) > 80 {
-					p = p[:80]
-				}
-				title = p
 			}
 		}
 	}
@@ -2363,85 +2120,6 @@ func cursorSubagentStartedMessage(tool string, input map[string]any) string {
 		return "Subagent started"
 	}
 	return "Subagent started: " + title
-}
-
-func (h *Handler) maybeRecordCursorSubagentStarted(
-	ctx context.Context,
-	event db.AgentInboxEvent,
-	runtimeID, deliveryID pgtype.UUID,
-	msg TaskMessageRequest,
-	baseDetails map[string]any,
-) {
-	if h == nil || h.DB == nil {
-		return
-	}
-	tool := strings.TrimSpace(msg.Tool)
-	callID := strings.TrimSpace(msg.CallID)
-	dedupeKey := callID
-	if dedupeKey == "" {
-		dedupeKey = fmt.Sprintf("seq:%d:%s", msg.Seq, tool)
-	}
-	if h.cursorSubagentStartedExists(ctx, event.WorkspaceID, event.AgentID, event.ID, dedupeKey) {
-		return
-	}
-	targetKind, targetID := agentInboxActivityTarget(event)
-	details := map[string]any{
-		"inbox_event_id":    uuidToString(event.ID),
-		"source_message_id": uuidToString(event.SourceMessageID),
-		"tool":              tool,
-		"cursor_subagent":   true,
-		"dedupe_key":        dedupeKey,
-	}
-	if deliveryID.Valid {
-		details["delivery_id"] = uuidToString(deliveryID)
-	}
-	if callID != "" {
-		details["call_id"] = callID
-	}
-	if baseDetails != nil {
-		if seq, ok := baseDetails["seq"]; ok {
-			details["seq"] = seq
-		}
-	}
-	if msg.Input != nil {
-		if st, ok := msg.Input["subagent_type"].(string); ok && strings.TrimSpace(st) != "" {
-			details["subagent_type"] = strings.TrimSpace(st)
-		}
-	}
-	h.recordAgentActivityEvent(ctx, h.DB,
-		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
-		activityKindCustom, "subagent_started", "info",
-		targetKind, targetID, "",
-		"cursor_tool", cursorSubagentStartedMessage(tool, msg.Input),
-		details,
-	)
-}
-
-func (h *Handler) cursorSubagentStartedExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, dedupeKey string) bool {
-	if h == nil || h.DB == nil {
-		return false
-	}
-	var exists bool
-	err := h.DB.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1
-  FROM agent_activity_event
-  WHERE workspace_id = $1
-    AND agent_id = $2
-    AND event_kind = $3
-    AND event_type = $4
-    AND details->>'inbox_event_id' = $5
-    AND COALESCE(details->>'dedupe_key', '') = $6
-)
-`, workspaceID, agentID, activityKindCustom, "subagent_started", uuidToString(inboxEventID), dedupeKey).Scan(&exists)
-	if err != nil {
-		slog.Warn("cursor subagent activity: duplicate lookup failed",
-			"agent_id", uuidToString(agentID),
-			"inbox_event_id", uuidToString(inboxEventID),
-			"error", err)
-		return false
-	}
-	return exists
 }
 
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {
@@ -2502,94 +2180,9 @@ func agentInboxActivityToolTarget(msg TaskMessageRequest) (string, string) {
 }
 
 func (h *Handler) recordAgentInboxVisibleOutputActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID pgtype.UUID, payload protocol.ChatDonePayload) {
-	if payload.Type != protocol.ChatOutputKindMessage {
-		return
-	}
-	if strings.TrimSpace(payload.OutputSuppressedReason) != "" {
-		return
-	}
-	if strings.TrimSpace(payload.Content) == "" && len(payload.Parts) == 0 && strings.TrimSpace(payload.MessageID) == "" {
-		return
-	}
-	targetKind, targetID := agentInboxActivityTarget(event)
-	if len(payload.Parts) == 0 && outputClaimsFileDelivery(payload.Content) {
-		h.recordMissingArtifactActivity(ctx, event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{}, targetKind, targetID, "", map[string]any{
-			"inbox_event_id":    uuidToString(event.ID),
-			"source_message_id": uuidToString(event.SourceMessageID),
-			"message_id":        strings.TrimSpace(payload.MessageID),
-		})
-		return
-	}
-	details := map[string]any{
-		"inbox_event_id":    uuidToString(event.ID),
-		"source_message_id": uuidToString(event.SourceMessageID),
-		"created":           true,
-	}
-	if strings.TrimSpace(payload.MessageID) != "" {
-		details["message_id"] = strings.TrimSpace(payload.MessageID)
-	}
-	if strings.TrimSpace(payload.Target) != "" {
-		details["target"] = strings.TrimSpace(payload.Target)
-	}
-	if len(payload.Parts) > 0 {
-		details["parts_count"] = len(payload.Parts)
-	}
-	h.recordAgentActivityEvent(ctx, h.DB,
-		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
-		activityKindText, "message_sent", "info",
-		targetKind, targetID, "",
-		"", agentVisibleOutputActivityText(payload.Content, payload.Parts, nil),
-		details,
-	)
 }
 
 func (h *Handler) recordTaskVisibleOutputActivity(ctx context.Context, workspaceID pgtype.UUID, task db.AgentInboxEvent, req TaskCompleteRequest) {
-	if req.Type != protocol.ChatOutputKindMessage {
-		return
-	}
-	if strings.TrimSpace(req.OutputSuppressedReason) != "" {
-		return
-	}
-	if strings.TrimSpace(req.Output) == "" && len(req.Parts) == 0 {
-		return
-	}
-	targetKind, targetID, targetSlug := h.taskActivityTarget(ctx, task)
-	if len(req.Parts) == 0 && outputClaimsFileDelivery(req.Output) {
-		h.recordMissingArtifactActivity(ctx, workspaceID, task.AgentID, task.RuntimeID, task.ID, targetKind, targetID, targetSlug, map[string]any{
-			"target": strings.TrimSpace(req.Target),
-		})
-		return
-	}
-	details := map[string]any{
-		"created": true,
-	}
-	if strings.TrimSpace(req.Target) != "" {
-		details["target"] = strings.TrimSpace(req.Target)
-	}
-	if len(req.Parts) > 0 {
-		details["parts_count"] = len(req.Parts)
-	}
-	h.recordAgentActivityEvent(ctx, h.DB,
-		workspaceID, task.AgentID, task.RuntimeID, task.ID,
-		activityKindText, "message_sent", "info",
-		targetKind, targetID, targetSlug,
-		"", agentVisibleOutputActivityText(req.Output, req.Parts, nil),
-		details,
-	)
-}
-
-func (h *Handler) recordMissingArtifactActivity(ctx context.Context, workspaceID, agentID, runtimeID, taskID pgtype.UUID, targetKind string, targetID pgtype.UUID, targetSlug string, details map[string]any) {
-	if details == nil {
-		details = map[string]any{}
-	}
-	details["artifact_consistency"] = "missing_attachment"
-	h.recordAgentActivityEvent(ctx, h.DB,
-		workspaceID, agentID, runtimeID, taskID,
-		activityKindError, "artifact_missing", "error",
-		targetKind, targetID, targetSlug,
-		"missing_file_attachment", "Agent claimed to send a file, but no attachment was produced",
-		details,
-	)
 }
 
 func (h *Handler) taskActivityTarget(ctx context.Context, task db.AgentInboxEvent) (string, pgtype.UUID, string) {

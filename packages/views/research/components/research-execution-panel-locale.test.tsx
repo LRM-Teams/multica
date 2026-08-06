@@ -8,7 +8,7 @@ import {
 import { ResearchExecutionPanel } from "./research-execution-panel";
 
 // Localised render probe for LRM-1434: the Research execution panel must not
-// leak Chinese chrome into en/ja/ko. This mirrors the real `en/research.json`
+// leak Chinese chrome into English. This mirrors the real `en/research.json`
 // `panel.execution` bundle (kept in sync by the locale parity test) and renders
 // with live-activity-free agents so the view-model's semantic fallbacks run.
 vi.mock("../../i18n/use-t", () => ({

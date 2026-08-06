@@ -19,23 +19,12 @@ describe("channel composer placeholder locales (LRM-491)", () => {
     const zh = JSON.parse(
       readFileSync(resolve(localesRoot, "zh-Hans/channels.json"), "utf8"),
     ) as { composer: { placeholder: string } };
-    const ja = JSON.parse(
-      readFileSync(resolve(localesRoot, "ja/channels.json"), "utf8"),
-    ) as { composer: { placeholder: string } };
-    const ko = JSON.parse(
-      readFileSync(resolve(localesRoot, "ko/channels.json"), "utf8"),
-    ) as { composer: { placeholder: string } };
-
     expect(en.composer.placeholder).toBe("Message #{{name}}");
     expect(zh.composer.placeholder).toBe("发消息给 #{{name}}");
-    expect(ja.composer.placeholder).toContain("{{name}}");
-    expect(ko.composer.placeholder).toContain("{{name}}");
 
     for (const placeholder of [
       en.composer.placeholder,
       zh.composer.placeholder,
-      ja.composer.placeholder,
-      ko.composer.placeholder,
     ]) {
       expect(placeholder).not.toMatch(/Describe what you need/i);
       expect(placeholder).not.toMatch(/@mention an agent/i);

@@ -432,6 +432,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
 	daemonHub.SetAgentRecoveryHandler(h.HandleAgentMessageRecovery)
 	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
+	// The Runner contract remains dormant until the coordinated hard cut; this
+	// installs its fenced server intake without changing legacy WS routing.
+	daemonHub.SetWorkspaceRunnerHandler(h.HandleWorkspaceRunnerFrame)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()

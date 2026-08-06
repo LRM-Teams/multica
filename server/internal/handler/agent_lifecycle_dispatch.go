@@ -318,22 +318,5 @@ func (h *Handler) ReportAgentLifecycleOperationResult(w http.ResponseWriter, r *
 		writeError(w, http.StatusInternalServerError, "failed to record agent lifecycle result")
 		return
 	}
-	if status == agentLifecycleSucceeded {
-		// Parker 2026-08-02 / Frank: Activity must show that the old runtime was invalidated.
-		// One success row only (~seconds path) — not a running+succeeded pair.
-		// restarted_by_user stays diagnostic_only (#62); this is a truthful
-		// business event on the timeline, not that kill-path failure row.
-		h.recordAgentActivityEvent(r.Context(), h.DB,
-			workspaceID, agentID, runtimeUUID, pgtype.UUID{},
-			activityKindCustom, agentLifecycleSucceededActivityEventType, "info",
-			"agent", agentID, "",
-			"", "Restart prepared",
-			map[string]any{
-				"operation_id": uuidToString(operationID),
-				"action_kind":  actionKind,
-				"status":       status,
-			},
-		)
-	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
 }

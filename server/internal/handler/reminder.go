@@ -407,14 +407,6 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 	}
 	h.publishAgentReminderChanged(r.Context(), created.WorkspaceID, created.AgentID)
 	h.projectReminderUpsert(r.Context(), created)
-	targetKind, targetID, targetSlug := reminderActivityTarget(created, true)
-	h.recordAgentActivityEvent(r.Context(), h.DB,
-		origin.workspaceID, origin.agentID, source.runtimeID(), reminderTransportActivityTaskID(source),
-		activityKindCustom, "reminder_scheduled", "info",
-		targetKind, targetID, targetSlug,
-		"", "Agent scheduled a future self-wake",
-		map[string]any{"reminder_id": uuidToString(created.ID), "fire_at": schedule.FireAt.Format(time.RFC3339)},
-	)
 	writeJSON(w, http.StatusCreated, reminderResponse(created))
 }
 
@@ -596,7 +588,6 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), updated.WorkspaceID, updated.AgentID)
 	h.projectReminderUpsert(r.Context(), updated)
-	h.recordReminderActivity(r.Context(), source, updated, "reminder_snoozed", "Agent snoozed a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(updated))
 }
 
@@ -780,7 +771,6 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), updated.WorkspaceID, updated.AgentID)
 	h.projectReminderUpsert(r.Context(), updated)
-	h.recordReminderActivity(r.Context(), source, updated, "reminder_updated", "Agent updated a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(updated))
 }
 
@@ -851,7 +841,6 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), cancelled.WorkspaceID, cancelled.AgentID)
 	h.projectReminderCancel(r.Context(), cancelled)
-	h.recordReminderActivity(r.Context(), source, cancelled, "reminder_cancelled", "Agent cancelled a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(cancelled))
 }
 
@@ -977,31 +966,6 @@ func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, 
 		return pgtype.UUID{}, false
 	}
 	return ids[0], true
-}
-
-func reminderTransportActivityTaskID(source agentTransportSource) pgtype.UUID {
-	if source.inboxEventID.Valid {
-		return pgtype.UUID{}
-	}
-	return source.legacyTaskID()
-}
-
-func (h *Handler) recordReminderActivity(ctx context.Context, source agentTransportSource, reminder agentReminder, eventType, message string) {
-	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, true)
-	h.recordAgentActivityEvent(ctx, h.DB,
-		reminder.WorkspaceID, reminder.AgentID, source.runtimeID(), reminderTransportActivityTaskID(source),
-		activityKindCustom, eventType, "info",
-		targetKind, targetID, targetSlug,
-		"", message,
-		map[string]any{"reminder_id": uuidToString(reminder.ID), "fire_at": timestampToString(reminder.FireAt)},
-	)
-}
-
-func reminderActivityTarget(reminder agentReminder, anchorAvailable bool) (string, pgtype.UUID, string) {
-	if anchorAvailable && reminder.AnchorThreadRootMessageID.Valid {
-		return "thread", reminder.AnchorThreadRootMessageID, uuidToString(reminder.AnchorChannelID)
-	}
-	return "channel", reminder.AnchorChannelID, ""
 }
 
 func reminderTargetKind(threadRootID pgtype.UUID) string {
@@ -1880,14 +1844,6 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		h.projectReminderCancel(ctx, reminder)
 	}
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
-	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, anchorAvailable)
-	h.recordAgentActivityEvent(ctx, h.DB,
-		reminder.WorkspaceID, reminder.AgentID, agentRuntimeID, task.ID,
-		activityKindCustom, "reminder_fired", "info",
-		targetKind, targetID, targetSlug,
-		"", "Reminder fired and woke the agent",
-		map[string]any{"reminder_id": uuidToString(reminder.ID), "occurrence_id": uuidToString(occurrenceID)},
-	)
 	return nil
 }
 

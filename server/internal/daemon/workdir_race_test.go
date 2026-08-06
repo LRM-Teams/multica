@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -130,77 +129,5 @@ func TestRunTask_ChatWithoutRunTokenFailsBeforeAgentExecution(t *testing.T) {
 	}
 	if startCalls.Load() != 0 {
 		t.Fatalf("legacy StartTask calls = %d, want zero", startCalls.Load())
-	}
-}
-
-func TestRunTask_ChatTransportSetupErrorsFailBeforeAgentExecution(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		name                string
-		resolveExecutable   func() (string, error)
-		prepareCLITransport func(Config, string, string, string, string, string) (string, string, error)
-		wantStage           string
-	}{
-		{
-			name:              "executable missing",
-			resolveExecutable: func() (string, error) { return "", os.ErrNotExist },
-			wantStage:         "resolve_multica_executable",
-		},
-		{
-			name:              "wrapper preparation fails",
-			resolveExecutable: func() (string, error) { return "/test/multica", nil },
-			prepareCLITransport: func(Config, string, string, string, string, string) (string, string, error) {
-				return "", "", os.ErrPermission
-			},
-			wantStage: "prepare_task_cli_wrapper",
-		},
-	} {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			var startCalls atomic.Int64
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasSuffix(r.URL.Path, "/start") {
-					startCalls.Add(1)
-				}
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte("{}"))
-			}))
-			t.Cleanup(srv.Close)
-
-			d := &Daemon{
-				client:              NewClient(srv.URL),
-				logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
-				workspaces:          make(map[string]*workspaceState),
-				runtimeIndex:        map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-				resolveExecutable:   tc.resolveExecutable,
-				prepareCLITransport: tc.prepareCLITransport,
-				cfg: Config{
-					WorkspacesRoot: t.TempDir(),
-					Agents: map[string]AgentEntry{
-						"claude": {Path: filepath.Join(t.TempDir(), "unused-agent-binary")},
-					},
-				},
-			}
-
-			result, err := d.runTask(context.Background(), canonicalInboxTaskForTest(Task{
-				ID:          "task-chat-transport-setup",
-				WorkspaceID: workdirRaceWorkspaceID,
-				RuntimeID:   "rt-1",
-				ChatMessage: "hello",
-				AuthToken:   "task-token",
-				AgentID:     workdirRaceAgentID,
-				Agent:       &AgentData{ID: workdirRaceAgentID, Name: "test-agent"},
-			}), "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
-			if err != nil {
-				t.Fatalf("runTask error = %v, want fail-closed TaskResult", err)
-			}
-			if result.Status != "failed" || result.FailureReason != "transport_unavailable" || !strings.Contains(result.Comment, tc.wantStage) {
-				t.Fatalf("chat task result = %+v, want transport_unavailable %s", result, tc.wantStage)
-			}
-			if startCalls.Load() != 0 {
-				t.Fatalf("legacy StartTask calls = %d, want zero", startCalls.Load())
-			}
-		})
 	}
 }

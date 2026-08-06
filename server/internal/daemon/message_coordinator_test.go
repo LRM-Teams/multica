@@ -581,7 +581,15 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	daemon := &Daemon{}
+	runtimePool := newCanonicalAgentRuntimePool()
+	runtimePool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode:    canonicalRuntimeResident,
+		backend: &canonicalRuntimeTestBackend{},
+	}
+	daemon := &Daemon{
+		canonicalRuntimes: runtimePool,
+		messageRuntimeIDs: map[string]string{"agent-1": "runtime-1"},
+	}
 	if err := daemon.registerIdleMessageCoordinator("agent-1", coordinator); err != nil {
 		t.Fatalf("registerIdleMessageCoordinator: %v", err)
 	}

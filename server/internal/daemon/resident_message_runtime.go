@@ -17,11 +17,14 @@ import (
 // stable Agent placement/configuration; Message delivery never constructs a
 // Task or a current-turn transport envelope.
 func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runtimeID string) error {
-	if d == nil || d.canonicalRuntimes == nil || d.client == nil {
+	if d == nil || d.canonicalRuntimes == nil {
 		return errors.New("resident Message runtime is not configured")
 	}
 	if d.canonicalRuntimes.hasResidentBackend(agentID, runtimeID) {
 		return nil
+	}
+	if d.client == nil {
+		return errors.New("resident Message runtime is not configured")
 	}
 	d.mu.Lock()
 	runtime, ok := d.runtimeIndex[runtimeID]

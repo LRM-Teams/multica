@@ -9,6 +9,8 @@ import {
   isIdleStatusEvent,
   isNarrativeActivityEvent,
   normalizeActivityExpandedText,
+  ACTIVITY_LABEL_EN,
+  ACTIVITY_SUBTEXT_EN,
   ACTIVITY_TONE_DOT_CLASS,
   type ActivityLabelKey,
 } from "./activity-event";
@@ -662,5 +664,90 @@ describe("isDecayedFailure (task #13)", () => {
 
   it("does not decay on an invalid timestamp when nothing newer exists", () => {
     expect(isDecayedFailure("not-a-date", false)).toBe(false);
+  });
+});
+
+// T8 (#2282 vertical 8) — thin frontend projection acceptance: the Activity
+// stage COPY is frontend copy derived purely from wire Activity fact keys
+// (`activity_kind` / `detail_kind` / tool slug), independent of any canonical
+// Message transport internals (Delivery / Pending / Notice / Context Boundary /
+// runtime seq). These tests pin the five required stage strings and assert they
+// are NOT just echoing raw wire identifiers.
+describe("T8 Activity stage copy is independent frontend projection", () => {
+  function wakeEvent(extra?: Partial<ActivityEvent>): ActivityEvent {
+    return { ...evtBase("wake_attempt"), detail_kind: "wake_attempt", ...extra };
+  }
+
+  it("Message received is FE copy, emitted from `wake_attempt` and not from any transport field", () => {
+    // A wake_attempt carrying heavy transport noise (delivery/pending/Notice
+    // fields, seqs, boundary ids) must STILL project to the same copy — the
+    // projection reads only fact keys, never transport internals.
+    const noisy = wakeEvent({
+      text: "transport body payload",
+      // arbitrary internal fields the projection must ignore:
+      details: {
+        delivery_id: "del-1",
+        pending: true,
+        seq: 41,
+        boundary_id: "ctx/agent-1",
+        notice: "content-free",
+      } as never,
+    });
+    const p = activityPresentation(noisy);
+    expect(p.labelKey).toBe("working");
+    expect(p.subtextKey).toBe("message_received");
+    expect(ACTIVITY_LABEL_EN[p.labelKey]).toBe("Working");
+    expect(ACTIVITY_SUBTEXT_EN.message_received).toBe("Message received");
+    // The copy is not derived from the (noisy) body text.
+    expect(p.subtext).toBeUndefined();
+  });
+
+  it.each([
+    // [tool slug, expected FE copy] — copy must not be the slug itself.
+    ["check_messages", "Checking messages"],
+    ["receive_message", "Checking messages"], // shares check_messages' label
+    ["read_history", "Reading history"],
+    ["search_messages", "Searching messages"],
+  ] as const)("canonical tool %s projects to frontend copy %s", (tool, copy) => {
+    const p = activityPresentation(toolEvent(tool));
+    expect(ACTIVITY_LABEL_EN[p.labelKey]).toBe(copy);
+    // Copy is a FE constant, never the raw tool slug / wire identifier.
+    expect(copy).not.toBe(tool);
+  });
+
+  it("Send held by freshness check projects from both status and detail rows, ignoring internal ids", () => {
+    const status = activityPresentation({
+      ...evtBase("blocked"),
+      detail_kind: "send_freshness_hold",
+      reason_code: "",
+    });
+    const detail = activityPresentation({
+      ...evtBase("text"),
+      detail_kind: "send_freshness_hold_detail",
+      reason_code: "",
+      details: {
+        seen_up_to_seq: 41,
+        producer_fact_id: "freshness_decision_fact:abc",
+      } as never,
+    });
+    for (const p of [status, detail]) {
+      expect(p.labelKey).toBe("send_held_by_freshness");
+      expect(ACTIVITY_LABEL_EN[p.labelKey]).toBe("Send held by freshness check");
+    }
+  });
+
+  it("every required T8 stage copy is a distinct frontend constant, not a raw wire identifier", () => {
+    const req: Array<[ActivityLabelKey, string]> = [
+      ["checking_messages", "Checking messages"],
+      ["reading_history", "Reading history"],
+      ["searching_messages", "Searching messages"],
+      ["send_held_by_freshness", "Send held by freshness check"],
+    ];
+    for (const [key, copy] of req) {
+      expect(ACTIVITY_LABEL_EN[key]).toBe(copy);
+      // Copy must differ from the wire label key (underscored identifier).
+      expect(copy).not.toBe(key);
+    }
+    expect(ACTIVITY_SUBTEXT_EN.message_received).toBe("Message received");
   });
 });

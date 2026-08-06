@@ -12,6 +12,7 @@ const projectionBatchLimit = 500
 // It deliberately excludes Research Run mutation and scheduling operations.
 type projectionEventStore interface {
 	ListUnprojectedEvents(context.Context, string, int) ([]RunEvent, error)
+	AssertRunLease(context.Context, string) error
 	MarkEventProjected(context.Context, string) error
 	MarkEventProjectionFailed(context.Context, string, string, time.Time) error
 }
@@ -38,6 +39,9 @@ func (module projectionModule) ProjectPending(ctx context.Context, sessionID str
 			return nil
 		}
 		event := events[0]
+		if err = module.store.AssertRunLease(ctx, sessionID); err != nil {
+			return err
+		}
 		if err = module.output.Project(ctx, event); err != nil {
 			delay := projectionRetryDelay(event.ProjectionAttempts)
 			if markErr := module.store.MarkEventProjectionFailed(ctx, event.ID, err.Error(), module.clock.Now().Add(delay)); markErr != nil {

@@ -534,6 +534,9 @@ func (s *PostgresStore) RecordBudgetExhausted(ctx context.Context, sessionID, bu
 		return RunEvent{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return RunEvent{}, err
+	}
 	var workspaceID string
 	var goalVersion, planVersion int
 	if err = tx.QueryRow(ctx, `
@@ -632,23 +635,53 @@ func (s *PostgresStore) ListUnprojectedEvents(ctx context.Context, sessionID str
 }
 
 func (s *PostgresStore) MarkEventProjected(ctx context.Context, eventID string) error {
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var sessionID string
+	if err = tx.QueryRow(ctx, `SELECT session_id::text FROM research_run_event WHERE id = $1::uuid`, eventID).Scan(&sessionID); err != nil {
+		return err
+	}
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		UPDATE research_run_event
 		SET projected_at = now(), projection_attempts = projection_attempts + 1,
 		    projection_error = ''
 		WHERE id = $1::uuid
 	`, eventID)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) MarkEventProjectionFailed(ctx context.Context, eventID, message string, next time.Time) error {
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var sessionID string
+	if err = tx.QueryRow(ctx, `SELECT session_id::text FROM research_run_event WHERE id = $1::uuid`, eventID).Scan(&sessionID); err != nil {
+		return err
+	}
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		UPDATE research_run_event
 		SET projection_attempts = projection_attempts + 1,
 		    projection_error = $2, next_projection_at = $3
 		WHERE id = $1::uuid AND projected_at IS NULL
 	`, eventID, truncateBytes(message, 4096), next)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 type activeAttempt struct {
@@ -726,7 +759,7 @@ func (s *PostgresStore) reconcileAttemptRuntime(ctx context.Context, observed ac
 	if err != nil {
 		return nil, err
 	}
-	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
 		return nil, err
 	}
 	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_task WHERE id = $1::uuid FOR UPDATE`, taskID); err != nil {

@@ -18,6 +18,9 @@ func (s *PostgresStore) ActivateReadyTasks(ctx context.Context, sessionID string
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return 0, err
+	}
 	rows, err := tx.Query(ctx, `
 		UPDATE research_task t
 		SET status = 'blocked', completed_at = now(),
@@ -112,6 +115,9 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		return Attempt{}, RunEvent{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, in.SessionID, in.Request.Run.WorkspaceID); err != nil {
+		return Attempt{}, RunEvent{}, err
+	}
 
 	var workspaceID, status string
 	var goalVersion, planVersion, maxAttempts, attemptCount, maxParallel int
@@ -251,7 +257,7 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 	} else if err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
-	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
 	var attempt Attempt
@@ -334,7 +340,7 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 	} else if err != nil {
 		return RunEvent{}, err
 	}
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, lockedSessionID); err != nil {
+	if err := lockRunForMutation(ctx, tx, lockedSessionID, ""); err != nil {
 		return RunEvent{}, err
 	}
 	var sessionID, workspaceID, taskID, assignedAgentID string
@@ -419,6 +425,9 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 		return Task{}, RunEvent{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, in.SessionID, ""); err != nil {
+		return Task{}, RunEvent{}, err
+	}
 	var workspaceID string
 	var goalVersion, planVersion, maxTasks, maxAttempts, timeout int
 	var status, orchestratorVersion string
@@ -569,6 +578,9 @@ func (s *PostgresStore) SetAwaitingConfirmation(ctx context.Context, sessionID s
 		return Run{}, RunEvent{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return Run{}, RunEvent{}, err
+	}
 	var workspaceID string
 	var status string
 	err = tx.QueryRow(ctx, `SELECT workspace_id::text, status FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID).Scan(&workspaceID, &status)
@@ -753,7 +765,7 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_session SET status = $2, stop_reason = $3, reconcile_lease_token = NULL, reconcile_lease_expires_at = NULL, updated_at = now() WHERE id = $1::uuid`, sessionID, target, truncateBytes(reason, 1024)); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE research_session SET status = $2, stop_reason = $3, updated_at = now() WHERE id = $1::uuid`, sessionID, target, truncateBytes(reason, 1024)); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	eventType := "run_" + string(target)

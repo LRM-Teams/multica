@@ -14,7 +14,15 @@ func (s *PostgresStore) ClaimDispatchIntents(ctx context.Context, sessionID, tok
 	if limit <= 0 {
 		return nil, nil
 	}
-	rows, err := s.pool.Query(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
 		WITH candidates AS (
 			SELECT outbox.id
 			FROM research_dispatch_outbox outbox
@@ -43,7 +51,6 @@ func (s *PostgresStore) ClaimDispatchIntents(ctx context.Context, sessionID, tok
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	intents := []DispatchIntent{}
 	for rows.Next() {
 		var intent DispatchIntent
@@ -60,17 +67,43 @@ func (s *PostgresStore) ClaimDispatchIntents(ctx context.Context, sessionID, tok
 		}
 		intents = append(intents, intent)
 	}
-	return intents, rows.Err()
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return intents, nil
 }
 
 func (s *PostgresStore) RescheduleDispatchIntent(ctx context.Context, intentID, token, diagnostics string, next time.Time) (bool, error) {
-	command, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var sessionID string
+	if err = tx.QueryRow(ctx, `SELECT session_id::text FROM research_dispatch_outbox WHERE id = $1::uuid`, intentID).Scan(&sessionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrRunNotFound
+		}
+		return false, err
+	}
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return false, err
+	}
+	command, err := tx.Exec(ctx, `
 		UPDATE research_dispatch_outbox
 		SET status = 'pending', lease_token = NULL, lease_expires_at = NULL,
 		    next_delivery_at = $3, last_error = $4, updated_at = now()
 		WHERE id = $1::uuid AND status = 'delivering' AND lease_token = $2::uuid
 	`, intentID, token, next, truncateBytes(diagnostics, 4096))
 	if err != nil {
+		return false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
 		return false, err
 	}
 	return command.RowsAffected() == 1, nil
@@ -88,7 +121,7 @@ func (s *PostgresStore) FailDispatchIntent(ctx context.Context, intentID, token 
 	} else if err != nil {
 		return false, RunEvent{}, err
 	}
-	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
 		return false, RunEvent{}, err
 	}
 	var attemptID, status, leaseToken string
@@ -146,7 +179,7 @@ func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID,
 	} else if err != nil {
 		return false, Attempt{}, RunEvent{}, err
 	}
-	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
 		return false, Attempt{}, RunEvent{}, err
 	}
 	var outboxStatus, leaseToken, attemptStatus string

@@ -125,3 +125,18 @@ func TestProjectResearchAttemptFailureUsesDiagnostics(t *testing.T) {
 		t.Fatalf("summary=%q", summary)
 	}
 }
+
+func TestProjectResearchCircuitTransitionPreservesStateChange(t *testing.T) {
+	nodeType, title, summary, status := projectResearchEvent(
+		researchrun.RunEvent{Type: "execution_circuit_transition"},
+		db.ResearchSession{},
+		map[string]any{
+			"scope": "provider", "from_state": "open", "to_state": "half_open",
+			"cause": "probe_claimed",
+		},
+	)
+	if nodeType != "agent_activity" || title != "执行目标健康状态变化" ||
+		summary != "provider · open → half_open · probe_claimed" || status != "done" {
+		t.Fatalf("projected circuit transition=(%q, %q, %q, %q)", nodeType, title, summary, status)
+	}
+}

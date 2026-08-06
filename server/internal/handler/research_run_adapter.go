@@ -224,13 +224,12 @@ func researchExecutionTarget(ctx context.Context, h *Handler, agent db.Agent, ru
 		Provider:  runtime.Provider,
 		Model:     strings.TrimSpace(agent.Model.String),
 	}
-	target.ConfigFingerprint = researchrun.ExecutionTargetFingerprint(
-		target.AgentID, target.RuntimeID, target.Provider, target.Model,
-		agent.RuntimeMode, runtime.PinnedVersion.String, providerFingerprint,
-		string(agent.RuntimeConfig), string(agent.CustomEnv), string(agent.CustomArgs),
-		string(agent.McpConfig), agent.ThinkingLevel.String,
-	)
-	return target, nil
+	return researchrun.FingerprintExecutionTarget(target, researchrun.ExecutionTargetConfigIdentity{
+		RuntimeMode: agent.RuntimeMode, RuntimePinnedVersion: runtime.PinnedVersion.String,
+		ProviderStateFingerprint: providerFingerprint, RuntimeConfig: string(agent.RuntimeConfig),
+		CustomEnv: string(agent.CustomEnv), CustomArgs: string(agent.CustomArgs),
+		MCPConfig: string(agent.McpConfig), ThinkingLevel: agent.ThinkingLevel.String,
+	}), nil
 }
 
 func (d *researchRunDispatcher) Inspect(ctx context.Context, keys []string) (map[string]researchrun.InboxTaskState, error) {
@@ -534,6 +533,13 @@ func projectResearchEvent(event researchrun.RunEvent, session db.ResearchSession
 			summary = valueString(payload, "failure_class")
 		}
 		return "dead_end", "调研任务尝试失败", summary, "done"
+	case "execution_circuit_transition":
+		summary := strings.Join([]string{
+			valueString(payload, "scope"),
+			valueString(payload, "from_state") + " → " + valueString(payload, "to_state"),
+			valueString(payload, "cause"),
+		}, " · ")
+		return "agent_activity", "执行目标健康状态变化", summary, "done"
 	case "task_blocked":
 		return "dead_end", "调研任务因前置失败而阻塞", valueString(payload, "task_id"), "done"
 	case "control_task_created":

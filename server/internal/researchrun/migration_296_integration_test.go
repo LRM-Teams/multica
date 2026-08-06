@@ -30,12 +30,27 @@ func TestMigration296DownUpRestoresFrozenExecutionTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reapplied := false
+	down297SQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "297_research_execution_circuit.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	up297SQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "297_research_execution_circuit.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reapplied296 := false
+	reapplied297 := false
 	defer func() {
-		if !reapplied {
+		if !reapplied296 {
 			_, _ = pool.Exec(context.Background(), string(upSQL))
 		}
+		if !reapplied297 {
+			_, _ = pool.Exec(context.Background(), string(up297SQL))
+		}
 	}()
+	if _, err = pool.Exec(ctx, string(down297SQL)); err != nil {
+		t.Fatalf("apply migration 297 down before 296 rollback: %v", err)
+	}
 	if _, err = pool.Exec(ctx, string(downSQL)); err != nil {
 		t.Fatalf("apply migration 296 down: %v", err)
 	}
@@ -50,7 +65,7 @@ func TestMigration296DownUpRestoresFrozenExecutionTarget(t *testing.T) {
 	if _, err = pool.Exec(ctx, string(upSQL)); err != nil {
 		t.Fatalf("reapply migration 296 up: %v", err)
 	}
-	reapplied = true
+	reapplied296 = true
 	if err = pool.QueryRow(ctx, `
 		SELECT count(*)::int FROM information_schema.columns
 		WHERE table_schema = current_schema() AND table_name = 'research_task_attempt'
@@ -58,4 +73,8 @@ func TestMigration296DownUpRestoresFrozenExecutionTarget(t *testing.T) {
 	`).Scan(&columns); err != nil || columns != 6 {
 		t.Fatalf("target columns after up=%d err=%v", columns, err)
 	}
+	if _, err = pool.Exec(ctx, string(up297SQL)); err != nil {
+		t.Fatalf("restore migration 297 after 296 rollback test: %v", err)
+	}
+	reapplied297 = true
 }

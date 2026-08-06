@@ -408,12 +408,15 @@ type DispatchRequest struct {
 }
 
 type ExecutionTarget struct {
-	Adapter           string `json:"adapter"`
-	AgentID           string `json:"agent_id"`
-	RuntimeID         string `json:"runtime_id,omitempty"`
-	Provider          string `json:"provider,omitempty"`
-	Model             string `json:"model,omitempty"`
-	ConfigFingerprint string `json:"config_fingerprint,omitempty"`
+	Adapter                   string `json:"adapter"`
+	AgentID                   string `json:"agent_id"`
+	RuntimeID                 string `json:"runtime_id,omitempty"`
+	Provider                  string `json:"provider,omitempty"`
+	Model                     string `json:"model,omitempty"`
+	ConfigFingerprint         string `json:"config_fingerprint,omitempty"`
+	AgentConfigFingerprint    string `json:"agent_config_fingerprint,omitempty"`
+	RuntimeConfigFingerprint  string `json:"runtime_config_fingerprint,omitempty"`
+	ProviderConfigFingerprint string `json:"provider_config_fingerprint,omitempty"`
 }
 
 type CreateDispatchIntentInput struct {

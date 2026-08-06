@@ -85,7 +85,10 @@ export function ResearchCompletionCard({
         event.preventDefault();
         closeThen(onDismiss);
       }}
-      onClose={onDismiss}
+      // No onClose prop: every close path routes through closeThen, which
+      // invokes the caller's callback itself. dialog.close() fires a `close`
+      // event in spec-compliant DOMs (happy-dom, real browsers — jsdom does
+      // not), so also wiring onClose here would double-fire the callback.
     >
       <div
         role="document"

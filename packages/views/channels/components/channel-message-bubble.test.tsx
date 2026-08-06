@@ -1663,7 +1663,7 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "👍1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^👍\s*1$/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "React with ❤️" })).not.toBeInTheDocument();
   });
 
@@ -1691,7 +1691,7 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByTestId("thread-reply-preview")).toHaveTextContent("preview:2");
-    expect(screen.getByRole("button", { name: "👍1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^👍\s*1$/ })).toBeInTheDocument();
   });
 
   it("labels the current user as You in reaction attribution via HoverCard only", async () => {
@@ -1725,7 +1725,7 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    const pill = screen.getByRole("button", { name: "👍2" });
+    const pill = screen.getByRole("button", { name: /^👍\s*2$/ });
     // No native title — that double-rendered the same name under HoverCard.
     expect(pill).not.toHaveAttribute("title");
 
@@ -1755,7 +1755,7 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    const pill = screen.getByRole("button", { name: "👍1" });
+    const pill = screen.getByRole("button", { name: /^👍\s*1$/ });
     await user.hover(pill);
     expect(await screen.findByText("贝克汉姆")).toBeInTheDocument();
     expect(screen.queryByText("Unknown Agent")).not.toBeInTheDocument();
@@ -1796,8 +1796,8 @@ describe("ChannelMessageBubble", () => {
     );
 
     // Own reaction → brand-highlighted; peer-only reaction → muted, not brand.
-    expect(screen.getByRole("button", { name: "👍1" })).toHaveClass("text-brand");
-    const peerPill = screen.getByRole("button", { name: "🎉1" });
+    expect(screen.getByRole("button", { name: /^👍\s*1$/ })).toHaveClass("text-brand");
+    const peerPill = screen.getByRole("button", { name: /^🎉\s*1$/ });
     expect(peerPill).not.toHaveClass("text-brand");
     expect(peerPill).toHaveClass("text-muted-foreground");
   });
@@ -1821,7 +1821,7 @@ describe("ChannelMessageBubble", () => {
       <ChannelMessageBubble message={message} currentUserId="user-1" onReact={onReact} />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "👍1" }));
+    await userEvent.click(screen.getByRole("button", { name: /^👍\s*1$/ }));
 
     // The bubble surfaces reactions only through onReact — it has no send /
     // dispatch affordance, so a react can never produce a wake here.
@@ -2254,7 +2254,7 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByText("secret text")).not.toBeInTheDocument();
     expect(screen.queryByTestId("message-body")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "👍1" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^👍\s*1$/ })).not.toBeInTheDocument();
   });
 
   it("does not surface a delete affordance (LRM-695 removed it)", () => {

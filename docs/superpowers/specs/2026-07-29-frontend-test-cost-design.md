@@ -5,6 +5,35 @@
 **Status:** proposal — no implementation authorised. Sequencing and go/no-go are Parker's; Frank set the direction ("前端的测试可以改为长期方案").
 **Related:** task #855 (archived conclusion in its task thread) · PR #1356 (merged) · task #853
 
+> ## ✅ 2026-08-06 outcome — resolved by an option not on §4's menu
+>
+> The suite's default environment moved from jsdom to **happy-dom** (plus
+> `pool: "threads"` over forks), keeping `isolate: true` — per-file isolation,
+> the property every rejected option below traded away, is untouched, so none
+> of §3/§4a's nondeterminism applies. Both §2 cost centers move at once:
+> environment construction is an order of magnitude cheaper and imports/tests
+> get faster DOM ops. Local, same machine, identical pass set, warm cache,
+> full current suite (388 files): **192.7s → 46.1s wall**; deterministic
+> across 4 consecutive runs.
+>
+> Also measured and rejected on the way: `pool: "vmThreads"` (fastest of all —
+> 83.6s single-worker — but externalized modules are shared across VM realms
+> per worker, producing 650–683 load-order-dependent failures at CI's
+> 1-worker shape; same nondeterminism class as §4a).
+>
+> Costs of the switch: 2 test files pinned to jsdom via
+> `// @vitest-environment jsdom` (they assert CSSOM cascade that happy-dom
+> doesn't model), a pinned test UA (happy-dom's default UA contains
+> "Windows NT" and flipped platform detection), one accessible-name matcher
+> loosened to `/👍\s*1/`, and one real component bug fixed that jsdom had been
+> masking (`<dialog>` cancel handlers calling both `dialog.close()` and the
+> close callback — double-fire in any DOM that dispatches `close`, i.e. real
+> browsers). CI wall-time delta: measured on the PR run, not asserted here.
+>
+> §4's options D/E and §5's steps 2–4 are **superseded** — do not resume them.
+> The per-file mock-dedup problem D targeted still exists as a maintainability
+> concern, but no longer carries a performance justification.
+
 > **Picking this up cold?** Read §2 (where the time goes) and §3 (why the obvious lever doesn't work) before anything else. Everything here was measured, not estimated; every number states the machine and mode it came from. **Nothing in §5 is authorised** — it is a menu with prices, not a plan of record. The three things most likely to mislead you are called out in §2 (a red run's wall time is not comparable), §3 (the cheap-looking fix is a prerequisite, not a win), and §4a (this mode's failure count is nondeterministic — do not quote a single run).
 
 ---

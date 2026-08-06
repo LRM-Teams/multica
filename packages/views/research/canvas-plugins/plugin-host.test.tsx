@@ -1,6 +1,6 @@
 import { act, cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { JSX, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { renderWithI18n } from "../../test/i18n";
 import { ResearchCanvasPluginSlot } from "./plugin-host";
 import { ResearchCanvasPluginSlots } from "./plugin-slots";
@@ -25,12 +25,12 @@ function panelProps(): PanelPluginProps {
 function registration(
   id: string,
   slot: "insight" | "dispute" | "motion" | "executionOverlay" | "trajectoryJump",
-  loader: () => Promise<{ default: () => JSX.Element }>,
+  loader: () => Promise<{ default: () => ReactNode }>,
 ): ResearchCanvasPluginRegistration<any> {
   return { id, slot: slot as never, load: loader };
 }
 
-function Box({ children }: { children: string }): JSX.Element {
+function Box({ children }: { children: string }): ReactNode {
   return <div data-testid={`box-${children}`}>{children}</div>;
 }
 
@@ -54,8 +54,8 @@ describe("ResearchCanvasPluginSlot — FE-10 AC #1/#2 (isolated lazy slots)", ()
   });
 
   it("shows the loading frame while a registered lazy chunk is pending, then the plugin", async () => {
-    let resolve!: (v: { default: () => JSX.Element }) => void;
-    const gate = new Promise<{ default: () => JSX.Element }>((r) => (resolve = r));
+    let resolve!: (v: { default: () => ReactNode }) => void;
+    const gate = new Promise<{ default: () => ReactNode }>((r) => (resolve = r));
     renderSlot(
       [registration("insight-a", "insight", () => gate)],
       "insight",
@@ -126,6 +126,6 @@ describe("ResearchCanvasPluginSlot — FE-10 AC #1/#2 (isolated lazy slots)", ()
   });
 });
 
-function HostShell({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+function HostShell({ label, children }: { label: string; children: ReactNode }): ReactNode {
   return <div data-testid={label}>{children}</div>;
 }

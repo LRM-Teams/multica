@@ -1,6 +1,6 @@
 "use client";
 
-import type { JSX } from "react";
+import type { ReactNode } from "react";
 import { useT } from "../../i18n/use-t";
 import { RESEARCH_CANVAS_PLUGIN_SLOT_IDS } from "./types";
 import type { ResearchCanvasPluginSlotId } from "./types";
@@ -23,21 +23,20 @@ import type { ResearchCanvasPluginSlotId } from "./types";
  * matrix is observable in tests without depending on business copy.
  */
 
-export function LoadingSlotFallback(): JSX.Element {
+export function LoadingSlotFallback(): ReactNode {
   const { t } = useT("research");
   return (
-    <div
+    <output
       data-testid="research-canvas-plugin-loading"
-      role="status"
       aria-label={t(($) => $.canvas_plugins.loading_aria)}
-      className="pointer-events-none absolute inset-0 flex items-start justify-center pt-2 opacity-0"
+      className="pointer-events-none absolute inset-0 flex items-start justify-center gap-2 pt-2 opacity-0"
     >
       {/* Local skeleton: subtle, inert, never locks the canvas. */}
       <span
         aria-hidden
         className="h-8 w-48 animate-pulse rounded-md border border-dashed border-border bg-muted/30"
       />
-    </div>
+    </output>
   );
 }
 
@@ -48,11 +47,12 @@ export interface SlotErrorFallbackProps {
   retry: () => void;
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive business-free fallback module: loading/error/absent live together so each slot's generic recovery surface is defined in one place (all three share the slot contract in types.ts).
 export function SlotErrorFallback({
   error,
   pluginName,
   retry,
-}: SlotErrorFallbackProps): JSX.Element {
+}: SlotErrorFallbackProps): ReactNode {
   const { t } = useT("research");
   return (
     <div
@@ -87,11 +87,13 @@ export function SlotErrorFallback({
  * only a marker element) so an unregistered module never alters the canvas
  * look; the marker keeps the absent state observable to tests.
  */
-export function AbsentSlotFallback({ slot }: { slot: ResearchCanvasPluginSlotId }): JSX.Element {
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- same cohesive fallback module (see SlotErrorFallback); the absent marker is the third slot recovery face.
+export function AbsentSlotFallback({ slot }: { slot: ResearchCanvasPluginSlotId }): ReactNode {
   return <span data-testid={`research-canvas-plugin-absent-${slot}`} hidden />;
 }
 
 /** Map each slot to its generic absent marker id (for tests/readers). */
+// react-doctor-disable-next-line react-doctor/only-export-components -- test-support lookup of absent-slot testids (business-free matrix of slot ids -> stable data-testid), not a component; kept beside the fallback that owns the ids.
 export const ABSENT_SLOT_FALLBACK_TEST_IDS = Object.fromEntries(
   RESEARCH_CANVAS_PLUGIN_SLOT_IDS.map((slot) => [
     slot,

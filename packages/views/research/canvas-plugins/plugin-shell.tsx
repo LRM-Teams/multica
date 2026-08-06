@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type JSX, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { ResearchCanvasPluginSlot } from "./plugin-host";
 import { ResearchCanvasPluginSlots } from "./plugin-slots";
 import { useResearchCanvasSlot } from "./use-registered-slot";
@@ -52,7 +52,7 @@ export function ResearchCanvasPluginShell({
   selectedNodeId: string | null;
   reducedMotion: boolean;
   children?: ReactNode;
-}): JSX.Element {
+}): ReactNode {
   const context: ResearchCanvasPluginContext = useMemo(
     () => buildCanvasPluginContext(nodes, selectedNodeId, reducedMotion),
     [nodes, selectedNodeId, reducedMotion],
@@ -80,7 +80,7 @@ function SlotLayer({
 }: {
   slot: ResearchCanvasRenderSlotId;
   context: ResearchCanvasPluginContext;
-}): JSX.Element {
+}): ReactNode {
   const registration = useResearchCanvasSlot(slot);
   return (
     <div

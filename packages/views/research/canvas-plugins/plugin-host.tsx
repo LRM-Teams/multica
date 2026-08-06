@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, memo, Suspense, useMemo, useState, type ComponentType, type JSX } from "react";
+import { lazy, memo, Suspense, useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
 import { useResearchCanvasSlot } from "./use-registered-slot";
 import {
@@ -60,7 +60,7 @@ function ResearchCanvasPluginSlotInner({
   slot,
   registration,
   props,
-}: ResearchCanvasPluginSlotProps): JSX.Element {
+}: ResearchCanvasPluginSlotProps): ReactNode {
   // When composed inside `ResearchCanvasPluginSlots` without an explicit
   // registration, resolve the slot's registration from the provider context so
   // the host stays usable both standalone (explicit prop) and wired via the
@@ -72,11 +72,15 @@ function ResearchCanvasPluginSlotInner({
   // unless a fresh lazy is created) — without it, "Retry" would just re-show
   // the same error fallback forever.
   const [retryNonce, setRetryNonce] = useState(0);
+  // Bumping `retryNonce` forces a FRESH lazy instance so the chunk loader
+  // re-runs on Retry — React caches a rejected lazy promise unless a new
+  // lazy is created. It is deliberately consumed below (`void retryNonce`) so
+  // the memo legitimately depends on it and re-creates the lazy on retry.
   const SlotView = useMemo(
-    () => (resolved ? resolveSlotComponent(resolved as any) : null),
-    // retryNonce is intentionally a dependency only: bumping it forces a
-    // fresh lazy instance so the chunk loader re-runs on retry.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    () => {
+      void retryNonce;
+      return resolved ? resolveSlotComponent(resolved as any) : null;
+    },
     [resolved, retryNonce],
   );
 

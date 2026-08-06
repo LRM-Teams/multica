@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type JSX, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   ResearchCanvasPluginSlotsContext,
   type ResearchCanvasPluginRegistry,
@@ -34,7 +34,7 @@ export function ResearchCanvasPluginSlots({
   children,
   initialRegistry,
   registrations,
-}: ResearchCanvasPluginSlotsProps): JSX.Element {
+}: ResearchCanvasPluginSlotsProps): ReactNode {
   const [state, setState] = useState<ResearchCanvasPluginState>(() => {
     const base =
       initialRegistry ?? Object.create(null) as ResearchCanvasPluginRegistry;

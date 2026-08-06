@@ -25,11 +25,11 @@ const DefaultHTTPRequestSLOSeconds = 1.0
 // PriorityHTTPRoutes are the first routes Parker asked to hang on the SLO
 // (accident hot paths). Alerts for these routes set priority=hot_path.
 //
-// Note: FE `activity?tab=all` hits GET /api/agents/{id}/activity — query
+// Note: FE Activity reads GET /api/agents/{id}/runner-activity — query
 // params are not separate metric routes (and must not be, to avoid
 // high-cardinality labels).
 var PriorityHTTPRoutes = []string{
-	"/api/agents/{id}/activity",
+	"/api/agents/{id}/runner-activity",
 	"/api/agent-task-snapshot",
 }
 

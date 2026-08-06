@@ -210,7 +210,7 @@ RETURNING *;
 -- name: SetAgentRuntimeOffline :exec
 -- offline_reason is optional: callers that know why the runtime is offline
 -- (daemon graceful deregister, sandbox teardown) pass a reason_code string
--- (mirrors agent_activity_event's vocabulary, no new enum). Callers that
+-- (uses the shared runtime reason-code vocabulary, no new enum). Callers that
 -- don't know pass a zero-value/NULL pgtype.Text, which preserves today's
 -- "we don't know why" behavior — see docs/superpowers/specs/2026-08-02-
 -- agent-intentional-stop-signal-design.md.

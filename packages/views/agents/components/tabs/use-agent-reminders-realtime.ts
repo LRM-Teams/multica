@@ -6,7 +6,7 @@ import type { AgentReminderChangedPayload } from "@multica/core/types";
 
 /**
  * `agent_reminder:changed` is a pure invalidate signal (no event object to
- * merge, unlike Activity's `agent_activity:event`) — schedule/snooze/update/
+ * merge, unlike Runner Activity's `agent:activity`) — schedule/snooze/update/
  * cancel/fire/terminalize all just tell the FE "refetch", never what changed.
  * So this hook has no live buffer, just an invalidate on event + an
  * invalidate on reconnect (the global workspace-scoped reconnect handler

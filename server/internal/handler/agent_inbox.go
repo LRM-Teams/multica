@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -29,11 +28,7 @@ import (
 const (
 	agentInboxDrainMessageLimit      = 50
 	agentInboxStatusChangedEventType = "agent_status_changed"
-	agentInboxStatusActivityWorking  = "working"
-	agentInboxStatusActivityIdle     = "idle"
 )
-
-var claimedFileDeliveryRe = regexp.MustCompile(`(?i)\b[\w.-]+\.(txt|md|pdf|csv|xlsx|xls|docx|png|jpe?g|gif|zip|json|ya?ml|go|ts|tsx|js|py|html|css)\b`)
 
 type DrainAgentInboxResponse struct {
 	Events      []AgentInboxEventResponse `json:"events"`
@@ -253,7 +248,6 @@ func (h *Handler) AckAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to ack inbox delivery")
 		return
 	}
-	h.recordAgentInboxStatusActivity(r.Context(), event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID), deliveryID, agentInboxStatusActivityIdle)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
@@ -752,9 +746,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	h.TaskService.RecordEvolutionUnitUsed(r.Context(), event.ID)
 	if chatDonePayload != nil {
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
-		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
-	h.recordAgentInboxStatusActivity(r.Context(), event, task.RuntimeID, deliveryID, agentInboxStatusActivityIdle)
 	// An explicit no-reply (including a source-completion abandoned draft),
 	// onboarding sent/skipped/expired, and a completed transport reply are
 	// separate observable outcomes. None is a delivery failure.
@@ -1216,7 +1208,6 @@ func (h *Handler) finishFailedAgentInboxEvent(
 		h.mapDiagnosisInboxFailure(r.Context(), event, errText, failureReason, reasonCode)
 		go h.maybeStartSharedDispatchDiagnosis(context.Background(), event)
 	}
-	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
 	terminalOutcome := "failed"
 	if alreadyReplied {
 		terminalOutcome = "replied"
@@ -1971,9 +1962,6 @@ func (h *Handler) runtimeIDForAgentInboxEvent(ctx context.Context, event db.Agen
 	return runtimeID
 }
 
-func (h *Handler) recordAgentInboxStatusActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID, deliveryID pgtype.UUID, status string) {
-}
-
 func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageRequest, kind string, details map[string]any) (protocol.TaskMessagePayload, bool) {
 	payload := protocol.TaskMessagePayload{
 		TaskID:     uuidToString(event.ID),
@@ -2131,88 +2119,6 @@ func agentInboxActivityMessageText(msg TaskMessageRequest) string {
 	default:
 		return ""
 	}
-}
-
-func (h *Handler) recordAgentInboxVisibleOutputActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID pgtype.UUID, payload protocol.ChatDonePayload) {
-}
-
-func (h *Handler) recordTaskVisibleOutputActivity(ctx context.Context, workspaceID pgtype.UUID, task db.AgentInboxEvent, req TaskCompleteRequest) {
-}
-
-func (h *Handler) taskActivityTarget(ctx context.Context, task db.AgentInboxEvent) (string, pgtype.UUID, string) {
-	if task.IssueID.Valid {
-		return "issue", task.IssueID, ""
-	}
-	if task.ChatSessionID.Valid {
-		if channelID := h.channelIDForChatSession(ctx, task.ChatSessionID); channelID != "" {
-			if root := h.threadRootIDForChatSession(ctx, task.ChatSessionID); root != nil {
-				return "thread", parseUUID(*root), channelID
-			}
-			return "channel", parseUUID(channelID), ""
-		}
-		return "dm", task.ChatSessionID, ""
-	}
-	return "agent", task.AgentID, ""
-}
-
-func outputClaimsFileDelivery(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" || !claimedFileDeliveryRe.MatchString(trimmed) {
-		return false
-	}
-	lower := strings.ToLower(trimmed)
-	for _, marker := range []string{
-		"attached",
-		"attachment",
-		"created",
-		"generated",
-		"saved",
-		"sent",
-		"sending",
-		"written",
-		"wrote",
-		"here is",
-		"here's",
-		"给你",
-		"发给你",
-		"创建了",
-		"已创建",
-		"生成了",
-		"已生成",
-		"保存了",
-		"已保存",
-		"写好了",
-		"已发送",
-		"附件",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func agentVisibleOutputActivityText(content string, parts []protocol.MessagePart, attachments []AttachmentResponse) string {
-	text := strings.TrimSpace(redact.Text(content))
-	if text != "" {
-		return truncateForActivity(text, 500)
-	}
-	text = strings.TrimSpace(redact.Text(messageparts.FallbackContent(parts)))
-	if text != "" {
-		return truncateForActivity(text, 500)
-	}
-	switch len(attachments) {
-	case 0:
-	case 1:
-		filename := strings.TrimSpace(attachments[0].Filename)
-		if filename != "" {
-			return truncateForActivity("Sent attachment: "+filename, 500)
-		}
-		return "Sent an attachment"
-	default:
-		return fmt.Sprintf("Sent %d attachments", len(attachments))
-	}
-	return "Sent a message"
 }
 
 func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.AgentRuntime, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {

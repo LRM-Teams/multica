@@ -170,3 +170,12 @@ certificate, and a registered callback for that same origin.
 For a migration-sensitive change, also read the exact `schema_migrations` row;
 `/readyz` proves the current migration gate is healthy but is not a substitute
 for an immutable version/timestamp ledger when that exact evidence is required.
+
+### Workspace Runner Activity hard cut
+
+Migration `304_drop_legacy_agent_activity_event` is destructive and
+irreversible: it drops the old Activity history table and the down migration
+does not restore it. Run the target server image's migration step before any
+runtime roll, then verify migration `304` is recorded. The connected daemon
+must report Workspace Runner protocol support (minimum CLI version `0.4.13`);
+an older daemon is rejected with `426 workspace_runner_protocol_unsupported`.

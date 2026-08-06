@@ -25,31 +25,6 @@ const (
 	agentFileAccessWrite agentFileAccessMode = "write"
 )
 
-const (
-	// activityKindWorkspaceFile is the event_kind for durable agent
-	// workspace file operations (task #204-②/#95). Kept separate from
-	// activityKindCustom, which is already a catch-all for miscellaneous
-	// events — a dedicated kind keeps this audit trail independently
-	// queryable/filterable instead of buried among unrelated custom events.
-	activityKindWorkspaceFile = "workspace_file"
-
-	// agentWorkspaceFileTargetKind pairs with target_slug (the file's
-	// relative path) so the audit trail is queryable by path, not just
-	// recorded inside details JSONB.
-	agentWorkspaceFileTargetKind = "file"
-
-	// event_type values within activityKindWorkspaceFile. Only read/write
-	// are wired today — ListAgentFiles (directory listing) is deliberately
-	// not audited: it only reveals structure, never file content, so it
-	// doesn't answer the "who read/wrote what" question this audit trail
-	// exists for. Save/Share/Delete have no endpoints yet (not built —
-	// v1 Workspace tab work); add their event_type values here once those
-	// endpoints exist, no further migration needed since event_type is
-	// free text.
-	agentWorkspaceFileEventRead  = "file_read"
-	agentWorkspaceFileEventWrite = "file_write"
-)
-
 type AgentFilesResponse struct {
 	AgentID   string                     `json:"agent_id"`
 	Status    string                     `json:"status"`

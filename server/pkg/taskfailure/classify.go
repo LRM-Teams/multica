@@ -16,6 +16,12 @@ import (
 // startup rather than per-call matters.
 var providerHTTP5xxRe = regexp.MustCompile(`(^|[^0-9])5[0-9][0-9]([^0-9]|$)`)
 
+// providerHTTP402Re matches the billing HTTP status as a standalone number.
+// A plain substring check also matches fractional seconds in RFC3339Nano log
+// timestamps (for example, "14.402226Z"), which can turn an unrelated runtime
+// failure into a sticky provider-quota lock.
+var providerHTTP402Re = regexp.MustCompile(`(^|[^0-9])402([^0-9]|$)`)
+
 // Classify maps a free-form error string from the agent runtime / CLI
 // to one of the 14 agent_error.* sub-reasons. Always returns a valid
 // Reason; falls back to ReasonAgentUnknown when no rule matches and for
@@ -104,8 +110,8 @@ func Classify(rawError string) Reason {
 	//    (Parker #64). Chinese「使用上限」is supplement when code is absent.
 	//    Must land BEFORE the bare "429" capacity rule.
 	case HasProviderQuotaCode1310(trimmed),
+		providerHTTP402Re.MatchString(lower),
 		containsAny(lower,
-			"402",
 			"insufficient_balance",
 			"balance is too low",
 			"monthly usage limit",

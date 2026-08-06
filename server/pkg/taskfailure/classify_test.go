@@ -225,6 +225,37 @@ func TestClassify5xxRegex(t *testing.T) {
 	}
 }
 
+// TestClassify402Regex prevents timestamps and other longer numbers from
+// creating permanent provider-quota locks. Production Codex stderr includes
+// RFC3339Nano timestamps, so a fractional second beginning with 402 is a real
+// input boundary rather than a synthetic edge case.
+func TestClassify402Regex(t *testing.T) {
+	t.Parallel()
+
+	hits := []string{
+		"402",
+		"API Error: 402 Payment Required",
+		"provider returned HTTP/2 402",
+		"status=402; insufficient funds",
+	}
+	for _, in := range hits {
+		if got := Classify(in); got != ReasonAgentProviderQuotaLimit {
+			t.Errorf("Classify(%q) = %q, want %q", in, got, ReasonAgentProviderQuotaLimit)
+		}
+	}
+
+	misses := []string{
+		"2026-08-04T09:34:14.402226Z model catalog refresh timed out",
+		"request 1402 failed",
+		"4020 tokens generated",
+	}
+	for _, in := range misses {
+		if got := Classify(in); got == ReasonAgentProviderQuotaLimit {
+			t.Errorf("Classify(%q) = %q, want NOT provider_quota_limit", in, got)
+		}
+	}
+}
+
 // TestClassifyAlwaysReturnsAgentSide guarantees Classify never returns
 // a platform-side reason. Platform-side reasons originate from
 // sweepers / scheduler / poisoned classifier paths that don't pass

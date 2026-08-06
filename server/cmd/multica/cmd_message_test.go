@@ -96,6 +96,65 @@ func TestRunAgentMessageResolvePostsOneIdentity(t *testing.T) {
 	}
 }
 
+func TestMessageReactUsesCanonicalIdentityWithoutTargetOrCursor(t *testing.T) {
+	cmd := newMessageReactCmd()
+	for _, name := range []string{"message-id", "emoji", "remove", "output"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("message react is missing --%s", name)
+		}
+	}
+	for _, name := range []string{"target", "client-message-id", "channel"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Errorf("message react must not expose --%s", name)
+		}
+	}
+}
+
+func TestRunAgentMessageReactPostsTargetFreeIdentity(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/react" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action": "message_react", "channel_id": "channel-1", "message_id": "11111111-2222-3333-4444-555555555555", "emoji": "👍", "removed": true,
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	readOut, writeOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	oldOut := os.Stdout
+	os.Stdout = writeOut
+	cmd := newMessageReactCmd()
+	_ = cmd.Flags().Set("message-id", "11111111")
+	_ = cmd.Flags().Set("emoji", "+1")
+	_ = cmd.Flags().Set("remove", "true")
+	err = runAgentMessageReact(cmd, nil)
+	writeOut.Close()
+	os.Stdout = oldOut
+	_, readErr := io.ReadAll(readOut)
+	readOut.Close()
+	if err != nil {
+		t.Fatalf("runAgentMessageReact: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	if len(body) != 3 || body["message_id"] != "11111111" || body["emoji"] != "+1" || body["remove"] != true {
+		t.Fatalf("react request body = %#v, want target-free canonical identity", body)
+	}
+}
+
 func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -496,14 +555,6 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 				cmd := newMessageSendCmd()
 				_ = cmd.Flags().Set("message", "hello")
 				return runAgentMessageSend(cmd, nil)
-			},
-		},
-		{
-			name: "react",
-			run: func() error {
-				cmd := newMessageReactCmd()
-				_ = cmd.Flags().Set("emoji", "+1")
-				return runAgentMessageReact(cmd, nil)
 			},
 		},
 		{

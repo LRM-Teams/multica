@@ -3,6 +3,15 @@ DROP INDEX IF EXISTS idx_agent_attachment_upload_session_idempotency;
 ALTER TABLE agent_attachment_upload_session
   DROP CONSTRAINT agent_attachment_upload_session_check1;
 
+-- A downgraded server does not understand cancellation. Preserve the terminal
+-- no-send boundary by converting cancelled sessions into immediately expired
+-- pending sessions before removing their cancellation metadata.
+UPDATE agent_attachment_upload_session
+SET state = 'pending',
+    cancelled_at = NULL,
+    expires_at = LEAST(expires_at, NOW())
+WHERE state = 'cancelled';
+
 ALTER TABLE agent_attachment_upload_session
   ADD CONSTRAINT agent_attachment_upload_session_check1
   CHECK (

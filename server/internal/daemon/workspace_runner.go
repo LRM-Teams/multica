@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -74,6 +75,17 @@ func (d *Daemon) workspaceAgentProcessManager(workspaceID string) *agentProcessM
 	return manager
 }
 
+func (d *Daemon) workspaceAgentActivityProducer(workspaceID string) *agentActivityProducer {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if producer := d.agentActivityProducers[workspaceID]; producer != nil {
+		return producer
+	}
+	producer := newAgentActivityProducer(time.Now, nil)
+	d.agentActivityProducers[workspaceID] = producer
+	return producer
+}
+
 func (d *Daemon) runWorkspaceRunner(ctx context.Context, workspaceID string) {
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -128,6 +140,24 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
 		return err
 	}
+	var writeMu sync.Mutex
+	writeFrame := func(eventType string, payload any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return writeWorkspaceRunnerFrame(conn, eventType, payload)
+	}
+	producer := d.workspaceAgentActivityProducer(workspaceID)
+	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
+		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && d.logger != nil {
+			d.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
+		}
+	})
+	defer producer.DetachTransport(transportGeneration)
+	for _, frame := range reconnectFrames {
+		if err := writeFrame(frame.EventType, frame.Payload); err != nil {
+			return err
+		}
+	}
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -143,7 +173,7 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			if json.Unmarshal(message.Payload, &ping) != nil || ping.Validate() != nil {
 				continue
 			}
-			if err := writeWorkspaceRunnerFrame(conn, protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
+			if err := writeFrame(protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
 				return err
 			}
 		case protocol.EventDaemonAgentStart:
@@ -155,10 +185,30 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			if err != nil {
 				continue
 			}
-			if err := writeWorkspaceRunnerFrame(conn, protocol.EventAgentStartAck, ack); err != nil {
+			status := protocol.AgentStatusPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}
+			session := protocol.AgentSessionPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID}
+			if err := producer.SetManaged(status, session); err != nil {
+				continue
+			}
+			if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {
 				return err
 			}
-			if err := writeWorkspaceRunnerFrame(conn, protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}); err != nil {
+			if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
+				return err
+			}
+			if err := writeFrame(protocol.EventAgentSession, session); err != nil {
+				return err
+			}
+		case protocol.EventAgentActivityProbe:
+			var probe protocol.AgentActivityProbePayload
+			if json.Unmarshal(message.Payload, &probe) != nil || probe.Validate() != nil {
+				continue
+			}
+			activity, err := producer.Probe(probe)
+			if err != nil {
+				continue
+			}
+			if err := writeFrame(protocol.EventAgentActivity, activity); err != nil {
 				return err
 			}
 		}

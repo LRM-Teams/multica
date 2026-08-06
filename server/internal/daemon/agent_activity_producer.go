@@ -18,10 +18,11 @@ const agentActivityHeartbeatInterval = time.Minute
 type agentActivityProducer struct {
 	mu sync.Mutex
 
-	now    func() time.Time
-	newID  func() string
-	send   func(protocol.AgentActivityPayload)
-	states map[agentActivityProducerKey]*agentActivityProducerState
+	now                 func() time.Time
+	newID               func() string
+	send                func(protocol.AgentActivityPayload)
+	transportGeneration uint64
+	states              map[agentActivityProducerKey]*agentActivityProducerState
 }
 
 type agentActivityProducerKey struct {
@@ -84,6 +85,47 @@ func (p *agentActivityProducer) SetConnected(agentID, launchID string, connected
 	defer p.mu.Unlock()
 	if state := p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}]; state != nil {
 		state.connected = connected
+	}
+}
+
+// AttachTransport makes a newly established Workspace Runner connection the
+// only destination for best-effort Activity. It returns the current managed
+// state for ready reconciliation and a lease that prevents an older replaced
+// socket from marking the new connection disconnected on teardown.
+func (p *agentActivityProducer) AttachTransport(send func(protocol.AgentActivityPayload)) (uint64, []agentActivityReconnectFrame) {
+	if p == nil {
+		return 0, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.transportGeneration++
+	p.send = send
+	frames := make([]agentActivityReconnectFrame, 0, len(p.states)*3)
+	for _, state := range p.states {
+		state.connected = true
+		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentStatus, Payload: state.status})
+		frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentSession, Payload: state.session})
+		if !state.snapshot.ObservedAt.IsZero() {
+			frames = append(frames, agentActivityReconnectFrame{EventType: protocol.EventAgentActivity, Payload: protocol.AgentActivityPayload{Snapshot: state.snapshot}})
+		}
+	}
+	return p.transportGeneration, frames
+}
+
+// DetachTransport only disconnects the lease that owns it. A late defer from
+// a replaced connection must not silence the current Workspace Runner.
+func (p *agentActivityProducer) DetachTransport(generation uint64) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if generation != p.transportGeneration {
+		return
+	}
+	p.send = nil
+	for _, state := range p.states {
+		state.connected = false
 	}
 }
 

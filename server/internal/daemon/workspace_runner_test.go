@@ -50,7 +50,7 @@ func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 
 func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	frames := make(chan protocol.Message, 3)
+	frames := make(chan protocol.Message, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("workspace_id") != "ws-1" || r.Header.Get("Authorization") != "Bearer workspace-token" {
 			http.Error(w, "unexpected runner scope", http.StatusForbidden)
@@ -78,7 +78,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			t.Error(err)
 			return
 		}
-		for i := 0; i < 2; i++ {
+		for i := 0; i < 3; i++ {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -102,8 +102,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, "ws-1") }()
-	var ready, ack, status protocol.Message
-	for i := 0; i < 3; i++ {
+	var ready, ack, status, session protocol.Message
+	for i := 0; i < 4; i++ {
 		select {
 		case msg := <-frames:
 			switch msg.Type {
@@ -113,6 +113,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				ack = msg
 			case protocol.EventAgentStatus:
 				status = msg
+			case protocol.EventAgentSession:
+				session = msg
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for Runner frames")
@@ -129,8 +131,12 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	if err := json.Unmarshal(status.Payload, &active); err != nil {
 		t.Fatal(err)
 	}
-	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive {
-		t.Fatalf("ack=%+v status=%+v", accepted, active)
+	var reportedSession protocol.AgentSessionPayload
+	if err := json.Unmarshal(session.Payload, &reportedSession); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive || reportedSession.LaunchID != accepted.LaunchID {
+		t.Fatalf("ack=%+v status=%+v session=%+v", accepted, active, reportedSession)
 	}
 	<-errCh
 }

@@ -94,14 +94,15 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
-	messageCoordinatorMu sync.RWMutex
-	messageCoordinators  map[string]*MessageCoordinator
-	messageRuntimeIDs    map[string]string
-	messageSendMu        sync.Mutex
-	messageSends         map[string]int
-	agentProcessManagers map[string]*agentProcessManager
-	lifecycleDiagnostics *lifecycleDiagnosticWriter
-	runnerInstanceID     string
+	messageCoordinatorMu   sync.RWMutex
+	messageCoordinators    map[string]*MessageCoordinator
+	messageRuntimeIDs      map[string]string
+	messageSendMu          sync.Mutex
+	messageSends           map[string]int
+	agentProcessManagers   map[string]*agentProcessManager
+	agentActivityProducers map[string]*agentActivityProducer
+	lifecycleDiagnostics   *lifecycleDiagnosticWriter
+	runnerInstanceID       string
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -392,6 +393,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		messageCoordinators:       make(map[string]*MessageCoordinator),
 		messageRuntimeIDs:         make(map[string]string),
 		agentProcessManagers:      make(map[string]*agentProcessManager),
+		agentActivityProducers:    make(map[string]*agentActivityProducer),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		machineUpgradeGeneration:  uuid.NewString(),
 		runnerInstanceID:          uuid.NewString(),

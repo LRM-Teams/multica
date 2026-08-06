@@ -66,6 +66,22 @@ func TestAgentActivityProducerHeartbeatsAndProbeDoNotInventState(t *testing.T) {
 	}
 }
 
+func TestAgentActivityProducerReplacedTransportKeepsNewestRunnerConnected(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	producer := newAgentActivityProducer(func() time.Time { return now }, nil)
+	installActivityProducerAgent(t, producer)
+	var first, second []protocol.AgentActivityPayload
+	firstGeneration, _ := producer.AttachTransport(func(payload protocol.AgentActivityPayload) { first = append(first, payload) })
+	_, _ = producer.AttachTransport(func(payload protocol.AgentActivityPayload) { second = append(second, payload) })
+	producer.DetachTransport(firstGeneration)
+	if err := producer.Publish(activitySnapshot("daemon-1", protocol.ActivityKindWorking, 1, "fact-1", now), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 0 || len(second) != 1 {
+		t.Fatalf("replaced transport delivery first=%d second=%d", len(first), len(second))
+	}
+}
+
 func installActivityProducerAgent(t *testing.T, producer *agentActivityProducer) {
 	t.Helper()
 	if err := producer.SetManaged(protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: "launch-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: "launch-a", RuntimeGeneration: 1}); err != nil {

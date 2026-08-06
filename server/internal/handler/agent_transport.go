@@ -1290,7 +1290,9 @@ func (h *Handler) requireAgentTransportSource(w http.ResponseWriter, r *http.Req
 
 // requireAgentCredentialChatTransport authorizes chat actions from the durable
 // credential identity stamped by auth middleware. Chat is not scoped to an
-// issue task, inbox event, delivery, lease, or current runtime turn.
+// issue task, delivery, lease, or current runtime turn. When the daemon still
+// stamps inbox-event headers on a credential request, bind that wake so
+// response_mode / A2A exchange inheritance keep working for the ambient path.
 func (h *Handler) requireAgentCredentialChatTransport(w http.ResponseWriter, r *http.Request) (agentTransportSource, bool) {
 	workspaceID, ok := parseUUIDOrBadRequest(w, ctxWorkspaceID(r.Context()), "workspace id")
 	if !ok {
@@ -1300,10 +1302,25 @@ func (h *Handler) requireAgentCredentialChatTransport(w http.ResponseWriter, r *
 	if !ok {
 		return agentTransportSource{}, false
 	}
-	return agentTransportSource{
+	source := agentTransportSource{
 		origin:            chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
 		durableCredential: true,
-	}, true
+	}
+	if eventHeader := strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Event-ID")); eventHeader != "" {
+		inboxEventID, ok := parseUUIDOrBadRequest(w, eventHeader, "inbox event id")
+		if !ok {
+			return agentTransportSource{}, false
+		}
+		event, err := h.Queries.GetAgentInboxEvent(r.Context(), inboxEventID)
+		if err != nil || event.AgentID != agentID || event.WorkspaceID != workspaceID {
+			writeError(w, http.StatusForbidden, "inbox event does not match this agent credential")
+			return agentTransportSource{}, false
+		}
+		synthetic := agentInboxSyntheticTask(event, pgtype.UUID{})
+		source.inboxEventID = inboxEventID
+		source.legacyTask = &synthetic
+	}
+	return source, true
 }
 
 func (h *Handler) requireAgentTransportTask(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, bool) {

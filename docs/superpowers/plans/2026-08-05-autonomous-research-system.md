@@ -895,7 +895,8 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
   - [x] B2：建立 `resultAcceptanceModule`，拥有 Attempt/Task/Inbox 绑定预检、版本化 Result 解码、计划能力检查和原子 `AcceptResult` 输入构造；Engine 只在成功接纳后触发 Reconcile。
   - [x] B3：建立 `taskPromptModule`，拥有 orchestrator version 选择、V1–V5 不可变 Prompt builder 和 Prompt 专用 JSON 规范化；五版本完整 Prompt hash 不变。
   - [x] B4：建立 `executionModule`，拥有运行态 Attempt 同步、依赖激活、取消确认、Ready Task 排序、能力路由、Attempt 创建、Prompt 调用、Inbox 分派与身份挂接；Engine 只传入当前 Run 状态并调用 Module。
-  - [ ] 迁出 failure 和 Gate。
+  - [x] B5：建立 `failureModule`，拥有确定性 dispatch 错误分类、预算耗尽决策顺序、Run 失败转换、Attempt 取消和失败事件投影顺序，并阻止永久失败的计划或同一补救任务无限重建。
+  - [ ] 迁出 Gate。
 - [ ] 删除巨型 `Store` Interface；PostgreSQL 事务留在业务 Module 内。
 - [ ] 固定外部 `ResearchRun` Interface，禁止 Handler 直接写子实体状态。
 - [ ] 保持 V1–V5 字节级 Prompt/Result 兼容和行为回放一致。
@@ -1083,6 +1084,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [x] B2 把 Result 提交的运行/任务读取、Attempt 与 Inbox 绑定预检、V1–V5 解码、计划能力检查和 `AcceptResultInput` 构造迁入 `resultAcceptanceModule`；PostgreSQL `AcceptResult` 仍负责事务内的 Agent 身份、状态、幂等 replay 和物化验证。新增合法接纳、Attempt/Inbox 错配、能力缺失和未知版本测试；Engine 只处理成功后 Reconcile 及“已接纳但推进失败”的错误语义。
 - [x] B3 把 orchestrator version 分派、V1–V5 Prompt builder 和 `compactJSON` 迁入 `taskPromptModule`；`engine.go` 不再包含 Prompt 文本。`TestOrchestratorContractsMatchGoldenFixtures` 明确执行五个版本并保持完整 Prompt SHA-256 不变，未知版本仍拒绝；该项不修改任何历史 Prompt 字节。
 - [x] B4 把运行态 Attempt 检查、依赖激活、取消确认、Ready Task 选择、能力路由、Attempt 创建、Prompt Module 调用、Inbox 分派和身份挂接迁入 `executionModule`。已挂接 Attempt 只用 Inbox Task ID 检查；尚未挂接的 Attempt 只用稳定 dispatch key 恢复。取消仅在 Runtime 确认成功或未挂接派发超过 stale 时确认，派发成功但 Inbox 身份挂接失败时立即取消对应 Runtime Task。模块测试覆盖同步失败不修改状态、三类取消身份、取消失败不确认、成功派发与身份挂接；现有真实 PostgreSQL 调度回归继续验证持久化状态机。
+- [x] B5 把确定性 dispatch 错误分类、预算耗尽后的 Gate 决策顺序、Run 失败转换、Attempt 取消和失败事件投影迁入 `failureModule`。未知或明确可重试的 dispatch 错误不修改 Run；能力缺失和不可重试错误才结束 Run。失败路径固定先提交 `MarkFailed`，再请求 Runtime 取消，取消未确认时不投影已静止的终态；预算事件必须先提交，随后才判断可交付或失败。模块测试覆盖可重试无状态修改、不可重试失败顺序、取消失败延迟投影、预算通过和预算失败；真实 PostgreSQL 的永久 dispatch 与计划耗尽回归继续通过。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

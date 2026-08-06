@@ -113,7 +113,7 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		return e.projectPending(ctx, sessionID)
 	}
 	if run.InitializedAt != nil && run.Config.MaxRunSeconds > 0 && e.clock.Now().After(run.InitializedAt.Add(time.Duration(run.Config.MaxRunSeconds)*time.Second)) {
-		return e.handleBudgetExhaustion(ctx, run, "wall_time", fmt.Sprintf("run exceeded %d seconds", run.Config.MaxRunSeconds))
+		return e.failureModule().HandleBudgetExhaustion(ctx, run, "wall_time", fmt.Sprintf("run exceeded %d seconds", run.Config.MaxRunSeconds))
 	}
 
 	if err = e.executionModule().SyncAttempts(ctx, sessionID); err != nil {
@@ -134,7 +134,7 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	}
 	dispatched, err := e.dispatchReady(ctx, run, tasks, attempts, members)
 	if err != nil {
-		return e.handleDispatchFailure(ctx, sessionID, err)
+		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 	if dispatched > 0 || hasActiveCurrentWork(run, tasks) {
 		next = e.clock.Now().Add(10 * time.Second)
@@ -157,38 +157,23 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	control.SessionID = sessionID
 	if reason, terminal := terminalRemediationFailure(run, tasks, control.Kind, control.Objective); terminal {
 		terminalErr := errors.New(reason)
-		failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
-		_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_remediation_failed")
-		if cancelErr != nil {
-			return errors.Join(terminalErr, failErr, cancelErr)
-		}
-		return errors.Join(terminalErr, failErr, e.projectPending(ctx, sessionID))
+		return e.failureModule().FailRun(ctx, sessionID, reason, "research_remediation_failed", terminalErr)
 	}
 	task, _, err := e.store.CreateControlTask(ctx, control)
 	if err != nil {
 		if errors.Is(err, ErrBudgetExhausted) {
-			return e.handleBudgetExhaustion(ctx, run, "tasks", err.Error())
+			return e.failureModule().HandleBudgetExhaustion(ctx, run, "tasks", err.Error())
 		}
 		if errors.Is(err, ErrControlTargetChanged) {
 			next = e.clock.Now().Add(time.Second)
 			return e.projectPending(ctx, sessionID)
 		}
 		reason := fmt.Sprintf("cannot create %s remediation task: %v", control.Kind, err)
-		failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
-		_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_run_failed")
-		if cancelErr != nil {
-			return errors.Join(err, failErr, cancelErr)
-		}
-		return errors.Join(err, failErr, e.projectPending(ctx, sessionID))
+		return e.failureModule().FailRun(ctx, sessionID, reason, "research_run_failed", err)
 	}
 	if task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed || task.Status == TaskStatusCancelled {
 		reason := fmt.Sprintf("%s remediation task is terminal: %s", control.Kind, task.Status)
-		failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
-		_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_run_failed")
-		if cancelErr != nil {
-			return errors.Join(failErr, cancelErr)
-		}
-		return errors.Join(failErr, e.projectPending(ctx, sessionID))
+		return e.failureModule().FailRun(ctx, sessionID, reason, "research_run_failed", nil)
 	}
 	if err = e.executionModule().ActivateReadyTasks(ctx, sessionID); err != nil {
 		return err
@@ -202,53 +187,10 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		return err
 	}
 	if _, err = e.dispatchReady(ctx, run, tasks, attempts, members); err != nil {
-		return e.handleDispatchFailure(ctx, sessionID, err)
+		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 	next = e.clock.Now().Add(10 * time.Second)
 	return e.projectPending(ctx, sessionID)
-}
-
-func (e *Engine) handleDispatchFailure(ctx context.Context, sessionID string, err error) error {
-	reason := ""
-	cancelReason := ""
-	switch {
-	case errors.Is(err, ErrCapabilityUnavailable):
-		reason = err.Error()
-		cancelReason = "research_capability_unavailable"
-	case !dispatchErrorRetryable(err):
-		reason = "non-retryable research task dispatch failed: " + err.Error()
-		cancelReason = "research_dispatch_failed"
-	default:
-		return err
-	}
-	failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
-	_, cancelErr := e.cancelPendingAttempts(ctx, failed, cancelReason)
-	if cancelErr != nil {
-		return errors.Join(err, failErr, cancelErr)
-	}
-	return errors.Join(err, failErr, e.projectPending(ctx, sessionID))
-}
-
-func (e *Engine) handleBudgetExhaustion(ctx context.Context, run Run, budgetKind, details string) error {
-	if _, err := e.store.RecordBudgetExhausted(ctx, run.SessionID, budgetKind, details); err != nil {
-		return err
-	}
-	gate, err := e.store.EvaluateGate(ctx, run.SessionID)
-	if err != nil {
-		return err
-	}
-	if gate.Passed {
-		if _, _, err = e.store.SetAwaitingConfirmation(ctx, run.SessionID, gate); err != nil {
-			return err
-		}
-		return e.projectPending(ctx, run.SessionID)
-	}
-	failed, _, _, failErr := e.store.MarkFailed(ctx, run.SessionID, "research budget exhausted before delivery gates passed: "+details)
-	_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_budget_exhausted")
-	if cancelErr != nil {
-		return errors.Join(failErr, cancelErr)
-	}
-	return errors.Join(failErr, e.projectPending(ctx, run.SessionID))
 }
 
 func hasActiveCurrentWork(run Run, tasks []Task) bool {
@@ -262,43 +204,6 @@ func hasActiveCurrentWork(run Run, tasks []Task) bool {
 		}
 	}
 	return false
-}
-
-func terminalRemediationFailure(run Run, tasks []Task, kind TaskKind, objective string) (string, bool) {
-	planningSucceeded := false
-	var terminalInitialPlan *Task
-	var terminalSameControl *Task
-	for i := range tasks {
-		task := &tasks[i]
-		if task.GoalVersion != run.GoalVersion || task.PlanVersion != run.PlanVersion {
-			continue
-		}
-		if (task.Kind == TaskKindPlan || task.Kind == TaskKindReplan) && task.Status == TaskStatusSucceeded {
-			planningSucceeded = true
-		}
-		terminal := task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed
-		if terminal && task.Kind == TaskKindPlan {
-			terminalInitialPlan = task
-		}
-		if terminal && task.Kind == kind && task.Objective == objective && strings.HasPrefix(task.ClientKey, "control:") {
-			terminalSameControl = task
-		}
-	}
-	if kind == TaskKindReplan && !planningSucceeded && terminalInitialPlan != nil {
-		return terminalResearchTaskReason("initial research plan", *terminalInitialPlan), true
-	}
-	if terminalSameControl != nil {
-		return terminalResearchTaskReason("research remediation", *terminalSameControl), true
-	}
-	return "", false
-}
-
-func terminalResearchTaskReason(label string, task Task) string {
-	reason := strings.TrimSpace(task.TerminalReason)
-	if reason == "" {
-		reason = string(task.Status)
-	}
-	return fmt.Sprintf("%s task %s exhausted its attempts: %s", label, task.ID, reason)
 }
 
 func remediationTask(gate GateResult) ControlTaskInput {

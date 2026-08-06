@@ -1173,6 +1173,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/activity", h.GetRuntimeTaskActivity)
 					r.Get("/agent-workspaces", h.ListRuntimeAgentWorkspaces)
 					r.Delete("/agent-workspaces/{dirName}", h.DeleteRuntimeAgentWorkspace)
+					// Installed clients still use these runtime-scoped paths. They
+					// delegate to the daemon-scoped Machine Upgrade record and must
+					// never recreate a runtime-owned update lineage.
+					r.Post("/update", h.InitiateUpdate)
+					r.Get("/update/{updateId}", h.GetUpdate)
+					r.Delete("/update-intent", h.CancelUpdateIntent)
 					r.Post("/restart", h.InitiateRestart)
 					r.Get("/restart/{restartId}", h.GetRestart)
 					r.Post("/models", h.InitiateListModels)

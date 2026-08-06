@@ -50,6 +50,8 @@
     "title": "笔记",
     "new_page": "新建页",
     "directory": "目录",
+    "my_directory": "我的目录",
+    "shared_directory": "共享目录",
     "empty_create_hint": "还没有笔记。点击创建第一个页面。",
     "empty_title": "选择或创建一个页面",
     "empty_description": "页面可以无限嵌套。默认仅自己可见，页面所有者可以分享给工作区成员。",

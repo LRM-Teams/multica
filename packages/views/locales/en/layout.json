@@ -50,6 +50,8 @@
     "title": "Notes",
     "new_page": "New page",
     "directory": "Directory",
+    "my_directory": "My directory",
+    "shared_directory": "Shared directory",
     "empty_create_hint": "No notes yet. Create the first page.",
     "empty_title": "Select or create a page",
     "empty_description": "Pages can nest forever. They are private by default; the owner can share them with workspace members.",

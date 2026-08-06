@@ -365,6 +365,8 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
   const selected = detailPage?.id ? detailPage : selectedFromList;
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
+  const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
+  const sharedTree = useMemo(() => tree.filter((node) => node.owner_user_id !== currentUserId), [currentUserId, tree]);
   const createPage = useCreateNotePage();
   const duplicatePage = useDuplicateNotePage();
   const deletePage = useDeleteNotePage();
@@ -443,7 +445,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-72 shrink-0 flex-col border-r bg-muted/20">
           <div className="flex items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground">
-            <span>{t(($) => $.notes_page.directory)}</span>
+            <span>{t(($) => $.notes_page.my_directory)}</span>
             <Button size="icon" variant="ghost" className="size-7" onClick={() => {
               setShowTrash(false);
               handleCreate(null);
@@ -458,15 +460,29 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                 <div className="h-4 w-36 rounded bg-muted" />
                 <div className="h-4 w-28 rounded bg-muted" />
               </div>
-            ) : tree.length === 0 ? (
-              <button type="button" className="w-full rounded-lg border border-dashed p-4 text-left text-sm text-muted-foreground hover:bg-muted/50" onClick={() => handleCreate(null)}>
-                {t(($) => $.notes_page.empty_create_hint)}
-              </button>
             ) : (
-              <div className="space-y-0.5">
-                {tree.map((node) => (
-                  <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} onOpen={openPage} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
-                ))}
+              <div className="space-y-3">
+                <div className="space-y-0.5">
+                  {ownTree.length === 0 ? (
+                    <button type="button" className="w-full rounded-lg border border-dashed p-4 text-left text-sm text-muted-foreground hover:bg-muted/50" onClick={() => handleCreate(null)}>
+                      {t(($) => $.notes_page.empty_create_hint)}
+                    </button>
+                  ) : (
+                    ownTree.map((node) => (
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} onOpen={openPage} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                    ))
+                  )}
+                </div>
+                {sharedTree.length > 0 && (
+                  <div className="space-y-0.5">
+                    <div className="px-2 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      {t(($) => $.notes_page.shared_directory)}
+                    </div>
+                    {sharedTree.map((node) => (
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} onOpen={openPage} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -9,6 +9,7 @@ import { WorkspaceSlugProvider } from "@multica/core/paths";
 import { NavigationProvider, type NavigationAdapter } from "../../navigation";
 import enCommon from "../../locales/en/common.json";
 import enAgents from "../../locales/en/agents.json";
+import { runtimeMachineKey } from "../../runtimes/components/runtime-machines";
 
 const navigationStub: NavigationAdapter = {
   push: vi.fn(),
@@ -128,7 +129,11 @@ function makeRuntime(overrides: Partial<RuntimeDevice>): RuntimeDevice {
 }
 
 
-function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
+function renderDialog(
+  runtimes: RuntimeDevice[],
+  template?: Agent,
+  defaultMachineId?: string,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -144,6 +149,7 @@ function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
             members={members}
             currentUserId={ME}
             template={template}
+            defaultMachineId={defaultMachineId}
             onClose={onClose}
             onCreate={onCreate}
           />
@@ -214,14 +220,14 @@ describe("CreateAgentDialog workspace runtime selection", () => {
       provider: "cursor",
       device_info: "other-box",
     });
-    renderDialog([onS144, alsoOnS144, onOther]);
+    renderDialog(
+      [onS144, alsoOnS144, onOther],
+      undefined,
+      runtimeMachineKey(onS144),
+    );
 
-    // Default computer is the first machine in display order — machines sort
-    // by section/onlineCount then title, so "other-box" precedes "s144".
-    // Explicitly select s144, then open the code-agent picker — it must list
-    // s144's providers (Pi) and nothing from other machines.
-    fireEvent.click(screen.getByText("other-box", { selector: "div.truncate" }));
-    fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));
+    // Pin the selected computer so this assertion does not depend on machine
+    // ordering. Open the code-agent picker — other-box's Cursor must not appear.
     fireEvent.click(
       screen.getByText("Cursor", { selector: "span.truncate" }),
     );
@@ -249,19 +255,19 @@ describe("CreateAgentDialog workspace runtime selection", () => {
       provider: "pi",
       device_info: "other-box",
     });
-    renderDialog([onS144, onOther]);
+    renderDialog([onS144, onOther], undefined, runtimeMachineKey(onS144));
 
-    // Default is other-box (title sort order). Switch to s144.
-    fireEvent.click(screen.getByText("other-box", { selector: "div.truncate" }));
+    // Open computer picker and switch to other-box.
     fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));
+    fireEvent.click(screen.getByText("other-box", { selector: "div.truncate" }));
 
-    // Runtime trigger should now show the s144 machine's brand.
+    // Runtime trigger should now show the other machine's brand.
     expect(
-      screen.getByText("Cursor", { selector: "span.truncate" }),
+      screen.getByText("Pi", { selector: "span.truncate" }),
     ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByText("Cursor", { selector: "span.truncate" }),
+      screen.getByText("Pi", { selector: "span.truncate" }),
     );
-    expect(screen.queryByText("Pi")).toBeNull();
+    expect(screen.queryByText("Cursor")).toBeNull();
   });
 });

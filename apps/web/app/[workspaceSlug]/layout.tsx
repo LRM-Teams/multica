@@ -10,6 +10,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { NoAccessPage } from "@multica/views/workspace/no-access-page";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 import { useWorkspaceSeen } from "@multica/views/workspace/use-workspace-seen";
+import { OnboardingAgentSetup } from "@multica/views/workspace/onboarding-agent-setup";
 
 /** LRM-1263 — welcome modal is rare; keep it out of the workspace shell chunk. */
 const WelcomeAfterOnboarding = lazy(() =>
@@ -100,6 +101,13 @@ export default function WorkspaceLayout({
     // to. Show explicit feedback instead of silently redirecting. Doesn't
     // distinguish 404 vs 403 to avoid letting attackers enumerate slugs.
     return <NoAccessPage />;
+  }
+  if (workspace.onboarding_agent_id === null) {
+    return (
+      <WorkspaceSlugProvider slug={workspaceSlug}>
+        <OnboardingAgentSetup workspace={workspace} />
+      </WorkspaceSlugProvider>
+    );
   }
 
   return (

@@ -44,6 +44,7 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT } from "../../i18n";
 import { RolesDialog } from "./roles-dialog";
+import { editableWorkspaceRoles, workspaceMemberActions } from "./member-role-policy";
 
 const ROLE_ICONS: Record<MemberRole, typeof Crown> = {
   owner: Crown,
@@ -75,7 +76,6 @@ function useRoleLabels() {
 function MemberRow({
   member,
   canManage,
-  canManageOwners,
   isSelf,
   busy,
   onChangeRole,
@@ -83,7 +83,6 @@ function MemberRow({
 }: {
   member: MemberWithUser;
   canManage: boolean;
-  canManageOwners: boolean;
   isSelf: boolean;
   busy: boolean;
   onChangeRole: () => void;
@@ -93,8 +92,11 @@ function MemberRow({
   const roleConfig = useRoleLabels();
   const rc = roleConfig[member.role];
   const RoleIcon = rc.icon;
-  const canEditRole = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
-  const canRemove = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
+  const { canEditRole, canRemove } = workspaceMemberActions({
+    canManage,
+    isSelf,
+    targetRole: member.role,
+  });
   const showMenu = canEditRole || canRemove;
   const rowMenuAria = [canEditRole && t(($) => $.members.change_role), canRemove && t(($) => $.members.remove_action)]
     .filter(Boolean)
@@ -222,8 +224,6 @@ export function MembersTab() {
 
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "admin";
-  const isOwner = currentMember?.role === "owner";
-  const ownerCount = members.filter((m) => m.role === "owner").length;
 
   const handleInviteMember = async () => {
     if (!workspace) return;
@@ -281,20 +281,8 @@ export function MembersTab() {
   };
 
   const roleEditAllowed: MemberRole[] | undefined = roleEditMember
-    ? isOwner
-      ? ["owner", "admin", "member"]
-      : ["admin", "member"]
+    ? [...editableWorkspaceRoles]
     : undefined;
-
-  const roleEditDisabledReasons: Partial<Record<MemberRole, string>> | undefined =
-    roleEditMember &&
-    roleEditMember.role === "owner" &&
-    ownerCount <= 1
-      ? {
-          admin: t(($) => $.members.cannot_demote_last_owner),
-          member: t(($) => $.members.cannot_demote_last_owner),
-        }
-      : undefined;
 
   const handleRemoveMember = (member: MemberWithUser) => {
     if (!workspace) return;
@@ -381,7 +369,6 @@ export function MembersTab() {
                 <MemberRow
                   member={m}
                   canManage={canManageWorkspace}
-                  canManageOwners={isOwner}
                   isSelf={m.user_id === user?.id}
                   busy={memberActionId === m.id}
                   onChangeRole={() => setRoleEditMember(m)}
@@ -451,7 +438,6 @@ export function MembersTab() {
         mode="select"
         value={roleEditMember?.role ?? "member"}
         allowedRoles={roleEditAllowed}
-        disabledReasons={roleEditDisabledReasons}
         saving={roleEditMember != null && memberActionId === roleEditMember.id}
         onSave={async (role) => {
           if (!roleEditMember) return;

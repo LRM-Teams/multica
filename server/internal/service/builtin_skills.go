@@ -11,6 +11,7 @@ import (
 var builtinSkillsFS embed.FS
 
 const builtinSkillsRoot = "builtin_skills"
+const hiringBuiltinSkillName = "multica-creating-agents"
 
 // BuiltinSkills returns the platform's built-in skills, embedded at compile
 // time. Every agent receives these on top of its workspace-bound skills, so
@@ -23,6 +24,27 @@ const builtinSkillsRoot = "builtin_skills"
 // derives the skill directory from AgentSkillData.Name).
 func (s *TaskService) BuiltinSkills() []AgentSkillData {
 	return loadBuiltinSkills()
+}
+
+// BuiltinSkillsForAgent keeps the platform hiring contract out of ordinary
+// Agent execution profiles. The caller must derive isOnboardingAgent from the
+// Workspace's structured onboarding_agent_id binding, never from display name.
+func (s *TaskService) BuiltinSkillsForAgent(isOnboardingAgent bool) []AgentSkillData {
+	return builtinSkillsForAgent(isOnboardingAgent)
+}
+
+func builtinSkillsForAgent(isOnboardingAgent bool) []AgentSkillData {
+	skills := loadBuiltinSkills()
+	if isOnboardingAgent {
+		return skills
+	}
+	filtered := make([]AgentSkillData, 0, len(skills))
+	for _, skill := range skills {
+		if skill.Name != hiringBuiltinSkillName {
+			filtered = append(filtered, skill)
+		}
+	}
+	return filtered
 }
 
 func loadBuiltinSkills() []AgentSkillData {

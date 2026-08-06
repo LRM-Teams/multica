@@ -709,8 +709,7 @@ func TestMachineUpgrade_AllowsComputerOwnerOrWorkspaceOwnerAdmin(t *testing.T) {
 	if nonOwnerW.Code != http.StatusForbidden {
 		t.Fatalf("canonical create by non-owner = %d: %s", nonOwnerW.Code, nonOwnerW.Body.String())
 	}
-	workspaceOwnerMemberID := createRuntimeLocalSkillTestMember(t, "owner")
-	workspaceOwnerW, _ := initiateMachineUpgrade(t, workspaceOwnerMemberID, daemonID, "v9.9.9")
+	workspaceOwnerW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	if workspaceOwnerW.Code != http.StatusOK {
 		t.Fatalf("canonical create by workspace owner = %d: %s", workspaceOwnerW.Code, workspaceOwnerW.Body.String())
 	}

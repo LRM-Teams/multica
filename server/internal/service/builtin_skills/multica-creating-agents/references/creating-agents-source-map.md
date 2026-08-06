@@ -45,6 +45,7 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 |---|---|---|
 | Human create authorization | `handler/agent.go`, `handler/agent_template.go`, `handler.go:requireManageAgents` | owner/admin only; AgentPrincipal on the human route → 403 |
 | Canonical Proposal | `handler/agent_action.go`, `channel_message.parts`, `agent_action` | `agent:create` is one visible Message plus an atomically seeded commit record; no action-card row or dismiss state |
+| Onboarding prepare command | `cmd/multica/cmd_action.go`, `handler/agent_action.go`, `workspace.onboarding_agent_id` | `multica action prepare` calls `/api/agent/actions/prepare`; only the active bound Onboarding Agent is authorized |
 | Commit idempotency | `handler/agent_action_commit.go` | action Message ID + non-secret final-payload hash returns the same Agent on a safe replay and rejects divergent payloads |
 | Atomic provisioning | `createAgentManagedCommit`, template create transaction | Agent identity, system `#general` membership/onboarding, and one `agent_start_intent` commit together |
 | Durable first start | migrations 288–289, `handler/agent_start_intent.go`, `daemon/agent_start_intent.go` | stable dispatch ID retries until Computer acceptance; `ready`/`failed` are later sequence-guarded observations, and failed work is not auto-restarted |

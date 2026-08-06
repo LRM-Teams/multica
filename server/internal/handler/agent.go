@@ -1940,6 +1940,9 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	if !h.canManageAgent(w, r, agent) {
 		return
 	}
+	if !h.requireOnboardingAgentLifecycleOwner(w, r, agent) {
+		return
+	}
 	if agent.ArchivedAt.Valid {
 		writeError(w, http.StatusConflict, "agent is already archived")
 		return
@@ -1998,6 +2001,9 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canManageAgent(w, r, agent) {
+		return
+	}
+	if !h.requireOnboardingAgentLifecycleOwner(w, r, agent) {
 		return
 	}
 	if !agent.ArchivedAt.Valid {

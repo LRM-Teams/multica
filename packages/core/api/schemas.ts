@@ -47,6 +47,7 @@ import type {
   VoiceCallMedia,
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
+  EnsureWindyResponse,
   StartVoiceCallDuplexResponse,
   VoiceCallDuplexAudioHint,
   VoiceCallDuplexEventHint,
@@ -1791,6 +1792,7 @@ export const WorkspaceSchema = z.object({
   settings: z.record(z.string(), z.unknown()).default({}),
   issue_prefix: z.string().default(""),
   avatar_url: z.string().nullable().default(null),
+  onboarding_agent_id: z.string().nullable().optional(),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
   last_active_at: z.string().nullable().optional(),
@@ -1807,6 +1809,7 @@ export const EMPTY_WORKSPACE: Workspace = {
   settings: {},
   issue_prefix: "",
   avatar_url: null,
+  onboarding_agent_id: null,
   created_at: "",
   updated_at: "",
 };
@@ -2120,6 +2123,11 @@ export const CreateAgentFromTemplateResponseSchema = z.object({
   agent: MinimalAgentSchema,
   imported_skill_ids: z.array(z.string()).default([]),
   reused_skill_ids: z.array(z.string()).default([]),
+}).loose();
+
+export const EnsureWindyResponseSchema: z.ZodType<EnsureWindyResponse> = z.object({
+  agent: z.custom<Agent>((value) => MinimalAgentSchema.safeParse(value).success),
+  dm_id: z.string().optional(),
 }).loose();
 
 // Fallback when the success response fails to parse. The agent server-side

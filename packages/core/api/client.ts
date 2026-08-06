@@ -270,6 +270,7 @@ import {
   CloudRuntimeNodeListSchema,
   CloudRuntimeNodeSchema,
   CreateAgentFromTemplateResponseSchema,
+  EnsureWindyResponseSchema,
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
@@ -1289,11 +1290,12 @@ export class ApiClient {
     });
   }
 
-  async ensureWindy(runtimeId?: string): Promise<EnsureWindyResponse> {
-    const search = new URLSearchParams();
-    if (runtimeId) search.set("runtime_id", runtimeId);
-    const suffix = search.toString() ? `?${search}` : "";
-    return this.fetch(`/api/agents/windy${suffix}`, { method: "POST" });
+  async ensureWindy(runtimeId: string, model: string): Promise<EnsureWindyResponse> {
+    const raw = await this.fetch<unknown>("/api/agents/windy", {
+      method: "POST",
+      body: JSON.stringify({ runtime_id: runtimeId, model }),
+    });
+    return EnsureWindyResponseSchema.parse(raw);
   }
 
   async createAgentDraft(data: CreateAgentDraftRequest): Promise<AgentCreationDraft> {

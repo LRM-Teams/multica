@@ -3,7 +3,8 @@ SELECT w.id, w.name, w.slug, w.description, w.settings,
        w.created_at, w.updated_at, w.context,
        w.issue_prefix, w.issue_counter, w.avatar_url,
        m.last_active_at,
-       w.default_self_play_env_id
+       w.default_self_play_env_id,
+       w.onboarding_agent_id
 FROM member m
 JOIN workspace w ON w.id = m.workspace_id
 WHERE m.user_id = $1
@@ -75,9 +76,8 @@ UPDATE workspace
    AND onboarding_agent_id IS NULL;
 
 -- name: GetFirstWorkspaceOwnerUserID :one
--- "First" by member.created_at is a pragmatic, stable tie-break for the rare
--- multi-owner case; it is not a claim that workspaces have a canonical owner
--- column (see docs/engineering-principles.md on that open question).
+-- The schema enforces exactly one Owner for every live workspace. The ordering
+-- remains deterministic for databases inspected before migration 301 applies.
 SELECT user_id
   FROM member
  WHERE workspace_id = $1 AND role = 'owner'

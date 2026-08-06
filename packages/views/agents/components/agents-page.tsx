@@ -29,7 +29,7 @@ import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
@@ -45,6 +45,7 @@ import {
   dashboardAgentRunTimeOptions,
 } from "@multica/core/dashboard/queries";
 import { Button } from "@multica/ui/components/ui/button";
+import { Badge } from "@multica/ui/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -143,6 +144,7 @@ export function AgentsPage({
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
+  const workspace = useCurrentWorkspace();
   const navigation = useNavigation();
   const qc = useQueryClient();
   const currentUser = useAuthStore((s) => s.user);
@@ -561,6 +563,9 @@ export function AgentsPage({
     const isOwner = !!currentUser?.id && selectedAgent.owner_id === currentUser.id;
     return isWorkspaceAdmin || isOwner;
   }, [selectedAgent, currentUser?.id, isWorkspaceAdmin]);
+  const selectedCanLifecycle =
+    selectedCanManage &&
+    (workspace?.onboarding_agent_id !== selectedAgent?.id || myRole === "owner");
 
   // LRM-865: never call archiveAgent from the overview Delete button —
   // open ConfirmDeleteAgent first; only confirm submits.
@@ -773,6 +778,7 @@ export function AgentsPage({
                   itemContent={(_, agent) => (
                     <AgentRailRow
                       agent={agent}
+                      isOnboardingAgent={workspace?.onboarding_agent_id === agent.id}
                       fleet={fleetByAgentId.get(agent.id)}
                       presence={presenceMap.get(agent.id)}
                       selected={selectedAgent?.id === agent.id}
@@ -793,6 +799,7 @@ export function AgentsPage({
               metric={selectedMetric}
               fleet={fleetByAgentId.get(selectedAgent.id)}
               canManage={selectedCanManage}
+              canLifecycle={selectedCanLifecycle}
               onHonor={() =>
                 navigation.push(
                   `${paths.agentDetail(selectedAgent.id)}?tab=honor`,
@@ -1066,12 +1073,14 @@ function AvailabilityChip({
 
 function AgentRailRow({
   agent,
+  isOnboardingAgent,
   fleet,
   presence,
   selected,
   onClick,
 }: {
   agent: Agent;
+  isOnboardingAgent: boolean;
   fleet?: import("@multica/core/types/agent-fleet").AgentFleetRank;
   presence?: AgentPresenceDetail;
   selected: boolean;
@@ -1117,6 +1126,11 @@ function AgentRailRow({
             >
               {displayName}
             </p>
+            {isOnboardingAgent ? (
+              <Badge variant="secondary" className="shrink-0 text-[10px]">
+                {t(($) => $.dashboard.onboarding_agent_badge)}
+              </Badge>
+            ) : null}
             {agent.honor_level ? (
               <AgentHonorLevelIcon
                 level={agent.honor_level}

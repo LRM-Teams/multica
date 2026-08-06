@@ -73,6 +73,12 @@ function MessageBodyInner({
       : !isTranscriptPart && part.type !== "voice";
   });
   const hasAttachmentParts = collectAttachmentParts(presentedParts).length > 0;
+  const hasHiringProposal =
+    presentedParts?.some(
+      (part) => part.type === "reference" && part.ref_type === "agent:create",
+    ) ?? false;
+  const suppressHiringProtocolFallback =
+    hasHiringProposal && /^\s*\[agent:create proposal\](?:\s|$)/u.test(content);
 
   const body = (() => {
     if (compact) {
@@ -87,6 +93,9 @@ function MessageBodyInner({
         );
       }
       if (contentMode === "non-transcript") return null;
+      if (suppressHiringProtocolFallback) {
+        return null;
+      }
       // Project reference spans first (#530): post-#463 a mention lives in `parts`
       // with a span into `content`, so formatMessagePartsPreview yields nothing and
       // the raw `content` below would render the internal handle — a thread root or
@@ -133,8 +142,8 @@ function MessageBodyInner({
             part.type === "sticker" ||
             part.type === "choice" ||
             part.type === "choice_reply",
-        ) || (hasReferenceParts && content.trim() !== "");
-      if (!hasBodyContent) return null;
+        ) || (hasReferenceParts && content.trim() !== "" && !suppressHiringProtocolFallback);
+      if (!hasBodyContent && !hasHiringProposal) return null;
       // Structured mention / issue-ref parts (#463): the canonical `content` now
       // carries bare `@Label` / `MUL-123` text with the refs anchored to spans,
       // so render the text body through the shared inline-reference projector —
@@ -151,12 +160,14 @@ function MessageBodyInner({
         );
         return (
           <>
-            <InlineReferenceContent
-              content={content}
-              parts={presentedParts}
-              highlightQuery={highlightQuery}
-              sourceMessageId={sourceMessageId}
-            />
+            {!suppressHiringProtocolFallback ? (
+              <InlineReferenceContent
+                content={content}
+                parts={presentedParts}
+                highlightQuery={highlightQuery}
+                sourceMessageId={sourceMessageId}
+              />
+            ) : null}
             {stickerChoiceAndCardParts.length > 0 && (
               <MessagePartsRenderer parts={stickerChoiceAndCardParts} choiceContext={choiceContext} />
             )}

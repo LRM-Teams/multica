@@ -76,6 +76,25 @@ func TestBuiltinSkillsConformToTemplate(t *testing.T) {
 	}
 }
 
+func TestBuiltinSkillsForAgent_ExcludesHiringFromOrdinaryAgents(t *testing.T) {
+	ordinary := builtinSkillsForAgent(false)
+	onboarding := builtinSkillsForAgent(true)
+	for _, skill := range ordinary {
+		if skill.Name == hiringBuiltinSkillName || strings.Contains(skill.Content, "/api/agent/actions/prepare") {
+			t.Fatalf("ordinary Agent received hiring contract in %q", skill.Name)
+		}
+	}
+	found := false
+	for _, skill := range onboarding {
+		if skill.Name == hiringBuiltinSkillName {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Onboarding Agent did not receive %q", hiringBuiltinSkillName)
+	}
+}
+
 func TestBuiltinStickerSkillSeparatesStandaloneAndChannelDelivery(t *testing.T) {
 	t.Parallel()
 	skill, ok := findSkill(t, "multica-stickers")

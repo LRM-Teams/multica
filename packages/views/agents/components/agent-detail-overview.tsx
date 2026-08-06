@@ -287,6 +287,7 @@ export function AgentDetailOverview({
   metric,
   fleet,
   canManage,
+  canLifecycle,
   onHonor,
   onEdit,
   onDelete,
@@ -296,6 +297,7 @@ export function AgentDetailOverview({
   metric: AgentMetric;
   fleet?: AgentFleetRank;
   canManage: boolean;
+  canLifecycle: boolean;
   onHonor: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -394,7 +396,7 @@ export function AgentDetailOverview({
               {t(($) => $.restart_modal.trigger)}
             </Button>
           ) : null}
-          {canManage && (
+          {canLifecycle && (
             <Button variant="outline" size="sm" onClick={onDelete} className="text-destructive hover:text-destructive">
               <Trash2 className="size-3.5" />
               {t(($) => $.dashboard.delete)}

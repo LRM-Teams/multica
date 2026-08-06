@@ -1828,10 +1828,10 @@ RETURNING id
 	mkUser := func(t *testing.T, label string) string {
 		t.Helper()
 		var id string
-		email := fmt.Sprintf("github-routes-%s-%s@multica.ai", slug, label)
+		email := fmt.Sprintf("github-routes-%s-%s-%s@multica.ai", slug, label, randomID())
 		if err := testPool.QueryRow(ctx, `
 INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
-`, "GHR "+label, email).Scan(&id); err != nil {
+`, "GHR "+label+" "+randomID(), email).Scan(&id); err != nil {
 			t.Fatalf("create user %s: %v", label, err)
 		}
 		return id
@@ -1839,10 +1839,12 @@ INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
 	adminUserID := mkUser(t, "admin")
 	memberUserID := mkUser(t, "member")
 	outsiderUserID := mkUser(t, "outsider")
+	ownerUserID := mkUser(t, "owner")
 
 	for _, m := range []struct {
 		userID, role string
 	}{
+		{ownerUserID, "owner"},
 		{adminUserID, "admin"},
 		{memberUserID, "member"},
 	} {
@@ -1866,7 +1868,7 @@ INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, $3)
 
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, wsID)
-		for _, uid := range []string{adminUserID, memberUserID, outsiderUserID} {
+		for _, uid := range []string{ownerUserID, adminUserID, memberUserID, outsiderUserID} {
 			_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, uid)
 		}
 	})

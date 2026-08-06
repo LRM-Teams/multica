@@ -16,6 +16,7 @@ import {
   EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_USER,
   EvolutionReviewSubmissionListSchema,
+  EnsureWindyResponseSchema,
   WorkspaceMemoryCurationStatusSchema,
   MemoryCuratorProfileSchema,
   StartMemoryCurationRunResponseSchema,
@@ -640,6 +641,7 @@ describe("WorkspaceSchema", () => {
     settings: {},
     issue_prefix: "MUL",
     avatar_url: null,
+    onboarding_agent_id: "agent-onboarding",
     created_at: "2026-08-05T00:00:00Z",
     updated_at: "2026-08-05T00:00:00Z",
   };
@@ -647,6 +649,11 @@ describe("WorkspaceSchema", () => {
   it("parses workspace responses without repository metadata", () => {
     expect(WorkspaceSchema.parse(workspace)).toEqual(workspace);
     expect(WorkspaceListSchema.parse([workspace])).toEqual([workspace]);
+  });
+
+  it("preserves a missing onboarding binding from an older server", () => {
+    const { onboarding_agent_id: _omitted, ...legacyWorkspace } = workspace;
+    expect(WorkspaceSchema.parse(legacyWorkspace).onboarding_agent_id).toBeUndefined();
   });
 
   it("falls back when a workspace response is malformed", () => {
@@ -695,5 +702,13 @@ describe("SandboxNodeTemplatesResponseSchema", () => {
       { endpoint: "GET /api/sandbox/nodes/x/templates" },
     );
     expect(malformed).toEqual(EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE);
+  });
+});
+
+describe("EnsureWindyResponseSchema", () => {
+  it("requires the created or adopted Agent identity", () => {
+    expect(EnsureWindyResponseSchema.parse({ agent: { id: "wendy-1" } }).agent.id).toBe("wendy-1");
+    expect(() => EnsureWindyResponseSchema.parse({ agent: {} })).toThrow();
+    expect(() => EnsureWindyResponseSchema.parse({ dm_id: "dm-1" })).toThrow();
   });
 });

@@ -12,6 +12,8 @@ export interface Workspace {
   settings: Record<string, unknown>;
   issue_prefix: string;
   avatar_url: string | null;
+  /** Name-independent authority binding for the Workspace Onboarding Agent. */
+  onboarding_agent_id?: string | null;
   created_at: string;
   updated_at: string;
   /**

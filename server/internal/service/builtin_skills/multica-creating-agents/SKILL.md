@@ -32,6 +32,23 @@ Read-only list (no side effects):
 multica workspace info --agents --output json
 ```
 
+The active Workspace Onboarding Agent prepares a human-confirmable Hiring
+Proposal in the originating conversation with:
+
+```bash
+multica action prepare \
+  --type agent:create \
+  --name "<display name>" \
+  --description "<short role summary>" \
+  --target "#<channel>" \
+  --client-request-id "<stable retry id>"
+```
+
+The command posts to `/api/agent/actions/prepare`. It prepares a card only; an
+Owner or Admin must review and commit it. The server authorizes this endpoint
+from `workspace.onboarding_agent_id`, so another Agent must not proxy or ask the
+Onboarding Agent to prepare a proposal on its behalf.
+
 ## Core model
 
 An agent is a workspace-scoped row (table `agent`). Creation is a single

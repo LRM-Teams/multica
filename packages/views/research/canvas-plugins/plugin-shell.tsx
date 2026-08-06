@@ -12,6 +12,14 @@ import type {
 } from "./types";
 import type { ResearchCanvasRenderSlotId } from "./plugin-host";
 
+const RENDER_SLOT_IDS: ResearchCanvasRenderSlotId[] = [
+  "insight",
+  "dispute",
+  "motion",
+  "executionOverlay",
+  "trajectoryJump",
+];
+
 /**
  * FE-10 / LRM-1486 — THE single Canvas plugin shell.
  *
@@ -50,14 +58,6 @@ export function ResearchCanvasPluginShell({
     [nodes, selectedNodeId, reducedMotion],
   );
 
-  const renderSlots: ResearchCanvasRenderSlotId[] = [
-    "insight",
-    "dispute",
-    "motion",
-    "executionOverlay",
-    "trajectoryJump",
-  ];
-
   return (
     <ResearchCanvasPluginSlots>
       <div
@@ -65,7 +65,7 @@ export function ResearchCanvasPluginShell({
         className="pointer-events-none absolute inset-0 z-10"
         aria-hidden="true"
       >
-        {renderSlots.map((slot) => (
+        {RENDER_SLOT_IDS.map((slot) => (
           <SlotLayer key={slot} slot={slot} context={context} />
         ))}
       </div>

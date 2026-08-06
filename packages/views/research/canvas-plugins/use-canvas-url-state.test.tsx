@@ -29,6 +29,9 @@ function createFakeHistory(initialSearch = ""): {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      notify: () => {
+        for (const l of listeners) l();
+      },
     },
     recorded,
     search: () => search,

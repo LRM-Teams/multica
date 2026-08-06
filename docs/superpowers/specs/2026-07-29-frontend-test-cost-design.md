@@ -42,13 +42,6 @@
 > §4's options D/E and §5's steps 2–4 are **superseded** — do not resume them.
 > The per-file mock-dedup problem D targeted still exists as a maintainability
 > concern, but no longer carries a performance justification.
->
-> **Final disposition (later the same day):** even at the optimized floor the
-> job measured 14m04s on one runner, and reaching the 10-minute target by
-> deletion alone would have cut half the remaining suite cost including core
-> page coverage. Frank ruled to delete the frontend test system wholesale and
-> rebuild from scratch; this document survives as the measurement record. The
-> rebuild rules live in `docs/frontend-testing.md`.
 
 > **Picking this up cold?** Read §2 (where the time goes) and §3 (why the obvious lever doesn't work) before anything else. Everything here was measured, not estimated; every number states the machine and mode it came from. **Nothing in §5 is authorised** — it is a menu with prices, not a plan of record. The three things most likely to mislead you are called out in §2 (a red run's wall time is not comparable), §3 (the cheap-looking fix is a prerequisite, not a win), and §4a (this mode's failure count is nondeterministic — do not quote a single run).
 

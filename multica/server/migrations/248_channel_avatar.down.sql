@@ -1,1 +1,0 @@
-ALTER TABLE channel DROP COLUMN IF EXISTS avatar_url;

@@ -1,1 +1,0 @@
-export { EvolutionCenterPage } from "./components";

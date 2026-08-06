@@ -1,2 +1,0 @@
-DROP INDEX IF EXISTS idx_chat_message_task_assistant_created;
-DROP INDEX IF EXISTS idx_agent_task_queue_activity_feed;

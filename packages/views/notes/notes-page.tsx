@@ -9,7 +9,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
-import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
+import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import type { MemberWithUser, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -27,6 +27,20 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
+
+function lastViewedNoteKey(workspaceId: string) {
+  return `multica:last-viewed-note:${workspaceId}`;
+}
+
+function readLastViewedNote(workspaceId: string) {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(lastViewedNoteKey(workspaceId));
+}
+
+function writeLastViewedNote(workspaceId: string, pageId: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(lastViewedNoteKey(workspaceId), pageId);
+}
 
 function buildNoteTree(pages: NotePage[]): NoteTreeNode[] {
   const nodes = new Map<string, NoteTreeNode>();
@@ -267,11 +281,15 @@ function ShareDialog({
 
 function NoteEditor({
   selected,
+  childPages,
   currentUserId,
+  onOpenPage,
   onOpenShare,
 }: {
   selected: NotePage;
+  childPages: NotePage[];
   currentUserId?: string;
+  onOpenPage: (id: string) => void;
   onOpenShare: () => void;
 }) {
   const { t } = useT("layout");
@@ -337,6 +355,22 @@ function NoteEditor({
         className="border-0 px-0 text-3xl font-semibold shadow-none focus-visible:ring-0 md:text-4xl"
         placeholder="Untitled"
       />
+      {childPages.length > 0 && (
+        <div className="mt-5 space-y-1">
+          <div className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.notes_page.child_links)}</div>
+          {childPages.map((page) => (
+            <button
+              key={page.id}
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+              onClick={() => onOpenPage(page.id)}
+            >
+              <FileText className="size-4 shrink-0" />
+              <span className="truncate">{page.title || "Untitled"}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <ContentEditor
         defaultValue={selected.content}
         onUpdate={setDraftContent}
@@ -367,12 +401,34 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
   const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
   const sharedTree = useMemo(() => tree.filter((node) => node.owner_user_id !== currentUserId), [currentUserId, tree]);
+  const selectedChildPages = useMemo(
+    () =>
+      selected
+        ? list.pages
+            .filter((page) => page.parent_id === selected.id)
+            .sort((a, b) => a.sort_key.localeCompare(b.sort_key) || a.created_at.localeCompare(b.created_at))
+        : [],
+    [list.pages, selected],
+  );
   const createPage = useCreateNotePage();
   const duplicatePage = useDuplicateNotePage();
   const deletePage = useDeleteNotePage();
+  const permanentlyDeletePage = usePermanentlyDeleteNotePage();
   const restorePage = useRestoreNotePage();
   const [sharePage, setSharePage] = useState<NotePage | null>(null);
   const [showTrash, setShowTrash] = useState(false);
+
+  useEffect(() => {
+    if (!wsId || !selected?.id || showTrash) return;
+    writeLastViewedNote(wsId, selected.id);
+  }, [selected?.id, showTrash, wsId]);
+
+  useEffect(() => {
+    if (!wsId || pageId || isLoading || showTrash || list.pages.length === 0) return;
+    const lastViewedId = readLastViewedNote(wsId);
+    const target = list.pages.find((page) => page.id === lastViewedId)?.id ?? ownTree[0]?.id ?? sharedTree[0]?.id ?? list.pages[0]?.id;
+    if (target) navigation.replace(paths.noteDetail(target));
+  }, [isLoading, list.pages, navigation, ownTree, pageId, paths, sharedTree, showTrash, wsId]);
 
   const openPage = (id: string) => {
     setShowTrash(false);
@@ -416,6 +472,16 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       toast.success(t(($) => $.notes_page.moved_to_trash));
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.delete_failed));
+    }
+  };
+
+  const handlePermanentlyDelete = async (page: NotePage) => {
+    if (!window.confirm(t(($) => $.notes_page.permanent_delete_confirm, { title: page.title }))) return;
+    try {
+      await permanentlyDeletePage.mutateAsync(page.id);
+      toast.success(t(($) => $.notes_page.permanently_deleted));
+    } catch (error) {
+      showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.permanent_delete_failed));
     }
   };
 
@@ -513,6 +579,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                         <Undo2 className="size-4" />
                         {t(($) => $.notes_page.restore_action)}
                       </Button>
+                      <Button size="sm" variant="destructive" onClick={() => handlePermanentlyDelete(page)} disabled={permanentlyDeletePage.isPending}>
+                        <Trash2 className="size-4" />
+                        {t(($) => $.notes_page.permanent_delete_action)}
+                      </Button>
                     </div>
                   ))
                 )}
@@ -534,7 +604,9 @@ export function NotesPage({ pageId }: { pageId?: string }) {
             <NoteEditor
               key={selected.id}
               selected={selected}
+              childPages={selectedChildPages}
               currentUserId={currentUserId}
+              onOpenPage={openPage}
               onOpenShare={() => setSharePage(selected)}
             />
           )}

@@ -1013,6 +1013,10 @@ export class ApiClient {
     await this.fetch(`/api/notes/pages/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
+  async permanentlyDeleteNotePage(id: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(id)}/permanent`, { method: "DELETE" });
+  }
+
   async restoreNotePage(id: string): Promise<NotePage> {
     const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}/restore`, { method: "POST" });
     return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {

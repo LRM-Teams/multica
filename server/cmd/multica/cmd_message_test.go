@@ -25,6 +25,27 @@ func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
 			t.Errorf("message send exposes cursor flag %q", flag.Name)
 		}
 	})
+	if cmd.Flags().Lookup("client-message-id") != nil || cmd.Flags().Lookup("idempotency-key") != nil {
+		t.Fatal("message send exposes an Agent-controlled idempotency flag")
+	}
+}
+
+func TestRunAgentMessageSendDraftPathRejectsReplacementPayloadAndNormalAnyway(t *testing.T) {
+	withMessage := newMessageSendCmd()
+	_ = withMessage.Flags().Set("target", "#one")
+	_ = withMessage.Flags().Set("send-draft", "true")
+	_ = withMessage.Flags().Set("message", "replacement")
+	if err := runAgentMessageSend(withMessage, nil); err == nil || !strings.Contains(err.Error(), "does not accept --message") {
+		t.Fatalf("send-draft replacement error = %v", err)
+	}
+
+	normalAnyway := newMessageSendCmd()
+	_ = normalAnyway.Flags().Set("target", "#one")
+	_ = normalAnyway.Flags().Set("message", "replacement")
+	_ = normalAnyway.Flags().Set("anyway", "true")
+	if err := runAgentMessageSend(normalAnyway, nil); err == nil || !strings.Contains(err.Error(), "only valid with --send-draft") {
+		t.Fatalf("normal --anyway error = %v", err)
+	}
 }
 
 func TestMessageReadUsesOnlyCanonicalTargetFlag(t *testing.T) {
@@ -324,7 +345,7 @@ func TestRunAgentMessageSendVoiceRequiresTranscript(t *testing.T) {
 func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/send" {
+		if r.URL.Path != "/credential-proxy/messages/send" {
 			http.NotFound(w, r)
 			return
 		}
@@ -339,16 +360,20 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv("MULTICA_TASK_ID", "task-1")
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("server port: %v", err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
 	_ = cmd.Flags().Set("message", "here's the file")
 	_ = cmd.Flags().Set("attachment-id", "att-a")
 	_ = cmd.Flags().Set("attachment-id", "att-b")
-	_ = cmd.Flags().Set("client-message-id", "cli-msg-1")
 	if err := runAgentMessageSend(cmd, nil); err != nil {
 		t.Fatalf("runAgentMessageSend: %v", err)
 	}
@@ -440,7 +465,7 @@ func TestRunAgentMessageA2AControlPostsOwnerControl(t *testing.T) {
 func TestRunAgentMessageSendPostsVoiceMarkerAfterTranscript(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/send" {
+		if r.URL.Path != "/credential-proxy/messages/send" {
 			http.NotFound(w, r)
 			return
 		}
@@ -455,9 +480,14 @@ func TestRunAgentMessageSendPostsVoiceMarkerAfterTranscript(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv("MULTICA_TASK_ID", "task-1")
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("server port: %v", err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")

@@ -1357,6 +1357,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 			r.Post("/api/agent/messages/send", h.AgentTransportSendMessage)
+			r.Post("/api/agent/messages/target", h.AgentTransportResolveMessageTarget)
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
 			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)

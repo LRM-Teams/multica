@@ -36,14 +36,14 @@ V5/V6 Adapter ─┬─ Live Projection ─┬─ Node Registry ─┬─ Insigh
 | Issue | 必读文档 |
 | --- | --- |
 | LRM-1483/1484 | data-contract、viewport-performance |
-| LRM-1475 | node-card、layout、data-contract |
-| LRM-1476 | node-card、viewport-performance、现有 insight-tree design |
-| LRM-1477 | motion-direction、viewport-performance |
+| LRM-1475 | node-card、route-topology、layout、data-contract |
+| LRM-1476 | node-card、route-topology、viewport-performance、现有 insight-tree design |
+| LRM-1477 | motion-direction、route-topology、viewport-performance |
 | LRM-1478 | layout、node-card、motion-direction、现有 dispute design |
 | LRM-1479 | agent-execution、layout、node-card、data-contract |
-| LRM-1480 | viewport-performance、motion-direction、现有 trajectory design |
-| LRM-1486 | layout、viewport-performance、全部组件公开接口 |
-| LRM-1485 | 6 份子规格的预算与验收章节 |
+| LRM-1480 | route-topology、viewport-performance、motion-direction、现有 trajectory design |
+| LRM-1486 | route-topology、layout、viewport-performance、全部组件公开接口 |
+| LRM-1485 | 7 份子规格的预算与验收章节 |
 
 ## 2. 全体开发合同
 
@@ -114,12 +114,13 @@ None。与 Slice 1 通过公开 gateway 接口组合。
 
 ### What to build
 
-实现 6 个卡片族、`NodeCardShell`、30-kind registry、Generic fallback、八态与 40/100/160% 三档密度。所有事实来自 `CanvasNode` 和显式 detail，不解析 summary。
+实现 6 个卡片族、`NodeCardShell`、30-kind registry、Generic fallback、八态与 Landmark/Waypoint/Trail Dot 三档语义 LOD。这里只输出节点渲染形态，不实现曲线路径布局。所有事实来自 `CanvasNode` 和显式 detail，不解析 summary。
 
 ### Acceptance
 
 - 30 kinds 每类至少 1 个测试；未知 kind 不崩溃。
 - default/selected/loading/running/failed/stale/unknown/terminal 八态。
+- Landmark/Waypoint/Trail Dot 共享稳定 node id 和 anchor；25% zoom 不把正文卡缩成白色小块。
 - 长标题、空 summary、RTL/中英文、200% zoom 不溢出。
 - icon button、focus-visible、非颜色状态编码通过。
 
@@ -133,12 +134,13 @@ None。用统一 Canvas fixture 开发；接入依赖 Slice 10。
 
 ### What to build
 
-实现 canonical Insight/Derivation 逐层展开、Display Group 折叠、stale 祖先路径、最小重新整合入口和 Slice load-more。Display Group 与 Insight 必须有完全不同的结构和 accessible name。
+实现 canonical Insight/Derivation 逐层展开、Route Bundle/Display Group 折叠、stale 祖先路径、最小重新整合入口和 Slice load-more。Display Group、Route Bundle 与 Insight 必须有完全不同的结构和 accessible name。
 
 ### Acceptance
 
 - 4 Claim → 2 L1 → 1 L2 fixture 可摘要/展开。
 - 折叠显著减少 DOM；选中、viewport anchor、pinned path 不丢。
+- 第 4 层及更深转为 Route Bundle；展开后仍服从总量预算，不能恢复为全量小卡树。
 - stale 路径不只靠颜色；权限撤销不泄露正文。
 - `canExpand=false` 不显示展开；分页不产生重复节点。
 
@@ -152,7 +154,7 @@ None。通过 props 接收 `CanvasSlice`；接入依赖 Slice 10。
 
 ### What to build
 
-实现 10 个 `transition_kind` 到 motion directive 的确定性映射、可中断队列、coalesce/backpressure、Reduced Motion、低性能和后台/resync 终态策略。
+实现 10 个 `transition_kind` 到 motion directive 的确定性映射，并补齐 Route Sprout、Detour Trace、Dead-end Settle、Retry Hairpin、Convergence、Semantic LOD Morph、Ambient Probe；支持可中断队列、coalesce/backpressure、Reduced Motion、低性能和后台/resync 终态策略。
 
 ### Acceptance
 
@@ -160,6 +162,7 @@ None。通过 props 接收 `CanvasSlice`；接入依赖 Slice 10。
 - 100 delta 队列峰值 ≤64，终态与无动画重放一致。
 - 只动画 transform/opacity，不使用 `transition: all`。
 - background/resync 不补播历史；新 delta 能中断旧动画。
+- 同屏 active route probe ≤2；失败不抖动，retry 保留旧失败路径，LOD 不连续缩放文字。
 
 ### Blocked by
 
@@ -209,7 +212,7 @@ None。通过 `nodeId/agentId` callback 接入 Slice 10。
 
 ### What to build
 
-独立多泳道 Git 视图，卡片替代圆点，支持 Agent/branch/relation filter、时间/逻辑排序、minimap、详情和 jump-to-canvas。复用 lane layout、window slice 和 motion 基建。
+独立多泳道 Git 视图，主节点使用卡片、密集提交使用可命中的微圆点/路径束，支持 Agent/branch/relation filter、时间/逻辑排序、minimap、详情和 jump-to-canvas。路线允许平滑弯曲、分叉、交错与汇入，但不能随机变化。复用 lane layout、window slice 和 motion 基建。
 
 ### Acceptance
 
@@ -217,6 +220,7 @@ None。通过 `nodeId/agentId` callback 接入 Slice 10。
 - 10k fixture 首屏只建 window+overscan DOM。
 - 筛选前后 lane 稳定；selected id 不丢。
 - 点击卡片 → 详情 → 跳画布聚焦同一 node id。
+- 失败、retry、cancelled、accepted 具有颜色 + 线型 + 端点三重编码；密集轨迹不会变成等距卡片墙。
 
 ### Blocked by
 
@@ -228,7 +232,7 @@ None。通过 callback 与 Slice 10 组合。
 
 ### What to build
 
-建立 lens/plugin registry、lazy boundary、局部 error boundary、Inspector slot、Agent Deck slot、Trajectory entry 和 URL state adapter。`research-canvas.tsx` 只接一次插件壳，禁止后续 6 个并行 PR 都修改它。
+建立 lens/plugin registry、lazy boundary、局部 error boundary、Inspector slot、Agent Deck slot、Trajectory entry、URL state adapter，并在 `canvas-plugins/route-map/**` 落地有机路线层：稳定 cubic Bézier、Landmark/Waypoint/Trail Dot/Route Bundle 组合、spatial hit-test、局部布局和 safe-region 避让。`research-canvas.tsx` 只接一次插件壳，禁止后续 6 个并行 PR 都修改它。
 
 ### Acceptance
 
@@ -236,6 +240,7 @@ None。通过 callback 与 Slice 10 组合。
 - lens/node/view 可 deep-link；viewport/fold/motion 不污染 URL。
 - 插件 lazy load 有局部 skeleton，不锁画布。
 - Web/Desktop 共享，零 `next/*`/`react-router-dom`。
+- 最终主图不能使用 orthogonal router、每层等距列或所有节点同尺寸卡；Snapshot 相同则路线坐标一致，Delta 只移动 affected corridor。
 
 ### Blocked by
 
@@ -247,14 +252,15 @@ None。通过 callback 与 Slice 10 组合。
 
 ### What to build
 
-建立 10k fixture、DOM/布局/Delta/motion budgets、200% zoom、keyboard、Reduced Motion、unknown kind、malformed response 和视觉 artifact 生成脚本。这个 Slice 写门，不替其他 Slice 实现功能。
+建立 10k fixture、DOM/布局/Delta/motion budgets、25% 语义 LOD、弯路/失败/retry fixture、200% zoom、keyboard、Reduced Motion、unknown kind、malformed response 和视觉 artifact 生成脚本。这个 Slice 写门，不替其他 Slice 实现功能。
 
 ### Acceptance
 
-- 首屏不全量下载；desktop Canvas 图节点 DOM ≤220；Trajectory 只渲染 window+overscan。
+- 首屏不全量下载；desktop semantic node ≤180、图节点 DOM ≤220、Landmark Card ≤48；25% zoom Landmark Card ≤12；Trajectory 只渲染 window+overscan。
 - Delta 仅重算 affected roots；未受影响位置稳定。
 - 100 delta 终态 hash 一致；gap/resync 单次。
 - 360/768/1440、200% zoom、亮暗主题、Reduced Motion 有自动断言或 artifact。
+- route geometry 不含最终 orthogonal tree；失败端点、retry hairpin、stale/争议路径在灰阶下仍可区分。
 
 ### Blocked by
 

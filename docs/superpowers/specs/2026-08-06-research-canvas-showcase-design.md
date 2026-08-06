@@ -15,6 +15,7 @@
 | `2026-08-06-research-live-canvas-layout-spec.md` | 每个模块放哪里、各断点怎样重排 |
 | `2026-08-06-research-live-canvas-node-card-spec.md` | 节点卡具体显示负责人、目标、动作、解决项、进展的方法 |
 | `2026-08-06-research-live-canvas-viewport-performance-spec.md` | 点击居中、2/3 层展开、节点预算、Slice 与虚拟化 |
+| `2026-08-06-research-live-canvas-route-topology-spec.md` | 主节点卡、路标、微圆点、弯路/失败/回流、曲线布局与路径束 |
 | `2026-08-06-research-live-canvas-agent-execution-spec.md` | Agent/Task/Attempt 的真实状态和双向定位 |
 | `2026-08-06-research-live-canvas-motion-direction-spec.md` | 10 类 transition 的镜头、动画、光效和降级 |
 
@@ -51,7 +52,7 @@ ResearchSessionChrome
 ├─ LiveAgentDeck             Agent roster、Attempt 状态、当前任务、时长
 ├─ ResearchLensBar           执行 / 探索 / 证据 / Insight / 争议
 └─ ResearchWorkspace
-   ├─ InfiniteCanvas         当前 Slice 的卡片化语义图
+   ├─ InfiniteCanvas         地标卡 + 路标 + 微圆点组成的有机语义路线图
    ├─ ContextBreadcrumb      当前节点 → 上游 → Run
    ├─ NodeInspector          详情、证据、历史、允许的 NodeCommand
    ├─ Minimap                当前 Slice 与已加载范围，不伪装全图
@@ -119,7 +120,7 @@ Attempt 详情直接展示：`attempt_status`、`attempt_number`、`assigned_age
 
 ### 4.4 当前落地状态必须诚实显示
 
-截至 `origin/dev@4cf0be11c`：
+截至审阅基线 `origin/dev@ed1bdff3e`：
 
 - 已合并：统一 Canvas adapter、V6 schema/client、Delta reducer、Slice 前端基建、GraphModel、局部 positioner、camera focus、Presence v2、NodeCommand、Attempt lease/cancel 字段。
 - 尚未发现服务端 `/api/research/v6/runs/:id/projection/{snapshot,deltas,resume}` 路由；客户端方法存在不等于生产接口已接通。
@@ -131,10 +132,11 @@ Attempt 详情直接展示：`attempt_status`、`attempt_number`、`assigned_age
 
 ### 5.1 初始视口
 
-- 首屏只请求当前 Run 的入口 Slice：桌面建议 `maxDepth=2`、`limit≤120`，窄屏 `limit≤60`；实际上限服从服务端。
+- 首屏只请求当前 Run 的入口 Slice：桌面建议 `maxDepth=2`、`limit≤120`，窄屏 `limit≤48`；实际上限服从服务端。
 - 默认聚焦最高 importance 的活动节点、阻塞节点或最近 transition 的 affected root。
 - Minimap 只表达“已加载 Slice”，必须显示已加载/未加载数量，不能让用户误以为看到完整图。
-- 可见节点服从 viewport 子规格的 soft/hard limit；desktop 图节点 DOM 总量不得超过 220，10k fixture 不允许建立 10k DOM 节点。
+- 可见节点服从 viewport 与 route-topology 子规格的 soft/hard limit；desktop 图节点 DOM 总量不得超过 220，10k fixture 不允许建立 10k DOM 节点。
+- 主图禁止横平竖直的全量树。主节点保留为地标卡，中等节点降为路标，低 importance 的调研步骤降为可定位微圆点；失败、retry、stale 和汇入使用稳定曲线保留过程。
 
 ### 5.2 小节点 → 大节点 → 更大节点
 
@@ -143,7 +145,7 @@ Attempt 详情直接展示：`attempt_status`、`attempt_number`、`assigned_age
 1. **Canonical Insight**：后端产生 `insight` + `insight_derivation`，层级、输入、贡献 Agent、freshness 全部来自事实；卡片可逐层展开。
 2. **Display Group**：前端为性能折叠的显示单位，必须标“显示分组 · n 节点”，使用虚线/中性表面，不得使用 Insight 徽标，不写回后端。
 
-摘要态只显示顶层 Insight、选中路径、stale 路径、活动 task/attempt 与阻塞 dispute。展开时通过 Projection Slice 逐层加载；`canExpand=false` 不显示假展开入口。
+摘要态只显示顶层 Insight、选中路径、stale/失败路径、活动 task/attempt 与阻塞 dispute。其他过程压缩为 Route Bundle/Display Group。展开时通过 Projection Slice 逐层加载；`canExpand=false` 不显示假展开入口。
 
 ### 5.3 拖拽与操作
 
@@ -175,9 +177,10 @@ Attempt 详情直接展示：`attempt_status`、`attempt_number`、`assigned_age
 └─ typed-edge ports + unloaded count ───────────────┘
 ```
 
-- 40%：只显示轮廓、glyph、状态和负责人；不显示正文。
-- 100%：显示标题、两行摘要和 2–3 个事实。
-- 160%：显示扩展事实与操作入口，不把完整详情塞进卡片。
+- <35%：只保留 root、selected、active/blocking、顶层 Insight/Decision 地标卡，最多 12 张；其他节点切换成路标、微圆点和路径束。
+- 35–65%：紧凑地标卡 + 主要路标；不把标准卡整体缩小成不可读白块。
+- 66–119%：显示标准卡的标题、负责人、目标、当前动作和进展计数。
+- ≥120%：显示扩展事实与操作入口，不把完整详情塞进卡片。
 - 文字容器必须 `min-w-0` + clamp/break；数值和时长用 tabular numerals。
 - 状态不能只靠颜色；同时使用 badge 文案、glyph、线型或表面结构。
 
@@ -197,6 +200,8 @@ Attempt 详情直接展示：`attempt_status`、`attempt_number`、`assigned_age
 2. **Insight Crystallization**：`integration_formed` 后输入路径收束到 Insight 卡，卡片显示层级、输入数与贡献 Agent；终态仍保留输入关系。
 3. **Conflict Fracture**：`dispute_opened` 后 contradicts/challenged_by 关系显形，争议卡展开立场扇面；不使用循环抖动。
 4. **Director Escalation**：`lead_escalated` 后从 deliberation 到 Director/lead task 出现唯一的粗阶梯线，同时 Agent Deck 显示接手者。
+
+路径层还有 4 个明确分镜：新路线用 Route Sprout 长出；失败用 Dead-end Settle 留下断口；retry 用 Retry Hairpin 绕出新 Attempt；用户显式追踪时用 Detour Trace 沿弯路、失败点和回流路径播放一次。完整规则见 route-topology 与 motion-direction 子规格。
 
 其他 transition：`task_dispatched` 下沉到 Agent、`result_accepted` 结晶、`insight_staled` 沿祖先路径传播、`deliberation_progressed` 增加 turn、`team_membership_changed` 更新 roster、`report_revised` 显示版本替换。
 
@@ -239,6 +244,7 @@ Deck 排序：blocking/failed → running → queued → stale → idle → done
 ## 11. 性能、可访问性和质量门
 
 - 10k canonical 节点：首屏只取 Slice；desktop 图节点 DOM 预算 ≤220，其他断点服从 viewport 子规格，边按可视窗口裁剪。
+- desktop 同屏 semantic node soft/hard=120/180；Landmark Card hard=48，其他步骤使用 Waypoint、Trail Dot 或 Route Bundle，所有类型仍受总量上限约束。
 - Delta 只重算 `affectedRootIds`，未受影响节点坐标保持不变。
 - 不在 render 做 `getBoundingClientRect`；批量 DOM read/write；不使用 `transition: all`。
 - 所有 icon-only button 有 `aria-label`，装饰图标 `aria-hidden`，异步状态用 `aria-live="polite"`。
@@ -256,6 +262,7 @@ Deck 排序：blocking/failed → running → queued → stale → idle → done
 6. 10k 节点 Run 首屏不全量下载、不创建全量 DOM；多次 Slice 展开后仍可操作。
 7. 8 条 Agent 轨迹在独立 TrajectoryExplorer 中可追踪分叉、交叉、合并、终止和负责人。
 8. Reduced Motion、低性能、后台恢复、断网重连、200% zoom 均保持完整功能。
+9. 25% zoom 只保留 ≤12 张地标卡；用户仍能从弯曲路径、微圆点、失败端点和路径束看出主路、弯路、retry 与汇入。
 
 ## 13. 不做
 
@@ -264,4 +271,5 @@ Deck 排序：blocking/failed → running → queued → stale → idle → done
 - 不新增第二套 V6 type/registry/graph store。
 - 不让每个组件直接访问 API；server state 进入 React Query，client display state 进入 core Zustand。
 - 不在无限画布中复制独立 Git 轨迹探索器。
+- 不用 orthogonal tree、等距 rank 列或所有节点同尺寸卡片作为最终主画布。
 - 不为“震撼”牺牲可读性、焦点、Reduced Motion、性能或真实数据边界。

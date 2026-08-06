@@ -171,6 +171,48 @@ Deck 单元 FLIP 重排；加入 180ms 淡入，退出先显示 retired reason �
 - 分镜：活动 edge 流动全部停止；顶层 fresh Insight 与 report revision 在 600ms 内依重要度依次提亮；Chrome 显示交付入口。
 - 不做：彩带、全屏爆炸、遮挡报告按钮。失败/条件交付不能播放成功分镜。
 
+### 3.14 Route Sprout
+
+- 触发：聚焦上下文中的 `branch_spawned` 或 Slice 显式展开。
+- 分镜：稳定曲线 140ms opacity 淡入；单个 6px 探针沿 curve 移动 220–360ms；途中最多 6 个 Trail Dot 依次出现；终点 Waypoint/Landmark 最后淡入。
+- 后台普通分支只淡入终态，不抢镜头、不播放探针。
+
+### 3.15 Detour Trace
+
+- 触发：用户点击“查看走过的路”，不能由后台自动触发。
+- 分镜：探针沿选中路径从 root 向 terminal/Insight 运行；到 failed/lost 端点停 120ms，再沿 retry hairpin 继续；stale/争议段同时提升线型和端点。
+- 总编排超过 900ms 时按 Landmark 分段，允许点击跳过并直接落终态。
+
+### 3.16 Dead-end Settle
+
+- 触发：Attempt 明确进入 failed/lost。
+- 分镜：活动探针立即停止；尾段 140ms 出现断口；`×` 端点和失败入口淡入；旧路径与失败节点保留。
+- 禁止：卡片抖动、整屏红闪、把失败分支收回或删除。
+
+### 3.17 Retry Hairpin
+
+- 触发：后端建立新 retry Attempt/关系。
+- 分镜：新曲线路径从失败端点外侧绕出；新 Attempt 180ms 淡入；旧失败圆点不变，新路径使用 exploring 语义。
+- 新 Attempt 成功后只改变新路径 outcome；旧失败路径继续可追溯。
+
+### 3.18 Route Convergence
+
+- 触发：`integration_formed` 或明确 Decision 汇入关系。
+- 分镜：只提升参与的 canonical 输入曲线；每条输入各运行一次探针并向汇入点收束；复用 Insight Crystallization 创建 Landmark Card。
+- 没有 `integrates/derived_from/resolved_by` 等显式关系时，不因空间接近播放汇入。
+
+### 3.19 Semantic LOD Morph
+
+- 触发：zoom 穿过 <35%、35–65%、66–119%、≥120% 阈值或预算晋升/降级。
+- 分镜：Card/Waypoint/Trail Dot 围绕同一稳定锚点交叉淡入；旧形态 100–140ms 淡出，新形态 140–180ms 淡入。
+- 连续 wheel/pinch 时只应用最近终态；输入停止 120ms 后至多补一次淡入。禁止连续缩放文字和卡片正文。
+
+### 3.20 Ambient Probe
+
+- selected route 与最高优先 running route 各允许 1 个低频探针；同屏 hard limit=2。
+- 探针只表达已由执行事实确认的 active route，不代表 Agent 在线或任务进度百分比。
+- Reduced Motion、低性能、后台 tab、resync、offline 全部关闭。
+
 ## 4. 点击、展开与折叠
 
 - 点击：先 selection ring，后 camera；Inspector 内容可与 camera 并行淡入，但不能先抢焦点。
@@ -187,6 +229,7 @@ Deck 单元 FLIP 重排；加入 180ms 淡入，退出先显示 retired reason �
 - 1 个 active transition glow；
 - 1 个 selected ring；
 - 1 个 blocking/error attention mark。
+- 2 个 active route probe，且只在无高优先 transition 时运行。
 
 静止画面不允许：全图流动粒子、所有 running 节点呼吸、所有边持续流光、背景高频动画。Atmosphere 只能是低频低对比且低性能/Reduced Motion 关闭。
 
@@ -194,8 +237,8 @@ Deck 单元 FLIP 重排；加入 180ms 淡入，退出先显示 retired reason �
 
 | 条件 | 行为 |
 | --- | --- |
-| prefers-reduced-motion | 位移=0、duration=0；保留 badge/edge/终态 |
-| low performance | 关闭粒子/glow，stagger=0，camera 保留 180ms 或即时 |
+| prefers-reduced-motion | 位移=0、duration=0；关闭 route probe，保留 badge/线型/端点/终态 |
+| low performance | 关闭粒子/glow/route probe，stagger=0，camera 保留 180ms 或即时 |
 | document hidden | 丢弃动画 intent，只应用最新终态 |
 | resync | 不补播历史，Snapshot 120ms 淡入 |
 | >64 intents | coalesce 同 root/kind，旧 intent 丢弃 |

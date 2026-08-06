@@ -1721,43 +1721,6 @@ func TestBuildMetaSkillContentDoesNotUseLegacyManagedRole(t *testing.T) {
 	}
 }
 
-func TestExecutionDisciplineBriefAppearsOnceOnEveryRunKind(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		ctx  TaskContextForEnv
-	}{
-		{name: "assignment", ctx: TaskContextForEnv{IssueID: "issue-1"}},
-		{name: "comment", ctx: TaskContextForEnv{IssueID: "issue-1", TriggerCommentID: "comment-1"}},
-		{name: "chat", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
-		{name: "quick create", ctx: TaskContextForEnv{QuickCreatePrompt: "create an issue"}},
-		{name: "autopilot", ctx: TaskContextForEnv{AutopilotRunID: "run-1"}},
-	}
-	rules := []string{
-		`1. **Relay means relay.** For a request to relay, synchronize, or remind, act directly. Do not investigate, verify, or expand it unless verification is explicitly requested.`,
-		`2. **Combine repeated nudges.** Multiple prompts or follow-ups about one matter get one consolidated reply, not one reply per prompt.`,
-		`3. **Keep thread discussion in its thread.** Do not repeat the same discussion in the parent channel.`,
-		`4. **Send agents only deltas.** Share only new information with another agent; do not restate shared context, and do not reply when there is no delta.`,
-		`5. **Do not paste raw output to people.** State conclusions and necessary facts, not command output, JSON, or unprocessed tool output.`,
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			out := buildMetaSkillContent("codex", tc.ctx)
-			if got := strings.Count(out, executionDisciplineBrief); got != 1 {
-				t.Fatalf("execution discipline block count = %d, want 1", got)
-			}
-			for _, rule := range rules {
-				if got := strings.Count(out, rule); got != 1 {
-					t.Errorf("rule count = %d, want 1 for %q", got, rule)
-				}
-			}
-		})
-	}
-}
-
 func TestRuntimeBriefStaticInstructionsContainNoChineseCharacters(t *testing.T) {
 	t.Parallel()
 	brief := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1", ChatSessionID: "chat-1"})

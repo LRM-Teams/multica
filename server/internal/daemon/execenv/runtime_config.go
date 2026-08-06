@@ -441,16 +441,6 @@ func locateMarkerBlock(content string) (start, end int, found bool) {
 	return start, end, true
 }
 
-const executionDisciplineBrief = `## Execution Discipline
-
-**Five non-negotiable rules**
-
-1. **Relay means relay.** For a request to relay, synchronize, or remind, act directly. Do not investigate, verify, or expand it unless verification is explicitly requested.
-2. **Combine repeated nudges.** Multiple prompts or follow-ups about one matter get one consolidated reply, not one reply per prompt.
-3. **Keep thread discussion in its thread.** Do not repeat the same discussion in the parent channel.
-4. **Send agents only deltas.** Share only new information with another agent; do not restate shared context, and do not reply when there is no delta.
-5. **Do not paste raw output to people.** State conclusions and necessary facts, not command output, JSON, or unprocessed tool output.`
-
 // buildMetaSkillContent generates the meta skill markdown that teaches the agent
 // about the Multica runtime environment and available CLI tools.
 func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
@@ -587,9 +577,6 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- **Same-machine runtime switch:** the durable Agent workspace follows **Agent ID** (`MULTICA_AGENT_ROOT`); provider sessions may reset, but the working directory stays the same. Do not treat harness-private caches as canonical memory.\n\n")
 		renderMemoryOperatingGuide(&b, ctx)
 	}
-
-	b.WriteString(executionDisciplineBrief)
-	b.WriteString("\n\n")
 
 	renderPinnedRules(&b, ctx)
 

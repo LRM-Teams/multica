@@ -112,7 +112,7 @@ Chinese term reference:
 - `issue` has no settled Chinese translation — leave English; titles may capitalize as `Issue`
 - `skill` has no settled Chinese translation — leave English; titles may capitalize as `Skills`
 
-> **2026-07-17 decision (Frank) — the `issue` entity stays `Issue` in every locale.** A brief attempt to rename the user-facing `issue` entity (工单, keys like `LRM-137`) to `任务`/Task on a few surfaces (the channel board tab, activity/system-event rows) was **reversed**. Final ruling: the **issue entity = `Issue` everywhere** — keep the English word in all locales (en/zh `Issue`, ja `イシュー`, ko `이슈`), never `任务`. The word `任务` is reserved for the **agent-run / chat-task (`task #N`)** concept — two concepts, two words. Workflow **status names stay localized** (待办 / 处理中 / 审核中 / 已完成 …), since they hide the internal enum and are unrelated to entity naming. Internal code / API / DB `issue` is unchanged.
+> **2026-07-17 decision (Frank) — the `issue` entity stays `Issue` in every locale.** A brief attempt to rename the user-facing `issue` entity (工单, keys like `LRM-137`) to `任务`/Task on a few surfaces (the channel board tab, activity/system-event rows) was **reversed**. Final ruling: the **issue entity = `Issue` everywhere** — keep the English word in both shipped locales (en/zh `Issue`), never `任务`. The word `任务` is reserved for the **agent-run / chat-task (`task #N`)** concept — two concepts, two words. Workflow **status names stay localized** (待办 / 处理中 / 审核中 / 已完成 …), since they hide the internal enum and are unrelated to entity naming. Internal code / API / DB `issue` is unchanged.
 
 **Why `issue` / `skill` / `task` aren't forced into Chinese the way `project` is**:
 

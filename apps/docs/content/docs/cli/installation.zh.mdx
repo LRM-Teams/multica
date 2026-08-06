@@ -87,22 +87,23 @@ canonical `multica version`.
 multica update
 ```
 
-`multica update` updates the executable that invoked it. If Multica still
-resolves from an older system/Homebrew path, rerun the install script first to
-migrate to `$HOME/.local/bin/multica`; then use `multica update` on that
-canonical installation.
+若 daemon 正在运行，`multica update` 会向该机器的受保护控制面提交一个
+Machine Upgrade；daemon 是唯一负责 stage、handoff 和收敛的进程。daemon
+不存在时，命令会锁定 VersionStore，安装 Active 版本供**下一次** daemon 启动使用，
+不会声称已有运行中的 successor。若 PID 存在但控制面不可用，命令会以
+`upgrade_service_unreachable` 拒绝离线绕过。
 
 
-## Stuck on an old CLI (auto-update never runs)
+## Stuck on an old CLI (periodic self-update is retired)
 
-Some older daemons (for example **0.3.64–0.3.x** installs) never self-upgrade:
+Machine Upgrade is explicit-only. Older daemons (for example **0.3.64–0.3.x** installs) also cannot participate in the capability-gated lifecycle:
 
-- self-host defaults **auto-update off**
 - the binary's compile-time release feed points at a dead URL
 - the process is not a release build (`git describe` version), or is pinned
 
-You cannot fix those gates by waiting for the old binary to update itself.
-Use an **out-of-band** install from the public CDN release feed, then restart the daemon.
+Do not wait for a background update. Use an **out-of-band** install from the public CDN release feed, then restart the daemon. Once it reconnects with a current daemon, use an explicit Machine Upgrade request for future upgrades.
+
+首次从不支持 Machine Upgrade capability 的**未受 supervision** daemon 升级时，旧进程不具备 successor handoff 代码；完成带外安装后可能仍需一次显式 `multica daemon restart`。在 capability-bearing successor 完整重新注册前，界面不会把这次 bootstrap 描述为已收敛完成。
 
 ### Runbook (macOS/Linux)
 
@@ -124,13 +125,10 @@ multica daemon install-service   # preferred: user service + supervise (all plat
 multica daemon status
 ```
 
-Optional (self-host only, after the new binary is on PATH): enable auto-update and point at the canonical CDN so the *next* releases do not get stuck again:
+`MULTICA_DAEMON_AUTO_UPDATE`, `MULTICA_DAEMON_AUTO_UPDATE_INTERVAL`, `--no-auto-update`, and `--auto-update-interval` remain accepted temporarily for compatibility, but are no-ops. They cannot enable background release checks or mutation. `MULTICA_RELEASE_MANIFEST_BASE_URL` is still a release-source override used by explicit upgrade flows.
 
 ```bash
 export MULTICA_RELEASE_MANIFEST_BASE_URL="https://cdn.leagent.me/computer"
-export MULTICA_DAEMON_AUTO_UPDATE=true
-# put these in the daemon service environment, then:
-multica daemon install-service
 ```
 
 Windows: download the `windows-amd64` zip from `latest.json` under the same CDN base URL, replace `multica.exe`, then `multica daemon install-service` (or restart the existing service).

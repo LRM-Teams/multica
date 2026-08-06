@@ -130,13 +130,15 @@ jobs:
         #   yourself; CI won't.
         run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
 
-      # No Test step (Frank, 2026-08-06): the frontend unit suite was removed
-      # wholesale — after cutting its cost ~35% (#2394/#2401, happy-dom +
-      # threads) the job still could not reach the 10-minute wall target on
-      # one runner without deleting most page coverage anyway. Frontend
-      # correctness gates are build/typecheck/lint + React Doctor above.
-      # The measured infrastructure and the reintroduction bar live in
-      # docs/frontend-testing.md — read it before adding any test back.
+      # No Test step and no frontend-test job (Frank, 2026-08-06): the entire
+      # frontend test system — unit suites, the Playwright e2e/ suite, and
+      # the short-lived parallel frontend-test job from #2402 — was removed
+      # wholesale. After cutting the suite's cost ~35% (#2394/#2401,
+      # happy-dom + threads) the 10-minute wall target was still out of reach
+      # without deleting most page coverage anyway, so testing restarts from
+      # scratch under an explicit budget. Frontend correctness gates are
+      # build/typecheck/lint + React Doctor above. The rebuild covenant lives
+      # in docs/frontend-testing.md — read it before adding any test back.
   backend:
     # Also runs on the dev push. "The pull request already proved it" assumes no merge combination
     # can break tests both branches passed individually; #1457/#1459/#1455 hit

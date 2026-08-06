@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type LocalStorage struct {
@@ -150,6 +153,53 @@ func (s *LocalStorage) Upload(ctx context.Context, key string, data []byte, cont
 		return fmt.Sprintf("%s/uploads/%s", s.baseURL, key), nil
 	}
 	return fmt.Sprintf("/uploads/%s", key), nil
+}
+
+// PresignUpload reports the headers a client must use for a direct upload.
+// Local storage has no public object endpoint, so the Server supplies its
+// authenticated local upload route as the destination URL for the session.
+func (s *LocalStorage) PresignUpload(_ context.Context, _ string, _ time.Duration, contentType, _, _ string) (UploadSessionDestination, error) {
+	return UploadSessionDestination{
+		Method:  http.MethodPut,
+		Headers: map[string]string{"Content-Type": contentType},
+	}, nil
+}
+
+// VerifyUpload reads the object metadata from the local filesystem after the
+// session upload route has written it.
+func (s *LocalStorage) VerifyUpload(_ context.Context, key string) (UploadedObject, error) {
+	if strings.TrimSpace(key) == "" {
+		return UploadedObject{}, fmt.Errorf("local VerifyUpload: empty key")
+	}
+	filePath := filepath.Join(s.uploadDir, key)
+	if !isUnder(s.uploadDir, filePath) {
+		return UploadedObject{}, fmt.Errorf("local VerifyUpload: key escapes upload dir: %q", key)
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return UploadedObject{}, fmt.Errorf("local VerifyUpload: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return UploadedObject{}, fmt.Errorf("local VerifyUpload: object is not a regular file")
+	}
+	contentType := ""
+	if meta, ok := readLocalMeta(filePath); ok {
+		contentType = meta.ContentType
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return UploadedObject{}, fmt.Errorf("local VerifyUpload: %w", err)
+	}
+	defer f.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return UploadedObject{}, fmt.Errorf("local VerifyUpload checksum: %w", err)
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	if s.baseURL != "" {
+		return UploadedObject{URL: fmt.Sprintf("%s/uploads/%s", s.baseURL, key), SizeBytes: info.Size(), ContentType: contentType, ChecksumSHA256: digest}, nil
+	}
+	return UploadedObject{URL: fmt.Sprintf("/uploads/%s", key), SizeBytes: info.Size(), ContentType: contentType, ChecksumSHA256: digest}, nil
 }
 
 func (s *LocalStorage) GetFilePath(key string) string {

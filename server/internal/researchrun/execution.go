@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // executionStore is the canonical persistence input required by Execution
@@ -17,11 +19,14 @@ type executionStore interface {
 	ReconcileAttempts(context.Context, string, map[string]InboxTaskState) ([]RunEvent, error)
 	ActivateReadyTasks(context.Context, string) (int, error)
 	ListPendingCancellations(context.Context, string) ([]PendingCancellation, error)
-	MarkCancellationsCompleted(context.Context, string, []string) error
-	CreateAttempt(context.Context, string, string, string) (Attempt, RunEvent, error)
+	MarkCancellationsRequested(context.Context, string, []CancellationRequest) error
+	CompleteCancellations(context.Context, string, []string) ([]RunEvent, error)
+	CreateDispatchIntent(context.Context, CreateDispatchIntentInput) (Attempt, RunEvent, error)
+	ClaimDispatchIntents(context.Context, string, string, time.Duration, int) ([]DispatchIntent, error)
+	RescheduleDispatchIntent(context.Context, string, string, string, time.Time) (bool, error)
+	FailDispatchIntent(context.Context, string, string, AttemptFailure) (bool, RunEvent, error)
+	AcknowledgeDispatchIntent(context.Context, string, string, string) (bool, Attempt, RunEvent, error)
 	TaskContext(context.Context, string, string) (RunSnapshot, error)
-	FailAttempt(context.Context, AttemptFailure) (RunEvent, error)
-	AttachInboxTask(context.Context, string, string) (Attempt, RunEvent, error)
 }
 
 type executionModule struct {
@@ -35,6 +40,9 @@ type executionModule struct {
 // An Inbox Task ID is authoritative once attached; DispatchKey is used only
 // while the attach acknowledgement is still missing.
 func (module executionModule) SyncAttempts(ctx context.Context, sessionID string) error {
+	if _, err := module.DeliverPending(ctx, sessionID, 32); err != nil {
+		return err
+	}
 	attempts, err := module.store.ListAttempts(ctx, sessionID)
 	if err != nil {
 		return err
@@ -63,6 +71,77 @@ func (module executionModule) SyncAttempts(ctx context.Context, sessionID string
 	return module.ActivateReadyTasks(ctx, sessionID)
 }
 
+const (
+	dispatchLeaseDuration = 45 * time.Second
+	maxDispatchDeliveries = 8
+)
+
+// DeliverPending resumes frozen external mutations. Dispatcher.Dispatch is
+// idempotent by request Key, so a crash after the external commit but before
+// acknowledgement is repaired by replaying the exact same request.
+func (module executionModule) DeliverPending(ctx context.Context, sessionID string, limit int) (int, error) {
+	token := uuid.NewString()
+	intents, err := module.store.ClaimDispatchIntents(ctx, sessionID, token, dispatchLeaseDuration, limit)
+	if err != nil {
+		return 0, err
+	}
+	delivered := 0
+	for _, intent := range intents {
+		result, dispatchErr := module.dispatcher.Dispatch(ctx, intent.Request)
+		if dispatchErr != nil {
+			retryable := dispatchErrorRetryable(dispatchErr)
+			mutationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			if retryable && intent.DeliveryAttempts < maxDispatchDeliveries {
+				next := module.clock.Now().Add(dispatchDeliveryBackoff(intent.DeliveryAttempts))
+				_, err = module.store.RescheduleDispatchIntent(mutationCtx, intent.ID, token, dispatchErr.Error(), next)
+				cancel()
+				if err != nil {
+					return delivered, errors.Join(dispatchErr, err)
+				}
+				continue
+			}
+			_, _, err = module.store.FailDispatchIntent(mutationCtx, intent.ID, token, AttemptFailure{
+				AttemptID: intent.AttemptID, FailureClass: "dispatch_failed",
+				Diagnostics: dispatchErr.Error(), Retryable: retryable,
+			})
+			cancel()
+			if err != nil {
+				return delivered, errors.Join(dispatchErr, err)
+			}
+			if !retryable {
+				return delivered, fmt.Errorf("dispatch research task %s: %w", intent.Request.Task.ID, dispatchErr)
+			}
+			continue
+		}
+		mutationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		accepted, _, _, acknowledgeErr := module.store.AcknowledgeDispatchIntent(mutationCtx, intent.ID, token, result.InboxTaskID)
+		cancel()
+		if acknowledgeErr != nil {
+			// Do not cancel here. The outbox lease will expire and the idempotent
+			// external request will return the same Inbox Task on replay.
+			return delivered, acknowledgeErr
+		}
+		if !accepted {
+			cancelCtx, cancelRuntime := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			cancelErr := module.dispatcher.Cancel(cancelCtx, []string{result.InboxTaskID}, "research_attempt_no_longer_dispatchable")
+			cancelRuntime()
+			if cancelErr != nil {
+				return delivered, cancelErr
+			}
+			continue
+		}
+		delivered++
+	}
+	return delivered, nil
+}
+
+func dispatchDeliveryBackoff(deliveryAttempt int) time.Duration {
+	if deliveryAttempt < 1 {
+		deliveryAttempt = 1
+	}
+	return time.Duration(5*(1<<min(deliveryAttempt-1, 6))) * time.Second
+}
+
 func (module executionModule) ActivateReadyTasks(ctx context.Context, sessionID string) error {
 	_, err := module.store.ActivateReadyTasks(ctx, sessionID)
 	return err
@@ -78,7 +157,9 @@ func (module executionModule) CancelPendingAttempts(ctx context.Context, run Run
 	}
 	lookupKeys := make([]string, 0, len(pending))
 	for _, attempt := range pending {
-		if attempt.InboxTaskID == "" {
+		if attempt.InboxTaskID != "" {
+			lookupKeys = append(lookupKeys, attempt.InboxTaskID)
+		} else {
 			lookupKeys = append(lookupKeys, attempt.DispatchKey)
 		}
 	}
@@ -90,24 +171,39 @@ func (module executionModule) CancelPendingAttempts(ctx context.Context, run Run
 		}
 	}
 	inboxIDs := make([]string, 0, len(pending))
+	requests := make([]CancellationRequest, 0, len(pending))
 	completedAttemptIDs := make([]string, 0, len(pending))
 	staleAfter := time.Duration(run.Config.StaleAfterSeconds) * time.Second
 	if staleAfter <= 0 {
 		staleAfter = 15 * time.Minute
 	}
 	for _, attempt := range pending {
-		inboxID := attempt.InboxTaskID
-		if inboxID == "" {
-			if state, ok := states[attempt.DispatchKey]; ok {
-				inboxID = state.ID
-			}
+		lookupKey := attempt.InboxTaskID
+		if lookupKey == "" {
+			lookupKey = attempt.DispatchKey
 		}
-		if inboxID != "" {
-			inboxIDs = append(inboxIDs, inboxID)
+		state, found := states[lookupKey]
+		if !found {
+			state, found = states[attempt.DispatchKey]
+		}
+		inboxID := attempt.InboxTaskID
+		if inboxID == "" && found {
+			inboxID = state.ID
+		}
+		if found && !state.HasActiveLease && terminalInboxTaskState(state.Status) {
 			completedAttemptIDs = append(completedAttemptIDs, attempt.AttemptID)
 			continue
 		}
-		if !module.clock.Now().Before(attempt.DispatchedAt.Add(staleAfter)) {
+		if inboxID != "" && attempt.CancellationRequestedAt == nil {
+			inboxIDs = append(inboxIDs, inboxID)
+			requests = append(requests, CancellationRequest{AttemptID: attempt.AttemptID, InboxTaskID: inboxID})
+			continue
+		}
+		staleBase := attempt.DispatchedAt
+		if attempt.CancellationRequestedAt != nil {
+			staleBase = *attempt.CancellationRequestedAt
+		}
+		if !found && !module.clock.Now().Before(staleBase.Add(staleAfter)) {
 			completedAttemptIDs = append(completedAttemptIDs, attempt.AttemptID)
 		}
 	}
@@ -118,14 +214,29 @@ func (module executionModule) CancelPendingAttempts(ctx context.Context, run Run
 		if err != nil {
 			return true, fmt.Errorf("cancel research inbox tasks: %w", err)
 		}
+		markCtx, markCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		err = module.store.MarkCancellationsRequested(markCtx, run.SessionID, requests)
+		markCancel()
+		if err != nil {
+			return true, err
+		}
 	}
 	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	err = module.store.MarkCancellationsCompleted(markCtx, run.SessionID, completedAttemptIDs)
+	_, err = module.store.CompleteCancellations(markCtx, run.SessionID, completedAttemptIDs)
 	cancel()
 	if err != nil {
 		return true, err
 	}
 	return len(completedAttemptIDs) < len(pending), nil
+}
+
+func terminalInboxTaskState(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks []Task, attempts []Attempt, members []FleetMember) (int, error) {
@@ -135,7 +246,7 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 	activeByAgent := map[string]int{}
 	activeAttempts := 0
 	for _, attempt := range attempts {
-		if attempt.Status == AttemptStatusDispatching || attempt.Status == AttemptStatusRunning {
+		if attempt.Status == AttemptStatusDispatching || attempt.Status == AttemptStatusRunning || attempt.Status == AttemptStatusCancelling {
 			activeByAgent[attempt.AssignedAgentID]++
 			activeAttempts++
 		}
@@ -177,50 +288,57 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 			}
 			return dispatched, fmt.Errorf("%w: no active fleet member has capability %q for task %s", ErrCapabilityUnavailable, roleForTask(task), task.ID)
 		}
-		attempt, _, err := module.store.CreateAttempt(ctx, run.SessionID, task.ID, agentID)
+		snapshot, err := module.store.TaskContext(ctx, task.ID, run.WorkspaceID)
+		if err != nil {
+			return dispatched, err
+		}
+		var currentTask Task
+		for _, candidate := range snapshot.Tasks {
+			if candidate.ID == task.ID {
+				currentTask = candidate
+				break
+			}
+		}
+		if currentTask.ID == "" || currentTask.Status != TaskStatusReady {
+			continue
+		}
+		attemptID := uuid.NewString()
+		dispatchKey := fmt.Sprintf("research:%s:task:%s:attempt:%s", snapshot.Run.SessionID, currentTask.ID, attemptID)
+		attempt := Attempt{ID: attemptID, SessionID: snapshot.Run.SessionID, WorkspaceID: snapshot.Run.WorkspaceID,
+			TaskID: currentTask.ID, AssignedAgentID: agentID, DispatchKey: dispatchKey, Status: AttemptStatusDispatching}
+		prompt, err := module.prompts.Build(snapshot.Run, currentTask, attempt, snapshot, members)
+		if err != nil {
+			return dispatched, err
+		}
+		request := DispatchRequest{
+			Run:       snapshot.Run,
+			Task:      currentTask,
+			AttemptID: attempt.ID,
+			AgentID:   agentID,
+			Key:       attempt.DispatchKey,
+			Prompt:    prompt,
+		}
+		request.RequestHash, err = HashDispatchRequest(request)
+		if err != nil {
+			return dispatched, err
+		}
+		_, _, err = module.store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
+			AttemptID: attemptID, SessionID: snapshot.Run.SessionID, TaskID: currentTask.ID,
+			AgentID: agentID, ExpectedStateVersion: snapshot.Run.StateVersion, Request: request,
+		})
 		if errors.Is(err, ErrInvalidTransition) {
 			continue
 		}
 		if err != nil {
 			return dispatched, err
 		}
-		snapshot, err := module.store.TaskContext(ctx, task.ID, run.WorkspaceID)
-		if err != nil {
-			_, _ = module.store.FailAttempt(ctx, AttemptFailure{AttemptID: attempt.ID, FailureClass: "context_load_failed", Diagnostics: err.Error(), Retryable: true})
-			continue
-		}
-		prompt, err := module.prompts.Build(run, task, attempt, snapshot, members)
-		if err != nil {
-			_, _ = module.store.FailAttempt(ctx, AttemptFailure{AttemptID: attempt.ID, FailureClass: "unsupported_orchestrator_version", Diagnostics: err.Error(), Retryable: false})
-			return dispatched, err
-		}
-		request := DispatchRequest{
-			Run:       run,
-			Task:      task,
-			AttemptID: attempt.ID,
-			AgentID:   agentID,
-			Key:       attempt.DispatchKey,
-			Prompt:    prompt,
-		}
-		dispatch, err := module.dispatcher.Dispatch(ctx, request)
-		if err != nil {
-			retryable := dispatchErrorRetryable(err)
-			if _, failErr := module.store.FailAttempt(ctx, AttemptFailure{AttemptID: attempt.ID, FailureClass: "dispatch_failed", Diagnostics: err.Error(), Retryable: retryable}); failErr != nil {
-				return dispatched, errors.Join(err, failErr)
-			}
-			if !retryable {
-				return dispatched, fmt.Errorf("dispatch research task %s: %w", task.ID, err)
-			}
-			continue
-		}
-		if _, _, err = module.store.AttachInboxTask(ctx, attempt.ID, dispatch.InboxTaskID); err != nil {
-			cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-			cancelErr := module.dispatcher.Cancel(cancelCtx, []string{dispatch.InboxTaskID}, "research_attempt_no_longer_dispatchable")
-			cancel()
-			return dispatched, errors.Join(err, cancelErr)
-		}
 		activeByAgent[agentID]++
 		dispatched++
+	}
+	if dispatched > 0 {
+		if _, err := module.DeliverPending(ctx, run.SessionID, dispatched); err != nil {
+			return dispatched, err
+		}
 	}
 	return dispatched, nil
 }

@@ -101,3 +101,19 @@ func TestOfflineActivateAbortsOnBadCandidate(t *testing.T) {
 		t.Fatalf("Active should be unchanged on abort: %+v", state)
 	}
 }
+
+func TestRollbackToPreviousActiveUsesVerifiedCASPath(t *testing.T) {
+	previousProbe := probeStagedCandidate
+	probeStagedCandidate = func(context.Context, string, string, string) error { return nil }
+	t.Cleanup(func() { probeStagedCandidate = previousProbe })
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	stageAndActivate(t, store, "v0.3.77")
+	stageAndActivate(t, store, "v0.3.78")
+	rolledBack, _, err := store.RollbackToPreviousActive(context.Background(), "rollback-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledBack.ActiveVersion != "v0.3.77" || rolledBack.PreviousVersion != "v0.3.78" {
+		t.Fatalf("rollback activation = %+v", rolledBack)
+	}
+}

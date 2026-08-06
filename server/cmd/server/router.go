@@ -567,6 +567,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
+		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/accept", h.AcceptMachineUpgrade)
+		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/progress", h.ReportMachineUpgradeProgress)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
@@ -1192,6 +1194,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// Canonical daemon-identity Machine Upgrade lifecycle. Runtime-scoped
+			// update routes remain compatibility adapters for installed clients.
+			r.Route("/api/daemons/{daemonId}/upgrades", func(r chi.Router) {
+				r.Post("/", h.CreateMachineUpgrade)
+				r.Get("/{upgradeId}", h.GetMachineUpgrade)
+				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
+			})
+
 			// Cloud Runtime fleet proxy. The remote service URL is configured
 			// on SaaS API nodes only; self-hosted deployments return 503.
 			r.Route("/api/cloud-runtime", func(r chi.Router) {
@@ -1303,7 +1313,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/attachments/{id}", h.GetAgentAttachment)
 				r.Get("/attachments/{id}/download", h.DownloadAgentAttachment)
 				r.Get("/attachments/{id}/content", h.GetAgentAttachmentContent)
-				r.Post("/attachments", h.UploadAgentAttachment)
+				r.Get("/attachment-upload-capabilities", h.AgentAttachmentUploadCapabilities)
+				r.Post("/attachment-upload-sessions", h.CreateAgentAttachmentUploadSession)
+				r.Get("/attachment-upload-sessions/{sessionId}", h.GetAgentAttachmentUploadSessionStatus)
+				r.Put("/attachment-upload-sessions/{sessionId}/object", h.UploadAgentAttachmentSessionObject)
+				r.Post("/attachment-upload-sessions/{sessionId}/retry", h.RetryAgentAttachmentUploadSession)
+				r.Post("/attachment-upload-sessions/{sessionId}/cancel", h.CancelAgentAttachmentUploadSession)
+				r.Post("/attachment-upload-sessions/{sessionId}/complete", h.CompleteAgentAttachmentUploadSession)
 				r.Get("/channels/{channelId}/attachments", h.ListAgentChannelAttachments)
 				// Issues / projects / workspace / squad (necessary batch)
 				r.Get("/issues", h.ListAgentIssues)

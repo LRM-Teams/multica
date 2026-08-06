@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -904,7 +906,23 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 	}
 	userUUID := parseUUID(userID)
 	metadata := buildSandboxMetadata(req.Metadata, req.Name, req.Runtime)
+	dockerContainerName := ""
 	if req.DockerImage != "" {
+		if strings.TrimSpace(req.Name) == "" {
+			writeError(w, http.StatusBadRequest, "name is required for docker containers")
+			return
+		}
+		workspace, err := h.Queries.GetWorkspace(r.Context(), wsUUID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load workspace")
+			return
+		}
+		user, err := h.Queries.GetUser(r.Context(), userUUID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load user")
+			return
+		}
+		dockerContainerName = buildSandboxDockerContainerName(sandboxServerURLFromRequest(r), workspace, user, req.Name)
 		var meta map[string]any
 		_ = json.Unmarshal(metadata, &meta)
 		if meta == nil {
@@ -912,6 +930,7 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		}
 		meta["creation_mode"] = "docker_container"
 		meta["docker_image"] = req.DockerImage
+		meta["docker_container_name"] = dockerContainerName
 		metadata, _ = json.Marshal(meta)
 	}
 	inst, err := h.Queries.CreateSandboxInstance(r.Context(), db.CreateSandboxInstanceParams{
@@ -952,6 +971,7 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.DockerImage != "" {
 		payloadMap["docker_image"] = req.DockerImage
+		payloadMap["docker_container_name"] = dockerContainerName
 	}
 	payload, _ := json.Marshal(payloadMap)
 	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
@@ -975,15 +995,94 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.UUID, instanceID, displayName string) (map[string]string, error) {
+	return h.mintSandboxRuntimeEnv(r.Context(), workspaceID, userID, instanceID, sandboxServerURLFromRequest(r), displayName)
+}
+
+func sandboxServerURLFromRequest(r *http.Request) string {
 	serverURL := firstNonEmptyString(os.Getenv("MULTICA_PUBLIC_URL"), os.Getenv("MULTICA_APP_URL"), os.Getenv("MULTICA_SERVER_URL"))
-	if serverURL == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		serverURL = scheme + "://" + r.Host
+	if serverURL != "" {
+		return serverURL
 	}
-	return h.mintSandboxRuntimeEnv(r.Context(), workspaceID, userID, instanceID, serverURL, displayName)
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func buildSandboxDockerContainerName(serverURL string, workspace db.Workspace, user db.User, containerName string) string {
+	parts := []string{
+		"multica",
+		sandboxDeploymentDockerSegment(serverURL),
+		sandboxDockerNameSegmentFrom("workspace", 32, workspace.Slug, workspace.Name, uuidToString(workspace.ID)),
+		sandboxDockerNameSegmentFrom("user", 32, user.Name, user.DisplayName, user.Email, uuidToString(user.ID)),
+		sandboxDockerNameSegmentFrom("container", 48, containerName),
+	}
+	return strings.Join(parts, "-")
+}
+
+func sandboxDeploymentDockerSegment(serverURL string) string {
+	raw := strings.TrimSpace(serverURL)
+	host := raw
+	if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	} else {
+		if h, _, err := net.SplitHostPort(raw); err == nil {
+			host = h
+		}
+		if i := strings.Index(host, "/"); i >= 0 {
+			host = host[:i]
+		}
+	}
+	host = strings.Trim(host, "[]")
+	return sandboxDockerNameSegment(host, "server", 36)
+}
+
+func sandboxDockerNameSegmentFrom(fallback string, maxLen int, values ...string) string {
+	for _, value := range values {
+		if segment := sandboxDockerNameSegment(value, "", maxLen); segment != "" {
+			return segment
+		}
+	}
+	return fallback
+}
+
+func sandboxDockerNameSegment(raw, fallback string, maxLen int) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.TrimSpace(raw) {
+		var out rune
+		switch {
+		case r >= 'a' && r <= 'z':
+			out = r
+		case r >= 'A' && r <= 'Z':
+			out = r + ('a' - 'A')
+		case r >= '0' && r <= '9':
+			out = r
+		default:
+			out = '-'
+		}
+		if out == '-' {
+			if b.Len() == 0 || lastDash {
+				continue
+			}
+			lastDash = true
+		} else {
+			lastDash = false
+		}
+		b.WriteRune(out)
+	}
+	clean := strings.Trim(b.String(), "-")
+	if clean == "" {
+		clean = fallback
+	}
+	if maxLen > 0 && len(clean) > maxLen {
+		clean = strings.Trim(clean[:maxLen], "-")
+		if clean == "" {
+			clean = fallback
+		}
+	}
+	return clean
 }
 
 // mintSandboxRuntimeEnv builds the daemon bootstrap env for a sandbox: it mints

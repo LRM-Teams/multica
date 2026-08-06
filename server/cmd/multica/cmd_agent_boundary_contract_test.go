@@ -262,9 +262,8 @@ func TestBoundary_AttachmentView_HitsDedicatedAgentAPI(t *testing.T) {
 	}
 }
 
-// TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI asserts upload goes to
-// dedicated agent upload surface, not human /api/upload-file.
-// mat_* requires --target (unbound rejected — #801 Barry/Ronan lock).
+// TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI asserts an Agent upload
+// uses the target-bound Upload Session surface, never the human multipart API.
 func TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "up.txt")
 	if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
@@ -274,13 +273,16 @@ func TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/agent/channels":
-			_ = json.NewEncoder(w).Encode([]map[string]any{
-				{"id": boundaryContractChannelID, "name": "eng"},
+		case r.Method == http.MethodGet && r.URL.Path == "/api/agent/attachment-upload-capabilities":
+			_ = json.NewEncoder(w).Encode(map[string]any{"max_size_bytes": 1024, "session_ttl_seconds": 900})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/agent/attachment-upload-sessions":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "session-1", "upload_url": "/api/agent/attachment-upload-sessions/session-1/object",
+				"method": "PUT", "headers": map[string]string{"Content-Type": "text/plain"},
 			})
-		case r.Method == http.MethodPost && (r.URL.Path == "/api/agent/attachments" ||
-			r.URL.Path == "/api/agent/attachments/upload" ||
-			r.URL.Path == "/api/agent/upload-file"):
+		case r.Method == http.MethodPut && r.URL.Path == "/api/agent/attachment-upload-sessions/session-1/object":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/agent/attachment-upload-sessions/session-1/complete":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":       boundaryContractAttachmentID,
 				"filename": "up.txt",
@@ -303,23 +305,30 @@ func TestBoundary_AttachmentUpload_HitsDedicatedAgentAPI(t *testing.T) {
 
 	err := runAttachmentUpload(cmd, nil)
 	if err != nil {
-		t.Fatalf("runAttachmentUpload: %v (paths=%v) — expect dedicated /api/agent/attachments*", err, gotPaths)
+		t.Fatalf("runAttachmentUpload: %v (paths=%v) — expect dedicated Upload Session API", err, gotPaths)
 	}
-	foundUpload := false
+	wantPaths := []string{
+		"GET /api/agent/attachment-upload-capabilities",
+		"POST /api/agent/attachment-upload-sessions",
+		"PUT /api/agent/attachment-upload-sessions/session-1/object",
+		"POST /api/agent/attachment-upload-sessions/session-1/complete",
+	}
+	if len(gotPaths) != len(wantPaths) {
+		t.Fatalf("paths=%v, want %v", gotPaths, wantPaths)
+	}
+	for i, p := range gotPaths {
+		if p != wantPaths[i] {
+			t.Fatalf("paths=%v, want %v", gotPaths, wantPaths)
+		}
+	}
 	for _, p := range gotPaths {
 		path := strings.SplitN(p, " ", 2)[1]
-		if path == "/api/upload-file" || strings.HasPrefix(path, "/api/attachments/") {
+		if path == "/api/upload-file" || strings.HasPrefix(path, "/api/attachments/") || strings.HasPrefix(path, "/api/agent/attachments") {
 			t.Fatalf("upload hit human path %q; full=%v", p, gotPaths)
 		}
 		if !strings.HasPrefix(path, "/api/agent/") {
 			t.Fatalf("upload path %q is not under /api/agent/; full=%v", p, gotPaths)
 		}
-		if path == "/api/agent/attachments" || path == "/api/agent/attachments/upload" || path == "/api/agent/upload-file" {
-			foundUpload = true
-		}
-	}
-	if !foundUpload {
-		t.Fatalf("paths=%v, want dedicated agent upload POST", gotPaths)
 	}
 }
 
@@ -353,7 +362,7 @@ func TestBoundary_MessageSend_UsesMachineLocalProxy(t *testing.T) {
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("message", "boundary regression")
+	cmd.SetIn(strings.NewReader("boundary regression"))
 	if err := runAgentMessageSend(cmd, nil); err != nil {
 		t.Fatalf("runAgentMessageSend: %v", err)
 	}
@@ -1387,7 +1396,8 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"task run messages", []string{"/api/agent/tasks/", "/messages"}},
 		{"task self-cancel", []string{"/api/agent/tasks/", "/cancel"}},
 		{"project resource read", []string{"/api/agent/projects/"}},
-		{"attachment view/upload", []string{"/api/agent/attachments", "/api/agent/upload-file"}},
+		{"attachment view", []string{"/api/agent/attachments"}},
+		{"attachment upload session", []string{"/api/agent/attachment-upload-sessions"}},
 		{"directory agents", []string{"/api/agent/agents"}},
 		{"workspace get", []string{"/api/agent/workspace"}},
 	}
@@ -1411,19 +1421,12 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 	}
 }
 
-// TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging asserts mat_*
-// CLI may omit --target and still POST dedicated /api/agent/attachments
-// (Parker secure staging for DM/thread attach via --attachment-id).
-func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) {
+// TestBoundary_AttachmentUpload_AgentTokenRequiresTargetBoundSession prevents
+// unbound Agent staging: a later Message must prove the same target session.
+func TestBoundary_AttachmentUpload_AgentTokenRequiresTargetBoundSession(t *testing.T) {
 	var gotPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPaths = append(gotPaths, r.Method+" "+r.URL.Path)
-		if r.Method == http.MethodPost && r.URL.Path == "/api/agent/attachments" {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id": boundaryContractAttachmentID, "filename": "x.txt",
-			})
-			return
-		}
 		http.Error(w, "unexpected path", http.StatusForbidden)
 	}))
 	t.Cleanup(srv.Close)
@@ -1442,21 +1445,13 @@ func TestBoundary_AttachmentUpload_AgentTokenAllowsUnboundStaging(t *testing.T) 
 	cmd.Flags().String("path", "", "")
 	cmd.Flags().String("target", "", "")
 	_ = cmd.Flags().Set("path", path)
-	// no --target → unbound staging
-	if err := runAttachmentUpload(cmd, nil); err != nil {
-		t.Fatalf("mat_* unbound staging upload: %v paths=%v", err, gotPaths)
+	// no --target must fail before any request can create unbound staging.
+	err := runAttachmentUpload(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "--target is required") {
+		t.Fatalf("unbound Agent upload error = %v, want target requirement", err)
 	}
-	found := false
-	for _, p := range gotPaths {
-		if p == "POST /api/agent/attachments" {
-			found = true
-		}
-		if strings.Contains(p, "/api/upload-file") {
-			t.Fatalf("hit human upload path %q", p)
-		}
-	}
-	if !found {
-		t.Fatalf("paths=%v, want POST /api/agent/attachments", gotPaths)
+	if len(gotPaths) != 0 {
+		t.Fatalf("unbound Agent upload made requests: %v", gotPaths)
 	}
 }
 

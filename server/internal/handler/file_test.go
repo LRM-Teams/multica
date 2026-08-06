@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/auth"
+	"github.com/multica-ai/multica/server/internal/storage"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -53,17 +55,22 @@ func createHandlerTestChatSession(t *testing.T, agentID string) string {
 type mockStorage struct {
 	mu                  sync.Mutex
 	files               map[string][]byte
+	contentTypes        map[string]string
 	presignCalls        []string
 	presignDispositions []string
 }
 
-func (m *mockStorage) Upload(_ context.Context, key string, data []byte, _ string, _ string) (string, error) {
+func (m *mockStorage) Upload(_ context.Context, key string, data []byte, contentType string, _ string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.files == nil {
 		m.files = map[string][]byte{}
 	}
 	m.files[key] = append([]byte(nil), data...)
+	if m.contentTypes == nil {
+		m.contentTypes = map[string]string{}
+	}
+	m.contentTypes[key] = contentType
 	return fmt.Sprintf("https://cdn.example.com/%s", key), nil
 }
 
@@ -128,6 +135,28 @@ func (m *mockStorage) PresignGetWithContentDisposition(_ context.Context, key st
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
+
+func (m *mockStorage) PresignUpload(_ context.Context, _ string, _ time.Duration, contentType, _, _ string) (storage.UploadSessionDestination, error) {
+	return storage.UploadSessionDestination{Method: http.MethodPut, Headers: map[string]string{"Content-Type": contentType}}, nil
+}
+
+func (m *mockStorage) VerifyUpload(_ context.Context, key string) (storage.UploadedObject, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	data, ok := m.files[key]
+	if !ok {
+		return storage.UploadedObject{}, fmt.Errorf("mockStorage VerifyUpload: key not found: %q", key)
+	}
+	contentType := m.contentTypes[key]
+	digest := sha256.Sum256(data)
+	return storage.UploadedObject{
+		URL:            fmt.Sprintf("https://cdn.example.com/%s", key),
+		SizeBytes:      int64(len(data)),
+		ContentType:    contentType,
+		ChecksumSHA256: fmt.Sprintf("%x", digest),
+	}, nil
+}
+
 func (m *mockStorage) put(key string, data []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -135,6 +164,10 @@ func (m *mockStorage) put(key string, data []byte) {
 		m.files = map[string][]byte{}
 	}
 	m.files[key] = append([]byte(nil), data...)
+	if m.contentTypes == nil {
+		m.contentTypes = map[string]string{}
+	}
+	m.contentTypes[key] = http.DetectContentType(data)
 }
 
 func TestCanonicalUploadContentTypeNormalizesWAV(t *testing.T) {

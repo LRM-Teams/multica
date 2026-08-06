@@ -23,6 +23,7 @@ const (
 	versionMetadataName       = "version.json"
 	activationStateName       = "activation.json"
 	activationLockName        = "activation.lock"
+	machineMutationLockName   = "machine-upgrade.lock"
 )
 
 var ErrActivationConflict = errors.New("activation generation conflict")
@@ -33,6 +34,29 @@ type VersionStore struct {
 	root     string
 	goos     string
 	verifier BinaryVerifier
+}
+
+// WithMachineMutationLock serializes a complete offline Machine Upgrade,
+// including staging and activation. CompareAndSwapActivation alone protects
+// Active, but is too narrow to prevent two offline invocations from racing
+// through target resolution and release mutation as separate operations.
+func (s *VersionStore) WithMachineMutationLock(ctx context.Context, fn func() error) error {
+	if s == nil {
+		return errors.New("version store is nil")
+	}
+	if fn == nil {
+		return errors.New("machine mutation callback is required")
+	}
+	lockFile, err := os.OpenFile(filepath.Join(s.root, machineMutationLockName), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open machine mutation lock: %w", err)
+	}
+	defer lockFile.Close()
+	if err := lockExclusiveContext(ctx, lockFile); err != nil {
+		return fmt.Errorf("lock machine mutation: %w", err)
+	}
+	defer unlockExclusive(lockFile)
+	return fn()
 }
 
 type StagedVersion struct {

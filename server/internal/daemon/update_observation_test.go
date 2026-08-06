@@ -35,7 +35,7 @@ func TestUpdateObservationCoordinatorPersistsBeforePublishing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon-update-status.json")
 	coordinator := newTestUpdateObservationCoordinator(t, path)
 	initial := coordinator.Snapshot()
-	if initial.Revision != 1 || initial.Phase != "waiting" || initial.LastOutcome != "never_checked" {
+	if initial.Revision != 1 || initial.Phase != "disabled" || initial.LastOutcome != "explicit_only" || initial.AutoUpdateEffectiveEnabled || initial.ConfigSource != "deprecated_noop" || initial.IneligibleReason != "explicit_only" {
 		t.Fatalf("initial observation = %+v", initial)
 	}
 
@@ -82,7 +82,7 @@ func TestUpdateObservationCoordinatorNormalizesInterruptedPredecessor(t *testing
 	if successor.SessionID == first.Snapshot().SessionID {
 		t.Fatal("successor reused predecessor session_id")
 	}
-	if successor.Revision != 1 || successor.Phase != "waiting" || successor.LastOutcome != "interrupted" {
+	if successor.Revision != 1 || successor.Phase != "disabled" || successor.LastOutcome != "interrupted" {
 		t.Fatalf("successor observation = %+v", successor)
 	}
 	if successor.ErrorCode != "daemon_restarted_during_update" || successor.TargetVersion != "v0.3.73" {
@@ -104,7 +104,7 @@ func TestUpdateObservationCoordinatorReplaysRestartPendingSuccess(t *testing.T) 
 	}
 
 	successor := newTestUpdateObservationCoordinator(t, path).Snapshot()
-	if successor.Phase != "waiting" ||
+	if successor.Phase != "disabled" ||
 		successor.LastOutcome != "update_succeeded" ||
 		successor.TargetVersion != "v0.3.73" {
 		t.Fatalf("successor replay = %+v", successor)

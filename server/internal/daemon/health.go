@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -120,6 +122,64 @@ func (d *Daemon) shutdownHandler() http.HandlerFunc {
 			// srv.Close() races with the writer.
 			go d.cancelFunc()
 		}
+	}
+}
+
+type localMachineUpgradeRequest struct {
+	RequestID     string `json:"request_id"`
+	TargetVersion string `json:"target_version"`
+}
+
+// localMachineUpgradeHandler is deliberately separate from /health. The
+// bearer-like control secret lives in a 0600 profile file owned by the daemon
+// user, which protects the loopback mutation path from browsers and unrelated
+// local users. The daemon still creates the normal server-side canonical
+// operation; this endpoint is only the single-writer local routing boundary.
+func (d *Daemon) localMachineUpgradeHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		token := strings.TrimSpace(d.cfg.LocalControlToken)
+		provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
+		if token == "" || provided == "" || subtle.ConstantTimeCompare([]byte(token), []byte(provided)) != 1 {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		if d.client == nil || strings.TrimSpace(d.cfg.DaemonID) == "" || strings.TrimSpace(d.cfg.WorkspaceID) == "" {
+			http.Error(w, "machine control unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		var request localMachineUpgradeRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		request.RequestID = strings.TrimSpace(request.RequestID)
+		request.TargetVersion = strings.TrimSpace(request.TargetVersion)
+		if request.RequestID == "" || request.TargetVersion == "" {
+			http.Error(w, "request_id and target_version are required", http.StatusBadRequest)
+			return
+		}
+		operation, err := d.client.CreateMachineUpgrade(r.Context(), d.cfg.WorkspaceID, d.cfg.DaemonID, request.RequestID, request.TargetVersion)
+		if err != nil {
+			var requestErr *requestError
+			if errors.As(err, &requestErr) {
+				http.Error(w, requestErr.Body, requestErr.StatusCode)
+				return
+			}
+			http.Error(w, "create machine upgrade: "+err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(operation)
 	}
 }
 
@@ -279,6 +339,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
+	mux.HandleFunc("/machine-upgrades", d.localMachineUpgradeHandler())
 	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
 	mux.HandleFunc("/credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
 	mux.HandleFunc("/credential-proxy/messages/send", d.credentialProxyMessageSendHandler())

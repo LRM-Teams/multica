@@ -114,9 +114,8 @@ func TestRunStageUpdateUsesServerDispatchedBaseURLWithNoEnvVarFallback(t *testin
 		cfg:    Config{CLIVersion: "v0.3.77"},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	// Same mechanism a real heartbeat ack uses to populate the cache the
-	// "check" step's fetchLatestRelease(d.releaseManifestBaseURLOverride())
-	// already reads from — see handleHeartbeatActions in daemon.go.
+	// Same mechanism a real heartbeat ack uses to populate the release-source
+	// cache consumed by explicit Machine Upgrade staging.
 	d.handleHeartbeatActions(context.Background(), "rt-1", &HeartbeatResponse{
 		RuntimeID:              "rt-1",
 		Status:                 "ok",

@@ -370,6 +370,10 @@ const (
 	// unsupported_runtime_capability copy in
 	// packages/core/agents/agent-lifecycle.ts (FE points back here).
 	DaemonCapabilityAgentLifecycleActions = "agent_lifecycle_actions_v1"
+	// DaemonCapabilityMachineUpgrade gates the machine-scoped upgrade
+	// operation protocol. Older daemons continue to receive no machine action
+	// and therefore cannot accidentally claim or complete an operation.
+	DaemonCapabilityMachineUpgrade = "machine_upgrade_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by
@@ -737,6 +741,7 @@ type DaemonHeartbeatAckPayload struct {
 	Status                  string                                  `json:"status"`
 	RuntimeGone             bool                                    `json:"runtime_gone,omitempty"`
 	PendingUpdate           *DaemonHeartbeatPendingUpdate           `json:"pending_update,omitempty"`
+	PendingMachineUpgrade   *DaemonHeartbeatPendingMachineUpgrade   `json:"pending_machine_upgrade,omitempty"`
 	PendingModelList        *DaemonHeartbeatPendingModelList        `json:"pending_model_list,omitempty"`
 	PendingLocalSkills      *DaemonHeartbeatPendingLocalSkills      `json:"pending_local_skills,omitempty"`
 	PendingLocalSkillImport *DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_import,omitempty"`
@@ -783,6 +788,14 @@ type DaemonHeartbeatPendingUpdate struct {
 	ID                   string `json:"id"`
 	TargetVersion        string `json:"target_version"`
 	SupportsReadyToApply bool   `json:"supports_ready_to_apply,omitempty"`
+}
+
+// DaemonHeartbeatPendingMachineUpgrade is a machine-owned operation claimed
+// by exactly one capable sibling heartbeat. #2378 uses it only for the
+// already-current tracer bullet; later phases add staging and handoff fields.
+type DaemonHeartbeatPendingMachineUpgrade struct {
+	ID            string `json:"id"`
+	TargetVersion string `json:"target_version"`
 }
 
 // DaemonHeartbeatPendingRestart describes a human-initiated remote restart

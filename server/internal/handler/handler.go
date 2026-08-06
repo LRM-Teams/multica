@@ -129,6 +129,7 @@ type Handler struct {
 	EnvCheckpointService        EnvCheckpointServiceAPI
 	UpdateStore                 UpdateStore
 	UpdateIntentStore           UpdateIntentStore
+	MachineUpgradeStore         MachineUpgradeStore
 	RestartStore                RestartStore
 	AgentLifecycleDispatchStore AgentLifecycleDispatchStore
 	RuntimeReleaseSource        RuntimeReleaseSource
@@ -155,6 +156,7 @@ type Handler struct {
 	// parallel tests with separate Handler values cannot cross-contaminate.
 	channelUnmentionedMessages  uint64
 	channelUnmentionedFullWakes uint64
+	UploadSessionNow            func() time.Time
 	PATCache                    *auth.PATCache
 	DaemonTokenCache            *auth.DaemonTokenCache
 	MembershipCache             *auth.MembershipCache
@@ -302,6 +304,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		EmailService:                emailService,
 		UpdateStore:                 NewPostgresUpdateStore(updateDB),
 		UpdateIntentStore:           NewPostgresUpdateIntentStore(updateDB),
+		MachineUpgradeStore:         NewPostgresMachineUpgradeStore(updateDB),
 		RestartStore:                NewInMemoryRestartStore(),
 		AgentLifecycleDispatchStore: NewInMemoryAgentLifecycleDispatchStore(executor),
 		RuntimeReleaseSource:        NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),

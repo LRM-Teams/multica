@@ -13,7 +13,11 @@ import {
 import type { QueryClient } from "@tanstack/react-query";
 import { getCurrentWsId } from "@multica/core/platform";
 import { flattenIssueBuckets, issueKeys } from "@multica/core/issues/queries";
-import { workspaceKeys } from "@multica/core/workspace/queries";
+import {
+  workspaceKeys,
+  memberListOptions,
+  agentListOptions,
+} from "@multica/core/workspace/queries";
 import { useAuthStore } from "@multica/core/auth";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
 import { api } from "@multica/core/api";
@@ -698,6 +702,20 @@ export function createMentionSuggestion(
     // by the URL-driven workspace layout.
     const wsId = getCurrentWsId();
     if (!wsId) return [];
+
+    // Warm the mention directory so a bare `@` (empty query) reliably surfaces
+    // members/agents instead of returning an empty pool on a cold React Query
+    // cache (first open before the workspace layout has resolved the member /
+    // agent lists). Guard on prefetchQuery so pure-test QueryClient doubles
+    // without the real method keep working, and skip when already populated.
+    const warmQuery = (opts: unknown) => {
+      if (typeof qc.prefetchQuery !== "function") return;
+      const key = (opts as { queryKey: readonly unknown[] }).queryKey;
+      if (qc.getQueryData(key)) return;
+      void qc.prefetchQuery(opts as Parameters<typeof qc.prefetchQuery>[0]);
+    };
+    warmQuery(memberListOptions(wsId));
+    warmQuery(agentListOptions(wsId));
 
     const members: MemberWithUser[] = qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
     const agents: Agent[] = qc.getQueryData(workspaceKeys.agents(wsId)) ?? [];

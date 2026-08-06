@@ -508,22 +508,17 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"Common capability index",
 		"Delivery boundary: only successful chat send/react commands deliver visible chat output.",
 		"Text outside those commands, including final assistant output, is never delivered.",
-		"Chat output: use `multica message send --target <target>`",
+		"Chat output: pipe a non-empty body to `multica message send --target <target>`",
 		"explicit target",
 		"#channel:<threadId>",
 		"dm:@handle:<threadId>",
-		"--message \"short text\"",
-		"--message-stdin",
-		"--message-file <path>",
-		"--sticker <id>",
-		"--voice",
-		"explicitly asks for a spoken/voice reply",
-		"`--voice` is the only supported voice-reply path",
-		"do not synthesize, encode, upload, or attach an audio file",
-		"Common sticker fast path",
-		"greeting `hi`",
-		"multica sticker search <query>",
-		"do not list the whole sticker catalog",
+		"printf '%s\\n' 'short text' | multica message send --target <target>",
+		"quoted heredoc on stdin",
+		"--attachment-id <id>",
+		"Agent message sends do not accept sticker parts",
+		"Agents never submit message Parts, stickers, or voice markers",
+		"Do not synthesize, encode, upload, or attach an audio file",
+		"Reactions: use a reaction for a pure acknowledgement",
 		"Freshness holds:",
 		"Message held by freshness check",
 		"CLI also exits non-zero",
@@ -536,7 +531,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"a freshness `held` result exits non-zero",
 		"multica message react --message-id <id> --emoji \"...\" [--remove]",
 		"multica message read [--target ...] [--limit N] --output json",
-		"multica message search \"query\" [--target ...] --output json",
+		"multica message search [query] [--target ...] [--sender user:<uuid>|agent:<uuid>]",
 		"multica message resolve <message-id>",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
 		"issue list --mine --output json",
@@ -781,11 +776,11 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 		"task-scoped Multica CLI transport",
 		"multica message send",
 		"multica message react",
-		"--message \"short text\"",
+		"pipe a non-empty body",
 		"multica message react --message-id",
 		"multica message read",
 		"multica message search",
-		"--sticker",
+		"do not accept sticker parts",
 		"Freshness holds:",
 		"Message held by freshness check",
 		"CLI also exits non-zero",
@@ -1291,7 +1286,7 @@ func TestMetaSkillDocumentsCanonicalHumanDMTransport(t *testing.T) {
 	out := buildMetaSkillContent("claude", TaskContextForEnv{ChannelID: "channel-1"})
 
 	for _, want := range []string{
-		"multica message send --target dm:@<human-handle> --message-stdin",
+		"multica message send --target dm:@<human-handle>",
 		"there is no recipient fallback",
 		"Unknown or agent handles are rejected",
 	} {
@@ -1726,40 +1721,13 @@ func TestBuildMetaSkillContentDoesNotUseLegacyManagedRole(t *testing.T) {
 	}
 }
 
-func TestExecutionDisciplineBriefAppearsOnceOnEveryRunKind(t *testing.T) {
+func TestRuntimeBriefStaticInstructionsContainNoChineseCharacters(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name string
-		ctx  TaskContextForEnv
-	}{
-		{name: "assignment", ctx: TaskContextForEnv{IssueID: "issue-1"}},
-		{name: "comment", ctx: TaskContextForEnv{IssueID: "issue-1", TriggerCommentID: "comment-1"}},
-		{name: "chat", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
-		{name: "quick create", ctx: TaskContextForEnv{QuickCreatePrompt: "create an issue"}},
-		{name: "autopilot", ctx: TaskContextForEnv{AutopilotRunID: "run-1"}},
-	}
-	rules := []string{
-		`1. **传达就是传达。** 收到"转告/同步/提醒"类指令时直接执行，不做顺手调查、验证或扩展；只有对方明确要求核实才去查。`,
-		`2. **多催合并一次回。** 同一事项的多条催促/追问，合并成一条回复；不逐条应答。`,
-		`3. **讨论从哪来回哪去。** thread 里的讨论只回 thread，不在主频道复读同一内容。`,
-		`4. **对 agent 只说增量。** 与其他 agent 往来只传新信息，不复述双方已知上下文；无新信息不回复。`,
-		`5. **对人不贴原始输出。** 面向人的消息说结论和必要事实，不贴命令行、JSON 或工具原始输出。`,
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			out := buildMetaSkillContent("codex", tc.ctx)
-			if got := strings.Count(out, executionDisciplineBrief); got != 1 {
-				t.Fatalf("execution discipline block count = %d, want 1", got)
-			}
-			for _, rule := range rules {
-				if got := strings.Count(out, rule); got != 1 {
-					t.Errorf("rule count = %d, want 1 for %q", got, rule)
-				}
-			}
-		})
+	brief := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1", ChatSessionID: "chat-1"})
+	for _, r := range brief {
+		if r >= '\u4e00' && r <= '\u9fff' {
+			t.Fatalf("runtime brief must not inject Chinese instruction text: %q", string(r))
+		}
 	}
 }
 

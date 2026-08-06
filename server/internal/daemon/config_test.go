@@ -232,13 +232,8 @@ func stageFakeAgent(t *testing.T) string {
 	return binDir
 }
 
-// TestLoadConfig_AutoUpdateDefault_SelfHostOn is task #61 (Frank,
-// 2026-08-01): self-host used to default AutoUpdateEnabled to false
-// (MUL-2381 — protecting against an external fork or an old pinned server
-// build). That risk doesn't apply here (self-host is internal-only, no
-// external fork users), and version pin (#57) plus post-upgrade cleanup
-// (#55) now make opt-in safe, so self-host now defaults to the same
-// enabled-by-default value as Multica Cloud.
+// Machine Upgrade #2379 retires periodic release mutation. Legacy settings
+// remain parseable but must be truthful no-ops for every server origin.
 func TestResolveWorkspacesRootDefaultsToMulticaHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -254,7 +249,7 @@ func TestResolveWorkspacesRootDefaultsToMulticaHome(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_AutoUpdateDefault_SelfHostOn(t *testing.T) {
+func TestLoadConfig_AutoUpdateDefaultIsExplicitOnlyNoOp(t *testing.T) {
 	stageFakeAgent(t)
 	cfg, err := LoadConfig(Overrides{
 		ServerURL:      "http://localhost:8080",
@@ -263,11 +258,11 @@ func TestLoadConfig_AutoUpdateDefault_SelfHostOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if !cfg.AutoUpdateEnabled {
-		t.Fatalf("AutoUpdateEnabled = false for self-host (localhost) server, want true")
+	if cfg.AutoUpdateEnabled {
+		t.Fatal("AutoUpdateEnabled must be false: upgrades are explicit-only")
 	}
-	if cfg.AutoUpdateConfigSource != "self_host_default" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want self_host_default", cfg.AutoUpdateConfigSource)
+	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
 
@@ -287,8 +282,8 @@ func TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost(t *testing
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true for self-host with explicit MULTICA_DAEMON_AUTO_UPDATE=false, want false")
 	}
-	if cfg.AutoUpdateConfigSource != "env_disabled" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want env_disabled", cfg.AutoUpdateConfigSource)
+	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
 
@@ -297,7 +292,7 @@ func TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost(t *testing
 // auto-update default. We pass the WSS form of the URL to also exercise that
 // NormalizeServerBaseURL maps it through to the http host the detector
 // inspects.
-func TestLoadConfig_AutoUpdateDefault_CloudOn(t *testing.T) {
+func TestLoadConfig_AutoUpdateDefault_CloudIsAlsoNoOp(t *testing.T) {
 	stageFakeAgent(t)
 	cfg, err := LoadConfig(Overrides{
 		ServerURL:      "wss://api.multica.ai/ws",
@@ -306,16 +301,16 @@ func TestLoadConfig_AutoUpdateDefault_CloudOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if !cfg.AutoUpdateEnabled {
-		t.Fatalf("AutoUpdateEnabled = false for Multica Cloud server, want true")
+	if cfg.AutoUpdateEnabled {
+		t.Fatal("AutoUpdateEnabled must be false for Multica Cloud too")
 	}
-	if cfg.AutoUpdateConfigSource != "official_host_default" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want official_host_default", cfg.AutoUpdateConfigSource)
+	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
 
-// TestLoadConfig_AutoUpdateEnv_ForcesOnForSelfHost lets a self-host operator
-// re-enable auto-update via env var, overriding the new conservative default.
+// Environment compatibility values parse successfully but cannot re-enable a
+// periodic mutation path.
 func TestLoadConfig_AutoUpdateEnv_ForcesOnForSelfHost(t *testing.T) {
 	stageFakeAgent(t)
 	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "true")
@@ -326,11 +321,11 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOnForSelfHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if !cfg.AutoUpdateEnabled {
-		t.Fatalf("AutoUpdateEnabled = false after explicit MULTICA_DAEMON_AUTO_UPDATE=true, want true")
+	if cfg.AutoUpdateEnabled {
+		t.Fatal("MULTICA_DAEMON_AUTO_UPDATE=true re-enabled a retired loop")
 	}
-	if cfg.AutoUpdateConfigSource != "env_enabled" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want env_enabled", cfg.AutoUpdateConfigSource)
+	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
 
@@ -349,8 +344,8 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOffForCloud(t *testing.T) {
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true after explicit MULTICA_DAEMON_AUTO_UPDATE=false, want false")
 	}
-	if cfg.AutoUpdateConfigSource != "env_disabled" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want env_disabled", cfg.AutoUpdateConfigSource)
+	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
 
@@ -371,8 +366,8 @@ func TestLoadConfig_AutoUpdate_NoFlagWinsOverCloudDefault(t *testing.T) {
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true with --no-auto-update set; flag must win")
 	}
-	if cfg.AutoUpdateConfigSource != "cli_disabled" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want cli_disabled", cfg.AutoUpdateConfigSource)
+	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
 

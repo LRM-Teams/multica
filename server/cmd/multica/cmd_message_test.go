@@ -14,7 +14,6 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/turntransport"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/spf13/pflag"
 )
 
@@ -31,17 +30,16 @@ func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
 }
 
 func TestRunAgentMessageSendDraftPathRejectsReplacementPayloadAndNormalAnyway(t *testing.T) {
-	withMessage := newMessageSendCmd()
-	_ = withMessage.Flags().Set("target", "#one")
-	_ = withMessage.Flags().Set("send-draft", "true")
-	_ = withMessage.Flags().Set("message", "replacement")
-	if err := runAgentMessageSend(withMessage, nil); err == nil || !strings.Contains(err.Error(), "does not accept --message") {
+	withAttachment := newMessageSendCmd()
+	_ = withAttachment.Flags().Set("target", "#one")
+	_ = withAttachment.Flags().Set("send-draft", "true")
+	_ = withAttachment.Flags().Set("attachment-id", "attachment-1")
+	if err := runAgentMessageSend(withAttachment, nil); err == nil || !strings.Contains(err.Error(), "does not accept --attachment-id") {
 		t.Fatalf("send-draft replacement error = %v", err)
 	}
 
 	normalAnyway := newMessageSendCmd()
 	_ = normalAnyway.Flags().Set("target", "#one")
-	_ = normalAnyway.Flags().Set("message", "replacement")
 	_ = normalAnyway.Flags().Set("anyway", "true")
 	if err := runAgentMessageSend(normalAnyway, nil); err == nil || !strings.Contains(err.Error(), "only valid with --send-draft") {
 		t.Fatalf("normal --anyway error = %v", err)
@@ -176,6 +174,21 @@ func TestRunAgentMessageReactPostsTargetFreeIdentity(t *testing.T) {
 	}
 }
 
+func TestMessageSearchUsesCanonicalFiltersWithoutLegacyChannelFlag(t *testing.T) {
+	cmd := newMessageSearchCmd()
+	for _, name := range []string{"target", "sender", "sort", "before", "after", "limit", "offset"} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Errorf("message search missing --%s", name)
+		}
+	}
+	if cmd.Flags().Lookup("channel") != nil {
+		t.Fatal("message search must not expose legacy --channel")
+	}
+	if err := cmd.Args(cmd, nil); err != nil {
+		t.Fatalf("filter-only message search must be accepted: %v", err)
+	}
+}
+
 func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -294,55 +307,16 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	}
 }
 
-func TestBuildAgentSendPartsIncludesAttachmentParts(t *testing.T) {
-	parts := buildAgentSendParts("got-it", "see files", []string{
-		"att-1",
-		"  att-2  ",
-		"",
-		"att-1", // duplicates preserved in flag order after appendUniqueStrings; builder itself does not dedupe
-	}, false)
-	want := []protocol.MessagePart{
-		{Type: protocol.MessagePartTypeSticker, StickerID: "got-it"},
-		{Type: protocol.MessagePartTypeText, Text: "see files"},
-		{Type: protocol.MessagePartTypeAttachment, AttachmentID: "att-1"},
-		{Type: protocol.MessagePartTypeAttachment, AttachmentID: "att-2"},
-		{Type: protocol.MessagePartTypeAttachment, AttachmentID: "att-1"},
-	}
-	if len(parts) != len(want) {
-		t.Fatalf("parts len = %d, want %d (%+v)", len(parts), len(want), parts)
-	}
-	for i := range want {
-		if parts[i].Type != want[i].Type || parts[i].StickerID != want[i].StickerID ||
-			parts[i].Text != want[i].Text || parts[i].AttachmentID != want[i].AttachmentID {
-			t.Fatalf("parts[%d] = %+v, want %+v", i, parts[i], want[i])
-		}
-	}
-}
-
-func TestBuildAgentSendPartsAttachmentOnly(t *testing.T) {
-	parts := buildAgentSendParts("", "", []string{"att-only"}, false)
-	if len(parts) != 1 || parts[0].Type != protocol.MessagePartTypeAttachment || parts[0].AttachmentID != "att-only" {
-		t.Fatalf("parts = %+v, want single attachment part", parts)
-	}
-}
-
-func TestBuildAgentSendPartsMarksVoiceDelivery(t *testing.T) {
-	parts := buildAgentSendParts("", "spoken answer", nil, true)
-	if len(parts) != 2 || parts[0].Type != protocol.MessagePartTypeText || parts[1].Type != protocol.MessagePartTypeVoice {
-		t.Fatalf("parts = %+v, want text followed by voice marker", parts)
-	}
-}
-
-func TestRunAgentMessageSendVoiceRequiresTranscript(t *testing.T) {
+func TestRunAgentMessageSendRequiresNonEmptyStdin(t *testing.T) {
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("voice", "true")
-	if err := runAgentMessageSend(cmd, nil); err == nil || !strings.Contains(err.Error(), "--voice requires message text") {
-		t.Fatalf("error = %v, want missing transcript error", err)
+	cmd.SetIn(strings.NewReader(" \n\t "))
+	if err := runAgentMessageSend(cmd, nil); err == nil || !strings.Contains(err.Error(), "required on stdin") {
+		t.Fatalf("error = %v, want missing stdin content error", err)
 	}
 }
 
-func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
+func TestRunAgentMessageSendPostsOpaqueAttachmentIDsInOrder(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/credential-proxy/messages/send" {
@@ -371,15 +345,15 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("message", "here's the file")
 	_ = cmd.Flags().Set("attachment-id", "att-a")
 	_ = cmd.Flags().Set("attachment-id", "att-b")
+	cmd.SetIn(strings.NewReader("here's the file"))
 	if err := runAgentMessageSend(cmd, nil); err != nil {
 		t.Fatalf("runAgentMessageSend: %v", err)
 	}
 
-	if _, has := body["attachment_ids"]; has {
-		t.Fatalf("body still has attachment_ids = %#v; chat send must use parts only", body["attachment_ids"])
+	if _, has := body["parts"]; has {
+		t.Fatalf("Proxy request must not contain caller-built parts: %#v", body["parts"])
 	}
 	if body["target"] != "#multica" {
 		t.Fatalf("target = %#v, want #multica", body["target"])
@@ -387,16 +361,13 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	if body["content"] != "here's the file" {
 		t.Fatalf("content = %#v, want message text", body["content"])
 	}
-	rawParts, ok := body["parts"].([]any)
+	attachmentIDs, ok := body["attachment_ids"].([]any)
 	if !ok {
-		t.Fatalf("parts = %#v, want JSON array", body["parts"])
+		t.Fatalf("attachment_ids = %#v, want JSON array", body["attachment_ids"])
 	}
-	if len(rawParts) != 3 {
-		t.Fatalf("parts len = %d, want 3 (text + 2 attachments): %#v", len(rawParts), rawParts)
+	if len(attachmentIDs) != 2 || attachmentIDs[0] != "att-a" || attachmentIDs[1] != "att-b" {
+		t.Fatalf("attachment_ids = %#v, want ordered opaque ids", attachmentIDs)
 	}
-	assertPartMap(t, rawParts[0], map[string]any{"type": "text", "text": "here's the file"})
-	assertPartMap(t, rawParts[1], map[string]any{"type": "attachment", "attachment_id": "att-a"})
-	assertPartMap(t, rawParts[2], map[string]any{"type": "attachment", "attachment_id": "att-b"})
 }
 
 func TestRunAgentMessageSendRecordsAttemptBeforeHTTPFailure(t *testing.T) {
@@ -413,7 +384,7 @@ func TestRunAgentMessageSendRecordsAttemptBeforeHTTPFailure(t *testing.T) {
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("message", "attempted reply")
+	cmd.SetIn(strings.NewReader("attempted reply"))
 	if err := runAgentMessageSend(cmd, nil); err == nil {
 		t.Fatal("runAgentMessageSend succeeded against failing transport")
 	}
@@ -460,55 +431,6 @@ func TestRunAgentMessageA2AControlPostsOwnerControl(t *testing.T) {
 		body["rounds"] != float64(2) {
 		t.Fatalf("A2A control body=%#v", body)
 	}
-}
-
-func TestRunAgentMessageSendPostsVoiceMarkerAfterTranscript(t *testing.T) {
-	var body map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/credential-proxy/messages/send" {
-			http.NotFound(w, r)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"action":  "message_send",
-			"created": true,
-			"message": map[string]any{"id": "msg-voice"},
-		})
-	}))
-	defer srv.Close()
-
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_AGENT_ID", "agent-1")
-	t.Setenv("MULTICA_TASK_ID", "task-1")
-	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
-	if err != nil {
-		t.Fatalf("server port: %v", err)
-	}
-	t.Setenv("MULTICA_DAEMON_PORT", port)
-
-	cmd := newMessageSendCmd()
-	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("message", "spoken answer")
-	_ = cmd.Flags().Set("voice", "true")
-	if err := runAgentMessageSend(cmd, nil); err != nil {
-		t.Fatalf("runAgentMessageSend: %v", err)
-	}
-
-	if body["content"] != "spoken answer" {
-		t.Fatalf("content = %#v, want spoken answer", body["content"])
-	}
-	rawParts, ok := body["parts"].([]any)
-	if !ok {
-		t.Fatalf("parts = %#v, want JSON array", body["parts"])
-	}
-	if len(rawParts) != 2 {
-		t.Fatalf("parts len = %d, want 2 (text + voice): %#v", len(rawParts), rawParts)
-	}
-	assertPartMap(t, rawParts[0], map[string]any{"type": "text", "text": "spoken answer"})
-	assertPartMap(t, rawParts[1], map[string]any{"type": "voice"})
 }
 
 func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
@@ -583,7 +505,7 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 			name: "send",
 			run: func() error {
 				cmd := newMessageSendCmd()
-				_ = cmd.Flags().Set("message", "hello")
+				cmd.SetIn(strings.NewReader("hello"))
 				return runAgentMessageSend(cmd, nil)
 			},
 		},
@@ -592,13 +514,6 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 			run: func() error {
 				cmd := newMessageReadCmd()
 				return runAgentMessageRead(cmd, nil)
-			},
-		},
-		{
-			name: "search",
-			run: func() error {
-				cmd := newMessageSearchCmd()
-				return runAgentMessageSearch(cmd, []string{"needle"})
 			},
 		},
 	}
@@ -610,6 +525,78 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, want)
 			}
 		})
+	}
+}
+
+func TestRunAgentMessageSearchPostsCanonicalFiltersAndPermitsFilterOnly(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/search" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action": "message_search", "query": "", "sort": "oldest", "results": []any{}, "total": 0,
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := newMessageSearchCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("sender", "user:00000000-0000-4000-8000-000000000001")
+	_ = cmd.Flags().Set("sort", "oldest")
+	_ = cmd.Flags().Set("before", "2026-01-03T03:04:05Z")
+	_ = cmd.Flags().Set("after", "2026-01-02T03:04:05Z")
+	_ = cmd.Flags().Set("limit", "2")
+	_ = cmd.Flags().Set("offset", "4")
+
+	readOut, writeOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	oldOut := os.Stdout
+	os.Stdout = writeOut
+	err = runAgentMessageSearch(cmd, nil)
+	writeOut.Close()
+	os.Stdout = oldOut
+	_, readErr := io.ReadAll(readOut)
+	readOut.Close()
+	if err != nil {
+		t.Fatalf("runAgentMessageSearch: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	if body["query"] != "" || body["target"] != "#multica" || body["sender"] != "user:00000000-0000-4000-8000-000000000001" || body["sort"] != "oldest" {
+		t.Fatalf("search body = %#v", body)
+	}
+	if body["before"] != "2026-01-03T03:04:05Z" || body["after"] != "2026-01-02T03:04:05Z" || body["limit"] != float64(2) || body["offset"] != float64(4) {
+		t.Fatalf("search filters = %#v", body)
+	}
+	if _, ok := body["channel"]; ok {
+		t.Fatalf("legacy channel field leaked into search body: %#v", body)
+	}
+}
+
+func TestRunAgentMessageSearchReportsMalformedUpstreamResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	err := runAgentMessageSearch(newMessageSearchCmd(), []string{"needle"})
+	if err == nil || !strings.Contains(err.Error(), "search messages") {
+		t.Fatalf("error = %v, want malformed search response context", err)
 	}
 }
 

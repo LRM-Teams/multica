@@ -1460,7 +1460,7 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 	}
 }
 
-func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
+func TestAgentTransportSendMessageRejectsAgentControlledPartsAndAttachmentOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1469,66 +1469,21 @@ func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
 	agentID := agentIDForTask(t, taskID)
 	target := "#" + channelNameForTransportTest(t, channelID)
 
-	stickerOnlyID := "transport-sticker-" + uuid.NewString()
-	stickerOnly := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target": target,
-		"parts": []protocol.MessagePart{{
-			Type:      protocol.MessagePartTypeSticker,
-			StickerID: "hi",
-		}},
-		"client_message_id": stickerOnlyID,
+	parts := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           "arbitrary parts are not allowed",
+		"parts":             []protocol.MessagePart{{Type: protocol.MessagePartTypeSticker, StickerID: "hi"}},
+		"client_message_id": "transport-parts-rejected-" + uuid.NewString(),
 	})
-	if stickerOnly.Code != http.StatusCreated {
-		t.Fatalf("sticker-only transport send: status=%d body=%s", stickerOnly.Code, stickerOnly.Body.String())
+	if parts.Code != http.StatusBadRequest {
+		t.Fatalf("agent-controlled parts: status=%d body=%s", parts.Code, parts.Body.String())
 	}
-	var stickerOnlyBody AgentTransportSendResponse
-	if err := json.Unmarshal(stickerOnly.Body.Bytes(), &stickerOnlyBody); err != nil {
-		t.Fatalf("decode sticker-only send: %v", err)
-	}
-	if len(stickerOnlyBody.Message.Parts) != 1 || stickerOnlyBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker || stickerOnlyBody.Message.Parts[0].StickerID != "hi" {
-		t.Fatalf("sticker-only parts = %+v, want hi sticker", stickerOnlyBody.Message.Parts)
-	}
-	if stickerOnlyBody.Message.Parts[0].Alt == "" {
-		t.Fatalf("sticker-only alt is empty: %+v", stickerOnlyBody.Message.Parts[0])
-	}
-	assertAgentMessageSentActivityText(t, stickerOnlyBody.Message.ID, stickerOnlyBody.Message.Parts[0].Alt)
-
-	explanation := "这个问题是因为 transport sticker test " + uuid.NewString()
-	combinedID := "transport-combined-" + uuid.NewString()
-	combined := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":  target,
-		"content": explanation,
-		"parts": []protocol.MessagePart{
-			{Type: protocol.MessagePartTypeSticker, StickerID: "got-it"},
-			{Type: protocol.MessagePartTypeText, Text: explanation},
-		},
-		"client_message_id": combinedID,
+	attachmentOnly := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target": target, "attachment_ids": []string{uuid.NewString()},
+		"client_message_id": "transport-attachment-only-rejected-" + uuid.NewString(),
 	})
-	if combined.Code != http.StatusCreated {
-		t.Fatalf("combined transport send: status=%d body=%s", combined.Code, combined.Body.String())
-	}
-	var combinedBody AgentTransportSendResponse
-	if err := json.Unmarshal(combined.Body.Bytes(), &combinedBody); err != nil {
-		t.Fatalf("decode combined send: %v", err)
-	}
-	if len(combinedBody.Message.Parts) != 2 ||
-		combinedBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker ||
-		combinedBody.Message.Parts[0].StickerID != "got-it" ||
-		combinedBody.Message.Parts[1].Type != protocol.MessagePartTypeText ||
-		combinedBody.Message.Parts[1].Text != explanation {
-		t.Fatalf("combined parts = %+v, want got-it sticker then text", combinedBody.Message.Parts)
-	}
-
-	var messageRows int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND client_message_id IN ($2, $3)`,
-		channelID, stickerOnlyID, combinedID).Scan(&messageRows); err != nil {
-		t.Fatalf("count transport sticker messages: %v", err)
-	}
-	if messageRows != 2 {
-		t.Fatalf("transport sticker message rows=%d, want 2", messageRows)
+	if attachmentOnly.Code != http.StatusBadRequest {
+		t.Fatalf("attachment-only transport send: status=%d body=%s", attachmentOnly.Code, attachmentOnly.Body.String())
 	}
 }
 
@@ -1543,17 +1498,13 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 	target := "#" + channelNameForTransportTest(t, channelID)
 
 	ownedAttachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "agent-file.png")
+	seedCompletedAgentAttachmentUploadSessionForTest(t, agentID, channelID, "", "channel:"+channelID, ownedAttachmentID)
 	otherAgentID := uuid.NewString()
 	foreignAttachmentID := seedUnboundAgentAttachmentForTest(t, otherAgentID, "not-mine.png")
 
 	clientID := "transport-attachment-" + uuid.NewString()
 	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":  target,
-		"content": "here's the file",
-		"parts": []protocol.MessagePart{
-			{Type: protocol.MessagePartTypeText, Text: "here's the file"},
-			{Type: protocol.MessagePartTypeAttachment, AttachmentID: ownedAttachmentID},
-		},
+		"target": target, "content": "here's the file", "attachment_ids": []string{ownedAttachmentID},
 		"client_message_id": clientID,
 	})
 	if resp.Code != http.StatusCreated {
@@ -1612,17 +1563,13 @@ func TestAgentTransportSendMessageRejectsMixedForeignAttachmentsAtomically(t *te
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	agentID := agentIDForTask(t, taskID)
 	ownedAttachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "owned.png")
+	seedCompletedAgentAttachmentUploadSessionForTest(t, agentID, channelID, "", "channel:"+channelID, ownedAttachmentID)
 	foreignAttachmentID := seedUnboundAgentAttachmentForTest(t, uuid.NewString(), "foreign.png")
 	clientID := "transport-mixed-foreign-" + uuid.NewString()
 
 	response := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":  "#" + channelNameForTransportTest(t, channelID),
-		"content": "must stay atomic",
-		"parts": []protocol.MessagePart{
-			{Type: protocol.MessagePartTypeText, Text: "must stay atomic"},
-			{Type: protocol.MessagePartTypeAttachment, AttachmentID: ownedAttachmentID},
-			{Type: protocol.MessagePartTypeAttachment, AttachmentID: foreignAttachmentID},
-		},
+		"target": "#" + channelNameForTransportTest(t, channelID), "content": "must stay atomic",
+		"attachment_ids":    []string{ownedAttachmentID, foreignAttachmentID},
 		"client_message_id": clientID,
 	})
 	if response.Code != http.StatusBadRequest {
@@ -1647,7 +1594,7 @@ func TestAgentTransportSendMessageRejectsMixedForeignAttachmentsAtomically(t *te
 	}
 }
 
-func TestAgentTransportSendMessageReusesOwnedAttachmentAcrossGroupAndDM(t *testing.T) {
+func TestAgentTransportSendMessageRejectsAttachmentSessionForAnotherTarget(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1656,14 +1603,11 @@ func TestAgentTransportSendMessageReusesOwnedAttachmentAcrossGroupAndDM(t *testi
 	taskID, groupChannelID := createChannelCompletionTask(t, "group")
 	agentID := agentIDForTask(t, taskID)
 	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "reuse-across-conversations.png")
+	seedCompletedAgentAttachmentUploadSessionForTest(t, agentID, groupChannelID, "", "channel:"+groupChannelID, attachmentID)
 
 	groupResponse := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":  "#" + channelNameForTransportTest(t, groupChannelID),
-		"content": "group copy",
-		"parts": []protocol.MessagePart{
-			{Type: protocol.MessagePartTypeText, Text: "group copy"},
-			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
-		},
+		"target": "#" + channelNameForTransportTest(t, groupChannelID), "content": "group copy",
+		"attachment_ids":    []string{attachmentID},
 		"client_message_id": "transport-group-reuse-" + uuid.NewString(),
 	})
 	if groupResponse.Code != http.StatusCreated {
@@ -1671,51 +1615,55 @@ func TestAgentTransportSendMessageReusesOwnedAttachmentAcrossGroupAndDM(t *testi
 	}
 
 	humanHandle := userHandleForTransportTest(t, testUserID)
+	dmClientID := "transport-dm-reuse-" + uuid.NewString()
 	dmResponse := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":  "dm:@" + humanHandle,
-		"content": "dm copy",
-		"parts": []protocol.MessagePart{
-			{Type: protocol.MessagePartTypeText, Text: "dm copy"},
-			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
-		},
-		"client_message_id": "transport-dm-reuse-" + uuid.NewString(),
+		"target": "dm:@" + humanHandle, "content": "dm copy", "attachment_ids": []string{attachmentID},
+		"client_message_id": dmClientID,
 	})
-	if dmResponse.Code != http.StatusCreated {
-		t.Fatalf("reuse shared attachment in DM: status=%d body=%s", dmResponse.Code, dmResponse.Body.String())
+	if dmResponse.Code != http.StatusBadRequest {
+		t.Fatalf("send attachment session to another target: status=%d body=%s", dmResponse.Code, dmResponse.Body.String())
 	}
 
-	var groupBody, dmBody AgentTransportSendResponse
+	var groupBody AgentTransportSendResponse
 	if err := json.Unmarshal(groupResponse.Body.Bytes(), &groupBody); err != nil {
 		t.Fatalf("decode group send: %v", err)
 	}
-	if err := json.Unmarshal(dmResponse.Body.Bytes(), &dmBody); err != nil {
-		t.Fatalf("decode DM send: %v", err)
-	}
-	for label, message := range map[string]ChannelMessageResponse{
-		"group": groupBody.Message,
-		"dm":    dmBody.Message,
-	} {
-		if len(message.Attachments) != 1 || message.Attachments[0].ID != attachmentID {
-			t.Fatalf("%s message attachments=%+v, want reused attachment %s", label, message.Attachments, attachmentID)
-		}
-	}
-	if groupBody.Message.ChannelID == dmBody.Message.ChannelID {
-		t.Fatalf("group and DM unexpectedly share channel %s", groupBody.Message.ChannelID)
+	if len(groupBody.Message.Attachments) != 1 || groupBody.Message.Attachments[0].ID != attachmentID {
+		t.Fatalf("group message attachments=%+v, want %s", groupBody.Message.Attachments, attachmentID)
 	}
 
-	var referenceCount, distinctMessageCount, distinctChannelCount int
+	var dmMessages int
 	if err := testPool.QueryRow(ctx, `
-		SELECT count(*),
-		       count(DISTINCT reference.channel_message_id),
-		       count(DISTINCT message.channel_id)
-		FROM channel_message_attachment reference
-		JOIN channel_message message ON message.id = reference.channel_message_id
-		WHERE reference.attachment_id = $1
-	`, attachmentID).Scan(&referenceCount, &distinctMessageCount, &distinctChannelCount); err != nil {
-		t.Fatalf("load shared attachment references: %v", err)
+		SELECT count(*) FROM channel_message WHERE client_message_id = $1`, dmClientID).Scan(&dmMessages); err != nil {
+		t.Fatalf("count rejected DM message: %v", err)
 	}
-	if referenceCount != 2 || distinctMessageCount != 2 || distinctChannelCount != 2 {
-		t.Fatalf("shared attachment references=%d messages=%d channels=%d, want 2/2/2", referenceCount, distinctMessageCount, distinctChannelCount)
+	if dmMessages != 0 {
+		t.Fatalf("rejected DM send left %d messages", dmMessages)
+	}
+
+	expiredAttachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "expired-session.png")
+	seedCompletedAgentAttachmentUploadSessionForTest(t, agentID, groupChannelID, "", "channel:"+groupChannelID, expiredAttachmentID)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_attachment_upload_session
+		SET created_at = now() - interval '2 hours',
+		    expires_at = now() - interval '1 hour'
+		WHERE attachment_id = $1`, expiredAttachmentID); err != nil {
+		t.Fatalf("expire attachment upload session: %v", err)
+	}
+	expiredClientID := "transport-expired-session-" + uuid.NewString()
+	expiredResponse := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target": "#" + channelNameForTransportTest(t, groupChannelID), "content": "expired copy",
+		"attachment_ids": []string{expiredAttachmentID}, "client_message_id": expiredClientID,
+	})
+	if expiredResponse.Code != http.StatusBadRequest {
+		t.Fatalf("send expired attachment session: status=%d body=%s", expiredResponse.Code, expiredResponse.Body.String())
+	}
+	var expiredMessages int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE client_message_id = $1`, expiredClientID).Scan(&expiredMessages); err != nil {
+		t.Fatalf("count expired-session messages: %v", err)
+	}
+	if expiredMessages != 0 {
+		t.Fatalf("expired attachment session left %d messages", expiredMessages)
 	}
 }
 
@@ -1729,6 +1677,7 @@ func TestAgentTransportSendMessageNormalizesLegacyOwnedAudioAsVoice(t *testing.T
 	agentID := agentIDForTask(t, taskID)
 	target := "#" + channelNameForTransportTest(t, channelID)
 	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "nihao.mp3")
+	seedCompletedAgentAttachmentUploadSessionForTest(t, agentID, channelID, "", "channel:"+channelID, attachmentID)
 	if _, err := testPool.Exec(ctx, `
 		UPDATE attachment
 		SET content_type = 'audio/mpeg'
@@ -1737,12 +1686,7 @@ func TestAgentTransportSendMessageNormalizesLegacyOwnedAudioAsVoice(t *testing.T
 	}
 
 	response := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":  target,
-		"content": "你好～",
-		"parts": []protocol.MessagePart{
-			{Type: protocol.MessagePartTypeText, Text: "你好～"},
-			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
-		},
+		"target": target, "content": "你好～", "attachment_ids": []string{attachmentID},
 		"client_message_id": "transport-legacy-audio-" + uuid.NewString(),
 	})
 	if response.Code != http.StatusCreated {
@@ -1777,14 +1721,10 @@ func TestAgentTransportSendMessageLinksChannelPreboundOwnedAttachments(t *testin
 	target := "#" + channelNameForTransportTest(t, channelID)
 
 	preboundID := seedChannelPreboundAgentAttachmentForTest(t, agentID, channelID, "prebound.png")
+	seedCompletedAgentAttachmentUploadSessionForTest(t, agentID, channelID, "", "channel:"+channelID, preboundID)
 
 	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":  target,
-		"content": "prebound shot",
-		"parts": []protocol.MessagePart{
-			{Type: protocol.MessagePartTypeText, Text: "prebound shot"},
-			{Type: protocol.MessagePartTypeAttachment, AttachmentID: preboundID},
-		},
+		"target": target, "content": "prebound shot", "attachment_ids": []string{preboundID},
 		"client_message_id": "transport-prebound-" + uuid.NewString(),
 	})
 	if resp.Code != http.StatusCreated {
@@ -1851,7 +1791,7 @@ func TestAgentTransportSendMessageIncludesAuthorAvatarURL(t *testing.T) {
 	}
 }
 
-func TestAgentTransportSendMessageAttachmentOnlyActivityText(t *testing.T) {
+func TestAgentTransportSendMessageRejectsAttachmentOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1859,30 +1799,13 @@ func TestAgentTransportSendMessageAttachmentOnlyActivityText(t *testing.T) {
 	taskID, channelID := createChannelCompletionTask(t, "group")
 	agentID := agentIDForTask(t, taskID)
 	target := "#" + channelNameForTransportTest(t, channelID)
-	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "activity-report.pdf")
-
 	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target": target,
-		"parts": []protocol.MessagePart{{
-			Type:         protocol.MessagePartTypeAttachment,
-			AttachmentID: attachmentID,
-		}},
+		"target": target, "attachment_ids": []string{uuid.NewString()},
 		"client_message_id": "transport-attachment-only-" + uuid.NewString(),
 	})
-	if resp.Code != http.StatusCreated {
+	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("attachment-only transport send: status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	var body AgentTransportSendResponse
-	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode attachment-only send: %v", err)
-	}
-	if body.Message.Content != "" || len(body.Message.Attachments) != 1 || body.Message.Attachments[0].Filename != "activity-report.pdf" {
-		t.Fatalf("attachment-only message = %+v, want one linked activity-report.pdf attachment and empty content", body.Message)
-	}
-	if len(body.Message.Parts) != 1 || body.Message.Parts[0].Type != protocol.MessagePartTypeAttachment || body.Message.Parts[0].AttachmentID != attachmentID {
-		t.Fatalf("attachment-only parts = %+v, want one attachment part for %s", body.Message.Parts, attachmentID)
-	}
-	assertAgentMessageSentActivityText(t, body.Message.ID, "Sent attachment: activity-report.pdf")
 }
 
 func TestAgentTransportSendThreadReplyIDFlattensToRoot(t *testing.T) {
@@ -2442,14 +2365,109 @@ func TestAgentTransportTargetedCommandsRequireExplicitTarget(t *testing.T) {
 		t.Fatalf("read without target: status=%d body=%s", readRec.Code, readRec.Body.String())
 	}
 
-	searchRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{
-		"query": "needle",
-		"limit": 5,
+	reactRec := agentTransportReactForTest(t, taskID, agentID, map[string]any{
+		"message_id":        uuid.NewString(),
+		"emoji":             "+1",
+		"client_message_id": "missing-target-react-" + uuid.NewString(),
 	})
-	if searchRec.Code != http.StatusBadRequest {
-		t.Fatalf("search without target: status=%d body=%s", searchRec.Code, searchRec.Body.String())
+	if reactRec.Code != http.StatusBadRequest {
+		t.Fatalf("react without target: status=%d body=%s", reactRec.Code, reactRec.Body.String())
+	}
+}
+
+func TestAgentTransportSearchFiltersVisibleCanonicalMessagesWithoutConsumption(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
 	}
 
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	needle := "canonical transport search filters " + uuid.NewString()
+	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", needle+" first", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed first visible message: %v", err)
+	}
+	otherUserID := seedWorkspaceUserForTransportTargetTest(t, "search-sender-"+uuid.NewString()[:8])
+	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(otherUserID), "Other", needle+" second", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed second visible message: %v", err)
+	}
+	system, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", needle+" system", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed system message: %v", err)
+	}
+	hiddenChannelID := seedChannelForTest(t, "hidden-search-"+uuid.NewString()[:8], testUserID)
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(hiddenChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", needle+" hidden", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed hidden message: %v", err)
+	}
+
+	globalRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"query": needle, "sort": "newest", "limit": 10})
+	if globalRec.Code != http.StatusOK {
+		t.Fatalf("global search: status=%d body=%s", globalRec.Code, globalRec.Body.String())
+	}
+	var global AgentTransportSearchResponse
+	if err := json.Unmarshal(globalRec.Body.Bytes(), &global); err != nil {
+		t.Fatalf("decode global search: %v", err)
+	}
+	if global.Target != "" || global.ChannelID != "" || global.Total != 2 || len(global.Results) != 2 {
+		t.Fatalf("global search = %+v, want two visible canonical results without a target", global)
+	}
+	if !transportSearchResultsContain(global.Results, first.ID, needle+" first") || !transportSearchResultsContain(global.Results, second.ID, needle+" second") {
+		t.Fatalf("global search did not return both visible messages: %+v", global.Results)
+	}
+	for _, result := range global.Results {
+		if result.ChannelID != channelID || result.MessageID == "" {
+			t.Fatalf("result lacks canonical identity/visible channel: %+v", result)
+		}
+		if result.MessageID == system.ID || strings.Contains(result.Content, "hidden") {
+			t.Fatalf("search exposed excluded message: %+v", result)
+		}
+	}
+
+	page0Rec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"target": target, "query": needle, "sort": "newest", "limit": 1, "offset": 0})
+	page1Rec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"target": target, "query": needle, "sort": "newest", "limit": 1, "offset": 1})
+	var page0, page1 AgentTransportSearchResponse
+	if err := json.Unmarshal(page0Rec.Body.Bytes(), &page0); err != nil || page0Rec.Code != http.StatusOK {
+		t.Fatalf("decode first page: status=%d err=%v body=%s", page0Rec.Code, err, page0Rec.Body.String())
+	}
+	if err := json.Unmarshal(page1Rec.Body.Bytes(), &page1); err != nil || page1Rec.Code != http.StatusOK {
+		t.Fatalf("decode second page: status=%d err=%v body=%s", page1Rec.Code, err, page1Rec.Body.String())
+	}
+	if len(page0.Results) != 1 || len(page1.Results) != 1 || page0.Results[0].MessageID != global.Results[0].MessageID || page1.Results[0].MessageID != global.Results[1].MessageID {
+		t.Fatalf("stable pagination mismatch: global=%+v page0=%+v page1=%+v", global.Results, page0.Results, page1.Results)
+	}
+
+	senderRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"target": target, "sender": "user:" + otherUserID, "sort": "oldest", "limit": 10})
+	var sender AgentTransportSearchResponse
+	if err := json.Unmarshal(senderRec.Body.Bytes(), &sender); err != nil || senderRec.Code != http.StatusOK {
+		t.Fatalf("decode filter-only sender search: status=%d err=%v body=%s", senderRec.Code, err, senderRec.Body.String())
+	}
+	if sender.Query != "" || sender.Total != 1 || len(sender.Results) != 1 || sender.Results[0].MessageID != second.ID {
+		t.Fatalf("filter-only sender search = %+v, want %s", sender, second.ID)
+	}
+
+	for name, body := range map[string]map[string]any{
+		"empty":              {},
+		"bad sort":           {"query": needle, "sort": "random"},
+		"bad sender":         {"query": needle, "sender": "user:not-a-uuid"},
+		"bad timestamp":      {"query": needle, "before": "yesterday"},
+		"negative offset":    {"query": needle, "offset": -1},
+		"reversed time span": {"query": needle, "after": "2026-01-03T00:00:00Z", "before": "2026-01-02T00:00:00Z"},
+	} {
+		rec := agentTransportSearchForTest(t, taskID, agentID, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s search: status=%d body=%s", name, rec.Code, rec.Body.String())
+		}
+	}
+
+	hiddenTarget := "#" + channelNameForTransportTest(t, hiddenChannelID)
+	hiddenRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{"target": hiddenTarget, "query": needle})
+	if hiddenRec.Code != http.StatusBadRequest {
+		t.Fatalf("search private channel: status=%d body=%s", hiddenRec.Code, hiddenRec.Body.String())
+	}
+	assertAgentTransportAuditCount(t, taskID, agentTransportActionSearch, 4)
 }
 
 func TestAgentTransportDMThreadTarget(t *testing.T) {
@@ -3326,6 +3344,29 @@ func seedChannelPreboundAgentAttachmentForTest(t *testing.T, agentID, channelID,
 		t.Fatalf("seed channel-prebound agent attachment: %v", err)
 	}
 	return attachmentID
+}
+
+func seedCompletedAgentAttachmentUploadSessionForTest(t *testing.T, agentID, channelID, threadRootID, contextTarget, attachmentID string) {
+	t.Helper()
+	var threadRoot any
+	if threadRootID != "" {
+		threadRoot = threadRootID
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent_attachment_upload_session (
+			id, workspace_id, agent_id, channel_id, thread_root_message_id,
+			context_target, object_key, filename, content_type, size_bytes,
+			checksum_sha256, upload_mode, state, expires_at, attachment_id, completed_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, 'test-upload.png', 'image/png', 42,
+			repeat('0', 64), 'local', 'completed', now() + interval '15 minutes', $8, now()
+		)`,
+		uuid.NewString(), testWorkspaceID, agentID, channelID, threadRoot,
+		contextTarget, "test-agent-upload-session/"+uuid.NewString(), attachmentID,
+	); err != nil {
+		t.Fatalf("seed completed attachment upload session: %v", err)
+	}
 }
 
 func assertAgentTransportAuditCount(t *testing.T, taskID, action string, want int) {

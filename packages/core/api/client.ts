@@ -4504,7 +4504,7 @@ export class ApiClient {
   async getResearchV6ProjectionSnapshot(
     runId: string,
   ): Promise<import("../types/research-v6").ResearchV6Snapshot> {
-    const { parseResearchV6Snapshot } = await import("./research-v6-schemas");
+    const { parseResearchV6Snapshot } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/snapshot`);
     return parseResearchV6Snapshot(raw);
   }
@@ -4513,7 +4513,7 @@ export class ApiClient {
     runId: string,
     fromSequenceExclusive: number,
   ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6Delta } = await import("./research-v6-schemas");
+    const { parseResearchV6Delta } = await import("../research-v6/schemas");
     const raw = await this.fetch(
       `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
     );
@@ -4525,7 +4525,7 @@ export class ApiClient {
     runId: string,
     lastConfirmedSequence: number,
   ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdict } = await import("./research-v6-schemas");
+    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
       method: "POST",
       body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),

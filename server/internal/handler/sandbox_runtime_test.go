@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestMergeRuntimeEnvMetadata(t *testing.T) {
@@ -88,6 +89,34 @@ func TestShouldEnqueueSandboxReconfigure(t *testing.T) {
 	}
 	if shouldEnqueueSandboxReconfigure(localRef, json.RawMessage(`{}`)) {
 		t.Fatal("expected no reconfigure for empty runtime")
+	}
+}
+
+func TestBuildSandboxDockerContainerNameIncludesContext(t *testing.T) {
+	t.Parallel()
+	got := buildSandboxDockerContainerName(
+		"https://dev.multica.ai:8443/app",
+		db.Workspace{Slug: "alpha-team", Name: "Alpha Team"},
+		db.User{Name: "jian40", DisplayName: "Jian"},
+		"Chrome Box",
+	)
+	want := "multica-dev-multica-ai-alpha-team-jian40-chrome-box"
+	if got != want {
+		t.Fatalf("container name = %q, want %q", got, want)
+	}
+}
+
+func TestBuildSandboxDockerContainerNameFallsBackForNonASCII(t *testing.T) {
+	t.Parallel()
+	got := buildSandboxDockerContainerName(
+		"http://127.0.0.1:8080",
+		db.Workspace{Name: "工作区"},
+		db.User{DisplayName: "用户", Email: "owner@example.com"},
+		"容器",
+	)
+	want := "multica-127-0-0-1-workspace-owner-example-com-container"
+	if got != want {
+		t.Fatalf("container name = %q, want %q", got, want)
 	}
 }
 

@@ -121,6 +121,22 @@ func TestParseDockerPublishedPort(t *testing.T) {
 	}
 }
 
+func TestDockerContainerNameForJobUsesPayloadHostName(t *testing.T) {
+	job := sandboxJob{InstanceID: "11111111-2222-3333-4444-555555555555"}
+	payload := sandboxJobPayload{DockerContainerName: "Multica-dev-multica-ai-alpha-jian40-Chrome Box"}
+	if got := dockerContainerNameForJob(job, payload); got != "multica-dev-multica-ai-alpha-jian40-chrome-box" {
+		t.Fatalf("container name = %q", got)
+	}
+}
+
+func TestDockerContainerNameForJobFallsBackToMetadata(t *testing.T) {
+	job := sandboxJob{InstanceID: "11111111-2222-3333-4444-555555555555"}
+	payload := sandboxJobPayload{Metadata: json.RawMessage(`{"docker_container_name":"multica-prod-ws-user-box"}`)}
+	if got := dockerContainerNameForJob(job, payload); got != "multica-prod-ws-user-box" {
+		t.Fatalf("container name = %q", got)
+	}
+}
+
 func TestBuildDockerEndpointInfoIncludesServiceURLs(t *testing.T) {
 	endpoint := buildDockerEndpointInfo("cid", "multica-abc", "img:latest", "10.0.0.8", map[string]string{
 		"6079": "32768",

@@ -29,12 +29,25 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	if h == nil || h.TaskService == nil || h.TxStarter == nil {
 		return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(errors.New("research task dispatcher is unavailable"))
 	}
+	requestHash, err := researchrun.HashDispatchRequest(request)
+	if err != nil {
+		return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("hash research dispatch request: %w", err))
+	}
+	if request.RequestHash != "" && request.RequestHash != requestHash {
+		return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(errors.New("research dispatch request hash does not match its payload"))
+	}
+	request.RequestHash = requestHash
 	var existingID pgtype.UUID
+	var existingHash string
 	if err := h.DB.QueryRow(ctx, `
-		SELECT id FROM agent_inbox_event
+		SELECT id, COALESCE(context->>'research_dispatch_request_hash', '')
+		FROM agent_inbox_event
 		WHERE context->>'research_dispatch_key' = $1
 		LIMIT 1
-	`, request.Key).Scan(&existingID); err == nil {
+	`, request.Key).Scan(&existingID, &existingHash); err == nil {
+		if existingHash != "" && existingHash != requestHash {
+			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+		}
 		return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return researchrun.DispatchResult{}, err
@@ -83,6 +96,29 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		return researchrun.DispatchResult{}, err
 	}
 	defer tx.Rollback(ctx)
+	// Serialize the second idempotency check with creation. This covers lease
+	// expiry while the first worker is still inside the external mutation.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, request.Key); err != nil {
+		return researchrun.DispatchResult{}, fmt.Errorf("lock research task dispatch: %w", err)
+	}
+	existingID = pgtype.UUID{}
+	existingHash = ""
+	if err = tx.QueryRow(ctx, `
+		SELECT id, COALESCE(context->>'research_dispatch_request_hash', '')
+		FROM agent_inbox_event
+		WHERE context->>'research_dispatch_key' = $1
+		LIMIT 1
+	`, request.Key).Scan(&existingID, &existingHash); err == nil {
+		if existingHash != "" && existingHash != requestHash {
+			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return researchrun.DispatchResult{}, err
+		}
+		return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return researchrun.DispatchResult{}, err
+	}
 	qtx := db.New(tx)
 	message, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
 		ChatSessionID: chatSession.ID,
@@ -102,14 +138,15 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object(
 		  'type', 'research_run_task',
 		  'research_dispatch_key', $2::text,
-		  'research_session_id', $3::text,
-		  'research_task_id', $4::text,
-		  'research_attempt_id', $5::text,
-		  'research_task_timeout_seconds', $6::integer,
-		  'research_task_acceptance_criteria', $7::jsonb
+		  'research_dispatch_request_hash', $3::text,
+		  'research_session_id', $4::text,
+		  'research_task_id', $5::text,
+		  'research_attempt_id', $6::text,
+		  'research_task_timeout_seconds', $7::integer,
+		  'research_task_acceptance_criteria', $8::jsonb
 		), updated_at = now()
 		WHERE id = $1
-	`, task.ID, request.Key, request.Run.SessionID, request.Task.ID, request.AttemptID,
+	`, task.ID, request.Key, requestHash, request.Run.SessionID, request.Task.ID, request.AttemptID,
 		request.Task.TimeoutSeconds, request.Task.AcceptanceCriteria); err != nil {
 		return researchrun.DispatchResult{}, fmt.Errorf("bind research task dispatch: %w", err)
 	}
@@ -153,14 +190,27 @@ func (d *researchRunDispatcher) Inspect(ctx context.Context, keys []string) (map
 	if len(keys) == 0 {
 		return out, nil
 	}
+	// The daemon fence rejects a delivery once any newer active-state delivery
+	// row exists. Inspect the same newest row before deciding whether execution
+	// ownership is still live; an older unexpired row is no longer authoritative.
 	rows, err := d.handler.DB.Query(ctx, `
-		SELECT id::text, COALESCE(context->>'research_dispatch_key', ''), status,
-		       COALESCE(terminal_outcome, ''), retryable,
-		       COALESCE(failure_reason, COALESCE(error, '')),
-		       terminal_at IS NOT NULL, completed_at
-		FROM agent_inbox_event
-		WHERE id::text = ANY($1::text[])
-		   OR context->>'research_dispatch_key' = ANY($1::text[])
+		SELECT event.id::text, COALESCE(event.context->>'research_dispatch_key', ''), event.status,
+		       COALESCE(event.terminal_outcome, ''), event.retryable,
+		       COALESCE(event.failure_reason, COALESCE(event.error, '')),
+		       event.terminal_at IS NOT NULL, event.started_at, event.completed_at,
+		       now(), delivery.lease_expires_at,
+		       COALESCE(delivery.lease_expires_at > now(), false)
+		FROM agent_inbox_event event
+		LEFT JOIN LATERAL (
+		  SELECT candidate.lease_expires_at
+		  FROM agent_event_delivery candidate
+		  WHERE candidate.inbox_event_id = event.id
+		    AND candidate.status IN ('leased', 'processing')
+		  ORDER BY candidate.created_at DESC, candidate.id DESC
+		  LIMIT 1
+		) delivery ON true
+		WHERE event.id::text = ANY($1::text[])
+		   OR event.context->>'research_dispatch_key' = ANY($1::text[])
 	`, keys)
 	if err != nil {
 		return nil, err
@@ -168,15 +218,27 @@ func (d *researchRunDispatcher) Inspect(ctx context.Context, keys []string) (map
 	defer rows.Close()
 	for rows.Next() {
 		var id, dispatchKey, status, outcome, failure string
-		var retryable, terminal bool
-		var completedAt pgtype.Timestamptz
-		if err = rows.Scan(&id, &dispatchKey, &status, &outcome, &retryable, &failure, &terminal, &completedAt); err != nil {
+		var retryable, terminal, activeLease bool
+		var startedAt, completedAt, observedAt, leaseExpiresAt pgtype.Timestamptz
+		if err = rows.Scan(&id, &dispatchKey, &status, &outcome, &retryable, &failure, &terminal,
+			&startedAt, &completedAt, &observedAt, &leaseExpiresAt, &activeLease); err != nil {
 			return nil, err
 		}
-		state := researchrun.InboxTaskState{ID: id, FailureReason: failure, Retryable: retryable}
+		state := researchrun.InboxTaskState{
+			ID: id, FailureReason: failure, Retryable: retryable,
+			ObservedAt: observedAt.Time, HasActiveLease: activeLease,
+		}
+		if startedAt.Valid {
+			started := startedAt.Time
+			state.StartedAt = &started
+		}
 		if completedAt.Valid {
 			completed := completedAt.Time
 			state.CompletedAt = &completed
+		}
+		if leaseExpiresAt.Valid {
+			expires := leaseExpiresAt.Time
+			state.LeaseExpiresAt = &expires
 		}
 		state.Status, state.Retryable, state.FailureReason = normalizeResearchInboxTaskState(status, outcome, retryable, terminal, failure)
 		out[id] = state
@@ -270,7 +332,9 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	if h.ResearchRun != nil {
 		if snap, snapErr := h.ResearchRun.Snapshot(ctx, event.SessionID, event.WorkspaceID); snapErr == nil {
 			nodes, edges := projectRunV2Graph(snap)
-			publishProjectedRunGraph(h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, nodes, edges)
+			if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Sequence, nodes, edges); err != nil {
+				return err
+			}
 		} else {
 			// Snapshot unavailable: retain legacy single-event node insert.
 			if nodeType, title, summary, status := projectResearchEvent(event, session, payload); nodeType != "" {
@@ -285,6 +349,9 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 				node, insertErr := insertProjectedResearchNode(ctx, h.DB, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
 				if insertErr != nil {
 					return insertErr
+				}
+				if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
+					return err
 				}
 				h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
 			}
@@ -302,9 +369,15 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 		if insertErr != nil {
 			return insertErr
 		}
+		if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
+			return err
+		}
 		h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
 	}
 
+	if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
+		return err
+	}
 	h.publish(protocol.EventResearchSessionStatusChanged, event.WorkspaceID, event.ActorType, event.ActorID, map[string]any{
 		"session":      researchSessionToResponse(session),
 		"run_event_id": event.ID,
@@ -313,6 +386,9 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	if event.Type == "task_result_accepted" {
 		if reportID, _ := payload["report_id"].(string); strings.TrimSpace(reportID) != "" {
 			if report, reportErr := h.Queries.GetLatestResearchReport(ctx, db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: workspaceID}); reportErr == nil {
+				if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
+					return err
+				}
 				h.publish(protocol.EventResearchSessionReportUpdated, event.WorkspaceID, event.ActorType, event.ActorID, map[string]any{
 					"session_id": event.SessionID,
 					"report":     researchReportToResp(report),
@@ -325,10 +401,11 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 
 // publishProjectedRunGraph upserts the full run-v2 projected graph over WS.
 // Stable node/edge IDs let the client replace prior semantic nodes in place.
-func publishProjectedRunGraph(h *Handler, workspaceID, actorType, actorID, sessionID string, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) {
+func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, actorType, actorID, sessionID string, eventSequence int64, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) error {
 	if h == nil {
-		return
+		return nil
 	}
+	lease, _ := researchrun.ReconcileLeaseFromContext(ctx)
 	edgeByTo := map[string]ResearchGraphEdgeResp{}
 	for _, e := range edges {
 		if e.EdgeType != researchTreeEdgeType {
@@ -340,9 +417,14 @@ func publishProjectedRunGraph(h *Handler, workspaceID, actorType, actorID, sessi
 		edgeByTo[e.ToNodeID] = e
 	}
 	for _, node := range nodes {
+		if err := assertResearchProjectionLease(ctx, h.DB, sessionID); err != nil {
+			return err
+		}
 		payload := map[string]any{
-			"session_id": sessionID,
-			"node":       node,
+			"session_id":           sessionID,
+			"node":                 node,
+			"run_event_sequence":   eventSequence,
+			"reconcile_generation": lease.Generation,
 		}
 		if edge, ok := edgeByTo[node.ID]; ok {
 			payload["edge"] = edge
@@ -351,6 +433,26 @@ func publishProjectedRunGraph(h *Handler, workspaceID, actorType, actorID, sessi
 		}
 		h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, actorType, actorID, payload)
 	}
+	return nil
+}
+
+func assertResearchProjectionLease(ctx context.Context, executor dbExecutor, sessionID string) error {
+	lease, ok := researchrun.ReconcileLeaseFromContext(ctx)
+	if !ok || lease.SessionID != sessionID {
+		return researchrun.ErrRunLeaseLost
+	}
+	var one int
+	err := executor.QueryRow(ctx, `
+		SELECT 1 FROM research_session
+		WHERE id = $1::uuid
+		  AND reconcile_lease_token = $2::uuid
+		  AND reconcile_lease_generation = $3
+		  AND reconcile_lease_expires_at > now()
+	`, sessionID, lease.Token, lease.Generation).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return researchrun.ErrRunLeaseLost
+	}
+	return err
 }
 
 func projectedResearchActorAgentID(event researchrun.RunEvent, payload map[string]any) pgtype.UUID {
@@ -370,8 +472,12 @@ func projectResearchEvent(event researchrun.RunEvent, session db.ResearchSession
 		return "goal", session.Title, session.Goal, "active"
 	case "task_dispatching":
 		return "agent_activity", "调研任务已分派", valueString(payload, "task_id"), "active"
+	case "task_dispatched":
+		return "agent_activity", "调研任务等待 Agent 执行", valueString(payload, "task_id"), "active"
 	case "task_started":
 		return "agent_activity", "Agent 开始执行调研任务", valueString(payload, "task_id"), "active"
+	case "task_attempt_cancelling":
+		return "agent_activity", "正在停止超时任务", valueString(payload, "task_id"), "active"
 	case "task_result_accepted":
 		return "finding", "调研结果已入账", valueString(payload, "summary"), "done"
 	case "task_attempt_failed":
@@ -414,23 +520,37 @@ func valueString(values map[string]any, key string) string {
 }
 
 func insertProjectedResearchNode(ctx context.Context, executor dbExecutor, workspaceID, sessionID pgtype.UUID, eventID, nodeType, title, summary, status string, actorAgentID pgtype.UUID, payload []byte) (db.ResearchGraphNode, error) {
+	lease, ok := researchrun.ReconcileLeaseFromContext(ctx)
+	if !ok || lease.SessionID != uuidToString(sessionID) {
+		return db.ResearchGraphNode{}, researchrun.ErrRunLeaseLost
+	}
 	query := `
 		INSERT INTO research_graph_node (
 			workspace_id, session_id, node_type, title, summary, status,
 			actor_agent_id, payload, run_event_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid)
+		)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9::uuid
+		FROM research_session
+		WHERE id = $2
+		  AND reconcile_lease_token = $10::uuid
+		  AND reconcile_lease_generation = $11
+		  AND reconcile_lease_expires_at > now()
 		ON CONFLICT DO NOTHING
 		RETURNING id, workspace_id, session_id, node_type, title, summary, status,
 		          actor_agent_id, payload, created_at, updated_at
 	`
 	var node db.ResearchGraphNode
 	err := executor.QueryRow(ctx, query, workspaceID, sessionID, nodeType,
-		strings.TrimSpace(title), summary, status, actorAgentID, payload, eventID).Scan(
+		strings.TrimSpace(title), summary, status, actorAgentID, payload, eventID,
+		lease.Token, lease.Generation).Scan(
 		&node.ID, &node.WorkspaceID, &node.SessionID, &node.NodeType, &node.Title,
 		&node.Summary, &node.Status, &node.ActorAgentID, &node.Payload,
 		&node.CreatedAt, &node.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if leaseErr := assertResearchProjectionLease(ctx, executor, uuidToString(sessionID)); leaseErr != nil {
+			return db.ResearchGraphNode{}, leaseErr
+		}
 		err = executor.QueryRow(ctx, `
 			SELECT id, workspace_id, session_id, node_type, title, summary, status,
 			       actor_agent_id, payload, created_at, updated_at

@@ -19,7 +19,7 @@ const mockLiveStatus = vi.hoisted(
 
 const mockActivity = vi.hoisted(() => ({
   current: {
-    data: { summary: null, timeline: [] as Array<{ id: string; title: string; subtext?: string }> },
+    data: { summary: null, timeline: [] as Array<{ id: string; title: string; subtext?: string }> } as { summary: null; timeline: Array<{ id: string; title: string; subtext?: string }> } | undefined,
     isLoading: false,
   },
 }));

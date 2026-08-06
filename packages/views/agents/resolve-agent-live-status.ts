@@ -1,23 +1,11 @@
 import type { TFunction } from "i18next";
 import type { AgentPresenceDetail } from "@multica/core/agents";
-import type { AgentTask } from "@multica/core/types";
-import {
-  ACTIVITY_LABEL_EN,
-  ACTIVITY_TONE_DOT_CLASS,
-  activityPresentation,
-  type ActivityEvent,
-} from "./components/tabs/activity-event";
 import {
   formatPresenceStatus,
   presenceStatusDotClass,
   presenceStatusVisual,
   toLiveAvailability,
 } from "./presence";
-
-// Activity projection tones — kind colour on the DOT only; label text stays
-// neutral (mirrors the Activity timeline row).
-const TONE_DOT_CLASS = ACTIVITY_TONE_DOT_CLASS;
-const ACTIVITY_LABEL_TEXT = "text-foreground";
 
 /**
  * Live Online/Offline view for profile / DM / side-panel headers (LRM-248).
@@ -29,43 +17,6 @@ export type AgentLiveStatusView = {
   dotClass: string;
 };
 
-/** Active-task priority: running first, then starting, queued. */
-const ACTIVE_STATUS_RANK: Record<string, number> = {
-  running: 0,
-  dispatched: 1,
-  queued: 2,
-};
-
-/**
- * Pick the single most relevant active task for an agent from the workspace
- * snapshot. Terminal rows are ignored (snapshot includes one terminal per
- * agent for last-activity, not current workload).
- */
-export function pickPrimaryActiveTask(
-  snapshot: readonly AgentTask[],
-  agentId: string | null | undefined,
-): AgentTask | null {
-  if (!agentId) return null;
-  let best: AgentTask | null = null;
-  let bestRank = Number.POSITIVE_INFINITY;
-  for (const task of snapshot) {
-    if (task.agent_id !== agentId) continue;
-    const rank = ACTIVE_STATUS_RANK[task.status];
-    if (rank === undefined) continue;
-    if (rank < bestRank) {
-      best = task;
-      bestRank = rank;
-      continue;
-    }
-    if (rank === bestRank && best) {
-      const taskTime = task.started_at ?? task.dispatched_at ?? task.created_at;
-      const bestTime = best.started_at ?? best.dispatched_at ?? best.created_at;
-      if (taskTime > bestTime) best = task;
-    }
-  }
-  return best;
-}
-
 /**
  * Live presence for headers / profile cards — Online or Offline only.
  * `unstable` folds to Online. Archived returns null (caller shows gray avatar
@@ -73,10 +24,6 @@ export function pickPrimaryActiveTask(
  */
 export function resolveAgentLiveStatus(args: {
   presence: AgentPresenceDetail | "loading" | null | undefined;
-  /** @deprecated Ignored — live status no longer projects activity (LRM-248). */
-  activeTask?: AgentTask | null;
-  /** @deprecated Ignored — live status no longer projects activity (LRM-248). */
-  latestActivity?: ActivityEvent | null;
   tAgents: TFunction<"agents">;
   /** @deprecated Unused for live Online/Offline. */
   tChat?: TFunction<"chat">;
@@ -90,55 +37,6 @@ export function resolveAgentLiveStatus(args: {
   const dotClass = presenceStatusDotClass(presence);
   if (!label || !visual || !dotClass) return null;
   return { label, textClass: visual.textClass, dotClass };
-}
-
-/**
- * Activity-timeline projection for the composer strip (non-live event verbs:
- * Thinking / Running command…). Not a live presence label — Idle/Working/
- * Queued/Unstable/Reconnecting never appear here as presence words.
- *
- * Connection down (offline) suppresses activity verbs so a stale task cannot
- * paint "Running command" on an unreachable agent.
- *
- * LRM-1288 / LRM-238: never invent Thinking from `activeTask` alone. Thinking
- * only appears when a real activity/phase row is present (`latestActivity`).
- * Running/queued with no signal → Waiting (Frank product lock).
- */
-export function resolveAgentActivityProjection(args: {
-  presence: AgentPresenceDetail | "loading" | null | undefined;
-  activeTask: AgentTask | null;
-  latestActivity: ActivityEvent | null;
-}): AgentLiveStatusView | null {
-  const { presence, activeTask, latestActivity } = args;
-  if (!presence || presence === "loading") return null;
-  if (!activeTask) return null;
-
-  const live = toLiveAvailability(presence.availability);
-  // Archived / unknown — no activity strip.
-  if (live === null) return null;
-  // Offline — hide activity verbs (connection wins).
-  if (live === "offline") return null;
-
-  if (latestActivity) {
-    const p = activityPresentation(latestActivity);
-    const rawLabel = ACTIVITY_LABEL_EN[p.labelKey];
-    const label =
-      latestActivity.activity_kind === "tool_call" && p.tone === "active"
-        ? `${rawLabel}…`
-        : rawLabel;
-    return {
-      label,
-      textClass: ACTIVITY_LABEL_TEXT,
-      dotClass: TONE_DOT_CLASS[p.tone],
-    };
-  }
-
-  // Task on the plate but no activity/phase yet → Waiting (not Thinking).
-  return {
-    label: ACTIVITY_LABEL_EN.waiting,
-    textClass: ACTIVITY_LABEL_TEXT,
-    dotClass: TONE_DOT_CLASS.neutral,
-  };
 }
 
 /** Coarse Activity state for list/table contexts (task #7, 2026-07-31). */
@@ -188,10 +86,10 @@ export function presentAgentActivityBand(
   showDisconnected: boolean,
 ): AgentActivityBandView {
   if (band === "disconnected" && !showDisconnected) {
-    return { label: "—", dotClass: TONE_DOT_CLASS.neutral };
+    return { label: "—", dotClass: "bg-muted-foreground" };
   }
   return {
-    label: ACTIVITY_LABEL_EN[band],
-    dotClass: TONE_DOT_CLASS[band === "working" ? "running" : "neutral"],
+    label: band === "idle" ? "Idle" : band === "working" ? "Working" : "Disconnected",
+    dotClass: band === "working" ? "bg-brand" : "bg-muted-foreground",
   };
 }

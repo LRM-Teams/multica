@@ -13,7 +13,7 @@ import type { AgentTask } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 import { AgentActivityHoverContent } from "../../agents/components/agent-activity-hover-content";
-import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
+import { RUNNER_ACTIVITY_LABEL_EN } from "../../agents/runner-activity-labels";
 
 interface IssueAgentActivityIndicatorProps {
   issueId: string;
@@ -104,7 +104,7 @@ export const IssueAgentActivityIndicator = memo(function IssueAgentActivityIndic
         >
           {/* LRM-1288: Waiting for running+queued without activity signal —
               never invent Thinking (no activity subscription on this cue). */}
-          {ACTIVITY_LABEL_EN.waiting}
+          {RUNNER_ACTIVITY_LABEL_EN.waiting}
         </span>
       </HoverCardTrigger>
       <HoverCardContent align="end" className="w-72">

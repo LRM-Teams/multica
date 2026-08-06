@@ -101,8 +101,8 @@ func (c *agentRuntimeTurnCoordinator) Begin(request agentRuntimeTurnRequest) (*a
 	if stableEnvironment["MULTICA_AGENT_ID"] != request.AgentID {
 		return nil, errors.New("stable MULTICA_AGENT_ID does not match turn agent")
 	}
-	if currentTurnEnvironment["MULTICA_TASK_ID"] != request.TurnID {
-		return nil, errors.New("current-turn MULTICA_TASK_ID does not match turn")
+	if currentTurnEnvironment["MULTICA_EXECUTION_ID"] != request.TurnID {
+		return nil, errors.New("current-turn MULTICA_EXECUTION_ID does not match turn")
 	}
 
 	key := agentRuntimeTurnSlotKey{

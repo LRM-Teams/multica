@@ -2821,10 +2821,10 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if task.Agent != nil {
 		agentName = task.Agent.Name
 	}
-	if task.ChatSessionID != "" {
-		taskLog.Info("picked chat task", "chat_session", shortID(task.ChatSessionID), "agent", agentName, "provider", provider)
+	if isChatLikeTask(task) {
+		taskLog.Info("picked chat delivery", "channel", shortID(task.ChannelID), "agent", agentName, "provider", provider)
 	} else {
-		taskLog.Info("picked task", "issue", task.IssueID, "agent", agentName, "provider", provider)
+		taskLog.Info("picked issue execution", "issue", task.IssueID, "agent", agentName, "provider", provider)
 	}
 	taskLog.Debug("task context",
 		"workspace_id", task.WorkspaceID,
@@ -3481,7 +3481,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentToken = token
 		durableAgentToken = true
 	}
-	chatTask := task.ChatSessionID != "" && !restrictedExecution
+	chatTask := isChatLikeTask(task) && !restrictedExecution
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
@@ -3572,11 +3572,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"MULTICA_WORKSPACE_ID": task.WorkspaceID,
 		"MULTICA_AGENT_NAME":   agentName,
 		"MULTICA_AGENT_ID":     agentID,
-		"MULTICA_TASK_ID":      task.ID,
 		"MULTICA_RUN_ID":       task.ID,
 		"MULTICA_TASK_SLOT":    strconv.Itoa(slot),
 	}
-	if task.InboxEvent != nil {
+	if isChatLikeTask(task) {
+		agentEnv["MULTICA_EXECUTION_ID"] = task.ID
+	} else {
+		agentEnv["MULTICA_TASK_ID"] = task.ID
+	}
+	if task.InboxEvent != nil && !isChatLikeTask(task) {
 		agentEnv["MULTICA_AGENT_INBOX_EVENT_ID"] = task.InboxEvent.ID
 		agentEnv["MULTICA_AGENT_INBOX_DELIVERY_ID"] = task.InboxEvent.DeliveryID
 		agentEnv["MULTICA_AGENT_INBOX_LEASE_TOKEN"] = task.InboxEvent.LeaseToken

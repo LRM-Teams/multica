@@ -957,7 +957,7 @@ func renderStandaloneChatRuntimeBrief(b *strings.Builder, provider string, ctx T
 
 // renderChannelChatRuntimeBrief renders the complete delivery contract for a
 // chat run backed by a real channel/DM transport target (ChannelID set):
-// visible output is delivered only through the task-scoped Multica CLI
+// visible output is delivered only through the delivery-scoped Multica CLI
 // transport. This function must never treat final assistant output as
 // delivered on its own.
 func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
@@ -969,7 +969,7 @@ func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx Task
 		b.WriteString("- Words → `multica message send` · pure greeting/thanks/sign-off → reaction or a short text send.\n")
 		b.WriteString("Silence applies only to ambient/unaddressed messages and weak agent notifications. Unsure about a human → reply.\n\n")
 	}
-	b.WriteString("`ChannelID` target present: visible output is delivered only by the task-scoped Multica CLI transport (`multica message send` / `multica message react`). Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed channel messages, never human DMs, human @mentions, direct questions, or tasks. Issue writes remain claim-first and only when requested.\n\n")
+	b.WriteString("`ChannelID` target present: visible output is delivered only by the delivery-scoped Multica CLI transport (`multica message send` / `multica message react`). Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed channel messages, never human DMs, human @mentions, direct questions, or assigned work. Issue writes remain claim-first and only when requested.\n\n")
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")

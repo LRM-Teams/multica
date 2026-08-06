@@ -533,7 +533,7 @@ func TestAgentDMConcurrentDuplicateTurnStaysActiveNotPausedAtOldBudget(t *testin
 	}
 
 	source := agentTransportSource{
-		task: db.AgentInboxEvent{
+		legacyTask: &db.AgentInboxEvent{
 			ID:                parseUUID(uuid.NewString()),
 			AgentDmExchangeID: parseUUID(exchangeID),
 		},
@@ -635,7 +635,7 @@ func TestAgentDMFrequencyAndBudgetNeverPauseAcrossMatters(t *testing.T) {
 				task.AgentDmExchangeID = parseUUID(exchangeID)
 			}
 			source := agentTransportSource{
-				task: task,
+				legacyTask: &task,
 				origin: chatOutputOrigin{
 					workspaceID: parseUUID(testWorkspaceID),
 					agentID:     parseUUID(senderID),
@@ -1067,7 +1067,7 @@ func TestAgentTransportFreshnessDraftSQLBranchesAreScopedToTaskOrInbox(t *testin
 		t.Fatal("resolve transport task origin")
 	}
 	targetName := "#" + channelNameForTransportTest(t, channelID)
-	target, err := testHandler.resolveAgentTransportTarget(ctx, task, origin, targetName, true)
+	target, err := testHandler.resolveAgentTransportTarget(ctx, &task, origin, targetName, true)
 	if err != nil {
 		t.Fatalf("resolve transport target: %v", err)
 	}
@@ -1093,8 +1093,8 @@ func TestAgentTransportFreshnessDraftSQLBranchesAreScopedToTaskOrInbox(t *testin
 		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, inboxEventID)
 	})
 
-	taskSource := agentTransportSource{task: task, origin: origin}
-	inboxSource := agentTransportSource{task: task, origin: origin, inboxEventID: parseUUID(inboxEventID)}
+	taskSource := agentTransportSource{legacyTask: &task, origin: origin}
+	inboxSource := agentTransportSource{legacyTask: &task, origin: origin, inboxEventID: parseUUID(inboxEventID)}
 	for _, tc := range []struct {
 		name      string
 		source    agentTransportSource
@@ -1225,7 +1225,7 @@ func TestAgentTransportFreshnessHoldLoserReturnsPersistedWinnerDecision(t *testi
 	if !ok {
 		t.Fatal("resolve transport task origin")
 	}
-	target, err := testHandler.resolveAgentTransportTarget(ctx, task, origin, "#"+channelNameForTransportTest(t, channelID), true)
+	target, err := testHandler.resolveAgentTransportTarget(ctx, &task, origin, "#"+channelNameForTransportTest(t, channelID), true)
 	if err != nil {
 		t.Fatalf("resolve transport target: %v", err)
 	}
@@ -1241,7 +1241,7 @@ func TestAgentTransportFreshnessHoldLoserReturnsPersistedWinnerDecision(t *testi
 	if err != nil {
 		t.Fatalf("seed winner newer: %v", err)
 	}
-	source := agentTransportSource{task: task, origin: origin}
+	source := agentTransportSource{legacyTask: &task, origin: origin}
 	winnerDecision, err := testHandler.agentTransportFreshnessDecisionWithSeen(ctx, testHandler.DB, source, target, winnerSeen.Seq)
 	if err != nil || !winnerDecision.Hold {
 		t.Fatalf("winner freshness decision = %+v, err=%v", winnerDecision, err)
@@ -1271,12 +1271,15 @@ func TestAgentTransportFreshnessDecisionFactIsScopedToTaskOrInboxSource(t *testi
 	workspaceID := parseUUID(uuid.NewString())
 	agentID := parseUUID(uuid.NewString())
 	target := agentTransportTarget{raw: "#same-target"}
+	baseTask := db.AgentInboxEvent{ID: parseUUID(uuid.NewString())}
 	base := agentTransportSource{
-		task:   db.AgentInboxEvent{ID: parseUUID(uuid.NewString())},
-		origin: chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
+		legacyTask: &baseTask,
+		origin:     chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
 	}
 	otherTask := base
-	otherTask.task.ID = parseUUID(uuid.NewString())
+	otherTaskEvent := *otherTask.legacyTask
+	otherTaskEvent.ID = parseUUID(uuid.NewString())
+	otherTask.legacyTask = &otherTaskEvent
 	inbox := base
 	inbox.inboxEventID = parseUUID(uuid.NewString())
 	otherInbox := inbox

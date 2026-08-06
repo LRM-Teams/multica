@@ -52,6 +52,9 @@ func TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts(t *testing.T) 
 	if _, exists := turn.StableEnvironment["MULTICA_TASK_ID"]; exists {
 		t.Fatal("stable provider environment contains current turn id")
 	}
+	if _, exists := turn.StableEnvironment["MULTICA_EXECUTION_ID"]; exists {
+		t.Fatal("stable provider environment contains current execution id")
+	}
 	if _, exists := turn.StableEnvironment["MULTICA_AGENT_INBOX_LEASE_TOKEN"]; exists {
 		t.Fatal("stable provider environment contains current lease")
 	}
@@ -75,8 +78,7 @@ func TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts(t *testing.T) 
 		t.Fatalf("decode current-turn envelope: %v", err)
 	}
 	if envelope.TurnID != request.TurnID ||
-		envelope.Environment["MULTICA_TASK_ID"] != request.TurnID ||
-		envelope.Environment["MULTICA_AGENT_INBOX_LEASE_TOKEN"] != "lease-a" {
+		envelope.Environment["MULTICA_EXECUTION_ID"] != request.TurnID {
 		t.Fatalf("bound envelope = %#v", envelope)
 	}
 	if envelope.Generation != turn.binding.Generation || envelope.TokenFile != turn.binding.TokenFile {
@@ -238,7 +240,7 @@ func TestAgentRuntimeTurnCoordinatorConcurrentBeginHasSingleWinner(t *testing.T)
 			request := base
 			request.TurnID = uuid.NewString()
 			request.Environment = cloneEnvironment(base.Environment)
-			request.Environment["MULTICA_TASK_ID"] = request.TurnID
+			request.Environment["MULTICA_EXECUTION_ID"] = request.TurnID
 			request.Environment["MULTICA_RUN_ID"] = request.TurnID
 			got, err := coordinator.Begin(request)
 			switch {
@@ -309,9 +311,8 @@ func testAgentRuntimeTurnRequest(t *testing.T, root string) agentRuntimeTurnRequ
 			"MULTICA_WORKSPACE_ID":                   workspaceID,
 			"MULTICA_AGENT_ID":                       agentID,
 			"MULTICA_AGENT_NAME":                     "agent-a",
-			"MULTICA_TASK_ID":                        turnID,
+			"MULTICA_EXECUTION_ID":                   turnID,
 			"MULTICA_RUN_ID":                         turnID,
-			"MULTICA_AGENT_INBOX_LEASE_TOKEN":        "lease-a",
 			"MULTICA_QUICK_CREATE_SOURCE_MESSAGE_ID": "message-a",
 			"PATH":                                   "/usr/bin",
 		},

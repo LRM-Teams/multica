@@ -39,8 +39,6 @@ const (
 	EventTaskCompleted      = "task:completed" // running → completed
 	EventTaskFailed         = "task:failed"    // running → failed
 	EventTaskMessage        = "task:message"
-	EventAgentActivityStep  = "agent_activity:step"
-	EventAgentActivityEvent = "agent_activity:event"
 	EventAgentMemoryUpdated = "agent.memory_updated"
 	EventTaskCancelled      = "task:cancelled" // * → cancelled
 

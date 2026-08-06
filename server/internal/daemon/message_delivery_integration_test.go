@@ -117,7 +117,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	)
 	serverHandler.AgentDeliveryNotifier = hub
 	acks := make(chan protocol.AgentDeliverAckPayload, 2)
-	activities := make(chan protocol.AgentMessageHandoffPayload, 2)
+	handoffs := make(chan protocol.AgentMessageHandoffPayload, 2)
 	recoveryRequests := make(chan protocol.AgentRecoveryRequest, 2)
 	hub.SetAgentDeliveryAckHandler(func(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 		acks <- ack
@@ -128,7 +128,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		return serverHandler.HandleAgentMessageRecovery(ctx, identity, request)
 	})
 	hub.SetAgentMessageHandoffHandler(func(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.AgentMessageHandoffPayload) error {
-		activities <- payload
+		handoffs <- payload
 		return serverHandler.HandleAgentMessageHandoff(ctx, identity, payload)
 	})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -201,19 +201,19 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	}
 
 	select {
-	case activity := <-activities:
-		if activity.AgentID != agentID || activity.RuntimeID != runtimeID || activity.Count != 1 {
-			t.Fatalf("Activity = %+v", activity)
+	case handoff := <-handoffs:
+		if handoff.AgentID != agentID || handoff.RuntimeID != runtimeID || handoff.Count != 1 {
+			t.Fatalf("handoff = %+v", handoff)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("Message received Activity was not emitted")
+		t.Fatal("Message handoff receipt was not emitted")
 	}
 	for i := 0; i < 100; i++ {
 		runtime.Gosched()
 	}
 	select {
-	case duplicate := <-activities:
-		t.Fatalf("duplicate Message received Activity = %+v", duplicate)
+	case duplicate := <-handoffs:
+		t.Fatalf("duplicate Message handoff receipt = %+v", duplicate)
 	default:
 	}
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 || len(batches[0]) != 1 || batches[0][0].ID != created.ID {
@@ -234,14 +234,9 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if strings.Contains(string(raw), "hello") || strings.Contains(string(raw), created.ID) {
 		t.Fatalf("boundary file persisted a Message body or identity: %s", raw)
 	}
-	var activityCount int
-	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM agent_activity_event WHERE workspace_id=$1 AND agent_id=$2 AND event_type='message_received'`, workspaceID, agentID).Scan(&activityCount); err != nil || activityCount != 1 {
-		t.Fatalf("Message received Activity count = %d, err=%v", activityCount, err)
-	}
-
 	// A second canonical Message arrives while the same runtime session is
 	// busy. The Machine acknowledges transport acceptance, coalesces a
-	// content-free Notice, and does not advance the boundary or Activity.
+	// content-free Notice, and does not advance the message boundary.
 	slot := d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID]
 	slot.mu.Lock()
 	slot.running = true
@@ -286,8 +281,8 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		t.Fatalf("boundary after busy Notice = %d, want %d", got, created.Seq)
 	}
 	select {
-	case duplicate := <-activities:
-		t.Fatalf("busy Notice emitted Message received Activity = %+v", duplicate)
+	case duplicate := <-handoffs:
+		t.Fatalf("busy Notice emitted a Message handoff receipt = %+v", duplicate)
 	default:
 	}
 
@@ -315,10 +310,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
 		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
 	}
-	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM agent_activity_event WHERE workspace_id=$1 AND agent_id=$2 AND event_type='message_received'`, workspaceID, agentID).Scan(&activityCount); err != nil || activityCount != 1 {
-		t.Fatalf("Message received Activity after check = %d, err=%v", activityCount, err)
-	}
-
 	d.beginMessageRecovery(writes)
 	select {
 	case request := <-recoveryRequests:

@@ -32,8 +32,6 @@ import {
 } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  activeChannelTasksKeys,
-  activeChannelTasksOptions,
   channelMessageThreadOptions,
   channelKeys,
   channelMessagesPageOptions,
@@ -112,7 +110,6 @@ import {
 } from "@multica/core/identity";
 import type {
   Channel,
-  ChannelActiveTask,
   ChannelNotifyLevel,
   ChannelInviteCandidate,
   ChannelMember,
@@ -242,10 +239,6 @@ import {
   ConversationHeader,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
-import {
-  isTerminalChannelActiveTask,
-  listStoppableChannelTasks,
-} from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import {
   dmAgentBubbleActivity,
@@ -283,7 +276,6 @@ import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list
 import { memberFailureKey } from "./member-failure-key";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
-import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 import { ChannelPresenceCluster } from "./channel-agents-live-cue";
 
 // LRM-1264 R3 — defer Tasks/Files/details/thread/agent/member graphs until
@@ -337,7 +329,6 @@ export interface TypingActor {
 }
 
 const EMPTY_TYPING_ACTORS: TypingActor[] = [];
-const STOPPING_ALL_TASKS_ID = "__all__";
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 // #568 — below this, the two-pane desktop layout's conversation pane
@@ -1244,21 +1235,6 @@ export function ChannelsPage({
     [memberManagementCapabilities],
   );
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
-  const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
-  const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
-  // LRM-405 — header Stop-all entry opens a confirm dialog; cancel/close
-  // must not call cancel. Confirm reuses handleStopAllChannelTasks.
-  const [stopAllConfirmOpen, setStopAllConfirmOpen] = useState(false);
-  const stoppableChannelTasks = useMemo(
-    () => listStoppableChannelTasks(activeTasks),
-    [activeTasks],
-  );
-  // "Can send messages" on the channel surface today = not archived
-  // (archived channels render a read-only banner and hide the composer).
-  // No permission → hide the entry (explicit), never a silent no-op click.
-  const canPostInChannel = !!active && !isActiveArchived;
-  const hasStoppableChannelTasks = stoppableChannelTasks.length > 0;
-  const isStoppingAllChannelTasks = stoppingChannelTaskId === STOPPING_ALL_TASKS_ID;
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const updateChannel = useUpdateChannel();
@@ -1474,14 +1450,6 @@ export function ChannelsPage({
         (a) => a.channelId === active?.id && a.actorType !== "agent",
       ),
     [active?.id, typingActors],
-  );
-  const rosterSummary = useMemo(
-    () => {
-      const memberCount = channelMembers.filter((m) => m.member_type === "user").length;
-      const agentCount = channelMembers.filter((m) => m.member_type === "agent").length;
-      return { memberCount, agentCount };
-    },
-    [channelMembers],
   );
   // Pinned conversations live in the unified PINNED section (Slack-style),
   // not floated to the top of Channels / Direct messages.
@@ -1807,7 +1775,7 @@ export function ChannelsPage({
     });
   }, [threadRoot]);
 
-  // New messages (from others / agents) refresh the DM/task/member surfaces
+  // New messages (from others / agents) refresh the DM/member surfaces
   // and the open thread. Keep the active channel marked read while viewing
   // it. #689 perf audit: channelKeys.list(wsId) is NOT invalidated here —
   // useRealtimeSync's own central "channel:message" subscriber already does
@@ -1819,7 +1787,6 @@ export function ChannelsPage({
     // row's preview / unread — refresh it too.
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     if (e.channel_id) {
-      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(e.channel_id) });
       // Agent runtime stats are projected through the channel member list.
       // Refresh it with new agent replies so an already-open Agent panel can
       // show freshly persisted token stats without a full page reload.
@@ -1831,29 +1798,6 @@ export function ChannelsPage({
   // The DM list also unions legacy chat_sessions, so a chat message updates a
   // DM row even though it isn't a channel event.
   useWSEvent("chat:message", () => {
-    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-  });
-
-  useWSEvent("task:cancelled", () => {
-    if (!active?.id) return;
-    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
-    invalidateChannelMemberRoster(qc, active.id);
-    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
-    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-  });
-
-
-  useWSEvent("task:completed", (payload) => {
-    const event = payload as { chat_session_id?: string };
-    if (!event.chat_session_id || !active?.id) return;
-    invalidateChannelMemberRoster(qc, active.id);
-    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-  });
-
-  useWSEvent("task:failed", (payload) => {
-    const event = payload as { chat_session_id?: string };
-    if (!event.chat_session_id || !active?.id) return;
-    invalidateChannelMemberRoster(qc, active.id);
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
@@ -1875,9 +1819,6 @@ export function ChannelsPage({
   useWSEvent("channel:typing", (payload) => {
     const event = payload as ChannelTypingPayload;
     if (!event.channel_id || event.channel_id !== active?.id) return;
-    // A typing pulse from an agent often coincides with a task starting or
-    // ending — refresh the authoritative lifecycle view promptly.
-    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(event.channel_id) });
     const actorKey = `${event.actor_type}:${event.actor_id ?? event.actor_name}`;
     if (event.actor_type === "user" && event.actor_id && event.actor_id === currentUserId) return;
     setTypingActors((current) => {
@@ -2040,77 +1981,6 @@ export function ChannelsPage({
       onError: () => showErrorToast(t(($) => $.archive_dialog.restore_error)),
     });
   };
-
-  const handleStopChannelTask = useCallback(async (
-    task: ChannelActiveTask,
-    // LRM-1350: Working-list resolved label (same cascade as live cue). Never
-    // toast raw `task.agent_name` — that may be the Unknown Agent sentinel.
-    displayName: string,
-  ) => {
-    if (!active?.id) return;
-    // Terminal failed/no_reply rows are dismissed client-side in the live cue
-    // (LRM-581) — cancel is only for in-flight wakes.
-    if (isTerminalChannelActiveTask(task)) return;
-    // LRM-425 / LRM-238 — authoritative id is inbox_event_id; never fall back
-    // to /api/tasks/{id}/cancel for channel wakes (that path returns 409).
-    const inboxEventId = task.inbox_event_id?.trim();
-    if (!inboxEventId) {
-      showErrorToast(t(($) => $.agent_status.stop_failed));
-      return;
-    }
-    const toastName = displayName.trim();
-    if (!toastName) {
-      showErrorToast(t(($) => $.agent_status.stop_failed));
-      return;
-    }
-    setStoppingChannelTaskId(task.task_id);
-    try {
-      await api.cancelChannelInboxEvent(active.id, inboxEventId);
-      toast.success(
-        t(($) => $.agent_status.stop_success, { name: toastName }),
-      );
-      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
-      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
-      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    } catch {
-      showErrorToast(t(($) => $.agent_status.stop_failed));
-    } finally {
-      setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
-    }
-  }, [active?.id, qc, t, wsId]);
-
-  const handleStopAllChannelTasks = useCallback(async (tasks: ChannelActiveTask[]) => {
-    if (!active?.id || tasks.length === 0) return;
-    // LRM-425 — one bulk request; never for-in / Promise.all N× cancel.
-    setStoppingChannelTaskId(STOPPING_ALL_TASKS_ID);
-    try {
-      const result = await api.cancelChannelActiveInboxEvents(active.id);
-      const stopped = result.cancelled_count;
-      if (stopped > 0) {
-        toast.success(t(($) => $.agent_status.stop_all_success, { count: stopped }));
-      } else {
-        showErrorToast(t(($) => $.agent_status.stop_failed));
-      }
-    } catch {
-      showErrorToast(t(($) => $.agent_status.stop_failed));
-    }
-    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
-    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
-    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    setStoppingChannelTaskId(null);
-    // LRM-405 — after stop, focus composer so the user can re-guide agents.
-    // Do not auto-insert @mentions.
-    editorRef.current?.focus();
-  }, [active?.id, qc, t, wsId]);
-
-  const openStopAllAgentsConfirm = useCallback(() => {
-    if (!canPostInChannel || !hasStoppableChannelTasks || isStoppingAllChannelTasks) return;
-    setStopAllConfirmOpen(true);
-  }, [canPostInChannel, hasStoppableChannelTasks, isStoppingAllChannelTasks]);
-
-  const confirmStopAllAgents = useCallback(() => {
-    void handleStopAllChannelTasks(stoppableChannelTasks);
-  }, [handleStopAllChannelTasks, stoppableChannelTasks]);
 
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
@@ -3827,7 +3697,6 @@ export function ChannelsPage({
           descriptionPending: updateChannel.isPending,
           larkPending: updateChannel.isPending,
           avatarPending: updateChannel.isPending,
-          stopAllDisabled: !hasStoppableChannelTasks || isStoppingAllChannelTasks,
         },
         manageDisabledReason,
         onMuteToggle: () => handleToggleChannelMute(active),
@@ -3891,14 +3760,6 @@ export function ChannelsPage({
         membersBody: memberPanelBody,
         onClose: closeChannelDetails,
         onOpenSearch: () => setConvSearchOpen(true),
-        onStopAllAgents: canPostInChannel
-          ? () => {
-              openStopAllAgentsConfirm();
-            }
-          : undefined,
-        stopAllDisabledReason: hasStoppableChannelTasks
-          ? undefined
-          : t(($) => $.stop_all_agents.empty_tooltip),
         notifyPrefLabel: channelNotifyLevelLabel(
           t,
           resolveChannelNotifyLevel(active!),
@@ -4077,13 +3938,6 @@ export function ChannelsPage({
               >
                 <ChannelPresenceCluster
                   members={channelMembers}
-                  memberCount={rosterSummary.memberCount}
-                  agentCount={rosterSummary.agentCount}
-                  tasks={activeTasks}
-                  stoppingTaskId={stoppingChannelTaskId}
-                  canStop={canPostInChannel}
-                  onStopTask={handleStopChannelTask}
-                  onStopAll={openStopAllAgentsConfirm}
                   // #821 — the facepile navigates to the Details Members
                   // sub-page (the single roster home), not a separate dialog.
                   onOpenMembers={() => openChannelDetails("members")}
@@ -4857,16 +4711,6 @@ export function ChannelsPage({
           if (!open) setDeleteTarget(null);
         }}
       />
-
-      {active && canPostInChannel ? (
-        <StopAllAgentsDialog
-          open={stopAllConfirmOpen}
-          onOpenChange={setStopAllConfirmOpen}
-          channelName={active.name}
-          onConfirm={confirmStopAllAgents}
-          confirming={isStoppingAllChannelTasks}
-        />
-      ) : null}
 
       <AlertDialog
         open={archiveTarget !== null}

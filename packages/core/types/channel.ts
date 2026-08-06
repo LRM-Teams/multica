@@ -251,26 +251,6 @@ export interface ChannelThreadParticipant {
   followed: boolean;
 }
 
-export interface ChannelThreadWakeAnnotation {
-  key: string;
-  member_type: string;
-  member_id: string;
-  display_name: string;
-  state: "pending" | "held" | "replied" | "acked" | "delivered" | "no_reply" | "failed" | (string & {});
-  reason?: string | null;
-  outcome?: "replied" | "held" | "no_reply" | "failed" | null;
-  retryable?: boolean | null;
-  inbox_event_id?: string | null;
-  delivery_id?: string | null;
-  agent_id?: string | null;
-  conversation_id?: string | null;
-  channel_id?: string | null;
-  chat_session_id?: string | null;
-  thread_root_message_id?: string | null;
-  source_message_id?: string | null;
-  terminal_at?: string | null;
-}
-
 /**
  * Alice #1984 / Raft-aligned undelivered @ on public groups.
  * Message is stored; delivery withheld until the sender invites.
@@ -313,7 +293,6 @@ export interface ChannelMessage {
   thread_unread_count?: number;
   thread_followed?: boolean;
   thread_participants?: ChannelThreadParticipant[];
-  thread_wake_annotations?: ChannelThreadWakeAnnotation[];
   thread_id?: string | null;
   trigger_depth?: number;
   reactions?: ChannelReaction[];
@@ -478,36 +457,6 @@ export interface ChannelStats {
   file_count: number;
   member_count: number;
   by_author: ChannelAuthorStat[];
-}
-
-export interface ChannelActiveTask {
-  agent_id: string;
-  agent_name: string;
-  /**
-   * Emit-time agent face from `/active-tasks` (LRM-391 AC#5 / LRM-597).
-   * Prefer this over ListAgents / thin channel-member briefs for Working /
-   * Presence facepile — those can omit channel/private / group-manager agents.
-   */
-  avatar_url?: string | null;
-  task_id: string;
-  status: string;
-  /**
-   * Composer-strip discriminator (LRM-287). `reply` = in-conversation agent
-   * wake; `quick_create` / `issue_create` must not render above the composer.
-   */
-  kind?: "reply" | "quick_create" | "issue_create" | string;
-  /** Inbox wake reason when the row comes from agent_inbox_event. */
-  reason?: string;
-  outcome?: "replied" | "no_reply" | "failed" | string | null;
-  retryable?: boolean | null;
-  inbox_event_id?: string | null;
-  delivery_id?: string | null;
-  conversation_id?: string | null;
-  channel_id?: string | null;
-  chat_session_id?: string | null;
-  thread_root_message_id?: string | null;
-  source_message_id?: string | null;
-  terminal_at?: string | null;
 }
 
 /** One entry in a project workdir listing; `path` is relative to the workdir

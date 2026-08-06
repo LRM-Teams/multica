@@ -261,6 +261,15 @@ func TestCanonicalMessageProjectsAgentDeliveryEnvelope(t *testing.T) {
 	if notifier.workspaceID != testWorkspaceID || notifier.daemonID != daemonID || notifier.payload.AgentID != agentID || notifier.payload.DeliveryID == "" || got.ID != want.ID || got.Target != want.Target || got.Seq != want.Seq || got.Content != want.Content || len(got.Parts) != len(want.Parts) {
 		t.Fatalf("delivery workspace=%q daemon=%q payload=%+v, want workspace=%q daemon=%q Message=%+v", notifier.workspaceID, notifier.daemonID, notifier.payload, testWorkspaceID, daemonID, want)
 	}
+	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatalf("load channel %s", channelID)
+	}
+	before := len(notifier.deliveries)
+	testHandler.deliverCanonicalMessageToChannelAgents(ctx, channel, message)
+	if got := len(notifier.deliveries); got != before {
+		t.Fatalf("duplicate canonical delivery notified %d times, want %d", got, before)
+	}
 }
 
 func TestCanonicalAgentMessageLiveDeliveryMatchesRecoveryEligibility(t *testing.T) {

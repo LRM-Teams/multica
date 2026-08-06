@@ -472,6 +472,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/credential-proxy/messages/search", d.credentialProxyMessageSearchHandler())
 	mux.HandleFunc("/credential-proxy/messages/resolve", d.credentialProxyMessageResolveHandler())
 	mux.HandleFunc("/credential-proxy/messages/react", d.credentialProxyMessageReactHandler())
+	mux.HandleFunc("/api/", d.credentialProxyAgentAPIHandler())
 
 	srv := &http.Server{Handler: mux}
 

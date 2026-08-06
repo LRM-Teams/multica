@@ -134,7 +134,6 @@ import type {
   StickerCatalogResponse,
   Channel,
   ChannelNotifyLevel,
-  ChannelActiveTask,
   ChannelMember,
   ChannelInviteCandidatesResponse,
   ChannelMemberManagementCapabilities,
@@ -4048,59 +4047,6 @@ export class ApiClient {
 
   async getChannelProjectFile(channelId: string, path: string): Promise<ChannelProjectFileContent> {
     return this.fetch(`/api/channels/${channelId}/project-files/content?path=${encodeURIComponent(path)}`);
-  }
-
-  async listChannelActiveTasks(
-    channelId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<{ tasks: ChannelActiveTask[] }> {
-    return this.fetch(`/api/channels/${channelId}/active-tasks`, abortInit(options));
-  }
-
-  /**
-   * LRM-425: cancel one channel wake by inbox_event_id (active-tasks authority).
-   * Do not use cancelTaskById for channel strip / Stop — that dual path returns 409.
-   */
-  async cancelChannelInboxEvent(
-    channelId: string,
-    inboxEventId: string,
-  ): Promise<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }> {
-    return this.fetch(
-      `/api/channels/${channelId}/agent-inbox/events/${inboxEventId}/cancel`,
-      { method: "POST" },
-    );
-  }
-
-  /**
-   * LRM-425 Stop All: one request cancels every active channel wake.
-   * Frontend must not for-in / Promise.all single cancel.
-   */
-  async cancelChannelActiveInboxEvents(
-    channelId: string,
-  ): Promise<{
-    ok: boolean;
-    cancelled_count: number;
-    cancelled: Array<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }>;
-  }> {
-    return this.fetch(`/api/channels/${channelId}/agent-inbox/cancel-active`, {
-      method: "POST",
-    });
-  }
-
-  /**
-   * Re-dispatch a failed agent reply via a fresh inbox event (#388). Powers the
-   * #277 strip's "Retry" on a `failed`+`retryable` terminal row. Server copies
-   * the event into a new pending one keyed by `inbox_event_id`; a non-retryable
-   * event returns 409.
-   */
-  async retryChannelInboxEvent(
-    channelId: string,
-    inboxEventId: string,
-  ): Promise<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }> {
-    return this.fetch(
-      `/api/channels/${channelId}/agent-inbox/events/${inboxEventId}/retry`,
-      { method: "POST" },
-    );
   }
 
   async markChannelRead(channelId: string): Promise<MarkChannelReadResult> {

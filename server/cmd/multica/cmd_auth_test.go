@@ -50,6 +50,15 @@ func TestResolveTokenAgentContextDoesNotFallbackToProfile(t *testing.T) {
 	}
 }
 
+func TestInAgentExecutionContextRequiresAgentID(t *testing.T) {
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "legacy-task-only")
+
+	if inAgentExecutionContext() {
+		t.Fatal("task ID alone must not turn an ordinary CLI invocation into agent execution")
+	}
+}
+
 func TestResolveAppURL(t *testing.T) {
 	cmd := testCmd()
 

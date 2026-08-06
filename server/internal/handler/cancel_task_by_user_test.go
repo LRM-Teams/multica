@@ -137,7 +137,7 @@ func TestCancelTaskByUser_AgentInboxEvent_ChannelScoped_Succeeds(t *testing.T) {
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
-	root := dispatchThreadMentionForTest(t, channelID, agentID, "cancel-inbox-event-"+uuid.NewString())
+	root := seedThreadProductInboxEventForTest(t, channelID, agentID, "cancel-inbox-event-"+uuid.NewString())
 	eventID := latestChannelAgentInboxEventForRootForTest(t, root.ID, agentID)
 
 	w := httptest.NewRecorder()

@@ -188,7 +188,7 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 				&fr.scheduledFor, &fr.dueAt, &fr.firedAt, &fr.cadence, &fr.timezone,
 				&fr.reminder.ID, &fr.reminder.WorkspaceID, &fr.reminder.AgentID, &fr.reminder.InitiatorUserID, &fr.reminder.Title,
 				&fr.reminder.AnchorChannelID, &fr.reminder.AnchorMessageID, &fr.reminder.AnchorThreadRootMessageID,
-				&fr.reminder.FireAt, &fr.reminder.Status, &fr.reminder.FiredTaskID, &fr.reminder.SnoozeCount,
+				&fr.reminder.FireAt, &fr.reminder.Status, &fr.reminder.FiredReceiptMessageID, &fr.reminder.SnoozeCount,
 				&fr.reminder.CreatedAt, &fr.reminder.UpdatedAt, &fr.reminder.FiredAt, &fr.reminder.Cadence,
 				&fr.reminder.ScheduleTimezone, &fr.reminder.CadenceNextAt, &fr.reminder.CurrentOccurrenceID,
 				&fr.reminder.TerminalReason, &fr.reminder.Version, &fr.reminder.OriginKind,

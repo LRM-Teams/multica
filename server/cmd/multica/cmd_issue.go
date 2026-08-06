@@ -417,6 +417,10 @@ func runIssueList(cmd *cobra.Command, _ []string) error {
 }
 
 func runIssueListWithMine(cmd *cobra.Command, forceMine bool) error {
+	if err := validateIssueListOptions(cmd, forceMine); err != nil {
+		return err
+	}
+
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
@@ -468,9 +472,6 @@ func runIssueListWithMine(cmd *cobra.Command, forceMine bool) error {
 	}
 	withPRs, _ := cmd.Flags().GetBool("with-prs")
 	withGates, _ := cmd.Flags().GetBool("with-gates")
-	if withGates && !withPRs {
-		return fmt.Errorf("--with-gates requires --with-prs")
-	}
 	if withPRs {
 		params.Set("with_prs", "true")
 	}
@@ -563,6 +564,16 @@ func runIssueMine(cmd *cobra.Command, _ []string) error {
 	return runIssueListWithMine(cmd, true)
 }
 
+func validateIssueListOptions(cmd *cobra.Command, forceMine bool) error {
+	withPRs, _ := cmd.Flags().GetBool("with-prs")
+	withGates, _ := cmd.Flags().GetBool("with-gates")
+	if withGates && !withPRs {
+		return fmt.Errorf("--with-gates requires --with-prs")
+	}
+	_, _, err := issueListMineAgentID(cmd, forceMine)
+	return err
+}
+
 func normalizeIssueList(raw []any) []map[string]any {
 	issues := make([]map[string]any, 0, len(raw))
 	for _, item := range raw {
@@ -637,6 +648,18 @@ func pullRequestRef(pr map[string]any) string {
 }
 
 func resolveIssueListAssigneeFilter(ctx context.Context, client *cli.APIClient, cmd *cobra.Command, forceMine bool) (string, bool, error) {
+	if agentID, mine, err := issueListMineAgentID(cmd, forceMine); err != nil || mine {
+		return agentID, mine, err
+	}
+
+	_, assigneeID, hasAssignee, err := pickAssigneeFromFlags(ctx, client, cmd, "assignee", "assignee-id", issueAssigneeKinds)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve assignee: %w", err)
+	}
+	return assigneeID, hasAssignee, nil
+}
+
+func issueListMineAgentID(cmd *cobra.Command, forceMine bool) (string, bool, error) {
 	mine := forceMine
 	if !mine {
 		mine, _ = cmd.Flags().GetBool("mine")
@@ -656,12 +679,7 @@ func resolveIssueListAssigneeFilter(ctx context.Context, client *cli.APIClient, 
 		}
 		return agentID, true, nil
 	}
-
-	_, assigneeID, hasAssignee, err := pickAssigneeFromFlags(ctx, client, cmd, "assignee", "assignee-id", issueAssigneeKinds)
-	if err != nil {
-		return "", false, fmt.Errorf("resolve assignee: %w", err)
-	}
-	return assigneeID, hasAssignee, nil
+	return "", false, nil
 }
 
 func runIssuePullRequests(cmd *cobra.Command, args []string) error {

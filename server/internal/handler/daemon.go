@@ -1700,11 +1700,6 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		}
 		return err
 	}
-	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && h.chatTaskHasAgentTransportVisibleOutput(ctx, task) {
-		slog.Warn("complete task: suppressing final output after agent transport output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonToolTransportOutput)
-		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
-		return nil
-	}
 	// Channel visibility is owned by the agent transport (the same explicit
 	// message-send boundary exposed to agents as Raft). A task completion is a
 	// terminal status report, never a second message-writing path. In

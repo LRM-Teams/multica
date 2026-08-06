@@ -79,16 +79,21 @@ func completeChannelOnboardingForTest(t *testing.T, event AgentInboxEventRespons
 
 func sendChannelOnboardingMessageForTest(t *testing.T, event AgentInboxEventResponse, agentID, target, content string) AgentTransportSendResponse {
 	t.Helper()
+	var onboardingID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT channel_onboarding_id::text
+		FROM agent_inbox_event
+		WHERE id = $1`, event.ID).Scan(&onboardingID); err != nil {
+		t.Fatalf("load onboarding message identity: %v", err)
+	}
 	req := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":  target,
-		"content": content,
+		"target":            target,
+		"content":           content,
+		"client_message_id": channelOnboardingClientMessageID(parseUUID(onboardingID)),
 	})
 	req = withChatTestWorkspaceCtx(t, req)
-	req.Header.Set("X-Actor-Source", "agent_inbox_token")
+	req.Header.Set("X-Actor-Source", "agent_credential")
 	req.Header.Set("X-Agent-ID", agentID)
-	req.Header.Set("X-Agent-Inbox-Event-ID", event.ID)
-	req.Header.Set("X-Agent-Inbox-Delivery-ID", event.DeliveryID)
-	req.Header.Set("X-Task-ID", event.ID)
 	rec := httptest.NewRecorder()
 	testHandler.AgentTransportSendMessage(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -173,6 +178,26 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 	if event.AgentID != agentID || event.ChannelID != channelID || event.Reason != protocol.ChannelOnboardingReason || !event.RequiresWake || event.Task == nil {
 		t.Fatalf("drained onboarding event = %+v", event)
 	}
+	if event.ChatSessionID != "" || event.Task.ChatSessionID != "" {
+		t.Fatalf("onboarding must not create a chat session: event=%q task=%q", event.ChatSessionID, event.Task.ChatSessionID)
+	}
+	var legacySessionCount, legacyPromptCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_agent_session
+		WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&legacySessionCount); err != nil {
+		t.Fatalf("count legacy onboarding sessions: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM chat_message message
+		JOIN channel_agent_session session ON session.chat_session_id = message.chat_session_id
+		WHERE session.channel_id = $1 AND session.agent_id = $2`, channelID, agentID).Scan(&legacyPromptCount); err != nil {
+		t.Fatalf("count legacy onboarding prompts: %v", err)
+	}
+	if legacySessionCount != 0 || legacyPromptCount != 0 {
+		t.Fatalf("onboarding created legacy session=%d prompt=%d, want none", legacySessionCount, legacyPromptCount)
+	}
 	if event.SourceMessageID != systemMessageID || event.SeqFrom != systemSeq || event.SeqTo != systemSeq {
 		t.Fatalf("drained onboarding source = message:%q seq:%d..%d, want %s/%d", event.SourceMessageID, event.SeqFrom, event.SeqTo, systemMessageID, systemSeq)
 	}
@@ -185,11 +210,8 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 	} {
 		req := newRequest(http.MethodPost, "/api/agent/messages/send", invalid)
 		req = withChatTestWorkspaceCtx(t, req)
-		req.Header.Set("X-Actor-Source", "agent_inbox_token")
+		req.Header.Set("X-Actor-Source", "agent_credential")
 		req.Header.Set("X-Agent-ID", agentID)
-		req.Header.Set("X-Agent-Inbox-Event-ID", event.ID)
-		req.Header.Set("X-Agent-Inbox-Delivery-ID", event.DeliveryID)
-		req.Header.Set("X-Task-ID", event.ID)
 		rec := httptest.NewRecorder()
 		testHandler.AgentTransportSendMessage(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -201,12 +223,12 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 	if !first.Created {
 		t.Fatalf("first onboarding send created=false: %+v", first)
 	}
-	second := sendChannelOnboardingMessageForTest(t, event, agentID, "#"+channelName, "different retry body must not duplicate")
+	second := sendChannelOnboardingMessageForTest(t, event, agentID, "#"+channelName, "Hello from the joined agent")
 	if second.Created || second.Message.ID != first.Message.ID {
 		t.Fatalf("retry onboarding send = created:%v message:%s, want existing %s", second.Created, second.Message.ID, first.Message.ID)
 	}
 
-	var visibleAgentMessages, sendAudits, otherAgentInboxes int
+	var visibleAgentMessages, otherAgentInboxes int
 	var clientMessageID string
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*), COALESCE(min(client_message_id), '')
@@ -215,19 +237,14 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 		t.Fatalf("count onboarding agent messages: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_task_transport_audit
-		WHERE inbox_event_id = $1 AND action = 'message_send'`, event.ID).Scan(&sendAudits); err != nil {
-		t.Fatalf("count onboarding send audits: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM agent_inbox_event inbox
 		JOIN channel_agent_onboarding onboarding ON onboarding.id = inbox.channel_onboarding_id
 		WHERE onboarding.channel_id = $1 AND inbox.agent_id <> $2`, channelID, agentID).Scan(&otherAgentInboxes); err != nil {
 		t.Fatalf("count non-target onboarding inboxes: %v", err)
 	}
-	if visibleAgentMessages != 1 || sendAudits != 1 || otherAgentInboxes != 0 || clientMessageID != "channel-onboarding:"+event.ID {
-		t.Fatalf("send ledger = messages:%d audits:%d other_inboxes:%d client_id:%q", visibleAgentMessages, sendAudits, otherAgentInboxes, clientMessageID)
+	if visibleAgentMessages != 1 || otherAgentInboxes != 0 || clientMessageID != "channel-onboarding:"+onboardingID {
+		t.Fatalf("send ledger = messages:%d other_inboxes:%d client_id:%q", visibleAgentMessages, otherAgentInboxes, clientMessageID)
 	}
 
 	finalProse := "ordinary final text must not become a second greeting"
@@ -390,17 +407,19 @@ func TestChannelOnboardingRemoveReaddExpiresOldGenerationAndSend(t *testing.T) {
 	}
 	event := drain.Events[0]
 	removeChannelAgentForOnboardingTest(t, channelID, agentID)
+	var onboardingID string
+	if err := testPool.QueryRow(ctx, `SELECT channel_onboarding_id::text FROM agent_inbox_event WHERE id = $1`, event.ID).Scan(&onboardingID); err != nil {
+		t.Fatalf("load removed onboarding identity: %v", err)
+	}
 
 	req := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":  "#" + channelName,
-		"content": "must not send after removal",
+		"target":            "#" + channelName,
+		"content":           "must not send after removal",
+		"client_message_id": channelOnboardingClientMessageID(parseUUID(onboardingID)),
 	})
 	req = withChatTestWorkspaceCtx(t, req)
-	req.Header.Set("X-Actor-Source", "agent_inbox_token")
+	req.Header.Set("X-Actor-Source", "agent_credential")
 	req.Header.Set("X-Agent-ID", agentID)
-	req.Header.Set("X-Agent-Inbox-Event-ID", event.ID)
-	req.Header.Set("X-Agent-Inbox-Delivery-ID", event.DeliveryID)
-	req.Header.Set("X-Task-ID", event.ID)
 	rec := httptest.NewRecorder()
 	testHandler.AgentTransportSendMessage(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -430,20 +449,22 @@ func TestChannelOnboardingArchiveAfterDrainExpiresWithoutVisibleSend(t *testing.
 		t.Fatalf("drained archive onboarding events = %d, want 1", len(drain.Events))
 	}
 	event := drain.Events[0]
+	var onboardingID string
+	if err := testPool.QueryRow(ctx, `SELECT channel_onboarding_id::text FROM agent_inbox_event WHERE id = $1`, event.ID).Scan(&onboardingID); err != nil {
+		t.Fatalf("load archived onboarding identity: %v", err)
+	}
 
 	if _, err := testPool.Exec(ctx, `UPDATE channel SET archived_at = now() WHERE id = $1`, channelID); err != nil {
 		t.Fatalf("archive onboarding channel: %v", err)
 	}
 	req := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":  "#" + channelName,
-		"content": "must not send after archive",
+		"target":            "#" + channelName,
+		"content":           "must not send after archive",
+		"client_message_id": channelOnboardingClientMessageID(parseUUID(onboardingID)),
 	})
 	req = withChatTestWorkspaceCtx(t, req)
-	req.Header.Set("X-Actor-Source", "agent_inbox_token")
+	req.Header.Set("X-Actor-Source", "agent_credential")
 	req.Header.Set("X-Agent-ID", agentID)
-	req.Header.Set("X-Agent-Inbox-Event-ID", event.ID)
-	req.Header.Set("X-Agent-Inbox-Delivery-ID", event.DeliveryID)
-	req.Header.Set("X-Task-ID", event.ID)
 	rec := httptest.NewRecorder()
 	testHandler.AgentTransportSendMessage(rec, req)
 	if rec.Code != http.StatusConflict {

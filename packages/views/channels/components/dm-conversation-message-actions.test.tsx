@@ -123,7 +123,6 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/channels")>();
   return {
     ...actual,
-    activeChannelTasksOptions: () => ({ queryKey: ["channel-tasks"], queryFn: async () => [] }),
     channelMessageThreadOptions: () => ({
       queryKey: ["channel-thread"],
       queryFn: async () => ({

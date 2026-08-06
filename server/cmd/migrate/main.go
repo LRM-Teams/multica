@@ -55,6 +55,14 @@ type concurrentIndexSpec struct {
 	ddl  string
 }
 
+// These tables were introduced after migration 227, when the hook first runs
+// during a fresh upgrade. The same hook is deliberately callable on an
+// up-to-date schema to repair missing Agent FK indexes, so skip only the
+// historical pre-table phase and create the index whenever the table exists.
+var agentDeleteIndexOptionalRelations = map[string]string{
+	"idx_agent_attachment_upload_session_agent": "agent_attachment_upload_session",
+}
+
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
 	// This registry is manual: whenever a migration drops a table, remove its
 	// index spec here too or the hook will fail against the post-migration schema.
@@ -69,10 +77,8 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_voice_call_session_agent", `CREATE INDEX CONCURRENTLY idx_voice_call_session_agent ON voice_call_session (agent_id)`},
 		{"idx_agent_inbox_token_agent", `CREATE INDEX CONCURRENTLY idx_agent_inbox_token_agent ON agent_inbox_token (agent_id)`},
 		{"idx_agent_session_agent", `CREATE INDEX CONCURRENTLY idx_agent_session_agent ON agent_session (agent_id)`},
-		{"idx_agent_transport_draft_agent", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_agent ON agent_transport_draft (agent_id)`},
-		{"idx_agent_task_transport_audit_agent", `CREATE INDEX CONCURRENTLY idx_agent_task_transport_audit_agent ON agent_task_transport_audit (agent_id)`},
+		{"idx_agent_attachment_upload_session_agent", `CREATE INDEX CONCURRENTLY idx_agent_attachment_upload_session_agent ON agent_attachment_upload_session (agent_id)`},
 		{"idx_channel_agent_session_agent", `CREATE INDEX CONCURRENTLY idx_channel_agent_session_agent ON channel_agent_session (agent_id)`},
-		{"idx_channel_ambient_pending_wake_agent", `CREATE INDEX CONCURRENTLY idx_channel_ambient_pending_wake_agent ON channel_ambient_pending_wake (agent_id)`},
 		{"idx_channel_decision_audit_agent", `CREATE INDEX CONCURRENTLY idx_channel_decision_audit_agent ON channel_decision_audit (agent_id)`},
 		{"idx_chat_session_agent", `CREATE INDEX CONCURRENTLY idx_chat_session_agent ON chat_session (agent_id)`},
 		{"idx_collaboration_turn_agent", `CREATE INDEX CONCURRENTLY idx_collaboration_turn_agent ON collaboration_turn (agent_id)`},
@@ -126,12 +132,7 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 		{"idx_agent_inbox_token_delivery", `CREATE INDEX CONCURRENTLY idx_agent_inbox_token_delivery ON agent_inbox_token (delivery_id) WHERE delivery_id IS NOT NULL`},
 		{"idx_agent_memory_curation_candidate_run", `CREATE INDEX CONCURRENTLY idx_agent_memory_curation_candidate_run ON agent_memory_curation_candidate (run_id) WHERE run_id IS NOT NULL`},
 		{"idx_agent_memory_write_event_task", `CREATE INDEX CONCURRENTLY idx_agent_memory_write_event_task ON agent_memory_write_event (task_id) WHERE task_id IS NOT NULL`},
-		{"idx_agent_reminder_fired_task", `CREATE INDEX CONCURRENTLY idx_agent_reminder_fired_task ON agent_reminder (fired_task_id) WHERE fired_task_id IS NOT NULL`},
-		{"idx_agent_reminder_occurrence_fired_task", `CREATE INDEX CONCURRENTLY idx_agent_reminder_occurrence_fired_task ON agent_reminder_occurrence (fired_task_id) WHERE fired_task_id IS NOT NULL`},
 		{"idx_agent_session_last_acked_event", `CREATE INDEX CONCURRENTLY idx_agent_session_last_acked_event ON agent_session (last_acked_event_id) WHERE last_acked_event_id IS NOT NULL`},
-		{"idx_agent_transport_draft_inbox_event", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_inbox_event ON agent_transport_draft (inbox_event_id) WHERE inbox_event_id IS NOT NULL`},
-		{"idx_agent_transport_draft_task", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_task ON agent_transport_draft (task_id) WHERE task_id IS NOT NULL`},
-		{"idx_channel_ambient_pending_wake_chat_session", `CREATE INDEX CONCURRENTLY idx_channel_ambient_pending_wake_chat_session ON channel_ambient_pending_wake (chat_session_id) WHERE chat_session_id IS NOT NULL`},
 		{"idx_channel_decision_audit_inbox_event", `CREATE INDEX CONCURRENTLY idx_channel_decision_audit_inbox_event ON channel_decision_audit (inbox_event_id) WHERE inbox_event_id IS NOT NULL`},
 		{"idx_channel_message_attachment_workspace_attachment", `CREATE INDEX CONCURRENTLY idx_channel_message_attachment_workspace_attachment ON channel_message_attachment (workspace_id, attachment_id) WHERE attachment_id IS NOT NULL`},
 		{"idx_channel_voice_transcription_attachment", `CREATE INDEX CONCURRENTLY idx_channel_voice_transcription_attachment ON channel_voice_transcription (attachment_id) WHERE attachment_id IS NOT NULL`},
@@ -147,6 +148,15 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 
 func ensureConcurrentIndexes(ctx context.Context, pool *pgxpool.Pool, indexes []concurrentIndexSpec) error {
 	for _, index := range indexes {
+		if relation, optional := agentDeleteIndexOptionalRelations[index.name]; optional {
+			var exists bool
+			if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, relation).Scan(&exists); err != nil {
+				return fmt.Errorf("inspect optional relation %s for index %s: %w", relation, index.name, err)
+			}
+			if !exists {
+				continue
+			}
+		}
 		var valid bool
 		if err := pool.QueryRow(ctx, `
 			SELECT COALESCE((

@@ -46,6 +46,31 @@ func taskScopedCancelPrincipal(agentID, taskID, source string) middleware.AgentP
 	}
 }
 
+func seedProductInboxEventWithDelivery(t *testing.T, channelID, agentID string) (eventID, deliveryID string) {
+	t.Helper()
+	ctx := context.Background()
+	eventID = createProductInboxEventForRuntime(t, handlerTestRuntimeID(t), agentID, channelID)
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_event_delivery (
+			workspace_id,
+			agent_session_id,
+			inbox_event_id,
+			runtime_id,
+			status
+		)
+		SELECT workspace_id,
+		       agent_session_id,
+		       id,
+		       $2,
+		       'leased'
+		FROM agent_inbox_event
+		WHERE id = $1
+		RETURNING id`, eventID, handlerTestRuntimeID(t)).Scan(&deliveryID); err != nil {
+		t.Fatalf("seed product inbox delivery: %v", err)
+	}
+	return eventID, deliveryID
+}
+
 func assertExactHTTPError(t *testing.T, rec *httptest.ResponseRecorder, status int, body string) {
 	t.Helper()
 	if rec.Code != status || rec.Body.String() != body {
@@ -260,7 +285,7 @@ func TestCancelAgentTask_OwnTaskScopedTokenCancelsAndRevokesCredential(t *testin
 				); err != nil {
 					t.Fatalf("seed agent channel membership: %v", err)
 				}
-				taskID, deliveryID = seedChannelInboxWakeWithDelivery(t, channelID, agentID, source)
+				taskID, deliveryID = seedProductInboxEventWithDelivery(t, channelID, agentID)
 			}
 			tokenHash := "cancel-self-" + source + "-" + uuid.NewString()
 			seedTaskCancelCredential(t, source, tokenHash, taskID, deliveryID, agentID)
@@ -318,7 +343,7 @@ func TestCancelAgentTask_TerminalOwnTaskIsIdempotent200(t *testing.T) {
 				); err != nil {
 					t.Fatalf("seed agent channel membership: %v", err)
 				}
-				taskID, deliveryID = seedChannelInboxWakeWithDelivery(t, channelID, agentID, source)
+				taskID, deliveryID = seedProductInboxEventWithDelivery(t, channelID, agentID)
 			}
 			cancelledEvents := subscribeTaskCancelCount(taskID)
 			principal := taskScopedCancelPrincipal(agentID, taskID, source)

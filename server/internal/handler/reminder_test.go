@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -39,47 +38,6 @@ func TestParseReminderFireAt(t *testing.T) {
 	}
 }
 
-func TestBuildReminderPromptCarriesAnchorAndNoNoiseBoundary(t *testing.T) {
-	reminder := agentReminder{
-		ID:              parseUUID("11111111-1111-1111-1111-111111111111"),
-		Title:           "回来看讨论是否已收敛",
-		AnchorMessageID: parseUUID("22222222-2222-2222-2222-222222222222"),
-	}
-	prompt := buildReminderPrompt(ChannelResponse{ID: "ch-1", Name: "产品讨论", Kind: "group"}, reminder,
-		parseUUID("33333333-3333-3333-3333-333333333333"), "请给项目起一个名字", true)
-	for _, want := range []string{
-		"self-scheduled reminder is due",
-		"回来看讨论是否已收敛",
-		"msg-id: 22222222-2222-2222-2222-222222222222",
-		"Anchor excerpt: 请给项目起一个名字",
-		"Target channel id: ch-1 (#产品讨论)",
-		"33333333-3333-3333-3333-333333333333",
-		"Reply only on that anchor surface",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("reminder prompt missing %q:\n%s", want, prompt)
-		}
-	}
-}
-
-func TestBuildReminderPromptHidesDMCanonicalChannelName(t *testing.T) {
-	reminder := agentReminder{
-		ID:              parseUUID("11111111-1111-1111-1111-111111111111"),
-		Title:           "follow up privately",
-		AnchorMessageID: parseUUID("22222222-2222-2222-2222-222222222222"),
-	}
-	prompt := buildReminderPrompt(ChannelResponse{ID: "dm-ch", Name: "dm:internal-user-a:internal-user-b", Kind: "dm"}, reminder,
-		parseUUID("33333333-3333-3333-3333-333333333333"), "private anchor", true)
-	if !strings.Contains(prompt, "Target channel id: dm-ch (direct message)") {
-		t.Fatalf("DM prompt missing neutral surface:\n%s", prompt)
-	}
-	for _, forbidden := range []string{"dm:internal", "#dm:"} {
-		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("DM prompt leaked canonical channel identity %q:\n%s", forbidden, prompt)
-		}
-	}
-}
-
 func TestReminderTargetKind(t *testing.T) {
 	if got := reminderTargetKind(pgtype.UUID{}); got != "channel" {
 		t.Fatalf("empty root target kind = %q", got)
@@ -90,18 +48,6 @@ func TestReminderTargetKind(t *testing.T) {
 }
 
 func int64Ptr(value int64) *int64 { return &value }
-
-func TestBuildReminderPromptPinsChannelID(t *testing.T) {
-	reminder := agentReminder{Title: "patrol"}
-	reminder.ID = parseUUID("11111111-1111-1111-1111-111111111111")
-	prompt := buildReminderPrompt(ChannelResponse{ID: "ch-abc", Name: "产品", Kind: "group"}, reminder, parseUUID("22222222-2222-2222-2222-222222222222"), "hi", true)
-	if !strings.Contains(prompt, "Target channel id: ch-abc (#产品)") {
-		t.Fatalf("missing target channel id:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "Reply only on that anchor surface") {
-		t.Fatalf("missing surface pin language:\n%s", prompt)
-	}
-}
 
 func TestFilterManagerChannelsTo(t *testing.T) {
 	in := []ManagerChannelData{

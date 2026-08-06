@@ -144,22 +144,6 @@ var (
 	shortAgentMessageIDPattern           = regexp.MustCompile(`^[0-9a-fA-F]{8,35}$`)
 )
 
-type agentTransportDraft struct {
-	ID              pgtype.UUID
-	Target          string
-	ChannelID       pgtype.UUID
-	ThreadRootID    pgtype.UUID
-	Content         string
-	Parts           []protocol.MessagePart
-	ClientMessageID string
-	SeenUpToSeq     int64
-	HeldFromSeq     int64
-	HeldToSeq       int64
-	ShownFromSeq    pgtype.Int8
-	ShownToSeq      pgtype.Int8
-	DecisionFactID  string
-}
-
 type agentTransportFreshnessDecision struct {
 	Hold        bool
 	SeenUpToSeq int64
@@ -187,13 +171,8 @@ type agentTransportMessageResult struct {
 	Message             ChannelMessageResponse
 	Created             bool
 	TransportID         string
-	SentDraft           *agentTransportDraft
 	FreshnessResolution *AgentTransportFreshnessResolution
 	AgentDM             agentDMSendReservation
-}
-
-type agentTransportFreshnessResolutionPublication struct {
-	Resolution AgentTransportFreshnessResolution
 }
 
 type AgentTransportSearchRequest struct {
@@ -283,121 +262,21 @@ type agentTransportTarget struct {
 }
 
 type agentTransportSource struct {
-	task         db.AgentInboxEvent
-	origin       chatOutputOrigin
-	inboxEventID pgtype.UUID
+	origin chatOutputOrigin
+}
+
+func (h *Handler) channelInitiatorForTransportSource(ctx context.Context, source agentTransportSource) pgtype.UUID {
+	return h.agentOwnerID(ctx, source.origin.workspaceID, source.origin.agentID)
 }
 
 func (h *Handler) agentTransportInitiatorUserID(r *http.Request, source agentTransportSource) (pgtype.UUID, bool) {
-	switch r.Header.Get("X-Actor-Source") {
-	case "task_token":
-		return h.agentTaskInitiatorUserID(r, source.origin.workspaceID)
-	case "agent_inbox_token", "agent_credential":
-		return h.agentInboxInitiatorUserID(r, source.origin.workspaceID)
-	default:
-		return pgtype.UUID{}, false
-	}
-}
-
-func (h *Handler) requireAgentTransportPublicResponseMode(ctx context.Context, source agentTransportSource) error {
-	if !source.inboxEventID.Valid {
-		return nil
-	}
-	var deliveryMode, responseMode string
-	var channelID pgtype.UUID
-	if err := h.DB.QueryRow(ctx, `
-		SELECT delivery_mode, response_mode, channel_id
-		FROM agent_inbox_event
-		WHERE id = $1`, source.inboxEventID).Scan(&deliveryMode, &responseMode, &channelID); err != nil {
-		return err
-	}
-	if responseMode == "public_response" {
-		return nil
-	}
-	// LRM-1055: ambient observe wakes stay no_public_output for ordinary members,
-	// but channel managers need send/react during GM/patrol ambient turns.
-	if channelID.Valid && h.agentIsChannelManager(ctx, source.origin.workspaceID, channelID, source.origin.agentID) {
-		return nil
-	}
-	_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
-		WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "agent_transport",
-		EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
-		Payload: map[string]any{"response_mode": responseMode, "delivery_mode": deliveryMode},
-	})
-	return fmt.Errorf("agent inbox event response_mode %q does not grant public channel output", responseMode)
-}
-
-// requireAgentTransportVisibilityGrantActive checks the Collaboration turn
-// grant. Channel Attention Round response grants were retired with the
-// feature and its tables.
-func (h *Handler) requireAgentTransportVisibilityGrantActive(ctx context.Context, source agentTransportSource) error {
-	return h.requireAgentTransportTurnGrantActive(ctx, source)
-}
-
-func (h *Handler) requireAgentTransportTurnGrantActive(ctx context.Context, source agentTransportSource) error {
-	var turnStatus, sessionStatus string
-	var turnFresh, versionFresh bool
-	err := h.DB.QueryRow(ctx, `
-		SELECT turn.grant_status, session.status,
-		       (turn.deadline_at IS NULL OR turn.deadline_at > now()),
-		       turn.session_version = session.version
-		FROM collaboration_turn turn
-		JOIN collaboration_session session ON session.id = turn.session_id
-		WHERE turn.inbox_event_id = $1 AND turn.agent_id = $2`, source.inboxEventID, source.origin.agentID).Scan(&turnStatus, &sessionStatus, &turnFresh, &versionFresh)
-	if errorsIsNoRows(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if turnStatus != "granted" || sessionStatus != "active" || !turnFresh || !versionFresh {
-		_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
-			WorkspaceID: source.origin.workspaceID, ChannelID: source.origin.channelID, SourceKind: "collaboration_turn",
-			EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
-			Payload: map[string]any{"reason": "turn_grant_stale", "turn_status": turnStatus, "session_status": sessionStatus, "turn_fresh": turnFresh, "version_fresh": versionFresh},
-		})
-		return fmt.Errorf("turn_grant is %s, session is %s, or grant is stale", turnStatus, sessionStatus)
-	}
-	return nil
-}
-
-func consumeAgentTransportVisibilityGrantTx(ctx context.Context, exec dbExecutor, source agentTransportSource, channelID, messageID pgtype.UUID) error {
-	if !source.inboxEventID.Valid {
-		return nil
-	}
-	var turnID, sessionID pgtype.UUID
-	err := exec.QueryRow(ctx, `
-		UPDATE collaboration_turn turn
-		SET grant_status = 'consumed', result_message_id = $3, updated_at = now()
-		FROM collaboration_session session
-		WHERE turn.session_id = session.id
-		  AND turn.inbox_event_id = $1
-		  AND turn.agent_id = $2
-		  AND turn.grant_status = 'granted'
-		  AND session.status = 'active'
-		  AND turn.session_version = session.version
-		  AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
-		RETURNING turn.id, turn.session_id`, source.inboxEventID, source.origin.agentID, nullableUUID(messageID)).Scan(&turnID, &sessionID)
-	if err != nil && !errorsIsNoRows(err) {
-		return err
-	}
-	if err == nil {
-		return recordChannelDecisionAuditExec(ctx, exec, channelDecisionAuditEvent{
-			WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "collaboration_turn", SourceID: turnID,
-			EventType: "turn_grant_consumed", AgentID: source.origin.agentID, MessageID: messageID, InboxEventID: source.inboxEventID,
-			Payload: map[string]any{"session_id": uuidToString(sessionID), "consumed_by": "agent_transport"},
-		})
-	}
-	return nil
+	ownerID := h.agentOwnerID(r.Context(), source.origin.workspaceID, source.origin.agentID)
+	return ownerID, ownerID.Valid
 }
 
 func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Request) {
 	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
-		return
-	}
-	if err := h.requireAgentTransportPublicResponseMode(r.Context(), source); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	var req AgentTransportSendRequest
@@ -410,21 +289,6 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
-	}
-	onboarding, isChannelOnboarding, err := channelOnboardingForTransport(r.Context(), h.DB, source)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding send")
-		return
-	}
-	if isChannelOnboarding {
-		if err := h.requireActiveChannelOnboardingBeforeTarget(r.Context(), onboarding, source.inboxEventID); err != nil {
-			if errors.Is(err, errChannelOnboardingExpired) {
-				writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding membership generation")
-			return
-		}
 	}
 	if req.Parts != nil {
 		writeError(w, http.StatusBadRequest, "agent message send accepts content and attachment_ids, not parts")
@@ -445,9 +309,6 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	clientMessageID := strings.TrimSpace(req.ClientMessageID)
-	if isChannelOnboarding {
-		clientMessageID = channelOnboardingClientMessageID(source.inboxEventID)
-	}
 	if clientMessageID == "" {
 		writeError(w, http.StatusBadRequest, "client_message_id is required")
 		return
@@ -456,7 +317,26 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "client_message_id is too long")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, true)
+	onboarding, isChannelOnboarding, err := channelOnboardingForClientMessage(r.Context(), h.DB, source, clientMessageID)
+	if err != nil {
+		if errors.Is(err, errChannelOnboardingExpired) {
+			writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding send")
+		return
+	}
+	if isChannelOnboarding {
+		if err := h.requireActiveChannelOnboardingBeforeTarget(r.Context(), onboarding); err != nil {
+			if errors.Is(err, errChannelOnboardingExpired) {
+				writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding membership generation")
+			return
+		}
+	}
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.origin, req.Target, true)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
 			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
@@ -465,12 +345,12 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
 		return
 	}
-	if expected := strings.TrimSpace(req.ContextTarget); expected != "" && expected != agentTransportCanonicalMessageTarget(target) {
-		writeError(w, http.StatusConflict, "canonical send target changed during freshness preflight")
-		return
-	}
 	if isChannelOnboarding && !channelOnboardingTargetMatches(onboarding, target) {
 		writeError(w, http.StatusBadRequest, "channel onboarding must send to the joined channel main timeline")
+		return
+	}
+	if expected := strings.TrimSpace(req.ContextTarget); expected != "" && expected != agentTransportCanonicalMessageTarget(target) {
+		writeError(w, http.StatusConflict, "canonical send target changed during freshness preflight")
 		return
 	}
 	parts, err = h.normalizeLegacyAgentAudioVoiceReply(r.Context(), source, content, parts)
@@ -493,16 +373,12 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	initiatorID := h.channelInitiatorForTask(r.Context(), source.task)
-	if err := h.requireAgentTransportVisibilityGrantActive(r.Context(), source); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
-		return
-	}
+	initiatorID := h.channelInitiatorForTransportSource(r.Context(), source)
 	seenUpToSeq := int64(-1)
 	if !isChannelOnboarding && !req.BypassFreshness {
 		seenUpToSeq, err = h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
 		if err != nil {
-			slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+			slog.Warn("agent transport freshness check failed", "agent_id", uuidToString(source.origin.agentID), "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to send message")
 			return
 		}
@@ -512,10 +388,6 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		var freshnessHold *agentTransportFreshnessHoldError
 		if errors.As(err, &freshnessHold) {
 			writeAgentTransportHeldResponse(w, target, freshnessHold.decision, freshnessHold.transportID)
-			return
-		}
-		if errors.Is(err, errAgentTransportSourceNotActive) {
-			writeError(w, http.StatusConflict, errAgentTransportSourceNotActive.Error())
 			return
 		}
 		if errors.Is(err, errChannelClientMessageConflict) {
@@ -539,7 +411,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			})
 			return
 		}
-		slog.Warn("agent transport send failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		slog.Warn("agent transport send failed", "agent_id", uuidToString(source.origin.agentID), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to send message")
 		return
 	}
@@ -578,7 +450,7 @@ func (h *Handler) AgentTransportResolveMessageTarget(w http.ResponseWriter, r *h
 		writeError(w, http.StatusBadRequest, "target is required")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, true)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.origin, req.Target, true)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
 			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
@@ -709,7 +581,7 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	limit := clampAgentTransportLimit(req.Limit, 20)
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.origin, req.Target, false)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
 			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
@@ -728,29 +600,14 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		case errors.Is(err, errAgentTransportReadAnchorAmbiguous):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
-			slog.Warn("agent transport read failed", "task_id", uuidToString(source.task.ID), "error", err)
+			slog.Warn("agent transport read failed", "agent_id", uuidToString(source.origin.agentID), "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to read messages")
 		}
 		return
 	}
 	h.decorateAgentTransportMessages(r.Context(), target.channel.WorkspaceID, messages)
-	messageIDs := channelMessageIDs(messages)
 	seenUpToSeq := maxChannelMessageSeq(messages)
 	contextTarget := agentTransportCanonicalMessageTarget(target)
-	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionRead, target.raw, parseUUID(target.channel.ID), pgtype.UUID{}, "", map[string]any{
-		"channel_id":      target.channel.ID,
-		"message_ids":     messageIDs,
-		"limit":           limit,
-		"seen_up_to_seq":  seenUpToSeq,
-		"context_target":  contextTarget,
-		"thread_root_id":  target.threadRootMessageID,
-		"target_snapshot": target.raw,
-	})
-	if err != nil {
-		slog.Warn("agent transport read audit failed", "task_id", uuidToString(source.task.ID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to record message read")
-		return
-	}
 	response := AgentTransportReadResponse{
 		Action:        agentTransportActionRead,
 		Target:        target.raw,
@@ -759,7 +616,7 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		Messages:      messages,
 		Limit:         limit,
 		SeenUpToSeq:   seenUpToSeq,
-		TransportID:   transportID,
+		TransportID:   "",
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -772,47 +629,16 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 // The source and destination must be the same timeline. This prevents a voice
 // trigger from changing proactive output to another channel or thread.
 func (h *Handler) enforceAgentTransportVoiceReply(
-	ctx context.Context,
-	source agentTransportSource,
-	target agentTransportTarget,
-	content string,
+	_ context.Context,
+	_ agentTransportSource,
+	_ agentTransportTarget,
+	_ string,
 	parts []protocol.MessagePart,
 ) ([]protocol.MessagePart, error) {
-	if strings.TrimSpace(content) == "" || channelMessageHasVoicePart(parts) {
-		return parts, nil
-	}
-
-	sourceMessageID, err := h.agentTransportSourceMessageID(ctx, source)
-	if err != nil {
-		return nil, err
-	}
-	if !sourceMessageID.Valid {
-		return parts, nil
-	}
-	trigger, found := h.channelMessageByID(
-		ctx,
-		uuidToString(source.origin.workspaceID),
-		uuidToString(source.origin.channelID),
-		uuidToString(sourceMessageID),
-	)
-	if !found {
-		return nil, fmt.Errorf("source channel message %s not found", uuidToString(sourceMessageID))
-	}
-	return agentTransportVoiceReplyParts(trigger, target, content, parts), nil
-}
-
-func (h *Handler) agentTransportSourceMessageID(ctx context.Context, source agentTransportSource) (pgtype.UUID, error) {
-	if !source.inboxEventID.Valid {
-		return h.channelReactionTargetFromPrompt(ctx, source.task.ChatSessionID, source.task.ID), nil
-	}
-	var sourceMessageID pgtype.UUID
-	if err := h.DB.QueryRow(ctx, `
-		SELECT source_message_id
-		FROM agent_inbox_event
-		WHERE id = $1`, source.inboxEventID).Scan(&sourceMessageID); err != nil {
-		return pgtype.UUID{}, fmt.Errorf("load inbox source message: %w", err)
-	}
-	return sourceMessageID, nil
+	// A canonical Message delivery deliberately has no hidden source task.
+	// Explicit --voice remains supported; inferred modality cannot safely be
+	// reconstructed from a retired inbox event.
+	return parts, nil
 }
 
 func agentTransportVoiceReplyTargetMatches(trigger ChannelMessageResponse, target agentTransportTarget) bool {
@@ -877,7 +703,7 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if rawTarget := strings.TrimSpace(req.Target); rawTarget != "" {
-		target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, rawTarget, false)
+		target, err := h.resolveAgentTransportTarget(r.Context(), source.origin, rawTarget, false)
 		if err != nil || !h.agentHasSurfaceAccess(r.Context(), source.origin.workspaceID, source.origin.agentID, parseUUID(target.channel.ID)) {
 			writeError(w, http.StatusBadRequest, "invalid target")
 			return
@@ -890,7 +716,7 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 	}
 	total, results, err := h.searchAgentTransportMessages(r.Context(), source, search)
 	if err != nil {
-		slog.Warn("agent transport search failed", "task_id", uuidToString(source.task.ID), "error", err)
+		slog.Warn("agent transport search failed", "agent_id", uuidToString(source.origin.agentID), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to search messages")
 		return
 	}
@@ -904,24 +730,7 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		channelID = parseUUID(search.Target.channel.ID)
 		targetRaw = search.Target.raw
 	}
-	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionSearch, targetRaw, channelID, pgtype.UUID{}, "", map[string]any{
-		"channel_id":   uuidToString(channelID),
-		"query":        search.Query,
-		"sender":       search.Sender,
-		"sort":         search.Sort,
-		"before":       agentTransportSearchTimeString(search.Before),
-		"after":        agentTransportSearchTimeString(search.After),
-		"result_ids":   resultIDs,
-		"result_count": len(results),
-		"total":        total,
-		"limit":        search.Limit,
-		"offset":       search.Offset,
-	})
-	if err != nil {
-		slog.Warn("agent transport search audit failed", "task_id", uuidToString(source.task.ID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to record message search")
-		return
-	}
+	_ = resultIDs
 	writeJSON(w, http.StatusOK, AgentTransportSearchResponse{
 		Action:      agentTransportActionSearch,
 		Target:      targetRaw,
@@ -935,7 +744,7 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		Offset:      search.Offset,
 		Total:       total,
 		Results:     results,
-		TransportID: transportID,
+		TransportID: "",
 	})
 }
 
@@ -953,7 +762,7 @@ func (h *Handler) writeAgentTransportMessageResolveError(w http.ResponseWriter, 
 	case errors.Is(err, errAgentTransportMessageIDInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
-		slog.Warn("agent transport canonical message lookup failed", "task_id", uuidToString(source.task.ID), "error", err)
+		slog.Warn("agent transport canonical message lookup failed", "agent_id", uuidToString(source.origin.agentID), "error", err)
 		writeError(w, http.StatusInternalServerError, failure)
 	}
 }
@@ -1176,7 +985,7 @@ func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.origin, req.Target, false)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
 			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
@@ -1195,15 +1004,6 @@ func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to unfollow thread")
 		return
 	}
-	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionThreadUnfollow, target.raw, channelID, target.threadRootMessageID, "", map[string]any{
-		"channel_id": target.channel.ID,
-		"message_id": uuidToString(target.threadRootMessageID),
-	})
-	if err != nil {
-		slog.Warn("agent transport thread unfollow audit failed", "task_id", uuidToString(source.task.ID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to record thread unfollow")
-		return
-	}
 	if changed {
 		h.emitAgentThreadUnfollowedEvent(w, r.Context(), target.channel.WorkspaceID, channelID, target.threadRootMessageID, source.origin.agentID)
 	}
@@ -1212,140 +1012,44 @@ func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Re
 		Target:      target.raw,
 		ChannelID:   target.channel.ID,
 		MessageID:   uuidToString(target.threadRootMessageID),
-		TransportID: transportID,
+		TransportID: "",
 	})
 }
 
 func (h *Handler) requireAgentTransportSource(w http.ResponseWriter, r *http.Request) (agentTransportSource, bool) {
-	switch r.Header.Get("X-Actor-Source") {
-	case "task_token":
-		task, origin, ok := h.requireAgentTransportTask(w, r)
-		if !ok {
-			return agentTransportSource{}, false
-		}
-		return agentTransportSource{task: task, origin: origin}, true
-	case "agent_inbox_token":
-		task, origin, inboxEventID, ok := h.requireAgentTransportInboxEvent(w, r)
-		if !ok {
-			return agentTransportSource{}, false
-		}
-		return agentTransportSource{task: task, origin: origin, inboxEventID: inboxEventID}, true
-	case "agent_credential":
-		task, origin, inboxEventID, ok := h.requireAgentCredentialTransportInboxEvent(w, r)
-		if !ok {
-			return agentTransportSource{}, false
-		}
-		return agentTransportSource{task: task, origin: origin, inboxEventID: inboxEventID}, true
-	default:
-		writeError(w, http.StatusForbidden, "agent transport requires a task token")
+	if r.Header.Get("X-Actor-Source") != "agent_credential" {
+		writeError(w, http.StatusForbidden, "agent transport requires an agent credential")
 		return agentTransportSource{}, false
 	}
+	for _, header := range []string{
+		"X-Task-ID",
+		"X-Agent-Inbox-Event-ID",
+		"X-Agent-Inbox-Delivery-ID",
+		"X-Agent-Inbox-Lease-Token",
+	} {
+		if strings.TrimSpace(r.Header.Get(header)) != "" {
+			writeError(w, http.StatusBadRequest, "agent transport does not accept task or inbox delivery context")
+			return agentTransportSource{}, false
+		}
+	}
+	return h.requireAgentCredentialChatTransport(w, r)
 }
 
-func (h *Handler) requireAgentTransportTask(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, bool) {
-	if r.Header.Get("X-Actor-Source") != "task_token" {
-		writeError(w, http.StatusForbidden, "agent transport requires a task token")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
-	}
-	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+// requireAgentCredentialChatTransport authorizes chat actions from the durable
+// credential identity stamped by auth middleware. Chat is not scoped to an
+// issue task, inbox delivery, lease, or current runtime turn.
+func (h *Handler) requireAgentCredentialChatTransport(w http.ResponseWriter, r *http.Request) (agentTransportSource, bool) {
+	workspaceID, ok := parseUUIDOrBadRequest(w, ctxWorkspaceID(r.Context()), "workspace id")
 	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
+		return agentTransportSource{}, false
 	}
 	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
 	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
+		return agentTransportSource{}, false
 	}
-	taskID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Task-ID"), "task id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
-	}
-	task, err := h.Queries.GetAgentTask(r.Context(), taskID)
-	if err != nil || task.AgentID != agentID {
-		writeError(w, http.StatusForbidden, "task token does not match this agent task")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
-	}
-	if task.Status != "draining" {
-		writeError(w, http.StatusConflict, "agent task is not active")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
-	}
-	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
-	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
-		writeError(w, http.StatusForbidden, "agent task is not a channel task")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, false
-	}
-	return task, origin, true
-}
-
-func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, pgtype.UUID, bool) {
-	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	eventID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Event-ID"), "inbox event id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	deliveryID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Delivery-ID"), "delivery id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
-	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID {
-		writeError(w, http.StatusForbidden, "inbox token does not match this agent event")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	var deliveryActive bool
-	if err := h.DB.QueryRow(r.Context(), `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_event_delivery d
-			WHERE d.id = $1
-			  AND d.inbox_event_id = $2
-			  AND d.status IN ('leased', 'processing')
-			  AND d.lease_expires_at > now()
-		)`, deliveryID, event.ID).Scan(&deliveryActive); err != nil || !deliveryActive {
-		writeError(w, http.StatusConflict, "agent inbox delivery is not active")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	task := agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
-	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
-	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
-		// Channel-less wakes (issue-only) legitimately have no transport origin.
-		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	return task, origin, event.ID, true
-}
-
-func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, pgtype.UUID, bool) {
-	event, runtimeID, ok := h.requireAgentCredentialActiveInboxDelivery(w, r)
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	task := agentInboxSyntheticTask(event, runtimeID)
-	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
-	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
-		// LRM-1055: missing chat_session alone is no longer a hard reject; reject
-		// only when neither session nor channel_id yields a surface origin.
-		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	return task, origin, event.ID, true
+	return agentTransportSource{
+		origin: chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
+	}, true
 }
 
 // requireAgentCredentialActiveInboxDelivery validates the short-lived delivery
@@ -1417,7 +1121,7 @@ func (h *Handler) requireAgentCredentialActiveInboxDelivery(w http.ResponseWrite
 	return event, runtimeID, true
 }
 
-func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.AgentInboxEvent, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {
+func (h *Handler) resolveAgentTransportTarget(ctx context.Context, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {
 	rawTarget = strings.TrimSpace(rawTarget)
 	if rawTarget == "" {
 		return agentTransportTarget{}, errChatOutputInvalidTarget
@@ -1433,10 +1137,7 @@ func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.Agent
 	}
 	switch resolved.kind {
 	case chatOutputTargetDM:
-		creatorID := task.InitiatorUserID
-		if !creatorID.Valid {
-			creatorID = h.agentOwnerID(ctx, origin.workspaceID, origin.agentID)
-		}
+		creatorID := h.agentOwnerID(ctx, origin.workspaceID, origin.agentID)
 		ch, ok := h.agentDMChannel(ctx, origin.workspaceID, origin.agentID, resolved.recipientType, resolved.recipientID, creatorID, createDM)
 		if !ok {
 			return agentTransportTarget{}, errChatOutputInvalidTarget
@@ -1451,16 +1152,6 @@ func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.Agent
 		out.threadRootMessageID = parseUUID(resolved.threadRoot.ID)
 		out.threadID = threadID
 		out.triggerDepth = resolved.threadRoot.TriggerDepth + 1
-	}
-	// Reminder wake: hard pin to msg-id surface (thread→thread, main→main).
-	threadRootID := ""
-	if out.threadRootMessageID.Valid {
-		threadRootID = uuidToString(out.threadRootMessageID)
-	} else if strings.TrimSpace(out.threadRoot.ID) != "" {
-		threadRootID = strings.TrimSpace(out.threadRoot.ID)
-	}
-	if err := enforceReminderAnchorSurface(task, out.channel.ID, out.kind, threadRootID); err != nil {
-		return agentTransportTarget{}, err
 	}
 	return out, nil
 }
@@ -1549,15 +1240,9 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 			return agentTransportMessageResult{}, err
 		}
 	}
-	result, err := h.insertAgentTransportMessageWithAudit(ctx, source, target, input, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, afterInsert)
+	result, err := h.insertAgentTransportMessage(ctx, source, target, input, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, afterInsert)
 	if err != nil {
 		return agentTransportMessageResult{}, err
-	}
-	if result.FreshnessResolution != nil {
-		h.Metrics.ObserveFreshnessHoldResolution(
-			result.FreshnessResolution.Outcome,
-			result.FreshnessResolution.FreshnessHoldResolutionSeconds,
-		)
 	}
 	{
 		msgs := []ChannelMessageResponse{result.Message}
@@ -1568,6 +1253,12 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 	if result.Created {
 		if target.threadRootMessageID.Valid {
 			h.followChannelThreadAgent(ctx, input.ChannelID, target.threadRootMessageID, source.origin.agentID)
+			// A reply makes both its author and an agent-authored root's author
+			// active thread participants. Keep an explicit unfollow by the root
+			// author sticky; normal thread delivery is follower based.
+			if target.threadRoot.Type == "agent" && target.threadRoot.AuthorID != nil {
+				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, input.ChannelID, target.threadRootMessageID, parseUUID(*target.threadRoot.AuthorID))
+			}
 		}
 		_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, input.ChannelID)
 		if target.channel.Kind == "dm" {
@@ -1592,7 +1283,6 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 			})
 		} else if target.channel.Kind == "dm" && target.recipientType == "agent" {
 			msg := result.Message
-			reservation := result.AgentDM
 			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
 				lowID, highID, ok := normalizedAgentDMPair(source.origin.agentID, target.recipientID)
 				if ok {
@@ -1600,7 +1290,6 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 						ctx, target.channel, lowID, highID, protocol.EventChannelMessage, msg,
 					)
 				}
-				h.dispatchAgentDMAgentReply(ctx, source, target, msg, reservation, initiatorID)
 			})
 		}
 	}
@@ -1629,30 +1318,16 @@ func (h *Handler) finalizedAgentTransportInsertInput(ctx context.Context, source
 	}, nil
 }
 
-func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, draftContent string, draftParts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
+func (h *Handler) insertAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, _ string, _ []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return agentTransportMessageResult{}, err
-	}
-	if source.task.Reason != channelOnboardingReason {
-		if err := h.lockAgentTransportSource(ctx, tx, source); err != nil {
-			_ = tx.Rollback(ctx)
-			return agentTransportMessageResult{}, err
-		}
 	}
 	if err := h.lockAgentTransportTargetForInsert(ctx, tx, target); err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
 	}
-	if err := h.lockAgentTransportDraftSource(ctx, tx, source, target); err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportMessageResult{}, err
-	}
-	if err := h.requireAgentTransportSourceActiveWithExec(ctx, tx, source); err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportMessageResult{}, err
-	}
-	onboarding, isChannelOnboarding, err := channelOnboardingForTransport(ctx, tx, source)
+	onboarding, isChannelOnboarding, err := channelOnboardingForClientMessage(ctx, tx, source, clientMessageID)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
@@ -1668,7 +1343,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 			return agentTransportMessageResult{}, err
 		}
 		if !active {
-			if err := expireChannelOnboardingForInboxEventTx(ctx, tx, onboarding, source.inboxEventID); err != nil {
+			if err := expireChannelOnboardingForInboxEventTx(ctx, tx, onboarding); err != nil {
 				_ = tx.Rollback(ctx)
 				return agentTransportMessageResult{}, err
 			}
@@ -1682,7 +1357,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
 	} else if found {
-		result, err := h.completeDuplicateAgentTransportMessageWithExec(ctx, tx, source, target, input, attachmentIDs, existing, clientMessageID, nil)
+		result, err := h.completeDuplicateAgentTransportMessageWithExec(ctx, tx, input, attachmentIDs, existing)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 			return agentTransportMessageResult{}, err
@@ -1699,15 +1374,10 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 			return agentTransportMessageResult{}, err
 		}
 		if decision.Hold {
-			decision, transportID, _, err := h.holdAgentTransportSendWithExec(ctx, tx, source, target, draftContent, draftParts, clientMessageID, decision)
-			if err != nil {
-				_ = tx.Rollback(ctx)
-				return agentTransportMessageResult{}, err
-			}
 			if err := tx.Commit(ctx); err != nil {
 				return agentTransportMessageResult{}, err
 			}
-			return agentTransportMessageResult{}, &agentTransportFreshnessHoldError{decision: decision, transportID: transportID}
+			return agentTransportMessageResult{}, &agentTransportFreshnessHoldError{decision: decision}
 		}
 	}
 	reservation, err := h.reserveAgentDMSendTx(ctx, tx, source, target)
@@ -1719,7 +1389,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if isUniqueViolation(err) {
-			return h.resolveDuplicateAgentTransportMessageAtomic(ctx, source, target, input, attachmentIDs, clientMessageID, nil)
+			return h.resolveDuplicateAgentTransportMessageAtomic(ctx, target, input, attachmentIDs, clientMessageID)
 		}
 		return agentTransportMessageResult{}, err
 	}
@@ -1740,35 +1410,13 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 			return agentTransportMessageResult{}, err
 		}
 	}
-	auditContext := map[string]any{
-		"channel_id":        target.channel.ID,
-		"message_id":        msg.ID,
-		"client_message_id": clientMessageID,
-		"created":           true,
-		"seq":               msg.Seq,
-		"thread_root_id":    msg.ThreadRootMessageID,
-	}
-	transportID, err := h.recordAgentTransportAuditExec(ctx, tx, source, agentTransportActionSend, target.raw, input.ChannelID, parseUUID(msg.ID), clientMessageID, auditContext)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportMessageResult{}, err
-	}
-	if err := consumeAgentTransportVisibilityGrantTx(ctx, tx, source, input.ChannelID, parseUUID(msg.ID)); err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportMessageResult{}, err
-	}
-	if err := h.deleteAgentTransportDraftWithExec(ctx, tx, source, target.raw); err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportMessageResult{}, err
-	}
 	if err := tx.Commit(ctx); err != nil {
 		return agentTransportMessageResult{}, err
 	}
 	return agentTransportMessageResult{
-		Message:     msg,
-		Created:     true,
-		TransportID: transportID,
-		AgentDM:     reservation,
+		Message: msg,
+		Created: true,
+		AgentDM: reservation,
 	}, nil
 }
 
@@ -1781,299 +1429,7 @@ func (h *Handler) lockAgentTransportTargetForInsert(ctx context.Context, exec db
 	return err
 }
 
-func (h *Handler) lockAgentTransportSource(ctx context.Context, exec dbExecutor, source agentTransportSource) error {
-	key := fmt.Sprintf(
-		"%s:%s:%s",
-		uuidToString(source.origin.workspaceID),
-		uuidToString(source.origin.agentID),
-		agentTransportSourceDecisionKey(source),
-	)
-	_, err := exec.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('agent_transport_source'), hashtext($1))`, key)
-	return err
-}
-
-func (h *Handler) lockAgentTransportDraftSource(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget) error {
-	_, err := exec.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, agentTransportSourceDecisionKey(source), strings.TrimSpace(target.raw))
-	return err
-}
-
-func (h *Handler) requireAgentTransportSourceActiveWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource) error {
-	var status string
-	if err := exec.QueryRow(ctx, `
-		SELECT status
-		FROM agent_inbox_event
-		WHERE id = $1
-		  AND workspace_id = $2
-		  AND agent_id = $3`,
-		source.task.ID, source.origin.workspaceID, source.origin.agentID,
-	).Scan(&status); err != nil {
-		if errorsIsNoRows(err) {
-			return errAgentTransportSourceNotActive
-		}
-		return err
-	}
-	if status != "draining" {
-		return errAgentTransportSourceNotActive
-	}
-	return nil
-}
-
-func (h *Handler) agentTransportFreshnessResolutionWithExec(
-	ctx context.Context,
-	exec dbExecutor,
-	source agentTransportSource,
-	target agentTransportTarget,
-	draft agentTransportDraft,
-	outcome string,
-) (*AgentTransportFreshnessResolution, error) {
-	var seconds float64
-	err := exec.QueryRow(ctx, `
-		SELECT GREATEST(
-			EXTRACT(EPOCH FROM (clock_timestamp() - created_at)),
-			0
-		)::double precision
-		FROM agent_task_transport_audit
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND action = 'message_send'
-		  AND target = $3
-		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))
-		  AND COALESCE(context_pack->>'held', 'false') = 'true'
-		  AND context_pack->>'subtype' = 'freshness'
-		  AND context_pack->>'producer_fact_id' = $6
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1`,
-		source.origin.workspaceID,
-		source.origin.agentID,
-		target.raw,
-		nullableTaskIDForTransportSource(source),
-		nullableInboxEventIDForTransportSource(source),
-		draft.DecisionFactID,
-	).Scan(&seconds)
-	if err != nil {
-		return nil, err
-	}
-	return &AgentTransportFreshnessResolution{
-		ProducerFactID:                 draft.DecisionFactID,
-		Outcome:                        outcome,
-		FreshnessHoldResolutionSeconds: seconds,
-		ResolutionMS:                   int64(seconds * 1000),
-	}, nil
-}
-
-func (h *Handler) resolvedAgentTransportFreshnessProducerWithExec(
-	ctx context.Context,
-	exec dbExecutor,
-	source agentTransportSource,
-	target agentTransportTarget,
-	seenUpToSeq int64,
-) (string, bool, error) {
-	var producerFactID string
-	err := exec.QueryRow(ctx, `
-		SELECT hold.context_pack->>'producer_fact_id'
-		FROM agent_task_transport_audit hold
-		WHERE hold.workspace_id = $1
-		  AND hold.agent_id = $2
-		  AND hold.action = 'message_send'
-		  AND hold.target = $3
-		  AND (($4::uuid IS NOT NULL AND hold.task_id = $4) OR ($5::uuid IS NOT NULL AND hold.inbox_event_id = $5))
-		  AND COALESCE(hold.context_pack->>'held', 'false') = 'true'
-		  AND hold.context_pack->>'subtype' = 'freshness'
-		  AND hold.context_pack->>'latest_seq' = $6
-		  AND EXISTS (
-		    SELECT 1
-		    FROM agent_task_transport_audit resolution
-		    WHERE resolution.workspace_id = hold.workspace_id
-		      AND resolution.agent_id = hold.agent_id
-		      AND resolution.target = hold.target
-		      AND resolution.action = 'message_send'
-		      AND (($4::uuid IS NOT NULL AND resolution.task_id = $4) OR ($5::uuid IS NOT NULL AND resolution.inbox_event_id = $5))
-		      AND COALESCE(resolution.context_pack->>'freshness_resolution', 'false') = 'true'
-		      AND resolution.context_pack->>'producer_fact_id' = hold.context_pack->>'producer_fact_id'
-		  )
-		ORDER BY hold.created_at DESC, hold.id DESC
-		LIMIT 1`,
-		source.origin.workspaceID,
-		source.origin.agentID,
-		target.raw,
-		nullableTaskIDForTransportSource(source),
-		nullableInboxEventIDForTransportSource(source),
-		fmt.Sprint(seenUpToSeq),
-	).Scan(&producerFactID)
-	if err != nil {
-		if errorsIsNoRows(err) {
-			return "", false, nil
-		}
-		return "", false, err
-	}
-	return producerFactID, true, nil
-}
-
-// abandonAgentTransportFreshnessDraftsWithExec resolves every source-scoped
-// draft that is still present when its execution completes. There is no Raft
-// abandon command: finishing the source without either ready send command is
-// the durable "do not send" decision. Call this before locking/acking the
-// delivery so send and completion share target/source advisory-lock order.
-func (h *Handler) abandonAgentTransportFreshnessDraftsWithExec(
-	ctx context.Context,
-	exec dbExecutor,
-	event db.AgentInboxEvent,
-	runtimeID pgtype.UUID,
-) ([]agentTransportFreshnessResolutionPublication, error) {
-	if event.Reason == channelOnboardingReason {
-		return nil, nil
-	}
-	task := agentInboxSyntheticTask(event, runtimeID)
-	origin := chatOutputOrigin{
-		channelID:   event.ChannelID,
-		workspaceID: event.WorkspaceID,
-		agentID:     event.AgentID,
-	}
-	taskSource := agentTransportSource{task: task, origin: origin}
-	inboxSource := agentTransportSource{task: task, origin: origin, inboxEventID: event.ID}
-	// Completion must own both source namespaces before it enumerates drafts.
-	// This closes the absent -> first-hold transition: a send that started from
-	// a stale pre-ACK access check cannot create its first draft after this
-	// scan, because it must acquire the same source lock before checking the
-	// source's committed status.
-	if err := h.lockAgentTransportSource(ctx, exec, taskSource); err != nil {
-		return nil, err
-	}
-	if err := h.lockAgentTransportSource(ctx, exec, inboxSource); err != nil {
-		return nil, err
-	}
-	rows, err := exec.Query(ctx, `
-		SELECT target, channel_id, thread_root_message_id, task_id IS NOT NULL
-		FROM agent_transport_draft
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND (task_id = $3 OR inbox_event_id = $3)
-		ORDER BY channel_id ASC, thread_root_message_id ASC NULLS FIRST, target ASC`,
-		event.WorkspaceID, event.AgentID, event.ID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	type candidate struct {
-		target       string
-		channelID    pgtype.UUID
-		threadRootID pgtype.UUID
-		taskScoped   bool
-	}
-	var candidates []candidate
-	for rows.Next() {
-		var item candidate
-		if err := rows.Scan(&item.target, &item.channelID, &item.threadRootID, &item.taskScoped); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		candidates = append(candidates, item)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-
-	publications := make([]agentTransportFreshnessResolutionPublication, 0, len(candidates))
-	for _, item := range candidates {
-		source := taskSource
-		if !item.taskScoped {
-			source = inboxSource
-		}
-		target := agentTransportTarget{
-			channel: ChannelResponse{
-				ID:          uuidToString(item.channelID),
-				WorkspaceID: uuidToString(event.WorkspaceID),
-			},
-			threadRootMessageID: item.threadRootID,
-			raw:                 item.target,
-		}
-		if err := h.lockAgentTransportTargetForInsert(ctx, exec, target); err != nil {
-			return nil, err
-		}
-		if err := h.lockAgentTransportDraftSource(ctx, exec, source, target); err != nil {
-			return nil, err
-		}
-		draft, found, err := h.loadAgentTransportDraftWithExec(ctx, exec, source, item.target)
-		if err != nil {
-			return nil, err
-		}
-		if !found {
-			continue
-		}
-		resolution, err := h.agentTransportFreshnessResolutionWithExec(
-			ctx, exec, source, target, draft, "abandoned",
-		)
-		if err != nil {
-			return nil, err
-		}
-		_, err = h.recordAgentTransportAuditExec(
-			ctx, exec, source, agentTransportActionSend, target.raw,
-			item.channelID, pgtype.UUID{}, draft.ClientMessageID,
-			map[string]any{
-				"channel_id":                        uuidToString(item.channelID),
-				"thread_root_id":                    uuidToString(item.threadRootID),
-				"client_message_id":                 draft.ClientMessageID,
-				"created":                           false,
-				"freshness_resolution":              true,
-				"producer_fact_id":                  resolution.ProducerFactID,
-				"outcome":                           resolution.Outcome,
-				"freshness_hold_resolution_seconds": resolution.FreshnessHoldResolutionSeconds,
-				"resolution_ms":                     resolution.ResolutionMS,
-			},
-		)
-		if err != nil {
-			return nil, err
-		}
-		if err := h.deleteAgentTransportDraftWithExec(ctx, exec, source, target.raw); err != nil {
-			return nil, err
-		}
-		publications = append(publications, agentTransportFreshnessResolutionPublication{
-			Resolution: *resolution,
-		})
-	}
-	return publications, nil
-}
-
-func (h *Handler) publishAgentTransportFreshnessResolutions(
-	ctx context.Context,
-	publications []agentTransportFreshnessResolutionPublication,
-) {
-	for _, publication := range publications {
-		h.Metrics.ObserveFreshnessHoldResolution(
-			publication.Resolution.Outcome,
-			publication.Resolution.FreshnessHoldResolutionSeconds,
-		)
-	}
-}
-
-func (h *Handler) completeDuplicateAgentTransportMessageWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, existing ChannelMessageResponse, clientMessageID string, sentDraft *agentTransportDraft) (agentTransportMessageResult, error) {
-	_, isChannelOnboarding, err := channelOnboardingForTransport(ctx, exec, source)
-	if err != nil {
-		return agentTransportMessageResult{}, err
-	}
-	if isChannelOnboarding {
-		// The deterministic onboarding client id represents one canonical
-		// visible decision. A retry after the first transaction committed must
-		// reuse both the message and its audit evidence; recording another audit
-		// would make one decision look like multiple sends.
-		var transportID pgtype.UUID
-		if err := exec.QueryRow(ctx, `
-			SELECT id
-			FROM agent_task_transport_audit
-			WHERE inbox_event_id = $1
-			  AND action = 'message_send'
-			  AND channel_message_id = $2
-			ORDER BY created_at, id
-			LIMIT 1`, source.inboxEventID, parseUUID(existing.ID)).Scan(&transportID); err != nil {
-			return agentTransportMessageResult{}, err
-		}
-		if err := h.deleteAgentTransportDraftWithExec(ctx, exec, source, target.raw); err != nil {
-			return agentTransportMessageResult{}, err
-		}
-		return agentTransportMessageResult{Message: existing, Created: false, TransportID: uuidToString(transportID), SentDraft: sentDraft}, nil
-	}
+func (h *Handler) completeDuplicateAgentTransportMessageWithExec(ctx context.Context, _ dbExecutor, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, existing ChannelMessageResponse) (agentTransportMessageResult, error) {
 	ok, err := h.matchesChannelMessageIdempotencyPayload(ctx, existing, input, attachmentIDs)
 	if err != nil {
 		return agentTransportMessageResult{}, err
@@ -2081,43 +1437,14 @@ func (h *Handler) completeDuplicateAgentTransportMessageWithExec(ctx context.Con
 	if !ok {
 		return agentTransportMessageResult{}, errChannelClientMessageConflict
 	}
-	transportID, err := h.recordAgentTransportAuditExec(ctx, exec, source, agentTransportActionSend, target.raw, input.ChannelID, parseUUID(existing.ID), clientMessageID, map[string]any{
-		"channel_id":        target.channel.ID,
-		"message_id":        existing.ID,
-		"client_message_id": clientMessageID,
-		"created":           false,
-		"seq":               existing.Seq,
-		"thread_root_id":    existing.ThreadRootMessageID,
-	})
-	if err != nil {
-		return agentTransportMessageResult{}, err
-	}
-	if err := h.deleteAgentTransportDraftWithExec(ctx, exec, source, target.raw); err != nil {
-		return agentTransportMessageResult{}, err
-	}
-	return agentTransportMessageResult{Message: existing, Created: false, TransportID: transportID, SentDraft: sentDraft}, nil
+	return agentTransportMessageResult{Message: existing, Created: false}, nil
 }
-
-func (h *Handler) resolveDuplicateAgentTransportMessageAtomic(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, clientMessageID string, sentDraft *agentTransportDraft) (agentTransportMessageResult, error) {
+func (h *Handler) resolveDuplicateAgentTransportMessageAtomic(ctx context.Context, target agentTransportTarget, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, clientMessageID string) (agentTransportMessageResult, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
-	if source.task.Reason != channelOnboardingReason {
-		if err := h.lockAgentTransportSource(ctx, tx, source); err != nil {
-			_ = tx.Rollback(ctx)
-			return agentTransportMessageResult{}, err
-		}
-	}
 	if err := h.lockAgentTransportTargetForInsert(ctx, tx, target); err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportMessageResult{}, err
-	}
-	if err := h.lockAgentTransportDraftSource(ctx, tx, source, target); err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportMessageResult{}, err
-	}
-	if err := h.requireAgentTransportSourceActiveWithExec(ctx, tx, source); err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
 	}
@@ -2130,7 +1457,7 @@ func (h *Handler) resolveDuplicateAgentTransportMessageAtomic(ctx context.Contex
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, errChannelClientMessageConflict
 	}
-	result, err := h.completeDuplicateAgentTransportMessageWithExec(ctx, tx, source, target, input, attachmentIDs, existing, clientMessageID, nil)
+	result, err := h.completeDuplicateAgentTransportMessageWithExec(ctx, tx, input, attachmentIDs, existing)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
@@ -2140,7 +1467,6 @@ func (h *Handler) resolveDuplicateAgentTransportMessageAtomic(ctx context.Contex
 	}
 	return result, nil
 }
-
 func (h *Handler) findAgentChannelMessageByClientIDWithExec(ctx context.Context, exec dbExecutor, workspaceID, channelID, authorID pgtype.UUID, clientMessageID string) (ChannelMessageResponse, bool, error) {
 	row := exec.QueryRow(ctx, `
 		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
@@ -2625,13 +1951,7 @@ func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, e
 	if err != nil || totalNewer <= 0 {
 		return agentTransportFreshnessDecision{SeenUpToSeq: seenUpToSeq, LatestSeq: latestSeq}, err
 	}
-	showAfterSeq := seenUpToSeq
-	if draft, found, err := h.loadAgentTransportDraftWithExec(ctx, exec, source, target.raw); err != nil {
-		return agentTransportFreshnessDecision{}, err
-	} else if found && draft.HeldToSeq > showAfterSeq {
-		showAfterSeq = draft.HeldToSeq
-	}
-	messages, err := h.readAgentTransportMessagesAfterSeq(ctx, source, target, showAfterSeq, agentTransportFreshnessHoldLimit)
+	messages, err := h.readAgentTransportMessagesAfterSeq(ctx, source, target, seenUpToSeq, agentTransportFreshnessHoldLimit)
 	if err != nil {
 		return agentTransportFreshnessDecision{}, err
 	}
@@ -2652,51 +1972,13 @@ func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, e
 }
 
 func (h *Handler) agentTransportSeenUpToSeq(ctx context.Context, source agentTransportSource, target string, requested int64) (int64, error) {
+	_ = ctx
+	_ = source
+	_ = target
 	if requested > 0 {
 		return requested, nil
 	}
-	if seq, ok, err := h.latestAgentTransportReadSeenSeq(ctx, source, target); err != nil {
-		return 0, err
-	} else if ok && seq > 0 {
-		return seq, nil
-	}
-	if !source.inboxEventID.Valid {
-		return 0, nil
-	}
-	var seq int64
-	if err := h.DB.QueryRow(ctx, `
-		SELECT seq_to
-		FROM agent_inbox_event
-		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3`,
-		source.inboxEventID, source.origin.workspaceID, source.origin.agentID).Scan(&seq); err != nil {
-		if errorsIsNoRows(err) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	return seq, nil
-}
-
-func (h *Handler) latestAgentTransportReadSeenSeq(ctx context.Context, source agentTransportSource, target string) (int64, bool, error) {
-	var seq int64
-	err := h.DB.QueryRow(ctx, `
-		SELECT COALESCE(NULLIF(context_pack->>'seen_up_to_seq', '')::bigint, 0)
-		FROM agent_task_transport_audit
-		WHERE workspace_id = $1
-		  AND agent_id = $2
-		  AND action = $3
-		  AND target = $4
-		  AND (($5::uuid IS NOT NULL AND task_id = $5) OR ($6::uuid IS NOT NULL AND inbox_event_id = $6))
-		ORDER BY created_at DESC
-		LIMIT 1`,
-		source.origin.workspaceID, source.origin.agentID, agentTransportActionRead, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source)).Scan(&seq)
-	if err != nil {
-		if errorsIsNoRows(err) {
-			return 0, false, nil
-		}
-		return 0, false, err
-	}
-	return seq, true, nil
+	return 0, nil
 }
 
 func (h *Handler) agentTransportNewerMessageStats(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, seenUpToSeq int64) (int64, int64, error) {
@@ -2752,55 +2034,6 @@ func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, source
 	return out, rows.Err()
 }
 
-func (h *Handler) holdAgentTransportSend(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, clientMessageID string, decision agentTransportFreshnessDecision) (agentTransportFreshnessDecision, string, error) {
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return agentTransportFreshnessDecision{}, "", err
-	}
-	if err := h.lockAgentTransportDraftSource(ctx, tx, source, target); err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportFreshnessDecision{}, "", err
-	}
-	chosen, transportID, _, err := h.holdAgentTransportSendWithExec(ctx, tx, source, target, content, parts, clientMessageID, decision)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return agentTransportFreshnessDecision{}, "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return agentTransportFreshnessDecision{}, "", err
-	}
-	return chosen, transportID, nil
-}
-
-func (h *Handler) holdAgentTransportSendWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, clientMessageID string, decision agentTransportFreshnessDecision) (agentTransportFreshnessDecision, string, bool, error) {
-	chosen, winner, err := h.saveAgentTransportDraftWithExec(ctx, exec, source, target, content, parts, clientMessageID, decision)
-	if err != nil {
-		return agentTransportFreshnessDecision{}, "", false, err
-	}
-	if !winner {
-		return chosen, "", false, nil
-	}
-	transportID, err := h.recordAgentTransportAuditExec(ctx, exec, source, agentTransportActionSend, target.raw, parseUUID(target.channel.ID), pgtype.UUID{}, clientMessageID, map[string]any{
-		"held":                  true,
-		"subtype":               "freshness",
-		"reason":                "newer_messages_available",
-		"decision":              "local_hold",
-		"producer_fact_id":      chosen.ProducerID,
-		"channel_id":            target.channel.ID,
-		"client_message_id":     clientMessageID,
-		"seen_up_to_seq":        chosen.SeenUpToSeq,
-		"latest_seq":            chosen.LatestSeq,
-		"new_message_count":     chosen.TotalNewer,
-		"shown_message_count":   len(chosen.Messages),
-		"omitted_message_count": chosen.Omitted,
-		"thread_root_id":        target.threadRootMessageID,
-	})
-	if err != nil {
-		return agentTransportFreshnessDecision{}, "", false, err
-	}
-	return chosen, transportID, true, nil
-}
-
 func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTransportTarget, decision agentTransportFreshnessDecision, transportID string) {
 	olderBoundary := "No older."
 	if decision.Omitted > 0 {
@@ -2839,357 +2072,9 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 	})
 }
 
-func (h *Handler) saveAgentTransportDraftWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, clientMessageID string, decision agentTransportFreshnessDecision) (agentTransportFreshnessDecision, bool, error) {
-	partsJSON, err := json.Marshal(parts)
-	if err != nil {
-		return agentTransportFreshnessDecision{}, false, err
-	}
-	args := []any{
-		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target.raw), parseUUID(target.channel.ID), nullableUUID(target.threadRootMessageID),
-		content, partsJSON, clientMessageID,
-		decision.SeenUpToSeq, decision.SeenUpToSeq + 1, decision.LatestSeq, firstChannelMessageSeq(decision.Messages), maxChannelMessageSeq(decision.Messages), decision.ProducerID,
-	}
-	if source.inboxEventID.Valid {
-		err = exec.QueryRow(ctx, `
-			INSERT INTO agent_transport_draft (
-				workspace_id, agent_id, inbox_event_id, target, channel_id, thread_root_message_id,
-				content, parts, client_message_id,
-				seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq, decision_fact_id
-			)
-			VALUES ($1, $2, $15, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
-			ON CONFLICT (workspace_id, agent_id, inbox_event_id, target) WHERE inbox_event_id IS NOT NULL
-			DO UPDATE SET
-				channel_id = EXCLUDED.channel_id,
-				thread_root_message_id = EXCLUDED.thread_root_message_id,
-				content = EXCLUDED.content,
-				parts = EXCLUDED.parts,
-				client_message_id = EXCLUDED.client_message_id,
-				seen_up_to_seq = EXCLUDED.seen_up_to_seq,
-				held_from_seq = EXCLUDED.held_from_seq,
-				held_to_seq = EXCLUDED.held_to_seq,
-				shown_from_seq = EXCLUDED.shown_from_seq,
-				shown_to_seq = EXCLUDED.shown_to_seq,
-				decision_fact_id = EXCLUDED.decision_fact_id,
-			updated_at = now()
-			WHERE agent_transport_draft.held_to_seq < EXCLUDED.held_to_seq
-			RETURNING decision_fact_id`, append(args, source.inboxEventID)...).Scan(&decision.ProducerID)
-		if err == nil {
-			return decision, true, nil
-		}
-		if !errorsIsNoRows(err) {
-			return agentTransportFreshnessDecision{}, false, err
-		}
-		return h.replaceHeldAgentTransportDraftWithExec(ctx, exec, source, target, content, partsJSON, clientMessageID, decision)
-	}
-	err = exec.QueryRow(ctx, `
-		INSERT INTO agent_transport_draft (
-			workspace_id, agent_id, task_id, target, channel_id, thread_root_message_id,
-			content, parts, client_message_id,
-			seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq, decision_fact_id
-		)
-		VALUES ($1, $2, $15, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
-		ON CONFLICT (workspace_id, agent_id, task_id, target) WHERE task_id IS NOT NULL
-		DO UPDATE SET
-			channel_id = EXCLUDED.channel_id,
-			thread_root_message_id = EXCLUDED.thread_root_message_id,
-			content = EXCLUDED.content,
-			parts = EXCLUDED.parts,
-			client_message_id = EXCLUDED.client_message_id,
-			seen_up_to_seq = EXCLUDED.seen_up_to_seq,
-			held_from_seq = EXCLUDED.held_from_seq,
-			held_to_seq = EXCLUDED.held_to_seq,
-			shown_from_seq = EXCLUDED.shown_from_seq,
-			shown_to_seq = EXCLUDED.shown_to_seq,
-			decision_fact_id = EXCLUDED.decision_fact_id,
-		updated_at = now()
-		WHERE agent_transport_draft.held_to_seq < EXCLUDED.held_to_seq
-		RETURNING decision_fact_id`, append(args, source.task.ID)...).Scan(&decision.ProducerID)
-	if err == nil {
-		return decision, true, nil
-	}
-	if !errorsIsNoRows(err) {
-		return agentTransportFreshnessDecision{}, false, err
-	}
-	return h.replaceHeldAgentTransportDraftWithExec(ctx, exec, source, target, content, partsJSON, clientMessageID, decision)
-}
-
-// replaceHeldAgentTransportDraftWithExec is called while the source/target
-// advisory lock is held. A same-or-older range is a retry, so it can replace
-// authored content but must reuse the existing decision and emit no audit or
-// Activity row.
-func (h *Handler) replaceHeldAgentTransportDraftWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, content string, partsJSON []byte, clientMessageID string, decision agentTransportFreshnessDecision) (agentTransportFreshnessDecision, bool, error) {
-	tag, err := exec.Exec(ctx, `
-		UPDATE agent_transport_draft
-		SET content = $6, parts = $7::jsonb, client_message_id = $8, updated_at = now()
-		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
-		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))`,
-		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target.raw), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source), content, partsJSON, clientMessageID)
-	if err != nil {
-		return agentTransportFreshnessDecision{}, false, err
-	}
-	if tag.RowsAffected() != 1 {
-		return agentTransportFreshnessDecision{}, false, errAgentTransportDraftNotFound
-	}
-	winner, found, err := h.loadAgentTransportDraftWithExec(ctx, exec, source, target.raw)
-	if err != nil {
-		return agentTransportFreshnessDecision{}, false, err
-	}
-	if !found {
-		return agentTransportFreshnessDecision{}, false, errAgentTransportDraftNotFound
-	}
-	decision, err = h.agentTransportFreshnessDecisionFromDraft(ctx, exec, target, winner)
-	return decision, false, err
-}
-
-func (h *Handler) agentTransportFreshnessDecisionFromDraft(ctx context.Context, exec dbExecutor, target agentTransportTarget, draft agentTransportDraft) (agentTransportFreshnessDecision, error) {
-	totalNewer, err := h.countAgentTransportMessagesInSeqRange(ctx, exec, target, draft.SeenUpToSeq, draft.HeldToSeq)
-	if err != nil {
-		return agentTransportFreshnessDecision{}, err
-	}
-	var messages []ChannelMessageResponse
-	if draft.ShownFromSeq.Valid && draft.ShownToSeq.Valid && draft.ShownFromSeq.Int64 > 0 && draft.ShownToSeq.Int64 >= draft.ShownFromSeq.Int64 {
-		messages, err = h.readAgentTransportMessagesInSeqRange(ctx, exec, target, draft.ShownFromSeq.Int64-1, draft.ShownToSeq.Int64)
-		if err != nil {
-			return agentTransportFreshnessDecision{}, err
-		}
-		h.decorateAgentTransportMessages(ctx, target.channel.WorkspaceID, messages)
-	}
-	omitted := totalNewer - int64(len(messages))
-	if omitted < 0 {
-		omitted = 0
-	}
-	return agentTransportFreshnessDecision{
-		Hold:        true,
-		SeenUpToSeq: draft.SeenUpToSeq,
-		LatestSeq:   draft.HeldToSeq,
-		TotalNewer:  totalNewer,
-		Messages:    messages,
-		Omitted:     omitted,
-		ProducerID:  draft.DecisionFactID,
-	}, nil
-}
-
-func (h *Handler) countAgentTransportMessagesInSeqRange(ctx context.Context, exec dbExecutor, target agentTransportTarget, afterSeq, throughSeq int64) (int64, error) {
-	var count int64
-	err := exec.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM channel_message
-		WHERE channel_id = $1
-		  AND workspace_id = $2
-		  AND deleted_at IS NULL
-		  AND seq > $3
-		  AND seq <= $4
-		  AND (
-		    ($5::uuid IS NOT NULL AND (id = $5 OR thread_root_message_id = $5))
-		    OR ($5::uuid IS NULL AND thread_root_message_id IS NULL)
-		  )`,
-		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), afterSeq, throughSeq, nullableUUID(target.threadRootMessageID)).Scan(&count)
-	return count, err
-}
-
-func (h *Handler) readAgentTransportMessagesInSeqRange(ctx context.Context, exec dbExecutor, target agentTransportTarget, afterSeq, throughSeq int64) ([]ChannelMessageResponse, error) {
-	rows, err := exec.Query(ctx, `
-		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
-		FROM channel_message
-		WHERE channel_id = $1
-		  AND workspace_id = $2
-		  AND deleted_at IS NULL
-		  AND seq > $3
-		  AND seq <= $4
-		  AND (
-		    ($5::uuid IS NOT NULL AND (id = $5 OR thread_root_message_id = $5))
-		    OR ($5::uuid IS NULL AND thread_root_message_id IS NULL)
-		  )
-		ORDER BY seq ASC`,
-		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), afterSeq, throughSeq, nullableUUID(target.threadRootMessageID))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []ChannelMessageResponse
-	for rows.Next() {
-		msg, err := scanChannelMessage(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, msg)
-	}
-	return out, rows.Err()
-}
-
-func (h *Handler) loadAgentTransportDraft(ctx context.Context, source agentTransportSource, target string) (agentTransportDraft, bool, error) {
-	return h.loadAgentTransportDraftWithExec(ctx, h.DB, source, target)
-}
-
-func (h *Handler) loadAgentTransportDraftWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target string) (agentTransportDraft, bool, error) {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return agentTransportDraft{}, false, nil
-	}
-	var draft agentTransportDraft
-	var partsRaw []byte
-	err := exec.QueryRow(ctx, `
-		SELECT id, target, channel_id, thread_root_message_id, content, parts, client_message_id, seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq, COALESCE(decision_fact_id, '')
-		FROM agent_transport_draft
-		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
-		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))`,
-		source.origin.workspaceID, source.origin.agentID, target, nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source)).Scan(&draft.ID, &draft.Target, &draft.ChannelID, &draft.ThreadRootID, &draft.Content, &partsRaw, &draft.ClientMessageID, &draft.SeenUpToSeq, &draft.HeldFromSeq, &draft.HeldToSeq, &draft.ShownFromSeq, &draft.ShownToSeq, &draft.DecisionFactID)
-	if err != nil {
-		if errorsIsNoRows(err) {
-			return agentTransportDraft{}, false, nil
-		}
-		return agentTransportDraft{}, false, err
-	}
-	if len(partsRaw) > 0 {
-		if err := json.Unmarshal(partsRaw, &draft.Parts); err != nil {
-			return agentTransportDraft{}, false, err
-		}
-	}
-	return draft, true, nil
-}
-
-func (h *Handler) deleteAgentTransportDraftWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target string) error {
-	_, err := exec.Exec(ctx, `
-		DELETE FROM agent_transport_draft
-		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
-		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))`,
-		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source))
-	return err
-}
-
 func agentTransportFreshnessProducerID(source agentTransportSource, target agentTransportTarget, seenUpToSeq, latestSeq int64) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s:%s:%d:%d", uuidToString(source.origin.workspaceID), uuidToString(source.origin.agentID), agentTransportSourceDecisionKey(source), target.raw, seenUpToSeq, latestSeq)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s:%d:%d", uuidToString(source.origin.workspaceID), uuidToString(source.origin.agentID), target.raw, seenUpToSeq, latestSeq)))
 	return "freshness_decision_fact:" + hex.EncodeToString(sum[:8])
-}
-
-func agentTransportFreshnessRevisedClientMessageID(producerFactID string) string {
-	fact := strings.TrimPrefix(strings.TrimSpace(producerFactID), "freshness_decision_fact:")
-	return "freshness-revised:" + fact
-}
-
-func agentTransportSourceDecisionKey(source agentTransportSource) string {
-	if source.inboxEventID.Valid {
-		return "inbox:" + uuidToString(source.inboxEventID)
-	}
-	return "task:" + uuidToString(source.task.ID)
-}
-
-func (h *Handler) recordAgentTransportAudit(ctx context.Context, source agentTransportSource, action, target string, channelID, messageID pgtype.UUID, clientMessageID string, contextPack map[string]any) (string, error) {
-	return h.recordAgentTransportAuditExec(ctx, h.DB, source, action, target, channelID, messageID, clientMessageID, contextPack)
-}
-
-func (h *Handler) recordAgentTransportAuditExec(ctx context.Context, exec dbExecutor, source agentTransportSource, action, target string, channelID, messageID pgtype.UUID, clientMessageID string, contextPack map[string]any) (string, error) {
-	pack, err := json.Marshal(contextPack)
-	if err != nil {
-		return "", err
-	}
-	var auditID pgtype.UUID
-	if err := exec.QueryRow(ctx, `
-		INSERT INTO agent_task_transport_audit (workspace_id, task_id, inbox_event_id, agent_id, action, target, channel_id, channel_message_id, client_message_id, context_pack)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
-		RETURNING id`,
-		source.origin.workspaceID, nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source), source.task.AgentID, action, strings.TrimSpace(target), nullableUUID(channelID), nullableUUID(messageID), nullableAgentTransportClientID(clientMessageID), pack).Scan(&auditID); err != nil {
-		return "", err
-	}
-	return uuidToString(auditID), nil
-}
-
-func nullableTaskIDForTransportSource(source agentTransportSource) pgtype.UUID {
-	if source.inboxEventID.Valid {
-		return pgtype.UUID{}
-	}
-	return source.task.ID
-}
-
-func nullableInboxEventIDForTransportSource(source agentTransportSource) pgtype.UUID {
-	return source.inboxEventID
-}
-
-func nullableAgentTransportClientID(clientMessageID string) any {
-	clientMessageID = strings.TrimSpace(clientMessageID)
-	if clientMessageID == "" {
-		return nil
-	}
-	return clientMessageID
-}
-
-func (h *Handler) taskHasAgentTransportVisibleOutput(ctx context.Context, taskID pgtype.UUID) bool {
-	var exists bool
-	err := h.DB.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_task_transport_audit
-			WHERE task_id = $1 AND action IN ('message_send', 'message_react')
-			  AND channel_message_id IS NOT NULL
-		)`, taskID).Scan(&exists)
-	return err == nil && exists
-}
-
-// chatTaskHasAgentTransportVisibleOutput resolves the explicit transport write
-// for both ordinary daemon tasks and inbox-backed synthetic tasks. The latter
-// intentionally store their audit under inbox_event_id (rather than task_id),
-// even though their synthetic task ID is the inbox event ID.
-func (h *Handler) chatTaskHasAgentTransportVisibleOutput(ctx context.Context, task db.AgentInboxEvent) bool {
-	return h.taskHasAgentTransportVisibleOutput(ctx, task.ID) || h.inboxEventHasAgentTransportVisibleOutput(ctx, task.ID)
-}
-
-func (h *Handler) inboxEventHasAgentTransportVisibleOutput(ctx context.Context, eventID pgtype.UUID) bool {
-	var exists bool
-	err := h.DB.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_task_transport_audit
-			WHERE inbox_event_id = $1 AND action IN ('message_send', 'message_react')
-			  AND channel_message_id IS NOT NULL
-		)`, eventID).Scan(&exists)
-	return err == nil && exists
-}
-
-func (h *Handler) inboxEventHasAgentTransportMessageOutput(ctx context.Context, eventID pgtype.UUID) bool {
-	var exists bool
-	err := h.DB.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_task_transport_audit
-			WHERE inbox_event_id = $1
-			  AND action = 'message_send'
-			  AND channel_message_id IS NOT NULL
-		)`, eventID).Scan(&exists)
-	return err == nil && exists
-}
-
-// inboxEventHasAgentTransportFreshnessHold reports an unresolved Raft-compatible
-// send boundary: the attempted output was saved as a draft because newer
-// context arrived and no later decision resolved that producer fact.
-func (h *Handler) inboxEventHasAgentTransportFreshnessHold(ctx context.Context, eventID pgtype.UUID) bool {
-	var exists bool
-	err := h.DB.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_task_transport_audit hold
-			WHERE hold.inbox_event_id = $1
-			  AND hold.action = 'message_send'
-			  AND COALESCE(hold.context_pack->>'held', 'false') = 'true'
-			  AND hold.context_pack->>'subtype' = 'freshness'
-			  AND NOT EXISTS (
-			    SELECT 1
-			    FROM agent_task_transport_audit resolution
-			    WHERE resolution.inbox_event_id = hold.inbox_event_id
-			      AND resolution.action = 'message_send'
-			      AND resolution.target = hold.target
-			      AND COALESCE(resolution.context_pack->>'freshness_resolution', 'false') = 'true'
-			      AND resolution.context_pack->>'producer_fact_id' = hold.context_pack->>'producer_fact_id'
-			  )
-		)`, eventID).Scan(&exists)
-	return err == nil && exists
-}
-
-func channelMessageIDs(messages []ChannelMessageResponse) []string {
-	out := make([]string, 0, len(messages))
-	for _, msg := range messages {
-		out = append(out, msg.ID)
-	}
-	return out
 }
 
 func firstChannelMessageSeq(messages []ChannelMessageResponse) any {

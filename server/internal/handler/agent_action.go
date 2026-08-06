@@ -100,7 +100,7 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "target is required")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, targetRaw, true)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.origin, targetRaw, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
 		return

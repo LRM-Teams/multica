@@ -412,7 +412,6 @@ export type {
   ChannelMessageSearchResult,
   ChannelStats,
   ChannelAuthorStat,
-  ChannelActiveTask,
   ChannelTypingPayload,
   ChannelProjectFile,
   ChannelProjectFilesStatus,

@@ -1463,7 +1463,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/project", h.SetChannelProject)
 					r.Get("/project-files", h.ListChannelProjectFiles)
 					r.Get("/project-files/content", h.GetChannelProjectFile)
-					r.Get("/active-tasks", h.ListChannelActiveTasks)
 					r.Get("/goal", h.GetChannelGoal)
 					r.Post("/goal", h.CreateChannelGoal)
 					r.Patch("/goal", h.UpdateChannelGoal)
@@ -1489,10 +1488,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/messages", h.ListChannelMessages)
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)
-					// LRM-425: channel Stop uses inbox_event_id (active-tasks), not /api/tasks/{id}/cancel.
-					r.Post("/agent-inbox/events/{eventId}/cancel", h.CancelChannelAgentInboxEvent)
-					r.Post("/agent-inbox/cancel-active", h.CancelChannelActiveAgentInboxEvents)
-					r.Post("/agent-inbox/events/{eventId}/retry", h.RetryChannelAgentInboxEvent)
 					r.Patch("/messages/{messageId}", h.UpdateChannelMessage)
 					r.Delete("/messages/{messageId}", h.DeleteChannelMessage)
 					r.Get("/messages/{messageId}/thread", h.ListChannelMessageThread)

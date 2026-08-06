@@ -50,7 +50,6 @@ function renderPanel(
 ) {
   const onArchive = vi.fn();
   const onDelete = vi.fn();
-  const onStopAllAgents = vi.fn();
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
   });
@@ -94,22 +93,20 @@ function renderPanel(
           membersBody={<div>Members body</div>}
           initialTab="about"
           onClose={() => {}}
-          onStopAllAgents={onStopAllAgents}
           notifyPrefLabel="All"
           {...overrides}
         />
       </QueryClientProvider>
     </I18nProvider>,
   );
-  return { onArchive, onDelete, onStopAllAgents };
+  return { onArchive, onDelete };
 }
 
 describe("ChannelDetailsPanel danger zone (LRM-239 / LRM-494)", () => {
-  it("shows Stop + Delete on the home overview, archive under Settings", async () => {
+  it("shows Delete on the home overview, archive under Settings", async () => {
     const user = userEvent.setup();
     renderPanel();
     expect(screen.getByTestId("channel-details-home")).toBeTruthy();
-    expect(screen.getByTestId("channel-details-stop-all")).toBeTruthy();
     expect(screen.getByTestId("channel-details-delete")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Archive this channel/i })).not.toBeInTheDocument();
 
@@ -119,7 +116,6 @@ describe("ChannelDetailsPanel danger zone (LRM-239 / LRM-494)", () => {
 
   it("hides delete when onDelete is omitted (member / creator-member)", () => {
     renderPanel({ onDelete: undefined });
-    expect(screen.getByTestId("channel-details-stop-all")).toBeTruthy();
     expect(screen.queryByTestId("channel-details-delete")).not.toBeInTheDocument();
   });
 

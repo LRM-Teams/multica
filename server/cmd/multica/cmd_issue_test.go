@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -378,14 +379,35 @@ func newIssueMineTestCmd() *cobra.Command {
 	return cmd
 }
 
+func setAgentProxyEnv(t *testing.T, proxyURL string) {
+	t.Helper()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(proxyURL, "http://"))
+	if err != nil {
+		t.Fatalf("parse local proxy URL %q: %v", proxyURL, err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_AGENT_ID", "agent-123")
+	t.Setenv("MULTICA_TOKEN", "must-not-leave-agent-process")
+	t.Setenv("MULTICA_TOKEN_FILE", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+	t.Setenv("MULTICA_SERVER_URL", "https://server.example.invalid")
+}
+
 func TestRunIssueMineAggregatesPRsAndGatesInOneRequest(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.URL.Path != "/api/issues" {
-			t.Errorf("path = %s, want /api/issues", r.URL.Path)
+		if r.URL.Path != "/api/agent/issues" {
+			t.Errorf("path = %s, want /api/agent/issues", r.URL.Path)
 			http.NotFound(w, r)
 			return
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q, want none at the local proxy boundary", got)
+		}
+		if got := r.Header.Get("X-Task-ID"); got != "" {
+			t.Errorf("X-Task-ID = %q, want none at the local proxy boundary", got)
 		}
 		for key, want := range map[string]string{
 			"workspace_id": "ws-1",
@@ -418,11 +440,7 @@ func TestRunIssueMineAggregatesPRsAndGatesInOneRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "task-token")
-	t.Setenv("MULTICA_AGENT_ID", "agent-123")
-	t.Setenv("MULTICA_TASK_ID", "task-456")
+	setAgentProxyEnv(t, srv.URL)
 
 	cmd := newIssueMineTestCmd()
 	_ = cmd.Flags().Set("with-prs", "true")
@@ -454,11 +472,7 @@ func TestRunIssueMineRejectsGatesWithoutPRsBeforeRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "task-token")
-	t.Setenv("MULTICA_AGENT_ID", "agent-123")
-	t.Setenv("MULTICA_TASK_ID", "task-456")
+	setAgentProxyEnv(t, srv.URL)
 
 	cmd := newIssueMineTestCmd()
 	_ = cmd.Flags().Set("with-gates", "true")
@@ -505,8 +519,8 @@ func TestRunIssueListMineUsesAgentContextAssignee(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method = %s, want GET", r.Method)
 		}
-		if r.URL.Path != "/api/issues" {
-			t.Errorf("path = %s, want /api/issues", r.URL.Path)
+		if r.URL.Path != "/api/agent/issues" {
+			t.Errorf("path = %s, want /api/agent/issues", r.URL.Path)
 		}
 		if got := r.URL.Query().Get("workspace_id"); got != "ws-1" {
 			t.Errorf("workspace_id = %q, want ws-1", got)
@@ -514,14 +528,14 @@ func TestRunIssueListMineUsesAgentContextAssignee(t *testing.T) {
 		if got := r.URL.Query().Get("assignee_id"); got != "agent-123" {
 			t.Errorf("assignee_id = %q, want agent-123", got)
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer task-token" {
-			t.Errorf("Authorization = %q, want task-token bearer", got)
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q, want none at the local proxy boundary", got)
 		}
 		if got := r.Header.Get("X-Agent-ID"); got != "agent-123" {
 			t.Errorf("X-Agent-ID = %q, want agent-123", got)
 		}
-		if got := r.Header.Get("X-Task-ID"); got != "task-456" {
-			t.Errorf("X-Task-ID = %q, want task-456", got)
+		if got := r.Header.Get("X-Task-ID"); got != "" {
+			t.Errorf("X-Task-ID = %q, want none at the local proxy boundary", got)
 		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"issues": []map[string]any{},
@@ -530,16 +544,7 @@ func TestRunIssueListMineUsesAgentContextAssignee(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "")
-	tokenFile := t.TempDir() + "/task-token"
-	if err := os.WriteFile(tokenFile, []byte("task-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-	t.Setenv("MULTICA_TOKEN_FILE", tokenFile)
-	t.Setenv("MULTICA_AGENT_ID", "agent-123")
-	t.Setenv("MULTICA_TASK_ID", "task-456")
+	setAgentProxyEnv(t, srv.URL)
 
 	cmd := newIssueListTestCmd()
 	_ = cmd.Flags().Set("output", "json")
@@ -551,7 +556,7 @@ func TestRunIssueListMineUsesAgentContextAssignee(t *testing.T) {
 		t.Fatalf("runIssueList: %v", err)
 	}
 	if !called {
-		t.Fatal("expected /api/issues to be called")
+		t.Fatal("expected /api/agent/issues to be called through the local proxy")
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
@@ -592,9 +597,9 @@ func TestRunIssueListMineFailsOutsideAgentContext(t *testing.T) {
 func TestRunIssueListMineRejectsExplicitAssigneeFilters(t *testing.T) {
 	t.Setenv("MULTICA_SERVER_URL", "http://127.0.0.1:0")
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "task-token")
+	t.Setenv("MULTICA_TOKEN", "must-not-leave-agent-process")
 	t.Setenv("MULTICA_AGENT_ID", "agent-123")
-	t.Setenv("MULTICA_TASK_ID", "task-456")
+	t.Setenv("MULTICA_TASK_ID", "")
 
 	for _, flag := range []string{"assignee", "assignee-id"} {
 		t.Run(flag, func(t *testing.T) {

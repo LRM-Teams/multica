@@ -473,7 +473,7 @@ describe("Channel message pagination schemas", () => {
     expect(parsed.next_cursor?.seq).toBe(42);
   });
 
-  it("keeps thread participant and wake annotations with defensive defaults", () => {
+  it("keeps thread participants with defensive defaults", () => {
     const parsed = ChannelThreadMessagesPageSchema.parse({
       messages: [
         {
@@ -495,15 +495,6 @@ describe("Channel message pagination schemas", () => {
               display_name: "Ronan",
             },
           ],
-          thread_wake_annotations: [
-            {
-              key: "agent:agent-1",
-              member_type: "agent",
-              member_id: "agent-1",
-              display_name: "Ronan",
-              state: "no_reply",
-            },
-          ],
         },
       ],
     });
@@ -511,10 +502,6 @@ describe("Channel message pagination schemas", () => {
       key: "agent:agent-1",
       name: "",
       followed: false,
-    });
-    expect(parsed.messages[0]?.thread_wake_annotations?.[0]).toMatchObject({
-      key: "agent:agent-1",
-      state: "no_reply",
     });
   });
 

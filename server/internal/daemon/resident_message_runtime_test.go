@@ -81,6 +81,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	}
 	config := probe.latestConfig()
 	for _, forbidden := range []string{
+		"MULTICA_SERVER_URL",
 		"MULTICA_TASK_ID",
 		"MULTICA_EXECUTION_ID",
 		"MULTICA_AGENT_INBOX_EVENT_ID",

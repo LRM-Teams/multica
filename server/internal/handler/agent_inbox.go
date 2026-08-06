@@ -523,7 +523,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	var chatDonePayload *protocol.ChatDonePayload
 	terminalOutcome := ""
 	var collaborationWakes []channelAgentWake
-	var freshnessResolutionPublications []agentTransportFreshnessResolutionPublication
 	if !event.ChatSessionID.Valid {
 		workCompletion, err = h.TaskService.CompleteDaemonInboxTaskWithFinalization(
 			r.Context(),
@@ -555,10 +554,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 							return err
 						}
 					}
-					freshnessResolutionPublications, err = h.abandonAgentTransportFreshnessDraftsWithExec(
-						r.Context(), tx, event, task.RuntimeID,
-					)
-					return err
+					return nil
 				},
 				After: func(qtx *db.Queries, tx pgx.Tx, outcome *service.CompleteTaskOutcome) error {
 					event = outcome.Task
@@ -588,9 +584,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 					} else {
 						terminalOutcome = "completed"
 					}
-					if len(freshnessResolutionPublications) > 0 {
-						terminalOutcome = "no_reply"
-					}
 					if err := setAgentInboxCompletionFinalizationTx(
 						r.Context(), qtx, tx, event, deliveryID, executionID, result, terminalOutcome,
 					); err != nil {
@@ -612,10 +605,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		ackedSeq = workCompletion.AckedSeq
 		event = workCompletion.Task
 		task = agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
-		// Channel-only completions never publish ChatDone, so settle ambient
-		// pending wakes here (legacy path settled inside handleChannelChatDone).
 		if event.ChannelID.Valid {
-			h.settleChannelAmbientWakeForTask(r.Context(), event.ID, true)
 			h.publishChannelTypingStopForInboxEvent(r.Context(), event)
 		}
 	} else {
@@ -648,14 +638,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 				writeError(w, http.StatusInternalServerError, "failed to lock channel onboarding eligibility")
 				return
 			}
-		}
-
-		freshnessResolutionPublications, err = h.abandonAgentTransportFreshnessDraftsWithExec(
-			r.Context(), tx, event, task.RuntimeID,
-		)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to resolve inbox freshness draft")
-			return
 		}
 
 		acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
@@ -713,9 +695,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		if len(freshnessResolutionPublications) > 0 {
-			terminalOutcome = "no_reply"
-		}
 		if err := setAgentInboxCompletionFinalizationTx(
 			r.Context(), qtx, tx, event, deliveryID, executionID, result, terminalOutcome,
 		); err != nil {
@@ -740,7 +719,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		// branch gets for free. Rollout agents always run in a chat session.
 		h.TaskService.FinalizeTerminalTaskSideEffects(r.Context(), event)
 	}
-	h.publishAgentTransportFreshnessResolutions(r.Context(), freshnessResolutionPublications)
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
 	if workCompletion != nil && workCompletion.CompletedNow {
 		h.emitIssueExecutedOnFirstCompletion(r, &workCompletion.Task)
@@ -837,12 +815,9 @@ func setAgentInboxCompletionFinalizationTx(
 }
 
 func agentInboxCompletionTerminalOutcome(ctx context.Context, h *Handler, event db.AgentInboxEvent, req TaskCompleteRequest, payload *protocol.ChatDonePayload) string {
-	if h.inboxEventHasAgentTransportVisibleOutput(ctx, event.ID) {
-		return "replied"
-	}
-	if h.inboxEventHasAgentTransportFreshnessHold(ctx, event.ID) {
-		return "held"
-	}
+	_ = ctx
+	_ = h
+	_ = event
 	if payload != nil {
 		switch payload.Type {
 		case protocol.ChatOutputKindNoReply:
@@ -985,7 +960,7 @@ func (h *Handler) completeFailedNonChatAgentInboxEvent(
 	deliveryID, leaseToken pgtype.UUID,
 	errText, failureReason, reasonCode, sessionID, workDir string,
 ) {
-	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
+	alreadyReplied := false
 	terminalOutcome := "failed"
 	retryable := inboxFailureRetryable(errText, failureReason, alreadyReplied)
 	if alreadyReplied {
@@ -1050,7 +1025,6 @@ func (h *Handler) completeFailedNonChatAgentInboxEvent(
 	}
 	event = outcome.Task
 	if event.ChannelID.Valid {
-		h.settleChannelAmbientWakeForTask(r.Context(), event.ID, false)
 		h.publishChannelTypingStopForInboxEvent(r.Context(), event)
 	}
 	h.finishFailedAgentInboxEvent(
@@ -1097,7 +1071,7 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to record inbox failure")
 		return
 	}
-	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
+	alreadyReplied := false
 	terminalOutcome := "failed"
 	retryable := inboxFailureRetryable(errText, failureReason, alreadyReplied)
 	if alreadyReplied {
@@ -1247,12 +1221,6 @@ type ChannelCancelAgentInboxEventResponse struct {
 	Status       string `json:"status"`
 }
 
-type ChannelCancelActiveAgentInboxResponse struct {
-	OK             bool                                   `json:"ok"`
-	CancelledCount int                                    `json:"cancelled_count"`
-	Cancelled      []ChannelCancelAgentInboxEventResponse `json:"cancelled"`
-}
-
 func (h *Handler) cancelAgentInboxEventCore(ctx context.Context, workspaceUUID, inboxEventID pgtype.UUID) (cancelledAgentInboxEventRow, error) {
 	var row cancelledAgentInboxEventRow
 	err := h.DB.QueryRow(ctx, `
@@ -1341,218 +1309,6 @@ func (h *Handler) publishCancelledAgentInboxEvent(workspaceID, actorType, actorI
 	h.publishTask(protocol.EventTaskCancelled, workspaceID, actorType, actorID, uuidToString(row.ID), payload)
 }
 
-func (h *Handler) listCancellableChannelActiveInboxEventIDs(ctx context.Context, workspaceUUID, channelID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := h.DB.Query(ctx, `
-		SELECT e.id
-		FROM agent_inbox_event e
-		WHERE e.channel_id = $1
-		  AND e.workspace_id = $2
-		  AND e.requires_wake
-		  AND e.status IN ('pending', 'draining', 'failed')
-		  AND e.terminal_outcome IS NULL
-		  AND e.reason NOT IN ('ambient', 'channel_onboarding')
-		ORDER BY e.created_at ASC, e.id ASC`, channelID, workspaceUUID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	ids := make([]pgtype.UUID, 0)
-	for rows.Next() {
-		var id pgtype.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
-// CancelChannelAgentInboxEvent stops one channel wake by inbox_event_id
-// (LRM-425 single-stop contract). Authoritative id matches active-tasks.
-func (h *Handler) CancelChannelAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUserID(w, r)
-	if !ok {
-		return
-	}
-	workspaceID := ctxWorkspaceID(r.Context())
-	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
-		return
-	}
-	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
-	if !ok {
-		return
-	}
-	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "inbox event id")
-	if !ok {
-		return
-	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
-		return
-	}
-	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-
-	var exists bool
-	if err := h.DB.QueryRow(r.Context(), `
-		SELECT EXISTS (
-			SELECT 1
-			FROM agent_inbox_event e
-			WHERE e.id = $1
-			  AND e.workspace_id = $2
-			  AND e.channel_id = $3
-			  AND e.requires_wake
-		)`, eventID, workspaceUUID, channelID).Scan(&exists); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to resolve inbox event")
-		return
-	}
-	if !exists {
-		writeError(w, http.StatusNotFound, "inbox event not found")
-		return
-	}
-
-	row, err := h.cancelAgentInboxEventCore(r.Context(), workspaceUUID, eventID)
-	if err != nil {
-		if errors.Is(err, errAgentInboxEventNotCancellable) {
-			writeError(w, http.StatusConflict, "inbox event is not cancellable")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to cancel inbox event")
-		return
-	}
-
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	payload := h.cancelledInboxEventTaskResponse(row, workspaceID)
-	h.publishCancelledAgentInboxEvent(workspaceID, actorType, actorID, row, payload)
-	writeJSON(w, http.StatusOK, ChannelCancelAgentInboxEventResponse{
-		OK:           true,
-		InboxEventID: uuidToString(row.ID),
-		AgentID:      uuidToString(row.AgentID),
-		Status:       "cancelled",
-	})
-}
-
-// CancelChannelActiveAgentInboxEvents stops every active (cancellable) wake in
-// the channel in one request — Stop All must not loop single cancel (LRM-425).
-func (h *Handler) CancelChannelActiveAgentInboxEvents(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUserID(w, r)
-	if !ok {
-		return
-	}
-	workspaceID := ctxWorkspaceID(r.Context())
-	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
-		return
-	}
-	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
-	if !ok {
-		return
-	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
-		return
-	}
-	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-
-	eventIDs, err := h.listCancellableChannelActiveInboxEventIDs(r.Context(), workspaceUUID, channelID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list active inbox events")
-		return
-	}
-
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	cancelled := make([]ChannelCancelAgentInboxEventResponse, 0, len(eventIDs))
-	for _, eventID := range eventIDs {
-		row, err := h.cancelAgentInboxEventCore(r.Context(), workspaceUUID, eventID)
-		if err != nil {
-			if errors.Is(err, errAgentInboxEventNotCancellable) {
-				// Race: event terminated between list and cancel — skip.
-				continue
-			}
-			writeError(w, http.StatusInternalServerError, "failed to cancel active inbox events")
-			return
-		}
-		payload := h.cancelledInboxEventTaskResponse(row, workspaceID)
-		h.publishCancelledAgentInboxEvent(workspaceID, actorType, actorID, row, payload)
-		cancelled = append(cancelled, ChannelCancelAgentInboxEventResponse{
-			OK:           true,
-			InboxEventID: uuidToString(row.ID),
-			AgentID:      uuidToString(row.AgentID),
-			Status:       "cancelled",
-		})
-	}
-
-	writeJSON(w, http.StatusOK, ChannelCancelActiveAgentInboxResponse{
-		OK:             true,
-		CancelledCount: len(cancelled),
-		Cancelled:      cancelled,
-	})
-}
-
-func (h *Handler) RetryChannelAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
-	userID, ok := requireUserID(w, r)
-	if !ok {
-		return
-	}
-	workspaceID := ctxWorkspaceID(r.Context())
-	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
-	if !ok {
-		return
-	}
-	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "inbox event id")
-	if !ok {
-		return
-	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
-		return
-	}
-	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
-		return
-	}
-	var reason string
-	if err := h.DB.QueryRow(r.Context(), `
-		SELECT reason
-		FROM agent_inbox_event
-		WHERE id = $1 AND workspace_id = $2 AND channel_id = $3`,
-		eventID, parseUUID(workspaceID), channelID).Scan(&reason); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusConflict, "inbox event is not retryable")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to inspect inbox event")
-		return
-	}
-	if reason == channelOnboardingReason {
-		writeError(w, http.StatusConflict, "channel onboarding retries reuse the canonical inbox event")
-		return
-	}
-	retry, err := h.Queries.RetryAgentInboxEvent(r.Context(), db.RetryAgentInboxEventParams{
-		ID:          eventID,
-		WorkspaceID: parseUUID(workspaceID),
-		ChannelID:   channelID,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusConflict, "inbox event is not retryable")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to retry inbox event")
-		return
-	}
-	if retryEvent, err := h.Queries.GetAgentInboxEvent(r.Context(), retry.ID); err == nil {
-		h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, retryEvent, h.runtimeIDForAgentInboxEvent(r.Context(), retryEvent), "queued")
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"ok":             true,
-		"inbox_event_id": uuidToString(retry.ID),
-		"agent_id":       uuidToString(retry.AgentID),
-		"status":         retry.Status,
-	})
-}
-
 func (h *Handler) agentInboxEventResponse(ctx context.Context, runtime db.AgentRuntime, event db.AgentInboxEvent, delivery db.AgentEventDelivery) AgentInboxEventResponse {
 	resp := AgentInboxEventResponse{
 		ID:              uuidToString(event.ID),
@@ -1576,13 +1332,6 @@ func (h *Handler) agentInboxEventResponse(ctx context.Context, runtime db.AgentR
 	_ = h.DB.QueryRow(ctx, `SELECT delivery_mode, response_mode FROM agent_inbox_event WHERE id = $1`, event.ID).Scan(&resp.DeliveryMode, &resp.ResponseMode)
 	if config, ok := service.TaskExecutionConfigFromContext(event.ExecutionConfig); ok {
 		resp.ExecutionProfile = config.ExecutionProfile
-	}
-	if event.ChannelID.Valid && event.SeqTo > 0 {
-		from := event.SeqFrom - 1
-		if from < 0 {
-			from = 0
-		}
-		resp.Messages = h.channelAmbientUnreadMessages(ctx, h.DB, uuidToString(event.WorkspaceID), uuidToString(event.ChannelID), from, event.SeqTo, agentInboxDrainMessageLimit)
 	}
 	if event.RequiresWake {
 		if task := h.agentInboxTaskResponse(ctx, runtime, event, delivery); task != nil {
@@ -2569,12 +2318,6 @@ func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Quer
 		if err == nil {
 			outputType = normalized
 		}
-	}
-	if (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && h.inboxEventHasAgentTransportVisibleOutput(ctx, event.ID) {
-		outputType = protocol.ChatOutputKindNoReply
-		body = ""
-		parts = nil
-		req.OutputSuppressedReason = protocol.ChannelOutputSuppressedReasonToolTransportOutput
 	}
 	visibleContent := ""
 	var visibleParts []protocol.MessagePart

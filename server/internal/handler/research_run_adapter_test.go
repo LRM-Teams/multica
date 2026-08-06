@@ -63,6 +63,11 @@ func TestResearchRunDispatcherInspectExposesRuntimeStartLeaseAndCancellationAckn
 	fixture := seedAgentCredentialTransportFixture(t)
 	dispatcher := &researchRunDispatcher{handler: testHandler}
 	ctx := context.Background()
+	// The shared credential fixture models a draining product task. This test
+	// specifically starts at the pre-runtime-start lease state.
+	if _, err := testPool.Exec(ctx, `UPDATE agent_inbox_event SET started_at = NULL WHERE id = $1::uuid`, fixture.event.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	states, err := dispatcher.Inspect(ctx, []string{fixture.event.ID})
 	if err != nil {

@@ -30,14 +30,12 @@ const apiMock = vi.hoisted(() => ({
   listChannelMembers: vi.fn(),
   getChannelMemberManagementCapabilities: vi.fn(),
   listChannelMessageThread: vi.fn(),
-  listChannelActiveTasks: vi.fn(),
   getChannelProject: vi.fn(),
   getChannelGoal: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: apiMock }));
 
-import { activeChannelTasksOptions } from "./active-tasks";
 import { channelGoalOptions } from "./goal";
 import { channelProjectOptions } from "./project";
 import {
@@ -58,7 +56,6 @@ describe("LRM-1296 — channel switch cancels stale reads", () => {
     apiMock.listChannelMembers.mockImplementation(hang("members"));
     apiMock.getChannelMemberManagementCapabilities.mockImplementation(hang("caps"));
     apiMock.listChannelMessageThread.mockImplementation(hang("thread"));
-    apiMock.listChannelActiveTasks.mockImplementation(hang("activeTasks"));
     apiMock.getChannelProject.mockImplementation(hang("project"));
     apiMock.getChannelGoal.mockImplementation(hang("goal"));
   });
@@ -87,7 +84,6 @@ describe("LRM-1296 — channel switch cancels stale reads", () => {
     ["members", () => channelMembersOptions("channel-a")],
     ["caps", () => channelMemberManagementCapabilitiesOptions("channel-a")],
     ["thread", () => channelMessageThreadOptions("channel-a", "root-1")],
-    ["activeTasks", () => activeChannelTasksOptions("channel-a")],
     ["project", () => channelProjectOptions("ws-1", "channel-a")],
     ["goal", () => channelGoalOptions("channel-a")],
   ];

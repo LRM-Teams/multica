@@ -7,13 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -27,12 +25,7 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	// from other tests, which can lease concurrently with this fixture and
 	// falsely fail the same-agent serialization assertion.
 	runtimeID := createClaimReclaimRuntime(t, ctx, "inbox-serial-runtime-"+uuid.NewString())
-	firstAgentName := "Inbox Serial Agent A " + uuid.NewString()[:8]
-	firstAgentID := createHandlerTestAgentOnRuntime(t, firstAgentName, runtimeID)
-	var firstAgentHandle string
-	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, firstAgentID).Scan(&firstAgentHandle); err != nil {
-		t.Fatalf("load first agent handle: %v", err)
-	}
+	firstAgentID := createHandlerTestAgentOnRuntime(t, "Inbox Serial Agent A "+uuid.NewString()[:8], runtimeID)
 	firstChannelID := seedChannelForTest(t, "inbox-serial-a-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -40,16 +33,8 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 ON CONFLICT DO NOTHING`, firstChannelID, testWorkspaceID, firstAgentID); err != nil {
 		t.Fatalf("seed first agent member: %v", err)
 	}
-	firstChannel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(firstChannelID))
-	if !found {
-		t.Fatal("first channel not found after seed")
-	}
 	for i := 0; i < 2; i++ {
-		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(firstChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+firstAgentHandle+" serial prompt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-serial-a-"+uuid.NewString()), 0)
-		if err != nil {
-			t.Fatalf("insert first-agent trigger %d: %v", i, err)
-		}
-		testHandler.dispatchChannelMessageToAgents(ctx, firstChannel, trigger, parseUUID(testUserID))
+		createProductInboxEventForRuntime(t, runtimeID, firstAgentID, firstChannelID)
 	}
 
 	drain := func(daemonID string) (DrainAgentInboxResponse, error) {
@@ -120,12 +105,7 @@ ON CONFLICT DO NOTHING`, firstChannelID, testWorkspaceID, firstAgentID); err != 
 		t.Fatalf("first-agent states draining=%d pending=%d active=%d, want 1/1/1", draining, pending, activeDeliveries)
 	}
 
-	secondAgentName := "Inbox Serial Agent B " + uuid.NewString()[:8]
-	secondAgentID := createHandlerTestAgentOnRuntime(t, secondAgentName, runtimeID)
-	var secondAgentHandle string
-	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, secondAgentID).Scan(&secondAgentHandle); err != nil {
-		t.Fatalf("load second agent handle: %v", err)
-	}
+	secondAgentID := createHandlerTestAgentOnRuntime(t, "Inbox Serial Agent B "+uuid.NewString()[:8], runtimeID)
 	secondChannelID := seedChannelForTest(t, "inbox-serial-b-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -133,15 +113,7 @@ ON CONFLICT DO NOTHING`, firstChannelID, testWorkspaceID, firstAgentID); err != 
 ON CONFLICT DO NOTHING`, secondChannelID, testWorkspaceID, secondAgentID); err != nil {
 		t.Fatalf("seed second agent member: %v", err)
 	}
-	secondChannel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(secondChannelID))
-	if !found {
-		t.Fatal("second channel not found after seed")
-	}
-	secondTrigger, err := testHandler.insertChannelMessage(ctx, parseUUID(secondChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+secondAgentHandle+" concurrent other agent", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-serial-b-"+uuid.NewString()), 0)
-	if err != nil {
-		t.Fatalf("insert second-agent trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, secondChannel, secondTrigger, parseUUID(testUserID))
+	createProductInboxEventForRuntime(t, runtimeID, secondAgentID, secondChannelID)
 
 	secondResp, err := drain("inbox-serial-other-agent")
 	if err != nil {
@@ -401,8 +373,7 @@ func TestAgentInboxUsageExecutionIdentitySurvivesRenewAndReclaim(t *testing.T) {
 
 	ctx := context.Background()
 	runtimeID := handlerTestRuntimeID(t)
-	agentName := "Inbox Ledger Agent " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
+	agentID := createHandlerTestAgent(t, "Inbox Ledger Agent "+uuid.NewString()[:8], nil)
 	channelID := seedChannelForTest(t, "inbox-ledger-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -410,15 +381,7 @@ func TestAgentInboxUsageExecutionIdentitySurvivesRenewAndReclaim(t *testing.T) {
 ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("seed agent member: %v", err)
 	}
-	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") ledger prompt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-ledger-"+uuid.NewString()), 0)
-	if err != nil {
-		t.Fatalf("insert trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
+	createProductInboxEventForRuntime(t, runtimeID, agentID, channelID)
 
 	drain := func() AgentInboxEventResponse {
 		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "inbox-ledger-daemon")
@@ -1008,495 +971,5 @@ func TestAgentInboxFailureRollsBackDeliveryAndTaskWhenExecutionFinalizationFails
 			"failed retry = event:%q delivery:%q terminal:%q execution:%q children:%d",
 			eventStatus, deliveryStatus, terminalOutcome, executionStatus, retryChildren,
 		)
-	}
-}
-
-func TestRetryAgentInboxEventReplaysOriginalPromptAfterNewerCompletion(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
-	agentName := "Inbox Retry Prompt Agent " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	channelID := seedChannelForTest(t, "inbox-retry-prompt-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed agent member: %v", err)
-	}
-	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-
-	const promptA = "PROMPT_A_ORIGINAL_RETRY_TARGET"
-	triggerA, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") "+promptA, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("retry-a-"+uuid.NewString()), 0)
-	if err != nil {
-		t.Fatalf("insert prompt A: %v", err)
-	}
-	var promptAAttachmentID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO attachment (
-			workspace_id, channel_id, uploader_type, uploader_id,
-			filename, url, content_type, size_bytes
-		)
-		VALUES ($1, $2, 'member', $3, 'prompt-a.txt', 's3://prompt-a.txt', 'text/plain', 8)
-		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&promptAAttachmentID); err != nil {
-		t.Fatalf("seed prompt A attachment: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
-		VALUES ($1, $2, $3)`, testWorkspaceID, triggerA.ID, promptAAttachmentID); err != nil {
-		t.Fatalf("seed prompt A attachment reference: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, channel, triggerA, parseUUID(testUserID))
-
-	drainAReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "retry-prompt-daemon")
-	drainAReq = withURLParam(drainAReq, "runtimeId", runtimeID)
-	drainARec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainARec, drainAReq)
-	if drainARec.Code != http.StatusOK {
-		t.Fatalf("drain prompt A: status=%d body=%s", drainARec.Code, drainARec.Body.String())
-	}
-	var drainA DrainAgentInboxResponse
-	if err := json.Unmarshal(drainARec.Body.Bytes(), &drainA); err != nil {
-		t.Fatalf("decode prompt A drain: %v", err)
-	}
-	if len(drainA.Events) != 1 || drainA.Events[0].Task == nil {
-		t.Fatalf("prompt A drain missing runnable event: %s", drainARec.Body.String())
-	}
-	eventA := drainA.Events[0]
-
-	failAReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+eventA.ID+"/fail", FailAgentInboxEventRequest{
-		DeliveryID:    eventA.DeliveryID,
-		LeaseToken:    eventA.LeaseToken,
-		Error:         "provider rejected prompt A",
-		FailureReason: "agent_error.provider_auth_or_access",
-	}, testWorkspaceID, "retry-prompt-daemon")
-	failAReq = withURLParam(failAReq, "eventId", eventA.ID)
-	failARec := httptest.NewRecorder()
-	testHandler.FailAgentInboxEvent(failARec, failAReq)
-	if failARec.Code != http.StatusOK {
-		t.Fatalf("fail prompt A: status=%d body=%s", failARec.Code, failARec.Body.String())
-	}
-
-	const promptB = "PROMPT_B_NEWER_COMPLETED"
-	triggerB, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") "+promptB, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("retry-b-"+uuid.NewString()), 0)
-	if err != nil {
-		t.Fatalf("insert prompt B: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, channel, triggerB, parseUUID(testUserID))
-
-	drainBReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "retry-prompt-daemon")
-	drainBReq = withURLParam(drainBReq, "runtimeId", runtimeID)
-	drainBRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainBRec, drainBReq)
-	if drainBRec.Code != http.StatusOK {
-		t.Fatalf("drain prompt B: status=%d body=%s", drainBRec.Code, drainBRec.Body.String())
-	}
-	var drainB DrainAgentInboxResponse
-	if err := json.Unmarshal(drainBRec.Body.Bytes(), &drainB); err != nil {
-		t.Fatalf("decode prompt B drain: %v", err)
-	}
-	if len(drainB.Events) != 1 || drainB.Events[0].Task == nil {
-		t.Fatalf("prompt B drain missing runnable event: %s", drainBRec.Body.String())
-	}
-	eventB := drainB.Events[0]
-	completeBReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+eventB.ID+"/complete", CompleteAgentInboxEventRequest{
-		DeliveryID: eventB.DeliveryID,
-		LeaseToken: eventB.LeaseToken,
-		TaskCompleteRequest: TaskCompleteRequest{
-			Output: "prompt B completed",
-		},
-	}, testWorkspaceID, "retry-prompt-daemon")
-	completeBReq = withURLParam(completeBReq, "eventId", eventB.ID)
-	completeBRec := httptest.NewRecorder()
-	testHandler.CompleteAgentInboxEvent(completeBRec, completeBReq)
-	if completeBRec.Code != http.StatusOK {
-		t.Fatalf("complete prompt B: status=%d body=%s", completeBRec.Code, completeBRec.Body.String())
-	}
-
-	retryReq := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/agent-inbox/events/"+eventA.ID+"/retry", nil)
-	retryReq = withChannelTestWorkspaceCtx(t, retryReq, testUserID)
-	retryReq = withURLParams(retryReq, "channelId", channelID, "eventId", eventA.ID)
-	retryRec := httptest.NewRecorder()
-	testHandler.RetryChannelAgentInboxEvent(retryRec, retryReq)
-	if retryRec.Code != http.StatusCreated {
-		t.Fatalf("retry prompt A: status=%d body=%s", retryRec.Code, retryRec.Body.String())
-	}
-
-	drainRetryReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "retry-prompt-daemon")
-	drainRetryReq = withURLParam(drainRetryReq, "runtimeId", runtimeID)
-	drainRetryRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainRetryRec, drainRetryReq)
-	if drainRetryRec.Code != http.StatusOK {
-		t.Fatalf("drain retry A: status=%d body=%s", drainRetryRec.Code, drainRetryRec.Body.String())
-	}
-	var drainRetry DrainAgentInboxResponse
-	if err := json.Unmarshal(drainRetryRec.Body.Bytes(), &drainRetry); err != nil {
-		t.Fatalf("decode retry A drain: %v", err)
-	}
-	if len(drainRetry.Events) != 1 || drainRetry.Events[0].Task == nil {
-		t.Fatalf("retry A drain missing runnable event: %s", drainRetryRec.Body.String())
-	}
-	gotPrompt := drainRetry.Events[0].Task.ChatMessage
-	if strings.TrimSpace(gotPrompt) == "" || !strings.Contains(gotPrompt, promptA) || strings.Contains(gotPrompt, promptB) {
-		t.Fatalf("retried prompt = %q, want original A only", gotPrompt)
-	}
-	attachments := drainRetry.Events[0].Task.ChatMessageAttachments
-	if len(attachments) != 1 || attachments[0].ID != promptAAttachmentID || attachments[0].Filename != "prompt-a.txt" {
-		t.Fatalf("retried attachments = %+v, want prompt A attachment %s", attachments, promptAAttachmentID)
-	}
-}
-
-func TestAgentInboxDrainRejectsChatSessionFromDifferentRuntime(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
-	agentName := "Inbox Runtime Pointer Agent " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	channelID := seedChannelForTest(t, "inbox-runtime-pointer-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed agent member: %v", err)
-	}
-	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") inspect runtime pointer", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("runtime-pointer-"+uuid.NewString()), 0)
-	if err != nil {
-		t.Fatalf("insert trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
-
-	// Unrelated legacy chat_session with a foreign runtime pointer must not leak
-	// into channel-only wakes (which have no chat_session_id).
-	chatSessionID := ensureLegacyChannelChatBridgeForTest(t, channel, agentID, trigger, "foreign pointer bridge")
-	var foreignRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
-		)
-		VALUES ($1, $2, 'Foreign Inbox Runtime', 'local', 'pi', 'online', 'test runtime', '{}'::jsonb, $3, now())
-		RETURNING id`, testWorkspaceID, "foreign-inbox-runtime-"+uuid.NewString(), testUserID).Scan(&foreignRuntimeID); err != nil {
-		t.Fatalf("create foreign runtime: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `
-			UPDATE chat_session
-			SET session_id = NULL, work_dir = NULL, runtime_id = NULL
-			WHERE id = $1`, chatSessionID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, foreignRuntimeID)
-	})
-	if _, err := testPool.Exec(ctx, `
-		UPDATE chat_session
-		SET session_id = 'foreign-session',
-		    work_dir = '/tmp/foreign-inbox-workdir',
-		    runtime_id = $2
-		WHERE id = $1`, chatSessionID, foreignRuntimeID); err != nil {
-		t.Fatalf("seed foreign chat session pointer: %v", err)
-	}
-
-	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "runtime-pointer-daemon")
-	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
-	drainRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
-	if drainRec.Code != http.StatusOK {
-		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
-	}
-	var drainResp DrainAgentInboxResponse
-	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
-		t.Fatalf("decode drain response: %v", err)
-	}
-	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
-		t.Fatalf("drain missing runnable task: %s", drainRec.Body.String())
-	}
-	task := drainResp.Events[0].Task
-	if task.RuntimeID != runtimeID {
-		t.Fatalf("task runtime = %q, want %q", task.RuntimeID, runtimeID)
-	}
-	if task.ChatSessionID != "" {
-		t.Fatalf("channel-only wake leaked chat_session_id=%q", task.ChatSessionID)
-	}
-	if task.PriorSessionID != "" || task.PriorWorkDir != "" {
-		t.Fatalf("foreign runtime pointer leaked into task: session=%q workdir=%q", task.PriorSessionID, task.PriorWorkDir)
-	}
-}
-
-func TestAgentInboxDrainRejectsFallbackSessionFromDifferentRuntime(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
-	agentName := "Inbox Runtime Fallback Agent " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	channelID := seedChannelForTest(t, "inbox-runtime-fallback-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed agent member: %v", err)
-	}
-	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") inspect fallback runtime", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("runtime-fallback-"+uuid.NewString()), 0)
-	if err != nil {
-		t.Fatalf("insert trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
-
-	chatSessionID := ensureLegacyChannelChatBridgeForTest(t, channel, agentID, trigger, "foreign fallback bridge")
-	if _, err := testPool.Exec(ctx, `
-		UPDATE chat_session
-		SET session_id = NULL, work_dir = NULL, runtime_id = NULL
-		WHERE id = $1`, chatSessionID); err != nil {
-		t.Fatalf("clear chat session pointer: %v", err)
-	}
-
-	var foreignRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
-		)
-		VALUES ($1, $2, 'Foreign Fallback Runtime', 'local', 'pi', 'online', 'test runtime', '{}'::jsonb, $3, now())
-		RETURNING id`, testWorkspaceID, "foreign-fallback-runtime-"+uuid.NewString(), testUserID).Scan(&foreignRuntimeID); err != nil {
-		t.Fatalf("create foreign runtime: %v", err)
-	}
-	var priorTaskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, issue_id, status, priority, chat_session_id,
-			session_id, work_dir, completed_at
-		)
-		VALUES ($1, $2, NULL, 'acked', 10, $3, 'foreign-fallback-session', '/tmp/foreign-fallback-workdir', now())
-		RETURNING id`, agentID, foreignRuntimeID, chatSessionID).Scan(&priorTaskID); err != nil {
-		t.Fatalf("seed foreign fallback task: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, priorTaskID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, foreignRuntimeID)
-	})
-
-	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "runtime-fallback-daemon")
-	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
-	drainRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
-	if drainRec.Code != http.StatusOK {
-		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
-	}
-	var drainResp DrainAgentInboxResponse
-	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
-		t.Fatalf("decode drain response: %v", err)
-	}
-	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
-		t.Fatalf("drain missing runnable task: %s", drainRec.Body.String())
-	}
-	task := drainResp.Events[0].Task
-	if task.PriorSessionID != "" || task.PriorWorkDir != "" {
-		t.Fatalf("foreign fallback leaked into task: session=%q workdir=%q", task.PriorSessionID, task.PriorWorkDir)
-	}
-}
-
-func TestAgentInboxDrainIncludesSourceChannelMessageAttachment(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
-	agentName := "Inbox Source Attachment Agent " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	channelID := seedChannelForTest(t, "inbox-source-attachment-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed agent member: %v", err)
-	}
-	var attachmentID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO attachment (
-			workspace_id, channel_id, uploader_type, uploader_id,
-			filename, url, content_type, size_bytes
-		)
-		VALUES ($1, $2, 'member', $3, 'source-brief.pdf', 's3://source-brief.pdf', 'application/pdf', 42)
-		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
-		t.Fatalf("seed source attachment: %v", err)
-	}
-
-	content := "@" + agentName + " inspect the attached brief"
-	sendRec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
-		"content": content,
-		"parts": []map[string]any{
-			{
-				"type": "text",
-				"text": content,
-			},
-			{"type": "attachment", "attachment_id": attachmentID},
-		},
-	})
-	if sendRec.Code != http.StatusCreated {
-		t.Fatalf("send attachment mention: status=%d body=%s", sendRec.Code, sendRec.Body.String())
-	}
-
-	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "source-attachment-daemon")
-	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
-	drainRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
-	if drainRec.Code != http.StatusOK {
-		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
-	}
-	var drainResp DrainAgentInboxResponse
-	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
-		t.Fatalf("decode drain response: %v", err)
-	}
-	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
-		t.Fatalf("drain missing runnable task: %s", drainRec.Body.String())
-	}
-	attachments := drainResp.Events[0].Task.ChatMessageAttachments
-	if len(attachments) != 1 || attachments[0].ID != attachmentID || attachments[0].Filename != "source-brief.pdf" || attachments[0].ContentType != "application/pdf" {
-		t.Fatalf("task attachments = %+v, want source channel attachment %s", attachments, attachmentID)
-	}
-}
-
-func TestAgentInboxDrainDeduplicatesSourceAndPromptAttachment(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
-	agentName := "Inbox Attachment Dedupe Agent " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	channelID := seedChannelForTest(t, "inbox-attachment-dedupe-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed agent member: %v", err)
-	}
-	var attachmentID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO attachment (
-			workspace_id, channel_id, uploader_type, uploader_id,
-			filename, url, content_type, size_bytes
-		)
-		VALUES ($1, $2, 'member', $3, 'dedupe.txt', 's3://dedupe.txt', 'text/plain', 7)
-		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
-		t.Fatalf("seed attachment: %v", err)
-	}
-
-	content := "@" + agentName + " inspect the dedupe file"
-	sendRec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
-		"content": content,
-		"parts": []map[string]any{
-			{
-				"type": "text",
-				"text": content,
-			},
-			{"type": "attachment", "attachment_id": attachmentID},
-		},
-	})
-	if sendRec.Code != http.StatusCreated {
-		t.Fatalf("send attachment mention: status=%d body=%s", sendRec.Code, sendRec.Body.String())
-	}
-
-	// Channel-only wakes have no synthetic chat_message prompt; source attachment
-	// must still appear exactly once on claim.
-	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "attachment-dedupe-daemon")
-	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
-	drainRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
-	if drainRec.Code != http.StatusOK {
-		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
-	}
-	var drainResp DrainAgentInboxResponse
-	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
-		t.Fatalf("decode drain response: %v", err)
-	}
-	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
-		t.Fatalf("drain missing runnable task: %s", drainRec.Body.String())
-	}
-	attachments := drainResp.Events[0].Task.ChatMessageAttachments
-	if len(attachments) != 1 || attachments[0].ID != attachmentID {
-		t.Fatalf("task attachments = %+v, want attachment %s exactly once", attachments, attachmentID)
-	}
-}
-
-func TestAgentInboxDrainRejectsEventWithoutExactPrompt(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
-	agentName := "Inbox Exact Prompt Agent " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	channelID := seedChannelForTest(t, "inbox-exact-prompt-"+uuid.NewString(), testUserID)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)
-ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-		t.Fatalf("seed agent member: %v", err)
-	}
-	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") exact prompt target", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("exact-prompt-"+uuid.NewString()), 0)
-	if err != nil {
-		t.Fatalf("insert trigger: %v", err)
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
-
-	var eventID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT id::text
-		FROM agent_inbox_event
-		WHERE source_message_id = $1 AND agent_id = $2
-		ORDER BY created_at DESC
-		LIMIT 1`, trigger.ID, agentID).Scan(&eventID); err != nil {
-		t.Fatalf("load inbox event: %v", err)
-	}
-	// Channel-only wakes store the exact prompt in context; clearing it must
-	// fail-closed (no silent work-context claim).
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET context = '{}'::jsonb
-		WHERE id = $1`, eventID); err != nil {
-		t.Fatalf("clear channel_wake context: %v", err)
-	}
-
-	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "exact-prompt-daemon")
-	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
-	drainRec := httptest.NewRecorder()
-	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
-	if drainRec.Code != http.StatusInternalServerError {
-		t.Fatalf("drain inbox: status=%d body=%s, want fail-closed 500", drainRec.Code, drainRec.Body.String())
-	}
-	var status string
-	if err := testPool.QueryRow(ctx, `
-		SELECT status
-		FROM agent_inbox_event
-		WHERE id = $1`, eventID).Scan(&status); err != nil {
-		t.Fatalf("load malformed event status: %v", err)
-	}
-	if status != "suppressed" {
-		t.Fatalf("malformed event status = %q, want suppressed", status)
 	}
 }

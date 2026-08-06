@@ -234,36 +234,8 @@ ON CONFLICT DO NOTHING`,
 	if err != nil {
 		t.Fatalf("create later channel message: %v", err)
 	}
-	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-	if !found {
-		t.Fatal("channel not found after seed")
-	}
-	testHandler.dispatchChannelMessageToAgents(ctx, channel, later, parseUUID(testUserID))
-
-	var eventID, agentSessionID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT id::text, agent_session_id::text
-		FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3
-		ORDER BY created_at DESC
-		LIMIT 1`,
-		channelID, agentID, later.ID).Scan(&eventID, &agentSessionID); err != nil {
-		t.Fatalf("load later message wake: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_inbox_event
-		SET status = 'acked', acked_at = now(), terminal_outcome = 'no_reply',
-		    retryable = false, terminal_at = now(), updated_at = now()
-		WHERE id = $1`,
-		eventID); err != nil {
-		t.Fatalf("complete later message wake: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE agent_session
-		SET last_drained_seq = $1, updated_at = now()
-		WHERE id = $2`,
-		later.Seq, agentSessionID); err != nil {
-		t.Fatalf("advance agent beyond delayed voice message: %v", err)
+	if later.Seq <= voice.Message.Seq {
+		t.Fatalf("later message sequence = %d, want greater than delayed voice sequence %d", later.Seq, voice.Message.Seq)
 	}
 
 	pcm := []byte{0x00, 0x00, 0xff, 0x7f}
@@ -279,19 +251,16 @@ ON CONFLICT DO NOTHING`,
 		t.Fatalf("process delayed voice message: %v", err)
 	}
 
-	var wakeCount int
+	var deliveryCount, inboxCount int
 	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_inbox_event
-		WHERE channel_id = $1
-		  AND agent_id = $2
-		  AND source_message_id = $3
-		  AND status = 'pending'`,
-		channelID, agentID, voice.Message.ID).Scan(&wakeCount); err != nil {
-		t.Fatalf("count delayed voice wakes: %v", err)
+		SELECT
+		  (SELECT count(*) FROM agent_message_delivery WHERE agent_id = $1 AND message_id = $2),
+		  (SELECT count(*) FROM agent_inbox_event WHERE agent_id = $1 AND source_message_id = $2)`,
+		agentID, voice.Message.ID).Scan(&deliveryCount, &inboxCount); err != nil {
+		t.Fatalf("count delayed voice delivery: %v", err)
 	}
-	if wakeCount != 1 {
-		t.Fatalf("delayed voice wake count = %d, want 1 after the ambient cursor advanced", wakeCount)
+	if deliveryCount != 1 || inboxCount != 0 {
+		t.Fatalf("delayed voice delivery/inbox = %d/%d, want canonical delivery only", deliveryCount, inboxCount)
 	}
 }
 

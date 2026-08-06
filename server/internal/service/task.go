@@ -2122,52 +2122,10 @@ func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context
 	if err := qtx.StripArealProxyFromTaskContext(ctx, child.ID); err != nil {
 		return db.AgentInboxEvent{}, fmt.Errorf("strip areal_proxy from retry child: %w", err)
 	}
-	if err := transferQueuedPendingWakeTask(ctx, tx, parentID, child.ID); err != nil {
-		return db.AgentInboxEvent{}, err
-	}
 	if err := tx.Commit(ctx); err != nil {
 		return db.AgentInboxEvent{}, err
 	}
 	return child, nil
-}
-
-func transferQueuedPendingWakeTask(ctx context.Context, tx pgx.Tx, parentID, childID pgtype.UUID) error {
-	rows, err := tx.Query(ctx, `
-		SELECT status
-		FROM channel_ambient_pending_wake
-		WHERE task_id = $1
-		FOR UPDATE`, parentID)
-	if err != nil {
-		return fmt.Errorf("check pending wake state: %w", err)
-	}
-	defer rows.Close()
-
-	pendingRows := int64(0)
-	for rows.Next() {
-		pendingRows++
-		var status string
-		if err := rows.Scan(&status); err != nil {
-			return fmt.Errorf("scan pending wake state: %w", err)
-		}
-		if status != "queued" {
-			return fmt.Errorf("pending wake for parent task is %s, want queued", status)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("scan pending wake state: %w", err)
-	}
-
-	tag, err := tx.Exec(ctx, `
-		UPDATE channel_ambient_pending_wake
-		SET task_id = $2, updated_at = now()
-		WHERE task_id = $1 AND status = 'queued'`, parentID, childID)
-	if err != nil {
-		return fmt.Errorf("update pending wake task: %w", err)
-	}
-	if tag.RowsAffected() != pendingRows {
-		return fmt.Errorf("pending wake transfer updated %d rows, want %d", tag.RowsAffected(), pendingRows)
-	}
-	return nil
 }
 
 // RerunIssue creates a fresh queued task for an agent on the issue. Used by

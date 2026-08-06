@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -16,8 +18,25 @@ func resolveProfile(cmd *cobra.Command) string {
 }
 
 func newAPIClient(cmd *cobra.Command) (*cli.APIClient, error) {
-	serverURL := resolveServerURL(cmd)
 	workspaceID := resolveWorkspaceID(cmd)
+	if inAgentExecutionContext() {
+		agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+		if agentID == "" {
+			return nil, fmt.Errorf("agent API requests require MULTICA_AGENT_ID")
+		}
+		if workspaceID == "" {
+			return nil, fmt.Errorf("agent API requests require MULTICA_WORKSPACE_ID")
+		}
+		proxyURL, err := localAgentAPIProxyURL()
+		if err != nil {
+			return nil, err
+		}
+		client := cli.NewAPIClient(proxyURL, workspaceID, "")
+		client.AgentID = agentID
+		return client, nil
+	}
+
+	serverURL := resolveServerURL(cmd)
 	token := resolveToken(cmd)
 
 	if serverURL == "" {
@@ -25,23 +44,19 @@ func newAPIClient(cmd *cobra.Command) (*cli.APIClient, error) {
 	}
 
 	client := cli.NewAPIClient(serverURL, workspaceID, token)
-	// When running inside a daemon task, attribute actions to the agent.
-	if agentID := os.Getenv("MULTICA_AGENT_ID"); agentID != "" {
-		client.AgentID = agentID
-	}
-	if taskID := os.Getenv("MULTICA_TASK_ID"); taskID != "" {
-		client.TaskID = taskID
-	}
-	if inboxEventID := os.Getenv("MULTICA_AGENT_INBOX_EVENT_ID"); inboxEventID != "" {
-		client.AgentInboxEventID = inboxEventID
-	}
-	if deliveryID := os.Getenv("MULTICA_AGENT_INBOX_DELIVERY_ID"); deliveryID != "" {
-		client.AgentInboxDeliveryID = deliveryID
-	}
-	if leaseToken := os.Getenv("MULTICA_AGENT_INBOX_LEASE_TOKEN"); leaseToken != "" {
-		client.AgentInboxLeaseToken = leaseToken
-	}
 	return client, nil
+}
+
+// localAgentAPIProxyURL returns the daemon-owned local API boundary used by
+// every agent CLI command. The daemon supplies the durable credential; task,
+// inbox-delivery, and lease identity never leave the agent process.
+func localAgentAPIProxyURL() (string, error) {
+	portRaw := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
+	port, err := strconv.Atoi(portRaw)
+	if err != nil || port < 1 || port > 65535 {
+		return "", fmt.Errorf("agent API requests require a valid MULTICA_DAEMON_PORT")
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d", port), nil
 }
 
 func resolveServerURL(cmd *cobra.Command) string {
@@ -68,14 +83,13 @@ func normalizeAPIBaseURL(raw string) string {
 }
 
 // inAgentExecutionContext reports whether the CLI is being invoked from
-// inside a daemon-managed agent task (daemon sets MULTICA_AGENT_ID and
-// MULTICA_TASK_ID in the agent env). In that context the workspace must be
+// inside a daemon-managed agent run. In that context the workspace must be
 // provided explicitly by the daemon — falling back to user-global
 // ~/.multica/config.json would let the agent act on whatever workspace the
 // user last configured, which is how cross-workspace contamination happens
 // when multiple workspaces share a host.
 func inAgentExecutionContext() bool {
-	return os.Getenv("MULTICA_AGENT_ID") != "" || os.Getenv("MULTICA_TASK_ID") != ""
+	return strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID")) != ""
 }
 
 func resolveWorkspaceID(cmd *cobra.Command) string {

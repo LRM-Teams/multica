@@ -490,17 +490,18 @@ func isMatAgentToken(token string) bool {
 	return strings.HasPrefix(strings.TrimSpace(token), "mat_")
 }
 
-// isAgentAPIToken reports agent machine auth for command handlers.
-// Token source: resolveToken (env + TOKEN_FILE + profile). Classification: isMatAgentToken.
+// isAgentAPIToken reports whether command handlers must use the dedicated Agent
+// API surface. Daemon-managed runs have no bearer in their environment: their
+// local Credential Proxy supplies it, so execution context is authoritative.
+// The mat_ check remains only for direct legacy machine-token callers.
 func isAgentAPIToken(cmd *cobra.Command) bool {
-	return isMatAgentToken(resolveToken(cmd))
+	return inAgentExecutionContext() || isMatAgentToken(resolveToken(cmd))
 }
 
 // isAgentAPITokenAmbient is for id resolvers without *cobra.Command.
-// Token source: ambientTokenFromEnvOrFile only (env + TOKEN_FILE; daemon shape).
-// Classification: same isMatAgentToken. Never env-only.
+// Daemon execution is Agent principal even though its credential stays local.
 func isAgentAPITokenAmbient() bool {
-	return isMatAgentToken(ambientTokenFromEnvOrFile())
+	return inAgentExecutionContext() || isMatAgentToken(ambientTokenFromEnvOrFile())
 }
 
 // agentIssueAPIPath returns /api/issues/{id}{suffix} or /api/agent/issues/{id}{suffix}.

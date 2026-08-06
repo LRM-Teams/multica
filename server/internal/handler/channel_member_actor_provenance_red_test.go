@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -404,7 +405,7 @@ func requireAgentAuthoredOnboardingEvent(t *testing.T, fixture agentAuthoredOnbo
 	}
 }
 
-func TestAgentAuthoredOnboardingKeepsRealActorAndUsesCurrentHumanOwner(t *testing.T) {
+func TestAgentAuthoredOnboardingKeepsRealActorWithoutChatSession(t *testing.T) {
 	requireChannelMemberActorProvenanceSchema(t)
 	ctx := context.Background()
 	historicalCreator := createChannelPlainMember(t)
@@ -462,26 +463,32 @@ func TestAgentAuthoredOnboardingKeepsRealActorAndUsesCurrentHumanOwner(t *testin
 		t.Fatalf("materialize agent-authored onboarding: %v", err)
 	}
 
-	var creatorID, prompt string
+	var rawContext []byte
 	if err := testPool.QueryRow(ctx, `
-		SELECT session.creator_id::text,
-		       prompt.content
-		FROM channel_agent_session binding
-		JOIN chat_session session ON session.id = binding.chat_session_id
-		JOIN chat_message prompt ON prompt.chat_session_id = session.id AND prompt.role = 'user'
-		WHERE binding.channel_id = $1 AND binding.agent_id = $2
-		ORDER BY prompt.created_at DESC, prompt.id DESC
-		LIMIT 1`, channelID, fixture.targetAgent).Scan(&creatorID, &prompt); err != nil {
-		t.Fatalf("load materialized onboarding session: %v", err)
+		SELECT context
+		FROM agent_inbox_event
+		WHERE channel_onboarding_id = $1`, fixture.onboardingID).Scan(&rawContext); err != nil {
+		t.Fatalf("load materialized onboarding context: %v", err)
 	}
-	if creatorID != currentOwner {
-		t.Fatalf("legacy chat creator = %s, want current owner %s", creatorID, currentOwner)
+	var wake channelWakeContext
+	if err := json.Unmarshal(rawContext, &wake); err != nil {
+		t.Fatalf("decode materialized onboarding context: %v", err)
 	}
-	if !strings.Contains(prompt, fixture.actorAgent) {
-		t.Fatalf("onboarding prompt lost real agent actor %s: %s", fixture.actorAgent, prompt)
+	if !strings.Contains(wake.Prompt, fixture.actorAgent) {
+		t.Fatalf("onboarding prompt lost real agent actor %s: %s", fixture.actorAgent, wake.Prompt)
 	}
-	if strings.Contains(prompt, historicalCreator) {
-		t.Fatalf("onboarding prompt exposed historical creator as action actor: %s", prompt)
+	if strings.Contains(wake.Prompt, historicalCreator) {
+		t.Fatalf("onboarding prompt exposed historical creator as action actor: %s", wake.Prompt)
+	}
+	var sessionCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_agent_session
+		WHERE channel_id = $1 AND agent_id = $2`, channelID, fixture.targetAgent).Scan(&sessionCount); err != nil {
+		t.Fatalf("count legacy onboarding sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Fatalf("onboarding created %d legacy chat sessions, want none", sessionCount)
 	}
 }
 
@@ -602,7 +609,7 @@ func materializeChannelOnboardingWithDuplicateOwnerShadow(
 	return isolated.materializeNextChannelOnboardingForRuntime(ctx, runtime)
 }
 
-func TestChannelOnboardingFailsClosedWithoutExactlyOneEligibleHumanOwner(t *testing.T) {
+func TestChannelOnboardingDoesNotRequireHumanOwner(t *testing.T) {
 	requireChannelMemberActorProvenanceSchema(t)
 	for _, state := range []string{"missing", "duplicate", "cross_workspace"} {
 		t.Run(state, func(t *testing.T) {
@@ -626,8 +633,8 @@ func TestChannelOnboardingFailsClosedWithoutExactlyOneEligibleHumanOwner(t *test
 			} else {
 				err = testHandler.materializeNextChannelOnboardingForRuntime(ctx, runtime)
 			}
-			if err == nil || !strings.Contains(err.Error(), "owner invariant") {
-				t.Fatalf("%s owner state error = %v, want owner invariant", state, err)
+			if err != nil {
+				t.Fatalf("%s owner state must not block onboarding materialization: %v", state, err)
 			}
 
 			var sessions, inboxes, messagesAfter int
@@ -657,8 +664,8 @@ func TestChannelOnboardingFailsClosedWithoutExactlyOneEligibleHumanOwner(t *test
 				channelID).Scan(&messagesAfter); err != nil {
 				t.Fatalf("count system messages after materialization: %v", err)
 			}
-			if sessions != 0 || inboxes != 0 || status != "pending" || messagesAfter != messagesBefore {
-				t.Fatalf("%s owner state mutated session=%d inbox=%d status=%s messages=%d->%d",
+			if sessions != 0 || inboxes != 1 || status != "pending" || messagesAfter != messagesBefore {
+				t.Fatalf("%s owner-independent materialization = session:%d inbox:%d status:%s messages:%d->%d",
 					state, sessions, inboxes, status, messagesBefore, messagesAfter)
 			}
 		})

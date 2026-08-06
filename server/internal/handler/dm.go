@@ -1052,49 +1052,9 @@ func (h *Handler) agentDMParticipantsForChannels(ctx context.Context, workspaceI
 	return participantsByChannel
 }
 
-// dispatchDMAgentReply dispatches a 1-on-1 DM's user message to the channel's
-// agent peer (if any) without requiring an @-mention. Human↔human DMs have no
-// agent member, so this is a no-op. The trigger-depth and self-trigger guards
-// live in dispatchChannelAgentReply, so an agent's own reply never re-triggers.
-func (h *Handler) dispatchDMAgentReply(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
-	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
-		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "dm"); err == nil && h.Metrics != nil {
-			h.Metrics.RecordChannelFullExecutionWake("dm")
-		}
-	}
-}
-
-// dispatchDMThreadReply applies the same follower boundary as group threads.
-// A personal mention always pierces as a directed wake, but only establishes
-// an implicit follow when the agent has not explicitly unfollowed. An ordinary
-// reply is delivered only to active agent followers.
-func (h *Handler) dispatchDMThreadReply(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
-	h.notifyChannelMemberMentions(ctx, ch, trigger)
-	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
-	if len(mentionedAgents) > 0 {
-		for _, agent := range mentionedAgents {
-			if trigger.ThreadRootMessageID != nil {
-				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
-			}
-			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
-				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
-			}
-		}
-		return
-	}
-	if trigger.ThreadRootMessageID == nil {
-		return
-	}
-	for _, agent := range h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {
-		if _, err := h.dispatchChannelThreadContinuation(ctx, ch, agent, trigger, initiatorUserID); err == nil && h.Metrics != nil {
-			h.Metrics.RecordChannelFullExecutionWake("thread_reply")
-		}
-	}
-}
-
-// channelAgentMembers loads every (non-archived) agent member of a channel as a
-// full db.Agent, regardless of @-mentions. Mirrors the agent load in
-// channelMentionedAgents minus the mention filter; used by DM auto-dispatch.
+// channelAgentMembers loads every non-archived Agent member of a channel as a
+// full db.Agent. Canonical Message delivery uses it to resolve normal-channel
+// recipients; it is not a task dispatch helper.
 func (h *Handler) channelAgentMembers(ctx context.Context, workspaceID, channelID string) []db.Agent {
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.status,

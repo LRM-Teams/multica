@@ -480,6 +480,9 @@ type hermesClient struct {
 
 	usageMu sync.Mutex
 	usage   TokenUsage
+
+	runtimeStatsMu sync.Mutex
+	runtimeStats   *RuntimeTokenStats
 }
 
 // pendingToolCall buffers state for a tool call while its arguments
@@ -1339,6 +1342,8 @@ func extractACPToolCallText(blocks []json.RawMessage) string {
 
 func (c *hermesClient) handleUsageUpdate(data json.RawMessage) {
 	var msg struct {
+		Used  int64 `json:"used"`
+		Size  int64 `json:"size"`
 		Usage struct {
 			InputTokens      int64 `json:"inputTokens"`
 			OutputTokens     int64 `json:"outputTokens"`
@@ -1348,6 +1353,19 @@ func (c *hermesClient) handleUsageUpdate(data json.RawMessage) {
 	}
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return
+	}
+	if msg.Size > 0 && msg.Used >= 0 {
+		percent := float64(msg.Used) * 100 / float64(msg.Size)
+		contextTokens, contextWindow := msg.Used, msg.Size
+		c.runtimeStatsMu.Lock()
+		c.runtimeStats = &RuntimeTokenStats{
+			Provider:       "acp",
+			TotalTokens:    contextTokens,
+			ContextTokens:  &contextTokens,
+			ContextWindow:  &contextWindow,
+			ContextPercent: &percent,
+		}
+		c.runtimeStatsMu.Unlock()
 	}
 
 	c.usageMu.Lock()
@@ -1362,6 +1380,16 @@ func (c *hermesClient) handleUsageUpdate(data json.RawMessage) {
 		c.usage.CacheReadTokens = msg.Usage.CachedReadTokens
 	}
 	c.usageMu.Unlock()
+}
+
+func (c *hermesClient) currentRuntimeStats() *RuntimeTokenStats {
+	c.runtimeStatsMu.Lock()
+	defer c.runtimeStatsMu.Unlock()
+	if c.runtimeStats == nil {
+		return nil
+	}
+	copy := *c.runtimeStats
+	return &copy
 }
 
 // ── Helpers ──

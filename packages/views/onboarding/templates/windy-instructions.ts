@@ -36,7 +36,7 @@ Decision Principles
 
 Agent Recruiting Behavior
 
-When the user describes a goal, produce human-confirmable agent hire cards instead of asking them to manually write prompts. Each hire is name + short description only; the human picks computer/runtime/model and edits instructions in Create Agent Dialog.
+When the user describes a goal, produce human-confirmable agent:create Proposal Messages instead of asking them to manually write prompts. Each proposal is name + short description only; the human picks computer/runtime/model and edits instructions in Create Agent Dialog.
 
 Before preparing, do a light HR intake when important context is missing. Ask 3-6 focused questions about business/project background, goals, inputs/outputs, current workflow, collaborators, permission boundaries, quality bar, and no-go areas. Do not over-interview when the user already gave enough detail.
 
@@ -46,7 +46,7 @@ Hire (required):
 
 multica action prepare --target <channel> --name <name> [--description <short>] --output json
 
-Posts the hire card into the channel. Human confirms in Create Agent Dialog.
+Posts the Proposal Message into the channel. Human confirms in Create Agent Dialog.
 
 Project And Channel Behavior
 

@@ -10,7 +10,7 @@
 // error/loading branches keep their existing contract untouched.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import type { MessagePart, StickerCatalogResponse } from "@multica/core/types";
 
 import { renderWithI18n } from "../../test/i18n";
@@ -25,8 +25,10 @@ vi.mock("./choice-card", () => ({
   ChoiceCard: () => null,
   ChoiceReplyPart: () => null,
 }));
-vi.mock("../../common/windy-create-agent-links", () => ({
-  AgentCreateActionCard: () => null,
+vi.mock("../../common/agent-creation-proposal-card", () => ({
+  AgentCreationProposalCard: ({ proposal }: { proposal: { message_id: string; status: string } }) => (
+    <div data-testid="agent-creation-proposal-card" data-message-id={proposal.message_id} data-status={proposal.status} />
+  ),
 }));
 
 const catalogState = vi.hoisted(() => ({
@@ -224,5 +226,36 @@ describe("MessagePartsRenderer — the four error/loading branches are unchanged
     const node = getByTestId("message-sticker-placeholder");
     expect(node).toHaveTextContent("Sticker unavailable");
     expect(node.className).toContain("border-dashed");
+  });
+});
+
+describe("MessagePartsRenderer — Message-backed agent creation proposal", () => {
+  it("derives one Proposal directly from the canonical Message part", () => {
+    const proposalPart: MessagePart = {
+      type: "reference",
+      ref_type: "agent:create",
+      ref_id: "proposal-agent",
+      label: "Proposal Agent",
+      spans: [],
+      params: {
+        name: "Proposal Agent",
+        description: "Builds the requested integration.",
+        preferred_computer: "Mac Studio",
+        status: "executed",
+        committer_user_id: "user-1",
+        result_agent_id: "agent-1",
+      },
+    } as MessagePart;
+
+    renderWithI18n(
+      <MessagePartsRenderer
+        parts={[proposalPart]}
+        choiceContext={{ channelId: "channel-1", messageId: "message-1" }}
+      />,
+    );
+
+    const card = screen.getByTestId("agent-creation-proposal-card");
+    expect(card).toHaveAttribute("data-message-id", "message-1");
+    expect(card).toHaveAttribute("data-status", "executed");
   });
 });

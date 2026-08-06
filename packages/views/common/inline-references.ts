@@ -105,8 +105,9 @@ export function projectInlineReferences(
   if (!content) return [];
   const anchored = (parts ?? [])
     .filter(hasSpan)
-    // action_card is a block MessagePartsRenderer card, never an inline token.
-    .filter((p) => p.ref_type !== "action_card")
+    // agent:create is a block Proposal rendered by MessagePartsRenderer, not
+    // an inline token beside its own title.
+    .filter((p) => p.ref_type !== "agent:create")
     .filter(
       (p) =>
         p.content_start_utf16 >= 0 &&

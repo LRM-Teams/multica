@@ -65,7 +65,7 @@ func TestCreateAgentDraft_TaskTokenRetiredForAgents(t *testing.T) {
 	}
 }
 
-func TestAgentPrepareAction_CreatesActionCard(t *testing.T) {
+func TestAgentPrepareAction_RequiresCanonicalProposalTarget(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -78,19 +78,9 @@ func TestAgentPrepareAction_CreatesActionCard(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 	testHandler.AgentTransportPrepareAction(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("prepare expected 201, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("prepare without target expected 400, got %d: %s", w.Code, w.Body.String())
 	}
-	var resp agentActionCardResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if resp.ID == "" || resp.Payload.Name != "Targeted Hire" {
-		t.Fatalf("unexpected card: %+v", resp)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_action_card WHERE id = $1`, resp.ID)
-	})
 }
 
 func TestCreateAgentDraft_AgentCredentialRetiredForAgents(t *testing.T) {

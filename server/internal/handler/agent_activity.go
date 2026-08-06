@@ -2297,7 +2297,7 @@ func resolveRaftCLIInvocation(toolName string, input map[string]any) (raftCLIInv
 		invocation.SummaryKind = "none"
 	case "message read":
 		invocation.Tool = "read_history"
-		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+		invocation.ToolTarget = optionValue(rest, "--target")
 	case "message search":
 		invocation.Tool = "search_messages"
 		invocation.ToolTarget = optionValue(rest, "--query")

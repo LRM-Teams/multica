@@ -2158,6 +2158,34 @@ func TestAgentTransportDMThreadTarget(t *testing.T) {
 	if body.Message.ThreadRootMessageID == nil || *body.Message.ThreadRootMessageID != root.ID {
 		t.Fatalf("message thread_root_message_id=%v, want %s", body.Message.ThreadRootMessageID, root.ID)
 	}
+
+	mainRead := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": "dm:@" + humanHandle, "limit": 5,
+	})
+	if mainRead.Code != http.StatusOK {
+		t.Fatalf("read DM history: status=%d body=%s", mainRead.Code, mainRead.Body.String())
+	}
+	var mainReadBody AgentTransportReadResponse
+	if err := json.Unmarshal(mainRead.Body.Bytes(), &mainReadBody); err != nil {
+		t.Fatalf("decode DM history: %v", err)
+	}
+	if mainReadBody.ContextTarget != "channel:"+dmChannel.ID {
+		t.Fatalf("DM context target = %q, want channel:%s", mainReadBody.ContextTarget, dmChannel.ID)
+	}
+
+	threadRead := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": "dm:@" + humanHandle + ":" + root.ID, "limit": 5,
+	})
+	if threadRead.Code != http.StatusOK {
+		t.Fatalf("read DM thread history: status=%d body=%s", threadRead.Code, threadRead.Body.String())
+	}
+	var threadReadBody AgentTransportReadResponse
+	if err := json.Unmarshal(threadRead.Body.Bytes(), &threadReadBody); err != nil {
+		t.Fatalf("decode DM thread history: %v", err)
+	}
+	if threadReadBody.ContextTarget != "thread:"+root.ID {
+		t.Fatalf("DM thread context target = %q, want thread:%s", threadReadBody.ContextTarget, root.ID)
+	}
 }
 
 func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
@@ -2458,6 +2486,95 @@ func TestAgentTransportRejectsNonRaftTargetForms(t *testing.T) {
 	}
 }
 
+func TestAgentTransportReadAnchorsUseCanonicalTargetWindows(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seeded := make([]ChannelMessageResponse, 0, 4)
+	for i := 1; i <= 4; i++ {
+		message, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("anchored history %d %s", i, uuid.NewString()), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+		if err != nil {
+			t.Fatalf("seed message %d: %v", i, err)
+		}
+		seeded = append(seeded, message)
+	}
+
+	before := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "before": seeded[2].ID, "limit": 2,
+	})
+	if before.Code != http.StatusOK {
+		t.Fatalf("read before: status=%d body=%s", before.Code, before.Body.String())
+	}
+	var beforeBody AgentTransportReadResponse
+	if err := json.Unmarshal(before.Body.Bytes(), &beforeBody); err != nil {
+		t.Fatalf("decode before read: %v", err)
+	}
+	assertAgentTransportReadMessageIDs(t, beforeBody.Messages, seeded[0].ID, seeded[1].ID)
+	if beforeBody.ContextTarget != "channel:"+channelID {
+		t.Fatalf("context target = %q, want channel:%s", beforeBody.ContextTarget, channelID)
+	}
+
+	after := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "after": seeded[0].ID[:8], "limit": 2,
+	})
+	if after.Code != http.StatusOK {
+		t.Fatalf("read after short id: status=%d body=%s", after.Code, after.Body.String())
+	}
+	var afterBody AgentTransportReadResponse
+	if err := json.Unmarshal(after.Body.Bytes(), &afterBody); err != nil {
+		t.Fatalf("decode after read: %v", err)
+	}
+	assertAgentTransportReadMessageIDs(t, afterBody.Messages, seeded[1].ID, seeded[2].ID)
+
+	around := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around": fmt.Sprint(seeded[2].Seq), "limit": 3,
+	})
+	if around.Code != http.StatusOK {
+		t.Fatalf("read around sequence: status=%d body=%s", around.Code, around.Body.String())
+	}
+	var aroundBody AgentTransportReadResponse
+	if err := json.Unmarshal(around.Body.Bytes(), &aroundBody); err != nil {
+		t.Fatalf("decode around read: %v", err)
+	}
+	assertAgentTransportReadMessageIDs(t, aroundBody.Messages, seeded[1].ID, seeded[2].ID, seeded[3].ID)
+
+	multipleAnchors := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "before": seeded[2].ID, "after": seeded[2].ID,
+	})
+	if multipleAnchors.Code != http.StatusBadRequest {
+		t.Fatalf("multiple anchors status=%d body=%s, want 400", multipleAnchors.Code, multipleAnchors.Body.String())
+	}
+	missingAnchor := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around": uuid.NewString(),
+	})
+	if missingAnchor.Code != http.StatusNotFound {
+		t.Fatalf("missing anchor status=%d body=%s, want 404", missingAnchor.Code, missingAnchor.Body.String())
+	}
+	nonDecimalSequence := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around": "+7",
+	})
+	if nonDecimalSequence.Code != http.StatusBadRequest {
+		t.Fatalf("non-decimal sequence status=%d body=%s, want 400", nonDecimalSequence.Code, nonDecimalSequence.Body.String())
+	}
+}
+
+func assertAgentTransportReadMessageIDs(t *testing.T, messages []ChannelMessageResponse, want ...string) {
+	t.Helper()
+	if len(messages) != len(want) {
+		t.Fatalf("message count = %d, want %d: %+v", len(messages), len(want), messages)
+	}
+	for i, message := range messages {
+		if message.ID != want[i] {
+			t.Fatalf("messages[%d] = %s, want %s (all=%+v)", i, message.ID, want[i], messages)
+		}
+	}
+}
+
 func TestAgentTransportReadThreadIncludesSystemReplies(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2494,6 +2611,9 @@ func TestAgentTransportReadThreadIncludesSystemReplies(t *testing.T) {
 	}
 	if !transportMessagesContainType(readBody.Messages, systemReply.ID, systemNotice, "system") {
 		t.Fatalf("thread read messages did not include system reply %s: %+v", systemReply.ID, readBody.Messages)
+	}
+	if readBody.ContextTarget != "thread:"+root.ID {
+		t.Fatalf("thread context target = %q, want thread:%s", readBody.ContextTarget, root.ID)
 	}
 }
 

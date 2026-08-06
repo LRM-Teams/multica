@@ -348,6 +348,41 @@ func (c *MessageCoordinator) Check(limit int) (MessageCheckResult, error) {
 	return result, nil
 }
 
+// MarkRead advances exactly one target's Context Boundary after the Credential
+// Proxy has returned canonical history to the Agent. It has no runtime handoff
+// or Activity side effect: explicit history reading is its own boundary.
+func (c *MessageCoordinator) MarkRead(target string, throughSeq int64) error {
+	target = strings.TrimSpace(target)
+	if target == "" || throughSeq <= 0 {
+		return errors.New("message read target and positive sequence are required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("Message coordinator is closed")
+	}
+	next := cloneBoundaries(c.boundaries)
+	if throughSeq > next[target] {
+		next[target] = throughSeq
+		if err := writeConsumedSeqs(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
+			c.boundaryHealthy = false
+			return fmt.Errorf("persist Context Boundary after message read: %w", err)
+		}
+		c.boundaries = next
+		c.boundaryHealthy = true
+	}
+	for sequence, message := range c.pending[target] {
+		if sequence <= c.boundaries[target] {
+			delete(c.pending[target], sequence)
+			delete(c.accepted, messageIdentityKey(message))
+		}
+	}
+	if len(c.pending[target]) == 0 {
+		delete(c.pending, target)
+	}
+	return nil
+}
+
 func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

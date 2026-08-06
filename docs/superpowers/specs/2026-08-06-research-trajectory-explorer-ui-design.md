@@ -249,7 +249,7 @@
 1. **数据适配 + 视图壳**：`TrajectoryExplorer` + `TrajectoryToolbar` + adapter（nodes/edges→commits）+ 桌面布局；接入 aux drawer。
 2. **主图（虚拟化）**：`TrajectoryGraph` + `TrajectoryCommitCard`，消费 `sliceTrajectoryLaneLayout`，10k 窗口/性能门。
 3. **筛选/排序 + 稳定重排**：`TrajectoryToolbar` 维度；layout 重排稳定性测试。
-4. **缩缩放 + 迷你图**：`TrajectoryMinimap` + 显式缩放 + viewport 同步 + 一致性断言。
+4. **缩放 + 迷你图**：`TrajectoryMinimap` + 显式缩放 + viewport 同步 + 一致性断言。
 5. **详情 + 跳转画布**：`TrajectoryDetail` + `onJumpToCanvas` 接线（画布选中同一 node.id）。
 6. **动画消费 + a11y + 打磨**：接 motion 基建、i18n（en/zh-Hans/ja/ko）、reduced-motion、react:doctor、1394 截图矩阵。
 

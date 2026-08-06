@@ -187,3 +187,79 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	}
 	<-errCh
 }
+
+func TestWorkspaceRunnerAcknowledgesCanonicalMessageDelivery(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	acknowledgements := make(chan protocol.AgentDeliverAckPayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Error(err)
+			return
+		}
+		delivery, _ := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliver, Payload: marshalRaw(protocol.AgentDeliverPayload{
+			AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+			Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"},
+		})})
+		if err := conn.WriteMessage(websocket.TextMessage, delivery); err != nil {
+			t.Error(err)
+			return
+		}
+		for i := 0; i < 2; i++ {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var message protocol.Message
+			if err := json.Unmarshal(raw, &message); err != nil {
+				t.Error(err)
+				return
+			}
+			if message.Type != protocol.EventAgentDeliverAck {
+				continue
+			}
+			var ack protocol.AgentDeliverAckPayload
+			if err := json.Unmarshal(message.Payload, &ack); err != nil {
+				t.Error(err)
+				return
+			}
+			acknowledgements <- ack
+			return
+		}
+		t.Error("Runner did not acknowledge canonical Message delivery")
+	}))
+	defer server.Close()
+
+	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.messageCoordinatorMu.Lock()
+	d.messageCoordinators["agent-1"] = coordinator
+	d.messageRuntimeIDs["agent-1"] = "runtime-1"
+	d.messageCoordinatorMu.Unlock()
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, "ws-1") }()
+	select {
+	case ack := <-acknowledgements:
+		if ack.AgentID != "agent-1" || ack.Seq != 1 || ack.DeliveryID != "delivery-1" {
+			t.Fatalf("delivery acknowledgement=%+v", ack)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for Runner delivery acknowledgement")
+	}
+	<-errCh
+}

@@ -53,9 +53,11 @@ export function ResearchAuxDrawer({
       ? t(($) => $.panel.module_trajectory)
       : panel === "sources"
         ? t(($) => $.panel.module_sources)
-        : panel === "detail"
-          ? t(($) => $.panel.module_detail)
-          : t(($) => $.panel.module_detail);
+        : panel === "execution"
+          ? t(($) => $.panel.module_execution)
+          : panel === "detail"
+            ? t(($) => $.panel.module_detail)
+            : t(($) => $.panel.module_detail);
   const description = isSources
     ? t(($) => $.panel.module_sources_desc)
     : title;

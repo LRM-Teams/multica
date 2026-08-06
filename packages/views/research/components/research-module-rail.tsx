@@ -4,12 +4,16 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 
 /** LRM-1061 / LRM-1151 — aux panel ids (one drawer at a time). */
-export type ResearchAuxPanelId = "trajectory" | "sources" | "detail";
+export type ResearchAuxPanelId =
+  | "trajectory"
+  | "sources"
+  | "detail"
+  | "execution";
 
 const MODULES: {
   id: ResearchAuxPanelId;
-  icoKey: "module_trajectory_ico" | "module_sources_ico" | "module_detail_ico";
-  labelKey: "module_trajectory" | "module_sources" | "module_detail";
+  icoKey: "module_trajectory_ico" | "module_sources_ico" | "module_detail_ico" | "module_execution_ico";
+  labelKey: "module_trajectory" | "module_sources" | "module_detail" | "module_execution";
 }[] = [
   {
     id: "trajectory",
@@ -20,6 +24,11 @@ const MODULES: {
     id: "sources",
     icoKey: "module_sources_ico",
     labelKey: "module_sources",
+  },
+  {
+    id: "execution",
+    icoKey: "module_execution_ico",
+    labelKey: "module_execution",
   },
   {
     id: "detail",

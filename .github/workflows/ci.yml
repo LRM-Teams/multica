@@ -9,7 +9,7 @@ on:
   # pull_request as the sole trigger nothing ever wrote a current dev-scoped
   # entry, so every PR restored a stale one (the live entry dated from
   # 2026-07-28) and turbo reported 0 of 9 tasks cached. Tests are skipped on
-  # this trigger — see the Test step.
+  # this trigger — frontend tests remain pull-request-only below.
   push:
     branches: [dev]
 
@@ -18,12 +18,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
+  frontend-checks:
     # GitHub-hosted. The self-hosted CI pool was retired on 2026-07-29; the only
     # self-hosted selector left in the repo is deploy.yml's [self-hosted, aliyun],
     # which is the production deploy runner. Standard runners are 2 vCPU / 8 GB
-    # on private repos — see the "Report runner size" step below for the
-    # measured values.
+    # on private repos.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -131,35 +130,80 @@ jobs:
         #   yourself; CI won't.
         run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
 
+  frontend-tests:
+    if: github.event_name == 'pull_request'
+    name: frontend-tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core-web
+            target: core-web
+            shard: 0
+          - name: views-1-of-3
+            target: views
+            shard: 1
+          - name: views-2-of-3
+            target: views
+            shard: 2
+          - name: views-3-of-3
+            target: views
+            shard: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
       - name: Report runner size
-        # One line, so the runner's core count is a measurement in the log
-        # rather than an assumption about GitHub's published spec. Vitest sizes
-        # its worker pool from this number (see packages/views/vitest.config.ts).
+        # Keep the runner's actual capacity in each shard log. Vitest sizes its
+        # worker pool from this number (see packages/views/vitest.config.ts).
         run: |
           echo "nproc=$(nproc) availableParallelism=$(node -p 'require("node:os").availableParallelism()')"
           echo "mem=$(free -g | awk '/^Mem:/{print $2}')GiB"
 
-      - name: Test
-        # Skipped on the dev push, which exists only to publish a base-branch
-        # Turbo cache for build/typecheck/lint. Re-running the suite after a
-        # merge produces no information the pull request did not already give,
-        # and it is the expensive half of the job.
-        if: github.event_name == 'pull_request'
-        # `test` is a separate turbo invocation pinned to one outer task at a
-        # time (#853/#855). Previously all four tasks shared one command, so
-        # turbo ran several packages' `test` concurrently and each spawned its
-        # own pool of Vitest file workers: outer concurrency x inner workers.
-        # That oversubscribed the runner and starved whichever test was mid-
-        # `waitFor`, reddening PRs whose diffs never touched views (#1243,
-        # #1232). `--concurrency=1` bounds only the OUTER task graph; each
-        # package keeps its own file workers, so views' files stay parallel.
-        #
-        # Deliberately NOT done here: raising any timeout. That would hide the
-        # symptom and turn a stable red into an intermittent one.
-        run: pnpm exec turbo test --filter='@multica/web...' --concurrency=1
+      - name: Test core and web
+        if: matrix.target == 'core-web'
+        run: |
+          pnpm --filter @multica/core test
+          pnpm --filter @multica/web test
+
+      - name: Test views shard
+        if: matrix.target == 'views'
+        run: pnpm --filter @multica/views exec vitest run --shard=${{ matrix.shard }}/3
+
+  frontend:
+    if: always()
+    needs: [frontend-checks, frontend-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require frontend checks
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CHECKS_RESULT: ${{ needs.frontend-checks.result }}
+          TESTS_RESULT: ${{ needs.frontend-tests.result }}
+        run: |
+          test "$CHECKS_RESULT" = "success"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            test "$TESTS_RESULT" = "success"
+          else
+            test "$TESTS_RESULT" = "skipped"
+          fi
+
   backend:
-    # Also runs on the dev push (unlike frontend's Test step above, which stays
-    # PR-only — it's the expensive half of that job and shares no cache with
+    # Also runs on the dev push (unlike frontend-tests above, which stays
+    # PR-only — it is expensive and shares no cache with
     # push). "The pull request already proved it" assumes no merge combination
     # can break tests both branches passed individually; #1457/#1459/#1455 hit
     # exactly that (2026-07-30): dev push had skipped backend since a day

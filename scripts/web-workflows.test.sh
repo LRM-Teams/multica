@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ci_workflow="$(<.github/workflows/ci.yml)"
+for required in \
+  'frontend-checks:' \
+  'frontend-tests:' \
+  'name: frontend-tests (${{ matrix.name }})' \
+  'fail-fast: false' \
+  'name: core-web' \
+  'name: views-1-of-3' \
+  'name: views-2-of-3' \
+  'name: views-3-of-3' \
+  'pnpm --filter @multica/core test' \
+  'pnpm --filter @multica/web test' \
+  'pnpm --filter @multica/views exec vitest run --shard=${{ matrix.shard }}/3' \
+  'needs: [frontend-checks, frontend-tests]' \
+  'CHECKS_RESULT: ${{ needs.frontend-checks.result }}' \
+  'TESTS_RESULT: ${{ needs.frontend-tests.result }}'; do
+  if ! grep -Fq -- "$required" <<<"$ci_workflow"; then
+    echo "Frontend CI sharding contract is missing: $required"
+    exit 1
+  fi
+done
+
+if grep -Fq -- "pnpm exec turbo test --filter='@multica/web...' --concurrency=1" <<<"$ci_workflow"; then
+  echo "Frontend tests must not run sequentially in one CI job"
+  exit 1
+fi
+
 for disabled_workflow in \
   .github/workflows/desktop-smoke.yml \
   .github/workflows/mobile-verify.yml; do

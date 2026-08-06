@@ -104,3 +104,20 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	}
 	return coordinator.Check(messageCheckDefaultLimit)
 }
+
+// RecordMessageRead consumes successful canonical history through one target's
+// local Context Boundary. The server response is the authority for both the
+// canonical target and its maximum returned sequence; the Agent never supplies
+// a cursor directly.
+func (p *CredentialProxy) RecordMessageRead(agentID, target string, throughSeq int64) error {
+	if p == nil || p.daemon == nil {
+		return errors.New("Credential Proxy is unavailable")
+	}
+	p.daemon.messageCoordinatorMu.RLock()
+	defer p.daemon.messageCoordinatorMu.RUnlock()
+	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
+	if coordinator == nil {
+		return errors.New("Message coordinator is unavailable")
+	}
+	return coordinator.MarkRead(target, throughSeq)
+}

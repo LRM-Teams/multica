@@ -922,6 +922,11 @@ func TestResolveRaftCLIInvocation_MapsMessageCommands(t *testing.T) {
 	if !ok || check.Tool != "check_messages" || check.ToolTarget != "" || check.SummaryKind != "none" {
 		t.Fatalf("message check invocation = %+v ok=%v, want check_messages without target", check, ok)
 	}
+
+	read, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "multica message read --target '#multica' --around 42"})
+	if !ok || read.Tool != "read_history" || read.ToolTarget != "#multica" || read.SummaryKind != "message_target" {
+		t.Fatalf("message read invocation = %+v ok=%v, want read_history on canonical target", read, ok)
+	}
 }
 
 func TestResolveRaftCLIInvocation_MapsStableActivityActions(t *testing.T) {

@@ -589,6 +589,7 @@
   "message": {
     "add_reaction": "添加表情回应",
     "more_emojis": "更多表情",
+    "loading_emojis": "正在加载表情…",
     "more_actions": "更多操作",
     "actions_menu": "消息操作",
     "copy_action": "复制",

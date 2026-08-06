@@ -2,6 +2,7 @@
 
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@multica/ui/components/ui/hover-card";
 import { QuickEmojiPicker } from "./quick-emoji-picker";
+import type { ReactNode } from "react";
 
 interface ReactionItem {
   id: string;
@@ -59,6 +60,9 @@ interface ReactionBarProps {
   hideAddButton?: boolean;
   quickEmojis?: string[];
   showQuickReactions?: boolean;
+  /** Caller-provided picker copy (no business i18n in ui). */
+  moreLabel?: ReactNode;
+  loadingLabel?: ReactNode;
 }
 
 function ReactionBar({
@@ -70,6 +74,8 @@ function ReactionBar({
   hideAddButton,
   quickEmojis = [],
   showQuickReactions = true,
+  moreLabel,
+  loadingLabel,
 }: ReactionBarProps) {
   const grouped = groupReactions(reactions, currentUserId);
   const groupedEmojis = new Set(grouped.map((g) => g.emoji));
@@ -134,7 +140,9 @@ function ReactionBar({
           </HoverCard>
         );
       })}
-      {!hideAddButton && <QuickEmojiPicker onSelect={onToggle} />}
+      {!hideAddButton && (
+        <QuickEmojiPicker onSelect={onToggle} moreLabel={moreLabel} loadingLabel={loadingLabel} />
+      )}
     </div>
   );
 }

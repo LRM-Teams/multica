@@ -2080,6 +2080,120 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	assertAgentTransportAuditCount(t, taskID, agentTransportActionReact, 1)
 }
 
+func TestAgentTransportResolveReturnsOneVisibleCanonicalMessage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	parts := []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "resolve exact content"},
+		{Type: protocol.MessagePartTypeSticker, StickerID: "got-it"},
+	}
+	resolved, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "resolve exact content", parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed resolvable message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "resolve neighboring message", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed neighboring message: %v", err)
+	}
+
+	fullRec := agentTransportResolveForTest(t, taskID, agentID, map[string]any{"message_id": resolved.ID})
+	if fullRec.Code != http.StatusOK {
+		t.Fatalf("resolve full id: status=%d body=%s", fullRec.Code, fullRec.Body.String())
+	}
+	var fullWire map[string]any
+	if err := json.Unmarshal(fullRec.Body.Bytes(), &fullWire); err != nil {
+		t.Fatalf("decode resolve wire response: %v", err)
+	}
+	for _, forbidden := range []string{"messages", "results", "total", "limit"} {
+		if _, found := fullWire[forbidden]; found {
+			t.Fatalf("exact resolve must not return history/search field %q: %#v", forbidden, fullWire)
+		}
+	}
+	var full AgentTransportResolveResponse
+	if err := json.Unmarshal(fullRec.Body.Bytes(), &full); err != nil {
+		t.Fatalf("decode full resolve: %v", err)
+	}
+	if full.Action != agentTransportActionResolve || full.Message.ID != resolved.ID || full.Message.ChannelID != channelID || full.Message.Seq != resolved.Seq || full.Message.Type != "user" || full.Message.AuthorID == nil || *full.Message.AuthorID != testUserID || full.Message.Content != "resolve exact content" {
+		t.Fatalf("full resolve = %+v, want exact canonical message", full)
+	}
+	if full.Target.ChannelID != channelID || full.Target.ThreadRootMessageID != nil {
+		t.Fatalf("resolve target = %+v, want main-channel identity", full.Target)
+	}
+	if len(full.Message.Parts) != len(parts) || full.Message.Parts[0].Text != parts[0].Text || full.Message.Parts[1].StickerID != parts[1].StickerID {
+		t.Fatalf("resolve parts = %+v, want %+v", full.Message.Parts, parts)
+	}
+
+	shortRec := agentTransportResolveForTest(t, taskID, agentID, map[string]any{"message_id": resolved.ID[:8]})
+	if shortRec.Code != http.StatusOK {
+		t.Fatalf("resolve short id: status=%d body=%s", shortRec.Code, shortRec.Body.String())
+	}
+	var short AgentTransportResolveResponse
+	if err := json.Unmarshal(shortRec.Body.Bytes(), &short); err != nil {
+		t.Fatalf("decode short resolve: %v", err)
+	}
+	if short.Message.ID != resolved.ID {
+		t.Fatalf("short resolve id = %q, want %q", short.Message.ID, resolved.ID)
+	}
+
+	ambiguousPrefix := ""
+	for range 16 {
+		candidate := uuid.NewString()[:4]
+		var collisions int
+		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE workspace_id = $1 AND replace(id::text, '-', '') LIKE $2 || '%'`, testWorkspaceID, candidate).Scan(&collisions); err != nil {
+			t.Fatalf("check ambiguous prefix collision: %v", err)
+		}
+		if collisions == 0 {
+			ambiguousPrefix = candidate
+			break
+		}
+	}
+	if ambiguousPrefix == "" {
+		t.Fatal("could not allocate an unambiguous test prefix")
+	}
+	for _, id := range []string{
+		ambiguousPrefix + "0000-0000-4000-8000-000000000001",
+		ambiguousPrefix + "0000-0000-4000-8000-000000000002",
+	} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_message (id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source)
+			VALUES ($1, $2, $3, 'user', $4, 'Tester', 'ambiguous resolve message', '[]'::jsonb, 'multica')`,
+			parseUUID(id), parseUUID(channelID), parseUUID(testWorkspaceID), parseUUID(testUserID)); err != nil {
+			t.Fatalf("seed ambiguous message %s: %v", id, err)
+		}
+	}
+	ambiguousRec := agentTransportResolveForTest(t, taskID, agentID, map[string]any{"message_id": ambiguousPrefix})
+	if ambiguousRec.Code != http.StatusConflict || !strings.Contains(ambiguousRec.Body.String(), "ambiguous") {
+		t.Fatalf("resolve ambiguous short id: status=%d body=%s", ambiguousRec.Code, ambiguousRec.Body.String())
+	}
+
+	hiddenChannelID := seedChannelForTest(t, "hidden-resolve-"+uuid.NewString()[:8], testUserID)
+	hidden, err := testHandler.insertChannelMessage(ctx, parseUUID(hiddenChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "hidden resolve content", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed hidden message: %v", err)
+	}
+	hiddenRec := agentTransportResolveForTest(t, taskID, agentID, map[string]any{"message_id": hidden.ID})
+	missingRec := agentTransportResolveForTest(t, taskID, agentID, map[string]any{"message_id": uuid.NewString()})
+	if hiddenRec.Code != http.StatusNotFound || missingRec.Code != http.StatusNotFound || hiddenRec.Body.String() != missingRec.Body.String() {
+		t.Fatalf("unauthorized/missing resolve must share one response: hidden=%d/%s missing=%d/%s", hiddenRec.Code, hiddenRec.Body.String(), missingRec.Code, missingRec.Body.String())
+	}
+	invalidRec := agentTransportResolveForTest(t, taskID, agentID, map[string]any{"message_id": "not-a-message-id"})
+	if invalidRec.Code != http.StatusBadRequest {
+		t.Fatalf("resolve malformed id: status=%d body=%s", invalidRec.Code, invalidRec.Body.String())
+	}
+
+	var auditCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_transport_audit WHERE task_id = $1`, taskID).Scan(&auditCount); err != nil {
+		t.Fatalf("count resolve transport side effects: %v", err)
+	}
+	if auditCount != 0 {
+		t.Fatalf("exact resolve must not write transport/context state; audit rows=%d", auditCount)
+	}
+}
+
 func TestAgentTransportRequiresExplicitTarget(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2157,6 +2271,34 @@ func TestAgentTransportDMThreadTarget(t *testing.T) {
 	}
 	if body.Message.ThreadRootMessageID == nil || *body.Message.ThreadRootMessageID != root.ID {
 		t.Fatalf("message thread_root_message_id=%v, want %s", body.Message.ThreadRootMessageID, root.ID)
+	}
+
+	mainRead := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": "dm:@" + humanHandle, "limit": 5,
+	})
+	if mainRead.Code != http.StatusOK {
+		t.Fatalf("read DM history: status=%d body=%s", mainRead.Code, mainRead.Body.String())
+	}
+	var mainReadBody AgentTransportReadResponse
+	if err := json.Unmarshal(mainRead.Body.Bytes(), &mainReadBody); err != nil {
+		t.Fatalf("decode DM history: %v", err)
+	}
+	if mainReadBody.ContextTarget != "channel:"+dmChannel.ID {
+		t.Fatalf("DM context target = %q, want channel:%s", mainReadBody.ContextTarget, dmChannel.ID)
+	}
+
+	threadRead := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": "dm:@" + humanHandle + ":" + root.ID, "limit": 5,
+	})
+	if threadRead.Code != http.StatusOK {
+		t.Fatalf("read DM thread history: status=%d body=%s", threadRead.Code, threadRead.Body.String())
+	}
+	var threadReadBody AgentTransportReadResponse
+	if err := json.Unmarshal(threadRead.Body.Bytes(), &threadReadBody); err != nil {
+		t.Fatalf("decode DM thread history: %v", err)
+	}
+	if threadReadBody.ContextTarget != "thread:"+root.ID {
+		t.Fatalf("DM thread context target = %q, want thread:%s", threadReadBody.ContextTarget, root.ID)
 	}
 }
 
@@ -2458,6 +2600,95 @@ func TestAgentTransportRejectsNonRaftTargetForms(t *testing.T) {
 	}
 }
 
+func TestAgentTransportReadAnchorsUseCanonicalTargetWindows(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seeded := make([]ChannelMessageResponse, 0, 4)
+	for i := 1; i <= 4; i++ {
+		message, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", fmt.Sprintf("anchored history %d %s", i, uuid.NewString()), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+		if err != nil {
+			t.Fatalf("seed message %d: %v", i, err)
+		}
+		seeded = append(seeded, message)
+	}
+
+	before := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "before": seeded[2].ID, "limit": 2,
+	})
+	if before.Code != http.StatusOK {
+		t.Fatalf("read before: status=%d body=%s", before.Code, before.Body.String())
+	}
+	var beforeBody AgentTransportReadResponse
+	if err := json.Unmarshal(before.Body.Bytes(), &beforeBody); err != nil {
+		t.Fatalf("decode before read: %v", err)
+	}
+	assertAgentTransportReadMessageIDs(t, beforeBody.Messages, seeded[0].ID, seeded[1].ID)
+	if beforeBody.ContextTarget != "channel:"+channelID {
+		t.Fatalf("context target = %q, want channel:%s", beforeBody.ContextTarget, channelID)
+	}
+
+	after := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "after": seeded[0].ID[:8], "limit": 2,
+	})
+	if after.Code != http.StatusOK {
+		t.Fatalf("read after short id: status=%d body=%s", after.Code, after.Body.String())
+	}
+	var afterBody AgentTransportReadResponse
+	if err := json.Unmarshal(after.Body.Bytes(), &afterBody); err != nil {
+		t.Fatalf("decode after read: %v", err)
+	}
+	assertAgentTransportReadMessageIDs(t, afterBody.Messages, seeded[1].ID, seeded[2].ID)
+
+	around := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around": fmt.Sprint(seeded[2].Seq), "limit": 3,
+	})
+	if around.Code != http.StatusOK {
+		t.Fatalf("read around sequence: status=%d body=%s", around.Code, around.Body.String())
+	}
+	var aroundBody AgentTransportReadResponse
+	if err := json.Unmarshal(around.Body.Bytes(), &aroundBody); err != nil {
+		t.Fatalf("decode around read: %v", err)
+	}
+	assertAgentTransportReadMessageIDs(t, aroundBody.Messages, seeded[1].ID, seeded[2].ID, seeded[3].ID)
+
+	multipleAnchors := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "before": seeded[2].ID, "after": seeded[2].ID,
+	})
+	if multipleAnchors.Code != http.StatusBadRequest {
+		t.Fatalf("multiple anchors status=%d body=%s, want 400", multipleAnchors.Code, multipleAnchors.Body.String())
+	}
+	missingAnchor := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around": uuid.NewString(),
+	})
+	if missingAnchor.Code != http.StatusNotFound {
+		t.Fatalf("missing anchor status=%d body=%s, want 404", missingAnchor.Code, missingAnchor.Body.String())
+	}
+	nonDecimalSequence := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around": "+7",
+	})
+	if nonDecimalSequence.Code != http.StatusBadRequest {
+		t.Fatalf("non-decimal sequence status=%d body=%s, want 400", nonDecimalSequence.Code, nonDecimalSequence.Body.String())
+	}
+}
+
+func assertAgentTransportReadMessageIDs(t *testing.T, messages []ChannelMessageResponse, want ...string) {
+	t.Helper()
+	if len(messages) != len(want) {
+		t.Fatalf("message count = %d, want %d: %+v", len(messages), len(want), messages)
+	}
+	for i, message := range messages {
+		if message.ID != want[i] {
+			t.Fatalf("messages[%d] = %s, want %s (all=%+v)", i, message.ID, want[i], messages)
+		}
+	}
+}
+
 func TestAgentTransportReadThreadIncludesSystemReplies(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2494,6 +2725,9 @@ func TestAgentTransportReadThreadIncludesSystemReplies(t *testing.T) {
 	}
 	if !transportMessagesContainType(readBody.Messages, systemReply.ID, systemNotice, "system") {
 		t.Fatalf("thread read messages did not include system reply %s: %+v", systemReply.ID, readBody.Messages)
+	}
+	if readBody.ContextTarget != "thread:"+root.ID {
+		t.Fatalf("thread context target = %q, want thread:%s", readBody.ContextTarget, root.ID)
 	}
 }
 
@@ -2764,6 +2998,14 @@ func agentTransportSearchForTest(t *testing.T, taskID, agentID string, body map[
 	return rec
 }
 
+func agentTransportResolveForTest(t *testing.T, taskID, agentID string, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	req := agentTransportRequest(t, http.MethodPost, "/api/agent/messages/resolve", taskID, agentID, body)
+	rec := httptest.NewRecorder()
+	testHandler.AgentTransportResolveMessage(rec, req)
+	return rec
+}
+
 func agentTransportUnfollowThreadForTest(t *testing.T, taskID, agentID string, body map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
 	req := agentTransportRequest(t, http.MethodPost, "/api/agent/threads/unfollow", taskID, agentID, body)
@@ -2955,6 +3197,22 @@ func assertAgentTransportFreshnessHoldActivity(t *testing.T, taskID, target stri
 	}
 }
 
+func TestAgentTransportFreshnessResolutionActivityMessage(t *testing.T) {
+	for _, tc := range []struct {
+		outcome string
+		want    string
+	}{
+		{outcome: "abandoned", want: "Held message was not sent"},
+		{outcome: "revised_send", want: "Freshness hold resolved"},
+	} {
+		t.Run(tc.outcome, func(t *testing.T) {
+			if got := agentTransportFreshnessResolutionActivityMessage(tc.outcome); got != tc.want {
+				t.Fatalf("message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func assertAgentTransportFreshnessResolutionActivity(t *testing.T, taskID, target, producerFactID, outcome string) {
 	t.Helper()
 	var count int
@@ -2963,7 +3221,10 @@ func assertAgentTransportFreshnessResolutionActivity(t *testing.T, taskID, targe
 		FROM agent_activity_event
 		WHERE task_id = $1
 		  AND event_type = 'send_freshness_resolved'
-		  AND message = 'Freshness hold resolved'
+		  AND message = CASE
+		    WHEN $4 = 'abandoned' THEN 'Held message was not sent'
+		    ELSE 'Freshness hold resolved'
+		  END
 		  AND target_slug = $2
 		  AND details->>'producer_fact_id' = $3
 		  AND details->>'outcome' = $4

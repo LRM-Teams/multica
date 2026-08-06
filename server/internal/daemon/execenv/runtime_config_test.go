@@ -537,6 +537,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"multica message react --message-id <id>",
 		"multica message read [--target ...] [--limit N] --output json",
 		"multica message search \"query\" [--target ...] --output json",
+		"multica message resolve <message-id>",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
 		"issue list --mine --output json",
 		"must not self-approve `in_review -> done`",

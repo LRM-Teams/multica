@@ -17,6 +17,14 @@ type PostgresStore struct {
 	pool *pgxpool.Pool
 }
 
+var (
+	_ projectionEventStore  = (*PostgresStore)(nil)
+	_ resultAcceptanceStore = (*PostgresStore)(nil)
+	_ executionStore        = (*PostgresStore)(nil)
+	_ failureStore          = (*PostgresStore)(nil)
+	_ deliveryGateStore     = (*PostgresStore)(nil)
+)
+
 func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool}
 }

@@ -21,6 +21,7 @@ import {
 } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
+import type { Decision } from "@multica/core/permissions";
 import { useTimeAgo } from "../../i18n";
 import {
   formatActorHandleLabel,
@@ -41,6 +42,7 @@ import { ThinkingPropRow } from "./inspector/thinking-prop-row";
 import { RuntimeConfigDialog } from "./runtime-config-dialog";
 import { LarkAgentBindButton } from "../../settings/components/lark-tab";
 import { AgentLifecycleStatusLine } from "./agent-lifecycle-status-line";
+import { AgentWorkspaceRole } from "./agent-workspace-role";
 
 interface InspectorProps {
   agent: Agent;
@@ -62,6 +64,11 @@ interface InspectorProps {
    * `server/internal/handler/agent.go:519-535`.
    */
   canEdit: boolean;
+  /** LRM-1449 — workspace-admin role change gate (owner/admin only). */
+  canChangeRole: Decision;
+  wsId: string;
+  /** LRM-1449 — called after a role change so the page can refresh the agent. */
+  onRoleChanged?: () => void;
   onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
   /**
    * Focus the overview pane's Integrations tab. The inspector's Lark status
@@ -91,6 +98,9 @@ export function AgentDetailInspector({
   members,
   currentUserId,
   canEdit,
+  canChangeRole,
+  wsId,
+  onRoleChanged,
   onUpdate,
   onShowIntegrations,
 }: InspectorProps) {
@@ -246,6 +256,16 @@ export function AgentDetailInspector({
           </span>
         </PropRow>
       </Section>
+
+      {/* LRM-1449 — workspace-admin role (Member/Admin). Standalone block so
+          the owner/admin-only toggle is a full-width control, not a cramped
+          PropRow value. */}
+      <AgentWorkspaceRole
+        wsId={wsId}
+        agent={agent}
+        permission={canChangeRole}
+        onRoleChanged={onRoleChanged}
+      />
 
       {/* Skills */}
       <div className="flex flex-col border-b px-5 py-4">

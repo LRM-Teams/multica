@@ -27,6 +27,75 @@ func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
 	})
 }
 
+func TestMessageReadUsesOnlyCanonicalTargetFlag(t *testing.T) {
+	cmd := newMessageReadCmd()
+	if cmd.Flags().Lookup("target") == nil {
+		t.Fatal("message read is missing --target")
+	}
+	if cmd.Flags().Lookup("channel") != nil {
+		t.Fatal("message read must not expose legacy --channel")
+	}
+}
+
+func TestMessageResolveAcceptsOnlyOneIdentityWithoutGenericFlags(t *testing.T) {
+	cmd := newMessageResolveCmd()
+	if err := cmd.Args(cmd, []string{"11111111-2222-3333-4444-555555555555"}); err != nil {
+		t.Fatalf("resolve one full id: %v", err)
+	}
+	if err := cmd.Args(cmd, nil); err == nil {
+		t.Fatal("resolve must require one message identity")
+	}
+	if err := cmd.Args(cmd, []string{"one", "two"}); err == nil {
+		t.Fatal("resolve must reject more than one message identity")
+	}
+	for _, name := range []string{"target", "output", "channel"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Errorf("resolve must not expose --%s", name)
+		}
+	}
+}
+
+func TestRunAgentMessageResolvePostsOneIdentity(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/resolve" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action": "message_resolve", "message": map[string]any{"id": "11111111-2222-3333-4444-555555555555"},
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	readOut, writeOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	oldOut := os.Stdout
+	os.Stdout = writeOut
+	err = runAgentMessageResolve(newMessageResolveCmd(), []string{"11111111"})
+	writeOut.Close()
+	os.Stdout = oldOut
+	_, readErr := io.ReadAll(readOut)
+	readOut.Close()
+	if err != nil {
+		t.Fatalf("runAgentMessageResolve: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	if len(body) != 1 || body["message_id"] != "11111111" {
+		t.Fatalf("resolve request body = %#v, want only message_id", body)
+	}
+}
+
 func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +149,68 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	}
 	if _, ok := body["limit"]; ok {
 		t.Fatalf("Agent-controlled limit leaked into request: %+v", body)
+	}
+}
+
+func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/credential-proxy/messages/read" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action": "message_read", "target": "#one", "messages": []any{}, "limit": 2,
+		})
+	}))
+	defer srv.Close()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("server port: %v", err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv("MULTICA_TASK_ID", "task-1")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+
+	cmd := newMessageReadCmd()
+	_ = cmd.Flags().Set("target", "#one")
+	_ = cmd.Flags().Set("around", "123")
+	_ = cmd.Flags().Set("limit", "2")
+	readOut, writeOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	oldOut := os.Stdout
+	os.Stdout = writeOut
+	err = runAgentMessageRead(cmd, nil)
+	writeOut.Close()
+	os.Stdout = oldOut
+	output, readErr := io.ReadAll(readOut)
+	readOut.Close()
+	if err != nil {
+		t.Fatalf("runAgentMessageRead: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	for field, want := range map[string]any{
+		"agent_id": "agent-1", "task_id": "task-1", "workspace_id": "workspace-1",
+		"target": "#one", "around": "123", "limit": float64(2),
+	} {
+		if got := body[field]; got != want {
+			t.Errorf("Credential Proxy body[%q] = %#v, want %#v (body=%+v)", field, got, want, body)
+		}
+	}
+	if _, ok := body["seen_up_to_seq"]; ok {
+		t.Fatalf("Agent-controlled cursor leaked into request: %+v", body)
+	}
+	var printed map[string]any
+	if err := json.Unmarshal(output, &printed); err != nil || printed["target"] != "#one" {
+		t.Fatalf("output = %q, want JSON read result (err=%v)", output, err)
 	}
 }
 

@@ -145,7 +145,7 @@ type Handler struct {
 	Analytics           analytics.Client
 	WendyComposer       WendyComposer
 	WorkGraph           *workgraph.Store
-	ResearchRun         *researchrun.Engine
+	ResearchRun         researchrun.ResearchRun
 	// Metrics is the shared business-metrics collector built by main.go.
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a

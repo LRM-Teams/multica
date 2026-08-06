@@ -282,6 +282,8 @@
     "edit_placeholder": "댓글 수정...",
     "save_action": "저장",
     "cancel_edit": "취소",
+    "more_emojis": "이모지 더 보기",
+    "loading_emojis": "이모지 불러오는 중…",
     "copy_action": "복사",
     "copied_toast": "복사했습니다",
     "edit_action": "수정",

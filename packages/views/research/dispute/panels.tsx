@@ -13,6 +13,7 @@
 import type { ResearchGraphNode } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { cn } from "@multica/ui/lib/utils";
+import { ArrowUp, ArrowUpRight } from "lucide-react";
 import { ReactNode } from "react";
 import { useT } from "../../i18n/use-t";
 import { disputeNodeGlyph } from "./encode";
@@ -159,10 +160,10 @@ export function EscalationBanner({
       data-escalated="true"
     >
       <span
-        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full border-2 border-warning text-[10px] font-bold text-warning"
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded-full border-2 border-warning text-warning"
         aria-hidden
       >
-        ▲
+        <ArrowUp className="size-3" />
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-[11px] font-semibold text-foreground">
@@ -171,10 +172,10 @@ export function EscalationBanner({
         <p className="text-[10px] text-warning">{t(($) => $.dispute.director_adjudicating)}</p>
       </div>
       <span
-        className="shrink-0 rounded border-2 border-dashed border-warning/70 px-1 py-0.5 text-[10px] font-semibold text-warning"
+        className="shrink-0 rounded border-2 border-dashed border-warning/70 p-1 text-warning"
         aria-hidden
       >
-        ↑
+        <ArrowUpRight className="size-3" />
       </span>
     </section>
   );
@@ -240,7 +241,7 @@ export function DecisionHistory({
                 className="inline-flex items-center gap-0.5 rounded px-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
                 aria-label={t(($) => $.dispute.focus.node)}
               >
-                ● {t(($) => $.dispute.view_history)}
+                {disputeNodeGlyph("decision", current.status)} {t(($) => $.dispute.view_history)}
               </button>
             ) : null}
           </div>
@@ -271,7 +272,7 @@ export function DecisionHistory({
                         className="mt-0.5 block text-[10px] text-destructive"
                         data-testid="dispute-superseded-flag"
                       >
-                        ↺ {t(($) => $.dispute.superseded)}
+                        {disputeNodeGlyph("decision", h.node.status)} {t(($) => $.dispute.superseded)}
                       </span>
                     ) : null}
                   </div>

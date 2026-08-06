@@ -356,8 +356,8 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const selectedFromList = findNote(list.pages, pageId);
   const selectedId = pageId ?? selectedFromList?.id;
-  const detailQuery = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
-  const selected = detailQuery.data?.id ? detailQuery.data : selectedFromList;
+  const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
+  const selected = detailPage?.id ? detailPage : selectedFromList;
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
   const createPage = useCreateNotePage();
   const deletePage = useDeleteNotePage();

@@ -213,23 +213,27 @@ ORDER BY parent_id NULLS FIRST, sort_key, created_at`, workspaceID, userID)
 		return
 	}
 	defer rows.Close()
-	pages := []NotePageResponse{}
+	collected := []notePageRow{}
 	for rows.Next() {
 		var p notePageRow
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.ParentID, &p.OwnerUserID, &p.Title, &p.Content, &p.SortKey, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list notes")
 			return
 		}
+		collected = append(collected, p)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list notes")
+		return
+	}
+	pages := make([]NotePageResponse, 0, len(collected))
+	for _, p := range collected {
 		shares, err := h.noteShareUserIDs(r.Context(), p.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list notes")
 			return
 		}
 		pages = append(pages, notePageToResponse(p, userID, shares))
-	}
-	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list notes")
-		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pages": pages})
 }
@@ -253,23 +257,27 @@ ORDER BY p.deleted_at DESC, p.updated_at DESC`, workspaceID, userID)
 		return
 	}
 	defer rows.Close()
-	pages := []NotePageResponse{}
+	collected := []notePageRow{}
 	for rows.Next() {
 		var p notePageRow
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.ParentID, &p.OwnerUserID, &p.Title, &p.Content, &p.SortKey, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list deleted notes")
 			return
 		}
+		collected = append(collected, p)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list deleted notes")
+		return
+	}
+	pages := make([]NotePageResponse, 0, len(collected))
+	for _, p := range collected {
 		shares, err := h.noteShareUserIDs(r.Context(), p.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list deleted notes")
 			return
 		}
 		pages = append(pages, notePageToResponse(p, userID, shares))
-	}
-	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list deleted notes")
-		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pages": pages})
 }

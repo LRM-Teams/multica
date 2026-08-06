@@ -6,11 +6,11 @@
  */
 import type { ResearchGraphEdge, ResearchGraphNode } from "../types/research";
 import type {
-  V6ProjectionDelta,
-  V6ProjectionEdge,
-  V6ProjectionNode,
-  V6ProjectionSnapshot,
-} from "./v6-types";
+  ResearchV6Delta,
+  ResearchV6ProjectionEdge,
+  ResearchV6ProjectionNode,
+  ResearchV6Snapshot,
+} from "../types/research-v6";
 import type {
   CanvasDelta,
   CanvasEdge,
@@ -91,21 +91,38 @@ export function v5FixtureGraph(): {
 
 const V6_RUN_ID = "run-v6-contract-fixture";
 
+/** Canonical stable node id — `${runId}:${entityKind}:${entityId}` (§7.1). */
+function v6NodeId(kind: string, id: string): string {
+  return `${V6_RUN_ID}:${kind}:${id}`;
+}
+
 function v6Node(
-  partial: Partial<V6ProjectionNode> &
-    Pick<V6ProjectionNode, "entity_kind" | "entity_id" | "title">,
-): V6ProjectionNode {
+  partial: Partial<ResearchV6ProjectionNode> &
+    Pick<ResearchV6ProjectionNode, "entity_kind" | "entity_id" | "title">,
+): ResearchV6ProjectionNode {
+  const id = v6NodeId(partial.entity_kind, partial.entity_id);
   return {
+    id,
     run_id: V6_RUN_ID,
+    node_kind: partial.entity_kind as ResearchV6ProjectionNode["node_kind"],
+    node_subtype: "",
+    schema_version: 1,
     summary: "",
     status: "active",
     importance: 0.5,
-    freshness: 0.5,
+    freshness: "fresh:1",
+    contract_version: null,
+    plan_version: null,
+    strategy_version: null,
     actor_agent_id: null,
-    detail_ref: `${partial.entity_kind}:${partial.entity_id}`,
-    payload: {},
+    task_id: null,
+    attempt_id: null,
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
+    detail: {},
+    created_sequence: null,
+    updated_sequence: null,
+    terminal_sequence: null,
     ...partial,
   };
 }
@@ -116,20 +133,22 @@ function v6Edge(
   fromId: string,
   toKind: string,
   toId: string,
-  relation: V6ProjectionEdge["relation"],
-): V6ProjectionEdge {
+  relation: ResearchV6ProjectionEdge["edge_type"],
+): ResearchV6ProjectionEdge {
   return {
     id,
-    from: { run_id: V6_RUN_ID, entity_kind: fromKind, entity_id: fromId },
-    to: { run_id: V6_RUN_ID, entity_kind: toKind, entity_id: toId },
-    relation,
-    created_at: "2026-08-01T00:00:00Z",
+    run_id: V6_RUN_ID,
+    from_node_id: v6NodeId(fromKind, fromId),
+    to_node_id: v6NodeId(toKind, toId),
+    edge_type: relation,
+    created_sequence: null,
+    tombstoned_at_sequence: null,
   };
 }
 
 /** A small §7.1 snapshot covering several node_kinds + typed edges. */
-export function v6FixtureSnapshot(): V6ProjectionSnapshot {
-  const nodes: V6ProjectionNode[] = [
+export function v6FixtureSnapshot(): ResearchV6Snapshot {
+  const nodes: ResearchV6ProjectionNode[] = [
     v6Node({ entity_kind: "question", entity_id: "q1", title: "Which provider?" }),
     v6Node({ entity_kind: "claim", entity_id: "c1", title: "A is cheaper" }),
     v6Node({ entity_kind: "claim", entity_id: "c2", title: "B has lower fees" }),
@@ -147,7 +166,7 @@ export function v6FixtureSnapshot(): V6ProjectionSnapshot {
       importance: 0.3,
     }),
   ];
-  const edges: V6ProjectionEdge[] = [
+  const edges: ResearchV6ProjectionEdge[] = [
     v6Edge("e1", "question", "q1", "claim", "c1", "decomposes"),
     v6Edge("e2", "question", "q1", "claim", "c2", "decomposes"),
     v6Edge("e3", "hypothesis", "h1", "claim", "c1", "tests"),
@@ -159,18 +178,19 @@ export function v6FixtureSnapshot(): V6ProjectionSnapshot {
     run_id: V6_RUN_ID,
     snapshot_id: `v6-snap-1`,
     through_event_sequence: 6,
-    graph_content_hash: "fixture-hash-unused-tests-recompute",
+    graph_content_hash: { nodes: "n", edges: "e" },
     nodes,
     edges,
+    next_cursor: null,
   };
 }
 
 /** Delta that tombstones claim c1 (and its edges) + adds a resolution claim. */
-export function v6FixtureDelta(): V6ProjectionDelta {
+export function v6FixtureDelta(): ResearchV6Delta {
   return {
     from_sequence_exclusive: 6,
     through_sequence: 8,
-    upsert_nodes: [
+    node_upserts: [
       v6Node({
         entity_kind: "claim",
         entity_id: "c3",
@@ -179,17 +199,15 @@ export function v6FixtureDelta(): V6ProjectionDelta {
         importance: 0.85,
       }),
     ],
-    upsert_edges: [
+    edge_upserts: [
       v6Edge("e7", "question", "q1", "claim", "c3", "resolved_by"),
       v6Edge("e8", "claim", "c3", "insight", "i1", "refines"),
     ],
-    visibility_tombstones: {
-      // §7.2 tombstones reference full projection node ids (same id space as
-      // the snapshot nodes), not bare entity refs.
-      node_ids: ["v6:run-v6-contract-fixture:claim:c1"],
-      edge_ids: ["e1", "e3", "e4", "e6"],
-    },
-    affected_roots: ["question:q1", "insight:i1"],
+    // §7.2 tombstones reference full projection node ids (same id space as
+    // the snapshot nodes), not bare entity refs.
+    node_tombstones: [v6NodeId("claim", "c1")],
+    edge_tombstones: ["e1", "e3", "e4", "e6"],
+    affected_root_node_ids: [v6NodeId("question", "q1"), v6NodeId("insight", "i1")],
     transition_kind: "insight_staled",
   };
 }

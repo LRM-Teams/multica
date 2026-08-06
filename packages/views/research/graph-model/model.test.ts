@@ -154,7 +154,7 @@ describe("unified canvas ViewModel — (AC2) visibility tombstone local recomput
     const canonicalCount = model.snapshot.nodes.length;
     model = canvasModelReducer(model, {
       type: "setHidden",
-      nodeIds: ["v6:run-v6-contract-fixture:claim:c2"],
+      nodeIds: ["run-v6-contract-fixture:claim:c2"],
     });
     const render = renderCanvas(model);
     expect(render.nodes.some((n) => n.id.includes(":claim:c2"))).toBe(false);

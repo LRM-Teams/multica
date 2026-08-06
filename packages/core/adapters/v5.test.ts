@@ -44,11 +44,13 @@ describe("adaptV5Graph — no field guessing", () => {
     expect(snapshotA.nodes.find((n) => n.id === "finding")!.freshness).toBe(
       snapshotB.nodes.find((n) => n.id === "finding")!.freshness,
     );
-    // Freshness is monotonic in updated_at recency.
+    // Freshness is monotonic in updated_at recency (V5 derives a 0..1 value).
     const newest = snapshotA.nodes
       .filter((n) => n.id !== "probe-b")
       .map((n) => n.freshness);
-    expect(newest.every((f) => f >= 0 && f <= 1)).toBe(true);
+    expect(
+      newest.every((f) => typeof f === "number" && f >= 0 && f <= 1),
+    ).toBe(true);
   });
 
   it("maps typed V5 edges and drops none", () => {

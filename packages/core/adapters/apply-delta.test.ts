@@ -81,10 +81,10 @@ describe("applyCanvasDelta — (§7.2) idempotent, sequence-framed", () => {
     // Retained neighbors of the tombstoned claim:c1 (pre-removal, both
     // directions): q1 (in), h1 (in), i1 (out), c2 (out via contradicts).
     expect(applied.affectedRootIds.sort()).toEqual([
-      "v6:run-v6-contract-fixture:claim:c2",
-      "v6:run-v6-contract-fixture:hypothesis:h1",
-      "v6:run-v6-contract-fixture:insight:i1",
-      "v6:run-v6-contract-fixture:question:q1",
+      "run-v6-contract-fixture:claim:c2",
+      "run-v6-contract-fixture:hypothesis:h1",
+      "run-v6-contract-fixture:insight:i1",
+      "run-v6-contract-fixture:question:q1",
     ]);
   });
 

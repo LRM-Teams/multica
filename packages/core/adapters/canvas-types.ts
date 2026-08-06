@@ -18,8 +18,10 @@
  *   - `importance`    → 0..1, from a documented backend field when present,
  *                        else a stable neutral default (never derived from
  *                        prose).
- *   - `freshness`     → 0..1, from a documented backend field when present,
- *                        else derived deterministically from timestamps only.
+ *   - `freshness`     → verbatim server freshness signal: V6 opaque token
+ *                        (`string | null`) copied as-is, else a documented V5
+ *                        timestamp-derived recency (number). Never derived
+ *                        from prose.
  *   - `detailRef`     → stable canonical entity reference for the by-id detail
  *                        read. Never fabricated.
  */
@@ -45,8 +47,12 @@ export interface CanvasNode {
   status: string;
   /** 0..1 importance rank (documented field or stable neutral). */
   importance: number;
-  /** 0..1 freshness (documented field or timestamp-derived). */
-  freshness: number;
+  /**
+   * 0..1 freshness (number), the server's opaque freshness token (string), or
+   * null when the backend reports none — copied verbatim, never derived from
+   * prose.
+   */
+  freshness: number | string | null;
   /** Stable canonical entity reference for the by-id detail read. */
   detailRef: string;
   /** Actor Agent id when the projection reports one. */
@@ -58,8 +64,9 @@ export interface CanvasNode {
   updatedAtSequence?: number;
   /** Raw node_kind union for generic degradation and typed styling. */
   payload: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
+  /** Backend timestamps verbatim (`null` when the projection reports none). */
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 export interface CanvasEdge {
@@ -69,7 +76,11 @@ export interface CanvasEdge {
   to: CanvasNodeId;
   /** Typed relation, verbatim from the projection. */
   relation: CanvasRelation;
-  createdAt: string;
+  /**
+   * Backend timestamp (string) or event sequence (number) verbatim; `null`
+   * when the projection reports neither. Never fabricated.
+   */
+  createdAt: number | string | null;
 }
 
 /**

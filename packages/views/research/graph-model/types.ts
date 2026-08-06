@@ -11,7 +11,8 @@ export interface RenderNode {
   title: string;
   status: string;
   importance: number;
-  freshness: number;
+  /** Same verbatim freshness signal as the canvas model. */
+  freshness: number | string | null;
   position: Point;
 }
 

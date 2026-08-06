@@ -146,6 +146,8 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 		defer writeMu.Unlock()
 		return writeWorkspaceRunnerFrame(conn, eventType, payload)
 	}
+	messageTransportGeneration := d.attachWorkspaceRunnerMessageTransport(workspaceID, writeFrame)
+	defer d.detachWorkspaceRunnerMessageTransport(workspaceID, messageTransportGeneration)
 	producer := d.workspaceAgentActivityProducer(workspaceID)
 	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && d.logger != nil {
@@ -172,6 +174,9 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			return err
 		}
 	}
+	d.beginMessageRecoveryWithSend(func(request protocol.AgentRecoveryRequest) error {
+		return writeFrame(protocol.EventAgentRecoveryRequest, request)
+	})
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -253,6 +258,16 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			}
 			if err := d.flushIdleAgentDelivery(context.Background(), delivery.AgentID); err != nil && d.logger != nil {
 				d.logger.Warn("workspace Runner idle agent Message handoff failed after delivery acknowledgement", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+			}
+		case protocol.EventAgentRecoveryPage:
+			var page protocol.AgentRecoveryPage
+			if json.Unmarshal(message.Payload, &page) != nil {
+				continue
+			}
+			if err := d.handleMessageRecoveryPageWithSend(context.Background(), page, func(request protocol.AgentRecoveryRequest) error {
+				return writeFrame(protocol.EventAgentRecoveryRequest, request)
+			}); err != nil && d.logger != nil {
+				d.logger.Warn("workspace Runner agent Message recovery failed", "error", err, "workspace_id", workspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
 			}
 		case protocol.EventAgentActivityProbe:
 			var probe protocol.AgentActivityProbePayload

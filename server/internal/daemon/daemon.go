@@ -94,15 +94,17 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
-	messageCoordinatorMu   sync.RWMutex
-	messageCoordinators    map[string]*MessageCoordinator
-	messageRuntimeIDs      map[string]string
-	messageSendMu          sync.Mutex
-	messageSends           map[string]int
-	agentProcessManagers   map[string]*agentProcessManager
-	agentActivityProducers map[string]*agentActivityProducer
-	lifecycleDiagnostics   *lifecycleDiagnosticWriter
-	runnerInstanceID       string
+	messageCoordinatorMu    sync.RWMutex
+	messageCoordinators     map[string]*MessageCoordinator
+	messageRuntimeIDs       map[string]string
+	messageSendMu           sync.Mutex
+	messageSends            map[string]int
+	agentProcessManagers    map[string]*agentProcessManager
+	agentActivityProducers  map[string]*agentActivityProducer
+	runnerMessageTransports map[string]workspaceRunnerMessageTransport
+	runnerMessageGeneration map[string]uint64
+	lifecycleDiagnostics    *lifecycleDiagnosticWriter
+	runnerInstanceID        string
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -310,6 +312,16 @@ func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, agentID string) err
 }
 
 func (d *Daemon) beginMessageRecovery(writes chan<- []byte) {
+	d.beginMessageRecoveryWithSend(func(request protocol.AgentRecoveryRequest) error {
+		d.enqueueMessageRecoveryRequest(request, writes)
+		return nil
+	})
+}
+
+func (d *Daemon) beginMessageRecoveryWithSend(send func(protocol.AgentRecoveryRequest) error) {
+	if send == nil {
+		return
+	}
 	d.messageCoordinatorMu.RLock()
 	coordinators := make(map[string]*MessageCoordinator, len(d.messageCoordinators))
 	for agentID, coordinator := range d.messageCoordinators {
@@ -317,7 +329,9 @@ func (d *Daemon) beginMessageRecovery(writes chan<- []byte) {
 	}
 	d.messageCoordinatorMu.RUnlock()
 	for agentID, coordinator := range coordinators {
-		d.enqueueMessageRecoveryRequest(coordinator.BeginRecovery(agentID, 100), writes)
+		if err := send(coordinator.BeginRecovery(agentID, 100)); err != nil && d.logger != nil {
+			d.logger.Warn("agent Message recovery request failed", "error", err, "agent_id", agentID)
+		}
 	}
 }
 
@@ -333,7 +347,7 @@ func (d *Daemon) beginAgentMessageRecovery(agentID string, writes chan<- []byte)
 		d.enqueueMessageRecoveryRequest(request, writes)
 		return
 	}
-	d.queueReminderFrame(protocol.EventAgentRecoveryRequest, request)
+	d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentRecoveryRequest, request)
 }
 
 func (d *Daemon) enqueueMessageRecoveryRequest(request protocol.AgentRecoveryRequest, writes chan<- []byte) {
@@ -350,6 +364,16 @@ func (d *Daemon) enqueueMessageRecoveryRequest(request protocol.AgentRecoveryReq
 }
 
 func (d *Daemon) handleMessageRecoveryPage(ctx context.Context, page protocol.AgentRecoveryPage, writes chan<- []byte) error {
+	return d.handleMessageRecoveryPageWithSend(ctx, page, func(request protocol.AgentRecoveryRequest) error {
+		d.enqueueMessageRecoveryRequest(request, writes)
+		return nil
+	})
+}
+
+func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
+	if send == nil {
+		return errors.New("Message recovery sender is unavailable")
+	}
 	d.messageCoordinatorMu.RLock()
 	defer d.messageCoordinatorMu.RUnlock()
 	coordinator := d.messageCoordinators[page.AgentID]
@@ -360,8 +384,7 @@ func (d *Daemon) handleMessageRecoveryPage(ctx context.Context, page protocol.Ag
 		return err
 	}
 	if page.HasMore {
-		d.enqueueMessageRecoveryRequest(coordinator.RecoveryRequest(page.AgentID, 100), writes)
-		return nil
+		return send(coordinator.RecoveryRequest(page.AgentID, 100))
 	}
 	return coordinator.Flush(ctx)
 }
@@ -394,6 +417,8 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		messageRuntimeIDs:         make(map[string]string),
 		agentProcessManagers:      make(map[string]*agentProcessManager),
 		agentActivityProducers:    make(map[string]*agentActivityProducer),
+		runnerMessageTransports:   make(map[string]workspaceRunnerMessageTransport),
+		runnerMessageGeneration:   make(map[string]uint64),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		machineUpgradeGeneration:  uuid.NewString(),
 		runnerInstanceID:          uuid.NewString(),

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
-import type { CreateNotePageRequest, NotePage, NotePageListResponse, UpdateNotePageRequest, UpdateNotePageSharesRequest } from "../types";
+import type { CreateNotePageRequest, DuplicateNotePageRequest, NotePage, NotePageListResponse, UpdateNotePageRequest, UpdateNotePageSharesRequest } from "../types";
 import { noteKeys } from "./queries";
 
 export function useCreateNotePage() {
@@ -16,6 +16,23 @@ export function useCreateNotePage() {
           : old,
       );
       qc.setQueryData(noteKeys.detail(wsId, page.id), page);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: noteKeys.list(wsId) }),
+  });
+}
+
+export function useDuplicateNotePage() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data?: DuplicateNotePageRequest }) => api.duplicateNotePage(id, data),
+    onSuccess: (response) => {
+      qc.setQueryData<NotePageListResponse>(noteKeys.list(wsId), (old) =>
+        old
+          ? { pages: [...old.pages.filter((page) => !response.pages.some((copy) => copy.id === page.id)), ...response.pages] }
+          : response,
+      );
+      for (const page of response.pages) qc.setQueryData(noteKeys.detail(wsId, page.id), page);
     },
     onSettled: () => qc.invalidateQueries({ queryKey: noteKeys.list(wsId) }),
   });

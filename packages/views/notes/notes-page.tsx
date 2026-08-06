@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, Lock, MoreHorizontal, Plus, Share2, Trash2, Undo2, Users } from "lucide-react";
+import { Copy, FileText, Lock, MoreHorizontal, Plus, Share2, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
-import { useCreateNotePage, useDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
+import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import type { MemberWithUser, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -57,6 +57,7 @@ function NoteTreeRow({
   onOpen,
   onCreateChild,
   onShare,
+  onDuplicate,
   onDelete,
 }: {
   node: NoteTreeNode;
@@ -65,6 +66,7 @@ function NoteTreeRow({
   onOpen: (id: string) => void;
   onCreateChild: (parentId: string) => void;
   onShare: (page: NotePage) => void;
+  onDuplicate: (page: NotePage) => void;
   onDelete: (page: NotePage) => void;
 }) {
   const { t } = useT("layout");
@@ -151,6 +153,10 @@ function NoteTreeRow({
                   <Share2 className="size-3.5" />
                   {t(($) => $.notes_page.share_action)}
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onDuplicate(node)}>
+                  <Copy className="size-3.5" />
+                  {t(($) => $.notes_page.duplicate_action)}
+                </DropdownMenuItem>
                 <DropdownMenuItem variant="destructive" onClick={() => onDelete(node)}>
                   <Trash2 className="size-3.5" />
                   {t(($) => $.notes_page.delete_action)}
@@ -169,7 +175,7 @@ function NoteTreeRow({
         </div>
       </div>
       {node.children.map((child) => (
-        <NoteTreeRow key={child.id} node={child} depth={depth + 1} activeId={activeId} onOpen={onOpen} onCreateChild={onCreateChild} onShare={onShare} onDelete={onDelete} />
+        <NoteTreeRow key={child.id} node={child} depth={depth + 1} activeId={activeId} onOpen={onOpen} onCreateChild={onCreateChild} onShare={onShare} onDuplicate={onDuplicate} onDelete={onDelete} />
       ))}
     </>
   );
@@ -359,7 +365,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
   const selected = detailPage?.id ? detailPage : selectedFromList;
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
+  const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
+  const sharedTree = useMemo(() => tree.filter((node) => node.owner_user_id !== currentUserId), [currentUserId, tree]);
   const createPage = useCreateNotePage();
+  const duplicatePage = useDuplicateNotePage();
   const deletePage = useDeleteNotePage();
   const restorePage = useRestoreNotePage();
   const [sharePage, setSharePage] = useState<NotePage | null>(null);
@@ -377,6 +386,24 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       navigation.push(paths.noteDetail(page.id));
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.create_failed));
+    }
+  };
+
+  const handleDuplicate = async (page: NotePage) => {
+    if (!page.can_manage_shares) return;
+    try {
+      const response = await duplicatePage.mutateAsync({
+        id: page.id,
+        data: { title: t(($) => $.notes_page.duplicate_title, { title: page.title }) },
+      });
+      const copiedPage = response.pages[0];
+      toast.success(t(($) => $.notes_page.duplicated));
+      if (copiedPage) {
+        setShowTrash(false);
+        navigation.push(paths.noteDetail(copiedPage.id));
+      }
+    } catch (error) {
+      showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.duplicate_failed));
     }
   };
 
@@ -418,7 +445,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-72 shrink-0 flex-col border-r bg-muted/20">
           <div className="flex items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground">
-            <span>{t(($) => $.notes_page.directory)}</span>
+            <span>{t(($) => $.notes_page.my_directory)}</span>
             <Button size="icon" variant="ghost" className="size-7" onClick={() => {
               setShowTrash(false);
               handleCreate(null);
@@ -433,15 +460,29 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                 <div className="h-4 w-36 rounded bg-muted" />
                 <div className="h-4 w-28 rounded bg-muted" />
               </div>
-            ) : tree.length === 0 ? (
-              <button type="button" className="w-full rounded-lg border border-dashed p-4 text-left text-sm text-muted-foreground hover:bg-muted/50" onClick={() => handleCreate(null)}>
-                {t(($) => $.notes_page.empty_create_hint)}
-              </button>
             ) : (
-              <div className="space-y-0.5">
-                {tree.map((node) => (
-                  <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} onOpen={openPage} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDelete={handleDelete} />
-                ))}
+              <div className="space-y-3">
+                <div className="space-y-0.5">
+                  {ownTree.length === 0 ? (
+                    <button type="button" className="w-full rounded-lg border border-dashed p-4 text-left text-sm text-muted-foreground hover:bg-muted/50" onClick={() => handleCreate(null)}>
+                      {t(($) => $.notes_page.empty_create_hint)}
+                    </button>
+                  ) : (
+                    ownTree.map((node) => (
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} onOpen={openPage} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                    ))
+                  )}
+                </div>
+                {sharedTree.length > 0 && (
+                  <div className="space-y-0.5">
+                    <div className="px-2 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      {t(($) => $.notes_page.shared_directory)}
+                    </div>
+                    {sharedTree.map((node) => (
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} onOpen={openPage} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -27,6 +27,10 @@ export interface UpdateNotePageRequest {
   content?: string;
 }
 
+export interface DuplicateNotePageRequest {
+  title?: string;
+}
+
 export interface UpdateNotePageSharesRequest {
   user_ids: string[];
 }

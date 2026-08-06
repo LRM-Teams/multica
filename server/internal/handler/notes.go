@@ -517,6 +517,29 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 	writeJSON(w, http.StatusCreated, map[string]any{"pages": copied})
 }
 
+func (h *Handler) PermanentlyDeleteNotePage(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	pageUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "note page id")
+	if !ok {
+		return
+	}
+	result, err := h.DB.Exec(r.Context(), `
+DELETE FROM note_page
+WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3 AND deleted_at IS NOT NULL`, pageUUID, workspaceID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to permanently delete note page")
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "note page not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) RestoreNotePage(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {

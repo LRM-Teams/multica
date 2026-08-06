@@ -124,6 +124,26 @@ export function useDeleteNotePage() {
   });
 }
 
+export function usePermanentlyDeleteNotePage() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (id: string) => api.permanentlyDeleteNotePage(id),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: noteKeys.trash(wsId) });
+      const prevTrash = qc.getQueryData<NotePageListResponse>(noteKeys.trash(wsId));
+      qc.setQueryData<NotePageListResponse>(noteKeys.trash(wsId), (old) =>
+        old ? { pages: old.pages.filter((p) => p.id !== id) } : old,
+      );
+      return { prevTrash };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.prevTrash) qc.setQueryData(noteKeys.trash(wsId), ctx.prevTrash);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: noteKeys.trash(wsId) }),
+  });
+}
+
 export function useRestoreNotePage() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

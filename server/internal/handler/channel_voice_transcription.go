@@ -430,14 +430,8 @@ func (h *Handler) dispatchTranscribedChannelVoiceMessageSideEffects(ctx context.
 
 func (h *Handler) dispatchHumanChannelMessageSideEffectsWithVoiceReplay(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse, initiatorUserID pgtype.UUID, replayTranscribedVoice bool) {
 	if msg.ThreadRootMessageID != nil {
-		if ch.Kind == "dm" {
-			h.dispatchDMThreadReply(ctx, ch, msg, initiatorUserID)
-		} else {
-			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorUserID)
-		}
-	} else if ch.Kind == "dm" {
-		h.dispatchDMAgentReply(ctx, ch, msg, initiatorUserID)
-	} else {
+		h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorUserID)
+	} else if ch.Kind != "dm" {
 		h.ingestWendyHumanGroupMessage(ctx, ch, msg)
 		if replayTranscribedVoice {
 			h.dispatchTranscribedChannelMessageToAgents(ctx, ch, msg, initiatorUserID)

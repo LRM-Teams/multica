@@ -233,15 +233,8 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 	}
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "system", "", scope.ChannelID, msg)
 
-	// System rows are observable but never ambiently wake agents. A structured
-	// agent reference is the explicit exception: dispatch only that member.
-	if scope.DirectSource && targetAgent.ID.Valid && scope.InitiatorUserID.Valid {
-		// The persisted reference is an explicit personal mention, so retain the
-		// established inbox reason instead of adding a parallel event reason.
-		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, targetAgent, msg, scope.InitiatorUserID, "mention"); err != nil {
-			slog.Warn("issue thread backflow: dispatch target agent", "issue", identifier, "event", event, "agent", uuidToString(targetAgent.ID), "error", err)
-		}
-	}
+	// A structured Agent reference is resolved by the committed channel:message
+	// Delivery boundary above. System rows otherwise remain observable only.
 }
 
 // tryMergeIssueThreadBackflow folds a new aggregatable transition into an open
@@ -340,12 +333,6 @@ func (h *Handler) tryMergeIssueThreadBackflow(ctx context.Context, ch ChannelRes
 
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessageUpdated, ch.WorkspaceID, "system", "", scope.ChannelID, msg)
 
-	// Only the newly added item may wake its directed target (if any).
-	if scope.DirectSource && targetAgent.ID.Valid && scope.InitiatorUserID.Valid {
-		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, targetAgent, msg, scope.InitiatorUserID, "mention"); err != nil {
-			slog.Warn("issue thread backflow: dispatch target agent on merge", "issue", incoming.IssueIdentifier, "event", event, "agent", uuidToString(targetAgent.ID), "error", err)
-		}
-	}
 	return true
 }
 

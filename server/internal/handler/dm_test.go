@@ -1199,10 +1199,9 @@ func TestPrivateAgentDMChannelAllowsAnyChannelMemberPostBatch908(t *testing.T) {
 	}
 }
 
-// TestDMDispatch_SelfTriggerGuard: an agent-authored DM message must NOT
-// re-dispatch to that same agent (otherwise an agent DM would loop on its own
-// replies). The guard short-circuits before any session is ensured.
-func TestDMDispatch_SelfTriggerGuard(t *testing.T) {
+// TestCanonicalMessageDeliverySkipsSelfAuthoredDM ensures an agent-authored DM
+// cannot re-deliver to that agent (otherwise its replies would loop).
+func TestCanonicalMessageDeliverySkipsSelfAuthoredDM(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1220,12 +1219,8 @@ func TestDMDispatch_SelfTriggerGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert agent trigger: %v", err)
 	}
-	testHandler.dispatchDMAgentReply(ctx, ch, trigger, parseUUID(testUserID))
-
-	var n int
-	testPool.QueryRow(ctx, `SELECT count(*) FROM channel_agent_session WHERE channel_id=$1`, channelID).Scan(&n)
-	if n != 0 {
-		t.Fatalf("self-trigger guard failed: agent's own message created %d sessions (want 0)", n)
+	if recipients := testHandler.canonicalMessageDeliveryRecipients(ctx, ch, trigger); len(recipients) != 0 {
+		t.Fatalf("self-authored DM recipients = %d, want 0", len(recipients))
 	}
 }
 

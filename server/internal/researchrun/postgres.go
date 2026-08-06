@@ -561,11 +561,12 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 			return nil, err
 		}
 		item.ExecutionTarget.AgentID = item.AgentID
-		item.ExecutionTarget.ConfigFingerprint = ExecutionTargetFingerprint(
-			item.AgentID, item.ExecutionTarget.RuntimeID, item.ExecutionTarget.Provider,
-			item.ExecutionTarget.Model, runtimeMode, pinnedVersion, providerFingerprint,
-			runtimeConfig, customEnv, customArgs, mcpConfig, thinkingLevel,
-		)
+		item.ExecutionTarget = FingerprintExecutionTarget(item.ExecutionTarget, ExecutionTargetConfigIdentity{
+			RuntimeMode: runtimeMode, RuntimePinnedVersion: pinnedVersion,
+			ProviderStateFingerprint: providerFingerprint, RuntimeConfig: runtimeConfig,
+			CustomEnv: customEnv, CustomArgs: customArgs, MCPConfig: mcpConfig,
+			ThinkingLevel: thinkingLevel,
+		})
 		if blockedUntil.Valid {
 			until := blockedUntil.Time
 			item.ProviderBlockedUntil = &until
@@ -804,7 +805,8 @@ const attemptSelectSQL = `
 	SELECT a.id::text, a.session_id::text, a.workspace_id::text, a.task_id::text,
 	       a.attempt_number, a.assigned_agent_id::text,
 	       a.execution_adapter, COALESCE(a.runtime_id::text, ''), a.provider,
-	       a.model, a.target_config_fingerprint,
+	       a.model, a.target_config_fingerprint, a.agent_config_fingerprint,
+	       a.runtime_config_fingerprint, a.provider_config_fingerprint,
 	       COALESCE(a.inbox_task_id::text, ''), a.dispatch_key,
 	       COALESCE(a.client_request_id, ''), a.status, COALESCE(a.result_hash, ''),
 	       a.failure_class, a.source_failure_reason, a.diagnostics, a.dispatched_at, a.started_at,
@@ -820,6 +822,9 @@ func scanAttempt(row scanner) (Attempt, error) {
 		&item.AttemptNumber, &item.AssignedAgentID, &item.ExecutionTarget.Adapter,
 		&item.ExecutionTarget.RuntimeID, &item.ExecutionTarget.Provider,
 		&item.ExecutionTarget.Model, &item.ExecutionTarget.ConfigFingerprint,
+		&item.ExecutionTarget.AgentConfigFingerprint,
+		&item.ExecutionTarget.RuntimeConfigFingerprint,
+		&item.ExecutionTarget.ProviderConfigFingerprint,
 		&item.InboxTaskID, &item.DispatchKey,
 		&item.ClientRequestID, &item.Status, &item.ResultHash, &item.FailureClass,
 		&item.SourceFailureReason, &item.Diagnostics, &item.DispatchedAt, &item.StartedAt, &item.RuntimeStartedAt,

@@ -203,27 +203,33 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		INSERT INTO research_task_attempt (
 			id, workspace_id, session_id, task_id, attempt_number, assigned_agent_id,
 			execution_adapter, runtime_id, provider, model, target_config_fingerprint,
+			agent_config_fingerprint, runtime_config_fingerprint, provider_config_fingerprint,
 			dispatch_key, status
 		) VALUES (
 			$1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::uuid,
-			$8, NULLIF($9, '')::uuid, $10, $11, $12, $7, 'dispatching'
+			$8, NULLIF($9, '')::uuid, $10, $11, $12, $13, $14, $15, $7, 'dispatching'
 		)
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
 		          attempt_number, assigned_agent_id::text,
 		          execution_adapter, COALESCE(runtime_id::text, ''), provider, model,
-		          target_config_fingerprint, '', dispatch_key, '', status,
+		          target_config_fingerprint, agent_config_fingerprint,
+		          runtime_config_fingerprint, provider_config_fingerprint,
+		          '', dispatch_key, '', status,
 		          '', failure_class, source_failure_reason, diagnostics, dispatched_at, started_at,
 		          runtime_started_at, runtime_last_observed_at, runtime_lease_expires_at,
 		          cancellation_requested_at, cancellation_completed_at,
 		          pending_failure_class, pending_failure_diagnostics,
 		          pending_failure_retryable, result_submitted_at, completed_at
 	`, in.AttemptID, workspaceID, in.SessionID, in.TaskID, attemptNumber, in.AgentID, in.Request.Key,
-		target.Adapter, target.RuntimeID, target.Provider, target.Model, target.ConfigFingerprint).Scan(
+		target.Adapter, target.RuntimeID, target.Provider, target.Model, target.ConfigFingerprint,
+		target.AgentConfigFingerprint, target.RuntimeConfigFingerprint, target.ProviderConfigFingerprint).Scan(
 		&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID, &attempt.TaskID,
 		&attempt.AttemptNumber, &attempt.AssignedAgentID,
 		&attempt.ExecutionTarget.Adapter, &attempt.ExecutionTarget.RuntimeID,
 		&attempt.ExecutionTarget.Provider, &attempt.ExecutionTarget.Model,
-		&attempt.ExecutionTarget.ConfigFingerprint, &attempt.InboxTaskID,
+		&attempt.ExecutionTarget.ConfigFingerprint, &attempt.ExecutionTarget.AgentConfigFingerprint,
+		&attempt.ExecutionTarget.RuntimeConfigFingerprint, &attempt.ExecutionTarget.ProviderConfigFingerprint,
+		&attempt.InboxTaskID,
 		&attempt.DispatchKey, &attempt.ClientRequestID, &attempt.Status,
 		&attempt.ResultHash, &attempt.FailureClass, &attempt.SourceFailureReason, &attempt.Diagnostics,
 		&attempt.DispatchedAt, &attempt.StartedAt, &attempt.RuntimeStartedAt,
@@ -286,7 +292,9 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
 		          attempt_number, assigned_agent_id::text,
 		          execution_adapter, COALESCE(runtime_id::text, ''), provider, model,
-		          target_config_fingerprint, inbox_task_id::text,
+		          target_config_fingerprint, agent_config_fingerprint,
+		          runtime_config_fingerprint, provider_config_fingerprint,
+		          inbox_task_id::text,
 		          dispatch_key, COALESCE(client_request_id, ''), status,
 		          COALESCE(result_hash, ''), failure_class, source_failure_reason, diagnostics, dispatched_at,
 		          started_at, runtime_started_at, runtime_last_observed_at,
@@ -298,7 +306,8 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 		&attempt.TaskID, &attempt.AttemptNumber, &attempt.AssignedAgentID,
 		&attempt.ExecutionTarget.Adapter, &attempt.ExecutionTarget.RuntimeID,
 		&attempt.ExecutionTarget.Provider, &attempt.ExecutionTarget.Model,
-		&attempt.ExecutionTarget.ConfigFingerprint,
+		&attempt.ExecutionTarget.ConfigFingerprint, &attempt.ExecutionTarget.AgentConfigFingerprint,
+		&attempt.ExecutionTarget.RuntimeConfigFingerprint, &attempt.ExecutionTarget.ProviderConfigFingerprint,
 		&attempt.InboxTaskID, &attempt.DispatchKey, &attempt.ClientRequestID,
 		&attempt.Status, &attempt.ResultHash, &attempt.FailureClass,
 		&attempt.SourceFailureReason, &attempt.Diagnostics, &attempt.DispatchedAt, &attempt.StartedAt,

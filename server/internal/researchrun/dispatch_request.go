@@ -89,6 +89,40 @@ func ExecutionTargetFingerprint(parts ...string) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
+type ExecutionTargetConfigIdentity struct {
+	RuntimeMode              string
+	RuntimePinnedVersion     string
+	ProviderStateFingerprint string
+	RuntimeConfig            string
+	CustomEnv                string
+	CustomArgs               string
+	MCPConfig                string
+	ThinkingLevel            string
+}
+
+// FingerprintExecutionTarget adds scoped circuit identities while preserving
+// the aggregate fingerprint protocol already frozen into active Attempts.
+func FingerprintExecutionTarget(target ExecutionTarget, config ExecutionTargetConfigIdentity) ExecutionTarget {
+	target.AgentConfigFingerprint = ExecutionTargetFingerprint(
+		target.AgentID, target.Model, config.RuntimeConfig, config.CustomEnv,
+		config.CustomArgs, config.MCPConfig, config.ThinkingLevel,
+	)
+	target.RuntimeConfigFingerprint = ExecutionTargetFingerprint(
+		target.RuntimeID, config.RuntimeMode, config.RuntimePinnedVersion,
+	)
+	target.ProviderConfigFingerprint = ExecutionTargetFingerprint(
+		target.RuntimeID, target.Provider, config.ProviderStateFingerprint,
+		config.RuntimeConfig, config.CustomEnv,
+	)
+	target.ConfigFingerprint = ExecutionTargetFingerprint(
+		target.AgentID, target.RuntimeID, target.Provider, target.Model,
+		config.RuntimeMode, config.RuntimePinnedVersion, config.ProviderStateFingerprint,
+		config.RuntimeConfig, config.CustomEnv, config.CustomArgs, config.MCPConfig,
+		config.ThinkingLevel,
+	)
+	return target
+}
+
 func encodeDispatchRequest(request DispatchRequest) ([]byte, string, error) {
 	hash, err := HashDispatchRequest(request)
 	if err != nil {

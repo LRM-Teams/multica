@@ -78,4 +78,9 @@ func TestExecutionTargetIsFrozenIntoAttemptAndOutbox(t *testing.T) {
 	if !errors.As(mutationErr, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "research_task_attempt_execution_target_immutable_check" {
 		t.Fatalf("immutable target mutation error=%v", mutationErr)
 	}
+	_, mutationErr = pool.Exec(ctx, `UPDATE research_task_attempt SET provider_config_fingerprint = 'other-provider-config' WHERE id = $1::uuid`, attempt.ID)
+	pgErr = nil
+	if !errors.As(mutationErr, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "research_task_attempt_execution_target_immutable_check" {
+		t.Fatalf("immutable scoped fingerprint mutation error=%v", mutationErr)
+	}
 }

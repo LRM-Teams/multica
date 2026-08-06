@@ -859,5 +859,11 @@
     "status_fail": "failed",
     "status_wait": "waiting",
     "status_mute": "muted"
+  },
+  "canvas_plugins": {
+    "loading_aria": "Loading canvas module",
+    "error_title": "This part failed to load",
+    "error_unknown": "Unexpected error",
+    "retry": "Retry"
   }
 }

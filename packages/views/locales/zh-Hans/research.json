@@ -859,5 +859,11 @@
     "status_fail": "失败",
     "status_wait": "等待",
     "status_mute": "已搁置"
+  },
+  "canvas_plugins": {
+    "loading_aria": "正在加载画布模块",
+    "error_title": "该模块加载失败",
+    "error_unknown": "未知错误",
+    "retry": "重试"
   }
 }

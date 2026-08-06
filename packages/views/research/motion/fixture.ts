@@ -54,13 +54,10 @@ export function transitionEvent(
  * mix of same-lane coalescing candidates and distinct lanes, including a
  * hidden-period window for the background-restore path.
  */
-export function hundredDeltaBurst(
-  overrides: { hiddenCount?: number } = {},
-): ProjectionTransitionEvent[] {
-  const hiddenCount = overrides.hiddenCount ?? 0;
+export function hundredDeltaBurst(): ProjectionTransitionEvent[] {
   const events: ProjectionTransitionEvent[] = [];
   for (let i = 0; i < 100; i += 1) {
-    const kind = ALL_TRANSITION_KINDS[i % ALL_TRANSITION_KINDS.length];
+    const kind = ALL_TRANSITION_KINDS[i % ALL_TRANSITION_KINDS.length]!;
     // Repeat within a small budget window to exercise coalescing; distinct
     // anchor for index multiples of 7 to widen distinct lanes.
     const anchor = i % 7 === 0 ? `anchor-${i % 5}` : `anchor-shared`;

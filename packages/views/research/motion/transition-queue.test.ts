@@ -116,7 +116,7 @@ describe("Coalescing — spec §5.3 same-lane merge", () => {
     const lane = state.queued.get("result_accepted::anchor-1") ?? [];
     const live = lane.filter((e) => e.state !== "settled");
     expect(live.length).toBe(1); // merged → one live
-    expect(live[0].relatedIds).toContain("b");
+    expect(live[0]?.relatedIds).toContain("b");
   });
 });
 
@@ -124,7 +124,7 @@ describe("Cap enforcement — spec §5.3", () => {
   it("keeps the live queue at or under the cap even with many distinct lanes", () => {
     let state = createTransitionQueue({ nowMs: 0 });
     for (let i = 0; i < MOTION_QUEUE_CAP + 5; i += 1) {
-      const kind = ALL_TRANSITION_KINDS[i % ALL_TRANSITION_KINDS.length];
+      const kind = ALL_TRANSITION_KINDS[i % ALL_TRANSITION_KINDS.length]!;
       state = transitionQueueReducer(state, {
         type: "enqueue",
         event: {
@@ -152,7 +152,7 @@ describe("Interrupt — spec §4.3", () => {
     const lane = state.queued.get("dispute_opened::claim-9") ?? [];
     const live = lane.filter((e) => e.state !== "settled");
     expect(live.length).toBe(1);
-    expect(live[0].relatedIds).toContain("new");
+    expect(live[0]?.relatedIds).toContain("new");
   });
 });
 
@@ -160,7 +160,7 @@ describe("Background restore — Rule ⑥", () => {
   it("collapse leaves at most STAGGER_CAP live and the rest settle", () => {
     let state = createTransitionQueue({ nowMs: 0 });
     for (let i = 0; i < 60; i += 1) {
-      const kind = ALL_TRANSITION_KINDS[i % ALL_TRANSITION_KINDS.length];
+      const kind = ALL_TRANSITION_KINDS[i % ALL_TRANSITION_KINDS.length]!;
       state = transitionQueueReducer(state, {
         type: "enqueue",
         event: {

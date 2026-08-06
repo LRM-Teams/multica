@@ -341,7 +341,7 @@ Tests follow the code, not the app. This is the most important testing principle
 | What you're testing | Where the test lives | Why |
 |---|---|---|
 | Shared business logic (stores, queries, hooks) | `packages/core/*.test.ts` | No DOM needed, pure logic |
-| Shared UI components (pages, forms, modals) | `packages/views/*.test.tsx` | jsdom, no framework mocks |
+| Shared UI components (pages, forms, modals) | `packages/views/*.test.tsx` | happy-dom, no framework mocks |
 | Platform-specific wiring (cookies, redirects, searchParams) | `apps/web/*.test.tsx` or `apps/desktop/` | Needs framework-specific mocks |
 | End-to-end user flows | `e2e/*.spec.ts` | Real browser, real backend |
 
@@ -350,8 +350,8 @@ Tests follow the code, not the app. This is the most important testing principle
 ### Test infrastructure
 
 - `packages/core/` — Vitest, Node environment (no DOM)
-- `packages/views/` — Vitest, jsdom environment, `@testing-library/react`
-- `apps/web/` — Vitest, jsdom environment, framework-specific mocks
+- `packages/views/` — Vitest, happy-dom environment, `@testing-library/react`. Files that assert jsdom-only behavior (CSSOM cascade in `getComputedStyle`) opt out per file with `// @vitest-environment jsdom`.
+- `apps/web/` — Vitest, happy-dom environment, framework-specific mocks
 - `e2e/` — Playwright
 - `server/` — Go standard `go test`
 

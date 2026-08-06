@@ -125,7 +125,7 @@ function placeSpine(ctx: PlaceCtx): void {
     2 + Math.floor(stable01(`bend:${seed}`, seed) * (BEND_EVERY_MAX - BEND_EVERY_MIN + 1));
   let x = 0;
   let y = 0;
-  let phase = stablePhase(`spine-phase:${seed}`, seed); // initial bend direction (radians)
+  const phase = stablePhase(`spine-phase:${seed}`, seed); // initial bend direction (radians)
   // Vertical drift applied during each straight run.
   for (let i = 0; i < spine.length; i += 1) {
     const id = spine[i]!;

@@ -50,6 +50,12 @@ var devDescribeRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+-\d+-g[0-9a-fA-F]+`)
 // itself is the shared signal, so the modal pre-check and this server gate
 // agree by construction without needing to compare separate env flags.
 func CheckMinCLIVersion(detected string) error {
+	return CheckCLIVersionAtLeast(detected, MinQuickCreateCLIVersion)
+}
+
+// CheckCLIVersionAtLeast applies the same fail-closed parsing and dev-build
+// policy as CheckMinCLIVersion, for protocol gates that have their own minimum.
+func CheckCLIVersionAtLeast(detected, minimum string) error {
 	d := strings.TrimSpace(detected)
 	if d == "" {
 		return ErrCLIVersionMissing
@@ -61,7 +67,7 @@ func CheckMinCLIVersion(detected string) error {
 	if err != nil {
 		return ErrCLIVersionMissing
 	}
-	min, err := parseSemver(MinQuickCreateCLIVersion)
+	min, err := parseSemver(minimum)
 	if err != nil {
 		// Misconfiguration in the constant itself — fail closed as missing.
 		return ErrCLIVersionMissing

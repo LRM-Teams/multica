@@ -7,6 +7,29 @@ export type ChannelNotifyLevel = "default" | "all" | "mentions" | "muted";
 
 export type ChannelGoalStatus = "active" | "paused" | "completed" | "cancelled";
 
+export interface ChannelGoalWorkGraphSummary {
+  id: string;
+  version: number;
+  status: "active" | "paused" | "deliverable" | "completed" | "cancelled" | "failed";
+  total: number;
+  completed: number;
+  running: number;
+  waiting: number;
+  stale: number;
+}
+
+export interface WorkGraphNode {
+  id: string; issue_id: string; role: string; context_policy: string;
+  execution_status: string; validity_status: string; review_status: string;
+  objective: string; completion_contract: string[]; based_on_graph_version: number;
+}
+export interface WorkGraphEdge { id: string; from_node_id: string; to_node_id: string; edge_type: string; required: boolean; }
+export interface WorkGraphDetail {
+  id: string; workspace_id: string; anchor_kind: string; anchor_id: string; status: string;
+  current_version: number; admission_decision: "GRAPH" | "PROPOSE_GRAPH";
+  nodes: WorkGraphNode[]; edges: WorkGraphEdge[];
+}
+
 export interface ChannelGoal {
   id: string;
   workspace_id: string;
@@ -28,6 +51,7 @@ export interface ChannelGoal {
   created_at: string;
   updated_at: string;
   completed_at?: string;
+  work_graph?: ChannelGoalWorkGraphSummary;
 }
 
 export interface ChannelGoalEnvelope {

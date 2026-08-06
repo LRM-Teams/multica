@@ -220,6 +220,7 @@ import type {
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
   StartVoiceCallDuplexResponse,
+  WorkGraphDetail,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -294,6 +295,7 @@ import {
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelGoalEnvelopeSchema,
+  WorkGraphDetailSchema,
   ChannelGoalProcessEnvelopeSchema,
   ChannelGoalProcessListEnvelopeSchema,
   ChannelGoalSubgoalListEnvelopeSchema,
@@ -3839,6 +3841,13 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal`, abortInit(options));
     return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
       endpoint: "GET /api/channels/:id/goal",
+    });
+  }
+
+  async getWorkGraph(graphId: string): Promise<WorkGraphDetail | null> {
+    const raw = await this.fetch<unknown>(`/api/work-graphs/${encodeURIComponent(graphId)}`);
+    return parseWithFallback(raw, WorkGraphDetailSchema.nullable(), null, {
+      endpoint: "GET /api/work-graphs/:id",
     });
   }
 

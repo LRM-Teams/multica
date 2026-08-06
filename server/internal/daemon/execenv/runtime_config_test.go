@@ -54,6 +54,40 @@ func TestAssignmentSnapshotBriefAvoidsRedundantRoundTrips(t *testing.T) {
 	}
 }
 
+func TestAssignmentBriefIncludesWorkDecompositionGate(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("claude", TaskContextForEnv{
+		IssueID: "issue-assignment",
+		AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+			Title:              "Ship a bounded change",
+			AcceptanceCriteria: []string{"The change is verified"},
+			Status:             "todo",
+			Metadata:           map[string]any{},
+		},
+	})
+
+	for _, want := range []string{
+		"Work Decomposition Gate",
+		"DIRECT",
+		"GRAPH",
+		"PROPOSE_GRAPH",
+		"one bounded context",
+		"independently deliverable",
+		"Do not create graph nodes for a greeting, one tool call",
+		"must not also implement work already delegated",
+		"The server is authoritative",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("assignment brief missing decomposition contract %q\n--- output ---\n%s", want, out)
+		}
+	}
+	for _, forbidden := range []string{"multica issue verify"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("phase-0 brief advertises unavailable command %q\n--- output ---\n%s", forbidden, out)
+		}
+	}
+}
+
 func TestTerminalAssignmentSnapshotStopsWithoutIssueCommands(t *testing.T) {
 	ctx := TaskContextForEnv{
 		IssueID: "issue-terminal",

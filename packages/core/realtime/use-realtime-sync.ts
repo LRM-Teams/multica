@@ -1335,6 +1335,7 @@ export function useRealtimeSync(
       if (id) qc.invalidateQueries({ queryKey: channelKeys.all(id) });
       if (id) qc.invalidateQueries({ queryKey: conversationKeys.list(id) });
       qc.invalidateQueries({ queryKey: channelGoalKeys.all() });
+      qc.invalidateQueries({ queryKey: channelGoalKeys.workGraphs() });
     });
 
     const unsubVoiceCallUpdated = ws.on("voice_call:updated", (payload) => {

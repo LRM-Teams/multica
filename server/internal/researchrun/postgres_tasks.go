@@ -163,12 +163,26 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	var activeCount int
 	if err = tx.QueryRow(ctx, `
 		SELECT count(*)::int FROM research_task_attempt
-		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')
+		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling')
 	`, in.SessionID).Scan(&activeCount); err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
 	if activeCount >= maxParallel {
 		return Attempt{}, RunEvent{}, fmt.Errorf("%w: run parallel task limit reached", ErrInvalidTransition)
+	}
+	var cancellationPending bool
+	if err = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1 FROM research_task_attempt
+		  WHERE task_id = $1::uuid
+		    AND status IN ('cancelling', 'cancelled')
+		    AND cancellation_completed_at IS NULL
+		)
+	`, in.TaskID).Scan(&cancellationPending); err != nil {
+		return Attempt{}, RunEvent{}, err
+	}
+	if cancellationPending {
+		return Attempt{}, RunEvent{}, fmt.Errorf("%w: prior attempt cancellation is not acknowledged", ErrInvalidTransition)
 	}
 	attemptNumber := attemptCount + 1
 	var attempt Attempt
@@ -180,13 +194,19 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
 		          attempt_number, assigned_agent_id::text, '', dispatch_key, '', status,
 		          '', failure_class, diagnostics, dispatched_at, started_at,
-		          result_submitted_at, completed_at
+		          runtime_started_at, runtime_last_observed_at, runtime_lease_expires_at,
+		          cancellation_requested_at, cancellation_completed_at,
+		          pending_failure_class, pending_failure_diagnostics,
+		          pending_failure_retryable, result_submitted_at, completed_at
 	`, in.AttemptID, workspaceID, in.SessionID, in.TaskID, attemptNumber, in.AgentID, in.Request.Key).Scan(
 		&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID, &attempt.TaskID,
 		&attempt.AttemptNumber, &attempt.AssignedAgentID, &attempt.InboxTaskID,
 		&attempt.DispatchKey, &attempt.ClientRequestID, &attempt.Status,
 		&attempt.ResultHash, &attempt.FailureClass, &attempt.Diagnostics,
-		&attempt.DispatchedAt, &attempt.StartedAt, &attempt.ResultSubmittedAt,
+		&attempt.DispatchedAt, &attempt.StartedAt, &attempt.RuntimeStartedAt,
+		&attempt.RuntimeObservedAt, &attempt.RuntimeLeaseUntil, &attempt.CancelRequestedAt,
+		&attempt.CancelCompletedAt, &attempt.PendingFailure, &attempt.PendingDiagnostics,
+		&attempt.PendingRetryable, &attempt.ResultSubmittedAt,
 		&attempt.CompletedAt,
 	)
 	if err != nil {
@@ -237,18 +257,25 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 	var attempt Attempt
 	err = tx.QueryRow(ctx, `
 		UPDATE research_task_attempt
-		SET inbox_task_id = $2::uuid, status = 'running', started_at = COALESCE(started_at, now()), updated_at = now()
+		SET inbox_task_id = $2::uuid, updated_at = now()
 		WHERE id = $1::uuid AND status = 'dispatching'
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
 		          attempt_number, assigned_agent_id::text, inbox_task_id::text,
 		          dispatch_key, COALESCE(client_request_id, ''), status,
 		          COALESCE(result_hash, ''), failure_class, diagnostics, dispatched_at,
-		          started_at, result_submitted_at, completed_at
+		          started_at, runtime_started_at, runtime_last_observed_at,
+		          runtime_lease_expires_at, cancellation_requested_at,
+		          cancellation_completed_at, pending_failure_class,
+		          pending_failure_diagnostics, pending_failure_retryable,
+		          result_submitted_at, completed_at
 	`, attemptID, inboxTaskID).Scan(&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID,
 		&attempt.TaskID, &attempt.AttemptNumber, &attempt.AssignedAgentID,
 		&attempt.InboxTaskID, &attempt.DispatchKey, &attempt.ClientRequestID,
 		&attempt.Status, &attempt.ResultHash, &attempt.FailureClass,
 		&attempt.Diagnostics, &attempt.DispatchedAt, &attempt.StartedAt,
+		&attempt.RuntimeStartedAt, &attempt.RuntimeObservedAt, &attempt.RuntimeLeaseUntil,
+		&attempt.CancelRequestedAt, &attempt.CancelCompletedAt, &attempt.PendingFailure,
+		&attempt.PendingDiagnostics, &attempt.PendingRetryable,
 		&attempt.ResultSubmittedAt, &attempt.CompletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		row := tx.QueryRow(ctx, attemptSelectSQL+` WHERE a.id = $1::uuid`, attemptID)
@@ -256,15 +283,12 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 		if err != nil {
 			return Attempt{}, RunEvent{}, fmt.Errorf("%w: attach attempt", ErrInvalidTransition)
 		}
-		if attempt.InboxTaskID == inboxTaskID && (attempt.Status == AttemptStatusRunning || attempt.Status == AttemptStatusSucceeded) {
+		if attempt.InboxTaskID == inboxTaskID && (attempt.Status == AttemptStatusDispatching || attempt.Status == AttemptStatusRunning || attempt.Status == AttemptStatusSucceeded) {
 			return attempt, RunEvent{}, tx.Commit(ctx)
 		}
 		return Attempt{}, RunEvent{}, fmt.Errorf("%w: attempt is not dispatching", ErrInvalidTransition)
 	}
 	if err != nil {
-		return Attempt{}, RunEvent{}, err
-	}
-	if _, err = tx.Exec(ctx, `UPDATE research_task SET status = 'running', started_at = COALESCE(started_at, now()), updated_at = now() WHERE id = $1::uuid`, attempt.TaskID); err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
 	if _, err = tx.Exec(ctx, `
@@ -275,7 +299,7 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 	`, attempt.ID); err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
-	event, err := appendEvent(ctx, tx, attempt.WorkspaceID, attempt.SessionID, "task_started", "task-started:"+attempt.ID, "system", "", map[string]any{
+	event, err := appendEvent(ctx, tx, attempt.WorkspaceID, attempt.SessionID, "task_dispatched", "task-dispatched:"+attempt.ID, "system", "", map[string]any{
 		"task_id": attempt.TaskID, "attempt_id": attempt.ID, "inbox_task_id": inboxTaskID, "agent_id": attempt.AssignedAgentID,
 	})
 	if err != nil {
@@ -320,7 +344,7 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 		       a.assigned_agent_id::text,
 		       a.attempt_number, t.max_attempts
 		FROM research_task_attempt a JOIN research_task t ON t.id = a.task_id
-		WHERE a.id = $1::uuid AND a.status IN ('dispatching', 'running')
+		WHERE a.id = $1::uuid AND a.status IN ('dispatching', 'running', 'cancelling')
 		FOR UPDATE OF a, t
 	`, in.AttemptID).Scan(&sessionID, &workspaceID, &taskID, &assignedAgentID, &attemptNumber, &maxAttempts)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -341,6 +365,12 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task_attempt
 		SET status = 'failed', failure_class = $2, diagnostics = $3,
+		    cancellation_completed_at = CASE
+		      WHEN status = 'cancelling' THEN COALESCE(cancellation_completed_at, now())
+		      ELSE cancellation_completed_at
+		    END,
+		    pending_failure_class = '', pending_failure_diagnostics = '',
+		    pending_failure_retryable = false,
 		    completed_at = now(), updated_at = now()
 		WHERE id = $1::uuid
 	`, in.AttemptID, truncateBytes(in.FailureClass, 160), diagnostics); err != nil {
@@ -670,7 +700,7 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT inbox_task_id::text FROM research_task_attempt
-		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running') AND inbox_task_id IS NOT NULL
+		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling') AND inbox_task_id IS NOT NULL
 	`, sessionID)
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
@@ -691,13 +721,20 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 		FROM research_dispatch_outbox outbox
 		WHERE outbox.attempt_id = attempt.id
 		  AND attempt.session_id = $1::uuid
-		  AND attempt.status IN ('dispatching', 'running')
+		  AND attempt.status IN ('dispatching', 'running', 'cancelling')
 		  AND outbox.status = 'pending'
 		  AND outbox.delivery_attempts = 0
 	`, sessionID); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE research_task_attempt SET status = 'cancelled', failure_class = $2, completed_at = now(), updated_at = now() WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')`, sessionID, target); err != nil {
+	if _, err = tx.Exec(ctx, `
+		UPDATE research_task_attempt
+		SET status = 'cancelled', failure_class = $2,
+		    pending_failure_class = '', pending_failure_diagnostics = '',
+		    pending_failure_retryable = false,
+		    completed_at = now(), updated_at = now()
+		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling')
+	`, sessionID, target); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	if _, err = tx.Exec(ctx, `
@@ -810,7 +847,7 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 		resolvedFreshness, resolvedLanguage, resolvedSourcePolicy, resolvedLimits, in.UserID, truncateBytes(in.Reason, 4096)); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT inbox_task_id::text FROM research_task_attempt WHERE session_id = $1::uuid AND status IN ('dispatching', 'running') AND inbox_task_id IS NOT NULL`, in.SessionID)
+	rows, err := tx.Query(ctx, `SELECT inbox_task_id::text FROM research_task_attempt WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling') AND inbox_task_id IS NOT NULL`, in.SessionID)
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
@@ -833,13 +870,20 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 			FROM research_dispatch_outbox outbox
 			WHERE outbox.attempt_id = attempt.id
 			  AND attempt.session_id = $1::uuid
-			  AND attempt.status IN ('dispatching', 'running')
+			  AND attempt.status IN ('dispatching', 'running', 'cancelling')
 			  AND outbox.status = 'pending'
 			  AND outbox.delivery_attempts = 0
 		`, in.SessionID); err != nil {
 			return Run{}, RunEvent{}, nil, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE research_task_attempt SET status = 'cancelled', failure_class = 'goal_steered', completed_at = now(), updated_at = now() WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')`, in.SessionID); err != nil {
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_task_attempt
+			SET status = 'cancelled', failure_class = 'goal_steered',
+			    pending_failure_class = '', pending_failure_diagnostics = '',
+			    pending_failure_retryable = false,
+			    completed_at = now(), updated_at = now()
+			WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling')
+		`, in.SessionID); err != nil {
 			return Run{}, RunEvent{}, nil, err
 		}
 		if _, err = tx.Exec(ctx, `

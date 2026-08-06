@@ -335,7 +335,7 @@ func (s *PostgresStore) nodeCommandRetry(
 	}
 
 	// Preserve original attempts; only reopen the task for a new attempt.
-	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning) {
+	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning || latest.Status == AttemptStatusCancelling) {
 		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNotRetryable, "任务仍在执行，请等待结束后再重试，或先改派")
 	}
 
@@ -463,6 +463,9 @@ func (s *PostgresStore) nodeCommandReassign(
 	if hasLatest && fromAgent == "" {
 		fromAgent = strings.TrimSpace(latest.AssignedAgentID)
 	}
+	if hasLatest && latest.CancelCompletedAt == nil && (latest.Status == AttemptStatusCancelling || latest.Status == AttemptStatusCancelled) {
+		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNotRetryable, "原执行仍在停止中，请等待取消确认后再改派")
+	}
 
 	// Cancel in-flight attempt so a new assignee can take over; keep the row.
 	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning) {
@@ -502,7 +505,7 @@ func (s *PostgresStore) nodeCommandReassign(
 	activeLoad := map[string]int{}
 	rows, qerr := tx.Query(ctx, `
 		SELECT assigned_agent_id::text FROM research_task_attempt
-		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')
+		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling')
 	`, in.SessionID)
 	if qerr != nil {
 		return NodeCommandOutcome{}, qerr
@@ -681,7 +684,7 @@ func retryEligibility(task Task, latest Attempt, hasLatest bool) *NodeCommandDen
 			return nil
 		}
 		return denyNodeCommand(NodeCmdCodeNotRetryable, "最近一次尝试已成功，无需重试")
-	case AttemptStatusDispatching, AttemptStatusRunning:
+	case AttemptStatusDispatching, AttemptStatusRunning, AttemptStatusCancelling:
 		return denyNodeCommand(NodeCmdCodeNotRetryable, "任务仍在执行，请等待结束后再重试，或先改派")
 	default:
 		if task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed {

@@ -97,6 +97,10 @@ func TestProjectRunV2GraphParallelTasks(t *testing.T) {
 func TestProjectRunV2GraphRetryAndFailedAttempt(t *testing.T) {
 	sessionID := "33333333-3333-3333-3333-333333333333"
 	agentID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	runtimeStartedAt := time.Unix(1_700_000_150, 0).UTC()
+	runtimeObservedAt := time.Unix(1_700_000_180, 0).UTC()
+	runtimeLeaseUntil := time.Unix(1_700_000_240, 0).UTC()
+	cancelRequestedAt := time.Unix(1_700_000_190, 0).UTC()
 	snap := researchrun.RunSnapshot{
 		Run: researchrun.Run{
 			SessionID:      sessionID,
@@ -116,7 +120,14 @@ func TestProjectRunV2GraphRetryAndFailedAttempt(t *testing.T) {
 		},
 		Attempts: []researchrun.Attempt{
 			{ID: "a1", TaskID: "t1", AttemptNumber: 1, AssignedAgentID: agentID, Status: researchrun.AttemptStatusFailed, FailureClass: "result_not_submitted", Diagnostics: "missing structured result"},
-			{ID: "a2", TaskID: "t1", AttemptNumber: 2, AssignedAgentID: agentID, Status: researchrun.AttemptStatusRunning},
+			{
+				ID: "a2", TaskID: "t1", AttemptNumber: 2, AssignedAgentID: agentID,
+				InboxTaskID: "inbox-2", DispatchKey: "research:dispatch:a2", Status: researchrun.AttemptStatusCancelling,
+				DispatchedAt: time.Unix(1_700_000_100, 0).UTC(), RuntimeStartedAt: &runtimeStartedAt,
+				RuntimeObservedAt: &runtimeObservedAt, RuntimeLeaseUntil: &runtimeLeaseUntil,
+				CancelRequestedAt: &cancelRequestedAt, PendingFailure: "task_timeout",
+				PendingDiagnostics: "runtime exceeded 30 seconds", PendingRetryable: true,
+			},
 		},
 	}
 	nodes, edges := projectRunV2Graph(snap)
@@ -136,6 +147,17 @@ func TestProjectRunV2GraphRetryAndFailedAttempt(t *testing.T) {
 	retry := findNodeByPayload(t, nodes, "attempt_id", "a2")
 	if retry.Status != "running" {
 		t.Fatalf("retry attempt status=%q", retry.Status)
+	}
+	retryPayload := payloadObject(retry.Payload)
+	if retryPayload["attempt_status"] != "cancelling" || retryPayload["inbox_task_id"] != "inbox-2" || retryPayload["pending_failure_class"] != "task_timeout" {
+		t.Fatalf("retry runtime payload=%v", retryPayload)
+	}
+	retryDetails, _ := retryPayload["details"].(map[string]any)
+	if retryDetails["runtime_started_at"] != runtimeStartedAt.Format(time.RFC3339) || retryDetails["runtime_lease_expires_at"] != runtimeLeaseUntil.Format(time.RFC3339) {
+		t.Fatalf("retry runtime details=%v", retryDetails)
+	}
+	if retryDetails["pending_failure_diagnostics"] != "runtime exceeded 30 seconds" || retryDetails["pending_failure_retryable"] != true {
+		t.Fatalf("retry pending failure details=%v", retryDetails)
 	}
 	task := findNodeByPayload(t, nodes, "task_id", "t1")
 	if len(task.ChildIDs) != 2 {

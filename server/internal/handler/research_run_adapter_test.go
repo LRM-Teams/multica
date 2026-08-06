@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/researchrun"
@@ -52,6 +53,65 @@ func TestResearchRunDispatcherInspectTreatsRepliedTaskAsCompletedExecution(t *te
 	}
 	if got := states[fixture.event.ID]; got.Status != "completed" {
 		t.Fatalf("state=%+v, want completed execution", got)
+	}
+}
+
+func TestResearchRunDispatcherInspectExposesRuntimeStartLeaseAndCancellationAcknowledgement(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedAgentCredentialTransportFixture(t)
+	dispatcher := &researchRunDispatcher{handler: testHandler}
+	ctx := context.Background()
+
+	states, err := dispatcher.Inspect(ctx, []string{fixture.event.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued := states[fixture.event.ID]
+	if queued.Status != "running" || queued.StartedAt != nil || !queued.HasActiveLease || queued.LeaseExpiresAt == nil || queued.ObservedAt.IsZero() {
+		t.Fatalf("claimed runtime state=%+v", queued)
+	}
+
+	startedAt := time.Now().UTC().Add(-time.Minute)
+	if _, err = testPool.Exec(ctx, `UPDATE agent_inbox_event SET started_at = $2 WHERE id = $1::uuid`, fixture.event.ID, startedAt); err != nil {
+		t.Fatal(err)
+	}
+	states, err = dispatcher.Inspect(ctx, []string{fixture.event.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := states[fixture.event.ID]
+	if running.StartedAt == nil || running.StartedAt.Sub(startedAt).Abs() > time.Millisecond || !running.HasActiveLease {
+		t.Fatalf("running state=%+v", running)
+	}
+
+	if _, err = testHandler.TaskService.CancelTask(ctx, parseUUID(fixture.event.ID)); err != nil {
+		t.Fatal(err)
+	}
+	states, err = dispatcher.Inspect(ctx, []string{fixture.event.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelRequested := states[fixture.event.ID]
+	if cancelRequested.Status != "cancelled" || !cancelRequested.HasActiveLease {
+		t.Fatalf("cancel request was mistaken for runtime acknowledgement: %+v", cancelRequested)
+	}
+
+	if _, err = testPool.Exec(ctx, `
+		UPDATE agent_event_delivery
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE inbox_event_id = $1::uuid AND status IN ('leased', 'processing')
+	`, fixture.event.ID); err != nil {
+		t.Fatal(err)
+	}
+	states, err = dispatcher.Inspect(ctx, []string{fixture.event.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acknowledged := states[fixture.event.ID]
+	if acknowledged.Status != "cancelled" || acknowledged.HasActiveLease {
+		t.Fatalf("expired runtime lease state=%+v", acknowledged)
 	}
 }
 

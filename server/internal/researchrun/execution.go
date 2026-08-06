@@ -19,7 +19,8 @@ type executionStore interface {
 	ReconcileAttempts(context.Context, string, map[string]InboxTaskState) ([]RunEvent, error)
 	ActivateReadyTasks(context.Context, string) (int, error)
 	ListPendingCancellations(context.Context, string) ([]PendingCancellation, error)
-	MarkCancellationsCompleted(context.Context, string, []string) error
+	MarkCancellationsRequested(context.Context, string, []CancellationRequest) error
+	CompleteCancellations(context.Context, string, []string) ([]RunEvent, error)
 	CreateDispatchIntent(context.Context, CreateDispatchIntentInput) (Attempt, RunEvent, error)
 	ClaimDispatchIntents(context.Context, string, string, time.Duration, int) ([]DispatchIntent, error)
 	RescheduleDispatchIntent(context.Context, string, string, string, time.Time) (bool, error)
@@ -156,7 +157,9 @@ func (module executionModule) CancelPendingAttempts(ctx context.Context, run Run
 	}
 	lookupKeys := make([]string, 0, len(pending))
 	for _, attempt := range pending {
-		if attempt.InboxTaskID == "" {
+		if attempt.InboxTaskID != "" {
+			lookupKeys = append(lookupKeys, attempt.InboxTaskID)
+		} else {
 			lookupKeys = append(lookupKeys, attempt.DispatchKey)
 		}
 	}
@@ -168,24 +171,39 @@ func (module executionModule) CancelPendingAttempts(ctx context.Context, run Run
 		}
 	}
 	inboxIDs := make([]string, 0, len(pending))
+	requests := make([]CancellationRequest, 0, len(pending))
 	completedAttemptIDs := make([]string, 0, len(pending))
 	staleAfter := time.Duration(run.Config.StaleAfterSeconds) * time.Second
 	if staleAfter <= 0 {
 		staleAfter = 15 * time.Minute
 	}
 	for _, attempt := range pending {
-		inboxID := attempt.InboxTaskID
-		if inboxID == "" {
-			if state, ok := states[attempt.DispatchKey]; ok {
-				inboxID = state.ID
-			}
+		lookupKey := attempt.InboxTaskID
+		if lookupKey == "" {
+			lookupKey = attempt.DispatchKey
 		}
-		if inboxID != "" {
-			inboxIDs = append(inboxIDs, inboxID)
+		state, found := states[lookupKey]
+		if !found {
+			state, found = states[attempt.DispatchKey]
+		}
+		inboxID := attempt.InboxTaskID
+		if inboxID == "" && found {
+			inboxID = state.ID
+		}
+		if found && !state.HasActiveLease && terminalInboxTaskState(state.Status) {
 			completedAttemptIDs = append(completedAttemptIDs, attempt.AttemptID)
 			continue
 		}
-		if !module.clock.Now().Before(attempt.DispatchedAt.Add(staleAfter)) {
+		if inboxID != "" && attempt.CancellationRequestedAt == nil {
+			inboxIDs = append(inboxIDs, inboxID)
+			requests = append(requests, CancellationRequest{AttemptID: attempt.AttemptID, InboxTaskID: inboxID})
+			continue
+		}
+		staleBase := attempt.DispatchedAt
+		if attempt.CancellationRequestedAt != nil {
+			staleBase = *attempt.CancellationRequestedAt
+		}
+		if !found && !module.clock.Now().Before(staleBase.Add(staleAfter)) {
 			completedAttemptIDs = append(completedAttemptIDs, attempt.AttemptID)
 		}
 	}
@@ -196,14 +214,29 @@ func (module executionModule) CancelPendingAttempts(ctx context.Context, run Run
 		if err != nil {
 			return true, fmt.Errorf("cancel research inbox tasks: %w", err)
 		}
+		markCtx, markCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		err = module.store.MarkCancellationsRequested(markCtx, run.SessionID, requests)
+		markCancel()
+		if err != nil {
+			return true, err
+		}
 	}
 	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	err = module.store.MarkCancellationsCompleted(markCtx, run.SessionID, completedAttemptIDs)
+	_, err = module.store.CompleteCancellations(markCtx, run.SessionID, completedAttemptIDs)
 	cancel()
 	if err != nil {
 		return true, err
 	}
 	return len(completedAttemptIDs) < len(pending), nil
+}
+
+func terminalInboxTaskState(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks []Task, attempts []Attempt, members []FleetMember) (int, error) {
@@ -213,7 +246,7 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 	activeByAgent := map[string]int{}
 	activeAttempts := 0
 	for _, attempt := range attempts {
-		if attempt.Status == AttemptStatusDispatching || attempt.Status == AttemptStatusRunning {
+		if attempt.Status == AttemptStatusDispatching || attempt.Status == AttemptStatusRunning || attempt.Status == AttemptStatusCancelling {
 			activeByAgent[attempt.AssignedAgentID]++
 			activeAttempts++
 		}

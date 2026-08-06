@@ -34,10 +34,11 @@ func TestResearchExecutionStateTransitionMatrices(t *testing.T) {
 			"failed>ready", "blocked>ready",
 		))
 	testTransitionMatrix(t, ctx, pool, "research_attempt_status_transition_allowed",
-		[]string{"dispatching", "running", "succeeded", "failed", "cancelled", "lost"},
+		[]string{"dispatching", "running", "cancelling", "succeeded", "failed", "cancelled", "lost"},
 		transitionSet(
-			"dispatching>running", "dispatching>succeeded", "dispatching>failed", "dispatching>cancelled", "dispatching>lost",
-			"running>succeeded", "running>failed", "running>cancelled", "running>lost",
+			"dispatching>running", "dispatching>cancelling", "dispatching>succeeded", "dispatching>failed", "dispatching>cancelled", "dispatching>lost",
+			"running>cancelling", "running>succeeded", "running>failed", "running>cancelled", "running>lost",
+			"cancelling>failed", "cancelling>cancelled", "cancelling>lost",
 		))
 	testTransitionMatrix(t, ctx, pool, "research_dispatch_status_transition_allowed",
 		[]string{"pending", "delivering", "delivered", "failed", "cancelled"},

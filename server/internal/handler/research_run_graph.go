@@ -245,22 +245,49 @@ func projectRunV2Graph(snap researchrun.RunSnapshot) (nodes []ResearchGraphNodeR
 			title = "尝试成功 #" + strconv.Itoa(attempt.AttemptNumber)
 		}
 		payload := runGraphPayload(map[string]any{
-			"projection":        "run_v2",
-			"kind":              runGraphKindAttempt,
-			"attempt_id":        id,
-			"task_id":           attempt.TaskID,
-			"attempt_number":    attempt.AttemptNumber,
-			"attempt_status":    string(attempt.Status),
-			"assigned_agent_id": nullIfEmpty(attempt.AssignedAgentID),
-			"failure_class":     nullIfEmpty(attempt.FailureClass),
-			"diagnostics":       nullIfEmpty(attempt.Diagnostics),
-			"phase":             phase,
+			"projection":                  "run_v2",
+			"kind":                        runGraphKindAttempt,
+			"attempt_id":                  id,
+			"task_id":                     attempt.TaskID,
+			"attempt_number":              attempt.AttemptNumber,
+			"attempt_status":              string(attempt.Status),
+			"assigned_agent_id":           nullIfEmpty(attempt.AssignedAgentID),
+			"inbox_task_id":               nullIfEmpty(attempt.InboxTaskID),
+			"dispatch_key":                nullIfEmpty(attempt.DispatchKey),
+			"failure_class":               nullIfEmpty(attempt.FailureClass),
+			"diagnostics":                 nullIfEmpty(attempt.Diagnostics),
+			"pending_failure_class":       nullIfEmpty(attempt.PendingFailure),
+			"pending_failure_diagnostics": nullIfEmpty(attempt.PendingDiagnostics),
+			"pending_failure_retryable":   attempt.PendingRetryable,
+			"dispatched_at":               attempt.DispatchedAt,
+			"runtime_started_at":          attempt.RuntimeStartedAt,
+			"runtime_last_observed_at":    attempt.RuntimeObservedAt,
+			"runtime_lease_expires_at":    attempt.RuntimeLeaseUntil,
+			"cancellation_requested_at":   attempt.CancelRequestedAt,
+			"cancellation_completed_at":   attempt.CancelCompletedAt,
+			"result_submitted_at":         attempt.ResultSubmittedAt,
+			"completed_at":                attempt.CompletedAt,
+			"phase":                       phase,
 			"details": map[string]any{
-				"task_id":           attempt.TaskID,
-				"attempt_id":        id,
-				"agent_id":          nullIfEmpty(attempt.AssignedAgentID),
-				"assigned_agent_id": nullIfEmpty(attempt.AssignedAgentID),
-				"failure_class":     nullIfEmpty(attempt.FailureClass),
+				"task_id":                     attempt.TaskID,
+				"attempt_id":                  id,
+				"agent_id":                    nullIfEmpty(attempt.AssignedAgentID),
+				"assigned_agent_id":           nullIfEmpty(attempt.AssignedAgentID),
+				"inbox_task_id":               nullIfEmpty(attempt.InboxTaskID),
+				"dispatch_key":                nullIfEmpty(attempt.DispatchKey),
+				"failure_class":               nullIfEmpty(attempt.FailureClass),
+				"diagnostics":                 nullIfEmpty(attempt.Diagnostics),
+				"pending_failure_class":       nullIfEmpty(attempt.PendingFailure),
+				"pending_failure_diagnostics": nullIfEmpty(attempt.PendingDiagnostics),
+				"pending_failure_retryable":   attempt.PendingRetryable,
+				"dispatched_at":               attempt.DispatchedAt,
+				"runtime_started_at":          attempt.RuntimeStartedAt,
+				"runtime_last_observed_at":    attempt.RuntimeObservedAt,
+				"runtime_lease_expires_at":    attempt.RuntimeLeaseUntil,
+				"cancellation_requested_at":   attempt.CancelRequestedAt,
+				"cancellation_completed_at":   attempt.CancelCompletedAt,
+				"result_submitted_at":         attempt.ResultSubmittedAt,
+				"completed_at":                attempt.CompletedAt,
 			},
 		})
 		nodes = append(nodes, ResearchGraphNodeResp{
@@ -670,7 +697,7 @@ func projectTaskStatus(status researchrun.TaskStatus) string {
 
 func projectAttemptStatus(status researchrun.AttemptStatus) string {
 	switch status {
-	case researchrun.AttemptStatusDispatching, researchrun.AttemptStatusRunning:
+	case researchrun.AttemptStatusDispatching, researchrun.AttemptStatusRunning, researchrun.AttemptStatusCancelling:
 		return "running"
 	case researchrun.AttemptStatusSucceeded:
 		return "succeeded"

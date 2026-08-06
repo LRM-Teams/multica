@@ -382,10 +382,11 @@ func (s *PostgresStore) ListAttempts(ctx context.Context, sessionID string) ([]A
 
 func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID string) ([]PendingCancellation, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id::text, COALESCE(inbox_task_id::text, ''), dispatch_key, dispatched_at
+		SELECT id::text, COALESCE(inbox_task_id::text, ''), dispatch_key, status,
+		       dispatched_at, cancellation_requested_at
 		FROM research_task_attempt
 		WHERE session_id = $1::uuid
-		  AND status = 'cancelled'
+		  AND status IN ('cancelling', 'cancelled')
 		  AND cancellation_completed_at IS NULL
 		ORDER BY dispatched_at, id
 	`, sessionID)
@@ -396,7 +397,8 @@ func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID 
 	out := []PendingCancellation{}
 	for rows.Next() {
 		var item PendingCancellation
-		if err = rows.Scan(&item.AttemptID, &item.InboxTaskID, &item.DispatchKey, &item.DispatchedAt); err != nil {
+		if err = rows.Scan(&item.AttemptID, &item.InboxTaskID, &item.DispatchKey, &item.Status,
+			&item.DispatchedAt, &item.CancellationRequestedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -404,24 +406,116 @@ func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID 
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) MarkCancellationsCompleted(ctx context.Context, sessionID string, attemptIDs []string) error {
-	if len(attemptIDs) == 0 {
+func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionID string, requests []CancellationRequest) error {
+	if len(requests) == 0 {
 		return nil
 	}
-	command, err := s.pool.Exec(ctx, `
-		UPDATE research_task_attempt
-		SET cancellation_completed_at = COALESCE(cancellation_completed_at, now()), updated_at = now()
-		WHERE session_id = $1::uuid
-		  AND id::text = ANY($2::text[])
-		  AND status = 'cancelled'
-	`, sessionID, attemptIDs)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
-	if command.RowsAffected() != int64(len(attemptIDs)) {
-		return fmt.Errorf("%w: cancellation attempts changed concurrently", ErrInvalidTransition)
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+		return err
 	}
-	return nil
+	for _, request := range requests {
+		command, updateErr := tx.Exec(ctx, `
+			UPDATE research_task_attempt
+			SET inbox_task_id = COALESCE(inbox_task_id, $3::uuid),
+			    cancellation_requested_at = COALESCE(cancellation_requested_at, now()),
+			    updated_at = now()
+			WHERE session_id = $1::uuid
+			  AND id = $2::uuid
+			  AND status IN ('cancelling', 'cancelled')
+			  AND cancellation_completed_at IS NULL
+			  AND (inbox_task_id IS NULL OR inbox_task_id = $3::uuid)
+		`, sessionID, request.AttemptID, request.InboxTaskID)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return fmt.Errorf("%w: cancellation request changed concurrently", ErrInvalidTransition)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID string, attemptIDs []string) ([]RunEvent, error) {
+	if len(attemptIDs) == 0 {
+		return nil, nil
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, status, pending_failure_class,
+		       pending_failure_diagnostics, pending_failure_retryable
+		FROM research_task_attempt
+		WHERE session_id = $1::uuid
+		  AND id::text = ANY($2::text[])
+		  AND status IN ('cancelling', 'cancelled')
+		  AND cancellation_completed_at IS NULL
+		ORDER BY id
+		FOR UPDATE
+	`, sessionID, attemptIDs)
+	if err != nil {
+		return nil, err
+	}
+	type completion struct {
+		id, status, failureClass, diagnostics string
+		retryable                             bool
+	}
+	items := make([]completion, 0, len(attemptIDs))
+	for rows.Next() {
+		var item completion
+		if err = rows.Scan(&item.id, &item.status, &item.failureClass, &item.diagnostics, &item.retryable); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(items) != len(attemptIDs) {
+		return nil, fmt.Errorf("%w: cancellation attempts changed concurrently", ErrInvalidTransition)
+	}
+	events := make([]RunEvent, 0, len(items))
+	for _, item := range items {
+		if item.status == string(AttemptStatusCancelled) {
+			command, updateErr := tx.Exec(ctx, `
+				UPDATE research_task_attempt
+				SET cancellation_completed_at = now(), updated_at = now()
+				WHERE id = $1::uuid AND status = 'cancelled' AND cancellation_completed_at IS NULL
+			`, item.id)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			if command.RowsAffected() != 1 {
+				return nil, fmt.Errorf("%w: cancelled attempt changed concurrently", ErrInvalidTransition)
+			}
+			continue
+		}
+		event, failErr := failAttemptTx(ctx, tx, AttemptFailure{
+			AttemptID: item.id, FailureClass: item.failureClass,
+			Diagnostics: item.diagnostics, Retryable: item.retryable,
+		})
+		if failErr != nil {
+			return nil, failErr
+		}
+		events = append(events, event)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspaceID string) ([]FleetMember, error) {
@@ -523,7 +617,7 @@ func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, d
 		    OR EXISTS (
 		      SELECT 1 FROM research_task_attempt attempt
 		      WHERE attempt.session_id = research_session.id
-		        AND attempt.status = 'cancelled'
+		        AND attempt.status IN ('cancelling', 'cancelled')
 		        AND attempt.cancellation_completed_at IS NULL
 		    )
 		    OR EXISTS (
@@ -568,7 +662,7 @@ func (s *PostgresStore) ListDueRunIDs(ctx context.Context, limit int) ([]string,
 		    OR EXISTS (
 		      SELECT 1 FROM research_task_attempt attempt
 		      WHERE attempt.session_id = research_session.id
-		        AND attempt.status = 'cancelled'
+		        AND attempt.status IN ('cancelling', 'cancelled')
 		        AND attempt.cancellation_completed_at IS NULL
 		    )
 		    OR EXISTS (
@@ -632,7 +726,10 @@ const attemptSelectSQL = `
 	       COALESCE(a.inbox_task_id::text, ''), a.dispatch_key,
 	       COALESCE(a.client_request_id, ''), a.status, COALESCE(a.result_hash, ''),
 	       a.failure_class, a.diagnostics, a.dispatched_at, a.started_at,
-	       a.result_submitted_at, a.completed_at
+	       a.runtime_started_at, a.runtime_last_observed_at, a.runtime_lease_expires_at,
+	       a.cancellation_requested_at, a.cancellation_completed_at,
+	       a.pending_failure_class, a.pending_failure_diagnostics,
+	       a.pending_failure_retryable, a.result_submitted_at, a.completed_at
 	FROM research_task_attempt a`
 
 func scanAttempt(row scanner) (Attempt, error) {
@@ -640,7 +737,10 @@ func scanAttempt(row scanner) (Attempt, error) {
 	err := row.Scan(&item.ID, &item.SessionID, &item.WorkspaceID, &item.TaskID,
 		&item.AttemptNumber, &item.AssignedAgentID, &item.InboxTaskID, &item.DispatchKey,
 		&item.ClientRequestID, &item.Status, &item.ResultHash, &item.FailureClass,
-		&item.Diagnostics, &item.DispatchedAt, &item.StartedAt, &item.ResultSubmittedAt,
+		&item.Diagnostics, &item.DispatchedAt, &item.StartedAt, &item.RuntimeStartedAt,
+		&item.RuntimeObservedAt, &item.RuntimeLeaseUntil, &item.CancelRequestedAt,
+		&item.CancelCompletedAt, &item.PendingFailure, &item.PendingDiagnostics,
+		&item.PendingRetryable, &item.ResultSubmittedAt,
 		&item.CompletedAt)
 	return item, err
 }

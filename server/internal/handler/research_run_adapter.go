@@ -190,14 +190,27 @@ func (d *researchRunDispatcher) Inspect(ctx context.Context, keys []string) (map
 	if len(keys) == 0 {
 		return out, nil
 	}
+	// The daemon fence rejects a delivery once any newer active-state delivery
+	// row exists. Inspect the same newest row before deciding whether execution
+	// ownership is still live; an older unexpired row is no longer authoritative.
 	rows, err := d.handler.DB.Query(ctx, `
-		SELECT id::text, COALESCE(context->>'research_dispatch_key', ''), status,
-		       COALESCE(terminal_outcome, ''), retryable,
-		       COALESCE(failure_reason, COALESCE(error, '')),
-		       terminal_at IS NOT NULL, completed_at
-		FROM agent_inbox_event
-		WHERE id::text = ANY($1::text[])
-		   OR context->>'research_dispatch_key' = ANY($1::text[])
+		SELECT event.id::text, COALESCE(event.context->>'research_dispatch_key', ''), event.status,
+		       COALESCE(event.terminal_outcome, ''), event.retryable,
+		       COALESCE(event.failure_reason, COALESCE(event.error, '')),
+		       event.terminal_at IS NOT NULL, event.started_at, event.completed_at,
+		       now(), delivery.lease_expires_at,
+		       COALESCE(delivery.lease_expires_at > now(), false)
+		FROM agent_inbox_event event
+		LEFT JOIN LATERAL (
+		  SELECT candidate.lease_expires_at
+		  FROM agent_event_delivery candidate
+		  WHERE candidate.inbox_event_id = event.id
+		    AND candidate.status IN ('leased', 'processing')
+		  ORDER BY candidate.created_at DESC, candidate.id DESC
+		  LIMIT 1
+		) delivery ON true
+		WHERE event.id::text = ANY($1::text[])
+		   OR event.context->>'research_dispatch_key' = ANY($1::text[])
 	`, keys)
 	if err != nil {
 		return nil, err
@@ -205,15 +218,27 @@ func (d *researchRunDispatcher) Inspect(ctx context.Context, keys []string) (map
 	defer rows.Close()
 	for rows.Next() {
 		var id, dispatchKey, status, outcome, failure string
-		var retryable, terminal bool
-		var completedAt pgtype.Timestamptz
-		if err = rows.Scan(&id, &dispatchKey, &status, &outcome, &retryable, &failure, &terminal, &completedAt); err != nil {
+		var retryable, terminal, activeLease bool
+		var startedAt, completedAt, observedAt, leaseExpiresAt pgtype.Timestamptz
+		if err = rows.Scan(&id, &dispatchKey, &status, &outcome, &retryable, &failure, &terminal,
+			&startedAt, &completedAt, &observedAt, &leaseExpiresAt, &activeLease); err != nil {
 			return nil, err
 		}
-		state := researchrun.InboxTaskState{ID: id, FailureReason: failure, Retryable: retryable}
+		state := researchrun.InboxTaskState{
+			ID: id, FailureReason: failure, Retryable: retryable,
+			ObservedAt: observedAt.Time, HasActiveLease: activeLease,
+		}
+		if startedAt.Valid {
+			started := startedAt.Time
+			state.StartedAt = &started
+		}
 		if completedAt.Valid {
 			completed := completedAt.Time
 			state.CompletedAt = &completed
+		}
+		if leaseExpiresAt.Valid {
+			expires := leaseExpiresAt.Time
+			state.LeaseExpiresAt = &expires
 		}
 		state.Status, state.Retryable, state.FailureReason = normalizeResearchInboxTaskState(status, outcome, retryable, terminal, failure)
 		out[id] = state
@@ -407,8 +432,12 @@ func projectResearchEvent(event researchrun.RunEvent, session db.ResearchSession
 		return "goal", session.Title, session.Goal, "active"
 	case "task_dispatching":
 		return "agent_activity", "调研任务已分派", valueString(payload, "task_id"), "active"
+	case "task_dispatched":
+		return "agent_activity", "调研任务等待 Agent 执行", valueString(payload, "task_id"), "active"
 	case "task_started":
 		return "agent_activity", "Agent 开始执行调研任务", valueString(payload, "task_id"), "active"
+	case "task_attempt_cancelling":
+		return "agent_activity", "正在停止超时任务", valueString(payload, "task_id"), "active"
 	case "task_result_accepted":
 		return "finding", "调研结果已入账", valueString(payload, "summary"), "done"
 	case "task_attempt_failed":

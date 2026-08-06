@@ -114,21 +114,47 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 		if err := json.Unmarshal(raw, &message); err != nil {
 			continue
 		}
-		if message.Type != protocol.EventWorkspaceRunnerPing {
-			continue
-		}
-		var ping protocol.WorkspaceRunnerPingPayload
-		if json.Unmarshal(message.Payload, &ping) != nil || ping.Validate() != nil {
-			continue
-		}
-		pong, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerPong, Payload: marshalRaw(protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID})})
-		if err != nil {
-			return err
-		}
-		if err := conn.WriteMessage(websocket.TextMessage, pong); err != nil {
-			return err
+		switch message.Type {
+		case protocol.EventWorkspaceRunnerPing:
+			var ping protocol.WorkspaceRunnerPingPayload
+			if json.Unmarshal(message.Payload, &ping) != nil || ping.Validate() != nil {
+				continue
+			}
+			if err := writeWorkspaceRunnerFrame(conn, protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
+				return err
+			}
+		case protocol.EventDaemonAgentStart:
+			var start protocol.WorkspaceRunnerAgentStartPayload
+			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !d.ownsWorkspaceRunnerRuntime(workspaceID, start.RuntimeID) {
+				continue
+			}
+			ack, err := d.agentProcessManager.Start(agentProcessStartRequest{AgentID: start.AgentID, RuntimeID: start.RuntimeID, StartDispatchID: start.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
+			if err != nil {
+				continue
+			}
+			if err := writeWorkspaceRunnerFrame(conn, protocol.EventAgentStartAck, ack); err != nil {
+				return err
+			}
+			if err := writeWorkspaceRunnerFrame(conn, protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}); err != nil {
+				return err
+			}
 		}
 	}
+}
+
+func (d *Daemon) ownsWorkspaceRunnerRuntime(workspaceID, runtimeID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	runtime, ok := d.runtimeIndex[runtimeID]
+	return ok && runtime.WorkspaceID == workspaceID
+}
+
+func writeWorkspaceRunnerFrame(conn *websocket.Conn, eventType string, payload any) error {
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
+	if err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.TextMessage, frame)
 }
 
 func workspaceRunnerURL(baseURL, workspaceID string) (string, error) {

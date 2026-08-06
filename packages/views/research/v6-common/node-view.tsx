@@ -129,14 +129,21 @@ export function GenericNode(props: {
       data-diagnostic-seq={viewModel.diagnosticIndex}
       role="group"
       aria-label={`${labels.unknownNode}: ${viewModel.title ?? viewModel.nodeId}`}
-      style={{ border: "1px dashed #c0392b", borderRadius: 8, padding: 8, maxWidth: 260 }}
+      style={{
+        border: "1px dashed var(--destructive)",
+        borderRadius: 8,
+        padding: 8,
+        maxWidth: 260,
+      }}
     >
-      <div style={{ fontWeight: 700, color: "#c0392b" }}>
+      <div style={{ fontWeight: 700, color: "var(--destructive)" }}>
         {labels.unknownNode}
         <span style={{ marginLeft: 6, fontFamily: "monospace", fontWeight: 400 }}>{viewModel.kind}</span>
       </div>
       <div>{viewModel.title || viewModel.nodeId}</div>
-      <div style={{ color: "#596069", fontSize: 12 }}>{viewModel.summary}</div>
+      <div style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
+        {viewModel.summary}
+      </div>
       <details data-testid="v6-generic-diagnostics">
         <summary>{labels.diagnosticsTitle}</summary>
         <dl style={{ margin: 0, fontSize: 12, fontFamily: "monospace" }}>
@@ -166,17 +173,39 @@ export function V6NodeView(props: {
       data-kind={known.kind}
       role="group"
       aria-label={`${known.label}: ${known.title ?? known.nodeId}`}
-      style={{ border: "1px solid #d0d7de", borderRadius: 8, padding: 8, maxWidth: 260 }}
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        padding: 8,
+        maxWidth: 260,
+      }}
     >
       <div style={{ fontWeight: 700 }}>
         {known.label}
-        <span style={{ marginLeft: 6, fontFamily: "monospace", fontWeight: 400, fontSize: 12, color: "#596069" }}>
+        <span
+          style={{
+            marginLeft: 6,
+            fontFamily: "monospace",
+            fontWeight: 400,
+            fontSize: 12,
+            color: "var(--muted-foreground)",
+          }}
+        >
           {known.group}
         </span>
       </div>
       <div>{known.title || known.nodeId}</div>
-      <div style={{ color: "#596069", fontSize: 12 }}>{known.summary}</div>
-      <div style={{ fontSize: 12, color: meta ? "#596069" : undefined }}>{known.status}</div>
+      <div style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
+        {known.summary}
+      </div>
+      <div
+        style={{
+          fontSize: 12,
+          color: meta ? "var(--muted-foreground)" : undefined,
+        }}
+      >
+        {known.status}
+      </div>
     </div>
   );
 }

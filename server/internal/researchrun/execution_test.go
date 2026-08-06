@@ -235,7 +235,7 @@ func TestExecutionModuleDeliverPendingReschedulesRetryableFailureWithoutConsumin
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	request := DispatchRequest{Run: Run{SessionID: "session-1"}, Task: Task{ID: "task-1"}, AttemptID: "attempt-1", AgentID: "agent-1", Prompt: "frozen prompt", Key: "dispatch-1"}
 	request.RequestHash, _ = HashDispatchRequest(request)
-	store := &executionTestStore{claimed: []DispatchIntent{{ID: "intent-1", AttemptID: "attempt-1", SessionID: "session-1", Request: request, DeliveryAttempts: 3}}}
+	store := &executionTestStore{claimed: []DispatchIntent{{ID: "intent-1", AttemptID: "attempt-1", SessionID: "session-1", Request: request, DeliveryAttempts: 1}}}
 	dispatchErr := errors.New("provider temporarily unavailable")
 	module := executionModule{store: store, dispatcher: &executionTestDispatcher{dispatchErr: dispatchErr}, clock: executionFixedClock{now: now}}
 
@@ -244,6 +244,21 @@ func TestExecutionModuleDeliverPendingReschedulesRetryableFailureWithoutConsumin
 		t.Fatalf("delivered=%d error=%v", delivered, err)
 	}
 	if store.rescheduledIntentID != "intent-1" || store.failedIntentID != "" {
+		t.Fatalf("rescheduled=%q failed=%q", store.rescheduledIntentID, store.failedIntentID)
+	}
+}
+
+func TestExecutionModuleDeliverPendingStopsUnknownFailureAfterSmallBudget(t *testing.T) {
+	request := DispatchRequest{Run: Run{SessionID: "session-1"}, Task: Task{ID: "task-1"}, AttemptID: "attempt-1", AgentID: "agent-1", Prompt: "frozen prompt", Key: "dispatch-1"}
+	request.RequestHash, _ = HashDispatchRequest(request)
+	store := &executionTestStore{claimed: []DispatchIntent{{ID: "intent-1", AttemptID: "attempt-1", SessionID: "session-1", Request: request, DeliveryAttempts: 2}}}
+	module := executionModule{store: store, dispatcher: &executionTestDispatcher{dispatchErr: errors.New("opaque adapter failure")}, clock: executionFixedClock{now: time.Now().UTC()}}
+
+	delivered, err := module.DeliverPending(context.Background(), "session-1", 1)
+	if err != nil || delivered != 0 {
+		t.Fatalf("delivered=%d error=%v", delivered, err)
+	}
+	if store.rescheduledIntentID != "" || store.failedIntentID != "intent-1" {
 		t.Fatalf("rescheduled=%q failed=%q", store.rescheduledIntentID, store.failedIntentID)
 	}
 }

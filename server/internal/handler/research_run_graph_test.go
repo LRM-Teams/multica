@@ -119,7 +119,9 @@ func TestProjectRunV2GraphRetryAndFailedAttempt(t *testing.T) {
 			{ID: "t1", QuestionID: "q1", Objective: "深读报告", Kind: researchrun.TaskKindDeepRead, Status: researchrun.TaskStatusRunning, AssignedAgentID: agentID, AttemptCount: 2, MaxAttempts: 3, Priority: 1},
 		},
 		Attempts: []researchrun.Attempt{
-			{ID: "a1", TaskID: "t1", AttemptNumber: 1, AssignedAgentID: agentID, Status: researchrun.AttemptStatusFailed, FailureClass: "result_not_submitted", Diagnostics: "missing structured result"},
+			{ID: "a1", TaskID: "t1", AttemptNumber: 1, AssignedAgentID: agentID,
+				ExecutionTarget: researchrun.ExecutionTarget{Adapter: "agent_inbox", AgentID: agentID, RuntimeID: "runtime-1", Provider: "codex", Model: "test-model", ConfigFingerprint: "config-1"},
+				Status:          researchrun.AttemptStatusFailed, FailureClass: "result_invalid", SourceFailureReason: "agent_error.empty_or_unparseable_output", Diagnostics: "missing structured result"},
 			{
 				ID: "a2", TaskID: "t1", AttemptNumber: 2, AssignedAgentID: agentID,
 				InboxTaskID: "inbox-2", DispatchKey: "research:dispatch:a2", Status: researchrun.AttemptStatusCancelling,
@@ -137,12 +139,16 @@ func TestProjectRunV2GraphRetryAndFailedAttempt(t *testing.T) {
 		t.Fatalf("failed attempt node type/status=%s/%s", failed.NodeType, failed.Status)
 	}
 	obj := payloadObject(failed.Payload)
-	if obj["failure_class"] != "result_not_submitted" {
+	if obj["failure_class"] != "result_invalid" || obj["source_failure_reason"] != "agent_error.empty_or_unparseable_output" {
 		t.Fatalf("failure_class=%v", obj["failure_class"])
 	}
 	details, _ := obj["details"].(map[string]any)
-	if details["failure_class"] != "result_not_submitted" {
+	if details["failure_class"] != "result_invalid" || details["source_failure_reason"] != "agent_error.empty_or_unparseable_output" {
 		t.Fatalf("details.failure_class=%v", details["failure_class"])
+	}
+	target, _ := details["execution_target"].(map[string]any)
+	if target["adapter"] != "agent_inbox" || target["runtime_id"] != "runtime-1" || target["provider"] != "codex" || target["model"] != "test-model" {
+		t.Fatalf("details.execution_target=%v", target)
 	}
 	retry := findNodeByPayload(t, nodes, "attempt_id", "a2")
 	if retry.Status != "running" {

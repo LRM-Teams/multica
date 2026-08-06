@@ -855,25 +855,27 @@ func (s *PostgresStore) reconcileAttemptRuntime(ctx context.Context, observed ac
 	failure := AttemptFailure{AttemptID: observed.id, Retryable: true}
 	switch {
 	case found && !state.HasActiveLease && (state.Status == "failed" || state.Status == "cancelled"):
-		failure.FailureClass = "inbox_task_" + state.Status
+		disposition := ClassifyInboxFailure(state.FailureReason, state.Retryable)
+		failure.FailureClass = string(disposition.Class)
+		failure.SourceReason = state.FailureReason
 		failure.Diagnostics = state.FailureReason
-		failure.Retryable = state.Retryable
+		failure.Retryable = disposition.Retryable
 	case found && !state.HasActiveLease && state.Status == "completed":
-		failure.FailureClass = "result_not_submitted"
+		failure.FailureClass = string(FailureResultInvalid)
 		failure.Diagnostics = "The agent task completed without submitting the structured research result."
 	case runtimeStartedAt != nil && timeoutSeconds > 0 && !databaseNow.Before(runtimeStartedAt.Add(time.Duration(timeoutSeconds)*time.Second)):
 		diagnostics := "The agent task exceeded its configured execution timeout without a valid result."
 		if _, err = tx.Exec(ctx, `
 			UPDATE research_task_attempt
-			SET status = 'cancelling', pending_failure_class = 'task_timeout',
+			SET status = 'cancelling', pending_failure_class = $3,
 			    pending_failure_diagnostics = $2, pending_failure_retryable = true,
 			    updated_at = now()
 			WHERE id = $1::uuid AND status IN ('dispatching', 'running')
-		`, observed.id, diagnostics); err != nil {
+		`, observed.id, diagnostics, string(FailureTimeout)); err != nil {
 			return nil, err
 		}
 		event, eventErr := appendEvent(ctx, tx, workspaceID, sessionID, "task_attempt_cancelling", "attempt-cancelling:"+observed.id, "system", "", map[string]any{
-			"task_id": taskID, "attempt_id": observed.id, "failure_class": "task_timeout", "diagnostics": diagnostics,
+			"task_id": taskID, "attempt_id": observed.id, "failure_class": FailureTimeout, "diagnostics": diagnostics,
 		})
 		if eventErr != nil {
 			return nil, eventErr
@@ -884,7 +886,7 @@ func (s *PostgresStore) reconcileAttemptRuntime(ctx context.Context, observed ac
 		}
 		return events, nil
 	case !found && !databaseNow.Before(dispatchedAt.Add(time.Duration(staleAfterSeconds)*time.Second)):
-		failure.FailureClass = "dispatch_lost"
+		failure.FailureClass = string(FailureRuntimeLost)
 		failure.Diagnostics = "No durable inbox task could be found for the research attempt."
 	default:
 		if err = tx.Commit(ctx); err != nil {

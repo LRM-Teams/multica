@@ -497,10 +497,10 @@ func TestNonRetryableDispatchFailureStopsRunWithoutRemediationLoop(t *testing.T)
 	if len(tasks) != 1 || len(attempts) != 1 {
 		t.Fatalf("tasks=%d attempts=%d, want one initial plan and one attempt", len(tasks), len(attempts))
 	}
-	if tasks[0].Status != TaskStatusFailed || tasks[0].TerminalReason != "dispatch_failed" {
+	if tasks[0].Status != TaskStatusFailed || tasks[0].TerminalReason != string(FailureUnknown) {
 		t.Fatalf("terminal plan task=%+v", tasks[0])
 	}
-	if attempts[0].FailureClass != "dispatch_failed" || attempts[0].Status != AttemptStatusFailed {
+	if attempts[0].FailureClass != string(FailureUnknown) || attempts[0].Status != AttemptStatusFailed {
 		t.Fatalf("attempt=%+v", attempts[0])
 	}
 }

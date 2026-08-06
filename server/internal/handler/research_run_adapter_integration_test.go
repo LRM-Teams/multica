@@ -115,6 +115,11 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 	attemptID := uuid.NewString()
 	criteria := json.RawMessage(`[{"criterion":"return a structured plan"}]`)
 	dispatcher := &researchRunDispatcher{handler: testHandler}
+	members, err := researchrun.NewPostgresStore(testPool).ListFleetMembers(ctx, uuidToString(session.ID), workspaceIDText)
+	if err != nil || len(members) != 1 {
+		t.Fatalf("resolve dispatch target members=%+v err=%v", members, err)
+	}
+	target := members[0].ExecutionTarget
 	request := researchrun.DispatchRequest{
 		Run: researchrun.Run{
 			SessionID:   uuidToString(session.ID),
@@ -127,6 +132,7 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 		},
 		AttemptID: attemptID,
 		AgentID:   uuidToString(agentID),
+		Target:    target,
 		Prompt:    "Return the research plan through the task-result command.",
 		Key:       dispatchKey,
 	}
@@ -175,5 +181,22 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 	conflicting.Prompt = "different payload under the same dispatch key"
 	if _, err = dispatcher.Dispatch(ctx, conflicting); err == nil || !strings.Contains(err.Error(), "reused for a different request") {
 		t.Fatalf("conflicting dispatch error=%v", err)
+	}
+	if _, err = testPool.Exec(ctx, `UPDATE agent SET model = 'changed-model' WHERE id = $1::uuid`, agentIDText); err != nil {
+		t.Fatal(err)
+	}
+	staleTarget := request
+	staleTarget.Key = "research-dispatch-stale-target:" + uuid.NewString()
+	staleTarget.AttemptID = uuid.NewString()
+	staleTarget.RequestHash, err = researchrun.HashDispatchRequest(staleTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = dispatcher.Dispatch(ctx, staleTarget); err == nil {
+		t.Fatal("dispatch accepted a target whose model changed after attempt creation")
+	}
+	policy := researchrun.DispatchFailurePolicy(err)
+	if policy.Class != researchrun.FailureTargetChanged || !policy.Retryable {
+		t.Fatalf("stale target policy=%+v error=%v", policy, err)
 	}
 }

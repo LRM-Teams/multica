@@ -59,6 +59,7 @@ func init() {
 	actionCmd.GroupID = groupCore
 
 	// Runtime commands
+	computerCmd.GroupID = groupRuntime
 	daemonCmd.GroupID = groupRuntime
 	runtimeCmd.GroupID = groupRuntime
 
@@ -82,6 +83,7 @@ func init() {
 	rootCmd.AddCommand(reactCmd)
 	rootCmd.AddCommand(messageCmd)
 	rootCmd.AddCommand(daemonCmd)
+	rootCmd.AddCommand(computerCmd)
 	rootCmd.AddCommand(runtimeCmd)
 	rootCmd.AddCommand(authCmd)
 	rootCmd.AddCommand(userCmd)

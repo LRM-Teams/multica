@@ -13,7 +13,6 @@ import { Virtuoso } from "react-virtuoso";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   Agent,
-  AgentActionCard,
   AgentRuntime,
   CreateAgentRequest,
   AgentCreationDraft,
@@ -184,7 +183,6 @@ export function AgentsPage({
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [createDraft, setCreateDraft] = useState<AgentCreationDraft | null>(null);
-  const [createActionCard, setCreateActionCard] = useState<AgentActionCard | null>(null);
   // When set, the Create dialog opens pre-populated with this agent's
   // config — driven by the row-level "Duplicate" action. We keep this
   // separate from `showCreate` so a stray null-template doesn't open the
@@ -194,34 +192,22 @@ export function AgentsPage({
   );
   const openBlankCreate = useCallback(() => {
     setCreateDraft(null);
-    setCreateActionCard(null);
     setDuplicateTemplate(null);
     setShowCreate(true);
   }, []);
 
-  // Hire path: ?action_card=<id> loads agent:create card (no draft bridge).
-  // Research / legacy: ?draft=<id> still opens draft-seeded create when present.
+  // Research / legacy: ?draft=<id> still opens draft-seeded create. Proposal
+  // creation is rendered from its canonical Message, never a URL card id.
   useEffect(() => {
-    const actionCardId = navigation.searchParams.get("action_card");
-    const draftId = actionCardId ? null : navigation.searchParams.get("draft");
-    if (!actionCardId && !draftId) return;
+    const draftId = navigation.searchParams.get("draft");
+    if (!draftId) return;
     let cancelled = false;
     (async () => {
       try {
-        if (actionCardId) {
-          const card = await api.getAgentActionCard(actionCardId);
-          if (cancelled) return;
-          setCreateActionCard(card);
-          setCreateDraft(null);
-          setDuplicateTemplate(null);
-          setShowCreate(true);
-          return;
-        }
         if (draftId) {
           const draft = await api.getAgentDraft(draftId);
           if (cancelled) return;
           setCreateDraft(draft);
-          setCreateActionCard(null);
           setDuplicateTemplate(null);
           setShowCreate(true);
         }
@@ -230,9 +216,7 @@ export function AgentsPage({
           showErrorToast(
             err instanceof Error
               ? err.message
-              : actionCardId
-                ? "Failed to load hire card"
-                : "Failed to load Wendy draft",
+              : "Failed to load Wendy draft",
           );
         }
       }
@@ -843,11 +827,9 @@ export function AgentsPage({
           currentUserId={currentUser?.id ?? null}
           template={duplicateTemplate}
           draft={createDraft}
-          actionCard={createActionCard}
           onClose={() => {
             setShowCreate(false);
             setCreateDraft(null);
-            setCreateActionCard(null);
             setDuplicateTemplate(null);
           }}
           onCreate={handleCreate}

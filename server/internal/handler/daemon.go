@@ -954,6 +954,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if ack.PendingMemoryCuration != nil {
 		resp["pending_memory_curation"] = ack.PendingMemoryCuration
 	}
+	if len(ack.PendingAgentStartIntents) > 0 {
+		resp["pending_agent_start_intents"] = ack.PendingAgentStartIntents
+	}
 	if ack.ReleaseManifestBaseURL != "" {
 		resp["release_manifest_base_url"] = ack.ReleaseManifestBaseURL
 	}
@@ -1213,6 +1216,12 @@ func (h *Handler) processHeartbeat(
 			slog.Warn("agent lifecycle dispatch HasPending failed", "error", probeLifecycleErr, "runtime_id", runtimeID)
 		}
 	}
+
+	startIntents, err := h.pendingAgentStartIntents(ctx, rt.ID)
+	if err != nil {
+		return nil, m, err
+	}
+	ack.PendingAgentStartIntents = startIntents
 
 	// Probe then claim the model list queue. Same pattern as the local-skill
 	// queues below — a slow shared store cannot stall the heartbeat on

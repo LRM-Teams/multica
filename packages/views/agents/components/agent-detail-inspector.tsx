@@ -5,9 +5,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Camera, Loader2, Pencil } from "lucide-react";
+import { Camera, Loader2, Pencil, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { Button } from "@multica/ui/components/ui/button";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type {
   Agent,
@@ -123,6 +124,32 @@ export function AgentDetailInspector({
         ) : (
           <AgentLifecycleStatusLine status={agent.runtime_display_status} />
         )}
+        {agent.start_intent_status === "failed" ? (
+          <div
+            className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+            data-testid="agent-start-intent-failure"
+          >
+            <div className="flex items-start gap-2">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              <p className="min-w-0 flex-1">
+                {t(($) => $.inspector.start_intent_failure, {
+                  code: agent.start_intent_failure_code || "unknown",
+                })}
+              </p>
+              {canEdit ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 shrink-0 border-destructive/30 bg-background px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => setRuntimeDialogOpen(true)}
+                >
+                  {t(($) => $.inspector.start_intent_review)}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* Properties — editable when canEdit. When the current user lacks
@@ -441,4 +468,3 @@ function NameAndDescription({
     </div>
   );
 }
-

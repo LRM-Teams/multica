@@ -574,6 +574,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
 		r.Post("/runtimes/{runtimeId}/memory-curation/{runId}/result", h.ReportMemoryCurationRunResult)
 		r.Post("/runtimes/{runtimeId}/agent-lifecycle/{operationId}/result", h.ReportAgentLifecycleOperationResult)
+		r.Post("/runtimes/{runtimeId}/agent-start-intents/{startDispatchId}/report", h.ReportAgentStartIntent)
 		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 		r.Post("/agent-memory-center/sync", h.SyncAgentMemoryCenter)
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
@@ -1068,9 +1069,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/windy", h.EnsureWindy)
 				r.Post("/drafts", h.CreateAgentDraft)
 				r.Get("/drafts/{draftId}", h.GetAgentDraft)
-				// agent:create action cards (human load / dismiss)
-				r.Get("/action-cards/{id}", h.GetActionCard)
-				r.Post("/action-cards/{id}/dismiss", h.DismissActionCard)
 				// Agent templates: pre-configured instructions + skill refs.
 				// Picking a template imports the referenced skills into the
 				// workspace (find-or-create by name) and creates the agent

@@ -142,8 +142,12 @@ function MessageBodyInner({
       // issue links (the bare-text migration window dropped them). Stickers still
       // render as images alongside. No refs → the existing parts renderer.
       if (hasReferenceParts) {
-        const stickerAndChoiceParts = bodyParts.filter(
-          (part) => part.type === "sticker" || part.type === "choice" || part.type === "choice_reply",
+        const stickerChoiceAndCardParts = bodyParts.filter(
+          (part) =>
+            part.type === "sticker" ||
+            part.type === "choice" ||
+            part.type === "choice_reply" ||
+            (part.type === "reference" && part.ref_type === "agent:create"),
         );
         return (
           <>
@@ -153,8 +157,8 @@ function MessageBodyInner({
               highlightQuery={highlightQuery}
               sourceMessageId={sourceMessageId}
             />
-            {stickerAndChoiceParts.length > 0 && (
-              <MessagePartsRenderer parts={stickerAndChoiceParts} choiceContext={choiceContext} />
+            {stickerChoiceAndCardParts.length > 0 && (
+              <MessagePartsRenderer parts={stickerChoiceAndCardParts} choiceContext={choiceContext} />
             )}
           </>
         );

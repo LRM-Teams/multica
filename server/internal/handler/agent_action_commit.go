@@ -6,12 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // codedActionCommitError carries an HTTP status + business code for the
@@ -44,9 +47,10 @@ const agentActionMessageNotPrepared = "agent_action_not_prepared"
 // of a prepared agent:create proposal Message (LRM-2343 S2). It runs in a single
 // DB transaction: FOR UPDATE lock + prepared->executed CAS, Agent creation,
 // system #general membership and commit snapshots. Idempotency is keyed on
-// action_message_id + the final non-sensitive payload hash: the same Message
-// re-committed with the same final payload returns the same Agent; a different
-// final payload returns 409 (stories 28-29).
+// action_message_id + the full final-input hash: the same Message re-committed
+// with the same final configuration returns the same Agent; a different final
+// configuration returns 409. The separately stored summary is non-sensitive
+// (stories 28-29).
 func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, committerID, actionMessageID pgtype.UUID, createParams db.CreateAgentParams, displayName string) (db.Agent, error) {
 	if !actionMessageID.Valid {
 		return db.Agent{}, actionCommitError(404, agentActionMessageMissingCode, "action message not found")
@@ -91,6 +95,9 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 	if !h.committerCanSeeChannelMessage(ctx, tx, wsUUID, actionMessageID, committerID) {
 		return db.Agent{}, actionCommitError(404, agentActionMessageMissingCode, "action message not found")
 	}
+	if strings.TrimSpace(createParams.DisplayName) == "" {
+		createParams.DisplayName = displayName
+	}
 
 	switch status {
 	case agentActionStatusExecuted:
@@ -116,7 +123,8 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 		return db.Agent{}, actionCommitError(500, "", "unknown action state")
 	}
 
-	// prepared -> create Agent + #general membership + snapshots in one tx.
+	// prepared -> create Agent + #general membership + durable first-start
+	// intent + snapshots in one tx.
 	qtx := h.Queries.WithTx(tx)
 	created, err := h.createAgentWithIdentity(ctx, qtx, createParams, displayName, displayName)
 	if err != nil {
@@ -126,18 +134,27 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 	if err := ensureAgentGeneralMembership(ctx, tx, wsUUID, created.ID); err != nil {
 		return db.Agent{}, err
 	}
+	if _, err := ensureAgentDurableStartIntent(ctx, tx, wsUUID, created.ID, createParams.RuntimeID); err != nil {
+		return db.Agent{}, err
+	}
 
-	hash := agentActionFinalPayloadHash(createParams, preExisting.proposed)
+	finalPayload := agentActionFinalPayload(createParams, preExisting.proposed)
+	finalPayloadRaw, err := json.Marshal(finalPayload)
+	if err != nil {
+		return db.Agent{}, err
+	}
+	hash := canonicalJSONHash(finalPayload)
 	tag, err := tx.Exec(ctx, `
 		UPDATE agent_action
 		SET status = 'executed',
 		    final_payload_hash = $3,
-		    committer_user_id = $4,
-		    result_agent_id = $5,
+		    final_payload = $4::jsonb,
+		    committer_user_id = $5,
+		    result_agent_id = $6,
 		    executed_at = now(),
 		    updated_at = now()
 		WHERE channel_message_id = $1 AND workspace_id = $2 AND status = 'prepared'`,
-		actionMessageID, wsUUID, hash, committerID, created.ID)
+		actionMessageID, wsUUID, hash, finalPayloadRaw, committerID, created.ID)
 	if err != nil {
 		return db.Agent{}, err
 	}
@@ -157,6 +174,9 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 		}
 		return db.Agent{}, actionCommitError(409, agentActionMessageNotPrepared, "action message was concurrently committed")
 	}
+	if err := updateAgentActionMessagePartTx(ctx, tx, actionMessageID, committerID, created.ID); err != nil {
+		return db.Agent{}, err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return db.Agent{}, err
@@ -164,17 +184,128 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 	return created, nil
 }
 
-// agentActionPreload is the proposal snapshot used for final-payload-hash
-// idempotency (the preferred Computer is part of the proposal but not of the
-// committed runtime config).
-type agentActionPreload struct{ proposed map[string]any }
+// updateAgentActionMessagePartTx updates only the public, non-sensitive
+// Proposal part. Runtime/model/reasoning configuration stays out of the
+// Message; viewers see the commit result through the standard Message read
+// path without another action-card resource.
+func updateAgentActionMessagePartTx(ctx context.Context, tx pgx.Tx, actionMessageID, committerID, resultAgentID pgtype.UUID) error {
+	var rawParts []byte
+	if err := tx.QueryRow(ctx, `SELECT parts FROM channel_message WHERE id = $1 FOR UPDATE`, actionMessageID).Scan(&rawParts); err != nil {
+		return err
+	}
+	parts := messageparts.Decode(rawParts)
+	found := false
+	for i := range parts {
+		if parts[i].Type != protocol.MessagePartTypeReference || parts[i].RefType != agentActionTypeCreate {
+			continue
+		}
+		params := map[string]any{}
+		if len(parts[i].Params) > 0 {
+			if err := json.Unmarshal(parts[i].Params, &params); err != nil {
+				return err
+			}
+		}
+		params["status"] = agentActionStatusExecuted
+		params["committer_user_id"] = uuidToString(committerID)
+		params["result_agent_id"] = uuidToString(resultAgentID)
+		updated, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		parts[i].Params = updated
+		found = true
+	}
+	if !found {
+		return actionCommitError(500, "", "action message has no agent:create proposal part")
+	}
+	_, err := tx.Exec(ctx, `UPDATE channel_message SET parts = $2::jsonb, edited_at = now() WHERE id = $1`, actionMessageID, messageparts.MustJSON(parts))
+	return err
+}
+
+// publishAgentActionMessageUpdated is a post-commit effect. It keeps the
+// canonical timeline query fresh without treating the realtime payload as a
+// second long-lived state source.
+func (h *Handler) publishAgentActionMessageUpdated(ctx context.Context, wsUUID, actionMessageID, committerID pgtype.UUID) {
+	msg, err := scanChannelMessage(h.DB.QueryRow(ctx, `
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		FROM channel_message WHERE id = $1 AND workspace_id = $2`, actionMessageID, wsUUID))
+	if err != nil {
+		slog.Warn("load committed agent:create proposal message", "message_id", uuidToString(actionMessageID), "error", err)
+		return
+	}
+	h.publishChannelToMembers(ctx, protocol.EventChannelMessageUpdated, msg.WorkspaceID, "member", uuidToString(committerID), parseUUID(msg.ChannelID), msg)
+}
+
+// ensureAgentDurableStartIntent records the first-start request in the same
+// transaction as the Agent identity. A later dispatcher may retry delivery,
+// but it must always use this original start_dispatch_id.
+func ensureAgentDurableStartIntent(ctx context.Context, tx pgx.Tx, wsUUID, agentID, runtimeID pgtype.UUID) (pgtype.UUID, error) {
+	var dispatchID pgtype.UUID
+	if !runtimeID.Valid {
+		return dispatchID, nil
+	}
+	err := tx.QueryRow(ctx, `
+		INSERT INTO agent_start_intent (
+			start_dispatch_id, agent_id, workspace_id, runtime_id, status
+		) VALUES (gen_random_uuid(), $1, $2, $3, 'pending')
+		ON CONFLICT (agent_id) DO NOTHING
+		RETURNING start_dispatch_id
+	`, agentID, wsUUID, runtimeID).Scan(&dispatchID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return dispatchID, err
+	}
+	return dispatchID, nil
+}
+
+// createAgentManagedCommit gives ordinary human creation the same atomic
+// provisioning boundary as a committed Proposal: identity, the system
+// #general membership (and its trigger-owned onboarding fact), and the durable
+// start intent either all commit or all roll back.
+func (h *Handler) createAgentManagedCommit(ctx context.Context, wsUUID pgtype.UUID, params db.CreateAgentParams, displayName string) (db.Agent, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.Agent{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	qtx := h.Queries.WithTx(tx)
+	var created db.Agent
+	if strings.TrimSpace(params.Name) != "" {
+		params.DisplayName = firstNonEmpty(params.DisplayName, params.Name)
+		created, err = qtx.CreateAgent(ctx, params)
+	} else {
+		created, err = h.createAgentWithIdentity(ctx, qtx, params, displayName, displayName)
+	}
+	if err != nil {
+		return db.Agent{}, err
+	}
+	if err := ensureAgentGeneralMembership(ctx, tx, wsUUID, created.ID); err != nil {
+		return db.Agent{}, err
+	}
+	if _, err := ensureAgentDurableStartIntent(ctx, tx, wsUUID, created.ID, params.RuntimeID); err != nil {
+		return db.Agent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Agent{}, err
+	}
+	return created, nil
+}
+
+// agentActionPreload is the proposal snapshot and current visible state used
+// for final-payload-hash idempotency. The preferred Computer is part of the
+// proposal but not of the committed runtime config.
+type agentActionPreload struct {
+	proposed map[string]any
+	status   string
+}
 
 func (h *Handler) loadAgentActionForCommit(ctx context.Context, wsUUID, actionMessageID pgtype.UUID) (agentActionPreload, bool, error) {
 	var proposedRaw []byte
+	var status string
 	err := h.DB.QueryRow(ctx, `
-		SELECT proposed_payload FROM agent_action
+		SELECT proposed_payload, status FROM agent_action
 		WHERE channel_message_id = $1 AND workspace_id = $2`,
-		actionMessageID, wsUUID).Scan(&proposedRaw)
+		actionMessageID, wsUUID).Scan(&proposedRaw, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return agentActionPreload{}, false, nil
 	}
@@ -183,7 +314,7 @@ func (h *Handler) loadAgentActionForCommit(ctx context.Context, wsUUID, actionMe
 	}
 	var proposed map[string]any
 	_ = json.Unmarshal(proposedRaw, &proposed)
-	return agentActionPreload{proposed: proposed}, true, nil
+	return agentActionPreload{proposed: proposed, status: status}, true, nil
 }
 
 // committerCanSeeChannelMessage reports whether the human committer is a member
@@ -238,13 +369,44 @@ func ensureAgentGeneralMembership(ctx context.Context, tx pgx.Tx, wsUUID, agentI
 	return err
 }
 
-// agentActionFinalPayloadHash returns the SHA-256 (hex) of the canonical JSON of
-// the final, non-sensitive committed configuration used for idempotent replay.
-// It deliberately excludes secrets (API keys/credentials are never part of the
-// create params hash) and uses a stable canonical form (sorted keys) so that the
-// same final content always hashes the same regardless of field order (stories
-// 27-29).
+// agentActionFinalPayloadHash returns the SHA-256 (hex) of every final create
+// input that can change the resulting Agent. The separately persisted
+// final_payload deliberately remains a non-sensitive audit summary, but the
+// idempotency discriminator must still include opaque JSON and secret-bearing
+// inputs so a replay with different final configuration cannot silently return
+// an Agent created with another person's choices.
 func agentActionFinalPayloadHash(params db.CreateAgentParams, proposed map[string]any) string {
+	hashInput := agentActionFinalPayload(params, proposed)
+	hashInput["instructions"] = params.Instructions
+	hashInput["runtime_config"] = actionFinalHashJSON(params.RuntimeConfig)
+	hashInput["custom_env"] = actionFinalHashJSON(params.CustomEnv)
+	hashInput["custom_args"] = actionFinalHashJSON(params.CustomArgs)
+	hashInput["mcp_config"] = actionFinalHashJSON(params.McpConfig)
+	hashInput["avatar_url"] = params.AvatarUrl.String
+	hashInput["avatar_source"] = params.AvatarSource
+	return canonicalJSONHash(hashInput)
+}
+
+// actionFinalHashJSON keeps the idempotency hash semantic rather than
+// formatting-sensitive for JSON fields. If a legacy caller sent malformed raw
+// JSON, retain its bytes as a string: the eventual insert is the authoritative
+// validator, but a retry must still compare that exact opaque value.
+func actionFinalHashJSON(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value
+	}
+	return string(raw)
+}
+
+// agentActionFinalPayload is the non-sensitive audit summary retained with the
+// committed Proposal. Credentials, instructions, and opaque runtime settings
+// can carry secrets; they participate in the hash above but are never copied
+// into this durable proposal audit record or the public Message part.
+func agentActionFinalPayload(params db.CreateAgentParams, proposed map[string]any) map[string]any {
 	preferredComputer := ""
 	if proposed != nil {
 		if v, ok := proposed["preferred_computer"].(string); ok {
@@ -252,16 +414,17 @@ func agentActionFinalPayloadHash(params db.CreateAgentParams, proposed map[strin
 		}
 	}
 	final := map[string]any{
-		"display_name":        params.DisplayName,
-		"name":                params.Name,
-		"description":         params.Description,
-		"runtime_id":          uuidToString(params.RuntimeID),
-		"model":               params.Model.String,
-		"thinking_level":      params.ThinkingLevel.String,
+		"display_name":         params.DisplayName,
+		"name":                 params.Name,
+		"description":          params.Description,
+		"runtime_id":           uuidToString(params.RuntimeID),
+		"runtime_mode":         params.RuntimeMode,
+		"model":                params.Model.String,
+		"thinking_level":       params.ThinkingLevel.String,
 		"max_concurrent_tasks": params.MaxConcurrentTasks,
-		"preferred_computer":  preferredComputer,
+		"preferred_computer":   preferredComputer,
 	}
-	return canonicalJSONHash(final)
+	return final
 }
 
 // canonicalJSONHash produces a SHA-256 (hex) over the canonical JSON of a map,

@@ -151,6 +151,9 @@ type fetchFailureResponse struct {
 
 func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
+	if rejectAgentOnHumanRoute(w, r, "CreateAgentFromTemplate") {
+		return
+	}
 
 	ownerID, ok := requireUserID(w, r)
 	if !ok {
@@ -191,6 +194,12 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	// Templates are another human agent-creation surface, not a bypass around
+	// the ordinary manageAgents capability. Keep this ahead of the remote skill
+	// fetches so an unauthorized caller cannot cause any side effects.
+	if _, ok := h.requireManageAgents(w, r, workspaceID, "workspace not found"); !ok {
+		return
+	}
 	avatar, ok := h.resolveAgentAvatarSelection(w, r, wsUUID, ownerID, pgtype.UUID{}, req.AvatarSelection)
 	if !ok {
 		return
@@ -211,10 +220,6 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid runtime_id")
 		return
 	}
-	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
-		return
-	}
-
 	slog.Info("agent-template create: request received",
 		append(logger.RequestAttrs(r),
 			"template_slug", tmpl.Slug,
@@ -459,6 +464,14 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 				"is_unique_violation", isUniqueViolation(err),
 			)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent: "+err.Error())
+		return
+	}
+	if err := ensureAgentGeneralMembership(r.Context(), tx, wsUUID, agent.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add agent to #general: "+err.Error())
+		return
+	}
+	if _, err := ensureAgentDurableStartIntent(r.Context(), tx, wsUUID, agent.ID, createParams.RuntimeID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create agent start intent: "+err.Error())
 		return
 	}
 

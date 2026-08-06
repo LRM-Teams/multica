@@ -4,13 +4,13 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { stickerCatalogOptions } from "@multica/core/stickers";
 import { api } from "@multica/core/api";
-import type { MessagePart, StickerAsset, StickerCatalogResponse } from "@multica/core/types";
+import type { AgentCreationProposal, MessagePart, StickerAsset, StickerCatalogResponse } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 import { useT } from "../../i18n/use-t";
 import { ChoiceCard, ChoiceReplyPart } from "./choice-card";
-import { AgentCreateActionCard } from "../../common/windy-create-agent-links";
+import { AgentCreationProposalCard } from "../../common/agent-creation-proposal-card";
 
 const SAFE_STICKER_ID = /^[a-z0-9-]+$/;
 
@@ -62,17 +62,11 @@ export function MessagePartsRenderer({
           return <ChoiceReplyPart key={key} part={part} />;
         }
         if (part.type === "reference") {
-          // Block hire card (contract A) — not an inline token like issue-ref.
-          if (
-            part.ref_type === "action_card" &&
-            part.ref_subtype === "agent:create" &&
-            part.ref_id
-          ) {
+          if (part.ref_type === "agent:create" && choiceContext?.messageId) {
             return (
-              <AgentCreateActionCard
+              <AgentCreationProposalCard
                 key={key}
-                cardId={part.ref_id}
-                label={part.label}
+                proposal={agentCreationProposalFromPart(part, choiceContext.messageId)}
               />
             );
           }
@@ -82,6 +76,22 @@ export function MessagePartsRenderer({
       })}
     </div>
   );
+}
+
+function agentCreationProposalFromPart(
+  part: Extract<MessagePart, { type: "reference"; ref_type: "agent:create" }>,
+  messageId: string,
+): AgentCreationProposal {
+  const params = part.params ?? {};
+  return {
+    message_id: messageId,
+    name: params.name?.trim() || part.label?.trim() || part.ref_id,
+    description: params.description?.trim() || "",
+    preferred_computer: params.preferred_computer?.trim() || undefined,
+    status: params.status === "executed" ? "executed" : "prepared",
+    committer_user_id: params.committer_user_id,
+    result_agent_id: params.result_agent_id,
+  };
 }
 
 function StickerPart({ part }: { part: Extract<MessagePart, { type: "sticker" }> }) {

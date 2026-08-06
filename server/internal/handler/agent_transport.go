@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -428,7 +429,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID)
+	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, nil)
 	if err != nil {
 		var freshnessHold *agentTransportFreshnessHoldError
 		if errors.As(err, &freshnessHold) {
@@ -1198,7 +1199,12 @@ func (h *Handler) agentAgentDMChannelMatches(ctx context.Context, workspaceID, c
 	return err == nil && matches
 }
 
-func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID) (agentTransportMessageResult, error) {
+// agentTransportMessageAfterInsert runs inside the Message insert transaction.
+// It is intentionally limited to durable database state: realtime delivery and
+// all other effects remain after the transaction commits.
+type agentTransportMessageAfterInsert func(context.Context, pgx.Tx, ChannelMessageResponse) error
+
+func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
 	input, err := h.finalizedAgentTransportInsertInput(ctx, source, target, content, parts, clientMessageID)
 	if err != nil {
 		return agentTransportMessageResult{}, err
@@ -1210,7 +1216,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 			return agentTransportMessageResult{}, err
 		}
 	}
-	result, err := h.insertAgentTransportMessageWithAudit(ctx, source, target, input, content, parts, attachmentIDs, clientMessageID, seenUpToSeq)
+	result, err := h.insertAgentTransportMessageWithAudit(ctx, source, target, input, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, afterInsert)
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
@@ -1293,7 +1299,7 @@ func (h *Handler) finalizedAgentTransportInsertInput(ctx context.Context, source
 	}, nil
 }
 
-func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, draftContent string, draftParts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64) (agentTransportMessageResult, error) {
+func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, draftContent string, draftParts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return agentTransportMessageResult{}, err
@@ -1391,6 +1397,12 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		return agentTransportMessageResult{}, err
 	}
 	msg := inserted.Message
+	if afterInsert != nil {
+		if err := afterInsert(ctx, tx, msg); err != nil {
+			_ = tx.Rollback(ctx)
+			return agentTransportMessageResult{}, err
+		}
+	}
 	if err := h.finishAgentDMSendTx(ctx, tx, reservation, parseUUID(msg.ID)); err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/stickers"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -346,16 +345,13 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 			if part.RefSubType != "" {
 				return protocol.MessagePart{}, fmt.Errorf("unsupported channel-ref ref_subtype %q", part.RefSubType)
 			}
-		case "action_card":
-			// Hire hard-cut: structured reference (like issue-ref), not multica:// links.
-			if part.RefSubType == "" {
-				part.RefSubType = "agent:create"
-			}
-			if part.RefSubType != "agent:create" {
-				return protocol.MessagePart{}, fmt.Errorf("unsupported action_card ref_subtype %q", part.RefSubType)
-			}
-			if _, err := uuid.Parse(part.RefID); err != nil {
-				return protocol.MessagePart{}, fmt.Errorf("action_card ref_id must be a UUID")
+		case "agent:create":
+			// LRM-2343 canonical Proposal. The reference is owned by the
+			// channel Message itself: ref_id is the server-provided proposal
+			// label/seed, while the committed result is recorded in Params and
+			// agent_action. It is deliberately not an opaque card-row UUID.
+			if part.RefSubType != "" {
+				return protocol.MessagePart{}, fmt.Errorf("agent:create does not support ref_subtype")
 			}
 		default:
 			return protocol.MessagePart{}, fmt.Errorf("unsupported ref_type %q", part.RefType)

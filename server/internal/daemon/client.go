@@ -563,6 +563,7 @@ type (
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport
 	PendingMemoryCuration   = protocol.DaemonHeartbeatPendingMemoryCuration
 	PendingRestart          = protocol.DaemonHeartbeatPendingRestart
+	PendingAgentStartIntent = protocol.DaemonHeartbeatPendingAgentStartIntent
 )
 
 func (c *Client) SendHeartbeat(
@@ -612,6 +613,13 @@ func (c *Client) ReportMemoryCurationResult(ctx context.Context, runtimeID, runI
 // out of running/scheduled into succeeded/failed.
 func (c *Client) ReportAgentLifecycleOperationResult(ctx context.Context, runtimeID, operationID string, result map[string]any) error {
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-lifecycle/%s/result", runtimeID, operationID), result, nil, c.tokenForRuntime(runtimeID))
+}
+
+// ReportAgentStartIntent reports a Computer acceptance or a later runtime
+// observation for a durable first-start delivery. Replays use the same
+// dispatch id and lifecycle sequence, so a lost HTTP response is safe.
+func (c *Client) ReportAgentStartIntent(ctx context.Context, runtimeID, startDispatchID string, result map[string]any) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-start-intents/%s/report", runtimeID, startDispatchID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportAgentProviderCrashed tells the server an idle resident provider

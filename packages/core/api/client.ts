@@ -19,7 +19,6 @@ import type {
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
-  AgentActionCard,
   EnsureWindyResponse,
   AgentTemplate,
   AgentTemplateSummary,
@@ -1238,18 +1237,6 @@ export class ApiClient {
 
   async getAgentDraft(id: string): Promise<AgentCreationDraft> {
     return this.fetch(`/api/agents/drafts/${encodeURIComponent(id)}`);
-  }
-
-  /** Load a prepared/done/dismissed agent:create action card (hire path). */
-  async getAgentActionCard(id: string): Promise<AgentActionCard> {
-    return this.fetch(`/api/agents/action-cards/${encodeURIComponent(id)}`);
-  }
-
-  /** Human cancel of a prepared agent:create action card. */
-  async dismissAgentActionCard(id: string): Promise<AgentActionCard> {
-    return this.fetch(`/api/agents/action-cards/${encodeURIComponent(id)}/dismiss`, {
-      method: "POST",
-    });
   }
 
   async listAgentTemplates(): Promise<AgentTemplateSummary[]> {

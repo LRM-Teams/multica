@@ -20,6 +20,11 @@ import (
 
 const runnerActivityTimelineLimit = 100
 
+const (
+	runnerActivityStaleAfter  = 90 * time.Second
+	runnerActivityProbeWindow = 5 * time.Second
+)
+
 // RunnerActivityResponse is deliberately a presentation boundary. Browser and
 // desktop callers receive labels, tones and bounded narrative bodies, never a
 // Runner fact envelope or provider-specific detail.
@@ -114,13 +119,29 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		WHERE workspace_id = $1 AND agent_id = $2
 		  AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5
 		  AND status = 'active'
-		  AND (last_client_sequence < $6 OR (last_client_sequence = $6 AND last_producer_fact_id = $7 AND last_activity_fingerprint = $8))`,
-		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID, fingerprint)
+		  AND (last_client_sequence < $6 OR (last_client_sequence = $6 AND last_producer_fact_id = $7 AND last_activity_fingerprint = $8))
+		  AND (
+			($9 = '' AND NOT EXISTS (
+				SELECT 1 FROM agent_activity_probe p WHERE p.workspace_id = $1 AND p.agent_id = $2
+			)) OR
+			($9 <> '' AND EXISTS (
+				SELECT 1 FROM agent_activity_probe p WHERE p.workspace_id = $1 AND p.agent_id = $2
+					AND p.daemon_id = $3 AND p.daemon_instance_id = $4 AND p.launch_id = $5 AND p.probe_id = $9
+			))
+		  )`,
+		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID, fingerprint, snapshot.ProbeID)
 	if err != nil {
 		return fmt.Errorf("advance Runner Activity fence: %w", err)
 	}
 	if command.RowsAffected() != 1 {
 		return errors.New("stale or unauthorized Runner Activity")
+	}
+	if snapshot.ProbeID != "" {
+		if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe
+			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5 AND probe_id = $6`,
+			workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ProbeID); err != nil {
+			return fmt.Errorf("clear Runner Activity probe: %w", err)
+		}
 	}
 	_, err = h.DB.Exec(ctx, `
 		INSERT INTO agent_activity_snapshot (
@@ -175,6 +196,108 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 			AgentID:  snapshot.AgentID,
 			Activity: projected,
 		})
+	}
+	return nil
+}
+
+// ReapStaleRunnerActivity drives timeout behavior from its explicit now
+// argument, which keeps the 90-second probe and five-second close deterministic
+// in integration tests and avoids treating a client-provided observed_at as a
+// trusted clock. It remains dormant until the coordinated hard cut schedules
+// it alongside Runner activation.
+func (h *Handler) ReapStaleRunnerActivity(ctx context.Context, now time.Time) error {
+	if h == nil || h.DB == nil {
+		return errors.New("handler database is unavailable")
+	}
+	if err := h.timeoutRunnerActivityProbes(ctx, now); err != nil {
+		return err
+	}
+	return h.sendRunnerActivityProbes(ctx, now)
+}
+
+func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) error {
+	rows, err := h.DB.Query(ctx, `
+		SELECT s.workspace_id, s.agent_id, s.daemon_id, s.daemon_instance_id, s.launch_id
+		FROM agent_activity_snapshot s
+		JOIN agent_activity_launch l ON l.workspace_id = s.workspace_id AND l.agent_id = s.agent_id
+		LEFT JOIN agent_activity_probe p ON p.workspace_id = s.workspace_id AND p.agent_id = s.agent_id
+		WHERE s.activity_kind IN ('working', 'thinking') AND s.received_at <= $1
+			AND l.status = 'active' AND p.agent_id IS NULL`, now.Add(-runnerActivityStaleAfter))
+	if err != nil {
+		return fmt.Errorf("list stale Runner Activity: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var workspaceID, agentID pgtype.UUID
+		var daemonID, daemonInstanceID, launchID string
+		if err := rows.Scan(&workspaceID, &agentID, &daemonID, &daemonInstanceID, &launchID); err != nil {
+			return fmt.Errorf("scan stale Runner Activity: %w", err)
+		}
+		probeID := randomID()
+		command, err := h.DB.Exec(ctx, `
+			INSERT INTO agent_activity_probe (workspace_id, agent_id, daemon_id, daemon_instance_id, launch_id, probe_id, sent_at, deadline_at)
+			SELECT $1, $2, $3, $4, $5, $6, $7, $8
+			WHERE EXISTS (
+				SELECT 1 FROM agent_activity_snapshot s JOIN agent_activity_launch l ON l.workspace_id = s.workspace_id AND l.agent_id = s.agent_id
+				WHERE s.workspace_id = $1 AND s.agent_id = $2 AND s.daemon_id = $3 AND s.daemon_instance_id = $4 AND s.launch_id = $5
+					AND s.activity_kind IN ('working', 'thinking') AND s.received_at <= $9 AND l.status = 'active'
+			)
+			ON CONFLICT (workspace_id, agent_id) DO NOTHING`, workspaceID, agentID, daemonID, daemonInstanceID, launchID, probeID, now, now.Add(runnerActivityProbeWindow), now.Add(-runnerActivityStaleAfter))
+		if err != nil {
+			return fmt.Errorf("record Runner Activity probe: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			continue
+		}
+		if h.DaemonHub == nil || !h.DaemonHub.NotifyWorkspaceRunner(daemonID, util.UUIDToString(workspaceID), protocol.EventAgentActivityProbe, protocol.AgentActivityProbePayload{AgentID: util.UUIDToString(agentID), LaunchID: launchID, ProbeID: probeID}) {
+			if err := h.markRunnerActivityDisconnected(ctx, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+				return err
+			}
+		}
+	}
+	return rows.Err()
+}
+
+func (h *Handler) timeoutRunnerActivityProbes(ctx context.Context, now time.Time) error {
+	rows, err := h.DB.Query(ctx, `SELECT workspace_id, agent_id, daemon_id, daemon_instance_id, launch_id FROM agent_activity_probe WHERE deadline_at <= $1`, now)
+	if err != nil {
+		return fmt.Errorf("list timed out Runner Activity probes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var workspaceID, agentID pgtype.UUID
+		var daemonID, daemonInstanceID, launchID string
+		if err := rows.Scan(&workspaceID, &agentID, &daemonID, &daemonInstanceID, &launchID); err != nil {
+			return fmt.Errorf("scan timed out Runner Activity probe: %w", err)
+		}
+		if h.DaemonHub != nil {
+			h.DaemonHub.CloseWorkspaceRunner(daemonID, util.UUIDToString(workspaceID), daemonInstanceID)
+		}
+		if err := h.markRunnerActivityDisconnected(ctx, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (h *Handler) markRunnerActivityDisconnected(ctx context.Context, workspaceID, agentID pgtype.UUID, daemonID, daemonInstanceID, launchID string) error {
+	if _, err := h.DB.Exec(ctx, `UPDATE agent_activity_launch SET status = 'inactive', updated_at = now()
+		WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+		return fmt.Errorf("deactivate stale Runner launch: %w", err)
+	}
+	if _, err := h.DB.Exec(ctx, `UPDATE agent_activity_snapshot SET activity_kind = 'offline', detail_kind = 'machine_disconnected', received_at = now()
+		WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+		return fmt.Errorf("project Runner disconnect: %w", err)
+	}
+	if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+		return fmt.Errorf("clear stale Runner Activity probe: %w", err)
+	}
+	if h.Bus != nil {
+		projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
+		if err != nil {
+			return err
+		}
+		h.publish(protocol.EventAgentActivity, util.UUIDToString(workspaceID), "system", "", RunnerActivityRealtimePayload{AgentID: util.UUIDToString(agentID), Activity: projected})
 	}
 	return nil
 }

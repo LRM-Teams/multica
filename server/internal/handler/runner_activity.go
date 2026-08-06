@@ -303,6 +303,11 @@ func (h *Handler) markRunnerActivityDisconnected(ctx context.Context, workspaceI
 }
 
 func runnerActivityFingerprint(activity protocol.AgentActivityPayload) (string, error) {
+	// ProbeID correlates a server liveness request; it is not producer fact
+	// content. A valid probe reply intentionally reuses the last observation's
+	// sequence and fact ID, so including ProbeID here would reject that reply as
+	// a conflicting same-sequence fact.
+	activity.Snapshot.ProbeID = ""
 	encoded, err := json.Marshal(activity)
 	if err != nil {
 		return "", fmt.Errorf("encode Runner Activity fact: %w", err)

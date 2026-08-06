@@ -30,4 +30,10 @@ func TestRunnerActivityFingerprintBindsWholeProducerFact(t *testing.T) {
 	if updated == first {
 		t.Fatal("different Activity envelope retained the producer fact fingerprint")
 	}
+	probeReply := base
+	probeReply.Snapshot.ProbeID = "probe-1"
+	probeFingerprint, err := runnerActivityFingerprint(probeReply)
+	if err != nil || probeFingerprint != first {
+		t.Fatalf("probe correlation changed producer fact fingerprint = %q, %v; want %q", probeFingerprint, err, first)
+	}
 }

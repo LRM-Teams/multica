@@ -57,15 +57,21 @@ func TestRunnerActivityProbeResponseMustMatchPendingProbe(t *testing.T) {
 		VALUES ($1, $2, $3, 'daemon-1', 'instance-1', $4, 'active')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
 		t.Fatal(err)
 	}
+	base := protocol.AgentActivityPayload{Snapshot: protocol.AgentActivitySnapshot{
+		AgentID: agentID, LaunchID: launchID, DaemonInstanceID: "instance-1", ClientSequence: 1, ProducerFactID: "fact-1",
+		ObservedAt: now, ActivityKind: protocol.ActivityKindThinking,
+	}}
+	if err := testHandler.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", base); err != nil {
+		t.Fatalf("record original Activity: %v", err)
+	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_probe (workspace_id, agent_id, daemon_id, daemon_instance_id, launch_id, probe_id, sent_at, deadline_at)
 		VALUES ($1, $2, 'daemon-1', 'instance-1', $3, $4, $5, $6)`, testWorkspaceID, agentID, launchID, probeID, now, now.Add(runnerActivityProbeWindow)); err != nil {
 		t.Fatal(err)
 	}
-	err := testHandler.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", protocol.AgentActivityPayload{Snapshot: protocol.AgentActivitySnapshot{
-		AgentID: agentID, LaunchID: launchID, DaemonInstanceID: "instance-1", ClientSequence: 1, ProducerFactID: "fact-1",
-		ObservedAt: now, ActivityKind: protocol.ActivityKindThinking, ProbeID: probeID,
-	}})
+	probeReply := base
+	probeReply.Snapshot.ProbeID = probeID
+	err := testHandler.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", probeReply)
 	if err != nil {
 		t.Fatal(err)
 	}

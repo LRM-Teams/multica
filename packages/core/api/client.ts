@@ -111,7 +111,7 @@ import type {
   DashboardUsageByAgent,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
-  RuntimeUpdate,
+  MachineUpgrade,
   RuntimeRestart,
   AgentLifecycleActionKind,
   AgentLifecyclePreflight,
@@ -220,6 +220,7 @@ import type {
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
   StartVoiceCallDuplexResponse,
+  WorkGraphDetail,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -294,6 +295,7 @@ import {
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelGoalEnvelopeSchema,
+  WorkGraphDetailSchema,
   ChannelGoalProcessEnvelopeSchema,
   ChannelGoalProcessListEnvelopeSchema,
   ChannelGoalSubgoalListEnvelopeSchema,
@@ -403,6 +405,8 @@ import {
   EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
   type DeleteComputerResponse,
   type RemoveComputerAgentsResponse,
+  MachineUpgradeSchema,
+  EMPTY_MACHINE_UPGRADE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1294,7 +1298,7 @@ export class ApiClient {
   /**
    * Workspace-level agent authority (`member` | `admin`). Separate from
    * PUT /api/agents/:id — that endpoint rejects `workspace_role`.
-   * Human route only; currently owner-gated server-side (admin gate TBD / Vera).
+   * Human route only; workspace owners and admins are authorized server-side.
    */
   async updateAgentWorkspaceRole(
     workspaceId: string,
@@ -1855,21 +1859,25 @@ export class ApiClient {
     );
   }
 
-  async initiateUpdate(
-    runtimeId: string,
+  async initiateMachineUpgrade(
+    daemonId: string,
     targetVersion: string,
-  ): Promise<RuntimeUpdate> {
-    return this.fetch(`/api/runtimes/${runtimeId}/update`, {
+    requestId: string,
+  ): Promise<MachineUpgrade> {
+    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades`, {
       method: "POST",
-      body: JSON.stringify({ target_version: targetVersion }),
+      body: JSON.stringify({ target_version: targetVersion, request_id: requestId }),
+    });
+    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
+      endpoint: "POST /api/daemons/:daemonId/upgrades",
     });
   }
 
-  async getUpdateResult(
-    runtimeId: string,
-    updateId: string,
-  ): Promise<RuntimeUpdate> {
-    return this.fetch(`/api/runtimes/${runtimeId}/update/${updateId}`);
+  async getMachineUpgrade(daemonId: string, upgradeId: string): Promise<MachineUpgrade> {
+    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades/${upgradeId}`);
+    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
+      endpoint: "GET /api/daemons/:daemonId/upgrades/:upgradeId",
+    });
   }
 
   async initiateRestart(runtimeId: string): Promise<RuntimeRestart> {
@@ -3842,6 +3850,13 @@ export class ApiClient {
     });
   }
 
+  async getWorkGraph(graphId: string): Promise<WorkGraphDetail | null> {
+    const raw = await this.fetch<unknown>(`/api/work-graphs/${encodeURIComponent(graphId)}`);
+    return parseWithFallback(raw, WorkGraphDetailSchema.nullable(), null, {
+      endpoint: "GET /api/work-graphs/:id",
+    });
+  }
+
   async createChannelGoal(
     channelId: string,
     input: CreateChannelGoalRequest,
@@ -4504,7 +4519,7 @@ export class ApiClient {
   async getResearchV6ProjectionSnapshot(
     runId: string,
   ): Promise<import("../types/research-v6").ResearchV6Snapshot> {
-    const { parseResearchV6Snapshot } = await import("./research-v6-schemas");
+    const { parseResearchV6Snapshot } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/snapshot`);
     return parseResearchV6Snapshot(raw);
   }
@@ -4513,7 +4528,7 @@ export class ApiClient {
     runId: string,
     fromSequenceExclusive: number,
   ): Promise<import("../types/research-v6").ResearchV6Delta | null> {
-    const { parseResearchV6Delta } = await import("./research-v6-schemas");
+    const { parseResearchV6Delta } = await import("../research-v6/schemas");
     const raw = await this.fetch(
       `/api/research/v6/runs/${runId}/projection/deltas?from_sequence_exclusive=${fromSequenceExclusive}`,
     );
@@ -4525,7 +4540,7 @@ export class ApiClient {
     runId: string,
     lastConfirmedSequence: number,
   ): Promise<import("../types/research-v6").ResearchV6ResumeVerdict> {
-    const { parseResearchV6ResumeVerdict } = await import("./research-v6-schemas");
+    const { parseResearchV6ResumeVerdict } = await import("../research-v6/schemas");
     const raw = await this.fetch(`/api/research/v6/runs/${runId}/projection/resume`, {
       method: "POST",
       body: JSON.stringify({ last_confirmed_sequence: lastConfirmedSequence }),

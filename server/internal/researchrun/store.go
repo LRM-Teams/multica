@@ -35,6 +35,7 @@ type AcceptResultOutcome struct {
 type AttemptFailure struct {
 	AttemptID    string
 	FailureClass string
+	SourceReason string
 	Diagnostics  string
 	Retryable    bool
 }
@@ -62,33 +63,49 @@ type Dispatcher interface {
 }
 
 type classifiedDispatchError struct {
-	err       error
-	retryable bool
+	err    error
+	policy FailureDisposition
 }
 
-func (e classifiedDispatchError) Error() string   { return e.err.Error() }
-func (e classifiedDispatchError) Unwrap() error   { return e.err }
-func (e classifiedDispatchError) Retryable() bool { return e.retryable }
+func (e classifiedDispatchError) Error() string                   { return e.err.Error() }
+func (e classifiedDispatchError) Unwrap() error                   { return e.err }
+func (e classifiedDispatchError) Retryable() bool                 { return e.policy.Retryable }
+func (e classifiedDispatchError) Disposition() FailureDisposition { return e.policy }
+
+// NewDispatchFailure preserves the Adapter's structured cause and the
+// Research executor action policy. retryable may only narrow a class policy;
+// it cannot make a deterministic class retryable.
+func NewDispatchFailure(err error, class FailureClass, retryable bool) error {
+	if err == nil {
+		return nil
+	}
+	policy := failureDisposition(class)
+	policy.Retryable = policy.Retryable && retryable
+	return classifiedDispatchError{err: err, policy: policy}
+}
 
 // NonRetryableDispatchError marks an Adapter failure that cannot be repaired by
 // dispatching the same Research Task again. The Engine fails the run instead of
 // consuming attempt and remediation budgets on a deterministic defect.
 func NonRetryableDispatchError(err error) error {
-	if err == nil {
-		return nil
+	return NewDispatchFailure(err, FailureInternal, false)
+}
+
+func DispatchFailurePolicy(err error) FailureDisposition {
+	var classified interface{ Disposition() FailureDisposition }
+	if errors.As(err, &classified) {
+		return classified.Disposition()
 	}
-	return classifiedDispatchError{err: err, retryable: false}
+	policy := failureDisposition(FailureUnknown)
+	var legacy interface{ Retryable() bool }
+	if errors.As(err, &legacy) {
+		policy.Retryable = legacy.Retryable()
+	}
+	return policy
 }
 
 func dispatchErrorRetryable(err error) bool {
-	var classified interface{ Retryable() bool }
-	if errors.As(err, &classified) {
-		return classified.Retryable()
-	}
-	// Existing Dispatcher implementations predate explicit classification.
-	// Preserve bounded retry for unknown/transient errors; production Adapters
-	// must classify deterministic contract/configuration failures.
-	return true
+	return DispatchFailurePolicy(err).Retryable
 }
 
 type Projector interface {

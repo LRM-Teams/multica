@@ -60,6 +60,7 @@ type AttemptStatus string
 const (
 	AttemptStatusDispatching AttemptStatus = "dispatching"
 	AttemptStatusRunning     AttemptStatus = "running"
+	AttemptStatusCancelling  AttemptStatus = "cancelling"
 	AttemptStatusSucceeded   AttemptStatus = "succeeded"
 	AttemptStatusFailed      AttemptStatus = "failed"
 	AttemptStatusCancelled   AttemptStatus = "cancelled"
@@ -255,30 +256,47 @@ type Task struct {
 }
 
 type Attempt struct {
-	ID                string        `json:"id"`
-	SessionID         string        `json:"session_id"`
-	WorkspaceID       string        `json:"workspace_id"`
-	TaskID            string        `json:"task_id"`
-	AttemptNumber     int           `json:"attempt_number"`
-	AssignedAgentID   string        `json:"assigned_agent_id"`
-	InboxTaskID       string        `json:"inbox_task_id,omitempty"`
-	DispatchKey       string        `json:"dispatch_key"`
-	ClientRequestID   string        `json:"client_request_id,omitempty"`
-	Status            AttemptStatus `json:"status"`
-	ResultHash        string        `json:"result_hash,omitempty"`
-	FailureClass      string        `json:"failure_class,omitempty"`
-	Diagnostics       string        `json:"diagnostics,omitempty"`
-	DispatchedAt      time.Time     `json:"dispatched_at"`
-	StartedAt         *time.Time    `json:"started_at,omitempty"`
-	ResultSubmittedAt *time.Time    `json:"result_submitted_at,omitempty"`
-	CompletedAt       *time.Time    `json:"completed_at,omitempty"`
+	ID                  string          `json:"id"`
+	SessionID           string          `json:"session_id"`
+	WorkspaceID         string          `json:"workspace_id"`
+	TaskID              string          `json:"task_id"`
+	AttemptNumber       int             `json:"attempt_number"`
+	AssignedAgentID     string          `json:"assigned_agent_id"`
+	ExecutionTarget     ExecutionTarget `json:"execution_target"`
+	InboxTaskID         string          `json:"inbox_task_id,omitempty"`
+	DispatchKey         string          `json:"dispatch_key"`
+	ClientRequestID     string          `json:"client_request_id,omitempty"`
+	Status              AttemptStatus   `json:"status"`
+	ResultHash          string          `json:"result_hash,omitempty"`
+	FailureClass        string          `json:"failure_class,omitempty"`
+	SourceFailureReason string          `json:"source_failure_reason,omitempty"`
+	Diagnostics         string          `json:"diagnostics,omitempty"`
+	DispatchedAt        time.Time       `json:"dispatched_at"`
+	StartedAt           *time.Time      `json:"started_at,omitempty"`
+	RuntimeStartedAt    *time.Time      `json:"runtime_started_at,omitempty"`
+	RuntimeObservedAt   *time.Time      `json:"runtime_last_observed_at,omitempty"`
+	RuntimeLeaseUntil   *time.Time      `json:"runtime_lease_expires_at,omitempty"`
+	CancelRequestedAt   *time.Time      `json:"cancellation_requested_at,omitempty"`
+	CancelCompletedAt   *time.Time      `json:"cancellation_completed_at,omitempty"`
+	PendingFailure      string          `json:"pending_failure_class,omitempty"`
+	PendingDiagnostics  string          `json:"pending_failure_diagnostics,omitempty"`
+	PendingRetryable    bool            `json:"pending_failure_retryable"`
+	ResultSubmittedAt   *time.Time      `json:"result_submitted_at,omitempty"`
+	CompletedAt         *time.Time      `json:"completed_at,omitempty"`
 }
 
 type PendingCancellation struct {
-	AttemptID    string
-	InboxTaskID  string
-	DispatchKey  string
-	DispatchedAt time.Time
+	AttemptID               string
+	InboxTaskID             string
+	DispatchKey             string
+	Status                  AttemptStatus
+	DispatchedAt            time.Time
+	CancellationRequestedAt *time.Time
+}
+
+type CancellationRequest struct {
+	AttemptID   string
+	InboxTaskID string
 }
 
 type SourceSnapshotView struct {
@@ -339,10 +357,13 @@ type Claim struct {
 }
 
 type FleetMember struct {
-	AgentID string
-	Role    string
-	Status  string
-	IsLead  bool
+	AgentID              string
+	Role                 string
+	Status               string
+	IsLead               bool
+	ExecutionTarget      ExecutionTarget
+	ProviderBlockDetail  string
+	ProviderBlockedUntil *time.Time
 }
 
 type StartInput struct {
@@ -376,12 +397,52 @@ type SteerInput struct {
 }
 
 type DispatchRequest struct {
-	Run       Run
-	Task      Task
-	AttemptID string
-	AgentID   string
-	Prompt    string
-	Key       string
+	Run         Run             `json:"run"`
+	Task        Task            `json:"task"`
+	AttemptID   string          `json:"attempt_id"`
+	AgentID     string          `json:"agent_id"`
+	Target      ExecutionTarget `json:"target,omitempty"`
+	Prompt      string          `json:"prompt"`
+	Key         string          `json:"key"`
+	RequestHash string          `json:"request_hash"`
+}
+
+type ExecutionTarget struct {
+	Adapter                   string `json:"adapter"`
+	AgentID                   string `json:"agent_id"`
+	RuntimeID                 string `json:"runtime_id,omitempty"`
+	Provider                  string `json:"provider,omitempty"`
+	Model                     string `json:"model,omitempty"`
+	ConfigFingerprint         string `json:"config_fingerprint,omitempty"`
+	AgentConfigFingerprint    string `json:"agent_config_fingerprint,omitempty"`
+	RuntimeConfigFingerprint  string `json:"runtime_config_fingerprint,omitempty"`
+	ProviderConfigFingerprint string `json:"provider_config_fingerprint,omitempty"`
+}
+
+type CreateDispatchIntentInput struct {
+	AttemptID            string
+	SessionID            string
+	TaskID               string
+	AgentID              string
+	Target               ExecutionTarget
+	ProbeTargets         []CircuitTarget
+	ProbeLeaseDuration   time.Duration
+	ExpectedStateVersion int64
+	Request              DispatchRequest
+}
+
+type DispatchOutcome struct {
+	Dispatched     int
+	Waiting        bool
+	NextDispatchAt *time.Time
+}
+
+type DispatchIntent struct {
+	ID               string
+	AttemptID        string
+	SessionID        string
+	Request          DispatchRequest
+	DeliveryAttempts int
 }
 
 type DispatchResult struct {
@@ -389,11 +450,15 @@ type DispatchResult struct {
 }
 
 type InboxTaskState struct {
-	ID            string
-	Status        string
-	FailureReason string
-	Retryable     bool
-	CompletedAt   *time.Time
+	ID             string
+	Status         string
+	FailureReason  string
+	Retryable      bool
+	StartedAt      *time.Time
+	CompletedAt    *time.Time
+	ObservedAt     time.Time
+	LeaseExpiresAt *time.Time
+	HasActiveLease bool
 }
 
 type RunEvent struct {

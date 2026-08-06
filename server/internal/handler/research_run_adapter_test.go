@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/researchrun"
@@ -55,6 +56,65 @@ func TestResearchRunDispatcherInspectTreatsRepliedTaskAsCompletedExecution(t *te
 	}
 }
 
+func TestResearchRunDispatcherInspectExposesRuntimeStartLeaseAndCancellationAcknowledgement(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedAgentCredentialTransportFixture(t)
+	dispatcher := &researchRunDispatcher{handler: testHandler}
+	ctx := context.Background()
+
+	states, err := dispatcher.Inspect(ctx, []string{fixture.event.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued := states[fixture.event.ID]
+	if queued.Status != "running" || queued.StartedAt != nil || !queued.HasActiveLease || queued.LeaseExpiresAt == nil || queued.ObservedAt.IsZero() {
+		t.Fatalf("claimed runtime state=%+v", queued)
+	}
+
+	startedAt := time.Now().UTC().Add(-time.Minute)
+	if _, err = testPool.Exec(ctx, `UPDATE agent_inbox_event SET started_at = $2 WHERE id = $1::uuid`, fixture.event.ID, startedAt); err != nil {
+		t.Fatal(err)
+	}
+	states, err = dispatcher.Inspect(ctx, []string{fixture.event.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := states[fixture.event.ID]
+	if running.StartedAt == nil || running.StartedAt.Sub(startedAt).Abs() > time.Millisecond || !running.HasActiveLease {
+		t.Fatalf("running state=%+v", running)
+	}
+
+	if _, err = testHandler.TaskService.CancelTask(ctx, parseUUID(fixture.event.ID)); err != nil {
+		t.Fatal(err)
+	}
+	states, err = dispatcher.Inspect(ctx, []string{fixture.event.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelRequested := states[fixture.event.ID]
+	if cancelRequested.Status != "cancelled" || !cancelRequested.HasActiveLease {
+		t.Fatalf("cancel request was mistaken for runtime acknowledgement: %+v", cancelRequested)
+	}
+
+	if _, err = testPool.Exec(ctx, `
+		UPDATE agent_event_delivery
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE inbox_event_id = $1::uuid AND status IN ('leased', 'processing')
+	`, fixture.event.ID); err != nil {
+		t.Fatal(err)
+	}
+	states, err = dispatcher.Inspect(ctx, []string{fixture.event.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acknowledged := states[fixture.event.ID]
+	if acknowledged.Status != "cancelled" || acknowledged.HasActiveLease {
+		t.Fatalf("expired runtime lease state=%+v", acknowledged)
+	}
+}
+
 func TestProjectResearchAttemptFailureUsesDiagnostics(t *testing.T) {
 	event := researchrun.RunEvent{Type: "task_attempt_failed"}
 	_, _, summary, _ := projectResearchEvent(event, db.ResearchSession{}, map[string]any{
@@ -63,5 +123,32 @@ func TestProjectResearchAttemptFailureUsesDiagnostics(t *testing.T) {
 	})
 	if summary != "Agent completed the turn without submitting a structured research result." {
 		t.Fatalf("summary=%q", summary)
+	}
+}
+
+func TestProjectResearchCircuitTransitionPreservesStateChange(t *testing.T) {
+	nodeType, title, summary, status := projectResearchEvent(
+		researchrun.RunEvent{Type: "execution_circuit_transition"},
+		db.ResearchSession{},
+		map[string]any{
+			"scope": "provider", "from_state": "open", "to_state": "half_open",
+			"cause": "probe_claimed",
+		},
+	)
+	if nodeType != "agent_activity" || title != "执行目标健康状态变化" ||
+		summary != "provider · open → half_open · probe_claimed" || status != "done" {
+		t.Fatalf("projected circuit transition=(%q, %q, %q, %q)", nodeType, title, summary, status)
+	}
+}
+
+func TestProjectResearchTargetWaitPreservesRetryTime(t *testing.T) {
+	nodeType, title, summary, status := projectResearchEvent(
+		researchrun.RunEvent{Type: "task_waiting_for_execution_target"},
+		db.ResearchSession{},
+		map[string]any{"retry_at": "2026-08-06T15:03:00Z"},
+	)
+	if nodeType != "agent_activity" || title != "等待可用执行目标" ||
+		summary != "2026-08-06T15:03:00Z" || status != "active" {
+		t.Fatalf("projected target wait=(%q, %q, %q, %q)", nodeType, title, summary, status)
 	}
 }

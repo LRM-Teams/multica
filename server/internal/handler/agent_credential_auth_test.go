@@ -985,24 +985,26 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 }
 
-func TestAgentCredentialTransportRequiresInboxLease(t *testing.T) {
+func TestAgentCredentialChatTransportDoesNotRequireInboxLease(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	req := newRequest(http.MethodPost, "/api/agent/messages/send", nil)
+	req = withChatTestWorkspaceCtx(t, req)
 	req.Header.Set("X-Actor-Source", "agent_credential")
 	req.Header.Set("X-Agent-ID", "00000000-0000-0000-0000-000000000001")
 	w := httptest.NewRecorder()
-	if _, ok := testHandler.requireAgentTransportSource(w, req); ok {
-		t.Fatal("agent_credential must not be accepted without inbox freshness headers")
+	source, ok := testHandler.requireAgentTransportSource(w, req)
+	if !ok {
+		t.Fatalf("agent_credential chat transport was rejected: status=%d body=%s", w.Code, w.Body.String())
 	}
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403: %s", w.Code, w.Body.String())
+	if !source.durableCredential || source.inboxEventID.Valid || source.legacyTask != nil {
+		t.Fatalf("credential source = %+v, want durable chat identity without inbox/task", source)
 	}
 }
 
-func TestAgentCredentialTransportAllowsActiveInboxDeliveryThroughMiddleware(t *testing.T) {
+func TestAgentCredentialChatTransportSendsThroughMiddlewareWithoutInboxLease(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1025,9 +1027,6 @@ func TestAgentCredentialTransportAllowsActiveInboxDeliveryThroughMiddleware(t *t
 	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", body)
 	sendReq.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
 	sendReq.Header.Set("X-Workspace-ID", testWorkspaceID)
-	sendReq.Header.Set("X-Agent-Inbox-Event-ID", fixture.event.ID)
-	sendReq.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.event.DeliveryID)
-	sendReq.Header.Set("X-Agent-Inbox-Lease-Token", fixture.event.LeaseToken)
 	sendRec := httptest.NewRecorder()
 	router.ServeHTTP(sendRec, sendReq)
 	if sendRec.Code != http.StatusCreated {
@@ -1044,8 +1043,8 @@ func TestAgentCredentialTransportAllowsActiveInboxDeliveryThroughMiddleware(t *t
 		fixture.event.ID, fixture.agentID, clientID).Scan(&taskAuditRows, &inboxAuditRows); err != nil {
 		t.Fatalf("count transport audit rows: %v", err)
 	}
-	if taskAuditRows != 0 || inboxAuditRows != 1 {
-		t.Fatalf("transport audit task rows=%d inbox rows=%d, want 0/1", taskAuditRows, inboxAuditRows)
+	if taskAuditRows != 0 || inboxAuditRows != 0 {
+		t.Fatalf("chat transport must not write task/inbox audit rows, got %d/%d", taskAuditRows, inboxAuditRows)
 	}
 }
 
@@ -1153,7 +1152,7 @@ func TestAgentCredentialTransportA2AReplyKeepsInheritedExchange(t *testing.T) {
 	}
 }
 
-func TestAgentCredentialTransportRejectsInvalidFreshness(t *testing.T) {
+func TestAgentCredentialActiveInboxDeliveryRejectsInvalidFreshness(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1228,8 +1227,8 @@ func TestAgentCredentialTransportRejectsInvalidFreshness(t *testing.T) {
 			req.Header.Set("X-Agent-Inbox-Delivery-ID", deliveryID)
 			req.Header.Set("X-Agent-Inbox-Lease-Token", leaseToken)
 			w := httptest.NewRecorder()
-			if _, ok := testHandler.requireAgentTransportSource(w, req); ok {
-				t.Fatal("agent_credential transport source unexpectedly accepted invalid freshness")
+			if _, _, ok := testHandler.requireAgentCredentialActiveInboxDelivery(w, req); ok {
+				t.Fatal("agent credential active inbox delivery unexpectedly accepted invalid freshness")
 			}
 			if w.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d: %s", w.Code, tc.wantStatus, w.Body.String())

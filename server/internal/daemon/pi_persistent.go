@@ -134,6 +134,27 @@ func (p *piPersistentPool) closeAll() {
 	}
 }
 
+func (p *piPersistentPool) forceTerminateAll() error {
+	p.mu.Lock()
+	backends := make([]agent.PiRPCBackend, 0, len(p.sessions))
+	for _, session := range p.sessions {
+		if session.running && session.backend != nil {
+			backends = append(backends, session.backend)
+		}
+	}
+	p.mu.Unlock()
+	for _, backend := range backends {
+		killable, ok := backend.(agent.ResidentRuntimeForceKillable)
+		if !ok {
+			return ErrPiPersistentSessionBusy
+		}
+		if err := killable.ForceKill(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *piPersistentPool) evictChat(agentID, runtimeID, chatSessionID string) int {
 	p.mu.Lock()
 	backends := make([]agent.PiRPCBackend, 0)
@@ -158,7 +179,7 @@ func (p *piPersistentPool) evictChat(agentID, runtimeID, chatSessionID string) i
 
 func usesPersistentPiChatRuntime(provider string, task Task) bool {
 	profile, err := taskExecutionProfile(task)
-	return err == nil && profile == executionProfileFull && provider == "pi" && task.ChatSessionID != ""
+	return err == nil && profile == executionProfileFull && provider == "pi" && isChatLikeTask(task)
 }
 
 func (d *Daemon) acquirePiChatRPCBackend(identity piPersistentIdentity, cfg agent.Config) (agent.Backend, func(bool), error) {

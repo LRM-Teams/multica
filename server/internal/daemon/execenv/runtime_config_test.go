@@ -54,6 +54,40 @@ func TestAssignmentSnapshotBriefAvoidsRedundantRoundTrips(t *testing.T) {
 	}
 }
 
+func TestAssignmentBriefIncludesWorkDecompositionGate(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("claude", TaskContextForEnv{
+		IssueID: "issue-assignment",
+		AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+			Title:              "Ship a bounded change",
+			AcceptanceCriteria: []string{"The change is verified"},
+			Status:             "todo",
+			Metadata:           map[string]any{},
+		},
+	})
+
+	for _, want := range []string{
+		"Work Decomposition Gate",
+		"DIRECT",
+		"GRAPH",
+		"PROPOSE_GRAPH",
+		"one bounded context",
+		"independently deliverable",
+		"Do not create graph nodes for a greeting, one tool call",
+		"must not also implement work already delegated",
+		"The server is authoritative",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("assignment brief missing decomposition contract %q\n--- output ---\n%s", want, out)
+		}
+	}
+	for _, forbidden := range []string{"multica issue verify"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("phase-0 brief advertises unavailable command %q\n--- output ---\n%s", forbidden, out)
+		}
+	}
+}
+
 func TestTerminalAssignmentSnapshotStopsWithoutIssueCommands(t *testing.T) {
 	ctx := TaskContextForEnv{
 		IssueID: "issue-terminal",
@@ -452,7 +486,7 @@ func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
 				for _, want := range []string{
 					"Thread attention is explicit.",
 					"`ChannelID` target present",
-					"task-scoped Multica CLI transport",
+					"durable agent-credential Multica CLI transport",
 					"final assistant output, is not delivered",
 				} {
 					if !strings.Contains(out, want) {
@@ -501,7 +535,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 
 	for _, want := range []string{
 		"## Delivery",
-		"task-scoped Multica CLI transport",
+		"durable agent-credential Multica CLI transport",
 		"Context boundaries:",
 		"Common chat command forms are listed here so you can use them directly",
 		"Do NOT run `multica message send --help`",
@@ -530,8 +564,8 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"the held draft is never retried or sent later",
 		"a freshness `held` result exits non-zero",
 		"multica message react --message-id <id> --emoji \"...\" [--remove]",
-		"multica message read [--target ...] [--limit N] --output json",
-		"multica message search \"query\" [--target ...] --output json",
+		"multica message read [--target ...] [--limit N]",
+		"multica message search [query] [--target ...] [--sender user:<uuid>|agent:<uuid>]",
 		"multica message resolve <message-id>",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
 		"issue list --mine --output json",
@@ -750,7 +784,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	// Ambient conversation delivery still carries the CLI instructions.
 	for _, want := range []string{
 		"## Delivery",
-		"task-scoped Multica CLI transport",
+		"durable agent-credential Multica CLI transport",
 		"multica message send",
 	} {
 		if !strings.Contains(out, want) {
@@ -759,7 +793,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	}
 }
 
-func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
+func TestChatRuntimeBriefAlwaysAdvertisesCredentialCLITransport(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID:                    "chat-1",
@@ -773,7 +807,7 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 
 	for _, want := range []string{
 		"## Delivery",
-		"task-scoped Multica CLI transport",
+		"durable agent-credential Multica CLI transport",
 		"multica message send",
 		"multica message react",
 		"pipe a non-empty body",
@@ -803,7 +837,7 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 
 	for _, banned := range []string{
 		"This runtime has no chat CLI transport.",
-		"No visible chat reply can be delivered without the task-scoped CLI transport.",
+		"No visible chat reply can be delivered without the durable agent-credential CLI transport.",
 		"Do not try to find, install, or discuss chat send/react commands",
 	} {
 		if strings.Contains(out, banned) {
@@ -1721,43 +1755,6 @@ func TestBuildMetaSkillContentDoesNotUseLegacyManagedRole(t *testing.T) {
 	}
 }
 
-func TestExecutionDisciplineBriefAppearsOnceOnEveryRunKind(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		ctx  TaskContextForEnv
-	}{
-		{name: "assignment", ctx: TaskContextForEnv{IssueID: "issue-1"}},
-		{name: "comment", ctx: TaskContextForEnv{IssueID: "issue-1", TriggerCommentID: "comment-1"}},
-		{name: "chat", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
-		{name: "quick create", ctx: TaskContextForEnv{QuickCreatePrompt: "create an issue"}},
-		{name: "autopilot", ctx: TaskContextForEnv{AutopilotRunID: "run-1"}},
-	}
-	rules := []string{
-		`1. **Relay means relay.** For a request to relay, synchronize, or remind, act directly. Do not investigate, verify, or expand it unless verification is explicitly requested.`,
-		`2. **Combine repeated nudges.** Multiple prompts or follow-ups about one matter get one consolidated reply, not one reply per prompt.`,
-		`3. **Keep thread discussion in its thread.** Do not repeat the same discussion in the parent channel.`,
-		`4. **Send agents only deltas.** Share only new information with another agent; do not restate shared context, and do not reply when there is no delta.`,
-		`5. **Do not paste raw output to people.** State conclusions and necessary facts, not command output, JSON, or unprocessed tool output.`,
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			out := buildMetaSkillContent("codex", tc.ctx)
-			if got := strings.Count(out, executionDisciplineBrief); got != 1 {
-				t.Fatalf("execution discipline block count = %d, want 1", got)
-			}
-			for _, rule := range rules {
-				if got := strings.Count(out, rule); got != 1 {
-					t.Errorf("rule count = %d, want 1 for %q", got, rule)
-				}
-			}
-		})
-	}
-}
-
 func TestRuntimeBriefStaticInstructionsContainNoChineseCharacters(t *testing.T) {
 	t.Parallel()
 	brief := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1", ChatSessionID: "chat-1"})
@@ -1798,7 +1795,7 @@ func TestChannelChatRuntimeBriefNeverLeaksStandaloneFinalOutputContract(t *testi
 	})
 
 	for _, want := range []string{
-		"`ChannelID` target present: visible output is delivered only by the task-scoped Multica CLI transport",
+		"`ChannelID` target present: visible output is delivered only by the durable agent-credential Multica CLI transport",
 		"Visible reply required for human DM/@mention/direct question/task/continuation.",
 		"For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds",
 	} {

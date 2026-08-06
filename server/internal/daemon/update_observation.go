@@ -61,31 +61,13 @@ func newUpdateObservationCoordinator(cfg Config, logger *slog.Logger) *updateObs
 
 func (c *updateObservationCoordinator) initialObservation(cfg Config) protocol.DaemonUpdateObservation {
 	now := c.now().UTC()
-	source := strings.TrimSpace(cfg.AutoUpdateConfigSource)
-	if source == "" {
-		source = "self_host_default"
-		if isOfficialCloudServer(cfg.ServerBaseURL) {
-			source = "official_host_default"
-		}
-	}
-	interval := cfg.AutoUpdateCheckInterval
-	if interval <= 0 {
-		interval = DefaultAutoUpdateCheckInterval
-	}
-	effectiveEnabled := cfg.AutoUpdateEnabled
-	ineligibleReason := ""
-	switch {
-	case cfg.LaunchedBy == "desktop":
-		effectiveEnabled = false
-		ineligibleReason = "desktop_managed"
-	case !isReleaseVersion(cfg.CLIVersion):
-		effectiveEnabled = false
-		ineligibleReason = "non_release_build"
-	}
-	phase := "waiting"
-	if !effectiveEnabled {
-		phase = "disabled"
-	}
+	// The observation name and fields are retained for deployed servers, but
+	// must truthfully report that periodic auto-update is retired.
+	source := "deprecated_noop"
+	interval := DefaultAutoUpdateCheckInterval
+	effectiveEnabled := false
+	ineligibleReason := "explicit_only"
+	phase := "disabled"
 	next := protocol.DaemonUpdateObservation{
 		SessionID:                  uuid.NewString(),
 		Revision:                   1,
@@ -95,7 +77,7 @@ func (c *updateObservationCoordinator) initialObservation(cfg Config) protocol.D
 		IneligibleReason:           ineligibleReason,
 		CheckIntervalSeconds:       max(int64(interval/time.Second), 1),
 		Phase:                      phase,
-		LastOutcome:                "never_checked",
+		LastOutcome:                "explicit_only",
 	}
 
 	previous, err := readPersistedUpdateObservation(c.path)
@@ -291,10 +273,10 @@ func validateDaemonUpdateObservation(observation protocol.DaemonUpdateObservatio
 	if _, err := time.Parse(time.RFC3339Nano, observation.ObservedAt); err != nil {
 		return errors.New("auto-update observation observed_at must be RFC3339")
 	}
-	if !oneOf(observation.ConfigSource, "official_host_default", "self_host_default", "env_enabled", "env_disabled", "cli_disabled") {
+	if !oneOf(observation.ConfigSource, "official_host_default", "self_host_default", "env_enabled", "env_disabled", "cli_disabled", "deprecated_noop") {
 		return fmt.Errorf("invalid auto-update config_source %q", observation.ConfigSource)
 	}
-	if observation.IneligibleReason != "" && !oneOf(observation.IneligibleReason, "desktop_managed", "non_release_build") {
+	if observation.IneligibleReason != "" && !oneOf(observation.IneligibleReason, "desktop_managed", "non_release_build", "explicit_only") {
 		return fmt.Errorf("invalid auto-update ineligible_reason %q", observation.IneligibleReason)
 	}
 	if observation.CheckIntervalSeconds <= 0 {
@@ -311,7 +293,7 @@ func validateDaemonUpdateObservation(observation protocol.DaemonUpdateObservatio
 			return errors.New("auto-update last_attempt_at must be RFC3339")
 		}
 	}
-	if !oneOf(observation.LastOutcome, "never_checked", "up_to_date", "busy", "pinned", "fetch_failed", "update_failed", "verification_failed", "update_succeeded", "interrupted") {
+	if !oneOf(observation.LastOutcome, "never_checked", "up_to_date", "busy", "pinned", "fetch_failed", "update_failed", "verification_failed", "update_succeeded", "interrupted", "explicit_only") {
 		return fmt.Errorf("invalid auto-update last_outcome %q", observation.LastOutcome)
 	}
 	if len(observation.ErrorCode) > 80 {

@@ -135,8 +135,8 @@ func TestDeliveryGateModuleConfirmRequiresFreshPassingGate(t *testing.T) {
 		if run.Status != RunStatusCompleted || store.completedSession != "session-1" || store.completedWorkspace != "workspace-1" || store.completedUser != "user-1" {
 			t.Fatalf("run=%+v complete=(%q,%q,%q)", run, store.completedSession, store.completedWorkspace, store.completedUser)
 		}
-		if projection.sessionID != "session-1" {
-			t.Fatalf("projected=%q", projection.sessionID)
+		if projection.calls != 0 {
+			t.Fatalf("confirm projected without a reconcile lease: calls=%d", projection.calls)
 		}
 	})
 }

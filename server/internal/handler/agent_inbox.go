@@ -957,6 +957,13 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	failureReason := strings.TrimSpace(req.FailureReason)
 	reasonCode := agentInboxFailureReasonCode(errText, failureReason, req.ReasonCode)
+	// A lifecycle restart/reset has already invalidated this provider session.
+	// The interrupted turn may report after that reset; never let its stale
+	// token become the next resume source. Keep workDir because session reset
+	// preserves the Agent Workspace and task working directories.
+	if reasonCode == "restarted_by_user" {
+		req.SessionID = ""
+	}
 	if failureReason != "" && event.Reason != channelOnboardingReason {
 		if !event.ChatSessionID.Valid {
 			h.completeFailedNonChatAgentInboxEvent(
@@ -1207,7 +1214,16 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	}
 
 	if event.ChatSessionID.Valid {
-		if chatFailureResumeUnsafe(failureReason) {
+		if reasonCode == "restarted_by_user" {
+			if _, err := tx.Exec(r.Context(), `
+				UPDATE chat_session
+				SET session_id = NULL,
+				    updated_at = now()
+				WHERE id = $1`, event.ChatSessionID); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to clear restarted chat session")
+				return
+			}
+		} else if chatFailureResumeUnsafe(failureReason) {
 			if _, err := tx.Exec(r.Context(), `
 				UPDATE chat_session
 				SET session_id = NULL,
@@ -1826,6 +1842,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	if strings.TrimSpace(resp.ChannelID) != "" {
 		channelID := parseUUID(resp.ChannelID)
 		if goal, err := h.currentChannelGoal(ctx, event.WorkspaceID, channelID); err == nil {
+			h.hydrateChannelGoalWorkGraph(ctx, &goal)
 			resp.ChannelGoal = channelGoalContextForClaim(goal)
 			// LRM-1004: attach bounded subgoals for this claiming agent only.
 			if resp.ChannelGoal != nil {

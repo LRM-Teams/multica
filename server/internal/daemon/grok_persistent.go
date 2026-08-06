@@ -158,6 +158,30 @@ func (p *persistentRuntimePool) closeAll() {
 	}
 }
 
+// forceTerminateAll may touch only backends retained by this daemon-owned
+// pool. A missing ForceKill capability is an ownership-safe failure, never a
+// license to find and kill a similarly named external process.
+func (p *persistentRuntimePool) forceTerminateAll() error {
+	p.mu.Lock()
+	backends := make([]agent.GrokACPBackend, 0, len(p.sessions))
+	for _, session := range p.sessions {
+		if session.running && session.backend != nil {
+			backends = append(backends, session.backend)
+		}
+	}
+	p.mu.Unlock()
+	for _, backend := range backends {
+		killable, ok := backend.(agent.ResidentRuntimeForceKillable)
+		if !ok {
+			return ErrPersistentRuntimeSessionBusy
+		}
+		if err := killable.ForceKill(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *persistentRuntimePool) evictChat(agentID, runtimeID, chatSessionID string) int {
 	p.mu.Lock()
 	backends := make([]agent.GrokACPBackend, 0)
@@ -200,7 +224,7 @@ func (d *Daemon) evictPersistentChatRuntime(task Task) {
 }
 
 func usesPersistentGrokChatRuntime(provider string, task Task) bool {
-	return provider == "grok" && task.ChatSessionID != ""
+	return provider == "grok" && isChatLikeTask(task)
 }
 
 // acquireGrokChatACPBackend binds the lease invariant to a retained Grok chat

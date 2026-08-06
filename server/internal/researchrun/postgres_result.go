@@ -28,6 +28,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, in.SessionID, ""); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 
 	state, replay, err := lockResultAttempt(ctx, tx, in)
 	if err != nil || replay != nil {
@@ -142,6 +145,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	}
 	if command.RowsAffected() != 1 {
 		return AcceptResultOutcome{}, fmt.Errorf("%w: attempt changed while accepting result", ErrInvalidTransition)
+	}
+	if err = settleAttemptCircuitSuccessTx(ctx, tx, in.AttemptID); err != nil {
+		return AcceptResultOutcome{}, err
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task

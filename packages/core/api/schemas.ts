@@ -30,6 +30,7 @@ import type {
   ChannelThreadMessagesPage,
   AgentHealthResponse,
   AgentRuntime,
+  MachineUpgrade,
   StickerCatalogResponse,
   ListIssuesResponse,
   TimelineEntry,
@@ -76,10 +77,32 @@ export const ChannelGoalSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   completed_at: z.string().optional(),
+  work_graph: z.object({
+    id: z.string(),
+    version: z.number(),
+    status: z.enum(["active", "paused", "deliverable", "completed", "cancelled", "failed"]),
+    total: z.number().default(0),
+    completed: z.number().default(0),
+    running: z.number().default(0),
+    waiting: z.number().default(0),
+    stale: z.number().default(0),
+  }).optional(),
 }).loose();
 
 export const ChannelGoalEnvelopeSchema = z.object({
   goal: ChannelGoalSchema.nullable().default(null),
+}).loose();
+
+export const WorkGraphDetailSchema = z.object({
+  id: z.string(), workspace_id: z.string(), anchor_kind: z.string(), anchor_id: z.string(),
+  status: z.string(), current_version: z.number(), admission_decision: z.enum(["GRAPH", "PROPOSE_GRAPH"]),
+  nodes: z.array(z.object({
+    id: z.string(), issue_id: z.string(), role: z.string(), context_policy: z.string(),
+    execution_status: z.string(), validity_status: z.string(), review_status: z.string(),
+    objective: z.string().default(""), completion_contract: z.array(z.string()).default([]),
+    based_on_graph_version: z.number(),
+  }).loose()).default([]),
+  edges: z.array(z.object({ id:z.string(),from_node_id:z.string(),to_node_id:z.string(),edge_type:z.string(),required:z.boolean() }).loose()).default([]),
 }).loose();
 
 export const ChannelGoalProcessMarkdownSchema = z.object({
@@ -299,6 +322,32 @@ export const AgentRuntimeSchema = z.object({
     .enum(["ok", "update_available", "updating", "failed", "offline"])
     .catch("offline"),
   update_error: z.string().nullable().optional(),
+  machine_upgrade: z
+    .object({
+      id: z.string(),
+      daemon_id: z.string(),
+      request_id: z.string(),
+      requested_target: z.string(),
+      resolved_target: z.string().nullable().optional(),
+      phase: z.string(),
+      result: z.string().nullable().optional(),
+      error_code: z.string().nullable().optional(),
+      error_message: z.string().nullable().optional(),
+      accepted_at: z.string().nullable().optional(),
+      accepted_generation: z.string().nullable().optional(),
+      accepted_runtime_ids: z.array(z.string()).optional(),
+      attested_runtime_ids: z.array(z.string()).optional(),
+      source_version: z.string().nullable().optional(),
+      rollback_generation: z.string().nullable().optional(),
+      rollback_runtime_ids: z.array(z.string()).optional(),
+      completed_at: z.string().nullable().optional(),
+      created_at: z.string(),
+      updated_at: z.string(),
+    })
+    .loose()
+    .nullable()
+    .optional()
+    .catch(null),
   // Unknown/malformed future update observations degrade only this optional
   // field. The runtime row remains usable by older installed desktop builds.
   auto_update: DaemonUpdateStatusSchema.nullable().optional().catch(null),
@@ -310,6 +359,41 @@ export const AgentRuntimeSchema = z.object({
 
 export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
 export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
+
+export const MachineUpgradeSchema = z.object({
+  id: z.string(),
+  daemon_id: z.string(),
+  request_id: z.string(),
+  requested_target: z.string(),
+  resolved_target: z.string().nullable().optional(),
+  phase: z.string().default("failed"),
+  result: z.string().nullable().optional(),
+  error_code: z.string().nullable().optional(),
+  error_message: z.string().nullable().optional(),
+  accepted_at: z.string().nullable().optional(),
+  accepted_generation: z.string().nullable().optional(),
+  accepted_runtime_ids: z.array(z.string()).default([]),
+  attested_runtime_ids: z.array(z.string()).default([]),
+  source_version: z.string().nullable().optional(),
+  rollback_generation: z.string().nullable().optional(),
+  rollback_runtime_ids: z.array(z.string()).default([]),
+  completed_at: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EMPTY_MACHINE_UPGRADE: MachineUpgrade = {
+  id: "",
+  daemon_id: "",
+  request_id: "",
+  requested_target: "",
+  phase: "failed",
+  accepted_runtime_ids: [],
+  attested_runtime_ids: [],
+  rollback_runtime_ids: [],
+  created_at: "",
+  updated_at: "",
+};
 
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive

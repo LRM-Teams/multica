@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -113,7 +114,13 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 	researchTaskID := uuid.NewString()
 	attemptID := uuid.NewString()
 	criteria := json.RawMessage(`[{"criterion":"return a structured plan"}]`)
-	result, err := (&researchRunDispatcher{handler: testHandler}).Dispatch(ctx, researchrun.DispatchRequest{
+	dispatcher := &researchRunDispatcher{handler: testHandler}
+	members, err := researchrun.NewPostgresStore(testPool).ListFleetMembers(ctx, uuidToString(session.ID), workspaceIDText)
+	if err != nil || len(members) != 1 {
+		t.Fatalf("resolve dispatch target members=%+v err=%v", members, err)
+	}
+	target := members[0].ExecutionTarget
+	request := researchrun.DispatchRequest{
 		Run: researchrun.Run{
 			SessionID:   uuidToString(session.ID),
 			WorkspaceID: workspaceIDText,
@@ -125,9 +132,11 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 		},
 		AttemptID: attemptID,
 		AgentID:   uuidToString(agentID),
+		Target:    target,
 		Prompt:    "Return the research plan through the task-result command.",
 		Key:       dispatchKey,
-	})
+	}
+	result, err := dispatcher.Dispatch(ctx, request)
 	if err != nil {
 		t.Fatalf("dispatch research task: %v", err)
 	}
@@ -135,10 +144,11 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 		t.Fatal("dispatch returned an empty inbox task ID")
 	}
 
-	var gotKey, gotSessionID, gotTaskID, gotAttemptID, timeoutJSONType, criteriaJSONType string
+	var gotKey, gotRequestHash, gotSessionID, gotTaskID, gotAttemptID, timeoutJSONType, criteriaJSONType string
 	var gotTimeout int
 	if err = testPool.QueryRow(ctx, `
 		SELECT context->>'research_dispatch_key',
+		       context->>'research_dispatch_request_hash',
 		       context->>'research_session_id',
 		       context->>'research_task_id',
 		       context->>'research_attempt_id',
@@ -148,7 +158,7 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 		FROM agent_inbox_event
 		WHERE id = $1::uuid
 	`, result.InboxTaskID).Scan(
-		&gotKey, &gotSessionID, &gotTaskID, &gotAttemptID,
+		&gotKey, &gotRequestHash, &gotSessionID, &gotTaskID, &gotAttemptID,
 		&gotTimeout, &timeoutJSONType, &criteriaJSONType,
 	); err != nil {
 		t.Fatalf("load dispatched inbox context: %v", err)
@@ -156,7 +166,37 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 	if gotKey != dispatchKey || gotSessionID != uuidToString(session.ID) || gotTaskID != researchTaskID || gotAttemptID != attemptID {
 		t.Fatalf("dispatch context IDs = %q %q %q %q", gotKey, gotSessionID, gotTaskID, gotAttemptID)
 	}
+	wantRequestHash, hashErr := researchrun.HashDispatchRequest(request)
+	if hashErr != nil || gotRequestHash != wantRequestHash {
+		t.Fatalf("dispatch request hash=%q want=%q err=%v", gotRequestHash, wantRequestHash, hashErr)
+	}
 	if gotTimeout != 1800 || timeoutJSONType != "number" || criteriaJSONType != "array" {
 		t.Fatalf("dispatch context types: timeout=%d timeout_type=%q criteria_type=%q", gotTimeout, timeoutJSONType, criteriaJSONType)
+	}
+	replayed, err := dispatcher.Dispatch(ctx, request)
+	if err != nil || replayed.InboxTaskID != result.InboxTaskID {
+		t.Fatalf("idempotent replay=%+v err=%v", replayed, err)
+	}
+	conflicting := request
+	conflicting.Prompt = "different payload under the same dispatch key"
+	if _, err = dispatcher.Dispatch(ctx, conflicting); err == nil || !strings.Contains(err.Error(), "reused for a different request") {
+		t.Fatalf("conflicting dispatch error=%v", err)
+	}
+	if _, err = testPool.Exec(ctx, `UPDATE agent SET model = 'changed-model' WHERE id = $1::uuid`, agentIDText); err != nil {
+		t.Fatal(err)
+	}
+	staleTarget := request
+	staleTarget.Key = "research-dispatch-stale-target:" + uuid.NewString()
+	staleTarget.AttemptID = uuid.NewString()
+	staleTarget.RequestHash, err = researchrun.HashDispatchRequest(staleTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = dispatcher.Dispatch(ctx, staleTarget); err == nil {
+		t.Fatal("dispatch accepted a target whose model changed after attempt creation")
+	}
+	policy := researchrun.DispatchFailurePolicy(err)
+	if policy.Class != researchrun.FailureTargetChanged || !policy.Retryable {
+		t.Fatalf("stale target policy=%+v error=%v", policy, err)
 	}
 }

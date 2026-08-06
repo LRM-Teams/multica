@@ -215,7 +215,7 @@ func selectCurrentAttempt(list []researchrun.Attempt) *researchrun.Attempt {
 		a := &list[i]
 		ts := attemptUpdatedAtMs(*a)
 		switch a.Status {
-		case researchrun.AttemptStatusDispatching, researchrun.AttemptStatusRunning:
+		case researchrun.AttemptStatusDispatching, researchrun.AttemptStatusRunning, researchrun.AttemptStatusCancelling:
 			if open == nil ||
 				a.AttemptNumber > open.AttemptNumber ||
 				(a.AttemptNumber == open.AttemptNumber && ts >= attemptUpdatedAtMs(*open)) {
@@ -266,6 +266,10 @@ func presenceSignalFromAttempt(sessionID, runStage string, task researchrun.Task
 		if sig.Activity == "" {
 			sig.Activity = researchPresenceGenericStartedTitle
 		}
+	case researchrun.AttemptStatusCancelling:
+		sig.Kind = presenceSignalAttempt
+		sig.PhaseHint = ResearchPresencePhaseRunning
+		sig.Activity = "正在停止超时任务"
 	case researchrun.AttemptStatusSucceeded:
 		sig.Kind = presenceSignalDone
 		sig.PhaseHint = ResearchPresencePhaseDone

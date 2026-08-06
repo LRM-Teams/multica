@@ -19,11 +19,14 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 		return NodeCommandOutcome{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, in.SessionID, in.WorkspaceID); err != nil {
+		return NodeCommandOutcome{}, err
+	}
 
 	var (
-		workspaceID, status, orchestratorVersion string
+		workspaceID, status, orchestratorVersion                 string
 		goalVersion, planVersion, maxTasks, maxAttempts, timeout int
-		stateVersion int64
+		stateVersion                                             int64
 	)
 	err = tx.QueryRow(ctx, `
 		SELECT workspace_id::text, status, orchestrator_version,
@@ -335,7 +338,7 @@ func (s *PostgresStore) nodeCommandRetry(
 	}
 
 	// Preserve original attempts; only reopen the task for a new attempt.
-	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning) {
+	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning || latest.Status == AttemptStatusCancelling) {
 		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNotRetryable, "任务仍在执行，请等待结束后再重试，或先改派")
 	}
 
@@ -376,7 +379,7 @@ func (s *PostgresStore) nodeCommandRetry(
 		UPDATE research_task
 		SET status = 'ready',
 		    ready_at = now(),
-		    terminal_reason = NULL,
+		    terminal_reason = '',
 		    completed_at = NULL,
 		    max_attempts = $2,
 		    acceptance_criteria = $3,
@@ -418,13 +421,13 @@ func (s *PostgresStore) nodeCommandRetry(
 	}
 
 	payload := map[string]any{
-		"command":            outcome,
-		"action":             NodeActionRetry,
-		"client_request_id":  in.ClientRequestID,
-		"source_node_id":     in.NodeID,
-		"task_id":            taskID,
+		"command":             outcome,
+		"action":              NodeActionRetry,
+		"client_request_id":   in.ClientRequestID,
+		"source_node_id":      in.NodeID,
+		"task_id":             taskID,
 		"previous_attempt_id": lineage.PreviousAttemptID,
-		"queued":             true,
+		"queued":              true,
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "node_command_retry", nodeCommandClientKey(in.ClientRequestID, "event"), in.ActorType, in.ActorID, payload)
 	if err != nil {
@@ -463,14 +466,39 @@ func (s *PostgresStore) nodeCommandReassign(
 	if hasLatest && fromAgent == "" {
 		fromAgent = strings.TrimSpace(latest.AssignedAgentID)
 	}
+	if hasLatest && latest.CancelCompletedAt == nil && (latest.Status == AttemptStatusCancelling || latest.Status == AttemptStatusCancelled) {
+		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNotRetryable, "原执行仍在停止中，请等待取消确认后再改派")
+	}
 
 	// Cancel in-flight attempt so a new assignee can take over; keep the row.
 	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning) {
+		if err = abandonAttemptCircuitProbesTx(ctx, tx, latest.ID); err != nil {
+			return NodeCommandOutcome{}, err
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_task_attempt attempt
+			SET cancellation_completed_at = now(), updated_at = now()
+			FROM research_dispatch_outbox outbox
+			WHERE attempt.id = $1::uuid
+			  AND outbox.attempt_id = attempt.id
+			  AND outbox.status = 'pending'
+			  AND outbox.delivery_attempts = 0
+		`, latest.ID); err != nil {
+			return NodeCommandOutcome{}, err
+		}
 		if _, err = tx.Exec(ctx, `
 			UPDATE research_task_attempt
 			SET status = 'cancelled', failure_class = 'reassigned',
 			    diagnostics = '改派取消原执行', completed_at = now(), updated_at = now()
 			WHERE id = $1::uuid
+		`, latest.ID); err != nil {
+			return NodeCommandOutcome{}, err
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_dispatch_outbox
+			SET status = 'cancelled', lease_token = NULL, lease_expires_at = NULL,
+			    last_error = 'reassigned', updated_at = now()
+			WHERE attempt_id = $1::uuid AND status IN ('pending', 'delivering')
 		`, latest.ID); err != nil {
 			return NodeCommandOutcome{}, err
 		}
@@ -483,7 +511,7 @@ func (s *PostgresStore) nodeCommandReassign(
 	activeLoad := map[string]int{}
 	rows, qerr := tx.Query(ctx, `
 		SELECT assigned_agent_id::text FROM research_task_attempt
-		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')
+		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling')
 	`, in.SessionID)
 	if qerr != nil {
 		return NodeCommandOutcome{}, qerr
@@ -549,7 +577,7 @@ func (s *PostgresStore) nodeCommandReassign(
 		SET status = 'ready',
 		    assigned_agent_id = $2::uuid,
 		    ready_at = now(),
-		    terminal_reason = NULL,
+		    terminal_reason = '',
 		    completed_at = NULL,
 		    acceptance_criteria = $3,
 		    goal_version = $4,
@@ -662,7 +690,7 @@ func retryEligibility(task Task, latest Attempt, hasLatest bool) *NodeCommandDen
 			return nil
 		}
 		return denyNodeCommand(NodeCmdCodeNotRetryable, "最近一次尝试已成功，无需重试")
-	case AttemptStatusDispatching, AttemptStatusRunning:
+	case AttemptStatusDispatching, AttemptStatusRunning, AttemptStatusCancelling:
 		return denyNodeCommand(NodeCmdCodeNotRetryable, "任务仍在执行，请等待结束后再重试，或先改派")
 	default:
 		if task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed {

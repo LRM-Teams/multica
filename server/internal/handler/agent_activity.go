@@ -2300,7 +2300,7 @@ func resolveRaftCLIInvocation(toolName string, input map[string]any) (raftCLIInv
 		invocation.ToolTarget = optionValue(rest, "--target")
 	case "message search":
 		invocation.Tool = "search_messages"
-		invocation.ToolTarget = optionValue(rest, "--query")
+		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--query"), positionalArg(rest, 0))
 		invocation.SummaryKind = "query"
 	case "server info":
 		invocation.Tool = "list_server"

@@ -168,6 +168,11 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusConflict, reason)
 		return
 	}
+	if req.ActionKind != agentLifecycleRestart &&
+		!agentSessionResetCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime))) {
+		writeError(w, http.StatusConflict, "unsupported_session_reset_capability")
+		return
+	}
 
 	// Task #112 / Frank 2026-08-03: never create after_current_run/scheduled
 	// lifecycle ops — there is no promotion trigger, so "runs after current
@@ -287,14 +292,20 @@ func (h *Handler) agentLifecyclePreflight(ctx context.Context, target db.Agent) 
 		return AgentLifecyclePreflight{}, err
 	}
 	actions := make(map[AgentLifecycleActionKind]AgentLifecycleActionPreflight, 3)
+	sessionResetSupported := supported && agentSessionResetCapabilityPresent(runtimeCapabilities(runtimeMetadata(runtime)))
 	for _, action := range []AgentLifecycleActionKind{
 		agentLifecycleRestart,
 		agentLifecycleResetSessionRestart,
 		agentLifecycleFullResetRestart,
 	} {
+		actionSupported, actionReason := supported, reason
+		if action != agentLifecycleRestart && supported && !sessionResetSupported {
+			actionSupported = false
+			actionReason = "unsupported_session_reset_capability"
+		}
 		actions[action] = AgentLifecycleActionPreflight{
-			Supported:      supported,
-			DisabledReason: reason,
+			Supported:      actionSupported,
+			DisabledReason: actionReason,
 			ExecutionMode:  agentLifecycleImmediate,
 		}
 	}
@@ -461,6 +472,15 @@ func agentLifecycleInitialStep(status string) string {
 func agentLifecycleCapabilityPresent(capabilities []string) bool {
 	for _, capability := range capabilities {
 		if capability == protocol.DaemonCapabilityAgentLifecycleActions {
+			return true
+		}
+	}
+	return false
+}
+
+func agentSessionResetCapabilityPresent(capabilities []string) bool {
+	for _, capability := range capabilities {
+		if capability == protocol.DaemonCapabilityAgentSessionReset {
 			return true
 		}
 	}

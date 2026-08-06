@@ -558,6 +558,7 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (string, erro
 type (
 	HeartbeatResponse       = protocol.DaemonHeartbeatAckPayload
 	PendingUpdate           = protocol.DaemonHeartbeatPendingUpdate
+	PendingMachineUpgrade   = protocol.DaemonHeartbeatPendingMachineUpgrade
 	PendingModelList        = protocol.DaemonHeartbeatPendingModelList
 	PendingLocalSkills      = protocol.DaemonHeartbeatPendingLocalSkills
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport
@@ -582,6 +583,70 @@ func (c *Client) SendHeartbeat(
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// MachineUpgradeReceipt is the immutable server acceptance snapshot needed by
+// the daemon before any local release mutation.
+type MachineUpgradeReceipt struct {
+	ID                 string   `json:"id"`
+	RequestedTarget    string   `json:"requested_target"`
+	ResolvedTarget     *string  `json:"resolved_target,omitempty"`
+	Phase              string   `json:"phase"`
+	AcceptedGeneration *string  `json:"accepted_generation,omitempty"`
+	AcceptedRuntimeIDs []string `json:"accepted_runtime_ids,omitempty"`
+}
+
+// MachineUpgradeControlOperation is the minimal canonical operation receipt
+// needed by the owner-only local control surface. It intentionally does not
+// duplicate handler types across the daemon package boundary.
+type MachineUpgradeControlOperation struct {
+	ID              string `json:"id"`
+	DaemonID        string `json:"daemon_id"`
+	RequestedTarget string `json:"requested_target"`
+	Phase           string `json:"phase"`
+}
+
+func (c *Client) CreateMachineUpgrade(ctx context.Context, workspaceID, daemonID, requestID, targetVersion string) (*MachineUpgradeControlOperation, error) {
+	var operation MachineUpgradeControlOperation
+	err := c.postJSONWithTokenAndHeaders(ctx, fmt.Sprintf("/api/daemons/%s/upgrades", daemonID), map[string]string{
+		"request_id":     requestID,
+		"target_version": targetVersion,
+	}, &operation, c.tokenSnapshot(), map[string]string{"X-Workspace-ID": workspaceID})
+	if err != nil {
+		return nil, err
+	}
+	return &operation, nil
+}
+
+// AcceptMachineUpgrade records that this daemon process accepted the claimed
+// machine operation. The following full registration is the attestation; the
+// server will not complete the operation until every captured sibling does so.
+func (c *Client) AcceptMachineUpgrade(ctx context.Context, runtimeID, upgradeID, generationID, cliVersion, resolvedTarget string) (*MachineUpgradeReceipt, error) {
+	var receipt MachineUpgradeReceipt
+	err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s/accept", runtimeID, upgradeID), map[string]any{
+		"generation_id":   generationID,
+		"cli_version":     cliVersion,
+		"resolved_target": resolvedTarget,
+	}, &receipt, c.tokenForRuntime(runtimeID))
+	if err != nil {
+		return nil, err
+	}
+	return &receipt, nil
+}
+
+func (c *Client) ReportMachineUpgradeProgress(ctx context.Context, runtimeID, upgradeID, phase, errorCode, errorMessage string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s/progress", runtimeID, upgradeID), map[string]any{
+		"phase": phase, "error_code": errorCode, "error_message": errorMessage,
+	}, nil, c.tokenForRuntime(runtimeID))
+}
+
+func (c *Client) ReportMachineUpgradeRollback(ctx context.Context, runtimeID, upgradeID, generation, errorCode, errorMessage string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s/progress", runtimeID, upgradeID), map[string]any{
+		"phase":         "rollback_pending",
+		"generation_id": generation,
+		"error_code":    errorCode,
+		"error_message": errorMessage,
+	}, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportUpdateResult sends the CLI update result back to the server.
@@ -620,6 +685,14 @@ func (c *Client) ReportAgentLifecycleOperationResult(ctx context.Context, runtim
 // dispatch id and lifecycle sequence, so a lost HTTP response is safe.
 func (c *Client) ReportAgentStartIntent(ctx context.Context, runtimeID, startDispatchID string, result map[string]any) error {
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-start-intents/%s/report", runtimeID, startDispatchID), result, nil, c.tokenForRuntime(runtimeID))
+}
+
+// ResetAgentRuntimeSession clears every server-owned provider resume pointer
+// for this agent and runtime. The operation ID makes retries idempotent.
+func (c *Client) ResetAgentRuntimeSession(ctx context.Context, operationID, agentID, runtimeID string) error {
+	return c.postJSONWithToken(ctx,
+		fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/session/reset", runtimeID, agentID),
+		map[string]any{"operation_id": operationID}, nil, c.tokenForRuntime(runtimeID))
 }
 
 // ReportAgentProviderCrashed tells the server an idle resident provider
@@ -835,6 +908,10 @@ func (c *Client) postJSON(ctx context.Context, path string, reqBody any, respBod
 }
 
 func (c *Client) postJSONWithToken(ctx context.Context, path string, reqBody any, respBody any, token string) error {
+	return c.postJSONWithTokenAndHeaders(ctx, path, reqBody, respBody, token, nil)
+}
+
+func (c *Client) postJSONWithTokenAndHeaders(ctx context.Context, path string, reqBody any, respBody any, token string, headers map[string]string) error {
 	var body io.Reader
 	if reqBody != nil {
 		data, err := json.Marshal(reqBody)
@@ -851,6 +928,11 @@ func (c *Client) postJSONWithToken(ctx context.Context, path string, reqBody any
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for name, value := range headers {
+		if value != "" {
+			req.Header.Set(name, value)
+		}
 	}
 	c.setIdentityHeaders(req)
 

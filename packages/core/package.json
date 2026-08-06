@@ -108,6 +108,8 @@
     "./research": "./research/index.ts",
     "./research/queries": "./research/queries.ts",
     "./research-v6-slice": "./hooks/research-v6-slice/index.ts",
+    "./adapters": "./adapters/index.ts",
+    "./adapters/fixtures": "./adapters/fixtures.ts",
     "./realtime": "./realtime/index.ts",
     "./navigation": "./navigation/index.ts",
     "./modals": "./modals/index.ts",
@@ -138,8 +140,9 @@
     "./research-v6/projection-client": "./hooks/research-v6/projection-client.ts",
     "./research-v6/store": "./hooks/research-v6/store.ts",
     "./research-v6/registry": "./research-v6/registry.ts",
+    "./research-v6/schemas": "./research-v6/schemas.ts",
+    "./research-v6-live": "./hooks/research-v6-live/index.ts",
     "./api/research-v6": "./api/research-v6.ts",
-    "./api/research-v6/schemas": "./api/research-v6-schemas.ts",
     "./api/research-v6/fixtures": "./api/research-v6-fixtures.ts"
   },
   "dependencies": {

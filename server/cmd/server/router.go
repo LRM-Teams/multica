@@ -565,8 +565,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed", h.ReportAgentProviderCrashed)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
+		r.Post("/runtimes/{runtimeId}/agents/{agentId}/session/reset", h.ResetAgentRuntimeSession)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
+		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/accept", h.AcceptMachineUpgrade)
+		r.Post("/runtimes/{runtimeId}/machine-upgrades/{upgradeId}/progress", h.ReportMachineUpgradeProgress)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
@@ -1170,6 +1173,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/activity", h.GetRuntimeTaskActivity)
 					r.Get("/agent-workspaces", h.ListRuntimeAgentWorkspaces)
 					r.Delete("/agent-workspaces/{dirName}", h.DeleteRuntimeAgentWorkspace)
+					// Installed clients still use these runtime-scoped paths. They
+					// delegate to the daemon-scoped Machine Upgrade record and must
+					// never recreate a runtime-owned update lineage.
 					r.Post("/update", h.InitiateUpdate)
 					r.Get("/update/{updateId}", h.GetUpdate)
 					r.Delete("/update-intent", h.CancelUpdateIntent)
@@ -1190,6 +1196,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// cascade plan.
 					r.Post("/archive-agents-and-delete", h.ArchiveAgentsAndDeleteRuntime)
 				})
+			})
+
+			// Canonical daemon-identity Machine Upgrade lifecycle. Runtime-scoped
+			// update routes remain compatibility adapters for installed clients.
+			r.Route("/api/daemons/{daemonId}/upgrades", func(r chi.Router) {
+				r.Post("/", h.CreateMachineUpgrade)
+				r.Get("/{upgradeId}", h.GetMachineUpgrade)
+				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
 			// Cloud Runtime fleet proxy. The remote service URL is configured
@@ -1252,6 +1266,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// completed_at). Backs the Agents-list sparkline (trailing 7d
 			// slice) AND the agent detail "Last 30 days" panel.
 			r.Get("/api/agent-activity-30d", h.GetWorkspaceAgentActivity30d)
+			r.Get("/api/work-graphs/{graphId}", h.GetWorkGraph)
 
 			// Workspace-wide 30-day run counts per agent for the Agents-list RUNS column.
 			r.Get("/api/agent-run-counts", h.GetWorkspaceAgentRunCounts)
@@ -1290,6 +1305,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/channels/{channelId}/goal/checkpoint", h.CheckpointAgentChannelGoal)
 				r.Get("/channels/{channelId}/goal/subgoals", h.ListAgentChannelGoalSubgoals)
 				r.Post("/channels/{channelId}/goal/subgoals", h.CreateAgentChannelGoalSubgoal)
+				r.Post("/work-graphs", h.CreateAgentWorkGraph)
+				r.Get("/work-graphs/{graphId}", h.GetAgentWorkGraph)
+				r.Post("/work-graphs/{graphId}/reconcile", h.ReconcileAgentWorkGraph)
+				r.Post("/work-graphs/{graphId}/nodes/{nodeId}/invalidate", h.InvalidateAgentWorkGraphNode)
+				r.Patch("/work-graphs/{graphId}/nodes/{nodeId}", h.UpdateAgentWorkGraphNode)
+				r.Post("/work-graphs/{graphId}/artifacts", h.AddAgentWorkGraphArtifact)
+				r.Post("/work-graphs/{graphId}/verifications", h.AddAgentWorkGraphVerification)
+				r.Post("/work-graphs/{graphId}/revisions", h.ReviseAgentWorkGraph)
 				r.Get("/channels/{channelId}/goal/process", h.ListAgentChannelGoalProcesses)
 				r.Put("/channels/{channelId}/goal/process", h.PutAgentChannelGoalProcess)
 				r.Get("/channels/{channelId}/goal/process/{agentId}", h.GetAgentChannelGoalProcess)

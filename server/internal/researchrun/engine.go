@@ -12,18 +12,28 @@ import (
 )
 
 type Engine struct {
-	store      *PostgresStore
-	dispatcher Dispatcher
-	projector  Projector
-	clock      Clock
+	store              *PostgresStore
+	dispatcher         Dispatcher
+	projector          Projector
+	clock              Clock
+	leaseDuration      time.Duration
+	leaseRenewInterval time.Duration
 }
+
+const (
+	reconcileLeaseDuration      = 45 * time.Second
+	reconcileLeaseRenewInterval = 15 * time.Second
+)
 
 func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) ResearchRun {
 	return newEngine(store, dispatcher, projector)
 }
 
 func newEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
-	return &Engine{store: store, dispatcher: dispatcher, projector: projector, clock: systemClock{}}
+	return &Engine{
+		store: store, dispatcher: dispatcher, projector: projector, clock: systemClock{},
+		leaseDuration: reconcileLeaseDuration, leaseRenewInterval: reconcileLeaseRenewInterval,
+	}
 }
 
 func (e *Engine) Create(ctx context.Context, in StartInput) (Run, error) {
@@ -35,6 +45,9 @@ func (e *Engine) Create(ctx context.Context, in StartInput) (Run, error) {
 		return Run{}, err
 	}
 	if err = e.ReconcileSession(ctx, run.SessionID); err != nil {
+		if errors.Is(err, ErrRunLeaseLost) {
+			return run, nil
+		}
 		return run, err
 	}
 	return e.store.GetRun(ctx, run.SessionID, in.WorkspaceID)
@@ -49,6 +62,9 @@ func (e *Engine) Start(ctx context.Context, in StartInput) (Run, error) {
 		return Run{}, err
 	}
 	if err = e.ReconcileSession(ctx, in.SessionID); err != nil {
+		if errors.Is(err, ErrRunLeaseLost) {
+			return run, nil
+		}
 		return run, err
 	}
 	return e.store.GetRun(ctx, in.SessionID, in.WorkspaceID)
@@ -63,6 +79,9 @@ func (e *Engine) SubmitResult(ctx context.Context, sessionID, workspaceID, taskI
 		return AcceptResultOutcome{}, err
 	}
 	if err = e.ReconcileSession(ctx, sessionID); err != nil {
+		if errors.Is(err, ErrRunLeaseLost) {
+			return outcome, nil
+		}
 		return outcome, fmt.Errorf("result accepted but run advancement failed: %w", err)
 	}
 	return outcome, nil
@@ -77,6 +96,9 @@ func (e *Engine) ReconcileDue(ctx context.Context, limit int) (int, error) {
 	errs := []error{}
 	for _, sessionID := range ids {
 		if err = e.ReconcileSession(ctx, sessionID); err != nil {
+			if errors.Is(err, ErrRunLeaseLost) {
+				continue
+			}
 			errs = append(errs, fmt.Errorf("research run %s: %w", sessionID, err))
 			continue
 		}
@@ -89,18 +111,66 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	if e == nil || e.store == nil || e.dispatcher == nil {
 		return errors.New("research run engine is unavailable")
 	}
+	leaseDuration := e.leaseDuration
+	if leaseDuration <= 0 {
+		leaseDuration = reconcileLeaseDuration
+	}
+	leaseRenewInterval := e.leaseRenewInterval
+	if leaseRenewInterval <= 0 || leaseRenewInterval >= leaseDuration {
+		leaseRenewInterval = min(reconcileLeaseRenewInterval, leaseDuration/3)
+	}
+	if leaseRenewInterval <= 0 {
+		leaseRenewInterval = time.Nanosecond
+	}
 	token := uuid.NewString()
-	run, claimed, err := e.store.ClaimRun(ctx, sessionID, token, 45*time.Second)
+	run, lease, claimed, err := e.store.ClaimRun(ctx, sessionID, token, leaseDuration)
 	if err != nil {
 		return err
 	}
 	if !claimed {
 		return nil
 	}
+	reconcileCtx, cancelReconcile := context.WithCancel(ctx)
+	reconcileCtx = withRunLease(reconcileCtx, lease)
+	heartbeatDone := make(chan struct{})
+	heartbeatErr := make(chan error, 1)
+	go func() {
+		defer close(heartbeatDone)
+		ticker := time.NewTicker(leaseRenewInterval)
+		defer ticker.Stop()
+		current := lease
+		for {
+			select {
+			case <-reconcileCtx.Done():
+				return
+			case <-ticker.C:
+				var renewErr error
+				current, renewErr = e.store.RenewRunLease(reconcileCtx, current, leaseDuration)
+				if renewErr != nil {
+					if reconcileCtx.Err() != nil {
+						return
+					}
+					heartbeatErr <- fmt.Errorf("renew research run lease: %w", renewErr)
+					cancelReconcile()
+					return
+				}
+			}
+		}
+	}()
+	ctx = reconcileCtx
 	next := e.clock.Now().Add(15 * time.Second)
 	defer func() {
-		if err := e.store.ReleaseRun(context.WithoutCancel(ctx), sessionID, token, next); err != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("release research run lease: %w", err))
+		cancelReconcile()
+		<-heartbeatDone
+		select {
+		case heartbeatFailure := <-heartbeatErr:
+			retErr = errors.Join(retErr, heartbeatFailure)
+		default:
+		}
+		if releaseErr := e.store.ReleaseRun(context.WithoutCancel(ctx), lease, next); releaseErr != nil {
+			if !errors.Is(releaseErr, ErrRunLeaseLost) || !errors.Is(retErr, ErrRunLeaseLost) {
+				retErr = errors.Join(retErr, fmt.Errorf("release research run lease: %w", releaseErr))
+			}
 		}
 	}()
 	pendingCancellations, cancelErr := e.cancelPendingAttempts(ctx, run, "research_run_"+string(run.Status))
@@ -121,7 +191,7 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	}
 
 	if err = e.executionModule().SyncAttempts(ctx, sessionID); err != nil {
-		return err
+		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 
 	tasks, err := e.store.ListTasks(ctx, sessionID)
@@ -136,12 +206,12 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	if err != nil {
 		return err
 	}
-	dispatched, err := e.dispatchReady(ctx, run, tasks, attempts, members)
+	dispatchOutcome, err := e.dispatchReady(ctx, run, tasks, attempts, members)
 	if err != nil {
 		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
-	if dispatched > 0 || hasActiveCurrentWork(run, tasks) {
-		next = e.clock.Now().Add(10 * time.Second)
+	if dispatchNext, wait := nextReconcileAfterDispatch(e.clock.Now(), dispatchOutcome, hasExecutingCurrentWork(run, tasks)); wait {
+		next = dispatchNext
 		return e.projectPending(ctx, sessionID)
 	}
 
@@ -166,20 +236,40 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	if err != nil {
 		return err
 	}
-	if _, err = e.dispatchReady(ctx, run, tasks, attempts, members); err != nil {
+	secondDispatch, err := e.dispatchReady(ctx, run, tasks, attempts, members)
+	if err != nil {
 		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 	next = e.clock.Now().Add(10 * time.Second)
+	if dispatchNext, wait := nextReconcileAfterDispatch(e.clock.Now(), secondDispatch, false); wait {
+		next = dispatchNext
+	}
 	return e.projectPending(ctx, sessionID)
 }
 
-func hasActiveCurrentWork(run Run, tasks []Task) bool {
+func nextReconcileAfterDispatch(now time.Time, outcome DispatchOutcome, executing bool) (time.Time, bool) {
+	if outcome.Dispatched > 0 || executing {
+		next := now.Add(10 * time.Second)
+		if outcome.NextDispatchAt != nil && outcome.NextDispatchAt.Before(next) {
+			next = *outcome.NextDispatchAt
+		}
+		return next, true
+	}
+	if !outcome.Waiting {
+		return time.Time{}, false
+	}
+	if outcome.NextDispatchAt != nil {
+		return *outcome.NextDispatchAt, true
+	}
+	return now.Add(5 * time.Minute), true
+}
+
+func hasExecutingCurrentWork(run Run, tasks []Task) bool {
 	for _, task := range tasks {
 		if task.GoalVersion != run.GoalVersion || task.PlanVersion != run.PlanVersion {
 			continue
 		}
-		switch task.Status {
-		case TaskStatusPending, TaskStatusReady, TaskStatusDispatching, TaskStatusRunning:
+		if task.Status == TaskStatusDispatching || task.Status == TaskStatusRunning {
 			return true
 		}
 	}
@@ -194,7 +284,7 @@ func (e *Engine) Pause(ctx context.Context, sessionID, workspaceID, userID strin
 	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_paused"); err != nil {
 		return run, err
 	}
-	return run, e.projectPending(ctx, sessionID)
+	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
 }
 
 func (e *Engine) Resume(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {
@@ -202,7 +292,7 @@ func (e *Engine) Resume(ctx context.Context, sessionID, workspaceID, userID stri
 	if err != nil {
 		return Run{}, err
 	}
-	return run, e.ReconcileSession(ctx, sessionID)
+	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
 }
 
 func (e *Engine) Cancel(ctx context.Context, sessionID, workspaceID, userID, reason string) (Run, error) {
@@ -213,7 +303,7 @@ func (e *Engine) Cancel(ctx context.Context, sessionID, workspaceID, userID, rea
 	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_cancelled"); err != nil {
 		return run, err
 	}
-	return run, e.projectPending(ctx, sessionID)
+	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
 }
 
 func (e *Engine) Archive(ctx context.Context, sessionID, workspaceID, userID, reason string) (Run, error) {
@@ -224,11 +314,15 @@ func (e *Engine) Archive(ctx context.Context, sessionID, workspaceID, userID, re
 	if _, err = e.cancelPendingAttempts(ctx, run, "research_run_archived"); err != nil {
 		return run, err
 	}
-	return run, e.projectPending(ctx, sessionID)
+	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
 }
 
 func (e *Engine) Confirm(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {
-	return e.gateModule().Confirm(ctx, sessionID, workspaceID, userID)
+	run, err := e.gateModule().Confirm(ctx, sessionID, workspaceID, userID)
+	if err != nil {
+		return Run{}, err
+	}
+	return run, reconcileHandoff(e.ReconcileSession(ctx, sessionID))
 }
 
 func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (RunSnapshot, error) {
@@ -299,7 +393,7 @@ func (e *Engine) Steer(ctx context.Context, in SteerInput) (Run, error) {
 	}); err != nil {
 		return run, err
 	}
-	return run, e.ReconcileSession(ctx, in.SessionID)
+	return run, reconcileHandoff(e.ReconcileSession(ctx, in.SessionID))
 }
 
 // NodeCommand applies continue|fork|retry|reassign from a canvas node, then
@@ -311,8 +405,10 @@ func (e *Engine) NodeCommand(ctx context.Context, in NodeCommandInput) (NodeComm
 	}
 	if !outcome.Replayed {
 		if recErr := e.ReconcileSession(ctx, in.SessionID); recErr != nil {
-			// Command already committed; surface reconcile failure without rolling back.
-			return outcome, recErr
+			if !errors.Is(recErr, ErrRunLeaseLost) {
+				// Command already committed; surface reconcile failure without rolling back.
+				return outcome, recErr
+			}
 		}
 	}
 	if outcome.Task != nil {
@@ -326,4 +422,11 @@ func (e *Engine) NodeCommand(ctx context.Context, in NodeCommandInput) (NodeComm
 		}
 	}
 	return outcome, nil
+}
+
+func reconcileHandoff(err error) error {
+	if errors.Is(err, ErrRunLeaseLost) {
+		return nil
+	}
+	return err
 }

@@ -78,6 +78,47 @@ func TestHealthHandlerReportsCLIVersionAndActiveTaskCount(t *testing.T) {
 	}
 }
 
+func TestLocalMachineUpgradeControlRequiresProfileSecretAndUsesCanonicalOperation(t *testing.T) {
+	var upstreamRequest map[string]string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemons/daemon-1/upgrades" {
+			t.Fatalf("upstream path = %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer daemon-owner-token" {
+			t.Fatalf("upstream authorization = %q", got)
+		}
+		if got := r.Header.Get("X-Workspace-ID"); got != "workspace-1" {
+			t.Fatalf("upstream workspace = %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&upstreamRequest); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(MachineUpgradeControlOperation{ID: "upgrade-1", DaemonID: "daemon-1", RequestedTarget: "v10.0.0", Phase: "queued"})
+	}))
+	defer upstream.Close()
+	client := NewClient(upstream.URL)
+	client.SetToken("daemon-owner-token")
+	d := &Daemon{cfg: Config{DaemonID: "daemon-1", WorkspaceID: "workspace-1", LocalControlToken: "profile-secret"}, client: client}
+	handler := d.localMachineUpgradeHandler()
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/machine-upgrades", bytes.NewBufferString(`{"request_id":"same-request","target_version":"v10.0.0"}`)))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated mutation status = %d, want 401", unauthorized.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/machine-upgrades", bytes.NewBufferString(`{"request_id":"same-request","target_version":"v10.0.0"}`))
+	req.Header.Set("X-Multica-Control-Token", "profile-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authenticated mutation status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if upstreamRequest["request_id"] != "same-request" || upstreamRequest["target_version"] != "v10.0.0" {
+		t.Fatalf("canonical request = %#v", upstreamRequest)
+	}
+}
+
 // TestHealthHandlerReportsStartingUntilReady pins the liveness/readiness split:
 // the health server binds and answers before preflight finishes, but it must
 // report "starting" until d.ready is set, and only then "running". Otherwise a
@@ -179,7 +220,7 @@ func TestShutdownHandlerRejectsNonPost(t *testing.T) {
 	}
 }
 
-func TestCredentialProxyMessageCheckRequiresCurrentTurnAndDrainsCoordinator(t *testing.T) {
+func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t *testing.T) {
 	root := t.TempDir()
 	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
@@ -196,23 +237,17 @@ func TestCredentialProxyMessageCheckRequiresCurrentTurnAndDrainsCoordinator(t *t
 	}
 	d := &Daemon{
 		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
-		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(Config{}, slog.Default()),
 	}
-	key := agentRuntimeTurnSlotKey{AgentID: "agent-1", RuntimeID: "runtime-1"}
-	if !d.agentRuntimeTurns.reserve(key, "task-1") {
-		t.Fatal("reserve active turn")
-	}
-	t.Cleanup(func() { d.agentRuntimeTurns.release(key, "task-1") })
 	handler := d.credentialProxyMessageCheckHandler()
 
-	unauthorized := httptest.NewRecorder()
-	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"stale-task"}`)))
-	if unauthorized.Code != http.StatusForbidden {
-		t.Fatalf("stale turn status = %d, want 403", unauthorized.Code)
+	legacy := httptest.NewRecorder()
+	handler.ServeHTTP(legacy, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"stale-task"}`)))
+	if legacy.Code != http.StatusBadRequest {
+		t.Fatalf("legacy task payload status = %d, want 400", legacy.Code)
 	}
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1"}`)))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(`{"agent_id":"agent-1"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("message check status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -245,10 +280,15 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 			t.Errorf("Authorization = %q, want cached Agent credential", got)
 		}
 		for header, want := range map[string]string{
-			"X-Workspace-ID": "workspace-1", "X-Agent-ID": "agent-1", "X-Task-ID": "task-1",
+			"X-Workspace-ID": "workspace-1", "X-Agent-ID": "agent-1",
 		} {
 			if got := r.Header.Get(header); got != want {
 				t.Errorf("%s = %q, want %q", header, got, want)
+			}
+		}
+		for _, header := range []string{"X-Task-ID", "X-Agent-Inbox-Event-ID", "X-Agent-Inbox-Delivery-ID", "X-Agent-Inbox-Lease-Token"} {
+			if got := r.Header.Get(header); got != "" {
+				t.Errorf("%s = %q, want absent", header, got)
 			}
 		}
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
@@ -271,23 +311,17 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	d := &Daemon{
 		cfg:                 cfg,
 		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
-		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(cfg, slog.Default()),
 	}
-	key := agentRuntimeTurnSlotKey{AgentID: "agent-1", RuntimeID: "runtime-1"}
-	if !d.agentRuntimeTurns.reserve(key, "task-1") {
-		t.Fatal("reserve active turn")
-	}
-	t.Cleanup(func() { d.agentRuntimeTurns.release(key, "task-1") })
 	handler := d.credentialProxyMessageReadHandler()
 
-	unauthorized := httptest.NewRecorder()
-	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"stale-task","workspace_id":"workspace-1","target":"#one"}`)))
-	if unauthorized.Code != http.StatusForbidden {
-		t.Fatalf("stale turn status = %d, want 403", unauthorized.Code)
+	legacy := httptest.NewRecorder()
+	handler.ServeHTTP(legacy, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"stale-task","workspace_id":"workspace-1","target":"#one"}`)))
+	if legacy.Code != http.StatusBadRequest {
+		t.Fatalf("legacy task payload status = %d, want 400", legacy.Code)
 	}
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","around":"42","limit":2}`)))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","around":"42","limit":2}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("message read status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -324,6 +358,11 @@ func TestCredentialProxyMessageSendSavesDraftBeforeNetworkAndClearsKnownSuccess(
 	var targetCalls, sendCalls int
 	var sent map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, header := range []string{"X-Task-ID", "X-Agent-Inbox-Event-ID", "X-Agent-Inbox-Delivery-ID", "X-Agent-Inbox-Lease-Token"} {
+			if got := r.Header.Get(header); got != "" {
+				t.Errorf("%s = %q, want absent", header, got)
+			}
+		}
 		switch r.URL.Path {
 		case "/api/agent/messages/target":
 			targetCalls++
@@ -346,7 +385,7 @@ func TestCredentialProxyMessageSendSavesDraftBeforeNetworkAndClearsKnownSuccess(
 
 	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
 	rec := httptest.NewRecorder()
-	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","content":"hello"}`)))
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","content":"hello"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("message send status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -399,7 +438,7 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 
 	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
 	rec := httptest.NewRecorder()
-	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","content":"reply"}`)))
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","content":"reply"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("local hold status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -457,7 +496,7 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 
 	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
 	rec := httptest.NewRecorder()
-	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","content":"reply"}`)))
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","content":"reply"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("server race hold status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -512,7 +551,7 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 
 	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
 	rec := httptest.NewRecorder()
-	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","send_draft":true,"anyway":true}`)))
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","send_draft":true,"anyway":true}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Draft replay status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -524,7 +563,7 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 	}
 
 	invalid := httptest.NewRecorder()
-	d.credentialProxyMessageSendHandler().ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","anyway":true}`)))
+	d.credentialProxyMessageSendHandler().ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","anyway":true}`)))
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("normal --anyway status=%d body=%s", invalid.Code, invalid.Body.String())
 	}
@@ -542,13 +581,7 @@ func credentialProxySendTestDaemon(t *testing.T, root, serverURL string, coordin
 	d := &Daemon{
 		cfg:                 cfg,
 		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
-		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(cfg, slog.Default()),
 	}
-	key := agentRuntimeTurnSlotKey{AgentID: "agent-1", RuntimeID: "runtime-1"}
-	if !d.agentRuntimeTurns.reserve(key, "task-1") {
-		t.Fatal("reserve active turn")
-	}
-	t.Cleanup(func() { d.agentRuntimeTurns.release(key, "task-1") })
 	return d
 }
 

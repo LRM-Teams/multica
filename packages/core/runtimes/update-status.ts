@@ -79,7 +79,7 @@ export function isUpdateLifecycleActive(
 }
 
 export interface DeriveUpdateStatusInput {
-  /** Status from an in-flight `getUpdateResult` poll, if one is running. */
+  /** Status from an in-flight machine-upgrade poll, if one is running. */
   pollStatus?: RuntimeUpdateStatus | null;
   /** The runtime projection's `update_state` (post-refresh source of truth). */
   updateState?: RuntimeUpdateState;

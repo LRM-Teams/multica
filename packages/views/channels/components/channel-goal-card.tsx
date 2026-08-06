@@ -25,6 +25,7 @@ import {
   channelMembersOptions,
   useCreateChannelGoal,
   useUpdateChannelGoal,
+  workGraphOptions,
 } from "@multica/core/channels";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
@@ -250,6 +251,7 @@ export function ChannelGoalCard({
     ...channelGoalSubgoalsOptions(channelId),
     enabled: !!goal,
   });
+  const { data: workGraph } = useQuery(workGraphOptions(goal?.work_graph?.id));
   const managers = useMemo(
     () =>
       members.filter(
@@ -349,11 +351,15 @@ export function ChannelGoalCard({
   const completed = new Set(goal.completed_criteria);
   const allCompleted = goal.success_criteria.every((criterion) => completed.has(criterion));
   const canComplete =
-    allCompleted && goal.evidence_refs.length > 0 && openSubgoalCount === 0;
+    allCompleted && goal.evidence_refs.length > 0 && openSubgoalCount === 0 &&
+    (!goal.work_graph || (goal.work_graph.completed === goal.work_graph.total && goal.work_graph.stale === 0));
   const completeDisabledReason =
     openSubgoalCount > 0
       ? t(($) => $.goal.subgoals_complete_blocked, { count: openSubgoalCount })
       : t(($) => $.goal.complete_disabled);
+  const workGraphSummary = goal.work_graph
+    ? `v${goal.work_graph.version} · ${goal.work_graph.completed}/${goal.work_graph.total}${goal.work_graph.running > 0 ? ` · ▶${goal.work_graph.running}` : ""}${goal.work_graph.stale > 0 ? ` · ⚠${goal.work_graph.stale}` : ""}`
+    : null;
   return (
     <>
       <section className={cn("shrink-0 border-b border-border/50 bg-primary/[0.035]", goal.status === "paused" && "opacity-75")} data-testid="channel-goal-card">
@@ -365,6 +371,12 @@ export function ChannelGoalCard({
               <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{goal.completed_criteria.length}/{goal.success_criteria.length}</Badge>
               {goal.status === "paused" ? <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{t(($) => $.goal.paused)}</Badge> : null}
               {goal.blocker ? <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">{t(($) => $.goal.blocked)}</Badge> : null}
+              {goal.work_graph ? (
+                <Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px]" data-testid="channel-goal-work-graph-summary">
+                  <ListTodo className="size-3" />
+                  {workGraphSummary}
+                </Badge>
+              ) : null}
             </div>
             {goal.current_step ? <p className="truncate text-xs text-muted-foreground">{goal.current_step}</p> : null}
           </button>
@@ -478,6 +490,19 @@ export function ChannelGoalCard({
               ))}
             </div>
             {goal.progress_summary ? <p><span className="font-medium">{t(($) => $.goal.progress)}:</span> {goal.progress_summary}</p> : null}
+            {workGraph ? (
+              <div className="space-y-1.5" data-testid="channel-goal-work-graph-detail">
+                {workGraph.nodes.map((node) => (
+                  <div key={node.id} className="flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-xs">
+                    <span className="min-w-0 flex-1 truncate">{node.objective || node.issue_id}</span>
+                    <span className="text-muted-foreground">{node.role}</span>
+                    <Badge variant={node.validity_status === "valid" ? "secondary" : "destructive"} className="h-5 px-1.5 text-[10px]">
+                      {node.validity_status === "valid" ? node.execution_status : node.validity_status}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {goal.blocker ? <p className="text-destructive"><span className="font-medium">{t(($) => $.goal.blocked)}:</span> {goal.blocker}</p> : null}
             {goal.evidence_refs.length ? (
               <div><span className="font-medium">{t(($) => $.goal.evidence)}:</span>

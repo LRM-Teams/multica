@@ -927,6 +927,11 @@ func TestResolveRaftCLIInvocation_MapsMessageCommands(t *testing.T) {
 	if !ok || read.Tool != "read_history" || read.ToolTarget != "#multica" || read.SummaryKind != "message_target" {
 		t.Fatalf("message read invocation = %+v ok=%v, want read_history on canonical target", read, ok)
 	}
+
+	search, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "multica message search incident --target #multica --sort oldest"})
+	if !ok || search.Tool != "search_messages" || search.ToolTarget != "incident" || search.SummaryKind != "query" {
+		t.Fatalf("message search invocation = %+v ok=%v, want search_messages/query", search, ok)
+	}
 }
 
 func TestResolveRaftCLIInvocation_MapsStableActivityActions(t *testing.T) {

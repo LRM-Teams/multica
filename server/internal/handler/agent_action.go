@@ -62,7 +62,7 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	task, origin := source.task, source.origin
+	origin := source.origin
 
 	var req agentActionPrepareRequest
 	decoder := json.NewDecoder(r.Body)
@@ -100,7 +100,7 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "target is required")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, targetRaw, true)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.legacyTask, source.origin, targetRaw, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
 		return
@@ -123,16 +123,16 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		r.Context(), source, target, buildAgentCreationProposalContent(name), []protocol.MessagePart{actionPart}, nil,
 		clientRequestID, 0, pgtype.UUID{},
 		func(ctx context.Context, tx pgx.Tx, message ChannelMessageResponse) error {
-			return seedAgentActionMessageTx(ctx, tx, origin.workspaceID, message.ID, task.AgentID, name, description, req.PreferredComputer)
+			return seedAgentActionMessageTx(ctx, tx, origin.workspaceID, message.ID, origin.agentID, name, description, req.PreferredComputer)
 		},
 	)
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
-			slog.Warn("agent action prepare idempotency payload conflict", "agent_id", uuidToString(task.AgentID), "client_request_id", clientRequestID, "target", target.raw)
+			slog.Warn("agent action prepare idempotency payload conflict", "agent_id", uuidToString(origin.agentID), "client_request_id", clientRequestID, "target", target.raw)
 			writeError(w, http.StatusConflict, "client_request_id conflicts with an existing action message")
 			return
 		}
-		slog.Warn("agent action prepare create message failed", "agent_id", uuidToString(task.AgentID), "error", err)
+		slog.Warn("agent action prepare create message failed", "agent_id", uuidToString(origin.agentID), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to prepare agent:create proposal")
 		return
 	}
@@ -159,7 +159,7 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		MessageID:         result.Message.ID,
 		Status:            proposalStatus,
 		Payload:           agentActionCreatePayload{Name: name, Description: description},
-		PreparedByAgentID: uuidToString(task.AgentID),
+		PreparedByAgentID: uuidToString(origin.agentID),
 	})
 }
 

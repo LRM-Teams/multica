@@ -17,7 +17,7 @@ import type { SupportedLocale } from "@multica/core/i18n";
 // extend the slice when their component started using a new namespace.
 //
 // Use `renderWithI18n` like the standard `render`. Pass `locale: "zh-Hans"`,
-// `locale: "ko"`, or `locale: "ja"` to verify localized strings; default is "en".
+// Pass `locale: "zh-Hans"` to verify localized strings; default is "en".
 type RenderArgs = Omit<RenderOptions, "wrapper"> & {
   locale?: SupportedLocale;
 };

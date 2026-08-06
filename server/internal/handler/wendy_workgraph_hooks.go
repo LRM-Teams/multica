@@ -24,6 +24,7 @@ func (h *Handler) syncWendyWorkGraphAfterIssueUpdate(ctx context.Context, issue 
 	if h.WorkGraph == nil {
 		return
 	}
+	_ = h.WorkGraph.SyncRuntimeIssue(ctx, issue)
 
 	issues, err := h.wendyGraphConnectedIssues(ctx, issue)
 	if err != nil {
@@ -46,6 +47,7 @@ func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task d
 	if h.WorkGraph == nil || !task.IssueID.Valid {
 		return
 	}
+	_ = h.WorkGraph.CompleteIssueNode(ctx, uuidToString(task.WorkspaceID), uuidToString(task.IssueID))
 	issue, err := h.Queries.GetIssue(ctx, task.IssueID)
 	if err != nil {
 		slog.Warn("load issue for Wendy task completion hook failed", "task_id", task.ID.String(), "issue_id", task.IssueID.String(), "error", err)

@@ -68,6 +68,21 @@ func TestProjectionModuleStopsAtBoundedBatch(t *testing.T) {
 	}
 }
 
+func TestProjectionModuleDoesNotCallOutputAfterLeaseLoss(t *testing.T) {
+	store := &projectionTestStore{
+		events:    []RunEvent{{ID: "event-1", SessionID: "session-1"}},
+		assertErr: ErrRunLeaseLost,
+	}
+	output := &projectionTestOutput{}
+	err := (projectionModule{store: store, output: output, clock: fixedProjectionClock{}}).ProjectPending(context.Background(), "session-1")
+	if !errors.Is(err, ErrRunLeaseLost) {
+		t.Fatalf("error=%v", err)
+	}
+	if len(output.projected) != 0 || len(store.markedProjected) != 0 || len(store.failures) != 0 {
+		t.Fatalf("projected=%v marked=%v failures=%v", output.projected, store.markedProjected, store.failures)
+	}
+}
+
 func TestProjectionModuleWithoutOutputDoesNotReadOutbox(t *testing.T) {
 	store := &projectionTestStore{events: []RunEvent{{ID: "event-1"}}}
 	module := projectionModule{store: store, clock: fixedProjectionClock{}}
@@ -91,6 +106,7 @@ type projectionTestStore struct {
 	listCalls       int
 	markedProjected []string
 	failures        []projectionTestFailure
+	assertErr       error
 }
 
 func (store *projectionTestStore) ListUnprojectedEvents(_ context.Context, _ string, limit int) ([]RunEvent, error) {
@@ -102,6 +118,10 @@ func (store *projectionTestStore) ListUnprojectedEvents(_ context.Context, _ str
 		limit = len(store.events)
 	}
 	return append([]RunEvent(nil), store.events[:limit]...), nil
+}
+
+func (store *projectionTestStore) AssertRunLease(_ context.Context, _ string) error {
+	return store.assertErr
 }
 
 func (store *projectionTestStore) MarkEventProjected(_ context.Context, eventID string) error {

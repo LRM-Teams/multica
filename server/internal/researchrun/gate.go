@@ -94,7 +94,7 @@ func (module deliveryGateModule) Confirm(ctx context.Context, sessionID, workspa
 	if err != nil {
 		return Run{}, err
 	}
-	return run, module.projection.ProjectPending(ctx, sessionID)
+	return run, nil
 }
 
 func remediationTask(gate GateResult) ControlTaskInput {

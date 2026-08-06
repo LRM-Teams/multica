@@ -2750,14 +2750,30 @@ func teamKnowledgeMemoryData(item db.ListActiveTeamKnowledgeForExecutionRow) Age
 
 func agentMemoryDeliveryForExecution(config []byte, execution MemoryExecutionScope) (string, string, string, bool) {
 	cfg := agentMemoryDeliveryConfig{}
-	_ = json.Unmarshal(config, &cfg)
+	if len(config) > 0 && (strings.EqualFold(strings.TrimSpace(string(config)), "null") || json.Unmarshal(config, &cfg) != nil) {
+		return "", "", "", false
+	}
 	scope := strings.ToLower(strings.TrimSpace(cfg.Scope))
 	if scope == "" {
 		scope = "agent"
 	}
 	subjectType := strings.ToLower(strings.TrimSpace(cfg.Subject.Type))
 	subjectID := strings.TrimSpace(cfg.Subject.ID)
-	if scope == "project" && strings.TrimSpace(execution.ProjectID) == "" {
+	switch scope {
+	case "agent", "workspace":
+	case "project":
+		if strings.TrimSpace(execution.ProjectID) == "" || (subjectID != "" && (subjectType != "project" || subjectID != strings.TrimSpace(execution.ProjectID))) {
+			return scope, subjectType, subjectID, false
+		}
+	case "channel":
+		if strings.TrimSpace(execution.ChannelID) == "" || (subjectID != "" && (subjectType != "channel" || subjectID != strings.TrimSpace(execution.ChannelID))) {
+			return scope, subjectType, subjectID, false
+		}
+	case "user", "member":
+		if subjectType != "member" || subjectID == "" {
+			return scope, subjectType, subjectID, false
+		}
+	default:
 		return scope, subjectType, subjectID, false
 	}
 	if scope == "user" || scope == "member" {

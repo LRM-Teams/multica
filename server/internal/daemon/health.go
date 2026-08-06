@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -123,14 +125,70 @@ func (d *Daemon) shutdownHandler() http.HandlerFunc {
 	}
 }
 
+type localMachineUpgradeRequest struct {
+	RequestID     string `json:"request_id"`
+	TargetVersion string `json:"target_version"`
+}
+
+// localMachineUpgradeHandler is deliberately separate from /health. The
+// bearer-like control secret lives in a 0600 profile file owned by the daemon
+// user, which protects the loopback mutation path from browsers and unrelated
+// local users. The daemon still creates the normal server-side canonical
+// operation; this endpoint is only the single-writer local routing boundary.
+func (d *Daemon) localMachineUpgradeHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		token := strings.TrimSpace(d.cfg.LocalControlToken)
+		provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
+		if token == "" || provided == "" || subtle.ConstantTimeCompare([]byte(token), []byte(provided)) != 1 {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		if d.client == nil || strings.TrimSpace(d.cfg.DaemonID) == "" || strings.TrimSpace(d.cfg.WorkspaceID) == "" {
+			http.Error(w, "machine control unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		var request localMachineUpgradeRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		request.RequestID = strings.TrimSpace(request.RequestID)
+		request.TargetVersion = strings.TrimSpace(request.TargetVersion)
+		if request.RequestID == "" || request.TargetVersion == "" {
+			http.Error(w, "request_id and target_version are required", http.StatusBadRequest)
+			return
+		}
+		operation, err := d.client.CreateMachineUpgrade(r.Context(), d.cfg.WorkspaceID, d.cfg.DaemonID, request.RequestID, request.TargetVersion)
+		if err != nil {
+			var requestErr *requestError
+			if errors.As(err, &requestErr) {
+				http.Error(w, requestErr.Body, requestErr.StatusCode)
+				return
+			}
+			http.Error(w, "create machine upgrade: "+err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(operation)
+	}
+}
+
 type credentialProxyMessageCheckRequest struct {
 	AgentID string `json:"agent_id"`
-	TaskID  string `json:"task_id"`
 }
 
 type credentialProxyMessageReadRequest struct {
 	AgentID string `json:"agent_id"`
-	TaskID  string `json:"task_id"`
 
 	WorkspaceID string `json:"workspace_id"`
 	Target      string `json:"target"`
@@ -138,10 +196,6 @@ type credentialProxyMessageReadRequest struct {
 	After       string `json:"after,omitempty"`
 	Around      string `json:"around,omitempty"`
 	Limit       int    `json:"limit"`
-
-	AgentInboxEventID    string `json:"agent_inbox_event_id,omitempty"`
-	AgentInboxDeliveryID string `json:"agent_inbox_delivery_id,omitempty"`
-	AgentInboxLeaseToken string `json:"agent_inbox_lease_token,omitempty"`
 }
 
 func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
@@ -162,13 +216,8 @@ func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
 			return
 		}
 		request.AgentID = strings.TrimSpace(request.AgentID)
-		request.TaskID = strings.TrimSpace(request.TaskID)
-		if request.AgentID == "" || request.TaskID == "" {
-			http.Error(w, "agent_id and task_id are required", http.StatusBadRequest)
-			return
-		}
-		if d.agentRuntimeTurns == nil || !d.agentRuntimeTurns.hasActiveAgentTurn(request.AgentID, request.TaskID) {
-			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
+		if request.AgentID == "" {
+			http.Error(w, "agent_id is required", http.StatusBadRequest)
 			return
 		}
 		result, err := d.CredentialProxy().CheckMessages(request.AgentID)
@@ -201,23 +250,13 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 			return
 		}
 		request.AgentID = strings.TrimSpace(request.AgentID)
-		request.TaskID = strings.TrimSpace(request.TaskID)
 		request.WorkspaceID = strings.TrimSpace(request.WorkspaceID)
 		request.Target = strings.TrimSpace(request.Target)
-		if request.AgentID == "" || request.TaskID == "" || request.WorkspaceID == "" || request.Target == "" {
-			http.Error(w, "agent_id, task_id, workspace_id, and target are required", http.StatusBadRequest)
+		if request.AgentID == "" || request.WorkspaceID == "" || request.Target == "" {
+			http.Error(w, "agent_id, workspace_id, and target are required", http.StatusBadRequest)
 			return
 		}
-		if d.agentRuntimeTurns == nil {
-			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
-			return
-		}
-		runtimeID, active := d.agentRuntimeTurns.activeAgentTurnRuntime(request.AgentID, request.TaskID)
-		if !active {
-			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
-			return
-		}
-		credential, ok := readCachedAgentCredential(d.cfg, request.WorkspaceID, runtimeID, request.AgentID, time.Now())
+		credential, ok := readCachedAgentCredentialForChat(d.cfg, request.WorkspaceID, request.AgentID, time.Now())
 		if !ok {
 			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
 			return
@@ -225,10 +264,6 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 
 		client := cli.NewAPIClient(d.cfg.ServerBaseURL, request.WorkspaceID, credential.Token)
 		client.AgentID = request.AgentID
-		client.TaskID = request.TaskID
-		client.AgentInboxEventID = strings.TrimSpace(request.AgentInboxEventID)
-		client.AgentInboxDeliveryID = strings.TrimSpace(request.AgentInboxDeliveryID)
-		client.AgentInboxLeaseToken = strings.TrimSpace(request.AgentInboxLeaseToken)
 		upstreamRequest := map[string]any{
 			"target": request.Target,
 			"limit":  request.Limit,
@@ -279,6 +314,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
+	mux.HandleFunc("/machine-upgrades", d.localMachineUpgradeHandler())
 	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
 	mux.HandleFunc("/credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
 	mux.HandleFunc("/credential-proxy/messages/send", d.credentialProxyMessageSendHandler())

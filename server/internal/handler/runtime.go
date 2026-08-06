@@ -45,14 +45,17 @@ type AgentRuntimeResponse struct {
 	// Daemon already sends device_name separately; we persist it so clients
 	// never re-parse device_info. Empty until the daemon re-registers after
 	// this persist landed. Older servers omit the field.
-	DeviceName     string                      `json:"device_name"`
-	Metadata       any                         `json:"metadata"`
-	Capabilities   []string                    `json:"capabilities"`
-	CurrentVersion *string                     `json:"current_version"`
-	TargetVersion  *string                     `json:"target_version,omitempty"`
-	UpdateState    string                      `json:"update_state"`
-	RuntimeHealth  string                      `json:"runtime_health"`
-	UpdateError    *string                     `json:"update_error,omitempty"`
+	DeviceName     string   `json:"device_name"`
+	Metadata       any      `json:"metadata"`
+	Capabilities   []string `json:"capabilities"`
+	CurrentVersion *string  `json:"current_version"`
+	TargetVersion  *string  `json:"target_version,omitempty"`
+	UpdateState    string   `json:"update_state"`
+	RuntimeHealth  string   `json:"runtime_health"`
+	UpdateError    *string  `json:"update_error,omitempty"`
+	// MachineUpgrade is the canonical daemon-scoped lifecycle. Older clients
+	// ignore it; compatibility fields above continue to project legacy rows.
+	MachineUpgrade *MachineUpgrade             `json:"machine_upgrade,omitempty"`
 	AutoUpdate     *DaemonUpdateStatusResponse `json:"auto_update"`
 	OwnerID        *string                     `json:"owner_id"`
 	LastSeenAt     *string                     `json:"last_seen_at"`
@@ -105,10 +108,10 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 
 func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) AgentRuntimeResponse {
 	update := h.latestRuntimeUpdate(ctx, rt)
-	return h.runtimeToResponseWithResolvedUpdate(ctx, rt, update)
+	return h.runtimeToResponseWithResolvedUpdate(ctx, rt, update, h.latestMachineUpgrade(ctx, rt))
 }
 
-func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
+func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest, machineUpgrade *MachineUpgrade) AgentRuntimeResponse {
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
 	daemonHeartbeat := h.daemonHeartbeatForRuntime(ctx, rt)
 	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
@@ -116,7 +119,43 @@ func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db
 	if daemonHeartbeat != nil {
 		resp.DaemonLastSeenAt = timestampToPtr(daemonHeartbeat.LastSeenAt)
 	}
+	resp.MachineUpgrade = machineUpgrade
 	return resp
+}
+
+func (h *Handler) latestMachineUpgrade(ctx context.Context, rt db.AgentRuntime) *MachineUpgrade {
+	if h == nil || h.MachineUpgradeStore == nil {
+		return nil
+	}
+	op, err := h.MachineUpgradeStore.LatestForDaemon(ctx, runtimeDaemonKey(rt))
+	if err != nil {
+		slog.Warn("failed to load machine upgrade state", "error", err, "runtime_id", uuidToString(rt.ID))
+		return nil
+	}
+	return op
+}
+
+func (h *Handler) machineUpgradesForList(ctx context.Context, runtimes []db.AgentRuntime) map[string]*MachineUpgrade {
+	result := make(map[string]*MachineUpgrade)
+	if h == nil || h.MachineUpgradeStore == nil || len(runtimes) == 0 {
+		return result
+	}
+	daemons := make([]string, 0, len(runtimes))
+	seen := make(map[string]struct{})
+	for _, rt := range runtimes {
+		if daemonID := runtimeDaemonKey(rt); daemonID != "" {
+			if _, ok := seen[daemonID]; !ok {
+				seen[daemonID] = struct{}{}
+				daemons = append(daemons, daemonID)
+			}
+		}
+	}
+	upgrades, err := h.MachineUpgradeStore.LatestForDaemons(ctx, daemons)
+	if err != nil {
+		slog.Warn("failed to load machine upgrade states", "error", err)
+		return result
+	}
+	return upgrades
 }
 
 // daemonHeartbeatForRuntime is the single-runtime counterpart to
@@ -1042,11 +1081,16 @@ func canDeleteRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 
-// canOwnRuntime is Computer-owner-only for upgrade/restart mutations.
-// Frank 2026-08-03: non-owners must not upgrade or restart others' machines;
-// workspace admin is not enough — FE hide is insufficient without a server 403.
+// canOwnRuntime is Computer-owner-only for restart mutations.
 func canOwnRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+}
+
+// canManageMachineUpgrade permits a computer owner or a workspace owner/admin
+// to start, inspect, or cancel a daemon-scoped machine upgrade. Restart remains
+// computer-owner-only because it is a separate, immediate machine mutation.
+func canManageMachineUpgrade(member db.Member, rt db.AgentRuntime) bool {
+	return roleAllowed(member.Role, "owner", "admin") || canOwnRuntime(member, rt)
 }
 
 // runtimesShareMachine reports whether two runtimes represent the same
@@ -1104,6 +1148,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]AgentRuntimeResponse, len(runtimes))
 	updates := h.runtimeUpdatesForList(r.Context(), runtimes)
+	machineUpgrades := h.machineUpgradesForList(r.Context(), runtimes)
 	autoUpdates := h.daemonUpdateStatusesForList(r.Context(), runtimes)
 	daemonHeartbeats := h.daemonHeartbeatsForList(r.Context(), runtimes)
 	now := time.Now()
@@ -1111,6 +1156,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 		update := updates[uuidToString(rt.ID)]
 		release := h.runtimeReleaseForResponse(r.Context(), rt, update)
 		resp[i] = runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, autoUpdates[runtimeDaemonKey(rt)])
+		resp[i].MachineUpgrade = machineUpgrades[runtimeDaemonKey(rt)]
 		hb := daemonHeartbeats[runtimeDaemonKey(rt)]
 		resp[i].ComputerConnected = computerConnected(hb, now)
 		if hb != nil {

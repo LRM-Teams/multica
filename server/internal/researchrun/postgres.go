@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -272,7 +273,10 @@ func (s *PostgresStore) GetCurrentMethod(ctx context.Context, sessionID, workspa
 }
 
 func loadRunForUpdate(ctx context.Context, tx pgx.Tx, sessionID, workspaceID string) (Run, error) {
-	return loadRun(ctx, tx, sessionID, workspaceID, true)
+	if err := lockRunForMutation(ctx, tx, sessionID, workspaceID); err != nil {
+		return Run{}, err
+	}
+	return loadRun(ctx, tx, sessionID, workspaceID, false)
 }
 
 type rowQuerier interface {
@@ -382,10 +386,11 @@ func (s *PostgresStore) ListAttempts(ctx context.Context, sessionID string) ([]A
 
 func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID string) ([]PendingCancellation, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id::text, COALESCE(inbox_task_id::text, ''), dispatch_key, dispatched_at
+		SELECT id::text, COALESCE(inbox_task_id::text, ''), dispatch_key, status,
+		       dispatched_at, cancellation_requested_at
 		FROM research_task_attempt
 		WHERE session_id = $1::uuid
-		  AND status = 'cancelled'
+		  AND status IN ('cancelling', 'cancelled')
 		  AND cancellation_completed_at IS NULL
 		ORDER BY dispatched_at, id
 	`, sessionID)
@@ -396,7 +401,8 @@ func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID 
 	out := []PendingCancellation{}
 	for rows.Next() {
 		var item PendingCancellation
-		if err = rows.Scan(&item.AttemptID, &item.InboxTaskID, &item.DispatchKey, &item.DispatchedAt); err != nil {
+		if err = rows.Scan(&item.AttemptID, &item.InboxTaskID, &item.DispatchKey, &item.Status,
+			&item.DispatchedAt, &item.CancellationRequestedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -404,31 +410,138 @@ func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID 
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) MarkCancellationsCompleted(ctx context.Context, sessionID string, attemptIDs []string) error {
-	if len(attemptIDs) == 0 {
+func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionID string, requests []CancellationRequest) error {
+	if len(requests) == 0 {
 		return nil
 	}
-	command, err := s.pool.Exec(ctx, `
-		UPDATE research_task_attempt
-		SET cancellation_completed_at = COALESCE(cancellation_completed_at, now()), updated_at = now()
-		WHERE session_id = $1::uuid
-		  AND id::text = ANY($2::text[])
-		  AND status = 'cancelled'
-	`, sessionID, attemptIDs)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
-	if command.RowsAffected() != int64(len(attemptIDs)) {
-		return fmt.Errorf("%w: cancellation attempts changed concurrently", ErrInvalidTransition)
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return err
 	}
-	return nil
+	for _, request := range requests {
+		command, updateErr := tx.Exec(ctx, `
+			UPDATE research_task_attempt
+			SET inbox_task_id = COALESCE(inbox_task_id, $3::uuid),
+			    cancellation_requested_at = COALESCE(cancellation_requested_at, now()),
+			    updated_at = now()
+			WHERE session_id = $1::uuid
+			  AND id = $2::uuid
+			  AND status IN ('cancelling', 'cancelled')
+			  AND cancellation_completed_at IS NULL
+			  AND (inbox_task_id IS NULL OR inbox_task_id = $3::uuid)
+		`, sessionID, request.AttemptID, request.InboxTaskID)
+		if updateErr != nil {
+			return updateErr
+		}
+		if command.RowsAffected() != 1 {
+			return fmt.Errorf("%w: cancellation request changed concurrently", ErrInvalidTransition)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID string, attemptIDs []string) ([]RunEvent, error) {
+	if len(attemptIDs) == 0 {
+		return nil, nil
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, status, pending_failure_class,
+		       pending_failure_diagnostics, pending_failure_retryable
+		FROM research_task_attempt
+		WHERE session_id = $1::uuid
+		  AND id::text = ANY($2::text[])
+		  AND status IN ('cancelling', 'cancelled')
+		  AND cancellation_completed_at IS NULL
+		ORDER BY id
+		FOR UPDATE
+	`, sessionID, attemptIDs)
+	if err != nil {
+		return nil, err
+	}
+	type completion struct {
+		id, status, failureClass, diagnostics string
+		retryable                             bool
+	}
+	items := make([]completion, 0, len(attemptIDs))
+	for rows.Next() {
+		var item completion
+		if err = rows.Scan(&item.id, &item.status, &item.failureClass, &item.diagnostics, &item.retryable); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(items) != len(attemptIDs) {
+		return nil, fmt.Errorf("%w: cancellation attempts changed concurrently", ErrInvalidTransition)
+	}
+	events := make([]RunEvent, 0, len(items))
+	for _, item := range items {
+		if item.status == string(AttemptStatusCancelled) {
+			if err = abandonAttemptCircuitProbesTx(ctx, tx, item.id); err != nil {
+				return nil, err
+			}
+			command, updateErr := tx.Exec(ctx, `
+				UPDATE research_task_attempt
+				SET cancellation_completed_at = now(), updated_at = now()
+				WHERE id = $1::uuid AND status = 'cancelled' AND cancellation_completed_at IS NULL
+			`, item.id)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			if command.RowsAffected() != 1 {
+				return nil, fmt.Errorf("%w: cancelled attempt changed concurrently", ErrInvalidTransition)
+			}
+			continue
+		}
+		event, failErr := failAttemptTx(ctx, tx, AttemptFailure{
+			AttemptID: item.id, FailureClass: item.failureClass,
+			Diagnostics: item.diagnostics, Retryable: item.retryable,
+		})
+		if failErr != nil {
+			return nil, failErr
+		}
+		events = append(events, event)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspaceID string) ([]FleetMember, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.agent_id::text, m.role, m.status, m.is_lead
+		SELECT m.agent_id::text, m.role, m.status, m.is_lead,
+		       COALESCE(agent.runtime_id::text, ''), COALESCE(runtime.provider, ''),
+		       COALESCE(agent.model, ''), agent.runtime_mode,
+		       COALESCE(runtime.pinned_version, ''),
+		       COALESCE(runtime_state.provider_config_fingerprint, ''),
+		       COALESCE(agent.runtime_config::text, ''), COALESCE(agent.custom_env::text, ''),
+		       COALESCE(agent.custom_args::text, ''), COALESCE(agent.mcp_config::text, ''),
+		       COALESCE(agent.thinking_level, ''),
+		       COALESCE(agent.provider_block_detail, ''), agent.provider_blocked_until
 		FROM research_fleet_member m
 		JOIN research_session s ON s.fleet_id = m.fleet_id
+		JOIN agent ON agent.id = m.agent_id AND agent.workspace_id = m.workspace_id
+		LEFT JOIN agent_runtime runtime ON runtime.id = agent.runtime_id AND runtime.workspace_id = m.workspace_id
+		LEFT JOIN agent_runtime_state runtime_state
+		  ON runtime_state.agent_id = agent.id AND runtime_state.runtime_id = agent.runtime_id
 		WHERE s.id = $1::uuid AND s.workspace_id = $2::uuid AND m.workspace_id = s.workspace_id
 		ORDER BY m.is_lead DESC, m.created_at, m.id
 	`, sessionID, workspaceID)
@@ -439,8 +552,27 @@ func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspa
 	out := []FleetMember{}
 	for rows.Next() {
 		var item FleetMember
-		if err := rows.Scan(&item.AgentID, &item.Role, &item.Status, &item.IsLead); err != nil {
+		var runtimeMode, pinnedVersion, providerFingerprint string
+		var runtimeConfig, customEnv, customArgs, mcpConfig, thinkingLevel string
+		var blockedUntil pgtype.Timestamptz
+		item.ExecutionTarget.Adapter = "agent_inbox"
+		if err := rows.Scan(&item.AgentID, &item.Role, &item.Status, &item.IsLead,
+			&item.ExecutionTarget.RuntimeID, &item.ExecutionTarget.Provider,
+			&item.ExecutionTarget.Model, &runtimeMode, &pinnedVersion,
+			&providerFingerprint, &runtimeConfig, &customEnv, &customArgs, &mcpConfig,
+			&thinkingLevel, &item.ProviderBlockDetail, &blockedUntil); err != nil {
 			return nil, err
+		}
+		item.ExecutionTarget.AgentID = item.AgentID
+		item.ExecutionTarget = FingerprintExecutionTarget(item.ExecutionTarget, ExecutionTargetConfigIdentity{
+			RuntimeMode: runtimeMode, RuntimePinnedVersion: pinnedVersion,
+			ProviderStateFingerprint: providerFingerprint, RuntimeConfig: runtimeConfig,
+			CustomEnv: customEnv, CustomArgs: customArgs, MCPConfig: mcpConfig,
+			ThinkingLevel: thinkingLevel,
+		})
+		if blockedUntil.Valid {
+			until := blockedUntil.Time
+			item.ProviderBlockedUntil = &until
 		}
 		out = append(out, item)
 	}
@@ -510,12 +642,22 @@ func (s *PostgresStore) TaskContext(ctx context.Context, taskID, workspaceID str
 	}, nil
 }
 
-func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, duration time.Duration) (Run, bool, error) {
+func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, duration time.Duration) (Run, RunLease, bool, error) {
+	if duration <= 0 {
+		return Run{}, RunLease{}, false, fmt.Errorf("%w: reconcile lease duration must be positive", ErrInvalidTransition)
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Run{}, RunLease{}, false, err
+	}
+	defer tx.Rollback(ctx)
 	var workspaceID string
-	err := s.pool.QueryRow(ctx, `
+	lease := RunLease{SessionID: sessionID, Token: token}
+	err = tx.QueryRow(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_token = $2::uuid,
 		    reconcile_lease_expires_at = now() + $3::interval,
+		    reconcile_lease_generation = reconcile_lease_generation + 1,
 		    updated_at = now()
 		WHERE id = $1::uuid
 		  AND (
@@ -523,7 +665,7 @@ func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, d
 		    OR EXISTS (
 		      SELECT 1 FROM research_task_attempt attempt
 		      WHERE attempt.session_id = research_session.id
-		        AND attempt.status = 'cancelled'
+		        AND attempt.status IN ('cancelling', 'cancelled')
 		        AND attempt.cancellation_completed_at IS NULL
 		    )
 		    OR EXISTS (
@@ -533,27 +675,63 @@ func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, d
 		        AND event.next_projection_at <= now()
 		    )
 		  )
-		  AND (reconcile_lease_expires_at IS NULL OR reconcile_lease_expires_at < now() OR reconcile_lease_token = $2::uuid)
-		RETURNING workspace_id::text
-	`, sessionID, token, duration.String()).Scan(&workspaceID)
+		  AND (reconcile_lease_expires_at IS NULL OR reconcile_lease_expires_at <= now())
+		RETURNING workspace_id::text, reconcile_lease_generation, reconcile_lease_expires_at
+	`, sessionID, token, duration.String()).Scan(&workspaceID, &lease.Generation, &lease.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Run{}, false, nil
+		return Run{}, RunLease{}, false, nil
 	}
 	if err != nil {
-		return Run{}, false, err
+		return Run{}, RunLease{}, false, err
 	}
-	run, err := s.GetRun(ctx, sessionID, workspaceID)
-	return run, true, err
+	run, err := loadRun(ctx, tx, sessionID, workspaceID, false)
+	if err != nil {
+		return Run{}, RunLease{}, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Run{}, RunLease{}, false, err
+	}
+	return run, lease, true, nil
 }
 
-func (s *PostgresStore) ReleaseRun(ctx context.Context, sessionID, token string, next time.Time) error {
-	_, err := s.pool.Exec(ctx, `
+func (s *PostgresStore) RenewRunLease(ctx context.Context, lease RunLease, duration time.Duration) (RunLease, error) {
+	if duration <= 0 {
+		return RunLease{}, fmt.Errorf("%w: reconcile lease duration must be positive", ErrInvalidTransition)
+	}
+	renewed := lease
+	err := s.pool.QueryRow(ctx, `
+		UPDATE research_session
+		SET reconcile_lease_expires_at = now() + $4::interval,
+		    updated_at = now()
+		WHERE id = $1::uuid
+		  AND reconcile_lease_token = $2::uuid
+		  AND reconcile_lease_generation = $3
+		  AND reconcile_lease_expires_at > now()
+		RETURNING reconcile_lease_expires_at
+	`, lease.SessionID, lease.Token, lease.Generation, duration.String()).Scan(&renewed.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RunLease{}, ErrRunLeaseLost
+	}
+	return renewed, err
+}
+
+func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time) error {
+	command, err := s.pool.Exec(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_token = NULL, reconcile_lease_expires_at = NULL,
-		    next_reconcile_at = $3, updated_at = now()
-		WHERE id = $1::uuid AND reconcile_lease_token = $2::uuid
-	`, sessionID, token, next)
-	return err
+		    next_reconcile_at = $4, updated_at = now()
+		WHERE id = $1::uuid
+		  AND reconcile_lease_token = $2::uuid
+		  AND reconcile_lease_generation = $3
+		  AND reconcile_lease_expires_at > now()
+	`, lease.SessionID, lease.Token, lease.Generation, next)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrRunLeaseLost
+	}
+	return nil
 }
 
 func (s *PostgresStore) ListDueRunIDs(ctx context.Context, limit int) ([]string, error) {
@@ -568,7 +746,7 @@ func (s *PostgresStore) ListDueRunIDs(ctx context.Context, limit int) ([]string,
 		    OR EXISTS (
 		      SELECT 1 FROM research_task_attempt attempt
 		      WHERE attempt.session_id = research_session.id
-		        AND attempt.status = 'cancelled'
+		        AND attempt.status IN ('cancelling', 'cancelled')
 		        AND attempt.cancellation_completed_at IS NULL
 		    )
 		    OR EXISTS (
@@ -629,19 +807,35 @@ func scanTask(row scanner) (Task, error) {
 const attemptSelectSQL = `
 	SELECT a.id::text, a.session_id::text, a.workspace_id::text, a.task_id::text,
 	       a.attempt_number, a.assigned_agent_id::text,
+	       a.execution_adapter, COALESCE(a.runtime_id::text, ''), a.provider,
+	       a.model, a.target_config_fingerprint, a.agent_config_fingerprint,
+	       a.runtime_config_fingerprint, a.provider_config_fingerprint,
 	       COALESCE(a.inbox_task_id::text, ''), a.dispatch_key,
 	       COALESCE(a.client_request_id, ''), a.status, COALESCE(a.result_hash, ''),
-	       a.failure_class, a.diagnostics, a.dispatched_at, a.started_at,
-	       a.result_submitted_at, a.completed_at
+	       a.failure_class, a.source_failure_reason, a.diagnostics, a.dispatched_at, a.started_at,
+	       a.runtime_started_at, a.runtime_last_observed_at, a.runtime_lease_expires_at,
+	       a.cancellation_requested_at, a.cancellation_completed_at,
+	       a.pending_failure_class, a.pending_failure_diagnostics,
+	       a.pending_failure_retryable, a.result_submitted_at, a.completed_at
 	FROM research_task_attempt a`
 
 func scanAttempt(row scanner) (Attempt, error) {
 	var item Attempt
 	err := row.Scan(&item.ID, &item.SessionID, &item.WorkspaceID, &item.TaskID,
-		&item.AttemptNumber, &item.AssignedAgentID, &item.InboxTaskID, &item.DispatchKey,
+		&item.AttemptNumber, &item.AssignedAgentID, &item.ExecutionTarget.Adapter,
+		&item.ExecutionTarget.RuntimeID, &item.ExecutionTarget.Provider,
+		&item.ExecutionTarget.Model, &item.ExecutionTarget.ConfigFingerprint,
+		&item.ExecutionTarget.AgentConfigFingerprint,
+		&item.ExecutionTarget.RuntimeConfigFingerprint,
+		&item.ExecutionTarget.ProviderConfigFingerprint,
+		&item.InboxTaskID, &item.DispatchKey,
 		&item.ClientRequestID, &item.Status, &item.ResultHash, &item.FailureClass,
-		&item.Diagnostics, &item.DispatchedAt, &item.StartedAt, &item.ResultSubmittedAt,
+		&item.SourceFailureReason, &item.Diagnostics, &item.DispatchedAt, &item.StartedAt, &item.RuntimeStartedAt,
+		&item.RuntimeObservedAt, &item.RuntimeLeaseUntil, &item.CancelRequestedAt,
+		&item.CancelCompletedAt, &item.PendingFailure, &item.PendingDiagnostics,
+		&item.PendingRetryable, &item.ResultSubmittedAt,
 		&item.CompletedAt)
+	item.ExecutionTarget.AgentID = item.AssignedAgentID
 	return item, err
 }
 
@@ -650,11 +844,7 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if _, err = tx.Exec(ctx, `
-		SELECT 1 FROM research_session
-		WHERE id = $1::uuid AND workspace_id = $2::uuid
-		FOR UPDATE
-	`, sessionID, workspaceID); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, workspaceID); err != nil {
 		return RunEvent{}, err
 	}
 	var existing RunEvent

@@ -12,8 +12,9 @@ import (
 )
 
 type lifecycleResetRecorder struct {
-	calls []agentLifecycleExecutionRequest
-	err   error
+	calls  []agentLifecycleExecutionRequest
+	err    error
+	onCall func()
 }
 
 func (r *lifecycleResetRecorder) ResetAgentRuntimeSession(_ context.Context, operationID, agentID, runtimeID string) error {
@@ -22,7 +23,17 @@ func (r *lifecycleResetRecorder) ResetAgentRuntimeSession(_ context.Context, ope
 		AgentID:     agentID,
 		RuntimeID:   runtimeID,
 	})
+	if r.onCall != nil {
+		r.onCall()
+	}
 	return r.err
+}
+
+func TestDaemonNewWiresLifecycleSessionResetClient(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	if d.agentLifecycleExecutor == nil || d.agentLifecycleExecutor.sessionReset != d.client {
+		t.Fatal("production lifecycle executor is missing the daemon session reset client")
+	}
 }
 
 func TestAgentLifecycleExecutorPreserveAndDeleteBoundaries(t *testing.T) {
@@ -132,10 +143,10 @@ func TestAgentLifecycleExecutorResetSessionInterruptsActiveTurn(t *testing.T) {
 	}
 }
 
-// TestAgentLifecycleExecutorPlainRestartInterruptsActiveTurn pins #62/#112:
-// plain restart force-interrupts a busy pool slot (ForceKill) instead of
-// returning ErrCanonicalAgentRuntimeBusy.
-func TestAgentLifecycleExecutorPlainRestartInterruptsActiveTurn(t *testing.T) {
+// TestAgentLifecycleExecutorResetSessionKillsBeforeClearingServerState pins
+// the ordering boundary: a late task result must not recreate the resume
+// pointer after the lifecycle reset has cleared it.
+func TestAgentLifecycleExecutorResetSessionKillsBeforeClearingServerState(t *testing.T) {
 	agentID := uuid.NewString()
 	runtimeID := uuid.NewString()
 	turnID := uuid.NewString()
@@ -179,21 +190,27 @@ func TestAgentLifecycleExecutorPlainRestartInterruptsActiveTurn(t *testing.T) {
 	}
 	backend := probe.backends[0]
 
+	resetter := &lifecycleResetRecorder{}
+	resetter.onCall = func() {
+		if got := backend.forceKillCount(); got != 1 {
+			t.Fatalf("session reset ran before ForceKill: count=%d", got)
+		}
+	}
 	executor := &agentLifecycleExecutor{
 		workspacesRoot: t.TempDir(),
 		turns:          turns,
 		runtimes:       pool,
-		sessionReset:   &lifecycleResetRecorder{},
+		sessionReset:   resetter,
 	}
 	execErr := executor.Execute(context.Background(), agentLifecycleExecutionRequest{
 		OperationID: uuid.NewString(),
 		WorkspaceID: uuid.NewString(),
 		AgentID:     agentID,
 		RuntimeID:   runtimeID,
-		ActionKind:  agentLifecycleActionRestart,
+		ActionKind:  agentLifecycleActionResetSessionRestart,
 	})
 	if execErr != nil {
-		t.Fatalf("plain restart on active turn should interrupt, not fail: %v", execErr)
+		t.Fatalf("reset session restart should interrupt, not fail: %v", execErr)
 	}
 	if got := backend.forceKillCount(); got != 1 {
 		t.Fatalf("ForceKill called %d times, want 1", got)

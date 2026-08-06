@@ -115,11 +115,20 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
-	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if claimed, claimErr := store.ClaimDispatchIntents(ctx, fixture.sessionID, uuid.NewString(), time.Minute, 1); claimErr != nil || len(claimed) != 1 {
+		t.Fatalf("claim cancellation dispatch=%+v err=%v", claimed, claimErr)
+	}
 	inboxID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'pending')
+	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
 	run, _, _, err = store.Pause(ctx, fixture.sessionID, fixture.workspaceID, fixture.userID)
 	if err != nil {
 		t.Fatal(err)
@@ -147,21 +156,27 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 	} else if !pendingStill {
 		t.Fatal("missing dispatch must keep cancellation pending during its stale window")
 	}
-	dispatcher.states[attempt.DispatchKey] = InboxTaskState{ID: inboxID, Status: "running"}
+	dispatcher.states[attempt.DispatchKey] = InboxTaskState{ID: inboxID, Status: "running", HasActiveLease: true}
 	if pendingStill, cancelErr := engine.cancelPendingAttempts(ctx, run, "test_cancellation"); cancelErr != nil {
 		t.Fatal(cancelErr)
-	} else if pendingStill {
-		t.Fatal("cancellation remained pending after the dispatch key resolved")
+	} else if !pendingStill {
+		t.Fatal("cancellation was acknowledged while the runtime lease remained active")
 	}
 	if len(dispatcher.cancelled) != 1 || dispatcher.cancelled[0] != inboxID {
 		t.Fatalf("cancelled=%v", dispatcher.cancelled)
+	}
+	dispatcher.states[inboxID] = InboxTaskState{ID: inboxID, Status: "cancelled"}
+	if pendingStill, cancelErr := engine.cancelPendingAttempts(ctx, run, "test_cancellation"); cancelErr != nil {
+		t.Fatal(cancelErr)
+	} else if pendingStill {
+		t.Fatal("cancellation remained pending after the runtime lease ended")
 	}
 	pending, err = store.ListPendingCancellations(ctx, fixture.sessionID)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pending after cancellation=%+v err=%v", pending, err)
 	}
 	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
-	if err != nil || len(attempts) != 1 {
+	if err != nil || len(attempts) != 1 || attempts[0].InboxTaskID != inboxID {
 		t.Fatalf("attempts after cancellation=%+v err=%v", attempts, err)
 	}
 	assertResearchBehaviorGolden(t, "cancellation", map[string]any{
@@ -170,6 +185,202 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 		"pending_cancellations": len(pending),
 		"cancelled_inbox_tasks": len(dispatcher.cancelled),
 	})
+}
+
+func TestPauseAcknowledgesNeverClaimedDispatchWithoutRuntimeWait(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	if _, _, err = store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Test undelivered cancellation",
+		Title: "Undelivered cancellation", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard")); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = store.Pause(ctx, fixture.sessionID, fixture.workspaceID, fixture.userID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListPendingCancellations(ctx, fixture.sessionID)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("never-dispatched attempt waited for runtime acknowledgement: pending=%+v err=%v", pending, err)
+	}
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	if err != nil || len(attempts) != 1 || attempts[0].ID != attempt.ID || attempts[0].Status != AttemptStatusCancelled || attempts[0].CancelCompletedAt == nil {
+		t.Fatalf("cancelled attempt=%+v err=%v", attempts, err)
+	}
+}
+
+func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	if _, _, err = store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Recover dispatch exactly once",
+		Title: "Dispatch recovery", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard")); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+
+	staleInput := testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = appendEvent(ctx, tx, fixture.workspaceID, fixture.sessionID, "test_state_change", "test-state-change", "system", "", map[string]any{"reason": "race"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.CreateDispatchIntent(ctx, staleInput); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("stale dispatch error=%v", err)
+	}
+	var attemptsAfterConflict, outboxAfterConflict int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM research_task_attempt WHERE task_id = $1::uuid`, tasks[0].ID).Scan(&attemptsAfterConflict); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM research_dispatch_outbox WHERE task_id = $1::uuid`, tasks[0].ID).Scan(&outboxAfterConflict); err != nil {
+		t.Fatal(err)
+	}
+	if attemptsAfterConflict != 0 || outboxAfterConflict != 0 {
+		t.Fatalf("stale request persisted attempt=%d outbox=%d", attemptsAfterConflict, outboxAfterConflict)
+	}
+
+	input := testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	input.Request.Prompt = "immutable dispatch prompt"
+	input.Request.RequestHash, err = HashDispatchRequest(input.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, _, err := store.CreateDispatchIntent(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frozenPrompt, frozenHash, outboxStatus string
+	if err = pool.QueryRow(ctx, `
+		SELECT request_payload->>'prompt', request_hash, status
+		FROM research_dispatch_outbox WHERE attempt_id = $1::uuid
+	`, attempt.ID).Scan(&frozenPrompt, &frozenHash, &outboxStatus); err != nil {
+		t.Fatal(err)
+	}
+	if frozenPrompt != input.Request.Prompt || frozenHash != input.Request.RequestHash || outboxStatus != "pending" {
+		t.Fatalf("frozen prompt=%q hash=%q status=%q", frozenPrompt, frozenHash, outboxStatus)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET dispatched_at = now() - interval '2 hours' WHERE id = $1::uuid`, attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if events, reconcileErr := store.ReconcileAttempts(ctx, fixture.sessionID, map[string]InboxTaskState{}); reconcileErr != nil || len(events) != 0 {
+		t.Fatalf("undelivered outbox was reconciled as runtime work: events=%+v err=%v", events, reconcileErr)
+	}
+	if attempts, listErr := store.ListAttempts(ctx, fixture.sessionID); listErr != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusDispatching {
+		t.Fatalf("undelivered attempt changed: attempts=%+v err=%v", attempts, listErr)
+	}
+
+	firstClaims, err := store.ClaimDispatchIntents(ctx, fixture.sessionID, uuid.NewString(), time.Minute, 1)
+	if err != nil || len(firstClaims) != 1 {
+		t.Fatalf("first claims=%+v err=%v", firstClaims, err)
+	}
+	secondToken := uuid.NewString()
+	secondClaims, err := store.ClaimDispatchIntents(ctx, fixture.sessionID, secondToken, time.Minute, 1)
+	if err != nil || len(secondClaims) != 0 {
+		t.Fatalf("live lease was stolen: claims=%+v err=%v", secondClaims, err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_dispatch_outbox SET lease_expires_at = now() - interval '1 second' WHERE id = $1::uuid`, firstClaims[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	secondClaims, err = store.ClaimDispatchIntents(ctx, fixture.sessionID, secondToken, time.Minute, 1)
+	if err != nil || len(secondClaims) != 1 || secondClaims[0].Request.Prompt != input.Request.Prompt || secondClaims[0].DeliveryAttempts != 2 {
+		t.Fatalf("expired lease recovery claims=%+v err=%v", secondClaims, err)
+	}
+	inboxID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'draining')
+	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	accepted, acknowledged, _, err := store.AcknowledgeDispatchIntent(ctx, secondClaims[0].ID, secondToken, inboxID)
+	if err != nil || !accepted || acknowledged.Status != AttemptStatusDispatching || acknowledged.InboxTaskID != inboxID {
+		t.Fatalf("accepted=%v attempt=%+v err=%v", accepted, acknowledged, err)
+	}
+
+	cancelTask, _, err := store.CreateControlTask(ctx, ControlTaskInput{
+		SessionID: fixture.sessionID, Kind: TaskKindDiscover, Objective: "cancel race", Capability: "lead", Priority: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelInput := testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, cancelTask.ID, fixture.agentID)
+	cancelAttempt, _, err := store.CreateDispatchIntent(ctx, cancelInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelToken := uuid.NewString()
+	cancelClaims, err := store.ClaimDispatchIntents(ctx, fixture.sessionID, cancelToken, time.Minute, 10)
+	if err != nil || len(cancelClaims) != 1 || cancelClaims[0].AttemptID != cancelAttempt.ID {
+		t.Fatalf("cancel claims=%+v err=%v", cancelClaims, err)
+	}
+	if _, _, _, err = store.Pause(ctx, fixture.sessionID, fixture.workspaceID, fixture.userID); err != nil {
+		t.Fatal(err)
+	}
+	accepted, _, _, err = store.AcknowledgeDispatchIntent(ctx, cancelClaims[0].ID, cancelToken, uuid.NewString())
+	if err != nil || accepted {
+		t.Fatalf("cancelled dispatch accepted=%v err=%v", accepted, err)
+	}
+	var attemptStatus, cancelOutboxStatus string
+	if err = pool.QueryRow(ctx, `
+		SELECT attempt.status, outbox.status
+		FROM research_task_attempt attempt
+		JOIN research_dispatch_outbox outbox ON outbox.attempt_id = attempt.id
+		WHERE attempt.id = $1::uuid
+	`, cancelAttempt.ID).Scan(&attemptStatus, &cancelOutboxStatus); err != nil {
+		t.Fatal(err)
+	}
+	if attemptStatus != "cancelled" || cancelOutboxStatus != "cancelled" {
+		t.Fatalf("cancel race attempt=%q outbox=%q", attemptStatus, cancelOutboxStatus)
+	}
 }
 
 type recordingCancellationDispatcher struct {
@@ -211,6 +422,31 @@ func (d *recordingCancellationDispatcher) Inspect(_ context.Context, keys []stri
 func (d *recordingCancellationDispatcher) Cancel(_ context.Context, ids []string, _ string) error {
 	d.cancelled = append(d.cancelled, ids...)
 	return nil
+}
+
+func testDispatchIntentInput(t *testing.T, ctx context.Context, store *PostgresStore, sessionID, workspaceID, taskID, agentID string) CreateDispatchIntentInput {
+	t.Helper()
+	run, err := store.GetRun(ctx, sessionID, workspaceID)
+	if err != nil {
+		t.Fatalf("load run for test dispatch: %v", err)
+	}
+	task, err := store.GetTask(ctx, taskID, sessionID)
+	if err != nil {
+		t.Fatalf("load task for test dispatch: %v", err)
+	}
+	attemptID := uuid.NewString()
+	request := DispatchRequest{
+		Run: run, Task: task, AttemptID: attemptID, AgentID: agentID,
+		Prompt: "test dispatch", Key: "research-test:" + attemptID,
+	}
+	request.RequestHash, err = HashDispatchRequest(request)
+	if err != nil {
+		t.Fatalf("hash test dispatch: %v", err)
+	}
+	return CreateDispatchIntentInput{
+		AttemptID: attemptID, SessionID: sessionID, TaskID: taskID, AgentID: agentID,
+		ExpectedStateVersion: run.StateVersion, Request: request,
+	}
 }
 
 // Production regression: a deterministic SQL/adapter dispatch defect created
@@ -261,10 +497,10 @@ func TestNonRetryableDispatchFailureStopsRunWithoutRemediationLoop(t *testing.T)
 	if len(tasks) != 1 || len(attempts) != 1 {
 		t.Fatalf("tasks=%d attempts=%d, want one initial plan and one attempt", len(tasks), len(attempts))
 	}
-	if tasks[0].Status != TaskStatusFailed || tasks[0].TerminalReason != "dispatch_failed" {
+	if tasks[0].Status != TaskStatusFailed || tasks[0].TerminalReason != string(FailureUnknown) {
 		t.Fatalf("terminal plan task=%+v", tasks[0])
 	}
-	if attempts[0].FailureClass != "dispatch_failed" || attempts[0].Status != AttemptStatusFailed {
+	if attempts[0].FailureClass != string(FailureUnknown) || attempts[0].Status != AttemptStatusFailed {
 		t.Fatalf("attempt=%+v", attempts[0])
 	}
 }
@@ -296,11 +532,15 @@ func TestExhaustedInitialPlanStopsRunWithoutCreatingReplan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `
-		UPDATE research_task
-		SET status = 'blocked', terminal_reason = 'result_not_submitted', completed_at = now()
-		WHERE session_id = $1::uuid AND kind = 'plan'
-	`, fixture.sessionID); err != nil {
+	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.FailAttempt(ctx, AttemptFailure{AttemptID: attempt.ID, FailureClass: "result_not_submitted", Retryable: false}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -315,7 +555,7 @@ func TestExhaustedInitialPlanStopsRunWithoutCreatingReplan(t *testing.T) {
 	if run.Status != RunStatusFailed || !strings.Contains(run.StopReason, "result_not_submitted") {
 		t.Fatalf("run=%+v", run)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err = store.ListTasks(ctx, fixture.sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +627,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 		t.Fatalf("ListTasks=%+v err=%v", tasks, err)
 	}
 	planTaskID := tasks[0].ID
-	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
 	if err != nil {
 		t.Fatalf("CreateAttempt: %v", err)
 	}
@@ -715,7 +955,7 @@ func TestPostgresStoreLeasesTerminalRunForPendingProjection(t *testing.T) {
 	if !containsString(due, fixture.sessionID) {
 		t.Fatalf("terminal run with pending projection not due: %v", due)
 	}
-	run, claimed, err := store.ClaimRun(ctx, fixture.sessionID, uuid.NewString(), time.Minute)
+	run, _, claimed, err := store.ClaimRun(ctx, fixture.sessionID, uuid.NewString(), time.Minute)
 	if err != nil || !claimed || run.Status != RunStatusPaused {
 		t.Fatalf("run=%+v claimed=%v err=%v", run, claimed, err)
 	}
@@ -750,7 +990,7 @@ func TestPostgresStoreAttemptAttributionSurvivesAgentDeletion(t *testing.T) {
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
-	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -814,20 +1054,20 @@ func TestPostgresStoreBlocksTasksWhoseDependencyIsTerminal(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO research_task_dependency (task_id, depends_on_task_id) VALUES ($1::uuid, $2::uuid)`, childID, parentID); err != nil {
 		t.Fatal(err)
 	}
-	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, parentID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, parentID, fixture.agentID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = store.FailAttempt(ctx, AttemptFailure{AttemptID: attempt.ID, FailureClass: "transient_test_failure", Retryable: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = store.CreateAttempt(ctx, fixture.sessionID, parentID, fixture.agentID); !errors.Is(err, ErrInvalidTransition) {
+	if _, _, err = store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, parentID, fixture.agentID)); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("immediate retry err=%v", err)
 	}
 	if _, err = pool.Exec(ctx, `UPDATE research_task SET ready_at = now() - interval '1 second' WHERE id = $1::uuid`, parentID); err != nil {
 		t.Fatal(err)
 	}
-	attempt, _, err = store.CreateAttempt(ctx, fixture.sessionID, parentID, fixture.agentID)
+	attempt, _, err = store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, parentID, fixture.agentID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1893,7 +2133,7 @@ func TestV5EvaluationDefectsPersistAndReachRemediation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, invalidTask.ID, fixture.validatorID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, invalidTask.ID, fixture.validatorID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2033,7 +2273,7 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 	case "validator":
 		agentID = fixture.validatorID
 	}
-	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, task.ID, agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, task.ID, agentID))
 	if err != nil {
 		t.Fatal(err)
 	}

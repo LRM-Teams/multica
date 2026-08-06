@@ -13,10 +13,8 @@ import "./globals.css";
 // plus a synthetic size-adjusted fallback face to prevent FOUT layout shift —
 // both are exposed under the `--font-inter` CSS variable.
 //
-// The full `--font-sans` stack (Inter + the per-locale CJK fallback chain) is
-// assembled in static CSS in ./globals.css, not here: it must be overridable per
-// `<html lang>` (Japanese Kanji are Han ideographs and need a Japanese-first CJK
-// stack), and a hashed family name can only be referenced from CSS via a variable.
+// The full `--font-sans` stack (Inter + CJK fallbacks) is assembled in static
+// CSS in ./globals.css; a hashed family name can only be referenced via a variable.
 // Keeping the CJK chain in CSS also keeps it CSP-safe and in sync with the desktop
 // app, which defines the same chain in apps/desktop/src/renderer/src/globals.css.
 const inter = Inter({
@@ -110,8 +108,6 @@ export const metadata: Metadata = {
 const HTML_LANG: Record<SupportedLocale, string> = {
   en: "en",
   "zh-Hans": "zh-CN",
-  ko: "ko-KR",
-  ja: "ja-JP",
 };
 
 export default async function RootLayout({

@@ -72,6 +72,7 @@ import {
   buildRuntimeMachines,
   defaultDesktopSelectedMachineId,
   isMineMachine,
+  machineDaemonUpgradeRuntimeId,
   machineHostname,
   machinePrimaryRuntimeId,
   mergePendingCloudComputers,
@@ -735,14 +736,23 @@ function MachineDetailView({
     machine.runtimes.find((r) => r.id === primaryRuntimeId) ??
     machine.runtimes[0] ??
     null;
+  const daemonUpgradeRuntimeId = machineDaemonUpgradeRuntimeId(machine, now);
+  const daemonUpgradeRuntime =
+    machine.runtimes.find((r) => r.id === daemonUpgradeRuntimeId) ??
+    primaryRuntime;
   const ownerId = machine.runtimes[0]?.owner_id ?? null;
   const ownerMember = ownerId
     ? members.find((m) => m.user_id === ownerId) ?? null
     : null;
-  // Frank/Parker 2026-08-03: only the Computer owner may start a daemon
-  // upgrade — workspace admin is not enough (task #29).
+  const currentMember = user
+    ? members.find((member) => member.user_id === user.id) ?? null
+    : null;
+  const isWorkspaceUpgradeAdmin =
+    currentMember?.role === "owner" || currentMember?.role === "admin";
   const canUpdate =
-    !!user && !!primaryRuntime && primaryRuntime.owner_id === user.id;
+    !!user && !!daemonUpgradeRuntime && daemonUpgradeRuntime.owner_id === user.id;
+  const canUpgrade =
+    !!daemonUpgradeRuntime && (canUpdate || isWorkspaceUpgradeAdmin);
   const { data: workspacesData, isFetching: workspacesLoading } =
     useRuntimeAgentWorkspaces(primaryRuntimeId, workspacesEnabled);
   const deleteWorkspace = useDeleteRuntimeAgentWorkspace(primaryRuntimeId ?? "");
@@ -987,15 +997,15 @@ function MachineDetailView({
               <InfoRow label={t(($) => $.machine.basics_os)}>
                 <span className="truncate text-sm">{osLabel}</span>
               </InfoRow>
-              {primaryRuntime ? (
+              {daemonUpgradeRuntime ? (
                 <InfoRow label={t(($) => $.machine.basics_daemon)}>
                   <MachineDaemonUpgrade
-                    runtime={primaryRuntime}
+                    runtime={daemonUpgradeRuntime}
                     cliVersion={machine.cliVersion}
                     updateTargetVersion={machine.updateTargetVersion}
                     updateError={machine.updateError}
                     isOnline={machine.health === "online"}
-                    canUpdate={canUpdate}
+                    canUpdate={canUpgrade}
                   />
                 </InfoRow>
               ) : null}

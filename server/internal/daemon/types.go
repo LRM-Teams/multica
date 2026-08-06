@@ -23,6 +23,17 @@ type Runtime struct {
 	Status      string `json:"status"`
 }
 
+// ResidentAgentRuntimeConfig is the daemon-only, process-stable configuration
+// of an Agent resident on one runtime. Message delivery is deliberately not
+// represented here: it is handled exclusively by MessageCoordinator.
+type ResidentAgentRuntimeConfig struct {
+	WorkspaceID            string     `json:"workspace_id"`
+	RuntimeID              string     `json:"runtime_id"`
+	WorkspaceContext       string     `json:"workspace_context,omitempty"`
+	RuntimeStateGeneration int64      `json:"runtime_state_generation"`
+	Agent                  *AgentData `json:"agent"`
+}
+
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {

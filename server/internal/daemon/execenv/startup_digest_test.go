@@ -4,10 +4,9 @@ import "testing"
 
 func TestStartupStaticDigestIgnoresPerTurnFields(t *testing.T) {
 	base := TaskContextForEnv{
-		AgentID: "agent-a", AgentName: "Agent A", ChatSessionID: "chat-1", Directed: true,
-		AgentInstructions: "be careful",
-		ManagedRole:       "group_manager",
-		ProjectID:         "proj-1",
+		AgentID: "agent-a", AgentName: "Agent A", MessageDelivery: true, AgentInstructions: "be careful",
+		ManagedRole: "group_manager",
+		ProjectID:   "proj-1",
 		AgentSkills: []SkillContextForEnv{{
 			Name: "s1", Description: "desc", Content: "body",
 			Files: []SkillFileContextForEnv{{Path: "extra.md", Content: "extra"}},
@@ -106,7 +105,7 @@ func TestStartupStaticDigestTracksSkillDescriptionNotFiles(t *testing.T) {
 	// Skill package Files are NOT written to workdir, so Files content must
 	// not force AGENTS rewrite / process recreation via digest.
 	base := TaskContextForEnv{
-		AgentID: "a", ChatSessionID: "c",
+		AgentID: "a", MessageDelivery: true,
 		AgentSkills: []SkillContextForEnv{{
 			Name: "s1", Description: "desc-a", Content: "body",
 			Files: []SkillFileContextForEnv{{Path: "extra.md", Content: "v1"}},
@@ -145,9 +144,8 @@ func TestStartupStaticDigestIgnoresAgentMemories(t *testing.T) {
 
 func TestRenderStartupPlanDigestMatchesMaterializeInput(t *testing.T) {
 	ctx := TaskContextForEnv{
-		AgentID: "a", AgentName: "A", ChatSessionID: "chat", Directed: true,
-		InitiatorName: "should-not-appear-in-static",
-		IssueID:       "should-not-appear-in-static",
+		AgentID: "a", AgentName: "A", MessageDelivery: true, InitiatorName: "should-not-appear-in-static",
+		IssueID: "should-not-appear-in-static",
 		AgentSkills: []SkillContextForEnv{{
 			Name: "Skill One", Description: "d", Content: "# Skill\n",
 		}},

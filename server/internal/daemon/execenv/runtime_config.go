@@ -883,8 +883,8 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("All memory and skills move with this agent workspace. Resolve every path below relative to `MULTICA_AGENT_ROOT`; do not depend on separate memory, project, channel, user, device, or skill directory environment variables.\n\n")
 	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily notes → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`.\n")
 	b.WriteString("- **Scope and privacy**: source is provenance, not scope. Keep user, project, channel, and agent-wide facts separate. Never inspect another member's directory, invent IDs from display names, copy secrets, or broaden a private fact into shared memory. Project paths exist only for an explicitly bound project.\n")
-	if isChatLikeContext(ctx) && ctx.Directed {
-		b.WriteString("- **Recall before action**: the effective snapshot already contains context selected for this member, project, and channel. Use only the current member ID supplied by the task when reading `users/<member-id>/`.\n")
+	if isChatLikeContext(ctx) {
+		b.WriteString("- **Recall before action**: use only the member identity supplied by the current Message context when reading `users/<member-id>/`.\n")
 	}
 	b.WriteString("- **Durability bar**: record supported preferences, ownership, handoffs, corrections, reusable fixes, and standing process rules when they are likely to matter in a future run. Skip greetings, acknowledgements, jokes, raw transcripts, transient logs, guesses, and secrets. Prefer updating an existing entry over duplicating it.\n")
 	b.WriteString("- **Claiming memory**: say that you remembered something only after the appropriate durable file write succeeds. Daily-only notes do not count for a standing rule. Human and peer-agent durable instructions use the same bar.\n")
@@ -894,82 +894,18 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("Live instructions and the current task remain authoritative. If memory conflicts with them, follow the live source and put the conflict in `memory/REVIEW.md`; never silently rewrite instructions or use memory to override them.\n\n")
 }
 
-// renderChatRuntimeBrief is the single routing decision point for the "##
-// Delivery" section (task #51 / engineering-principles.md #1178): a
-// standalone chat bubble (ChatSessionID set, no ChannelID) and a real
-// channel/DM transport (ChannelID set) have genuinely different delivery
-// contracts, decided once here and handed to two independent, non-branching
-// render functions. Neither renderStandaloneChatRuntimeBrief nor
-// renderChannelChatRuntimeBrief may fall back to the other's contract.
+// renderChatRuntimeBrief describes one durable Message runtime. It never
+// selects a current channel, task, lease, execution, or chat session: those
+// are Delivery facts handled by MessageCoordinator.
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
-	b.WriteString("## Delivery\n\n")
-	if ctx.ChatSessionID != "" && strings.TrimSpace(ctx.ChannelID) == "" {
-		renderStandaloneChatRuntimeBrief(b, provider, ctx)
-		return
-	}
 	renderChannelChatRuntimeBrief(b, provider, ctx)
 }
 
-// renderStandaloneChatRuntimeBrief renders the complete delivery contract for
-// a standalone chat bubble (no ChannelID / channel_agent_session binding):
-// final assistant output IS the reply, delivered automatically. This
-// function must never reference `multica message send`/`react` as the
-// delivery mechanism for the current reply.
-func renderStandaloneChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
-	// Directed reply requirement — only rendered for directed runs (DM,
-	// @mention, direct question, priority >= 2). Ambient runs never see
-	// this block, so they won't be pressured to reply to every message.
-	if ctx.Directed {
-		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
-		b.WriteString("This run has no `ChannelID`. A visible final response is required through final assistant output, which the current session delivers automatically. Do not turn it into a separate DM or channel send.\n")
-		b.WriteString("Normal answer → ordinary final text · sticker-only → exact envelope below. No pre-tool acknowledgment; live activity is visible. User waiting → response required.\n\n")
-	}
-	b.WriteString("No `ChannelID` target: final assistant output is delivered to the current session. Do not run `multica message send` for this reply, search for a target, or invent one. `multica message react` is target-free but only changes a visible canonical Message identified by `--message-id`; it is not a substitute for this reply. Issue writes remain claim-first and only when requested.\n\n")
-	b.WriteString("Context boundaries:\n")
-	b.WriteString("- Injected context belongs to this targetless session. Do not infer a backing DM or channel.\n")
-	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
-	b.WriteString("- Load broader chat history, issue timelines, project metadata, attachments, complete `SKILL.md` files, memories, or web pages only when relevant to the user's request.\n\n")
-
-	renderRuntimeSectionHeading(b, "Available Commands")
-	b.WriteString("Current reply needs no delivery command. Commands below are for platform work or a separate destination the user explicitly requests. Do not inspect send/react help or enumerate targets for this reply. Use help only for unfamiliar, low-frequency, or destructive flags missing here.\n\n")
-	b.WriteString("Common capability index — use these forms directly when they fit; inspect help only when a needed flag is missing:\n")
-	b.WriteString("- Current-session delivery: ordinary final assistant text is delivered automatically.\n")
-	b.WriteString("- Current-chat sticker fast path: for a sticker-only reply, return exactly one JSON object as final output with no commentary: `{\"action\":\"message_send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}`. Replace `hi` with another stable sticker id when appropriate. Do not call a send command for this reply.\n")
-	b.WriteString("- Separate-destination chat output: only when the user explicitly asks you to contact a different channel, DM, or thread, use `multica message send --target <target>` with an explicit target (`#channel`, `#channel:<threadId>`, `dm:@handle`, or `dm:@handle:<threadId>`).\n")
-	b.WriteString("- Proactive human DM: pipe a non-empty body to `multica message send --target dm:@<human-handle>` (for example, `printf '%s\\n' 'hello' | multica message send --target dm:@<human-handle>`). The human handle is always explicit: there is no recipient fallback. Unknown or agent handles are rejected; to reach another agent, post in a group and @-mention it. Treat a DM as sent only after the command exits 0 and its JSON response contains `message.id`; a freshness `held` result exits non-zero and is not a sent message.\n")
-	b.WriteString("- Freshness holds: if `multica message send` returns `state`/`outcome` = `held` (CLI also exits non-zero) or text saying \"Message held by freshness check\", the platform saved the attempted message as an **unsent draft** because newer chat context arrived while you were composing. This is not delivery and terminates the current send attempt. Do **not** automatically retry it, execute a returned command, or let a recovery/retry path send it. The agent reviews the bounded `heldMessages` and `contextWindow`, then ends this send attempt. If a reply is still needed, compose and send a new response normally; the held draft is never retried or sent later. Do not claim you replied unless a send exits 0 with `message.id`.\n")
-	b.WriteString("- Chat reactions/history: use `multica message react --message-id <id> --emoji \"...\" [--remove]`; use `multica message read [--target ...] [--limit N]`, `multica message search [query] [--target ...] [--sender user:<uuid>|agent:<uuid>] [--before RFC3339] [--after RFC3339] [--sort newest|oldest] [--limit N] [--offset N]`, or `multica message resolve <message-id>` when more bounded chat context is needed. These commands return canonical JSON. Search does not consume context coverage.\n")
-	b.WriteString("- Reminders: schedule an anchored durable self-wake with `multica reminder schedule --title \"...\" (--delay-seconds N | --fire-at ISO | --repeat RULE) --message-id <id>`; always pass the explicit current message/thread anchor because Reminder does not infer one from task text. Repeat rules are `every:Nm|Nh|Nd`, `daily@HH:MM`, or `weekly:days@HH:MM`. Use all six operations `reminder schedule|list|snooze|update|cancel|log`; the server locks calendar timezone at schedule time. Use a reminder when this run cannot close the work now because it depends on a future time or external state, such as CI or deployment completion, a human reply, a daemon reconnect, a scheduled recheck, or a periodic report. Do not create one when the work can finish in the current run or the wait is likely to finish within about one minute; in that short case, briefly poll instead. The reminder must stay anchored to the current message or thread and owned by this agent. Prefer reminders over sleep or runtime cron.\n")
-	b.WriteString("- Issues/comments: `multica issue list|get|search|comment ...`; use `issue list --mine --output json` for assigned issues. Existing-issue writes require claim/ownership, must remain visible through message/system events, and must not self-approve `in_review -> done`.\n")
-	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only for a durable high-signal issue fact; load exact flags when needed.\n")
-	b.WriteString("- Projects: inspect project details only when the request needs them.\n")
-	b.WriteString("- Attachments: `multica attachment view <id> --output <path>` for downloads. For an Agent chat upload, use `multica attachment upload --path <file> --target <target>`, then pass each returned `--attachment-id` with the same non-empty stdin message send. Chat-to-issue: bind every reference image on the MAIN issue (`issue create --attachment-id` and/or description embeds); do not use an attachment-carrier sub-issue as the only place for screenshots.\n")
-	b.WriteString("- Workspace/channel: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only under the explicit thread-attention boundary pinned above.\n\n")
-	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
-
-	renderChatRuntimeSharedPlatformContext(b, provider, ctx)
-
-	renderRuntimeSectionHeading(b, "Output")
-	b.WriteString("Reply with final assistant output. Use ordinary text, or the exact structured sticker envelope above for sticker-only output. Do not duplicate it through DM/channel transport.\n")
-	b.WriteString(compactCloseoutStatusInstruction)
-	b.WriteString("\n")
-}
-
 // renderChannelChatRuntimeBrief renders the complete delivery contract for a
-// chat run backed by a real channel/DM transport target (ChannelID set):
-// visible output is delivered only through the durable agent-credential Multica CLI
-// transport. This function must never treat final assistant output as
-// delivered on its own.
+// durable Message runtime. Visible output is delivered only through the
+// machine-local credential proxy; final assistant output is never delivered.
 func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
-	if ctx.Directed {
-		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
-		b.WriteString("Visible reply required for human DM/@mention/direct question/task/continuation. Agent channel @mention without an immediate deliverable/review/decision/direct answer → silence.\n")
-		b.WriteString("- Non-trivial work: short `multica message send` acknowledgment before substantive tools; state understanding + next step. Then work + separate result. Skip ack for immediate answers.\n")
-		b.WriteString("- Attention operation (follow/unfollow/mute/unmute): act first. Success → `multica message react --message-id <triggering-message-id> --emoji \"✅\"`, no text. Failure/substance → text.\n")
-		b.WriteString("- Words → `multica message send` · pure greeting/thanks/sign-off → reaction or a short text send.\n")
-		b.WriteString("Silence applies only to ambient/unaddressed messages and weak agent notifications. Unsure about a human → reply.\n\n")
-	}
-	b.WriteString("`ChannelID` target present: visible output is delivered only by the durable agent-credential Multica CLI transport (`multica message send` / `multica message react`). Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed channel messages, never human DMs, human @mentions, direct questions, or assigned work. Issue writes remain claim-first and only when requested.\n\n")
+	b.WriteString("Visible output is delivered only by the durable agent-credential Multica CLI transport (`multica message send` / `multica message react`). First use `multica message check` to learn pending input, then use an explicit canonical target for a send or read. Text outside those commands, including final assistant output, is not delivered. Silence is only for ambient unaddressed messages, never human DMs, human @mentions, direct questions, or assigned work. Issue writes remain claim-first and only when requested.\n\n")
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")

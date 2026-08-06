@@ -93,7 +93,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		messageCoordinators: make(map[string]*MessageCoordinator),
 		canonicalRuntimes:   newCanonicalAgentRuntimePool(),
-		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(Config{}, slog.Default()),
 	}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: fakeRuntime,

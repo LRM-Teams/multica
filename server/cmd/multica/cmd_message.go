@@ -308,7 +308,7 @@ func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
 		"remove":     remove,
 	}
 	var out map[string]any
-	if err := postAgentTransport(cmd, "/api/agent/messages/react", body, &out); err != nil {
+	if err := postAgentMessageThroughCredentialProxy("react", body, &out); err != nil {
 		return fmt.Errorf("react to message: %w", err)
 	}
 	return printAgentTransportOutput(out)
@@ -406,16 +406,16 @@ func runAgentMessageSearch(cmd *cobra.Command, args []string) error {
 		}
 	}
 	var out map[string]any
-	if err := postAgentTransport(cmd, "/api/agent/messages/search", body, &out); err != nil {
+	if err := postAgentMessageThroughCredentialProxy("search", body, &out); err != nil {
 		return fmt.Errorf("search messages: %w", err)
 	}
 	return printAgentTransportOutput(out)
 }
 
-func runAgentMessageResolve(cmd *cobra.Command, args []string) error {
-	body := map[string]string{"message_id": strings.TrimSpace(args[0])}
+func runAgentMessageResolve(_ *cobra.Command, args []string) error {
+	body := map[string]any{"message_id": strings.TrimSpace(args[0])}
 	var out map[string]any
-	if err := postAgentTransport(cmd, "/api/agent/messages/resolve", body, &out); err != nil {
+	if err := postAgentMessageThroughCredentialProxy("resolve", body, &out); err != nil {
 		return fmt.Errorf("resolve message: %w", err)
 	}
 	return cli.PrintJSON(os.Stdout, out)

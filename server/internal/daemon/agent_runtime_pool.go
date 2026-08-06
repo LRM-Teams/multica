@@ -31,8 +31,8 @@ const (
 // that slot's provider backend must restart; it never creates another slot.
 //
 // Product (Frank/Parker 2026-07-28): one long-lived resident session per
-// agent×runtime across channel/DM/thread. ChatSessionID / Directed / Initiator
-// are per-turn prompt facts — never fingerprint / force-fresh inputs.
+// agent×runtime across channel/DM/thread. Delivery and requester facts are
+// per-message details — never fingerprint / force-fresh inputs.
 type canonicalAgentRuntimeIdentity struct {
 	AgentID      string
 	RuntimeID    string
@@ -47,7 +47,7 @@ type canonicalAgentRuntimeIdentity struct {
 	Environment  map[string]string
 
 	// Slow-changing process boundary (fingerprint). Prefer restart when unsure;
-	// never put ChatSessionID, Directed, Initiator, Issue, or other per-turn fields.
+	// never put delivery, requester, Issue, or other per-turn fields here.
 	WorkspaceID         string
 	AgentInstructions   string
 	WorkspaceContext    string
@@ -560,6 +560,28 @@ func (p *canonicalAgentRuntimePool) slotCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.slots)
+}
+
+// hasResidentBackend reports whether the Agent×runtime slot already owns a
+// usable resident provider process. It intentionally does not expose whether
+// the process is currently handling a Message; MessageCoordinator retains
+// that admission boundary.
+func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string) bool {
+	if p == nil {
+		return false
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return false
+	}
+	defer slot.mu.Unlock()
+	return slot.mode == canonicalRuntimeResident && slot.backend != nil
 }
 
 func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {

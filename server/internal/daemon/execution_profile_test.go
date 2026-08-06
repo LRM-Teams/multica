@@ -86,22 +86,6 @@ func TestRestrictedExecutionConfigAppliesTighterBounds(t *testing.T) {
 	}
 }
 
-func TestRestrictedPiExecutionNeverReusesPersistentChatRuntime(t *testing.T) {
-	full := Task{ChatMessage: "hello"}
-	if !usesPersistentPiChatRuntime("pi", full) {
-		t.Fatal("full Pi chat should reuse its persistent runtime")
-	}
-	restricted := Task{
-		ChatMessage: "hello",
-		ExecutionConfig: &TaskExecutionConfig{
-			ExecutionProfile: executionProfileProtocolTurn,
-		},
-	}
-	if usesPersistentPiChatRuntime("pi", restricted) {
-		t.Fatal("protocol turn reused the main persistent Pi chat runtime")
-	}
-}
-
 func TestRestrictTaskForExecutionProfileRemovesFullExecutionSurfaces(t *testing.T) {
 	originalAgent := &AgentData{
 		Instructions: strings.Repeat("i", restrictedAgentInstructionsBytes+10),

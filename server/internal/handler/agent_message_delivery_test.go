@@ -32,11 +32,10 @@ func TestAgentMessageRecoveryPagesStableSequenceFenceAcrossTargets(t *testing.T)
 	}
 	boundaries := make(map[string]int64)
 	rows, err := testPool.Query(ctx, `
-		SELECT 'channel:' || cm.channel_id::text, COALESCE(max(message.seq), 0)
-		FROM channel_member cm
-		LEFT JOIN channel_message message ON message.channel_id = cm.channel_id
-		WHERE cm.workspace_id = $1 AND cm.member_type = 'agent' AND cm.member_id = $2
-		GROUP BY cm.channel_id`, testWorkspaceID, agentID)
+		SELECT target, COALESCE(max(seq), 0)
+		FROM agent_message_delivery
+		WHERE workspace_id = $1 AND agent_id = $2
+		GROUP BY target`, testWorkspaceID, agentID)
 	if err != nil {
 		t.Fatalf("load initial Agent boundaries: %v", err)
 	}
@@ -59,6 +58,11 @@ func TestAgentMessageRecoveryPagesStableSequenceFenceAcrossTargets(t *testing.T)
 		if err != nil {
 			t.Fatalf("insert canonical Message: %v", err)
 		}
+		channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+		if !found {
+			t.Fatalf("load channel %s", channelID)
+		}
+		testHandler.deliverCanonicalMessageToChannelAgents(ctx, channel, message)
 		return message
 	}
 	before := []ChannelMessageResponse{
@@ -204,6 +208,12 @@ func TestAgentMessageHandoffActivityIsIdempotent(t *testing.T) {
 }
 
 type capturedAgentDeliveryNotifier struct {
+	runtimeID  string
+	payload    protocol.AgentDeliverPayload
+	deliveries []capturedAgentDelivery
+}
+
+type capturedAgentDelivery struct {
 	runtimeID string
 	payload   protocol.AgentDeliverPayload
 }
@@ -211,6 +221,7 @@ type capturedAgentDeliveryNotifier struct {
 func (n *capturedAgentDeliveryNotifier) NotifyAgentDelivery(runtimeID string, payload protocol.AgentDeliverPayload) bool {
 	n.runtimeID = runtimeID
 	n.payload = payload
+	n.deliveries = append(n.deliveries, capturedAgentDelivery{runtimeID: runtimeID, payload: payload})
 	return true
 }
 
@@ -273,4 +284,74 @@ func TestCanonicalAgentMessageLiveDeliveryMatchesRecoveryEligibility(t *testing.
 	if notifier.payload.AgentID != recipientAgentID || notifier.payload.Message.ID != message.ID {
 		t.Fatalf("live Agent Message delivery = %+v, want recipient %s Message %s", notifier.payload, recipientAgentID, message.ID)
 	}
+}
+
+func TestCanonicalMessageDeliveryPreservesChannelMentionAndThreadRecipients(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	runtimeID := handlerTestRuntimeID(t)
+	firstAgentID := createHandlerTestAgentOnRuntime(t, "message-routing-first-"+uuid.NewString()[:8], runtimeID)
+	secondAgentID := createHandlerTestAgentOnRuntime(t, "message-routing-second-"+uuid.NewString()[:8], runtimeID)
+	channelID := seedChannelForTest(t, "message-routing-"+uuid.NewString(), testUserID)
+	for _, agentID := range []string{firstAgentID, secondAgentID} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)
+			ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("add Agent member: %v", err)
+		}
+	}
+	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("load channel")
+	}
+	notifier := &capturedAgentDeliveryNotifier{}
+	previous := testHandler.AgentDeliveryNotifier
+	testHandler.AgentDeliveryNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previous })
+
+	deliver := func(content string, parts []protocol.MessagePart, rootID *string) (ChannelMessageResponse, map[string]bool) {
+		t.Helper()
+		replyToMessageID := pgtype.UUID{}
+		threadRootMessageID := pgtype.UUID{}
+		if rootID != nil {
+			replyToMessageID = parseUUID(*rootID)
+			threadRootMessageID = parseUUID(*rootID)
+		}
+		message, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, parts, "multica", nil, replyToMessageID, threadRootMessageID, nil, 0)
+		if err != nil {
+			t.Fatalf("insert canonical Message: %v", err)
+		}
+		before := len(notifier.deliveries)
+		testHandler.deliverCanonicalMessageToChannelAgents(ctx, channel, message)
+		got := make(map[string]bool)
+		for _, delivery := range notifier.deliveries[before:] {
+			got[delivery.payload.AgentID] = true
+		}
+		return message, got
+	}
+	assertRecipients := func(name string, got map[string]bool, want ...string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s recipients = %v, want %v", name, got, want)
+		}
+		for _, agentID := range want {
+			if !got[agentID] {
+				t.Fatalf("%s recipients = %v, missing %s", name, got, agentID)
+			}
+		}
+	}
+
+	root, got := deliver("normal channel message", nil, nil)
+	assertRecipients("normal channel", got, firstAgentID, secondAgentID)
+	_, got = deliver("@second only", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: secondAgentID, Label: "@second"}}, nil)
+	assertRecipients("mention", got, secondAgentID)
+
+	testHandler.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(firstAgentID))
+	_, got = deliver("thread participant follow-up", nil, &root.ID)
+	assertRecipients("thread participant", got, firstAgentID)
+	_, got = deliver("@second thread", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: secondAgentID, Label: "@second"}}, &root.ID)
+	assertRecipients("thread mention", got, secondAgentID)
 }

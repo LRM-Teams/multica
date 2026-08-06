@@ -357,6 +357,21 @@ func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID, 
 	return &resp, nil
 }
 
+// GetResidentAgentRuntimeConfig fetches only stable Agent process
+// configuration. It is intentionally separate from task claim/drain so a
+// chat delivery cannot acquire a task, lease, execution, or session identity.
+func (c *Client) GetResidentAgentRuntimeConfig(ctx context.Context, runtimeID, agentID string) (*ResidentAgentRuntimeConfig, error) {
+	var resp ResidentAgentRuntimeConfig
+	if err := c.getJSONWithToken(ctx,
+		fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/runtime-config", runtimeID, agentID),
+		&resp,
+		c.tokenForRuntime(runtimeID),
+	); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, step, total int) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/progress", taskID), map[string]any{
 		"summary": summary,

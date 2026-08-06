@@ -5033,54 +5033,17 @@ func (h *Handler) dispatchTranscribedChannelMessageToAgents(ctx context.Context,
 }
 
 func (h *Handler) dispatchChannelMessageToAgentsWithCursorPolicy(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, replayTrigger bool) {
-	dispatchWakeExcept := h.dispatchChannelMessageWakeExcept
-	if replayTrigger {
-		dispatchWakeExcept = h.dispatchTranscribedChannelMessageWakeExcept
-	}
 	// Notify mentioned humans regardless of the agent trigger limit — surfacing a
-	// mention to a person never feeds the automatic agent-reply loop.
+	// mention to a person never feeds the automatic Agent-delivery loop.
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
-	groupCommand := channelMessageIsHumanAuthored(trigger.Type) && channelMessageIsGroupCommand(trigger.Content, trigger.Parts)
-	if len(mentionedAgents) > 0 && !groupCommand {
-		targetAgentIDs := make(map[string]struct{}, len(mentionedAgents))
-		for _, agent := range mentionedAgents {
-			targetAgentIDs[uuidToString(agent.ID)] = struct{}{}
-			if len(mentionedAgents) == 1 {
-				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
-			}
-			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
-				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
-			}
-		}
-		if channelMessageIsHumanAuthored(trigger.Type) {
-			// A human @mention upgrades only the mentioned agents to a directed,
-			// must-reply wake. Every other joined, unmuted agent still receives
-			// the message through the ordinary coalesced channel wake path so the
-			// mention does not make shared channel context disappear.
-			dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, targetAgentIDs)
-		} else {
-			// Preserve the existing loop boundary for agent-authored messages:
-			// non-targets observe without starting another agent run.
-			h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
-		}
-		return
+	if len(mentionedAgents) == 1 {
+		h.markTriggerFacilitatorIfNeeded(ctx, ch, mentionedAgents[0], trigger)
 	}
-	if channelMessageIsHumanAuthored(trigger.Type) {
-		h.recordChannelUnmentionedMessage()
-	}
-	// Unmentioned human messages (including 大家/@all): wake every channel agent
-	// with a silent-capable ambient run (Andong wake-all) and let each agent
-	// decide whether to reply.
-	if groupCommand {
-		dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, nil)
-		return
-	}
-	if !channelMessageIsHumanAuthored(trigger.Type) {
-		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
-		return
-	}
-	dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, nil)
+	// The committed channel:message boundary invokes the canonical Delivery
+	// recipient resolver. Do not create task-shaped inbox work here.
+	_ = initiatorUserID
+	_ = replayTrigger
 }
 
 func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -5090,44 +5053,18 @@ func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelRespons
 func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
-	if len(mentionedAgents) > 0 {
-		for _, agent := range mentionedAgents {
-			if trigger.ThreadRootMessageID != nil {
-				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
-			}
-			if len(mentionedAgents) == 1 {
-				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
-			}
-			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
-				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
-			}
-		}
-		return
-	}
-	if trigger.ThreadRootMessageID == nil {
-		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
-		return
-	}
-	threadAgents := h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID)
-	if len(threadAgents) == 0 {
-		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
-		return
-	}
-	targetAgentIDs := make(map[string]struct{}, len(threadAgents))
-	for _, agent := range threadAgents {
-		agentID := uuidToString(agent.ID)
-		targetAgentIDs[agentID] = struct{}{}
-		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
-			continue
-		}
-		// No @ in a thread: participant delivery with the same silent-capable
-		// contract as main-channel ambient (priority 1). Must-reply stays on
-		// explicit @ / DM / group_command paths only.
-		if _, err := h.dispatchChannelThreadContinuation(ctx, ch, agent, trigger, initiatorUserID); err == nil && h.Metrics != nil {
-			h.Metrics.RecordChannelFullExecutionWake("thread_reply")
+	for _, agent := range mentionedAgents {
+		if trigger.ThreadRootMessageID != nil {
+			h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 		}
 	}
-	h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
+	if len(mentionedAgents) == 1 {
+		h.markTriggerFacilitatorIfNeeded(ctx, ch, mentionedAgents[0], trigger)
+	}
+	// The committed channel:message boundary invokes the canonical Delivery
+	// recipient resolver. Thread participation is retained above, but no
+	// task-shaped inbox event is created.
+	_ = initiatorUserID
 }
 
 func (h *Handler) dispatchChannelMessageWake(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -5166,6 +5103,16 @@ func (h *Handler) dispatchSingleChannelMessageWake(ctx context.Context, ch Chann
 }
 
 func (h *Handler) dispatchSingleChannelMessageWakeWithCursorPolicy(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, agent db.Agent, replayTrigger bool) {
+	// Retired chat queue path. Canonical Delivery resolves recipients from the
+	// committed Message and the daemon coordinator owns local consumption.
+	_ = ctx
+	_ = ch
+	_ = trigger
+	_ = initiatorUserID
+	_ = agent
+	_ = replayTrigger
+	return
+
 	if h.TxStarter == nil {
 		slog.Warn("channel message wake: transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
 		return
@@ -5240,6 +5187,13 @@ func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch Ch
 	if trigger.ThreadRootMessageID != nil {
 		h.ensureChannelThreadAgentWakeParticipant(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 	}
+	// Recipient selection now happens at the committed channel:message
+	// boundary. Preserve the loop guard and thread-participant semantics, but
+	// never enqueue task-shaped chat work.
+	_ = initiatorUserID
+	_ = reason
+	return db.AgentInboxEvent{}, nil
+
 	if strings.TrimSpace(reason) == "" {
 		reason = "mention"
 		if ch.Kind == "dm" {
@@ -5277,6 +5231,11 @@ func (h *Handler) dispatchChannelThreadContinuation(ctx context.Context, ch Chan
 	if trigger.ThreadRootMessageID != nil {
 		h.ensureChannelThreadAgentWakeParticipant(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 	}
+	// Canonical Delivery resolves active thread participants directly from the
+	// committed Message; there is no task-shaped continuation to enqueue.
+	_ = initiatorUserID
+	return db.AgentInboxEvent{}, nil
+
 	prompt := h.buildChannelThreadContinuationPrompt(ctx, ch, agent, trigger)
 	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, prompt, "channel thread continuation", true, "thread_reply", channelThreadReplyPriority)
 }
@@ -6404,6 +6363,14 @@ func (h *Handler) dispatchChannelAmbientDelivery(ctx context.Context, ch Channel
 }
 
 func (h *Handler) dispatchChannelAmbientDeliveryExcept(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, skipAgentIDs map[string]struct{}) {
+	// Retired chat queue path. Canonical Delivery applies the same channel and
+	// thread recipient policy without an inbox event.
+	_ = ctx
+	_ = ch
+	_ = trigger
+	_ = skipAgentIDs
+	return
+
 	if skip, _ := channelMessageAmbientSkipReason(trigger); skip {
 		return
 	}

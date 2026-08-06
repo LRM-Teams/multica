@@ -27,8 +27,7 @@ func TestMaterializeSlimWritesOnlyAgentsManagedBlock(t *testing.T) {
 		AgentID:           "agent-a",
 		AgentName:         "Agent A",
 		AgentInstructions: "be helpful",
-		ChatSessionID:     "chat-should-not-force-disk",
-		Directed:          true,
+		MessageDelivery:   true,
 		AgentSkills: []SkillContextForEnv{{
 			Name: "review", Description: "d", Content: "managed skill should not land on disk\n",
 		}},
@@ -95,12 +94,11 @@ func TestMaterializeSlimRefusesSymlinkAgents(t *testing.T) {
 func TestStartupStaticContextStripsPerTurnSurface(t *testing.T) {
 	in := TaskContextForEnv{
 		AgentID: "a", AgentName: "A", AgentInstructions: "stay",
-		ChatSessionID: "chat-1", ChannelID: "ch-1", Directed: true,
-		ProjectID: "p1", ProjectTitle: "P",
+		MessageDelivery: true, ChannelID: "ch-1", ProjectID: "p1", ProjectTitle: "P",
 		InitiatorName: "Bob", IssueID: "iss",
 	}
 	out := StartupStaticContext(in)
-	if out.ChatSessionID != "" || out.ChannelID != "" || out.Directed || out.ProjectID != "" || out.IssueID != "" || out.InitiatorName != "" {
+	if out.MessageDelivery || out.ChannelID != "" || out.ProjectID != "" || out.IssueID != "" || out.InitiatorName != "" {
 		t.Fatalf("per-turn fields leaked into static: %+v", out)
 	}
 	if out.AgentID != "a" || out.AgentInstructions != "stay" {
@@ -109,8 +107,7 @@ func TestStartupStaticContextStripsPerTurnSurface(t *testing.T) {
 	// Digest ignores chat surface differences
 	d1 := ManagedStartupInputDigest("grok", in)
 	in2 := in
-	in2.ChatSessionID = "chat-2"
-	in2.Directed = false
+	in2.MessageDelivery = false
 	d2 := ManagedStartupInputDigest("grok", in2)
 	if d1 != d2 {
 		t.Fatalf("digest changed across chat surface: %s vs %s", d1, d2)

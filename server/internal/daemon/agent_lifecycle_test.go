@@ -53,7 +53,6 @@ func TestAgentLifecycleExecutorPreserveAndDeleteBoundaries(t *testing.T) {
 	resetter := &lifecycleResetRecorder{}
 	executor := &agentLifecycleExecutor{
 		workspacesRoot: root,
-		turns:          newAgentRuntimeTurnCoordinator(Config{WorkspacesRoot: root}, nil),
 		runtimes:       newCanonicalAgentRuntimePool(),
 		sessionReset:   resetter,
 	}
@@ -113,18 +112,9 @@ func TestAgentLifecycleExecutorPreserveAndDeleteBoundaries(t *testing.T) {
 func TestAgentLifecycleExecutorResetSessionInterruptsActiveTurn(t *testing.T) {
 	agentID := uuid.NewString()
 	runtimeID := uuid.NewString()
-	turnID := uuid.NewString()
-	turns := newAgentRuntimeTurnCoordinator(Config{}, nil)
-	key := agentRuntimeTurnSlotKey{AgentID: agentID, RuntimeID: runtimeID}
-	if !turns.reserve(key, turnID) {
-		t.Fatal("reserve active turn")
-	}
-	defer turns.release(key, turnID)
-
 	resetter := &lifecycleResetRecorder{}
 	executor := &agentLifecycleExecutor{
 		workspacesRoot: t.TempDir(),
-		turns:          turns,
 		runtimes:       newCanonicalAgentRuntimePool(),
 		sessionReset:   resetter,
 	}
@@ -149,14 +139,6 @@ func TestAgentLifecycleExecutorResetSessionInterruptsActiveTurn(t *testing.T) {
 func TestAgentLifecycleExecutorResetSessionKillsBeforeClearingServerState(t *testing.T) {
 	agentID := uuid.NewString()
 	runtimeID := uuid.NewString()
-	turnID := uuid.NewString()
-	turns := newAgentRuntimeTurnCoordinator(Config{}, nil)
-	key := agentRuntimeTurnSlotKey{AgentID: agentID, RuntimeID: runtimeID}
-	if !turns.reserve(key, turnID) {
-		t.Fatal("reserve active turn")
-	}
-	defer turns.release(key, turnID)
-
 	pool := newCanonicalAgentRuntimePool()
 	probe := &canonicalRuntimeFactoryProbe{}
 	stable, _, err := splitAgentProcessEnvironment(map[string]string{
@@ -198,7 +180,6 @@ func TestAgentLifecycleExecutorResetSessionKillsBeforeClearingServerState(t *tes
 	}
 	executor := &agentLifecycleExecutor{
 		workspacesRoot: t.TempDir(),
-		turns:          turns,
 		runtimes:       pool,
 		sessionReset:   resetter,
 	}
@@ -221,7 +202,6 @@ func TestAgentLifecycleExecutorReportsPartialFailureStep(t *testing.T) {
 	resetter := &lifecycleResetRecorder{err: errors.New("reset unavailable")}
 	executor := &agentLifecycleExecutor{
 		workspacesRoot: t.TempDir(),
-		turns:          newAgentRuntimeTurnCoordinator(Config{}, nil),
 		runtimes:       newCanonicalAgentRuntimePool(),
 		sessionReset:   resetter,
 	}
@@ -259,29 +239,10 @@ func TestAgentLifecycleExecutorRequiresSafetyDependenciesBeforeMutation(t *testi
 		RuntimeID:   runtimeID,
 	}
 
-	t.Run("missing turn coordinator", func(t *testing.T) {
-		request := base
-		request.ActionKind = agentLifecycleActionFullResetRestart
-		executor := &agentLifecycleExecutor{
-			workspacesRoot: root,
-			runtimes:       newCanonicalAgentRuntimePool(),
-			sessionReset:   resetter,
-		}
-		assertLifecycleValidationFailure(t, executor.Execute(context.Background(), request))
-		if len(resetter.calls) != 0 {
-			t.Fatal("missing coordinator reached session reset")
-		}
-		if _, err := os.Stat(sentinelPath); err != nil {
-			t.Fatalf("missing coordinator changed workspace: %v", err)
-		}
-	})
-
 	t.Run("missing runtime pool", func(t *testing.T) {
 		request := base
 		request.ActionKind = agentLifecycleActionRestart
-		executor := &agentLifecycleExecutor{
-			turns: newAgentRuntimeTurnCoordinator(Config{}, nil),
-		}
+		executor := &agentLifecycleExecutor{}
 		assertLifecycleValidationFailure(t, executor.Execute(context.Background(), request))
 	})
 
@@ -289,7 +250,6 @@ func TestAgentLifecycleExecutorRequiresSafetyDependenciesBeforeMutation(t *testi
 		request := base
 		request.ActionKind = agentLifecycleActionFullResetRestart
 		executor := &agentLifecycleExecutor{
-			turns:        newAgentRuntimeTurnCoordinator(Config{}, nil),
 			runtimes:     newCanonicalAgentRuntimePool(),
 			sessionReset: resetter,
 		}

@@ -42,12 +42,10 @@ type TaskContextForEnv struct {
 	ProjectID         string // issue's project, when present
 	ChannelID         string // exact DM/channel surface, when present
 	ProjectTitle      string // human-readable project title
-	ChatSessionID     string // non-empty for chat tasks
-	// Directed is true when this chat task was triggered by a directed message
-	// (DM, @mention, direct question/reply) rather than ambient channel
-	// observation. Used by renderChatRuntimeBrief to conditionally render the
-	// must-reply requirement (priority >= 2 is the directed signal).
-	Directed                bool
+	// MessageDelivery marks the durable Agent runtime that handles canonical
+	// Message Deliveries. It is process configuration only: no Task, lease,
+	// execution, session, or current-message identity appears here.
+	MessageDelivery         bool
 	AutopilotRunID          string // non-empty for autopilot run_only tasks
 	AutopilotID             string
 	AutopilotTitle          string

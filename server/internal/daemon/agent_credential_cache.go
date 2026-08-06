@@ -33,10 +33,10 @@ func readCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID strin
 	return readCachedAgentCredentialFor(cfg, workspaceID, runtimeID, agentID, now, true)
 }
 
-// readCachedAgentCredentialForChat resolves the durable credential owned by a
-// local workspace-agent root. Chat transport has no task, lease, or current
-// turn identity; runtime binding is checked when the credential is issued.
-func readCachedAgentCredentialForChat(cfg Config, workspaceID, agentID string, now time.Time) (cachedAgentCredential, bool) {
+// readCachedAgentCredentialForMessage resolves the durable credential owned by
+// a local workspace-agent root. Message transport has no task, lease, or
+// current-turn identity; runtime binding is checked when issued.
+func readCachedAgentCredentialForMessage(cfg Config, workspaceID, agentID string, now time.Time) (cachedAgentCredential, bool) {
 	return readCachedAgentCredentialFor(cfg, workspaceID, "", agentID, now, false)
 }
 

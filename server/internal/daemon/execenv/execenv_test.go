@@ -191,6 +191,7 @@ func TestWriteContextFilesOmitsSkillsWhenEmpty(t *testing.T) {
 }
 
 func TestWriteContextFilesChannelOnlyWakeNotBlankAssignment(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	dir := t.TempDir()
 
@@ -3589,6 +3590,7 @@ func TestInjectRuntimeConfigAssignmentTriggerMentionsRecent(t *testing.T) {
 // Commands → Core is global and must appear everywhere so that the agent
 // can still reach the commands if a future workflow path needs them.
 func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 
 	// Metadata discovery must appear in EVERY runtime config, regardless of

@@ -423,19 +423,11 @@ func safeSkillFilePath(root, rel string) (string, error) {
 	return target, nil
 }
 
-// isChatLikeContext reports conversational wakes that should receive the chat
-// runtime brief / sidecar, not the issue-assignment package. After LRM-1079/1081,
-// ordinary channel/DM wakes carry ChannelID without ChatSessionID.
-// Single-track: never gate on ChatSessionID.
+// isChatLikeContext reports a durable Message runtime. Channel identity is
+// deliberately not a selector: one Agent process can serve many channels and
+// must not inherit a current channel, task, or session at startup.
 func isChatLikeContext(ctx TaskContextForEnv) bool {
-	if strings.TrimSpace(ctx.IssueID) != "" {
-		return false
-	}
-	if strings.TrimSpace(ctx.AutopilotRunID) != "" || strings.TrimSpace(ctx.QuickCreatePrompt) != "" {
-		return false
-	}
-	// Single-track: ChannelID only — ChatSessionID is retired; ignore on wire.
-	return strings.TrimSpace(ctx.ChannelID) != ""
+	return ctx.MessageDelivery
 }
 
 // renderIssueContext builds the markdown content for issue_context.md.
@@ -474,17 +466,13 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	return b.String()
 }
 
-// renderChatWakeContext is the sidecar for channel/DM conversational wakes that
-// have no assigned issue. It must never claim "New Assignment" with a blank ID.
+// renderChatWakeContext is the startup sidecar for a durable Message runtime.
+// It contains no current channel, task, or session identity.
 func renderChatWakeContext(ctx TaskContextForEnv) string {
 	var b strings.Builder
-	b.WriteString("# Chat / Channel Wake\n\n")
-	if id := strings.TrimSpace(ctx.ChannelID); id != "" {
-		fmt.Fprintf(&b, "**Channel ID:** %s\n\n", id)
-	}
-	// ChatSessionID is retired — never print it even if still present on wire.
-	b.WriteString("**Trigger:** Channel/DM message (not an issue assignment)\n\n")
-	b.WriteString("There is no assigned issue for this wake. Do not run `multica issue get` unless the user asks you to create or inspect an issue.\n\n")
+	b.WriteString("# Message Runtime\n\n")
+	b.WriteString("This durable Agent runtime receives canonical Message Deliveries. It has no current channel, task, lease, execution, or session identity.\n\n")
+	b.WriteString("Use `multica message check` to inspect pending input, then use the returned canonical target for reads or sends when needed. Do not run `multica issue get` unless the user asks you to create or inspect an issue.\n\n")
 	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 	return b.String()
 }

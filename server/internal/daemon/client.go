@@ -282,6 +282,20 @@ func (c *Client) WorkspaceDaemonTokenAvailable(workspaceID string, now time.Time
 	return tok.available(now)
 }
 
+// WorkspaceDaemonToken returns the currently valid workspace-scoped daemon
+// credential for a long-lived Workspace Runner connection. The profile token
+// must never be substituted here because the server uses this token's
+// workspace claim as the Runner routing fence.
+func (c *Client) WorkspaceDaemonToken(workspaceID string, now time.Time) string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	tok := c.workspaceTokens[workspaceID]
+	if !tok.available(now) {
+		return ""
+	}
+	return tok.token
+}
+
 func (c *Client) tokenSnapshot() string {
 	c.tokenMu.RLock()
 	defer c.tokenMu.RUnlock()

@@ -101,6 +101,7 @@ type Daemon struct {
 	messageSends         map[string]int
 	agentProcessManager  *agentProcessManager
 	lifecycleDiagnostics *lifecycleDiagnosticWriter
+	runnerInstanceID     string
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -392,6 +393,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		messageRuntimeIDs:         make(map[string]string),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		machineUpgradeGeneration:  uuid.NewString(),
+		runnerInstanceID:          uuid.NewString(),
 	}
 	d.canonicalRuntimes.setMaxAgentProcesses(cfg.MaxAgentProcesses)
 	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
@@ -924,6 +926,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(ctx, taskWakeups)
+	go d.workspaceRunnerLoop(ctx)
 	go d.heartbeatLoop(ctx)
 	go d.residentCrashWatchLoop(ctx)
 	go d.tokenRenewalLoop(ctx)

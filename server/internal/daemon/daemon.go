@@ -434,7 +434,6 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	if cfg.WorkspacesRoot != "" {
 		d.lifecycleDiagnostics = newLifecycleDiagnosticWriter(filepath.Join(cfg.WorkspacesRoot, ".multica", "lifecycle-diagnostics"), time.Now)
 	}
-	d.agentRuntimeTurns = newAgentRuntimeTurnCoordinator(cfg, logger)
 	d.agentLifecycleExecutor = &agentLifecycleExecutor{
 		workspacesRoot: cfg.WorkspacesRoot,
 		runtimes:       d.canonicalRuntimes,

@@ -1,0 +1,55 @@
+{
+  "schema_version": "research-legacy-result-contracts-v1",
+  "versions": [
+    {
+      "version": "research-run-v1",
+      "cases": {
+        "citation_audit": "2340d0c890b96eb60f5e20d8231329ba53f8bab682d0a6c794cd7a60918d0dee",
+        "evidence": "fde89722dd87110b543bbd72e845fc2c535a3ba44a370127a5120cb0e35539e2",
+        "plan": "ae77329a217ba77914769db7c2a08de67d969c556dc5367a6a77a9cf105896a9",
+        "quality_evaluation": "7ebca016d7f859f90be88bb90e327be2b7c4de63e366741ae7a00a5242ac702b",
+        "report": "c878c6427639fc54f72d6dba075dcce5e2068b343d28a617cf8a3589100e83dd"
+      }
+    },
+    {
+      "version": "research-run-v2",
+      "cases": {
+        "citation_audit": "bfce03b7128711a66591e2dacaee077618f07aa58e2c38c1bbbccbb886047fbd",
+        "evidence": "573672db37eca62116403b746c55a864262b0d6531cfebd7637a1d60b73e2475",
+        "plan": "d6f6a88033bc0870d39563a49bd1927955217bf64b252a043477d7584e226a78",
+        "quality_evaluation": "ab5099d196cbff60bcb831a5ef2ac16d58d84f273f5db8da88b88941dfea2d74",
+        "report": "4ed8504343ab929a2d6c48a5d6e1bf8948228115771bff0d4a30f8f35f8f5dcf"
+      }
+    },
+    {
+      "version": "research-run-v3",
+      "cases": {
+        "citation_audit": "5ef5069ee87d0e6bbeb5cca6aab36dcc9879aab1621f7fe1dc504ac770bfee2e",
+        "evidence": "4ba59ae7095fa1bd878aa8c8edc6821bdeb2c875c28cc7f61ccc5428ffb82b1a",
+        "plan": "58066f8aa0831c3ba8ede2783790e9b323467101848d31e8df5c4015151717d3",
+        "quality_evaluation": "66dbe5c784c1d98f779d97cc6d8b960763374ae3207a627b0d42fe4d05b0abd2",
+        "report": "ea25266fe38152be9790431ca3499c1892f5bc20f5f6b1347252a52ffc016115"
+      }
+    },
+    {
+      "version": "research-run-v4",
+      "cases": {
+        "citation_audit": "8ca9f2e1da642f20a6c79719d6697e9d50accd8fcb3bd1b7a49dbf714f2abf09",
+        "evidence": "cef2851b103bb9e975efd87ecda68442e7a100dc3cc6d0e57b3e3abcf0728ebb",
+        "plan": "ea105ac8c077208ab2f5f40b41abe6d105f455de8c61b585ff437437c484876b",
+        "quality_evaluation": "68b7eb0bba7923e1dc97dfc422689c349b664b7fa6978ab4d0b6ccdc0d79efa6",
+        "report": "b8a18a26e76c4a8396359526f30e25707ef7ff93e5cfbe9404eb50763ebe361f"
+      }
+    },
+    {
+      "version": "research-run-v5",
+      "cases": {
+        "citation_audit": "17636c84397f1097191a0b2b0da363fcbc13ad3a01d846dc0470e2a55626111d",
+        "evidence": "8e17fd17c3f1251041d6f383a038207850430eecbd82ca6a54fcc821a7dbc451",
+        "plan": "09f4d3d08e462b8b27a3f473ca5a39976d141546c685f55a15a00cb83236acfc",
+        "quality_evaluation": "7ecdaf3338e7894834eb0dcd89095e675ad6975400c7d23361bd7cf9a4081af2",
+        "report": "3c89b59203e656155231548cf4a24d77f3f5046165b33137fe9edbd0b76e5937"
+      }
+    }
+  ]
+}

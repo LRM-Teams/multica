@@ -3197,6 +3197,22 @@ func assertAgentTransportFreshnessHoldActivity(t *testing.T, taskID, target stri
 	}
 }
 
+func TestAgentTransportFreshnessResolutionActivityMessage(t *testing.T) {
+	for _, tc := range []struct {
+		outcome string
+		want    string
+	}{
+		{outcome: "abandoned", want: "Held message was not sent"},
+		{outcome: "revised_send", want: "Freshness hold resolved"},
+	} {
+		t.Run(tc.outcome, func(t *testing.T) {
+			if got := agentTransportFreshnessResolutionActivityMessage(tc.outcome); got != tc.want {
+				t.Fatalf("message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func assertAgentTransportFreshnessResolutionActivity(t *testing.T, taskID, target, producerFactID, outcome string) {
 	t.Helper()
 	var count int
@@ -3205,7 +3221,10 @@ func assertAgentTransportFreshnessResolutionActivity(t *testing.T, taskID, targe
 		FROM agent_activity_event
 		WHERE task_id = $1
 		  AND event_type = 'send_freshness_resolved'
-		  AND message = 'Freshness hold resolved'
+		  AND message = CASE
+		    WHEN $4 = 'abandoned' THEN 'Held message was not sent'
+		    ELSE 'Freshness hold resolved'
+		  END
 		  AND target_slug = $2
 		  AND details->>'producer_fact_id' = $3
 		  AND details->>'outcome' = $4

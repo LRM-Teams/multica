@@ -1888,6 +1888,7 @@ func (h *Handler) insertAgentTransportFreshnessResolutionActivityWithExec(
 	transportID string,
 	messageID pgtype.UUID,
 ) (pgtype.UUID, error) {
+	message := agentTransportFreshnessResolutionActivityMessage(resolution.Outcome)
 	details := map[string]any{
 		"producer_fact_id":                  resolution.ProducerFactID,
 		"outcome":                           resolution.Outcome,
@@ -1903,12 +1904,19 @@ func (h *Handler) insertAgentTransportFreshnessResolutionActivityWithExec(
 		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
 		activityKindText, "send_freshness_resolved", "info",
 		"channel", parseUUID(target.channel.ID), target.raw,
-		"", "Freshness hold resolved", details,
+		"", message, details,
 	)
 	if !inserted {
 		return pgtype.UUID{}, errors.New("failed to persist freshness resolution activity")
 	}
 	return eventID, nil
+}
+
+func agentTransportFreshnessResolutionActivityMessage(outcome string) string {
+	if outcome == "abandoned" {
+		return "Held message was not sent"
+	}
+	return "Freshness hold resolved"
 }
 
 func (h *Handler) publishAgentTransportFreshnessResolutionActivity(

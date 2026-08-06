@@ -29,12 +29,25 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	if h == nil || h.TaskService == nil || h.TxStarter == nil {
 		return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(errors.New("research task dispatcher is unavailable"))
 	}
+	requestHash, err := researchrun.HashDispatchRequest(request)
+	if err != nil {
+		return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("hash research dispatch request: %w", err))
+	}
+	if request.RequestHash != "" && request.RequestHash != requestHash {
+		return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(errors.New("research dispatch request hash does not match its payload"))
+	}
+	request.RequestHash = requestHash
 	var existingID pgtype.UUID
+	var existingHash string
 	if err := h.DB.QueryRow(ctx, `
-		SELECT id FROM agent_inbox_event
+		SELECT id, COALESCE(context->>'research_dispatch_request_hash', '')
+		FROM agent_inbox_event
 		WHERE context->>'research_dispatch_key' = $1
 		LIMIT 1
-	`, request.Key).Scan(&existingID); err == nil {
+	`, request.Key).Scan(&existingID, &existingHash); err == nil {
+		if existingHash != "" && existingHash != requestHash {
+			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+		}
 		return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return researchrun.DispatchResult{}, err
@@ -83,6 +96,29 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		return researchrun.DispatchResult{}, err
 	}
 	defer tx.Rollback(ctx)
+	// Serialize the second idempotency check with creation. This covers lease
+	// expiry while the first worker is still inside the external mutation.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, request.Key); err != nil {
+		return researchrun.DispatchResult{}, fmt.Errorf("lock research task dispatch: %w", err)
+	}
+	existingID = pgtype.UUID{}
+	existingHash = ""
+	if err = tx.QueryRow(ctx, `
+		SELECT id, COALESCE(context->>'research_dispatch_request_hash', '')
+		FROM agent_inbox_event
+		WHERE context->>'research_dispatch_key' = $1
+		LIMIT 1
+	`, request.Key).Scan(&existingID, &existingHash); err == nil {
+		if existingHash != "" && existingHash != requestHash {
+			return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(fmt.Errorf("research dispatch key %q was reused for a different request", request.Key))
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return researchrun.DispatchResult{}, err
+		}
+		return researchrun.DispatchResult{InboxTaskID: uuidToString(existingID)}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return researchrun.DispatchResult{}, err
+	}
 	qtx := db.New(tx)
 	message, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
 		ChatSessionID: chatSession.ID,
@@ -102,14 +138,15 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object(
 		  'type', 'research_run_task',
 		  'research_dispatch_key', $2::text,
-		  'research_session_id', $3::text,
-		  'research_task_id', $4::text,
-		  'research_attempt_id', $5::text,
-		  'research_task_timeout_seconds', $6::integer,
-		  'research_task_acceptance_criteria', $7::jsonb
+		  'research_dispatch_request_hash', $3::text,
+		  'research_session_id', $4::text,
+		  'research_task_id', $5::text,
+		  'research_attempt_id', $6::text,
+		  'research_task_timeout_seconds', $7::integer,
+		  'research_task_acceptance_criteria', $8::jsonb
 		), updated_at = now()
 		WHERE id = $1
-	`, task.ID, request.Key, request.Run.SessionID, request.Task.ID, request.AttemptID,
+	`, task.ID, request.Key, requestHash, request.Run.SessionID, request.Task.ID, request.AttemptID,
 		request.Task.TimeoutSeconds, request.Task.AcceptanceCriteria); err != nil {
 		return researchrun.DispatchResult{}, fmt.Errorf("bind research task dispatch: %w", err)
 	}

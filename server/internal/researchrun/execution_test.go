@@ -113,15 +113,8 @@ func TestExecutionModuleCancelPendingAttemptsDoesNotAcknowledgeFailedRuntimeCanc
 
 func TestExecutionModuleDispatchReadyCreatesRuntimeTaskAndAttachesIdentity(t *testing.T) {
 	now := time.Date(2026, time.August, 5, 10, 0, 0, 0, time.UTC)
-	attempt := Attempt{ID: "attempt-1", DispatchKey: "dispatch-1", AssignedAgentID: "lead-1"}
-	store := &executionTestStore{
-		createdAttempt: attempt,
-		taskSnapshot:   RunSnapshot{Contract: ResearchContract{Language: "zh-CN", Audience: "decision maker", Freshness: "current"}},
-	}
-	dispatcher := &executionTestDispatcher{dispatchResult: DispatchResult{InboxTaskID: "inbox-1"}}
-	module := executionModule{store: store, dispatcher: dispatcher, clock: executionFixedClock{now: now}, prompts: taskPromptModule{}}
 	run := Run{
-		SessionID: "session-1", WorkspaceID: "workspace-1", Goal: "评估供应商",
+		SessionID: "session-1", WorkspaceID: "workspace-1", Goal: "评估供应商", StateVersion: 7,
 		GoalVersion: 1, PlanVersion: 1, OrchestratorVersion: OrchestratorVersionV1,
 		Config: RunConfig{MaxParallelTasks: 1},
 	}
@@ -129,6 +122,11 @@ func TestExecutionModuleDispatchReadyCreatesRuntimeTaskAndAttachesIdentity(t *te
 		ID: "task-1", Kind: TaskKindPlan, Objective: "制定可验证的调研计划", ExpectedResult: "plan",
 		Status: TaskStatusReady, GoalVersion: 1, PlanVersion: 1, Priority: 1,
 	}
+	store := &executionTestStore{
+		taskSnapshot: RunSnapshot{Run: run, Tasks: []Task{task}, Contract: ResearchContract{Language: "zh-CN", Audience: "decision maker", Freshness: "current"}},
+	}
+	dispatcher := &executionTestDispatcher{dispatchResult: DispatchResult{InboxTaskID: "inbox-1"}}
+	module := executionModule{store: store, dispatcher: dispatcher, clock: executionFixedClock{now: now}, prompts: taskPromptModule{}}
 	members := []FleetMember{{AgentID: "lead-1", Role: "lead", Status: "active", IsLead: true}}
 
 	dispatched, err := module.DispatchReady(context.Background(), run, []Task{task}, nil, members)
@@ -138,44 +136,76 @@ func TestExecutionModuleDispatchReadyCreatesRuntimeTaskAndAttachesIdentity(t *te
 	if dispatched != 1 {
 		t.Fatalf("dispatched=%d", dispatched)
 	}
-	if store.createdSession != "session-1" || store.createdTaskID != "task-1" || store.createdAgentID != "lead-1" {
-		t.Fatalf("created session=%q task=%q agent=%q", store.createdSession, store.createdTaskID, store.createdAgentID)
+	if store.createdInput.SessionID != "session-1" || store.createdInput.TaskID != "task-1" || store.createdInput.AgentID != "lead-1" || store.createdInput.ExpectedStateVersion != 7 {
+		t.Fatalf("created input=%+v", store.createdInput)
 	}
 	if len(dispatcher.dispatchRequests) != 1 {
 		t.Fatalf("dispatch requests=%d", len(dispatcher.dispatchRequests))
 	}
 	request := dispatcher.dispatchRequests[0]
-	if request.AttemptID != "attempt-1" || request.Key != "dispatch-1" || request.AgentID != "lead-1" || !strings.Contains(request.Prompt, "制定可验证的调研计划") {
+	if request.AttemptID == "" || request.Key == "" || request.AgentID != "lead-1" || request.RequestHash == "" || !strings.Contains(request.Prompt, "制定可验证的调研计划") {
 		t.Fatalf("dispatch request=%+v", request)
 	}
-	if store.attachedAttemptID != "attempt-1" || store.attachedInboxTaskID != "inbox-1" {
-		t.Fatalf("attached attempt=%q inbox=%q", store.attachedAttemptID, store.attachedInboxTaskID)
+	if store.acknowledgedAttemptID != request.AttemptID || store.acknowledgedInboxTaskID != "inbox-1" {
+		t.Fatalf("acknowledged attempt=%q inbox=%q", store.acknowledgedAttemptID, store.acknowledgedInboxTaskID)
 	}
 }
 
-func TestExecutionModuleDispatchReadyCancelsRuntimeTaskWhenIdentityAttachFails(t *testing.T) {
-	attachErr := errors.New("attempt changed before inbox identity attach")
+func TestExecutionModuleDispatchReadyLeavesExternalTaskForReplayWhenAcknowledgementFails(t *testing.T) {
+	acknowledgeErr := errors.New("database unavailable during acknowledgement")
+	run := Run{SessionID: "session-1", WorkspaceID: "workspace-1", Goal: "评估供应商", StateVersion: 3,
+		GoalVersion: 1, PlanVersion: 1, OrchestratorVersion: OrchestratorVersionV1, Config: RunConfig{MaxParallelTasks: 1}}
+	task := Task{ID: "task-1", Kind: TaskKindPlan, Objective: "制定计划", Status: TaskStatusReady, GoalVersion: 1, PlanVersion: 1}
 	store := &executionTestStore{
-		createdAttempt: Attempt{ID: "attempt-1", DispatchKey: "dispatch-1", AssignedAgentID: "lead-1"},
-		taskSnapshot:   RunSnapshot{Contract: ResearchContract{Language: "zh-CN"}},
-		attachErr:      attachErr,
+		taskSnapshot:   RunSnapshot{Run: run, Tasks: []Task{task}, Contract: ResearchContract{Language: "zh-CN"}},
+		acknowledgeErr: acknowledgeErr,
 	}
 	dispatcher := &executionTestDispatcher{dispatchResult: DispatchResult{InboxTaskID: "inbox-orphan"}}
 	module := executionModule{store: store, dispatcher: dispatcher, clock: executionFixedClock{now: time.Now().UTC()}, prompts: taskPromptModule{}}
-	run := Run{
-		SessionID: "session-1", WorkspaceID: "workspace-1", Goal: "评估供应商",
-		GoalVersion: 1, PlanVersion: 1, OrchestratorVersion: OrchestratorVersionV1,
-		Config: RunConfig{MaxParallelTasks: 1},
-	}
-	task := Task{ID: "task-1", Kind: TaskKindPlan, Objective: "制定计划", Status: TaskStatusReady, GoalVersion: 1, PlanVersion: 1}
 	members := []FleetMember{{AgentID: "lead-1", Role: "lead", Status: "active", IsLead: true}}
 
 	dispatched, err := module.DispatchReady(context.Background(), run, []Task{task}, nil, members)
-	if dispatched != 0 || !errors.Is(err, attachErr) {
+	if dispatched != 1 || !errors.Is(err, acknowledgeErr) {
 		t.Fatalf("dispatched=%d error=%v", dispatched, err)
 	}
-	if !reflect.DeepEqual(dispatcher.cancelledIDs, []string{"inbox-orphan"}) || dispatcher.cancelReason != "research_attempt_no_longer_dispatchable" {
-		t.Fatalf("cancel ids=%v reason=%q", dispatcher.cancelledIDs, dispatcher.cancelReason)
+	if len(dispatcher.cancelledIDs) != 0 {
+		t.Fatalf("recoverable external task was cancelled: %v", dispatcher.cancelledIDs)
+	}
+}
+
+func TestExecutionModuleDeliverPendingReplaysFrozenRequestAfterCrash(t *testing.T) {
+	request := DispatchRequest{Run: Run{SessionID: "session-1"}, Task: Task{ID: "task-1"}, AttemptID: "attempt-1", AgentID: "agent-1", Prompt: "frozen prompt", Key: "dispatch-1"}
+	request.RequestHash, _ = HashDispatchRequest(request)
+	store := &executionTestStore{claimed: []DispatchIntent{{ID: "intent-1", AttemptID: "attempt-1", SessionID: "session-1", Request: request, DeliveryAttempts: 2}}}
+	dispatcher := &executionTestDispatcher{dispatchResult: DispatchResult{InboxTaskID: "inbox-1"}}
+	module := executionModule{store: store, dispatcher: dispatcher, clock: executionFixedClock{now: time.Now().UTC()}}
+
+	delivered, err := module.DeliverPending(context.Background(), "session-1", 1)
+	if err != nil || delivered != 1 {
+		t.Fatalf("delivered=%d error=%v", delivered, err)
+	}
+	if len(dispatcher.dispatchRequests) != 1 || !reflect.DeepEqual(dispatcher.dispatchRequests[0], request) {
+		t.Fatalf("replayed request=%+v", dispatcher.dispatchRequests)
+	}
+	if store.acknowledgedAttemptID != "attempt-1" || store.acknowledgedInboxTaskID != "inbox-1" {
+		t.Fatalf("acknowledged attempt=%q inbox=%q", store.acknowledgedAttemptID, store.acknowledgedInboxTaskID)
+	}
+}
+
+func TestExecutionModuleDeliverPendingReschedulesRetryableFailureWithoutConsumingAttempt(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	request := DispatchRequest{Run: Run{SessionID: "session-1"}, Task: Task{ID: "task-1"}, AttemptID: "attempt-1", AgentID: "agent-1", Prompt: "frozen prompt", Key: "dispatch-1"}
+	request.RequestHash, _ = HashDispatchRequest(request)
+	store := &executionTestStore{claimed: []DispatchIntent{{ID: "intent-1", AttemptID: "attempt-1", SessionID: "session-1", Request: request, DeliveryAttempts: 3}}}
+	dispatchErr := errors.New("provider temporarily unavailable")
+	module := executionModule{store: store, dispatcher: &executionTestDispatcher{dispatchErr: dispatchErr}, clock: executionFixedClock{now: now}}
+
+	delivered, err := module.DeliverPending(context.Background(), "session-1", 1)
+	if err != nil || delivered != 0 {
+		t.Fatalf("delivered=%d error=%v", delivered, err)
+	}
+	if store.rescheduledIntentID != "intent-1" || store.failedIntentID != "" {
+		t.Fatalf("rescheduled=%q failed=%q", store.rescheduledIntentID, store.failedIntentID)
 	}
 }
 
@@ -184,22 +214,22 @@ type executionFixedClock struct{ now time.Time }
 func (clock executionFixedClock) Now() time.Time { return clock.now }
 
 type executionTestStore struct {
-	attempts            []Attempt
-	pending             []PendingCancellation
-	reconciledSession   string
-	reconciledStates    map[string]InboxTaskState
-	activatedSession    string
-	completedSession    string
-	completedAttemptIDs []string
-	createdAttempt      Attempt
-	createdSession      string
-	createdTaskID       string
-	createdAgentID      string
-	taskSnapshot        RunSnapshot
-	failedAttempt       AttemptFailure
-	attachedAttemptID   string
-	attachedInboxTaskID string
-	attachErr           error
+	attempts                []Attempt
+	pending                 []PendingCancellation
+	reconciledSession       string
+	reconciledStates        map[string]InboxTaskState
+	activatedSession        string
+	completedSession        string
+	completedAttemptIDs     []string
+	createdInput            CreateDispatchIntentInput
+	claimed                 []DispatchIntent
+	rescheduledIntentID     string
+	failedIntentID          string
+	taskSnapshot            RunSnapshot
+	acknowledgedAttemptID   string
+	acknowledgedInboxTaskID string
+	rejectAcknowledgement   bool
+	acknowledgeErr          error
 }
 
 func (store *executionTestStore) ListAttempts(context.Context, string) ([]Attempt, error) {
@@ -227,26 +257,45 @@ func (store *executionTestStore) MarkCancellationsCompleted(_ context.Context, s
 	return nil
 }
 
-func (store *executionTestStore) CreateAttempt(_ context.Context, sessionID, taskID, agentID string) (Attempt, RunEvent, error) {
-	store.createdSession = sessionID
-	store.createdTaskID = taskID
-	store.createdAgentID = agentID
-	return store.createdAttempt, RunEvent{}, nil
+func (store *executionTestStore) CreateDispatchIntent(_ context.Context, in CreateDispatchIntentInput) (Attempt, RunEvent, error) {
+	store.createdInput = in
+	intent := DispatchIntent{ID: "intent-" + in.AttemptID, AttemptID: in.AttemptID, SessionID: in.SessionID, Request: in.Request, DeliveryAttempts: 1}
+	store.claimed = append(store.claimed, intent)
+	return Attempt{ID: in.AttemptID, SessionID: in.SessionID, TaskID: in.TaskID, AssignedAgentID: in.AgentID, DispatchKey: in.Request.Key}, RunEvent{}, nil
 }
 
 func (store *executionTestStore) TaskContext(context.Context, string, string) (RunSnapshot, error) {
 	return store.taskSnapshot, nil
 }
 
-func (store *executionTestStore) FailAttempt(_ context.Context, failure AttemptFailure) (RunEvent, error) {
-	store.failedAttempt = failure
-	return RunEvent{}, nil
+func (store *executionTestStore) ClaimDispatchIntents(_ context.Context, _ string, _ string, _ time.Duration, limit int) ([]DispatchIntent, error) {
+	if limit > len(store.claimed) {
+		limit = len(store.claimed)
+	}
+	out := append([]DispatchIntent(nil), store.claimed[:limit]...)
+	store.claimed = store.claimed[limit:]
+	return out, nil
 }
 
-func (store *executionTestStore) AttachInboxTask(_ context.Context, attemptID, inboxTaskID string) (Attempt, RunEvent, error) {
-	store.attachedAttemptID = attemptID
-	store.attachedInboxTaskID = inboxTaskID
-	return Attempt{ID: attemptID, InboxTaskID: inboxTaskID}, RunEvent{}, store.attachErr
+func (store *executionTestStore) RescheduleDispatchIntent(_ context.Context, intentID, _ string, _ string, _ time.Time) (bool, error) {
+	store.rescheduledIntentID = intentID
+	return true, nil
+}
+
+func (store *executionTestStore) FailDispatchIntent(_ context.Context, intentID, _ string, _ AttemptFailure) (bool, RunEvent, error) {
+	store.failedIntentID = intentID
+	return true, RunEvent{}, nil
+}
+
+func (store *executionTestStore) AcknowledgeDispatchIntent(_ context.Context, _ string, _ string, inboxTaskID string) (bool, Attempt, RunEvent, error) {
+	if len(store.createdInput.AttemptID) > 0 {
+		store.acknowledgedAttemptID = store.createdInput.AttemptID
+	} else {
+		store.acknowledgedAttemptID = "attempt-1"
+	}
+	store.acknowledgedInboxTaskID = inboxTaskID
+	accepted := !store.rejectAcknowledgement
+	return accepted, Attempt{ID: store.acknowledgedAttemptID, InboxTaskID: inboxTaskID}, RunEvent{}, store.acknowledgeErr
 }
 
 type executionTestDispatcher struct {

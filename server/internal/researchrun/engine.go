@@ -121,7 +121,7 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	}
 
 	if err = e.executionModule().SyncAttempts(ctx, sessionID); err != nil {
-		return err
+		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 
 	tasks, err := e.store.ListTasks(ctx, sessionID)

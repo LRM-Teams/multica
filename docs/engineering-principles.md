@@ -159,8 +159,8 @@
 - **权限与完成门槛**：普通 executor 只能 checkpoint；manager 可维护 agent 自建目标，但不能改写 human-authored intent。完成必须同时满足全部 criteria 已确认且至少有一条 evidence；所有写入用 `expected_version` CAS，过期写返回 409。
 - **物**：完整产品/API/UI 契约见 [`docs/superpowers/specs/2026-07-31-adaptive-channel-goal-mode.md`](superpowers/specs/2026-07-31-adaptive-channel-goal-mode.md)；数据库约束 `257_adaptive_channel_goal`；handler/runtime/UI/locale parity 回归覆盖创建权限、每轮注入、checkpoint、证据完成门槛和 stale write。
 
-### 4.0.a Goal × Work Graph 权责边界 — `仅文档`（Phase 0 Prompt 有回归，通用图内核待实现）
-- **分层真相源**：Goal 管 objective、success criteria、人工范围和生命周期；Work Graph 管当前执行方案、节点、依赖、角色、预算、调度、产物有效性和核验。Issue/Run Node 是可审计工作单元，Agent Job/Runtime 是执行容器。Goal version 与 graph revision 不得混用。
+### 4.0.a Goal × Work Graph 权责边界 — `可执行`
+- **分层真相源**：Goal 管 objective、success criteria、人工范围和生命周期；Work Graph 管当前执行方案、节点、依赖、角色、预算、调度、产物有效性和核验。Issue/Run Node 是可审计工作单元，Agent Job/Runtime 是执行容器。Goal version 与 graph revision 不得混用。新 graph revision 必须重新准入保留节点并以新 completion contract、依赖和 review 状态调度；Artifact、Verification 和失效传播必须与同一 workspace/graph 内的节点绑定，禁止跨图引用。
 - **按需准入**：有 Goal 不等于必须建图。一个上下文能连贯完成的工作保持 `DIRECT`；存在独立交付边界、并行收益、独立权限/等待/核验需求才用 `GRAPH`；明显扩大成本、权限或范围时用 `PROPOSE_GRAPH` 请求确认。
 - **完成关系**：Graph 可交付只产生 Goal 完成候选，不得绕过 Goal 的 criteria、Evidence、开放工作和人工/发布 Gate。Goal intent 变化应使受影响节点和旧 PASS 失效，而不是覆盖历史。
 - **Subgoal 收敛方向**：现有 `channel_goal_subgoal` 不发展成第二套 DAG；通用图内核落地后，Goal 子目标 UI 应成为 Work Graph Node 投影或被明确迁移，禁止长期双向同步两套执行真相。

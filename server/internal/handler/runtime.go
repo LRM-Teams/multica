@@ -49,10 +49,14 @@ type AgentRuntimeResponse struct {
 	Metadata       any      `json:"metadata"`
 	Capabilities   []string `json:"capabilities"`
 	CurrentVersion *string  `json:"current_version"`
-	TargetVersion  *string  `json:"target_version,omitempty"`
-	UpdateState    string   `json:"update_state"`
-	RuntimeHealth  string   `json:"runtime_health"`
-	UpdateError    *string  `json:"update_error,omitempty"`
+	// DaemonTargetVersion is the one release target for the physical daemon.
+	// Runtime TargetVersion below is retained only as a legacy lifecycle
+	// projection; Computer clients must use this daemon-scoped field.
+	DaemonTargetVersion *string `json:"daemon_target_version,omitempty"`
+	TargetVersion       *string `json:"target_version,omitempty"`
+	UpdateState         string  `json:"update_state"`
+	RuntimeHealth       string  `json:"runtime_health"`
+	UpdateError         *string `json:"update_error,omitempty"`
 	// MachineUpgrade is the canonical daemon-scoped lifecycle. Older clients
 	// ignore it; compatibility fields above continue to project legacy rows.
 	MachineUpgrade *MachineUpgrade             `json:"machine_upgrade,omitempty"`
@@ -121,6 +125,52 @@ func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db
 	}
 	resp.MachineUpgrade = machineUpgrade
 	return resp
+}
+
+// attachDaemonTargetVersions gives every sibling runtime the same daemon
+// release target. Prefer a currently available release over an old failed
+// runtime operation; only use the latter when no available release exists so
+// failure/retry UI can still name its target.
+func attachDaemonTargetVersions(responses []AgentRuntimeResponse) {
+	available := make(map[string]string)
+	fallback := make(map[string]string)
+	for _, resp := range responses {
+		if resp.DaemonID == nil || strings.TrimSpace(*resp.DaemonID) == "" || resp.TargetVersion == nil {
+			continue
+		}
+		daemonID := strings.TrimSpace(*resp.DaemonID)
+		target := strings.TrimSpace(*resp.TargetVersion)
+		if target == "" {
+			continue
+		}
+		if resp.RuntimeHealth == "update_available" {
+			if current, ok := available[daemonID]; !ok || cli.IsNewerVersion(target, current) {
+				available[daemonID] = target
+			}
+			continue
+		}
+		if resp.RuntimeHealth == "failed" {
+			if current, ok := fallback[daemonID]; !ok || cli.IsNewerVersion(target, current) {
+				fallback[daemonID] = target
+			}
+		}
+	}
+
+	for i := range responses {
+		if responses[i].DaemonID == nil {
+			continue
+		}
+		daemonID := strings.TrimSpace(*responses[i].DaemonID)
+		target := available[daemonID]
+		if target == "" {
+			target = fallback[daemonID]
+		}
+		if target == "" {
+			responses[i].DaemonTargetVersion = nil
+			continue
+		}
+		responses[i].DaemonTargetVersion = &target
+	}
 }
 
 func (h *Handler) latestMachineUpgrade(ctx context.Context, rt db.AgentRuntime) *MachineUpgrade {
@@ -1163,6 +1213,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 			resp[i].DaemonLastSeenAt = timestampToPtr(hb.LastSeenAt)
 		}
 	}
+	attachDaemonTargetVersions(resp)
 
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -344,6 +344,7 @@ export const AgentRuntimeSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).catch({}),
   capabilities: z.array(z.string()).optional(),
   current_version: z.string().nullable(),
+  daemon_target_version: z.string().nullable().optional(),
   target_version: z.string().nullable().optional(),
   update_state: z
     .enum([

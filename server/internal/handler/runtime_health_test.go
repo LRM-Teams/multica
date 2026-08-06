@@ -26,6 +26,31 @@ func TestRuntimeToResponseWithReleaseShowsUpdateAvailable(t *testing.T) {
 	}
 }
 
+func TestAttachDaemonTargetVersionsPrefersAvailableReleaseOverFailedSibling(t *testing.T) {
+	daemonID := "daemon-s144"
+	currentTarget := "v0.4.14"
+	staleTarget := "v0.4.13"
+	responses := []AgentRuntimeResponse{
+		{
+			DaemonID:      &daemonID,
+			RuntimeHealth: "update_available",
+			TargetVersion: &currentTarget,
+		},
+		{
+			DaemonID:      &daemonID,
+			RuntimeHealth: "failed",
+			TargetVersion: &staleTarget,
+		},
+	}
+
+	attachDaemonTargetVersions(responses)
+	for i, response := range responses {
+		if response.DaemonTargetVersion == nil || *response.DaemonTargetVersion != currentTarget {
+			t.Fatalf("response %d daemon_target_version = %v, want %q", i, response.DaemonTargetVersion, currentTarget)
+		}
+	}
+}
+
 func TestRuntimeToResponseWithReleaseFailsClosedForInvalidSources(t *testing.T) {
 	tests := []struct {
 		name    string

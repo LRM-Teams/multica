@@ -2,7 +2,6 @@ import {
   aggregateRuntimeHealthPresentation,
   deriveRuntimeHealth,
   runtimeCurrentVersion,
-  runtimeTargetVersion,
   type RuntimeHealth,
   type RuntimeHealthPresentation,
 } from "@multica/core/runtimes";
@@ -36,7 +35,11 @@ export interface RuntimeMachine {
   health: RuntimeHealth;
   runtimeHealth: RuntimeHealthPresentation | null;
   updateError: string | null;
-  updateTargetVersion: string | null;
+  /**
+   * Canonical daemon-wide release target for this computer. Runtime rows are
+   * only transport observations; consumers must not select a provider target.
+   */
+  daemonTargetVersion: string | null;
   runtimes: AgentRuntime[];
   onlineCount: number;
   issueCount: number;
@@ -262,7 +265,7 @@ export function buildPendingCloudComputerMachine(
     health: "offline",
     runtimeHealth: null,
     updateError: null,
-    updateTargetVersion: null,
+    daemonTargetVersion: null,
     runtimes: [],
     onlineCount: 0,
     issueCount: 0,
@@ -427,7 +430,7 @@ function placeholderLocalMachine(
     health: "offline",
     runtimeHealth: null,
     updateError: null,
-    updateTargetVersion: null,
+    daemonTargetVersion: null,
     runtimes: [],
     onlineCount: 0,
     issueCount: 0,
@@ -530,6 +533,7 @@ function finalizeRuntimeMachine(
     runtimes.find(
       (runtime) => runtime.runtime_health === "failed" && runtime.update_error,
     ) ?? runtimes.find((runtime) => runtime.update_error);
+  const daemonTargetVersion = daemonReleaseTargetVersion(runtimes);
   const workload = runtimes.reduce(
     (sum, runtime) => {
       const entry = options.workloadByRuntimeId?.get(runtime.id);
@@ -555,9 +559,7 @@ function finalizeRuntimeMachine(
     health,
     runtimeHealth: aggregateRuntimeHealthPresentation(runtimes),
     updateError: updateIssueRuntime?.update_error?.trim() || null,
-    updateTargetVersion: updateIssueRuntime
-      ? runtimeTargetVersion(updateIssueRuntime)
-      : null,
+    daemonTargetVersion,
     runtimes,
     onlineCount,
     issueCount,
@@ -566,6 +568,19 @@ function finalizeRuntimeMachine(
     providerNames,
     lastSeenAt: latestMachineLastSeenAt(runtimes),
   };
+}
+
+/**
+ * `daemon_target_version` is the server's canonical daemon-level projection,
+ * repeated on its sibling runtime records for transport. Read it only at the
+ * computer boundary so a provider runtime never selects its own release.
+ */
+function daemonReleaseTargetVersion(runtimes: AgentRuntime[]): string | null {
+  for (const runtime of runtimes) {
+    const target = runtime.daemon_target_version?.trim();
+    if (target) return target;
+  }
+  return null;
 }
 
 /**

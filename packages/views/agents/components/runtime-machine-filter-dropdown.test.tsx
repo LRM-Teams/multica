@@ -28,7 +28,7 @@ function makeMachine(
     health: "online",
     runtimeHealth: null,
     updateError: null,
-    updateTargetVersion: null,
+    daemonTargetVersion: null,
     runtimes: [],
     onlineCount: 1,
     issueCount: 0,

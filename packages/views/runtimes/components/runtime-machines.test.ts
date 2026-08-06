@@ -143,6 +143,38 @@ describe("runtime machine grouping", () => {
     expect(machines[0]?.cliVersion).toBe("0.3.95");
   });
 
+  it("uses the daemon release target instead of a failed provider's old target", () => {
+    // Mirrors s144: live daemon runtimes have discovered v0.4.14, while a
+    // long-dead provider still retains a failed v0.4.13 attempt. The computer
+    // must expose the daemon release, not whichever provider carries an error.
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-codex",
+          provider: "codex",
+          current_version: "0.4.13",
+          daemon_target_version: "v0.4.14",
+          target_version: "v0.4.14",
+          runtime_health: "update_available",
+        }),
+        makeRuntime({
+          id: "rt-grok",
+          provider: "grok",
+          current_version: "0.4.4",
+          daemon_target_version: "v0.4.14",
+          target_version: "v0.4.13",
+          runtime_health: "failed",
+          update_error: "drain_timeout",
+          status: "offline",
+          last_seen_at: new Date(NOW - 24 * 60 * 60_000).toISOString(),
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machines[0]?.daemonTargetVersion).toBe("v0.4.14");
+  });
+
   it("Basics Daemon version falls back to the freshest sighting when all runtimes are offline", () => {
     const machines = buildRuntimeMachines(
       [

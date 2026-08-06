@@ -85,7 +85,7 @@ function makeMachine(runtimes: AgentRuntime[]): RuntimeMachine {
     health: "online",
     runtimeHealth: "ok",
     updateError: null,
-    updateTargetVersion: null,
+    daemonTargetVersion: null,
     runtimes,
     onlineCount: runtimes.length,
     issueCount: 0,

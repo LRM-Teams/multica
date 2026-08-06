@@ -135,6 +135,9 @@ export interface RuntimeDevice {
    */
   capabilities?: string[];
   current_version: string | null;
+  /** Canonical release target for this daemon/computer, shared by all siblings. */
+  daemon_target_version?: string | null;
+  /** Legacy runtime lifecycle target. Computer UI must not use this for release selection. */
   target_version?: string | null;
   update_state: RuntimeUpdateState;
   runtime_health: RuntimeHealthState;

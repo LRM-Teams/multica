@@ -558,16 +558,16 @@ function NoteEditor({
             <span className="inline-flex min-w-0 items-center gap-1">
               <span className="text-muted-foreground">{t(($) => $.notes_page.visibility_shared_to_prefix)}</span>
               <DropdownMenu>
-                <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.current_shares)} />} className="max-w-36 truncate font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground">
-                  {shareNames[0]}
+                <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.current_shares)} />} className="inline-flex max-w-36 items-center truncate font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground">
+                  <span className="truncate">{shareNames[0]}</span>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="min-w-48">
                   <DropdownMenuLabel>{t(($) => $.notes_page.current_shares)}</DropdownMenuLabel>
-                  <div className="space-y-1 px-1.5 pb-1 text-sm">
-                    {shareNames.map((name, index) => (
-                      <div key={`${name}:${index}`} className="truncate rounded px-1 py-0.5 text-muted-foreground">{name}</div>
-                    ))}
-                  </div>
+                  {shareNames.map((name, index) => (
+                    <DropdownMenuItem key={`${name}:${index}`} disabled className="text-muted-foreground opacity-100">
+                      <span className="truncate">{name}</span>
+                    </DropdownMenuItem>
+                  ))}
                 </DropdownMenuContent>
               </DropdownMenu>
               <span className="text-muted-foreground/70">{t(($) => $.notes_page.visibility_shared_etc)}</span>

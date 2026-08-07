@@ -65,6 +65,41 @@ function firstNumber(records: Record<string, unknown>[], key: string): number | 
   return null;
 }
 
+function parseISO(value: string | undefined | null): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+// Hoisted formatter (react-doctor/js-hoist-intl): build once, reuse across
+// renders instead of rebuilding Intl.DateTimeFormat on every call.
+const SHORT_DATETIME = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/** Format an ISO timestamp as a short local date-time (guard against bad input). */
+function formatTimestamp(value: string | undefined | null): string | null {
+  const ms = parseISO(value);
+  if (ms === null) return null;
+  return SHORT_DATETIME.format(ms);
+}
+
+/** Human duration from milliseconds: "3m 12s" / "1h 4m" / "45s". */
+function formatDuration(ms: number | null): string | null {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return null;
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 1) return "<1s";
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 function actorLabel(member: ResearchFleetMember | undefined, actorID: string | null): string | null {
   if (member) return member.display_name || member.name || member.role || member.agent_id;
   if (!actorID) return null;
@@ -194,6 +229,17 @@ type NodeRunContext = {
   producedClaims: ResearchRunSnapshot["claims"];
   createdTasks: ResearchRunSnapshot["tasks"];
   createdQuestions: ResearchRunSnapshot["questions"];
+  /** Session decision question (run.method.decision_question → contract.goal). */
+  decisionQuestion: string | null;
+  /** Projected node phase (payload.phase → node.phase → run.current_stage). */
+  phase: string | null;
+  /** Real run-engine start/update timestamps (never fabricated). */
+  startedAt: string | null;
+  updatedAt: string | null;
+  /** Duration in ms between startedAt and end (completed or run last-progress). */
+  durationMs: number | null;
+  /** Explicit node input (task acceptance criteria / payload input). */
+  input: string | null;
 };
 
 function buildNodeRunContext(
@@ -256,6 +302,55 @@ function buildNodeRunContext(
     if (value > 0) metrics.push({ key, label, value });
   }
 
+  // Real run-engine timestamps only (LRM-1410 residual): never hardcode or
+  // read local client clock into the header. Prefer task/attempt run fields,
+  // then node created/updated, then run last-progress.
+  const startedAt =
+    task?.started_at ||
+    attempt?.started_at ||
+    firstString(records, ["started_at"]) ||
+    node.created_at ||
+    null;
+  const updatedAt =
+    task?.completed_at ||
+    attempt?.completed_at ||
+    firstString(records, ["completed_at", "updated_at"]) ||
+    node.updated_at ||
+    run?.run?.last_progress_at ||
+    null;
+  const startedMs = parseISO(startedAt);
+  const endMs = parseISO(updatedAt) ?? startedMs;
+  // Only surface a duration when there is a real positive delta — a node that
+  // has not run (created == updated) must not show a fabricated "<1s".
+  const durationMs =
+    startedMs !== null && endMs !== null && endMs > startedMs
+      ? endMs - startedMs
+      : null;
+
+  const decisionQuestion =
+    run?.method?.decision_question || run?.contract?.goal || null;
+  const phase =
+    (typeof node.phase === "string" && node.phase.trim() ? node.phase : null) ||
+    firstString(records, ["phase"]) ||
+    (run?.run?.current_stage ? run.run.current_stage : null);
+
+  // Explicit node input: task acceptance criteria (real BE contract), else
+  // payload input text. Never invent a sentence when none exists.
+  const explicitInput = firstString(records, ["input", "task_input", "inputs"]);
+  const acceptanceCriteria = task?.acceptance_criteria;
+  let input: string | null = explicitInput;
+  if (!input && acceptanceCriteria && typeof acceptanceCriteria === "object") {
+    try {
+      const json = JSON.stringify(acceptanceCriteria);
+      if (json && json !== "{}") input = json;
+    } catch {
+      input = null;
+    }
+  }
+  if (!input && typeof acceptanceCriteria === "string" && acceptanceCriteria.trim()) {
+    input = acceptanceCriteria.trim();
+  }
+
   return {
     task,
     attempt,
@@ -272,6 +367,12 @@ function buildNodeRunContext(
     producedClaims,
     createdTasks,
     createdQuestions,
+    decisionQuestion,
+    phase,
+    startedAt,
+    updatedAt,
+    durationMs,
+    input,
   };
 }
 
@@ -325,6 +426,58 @@ function typeLabelFor(
     default:
       return nodeType;
   }
+}
+
+const GATE_NODE_TYPES = new Set(["stage_gate", "product_round_gate"]);
+
+/**
+ * LRM-1410 residual: next-step commands available for this node, derived from
+ * the real status/type contract (mirrors card-menu action semantics). Read-only
+ * display of the next-step slot — dispatch stays with the command console.
+ */
+type NextStepItem = { action: string; hint: string };
+
+function nextStepsForNode(node: ResearchGraphNode): NextStepItem[] {
+  const status = (node.status || "").toLowerCase();
+  const running = status === "running" || status === "active" || status === "in_progress";
+  const failed = status === "failed" || status === "error" || status === "terminal_failed";
+  const retryable =
+    failed ||
+    status === "retryable_failed" ||
+    status === "pending" ||
+    status === "queued";
+  const abandoned = status === "abandoned" || status === "cancelled";
+
+  if (running) return [{ action: "continue", hint: "running" }];
+  if (retryable) return [{ action: "retry", hint: "retry" }];
+  if (abandoned) return [{ action: "reassign", hint: "reassign" }];
+  if (GATE_NODE_TYPES.has(node.node_type)) {
+    return [{ action: "continue", hint: "gate" }];
+  }
+  // Completed/done finding or subquestion → can be forked to explore deeper.
+  if (status === "done" || status === "succeeded" || status === "completed" || status === "resolved") {
+    return [
+      { action: "continue", hint: "done" },
+      { action: "fork", hint: "fork" },
+    ];
+  }
+  return [];
+}
+
+const NEXT_STEP_ACTION_KEYS = {
+  continue: "continue",
+  fork: "fork",
+  retry: "retry",
+  reassign: "reassign",
+} as const;
+
+function nextStepActionLabel(
+  action: string,
+  t: ReturnType<typeof useT<"research">>["t"],
+): string {
+  const key = NEXT_STEP_ACTION_KEYS[action as keyof typeof NEXT_STEP_ACTION_KEYS];
+  if (!key) return action;
+  return t(($) => $.node.next_step_actions[key]);
 }
 
 function DetailBody({
@@ -381,6 +534,24 @@ function DetailBody({
   const executor = actorLabel(runContext.actor, runContext.actorID);
   const expectedResult = expectedResultLabelFor(runContext.task?.expected_result, t);
 
+  // Gate blocker: for stage_gate / product_round_gate nodes, surface the real
+  // session run gate findings, plus any node-payload blocker text.
+  const gateFindings: Array<{ code: string; severity: string; message: string }> =
+    GATE_NODE_TYPES.has(node.node_type) && run?.gate && run.gate.findings.length > 0
+      ? run.gate.findings.slice(0, 8)
+      : [];
+  if (GATE_NODE_TYPES.has(node.node_type) && gateFindings.length === 0) {
+    const payloadBlocker = firstString([payloadRecord(node.payload)], ["blocker", "gate_blocked", "gate_blocker"]);
+    if (payloadBlocker) {
+      gateFindings.push({
+        code: "payload",
+        severity: "error",
+        message: payloadBlocker,
+      });
+    }
+  }
+  const nextSteps = nextStepsForNode(node);
+
   // Only explicitly associated sources (source_id / source_ids). Never fall
   // back to session-wide sources — that would attribute other nodes' evidence
   // to a node with no associations (LRM-1091 C-area audit).
@@ -433,11 +604,70 @@ function DetailBody({
         </div>
         <h2 className="text-base leading-snug font-semibold">{node.title}</h2>
         <p className="sr-only">{t(($) => $.node.detail_hint)}</p>
+
+        {/* LRM-1410 residual: real session-run header meta — phase, run
+            timestamps and duration (never fabricated). flex-wrap keeps the
+            row readable on both desktop and narrow sheet without overflow. */}
+        {runContext.decisionQuestion ||
+        runContext.phase ||
+        runContext.startedAt ||
+        runContext.durationMs !== null ? (
+          <dl className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+            {runContext.decisionQuestion ? (
+              <div className="min-w-0" data-testid="node-detail-decision-question">
+                <dt className="inline font-semibold">{t(($) => $.node.decision_question)} </dt>
+                <dd className="inline min-w-0">{runContext.decisionQuestion}</dd>
+              </div>
+            ) : null}
+            {runContext.phase ? (
+              <div className="flex items-center gap-1">
+                <dt className="font-semibold">{t(($) => $.node.phase_label)}</dt>
+                <dd data-testid="node-detail-phase">{runContext.phase}</dd>
+              </div>
+            ) : null}
+            {runContext.startedAt ? (
+              <div className="flex items-center gap-1">
+                <dt className="font-semibold">{t(($) => $.node.started_at)}</dt>
+                <dd data-testid="node-detail-started">
+                  {formatTimestamp(runContext.startedAt)}
+                </dd>
+              </div>
+            ) : null}
+            {runContext.updatedAt && runContext.updatedAt !== runContext.startedAt ? (
+              <div className="flex items-center gap-1">
+                <dt className="font-semibold">{t(($) => $.node.updated_at)}</dt>
+                <dd data-testid="node-detail-updated">
+                  {formatTimestamp(runContext.updatedAt)}
+                </dd>
+              </div>
+            ) : null}
+            {runContext.durationMs !== null ? (
+              <div className="flex items-center gap-1">
+                <dt className="font-semibold">{t(($) => $.node.duration)}</dt>
+                <dd data-testid="node-detail-duration">
+                  {formatDuration(runContext.durationMs)}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+        ) : null}
       </header>
 
       <div className="space-y-4 p-4">
         {/* LRM-1332: four content faces before run Objective/Method/Outcome. */}
         <ResearchNodeContentFaces node={node} density="detail" />
+
+        {/* LRM-1410 residual: explicit Input block above Output/Result. */}
+        {runContext.input ? (
+          <section data-testid="node-detail-input">
+            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.input)}
+            </h3>
+            <p className="whitespace-pre-wrap text-xs leading-relaxed font-mono text-muted-foreground">
+              {runContext.input}
+            </p>
+          </section>
+        ) : null}
 
         {runContext.objective ? (
           <section>
@@ -529,6 +759,59 @@ function DetailBody({
                   {t(($) => $.node.report_created)}
                 </Badge>
               ) : null}
+            </div>
+          </section>
+        ) : null}
+
+        {/* LRM-1410 residual: gate blocker for stage_gate / product_round_gate
+            nodes. Shows the real run gate findings (with severity) and a
+            payload blocker; coexists with failure diagnostics below. */}
+        {gateFindings.length > 0 ? (
+          <section
+            className="rounded-md border border-warning/40 bg-warning/5 px-3 py-2"
+            data-testid="node-detail-gate-blocker"
+          >
+            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-warning uppercase">
+              {t(($) => $.node.gate_blocker)}
+            </h3>
+            <ul className="space-y-1.5">
+              {gateFindings.map((finding) => (
+                <li key={finding.code} className="flex items-start gap-1.5 text-xs">
+                  <span
+                    className={`mt-px shrink-0 rounded px-1 font-mono text-[10px] uppercase ${
+                      finding.severity === "error"
+                        ? "bg-destructive/15 text-destructive"
+                        : finding.severity === "warning"
+                          ? "bg-warning/15 text-warning"
+                          : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {finding.severity}
+                  </span>
+                  <span className="min-w-0">{finding.message}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {/* LRM-1410 residual: read-only next-step commands for this node. */}
+        {nextSteps.length > 0 ? (
+          <section data-testid="node-detail-next-steps">
+            <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.next_steps)}
+            </h3>
+            <div className="flex flex-wrap gap-1.5">
+              {nextSteps.map((step) => (
+                <Badge
+                  key={step.action}
+                  variant="outline"
+                  className="text-[11px]"
+                  data-testid={`node-detail-next-step-${step.action}`}
+                >
+                  {nextStepActionLabel(step.action, t)}
+                </Badge>
+              ))}
             </div>
           </section>
         ) : null}

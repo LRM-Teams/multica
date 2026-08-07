@@ -61,6 +61,20 @@ vi.mock("../../i18n/use-t", () => ({
           task_count: "New tasks",
           question_count: "New questions",
           report_created: "Report produced",
+          decision_question: "Decision",
+          phase_label: "Phase",
+          started_at: "Started",
+          updated_at: "Updated",
+          duration: "Duration",
+          input: "Input",
+          gate_blocker: "Gate blocked",
+          next_steps: "Next steps",
+          next_step_actions: {
+            continue: "Continue",
+            fork: "Fork",
+            retry: "Retry",
+            reassign: "Reassign",
+          },
           task_kinds: {
             discover: "Discover and select sources",
           },
@@ -475,5 +489,165 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(
       screen.getByText("Pricing evidence now has independent corroboration."),
     ).toBeInTheDocument();
+  });
+
+  it("LRM-1410 residual: header renders real decision question, phase and run timestamps", () => {
+    const runNode: ResearchGraphNode = {
+      ...node,
+      node_type: "probe",
+      status: "running",
+      phase: "s2_sources",
+      payload: { phase: "s2_sources" },
+    };
+    const run = {
+      run: { current_stage: "s2_sources", last_progress_at: "2026-08-05T11:00:00Z" },
+      method: {
+        decision_question: "What drives the listing-to-transaction price gap?",
+      },
+      contract: { goal: "Should never be used when method present" },
+      tasks: [
+        {
+          id: "task-1",
+          client_key: "gap",
+          kind: "probe",
+          objective: "Probe the price gap driver.",
+          required_capability: "scout",
+          status: "in_flight",
+          assigned_agent_id: "agent-1",
+          attempt_count: 1,
+          goal_version: 1,
+          plan_version: 1,
+          started_at: "2026-08-05T10:30:00Z",
+          completed_at: "2026-08-05T10:42:00Z",
+        },
+      ],
+      attempts: [],
+      sources: [],
+      observations: [],
+      claims: [],
+      questions: [],
+    } as unknown as ResearchRunSnapshot;
+    const runNodeWithIds = {
+      ...runNode,
+      payload: {
+        details: { task_id: "task-1", attempt_id: "attempt-1", phase: "s2_sources" },
+      },
+    };
+
+    render(<ResearchNodeDetail node={runNodeWithIds} sources={[]} run={run} open />);
+
+    expect(screen.getByTestId("node-detail-decision-question")).toHaveTextContent(
+      "What drives the listing-to-transaction price gap?",
+    );
+    expect(screen.getByTestId("node-detail-phase")).toHaveTextContent("s2_sources");
+    expect(screen.getByTestId("node-detail-started")).toBeInTheDocument();
+    // duration from real task started→completed
+    expect(screen.getByTestId("node-detail-duration")).toHaveTextContent("12m");
+  });
+
+  it("LRM-1410 residual: renders explicit Input block from task acceptance criteria", () => {
+    const inputNode: ResearchGraphNode = {
+      ...node,
+      payload: {
+        details: {
+          task_id: "task-1",
+          attempt_id: "attempt-1",
+        },
+      },
+    };
+    const run = {
+      tasks: [
+        {
+          id: "task-1",
+          client_key: "market-prices",
+          kind: "discover",
+          objective: "Collect prices.",
+          required_capability: "scout",
+          acceptance_criteria: {
+            schema_version: 2,
+            minimum_independent_sources: 2,
+          },
+          status: "succeeded",
+          attempt_count: 1,
+          goal_version: 1,
+          plan_version: 1,
+          started_at: "2026-08-05T09:00:00Z",
+        },
+      ],
+      attempts: [],
+      sources: [],
+      observations: [],
+      claims: [],
+      questions: [],
+    } as unknown as ResearchRunSnapshot;
+
+    render(<ResearchNodeDetail node={inputNode} sources={[]} run={run} open />);
+
+    const inputBlock = screen.getByTestId("node-detail-input");
+    expect(inputBlock).toHaveTextContent("Input");
+    expect(inputBlock).toHaveTextContent("minimum_independent_sources");
+    expect(inputBlock).toHaveTextContent("2");
+  });
+
+  it("LRM-1410 residual: stage_gate node surfaces real run gate findings with severity", () => {
+    const gateNode: ResearchGraphNode = {
+      ...node,
+      node_type: "stage_gate",
+      status: "waiting",
+      payload: {},
+    };
+    const run = {
+      gate: {
+        passed: false,
+        findings: [
+          {
+            code: "GATE-1",
+            severity: "error",
+            message: "Independent corroboration for the price claim is missing.",
+          },
+          {
+            code: "GATE-2",
+            severity: "warning",
+            message: "Coverage gap on transaction registry remains.",
+          },
+        ],
+      },
+      tasks: [],
+      attempts: [],
+      sources: [],
+      observations: [],
+      claims: [],
+      questions: [],
+    } as unknown as ResearchRunSnapshot;
+
+    render(<ResearchNodeDetail node={gateNode} sources={[]} run={run} open />);
+
+    const block = screen.getByTestId("node-detail-gate-blocker");
+    expect(block).toHaveTextContent("Gate blocked");
+    expect(
+      block,
+    ).toHaveTextContent(
+      "Independent corroboration for the price claim is missing.",
+    );
+    expect(block).toHaveTextContent("Coverage gap on transaction registry remains.");
+    expect(block).toHaveTextContent("error");
+  });
+
+  it("LRM-1410 residual: done node shows status-aware read-only next steps", () => {
+    const doneNode: ResearchGraphNode = {
+      ...node,
+      status: "done",
+      payload: {},
+    };
+    render(<ResearchNodeDetail node={doneNode} sources={[]} open />);
+    expect(screen.getByTestId("node-detail-next-steps")).toBeInTheDocument();
+    expect(screen.getByTestId("node-detail-next-step-continue")).toHaveTextContent("Continue");
+    expect(screen.getByTestId("node-detail-next-step-fork")).toHaveTextContent("Fork");
+  });
+
+  it("LRM-1410 residual: gate blocker and input are absent on a plain finding node", () => {
+    render(<ResearchNodeDetail node={node} sources={sources} open />);
+    expect(screen.queryByTestId("node-detail-gate-blocker")).toBeNull();
+    expect(screen.queryByTestId("node-detail-input")).toBeNull();
   });
 });

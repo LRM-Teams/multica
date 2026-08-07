@@ -409,14 +409,16 @@ func seedIdleMessageAcceptanceBoundaries(ctx context.Context, pool *pgxpool.Pool
 // coordinator crashed inside the pre-persist window".
 type recordingResidentMessage struct {
 	agent.Backend
-	mu      sync.Mutex
-	batches [][]agent.ResidentMessage
+	mu       sync.Mutex
+	batches  [][]agent.ResidentMessage
+	observed chan struct{}
 }
 
 func (r *recordingResidentMessage) AcceptMessageBatch(ctx context.Context, messages []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
 	r.mu.Lock()
 	r.batches = append(r.batches, append([]agent.ResidentMessage(nil), messages...))
 	r.mu.Unlock()
+	r.observed <- struct{}{}
 	return r.Backend.(agent.ResidentMessageInput).AcceptMessageBatch(ctx, messages)
 }
 
@@ -498,9 +500,10 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		d *Daemon,
 		acks chan protocol.AgentDeliverAckPayload,
 		batches func() [][]agent.ResidentMessage,
+		batchObserved <-chan struct{},
 		teardown func(),
 	) {
-		normal := &recordingResidentMessage{Backend: backend}
+		normal := &recordingResidentMessage{Backend: backend, observed: make(chan struct{}, 1)}
 		d = New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		d.client.SetWorkspaceDaemonToken(workspaceID, "workspace-token", time.Now().Add(time.Hour))
 		d.mu.Lock()
@@ -535,7 +538,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		for !d.messageCoordinators[agentID].FreshnessKnown() && time.Now().Before(deadline) {
 			runtime.Gosched()
 		}
-		return d, acks, normal.snapshot, teardown
+		return d, acks, normal.snapshot, normal.observed, teardown
 	}
 
 	postMessage := func() (string, int64) {
@@ -572,19 +575,28 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			t.Fatal("canonical delivery was not acknowledged")
 		}
 	}
+	waitBatch := func(observed <-chan struct{}, snapshot func() [][]agent.ResidentMessage, wantID string) [][]agent.ResidentMessage {
+		select {
+		case <-observed:
+			return snapshot()
+		case <-time.After(2 * time.Second):
+			t.Fatalf("runtime handoff was not observed for canonical Message %s", wantID)
+			return nil
+		}
+	}
 
 	// Phase A — crashed coordinator. Recovery completes, a canonical Message is
 	// server-acked, then the runtime handoff fails inside the pre-persist
 	// window: the durable boundary never advances and the runtime never holds
 	// a completed handoff.
-	dA, acksA, batchesA, teardownA := connect(failingResidentMessageRuntime{})
+	dA, acksA, batchesA, observedA, teardownA := connect(failingResidentMessageRuntime{})
 	idA, seqA := postMessage()
 	waitAck(acksA, seqA)
 	// The Message was server-acked but never durably consumed: the runtime
 	// handoff failed inside the pre-persist window, so the boundary for this
 	// target must still be below the Message's own sequence even though the
 	// runtime saw a handoff attempt for it.
-	if got := batchesA(); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
+	if got := waitBatch(observedA, batchesA, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("pre-crash runtime handoff attempt = %+v, want %s", got, idA)
 	}
 	if got := readBoundary(); got[target] >= seqA {
@@ -596,8 +608,8 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 
 	// Phase B — fresh daemon, same Agent root. Recovery must re-read the acked
 	// Message (the boundary never advanced) and hand it over: nothing lost.
-	_, _, batchesB, teardownB := connect(&idleMessageFakeRuntime{})
-	if got := batchesB(); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
+	_, _, batchesB, observedB, teardownB := connect(&idleMessageFakeRuntime{})
+	if got := waitBatch(observedB, batchesB, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("restarted runtime batches = %+v, want canonical Message %s handed off", got, idA)
 	}
 	if got := readBoundary(); got[target] != seqA {

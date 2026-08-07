@@ -318,7 +318,8 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 		t.Fatalf("undelivered attempt changed: attempts=%+v err=%v", attempts, listErr)
 	}
 
-	firstClaims, err := store.ClaimDispatchIntents(ctx, fixture.sessionID, uuid.NewString(), time.Minute, 1)
+	firstToken := uuid.NewString()
+	firstClaims, err := store.ClaimDispatchIntents(ctx, fixture.sessionID, firstToken, time.Minute, 1)
 	if err != nil || len(firstClaims) != 1 {
 		t.Fatalf("first claims=%+v err=%v", firstClaims, err)
 	}
@@ -333,6 +334,23 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 	secondClaims, err = store.ClaimDispatchIntents(ctx, fixture.sessionID, secondToken, time.Minute, 1)
 	if err != nil || len(secondClaims) != 1 || secondClaims[0].Request.Prompt != input.Request.Prompt || secondClaims[0].DeliveryAttempts != 2 {
 		t.Fatalf("expired lease recovery claims=%+v err=%v", secondClaims, err)
+	}
+	staleInboxID := uuid.NewString()
+	accepted, staleAttempt, _, staleErr := store.AcknowledgeDispatchIntent(ctx, firstClaims[0].ID, firstToken, staleInboxID)
+	if accepted || !errors.Is(staleErr, ErrInvalidTransition) || staleAttempt.ID != "" {
+		t.Fatalf("stale worker acknowledgement accepted=%v attempt=%+v err=%v", accepted, staleAttempt, staleErr)
+	}
+	var afterStaleStatus, afterStaleToken, afterStaleInbox string
+	if err = pool.QueryRow(ctx, `
+		SELECT outbox.status, COALESCE(outbox.lease_token::text, ''), COALESCE(attempt.inbox_task_id::text, '')
+		FROM research_dispatch_outbox outbox
+		JOIN research_task_attempt attempt ON attempt.id=outbox.attempt_id
+		WHERE outbox.id=$1::uuid
+	`, firstClaims[0].ID).Scan(&afterStaleStatus, &afterStaleToken, &afterStaleInbox); err != nil {
+		t.Fatal(err)
+	}
+	if afterStaleStatus != "delivering" || afterStaleToken != secondToken || afterStaleInbox != "" {
+		t.Fatalf("stale ack mutated successor claim: status=%q token=%q inbox=%q", afterStaleStatus, afterStaleToken, afterStaleInbox)
 	}
 	inboxID := uuid.NewString()
 	if _, err = pool.Exec(ctx, `

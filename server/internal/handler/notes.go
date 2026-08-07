@@ -147,26 +147,31 @@ ORDER BY created_at ASC`, pageID)
 func (h *Handler) noteAccess(ctx context.Context, pageID, workspaceID, userID pgtype.UUID) (accessible bool, owner bool, err error) {
 	err = h.DB.QueryRow(ctx, `
 WITH RECURSIVE chain AS (
-    SELECT id, parent_id, owner_user_id
+    SELECT id, workspace_id, parent_id, owner_user_id
     FROM note_page
-    WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+    WHERE id = $1
+      AND deleted_at IS NULL
+      AND (workspace_id = $2 OR owner_user_id = $3)
   UNION
-    SELECT parent.id, parent.parent_id, parent.owner_user_id
+    SELECT parent.id, parent.workspace_id, parent.parent_id, parent.owner_user_id
     FROM note_page parent
     JOIN chain child ON child.parent_id = parent.id
-    WHERE parent.workspace_id = $2 AND parent.deleted_at IS NULL
+    WHERE parent.deleted_at IS NULL
 )
 SELECT
   EXISTS (
     SELECT 1
     FROM chain c
     WHERE c.owner_user_id = $3
-       OR EXISTS (SELECT 1 FROM note_page_share s WHERE s.page_id = c.id AND s.user_id = $3)
+       OR (
+         c.workspace_id = $2
+         AND EXISTS (SELECT 1 FROM note_page_share s WHERE s.page_id = c.id AND s.user_id = $3)
+       )
   ) AS accessible,
   EXISTS (
     SELECT 1
     FROM note_page p
-    WHERE p.id = $1 AND p.workspace_id = $2 AND p.deleted_at IS NULL AND p.owner_user_id = $3
+    WHERE p.id = $1 AND p.deleted_at IS NULL AND p.owner_user_id = $3
   ) AS owner`, pageID, workspaceID, userID).Scan(&accessible, &owner)
 	return accessible, owner, err
 }
@@ -184,7 +189,7 @@ func (h *Handler) loadAccessibleNote(w http.ResponseWriter, r *http.Request, pag
 	page, err := scanNotePage(h.DB.QueryRow(r.Context(), `
 SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
 FROM note_page
-WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`, pageUUID, workspaceID))
+WHERE id = $1 AND deleted_at IS NULL`, pageUUID))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "note page not found")
 		return notePageRow{}, false, false
@@ -201,17 +206,19 @@ func (h *Handler) ListNotePages(w http.ResponseWriter, r *http.Request) {
 WITH RECURSIVE visible AS (
     SELECT p.id, p.workspace_id, p.parent_id, p.owner_user_id, p.title, p.content, p.sort_key, p.created_at, p.updated_at, p.deleted_at
     FROM note_page p
-    WHERE p.workspace_id = $1
-      AND p.deleted_at IS NULL
+    WHERE p.deleted_at IS NULL
       AND (
         p.owner_user_id = $2
-        OR EXISTS (SELECT 1 FROM note_page_share s WHERE s.page_id = p.id AND s.user_id = $2)
+        OR (
+          p.workspace_id = $1
+          AND EXISTS (SELECT 1 FROM note_page_share s WHERE s.page_id = p.id AND s.user_id = $2)
+        )
       )
   UNION
     SELECT child.id, child.workspace_id, child.parent_id, child.owner_user_id, child.title, child.content, child.sort_key, child.created_at, child.updated_at, child.deleted_at
     FROM note_page child
     JOIN visible parent ON child.parent_id = parent.id
-    WHERE child.workspace_id = $1 AND child.deleted_at IS NULL
+    WHERE child.deleted_at IS NULL
 )
 SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
 FROM visible
@@ -247,7 +254,7 @@ ORDER BY parent_id NULLS FIRST, sort_key, created_at`, workspaceID, userID)
 }
 
 func (h *Handler) ListDeletedNotePages(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	_, userID, _, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
 		return
 	}
@@ -255,11 +262,10 @@ func (h *Handler) ListDeletedNotePages(w http.ResponseWriter, r *http.Request) {
 SELECT p.id, p.workspace_id, p.parent_id, p.owner_user_id, p.title, p.content, p.sort_key, p.created_at, p.updated_at, p.deleted_at
 FROM note_page p
 LEFT JOIN note_page parent ON parent.id = p.parent_id AND parent.workspace_id = p.workspace_id
-WHERE p.workspace_id = $1
-  AND p.owner_user_id = $2
+WHERE p.owner_user_id = $1
   AND p.deleted_at IS NOT NULL
   AND (p.parent_id IS NULL OR parent.deleted_at IS NULL)
-ORDER BY p.deleted_at DESC, p.updated_at DESC`, workspaceID, userID)
+ORDER BY p.deleted_at DESC, p.updated_at DESC`, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list deleted notes")
 		return
@@ -301,22 +307,19 @@ func (h *Handler) CreateNotePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parentID := pgtype.UUID{}
+	pageWorkspaceID := workspaceID
 	if req.ParentID != nil && strings.TrimSpace(*req.ParentID) != "" {
-		parsed, ok := parseUUIDOrBadRequest(w, *req.ParentID, "parent id")
+		parent, _, ok := h.loadAccessibleNote(w, r, *req.ParentID, workspaceID, userID)
 		if !ok {
 			return
 		}
-		accessible, _, err := h.noteAccess(r.Context(), parsed, workspaceID, userID)
-		if err != nil || !accessible {
-			writeError(w, http.StatusNotFound, "parent note page not found")
-			return
-		}
-		parentID = parsed
+		parentID = parent.ID
+		pageWorkspaceID = parent.WorkspaceID
 	}
 	page, err := scanNotePage(h.DB.QueryRow(r.Context(), `
 INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
 VALUES ($1, $2, $3, $4, '', lpad((extract(epoch from now()) * 1000000)::bigint::text, 20, '0'), $3, $3)
-RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`, workspaceID, parentID, userID, normalizeNoteTitle(req.Title)))
+RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`, pageWorkspaceID, parentID, userID, normalizeNoteTitle(req.Title)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create note page")
 		return
@@ -367,7 +370,7 @@ func (h *Handler) UpdateNotePage(w http.ResponseWriter, r *http.Request) {
 UPDATE note_page
 SET title = $4, content = $5, updated_by = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
-RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`, page.ID, workspaceID, userID, title, content))
+RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`, page.ID, page.WorkspaceID, userID, title, content))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update note page")
 		return
@@ -404,7 +407,7 @@ WITH RECURSIVE subtree AS (
 )
 UPDATE note_page
 SET deleted_at = now(), updated_by = $3, updated_at = now()
-WHERE id IN (SELECT id FROM subtree)`, page.ID, workspaceID, userID)
+WHERE id IN (SELECT id FROM subtree)`, page.ID, page.WorkspaceID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete note page")
 		return
@@ -450,7 +453,7 @@ WITH RECURSIVE subtree AS (
 )
 SELECT id, parent_id, title, content, sort_key
 FROM subtree
-ORDER BY depth, parent_id NULLS FIRST, sort_key, created_at`, page.ID, workspaceID, userID)
+ORDER BY depth, parent_id NULLS FIRST, sort_key, created_at`, page.ID, page.WorkspaceID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
 		return
@@ -502,7 +505,7 @@ ORDER BY depth, parent_id NULLS FIRST, sort_key, created_at`, page.ID, workspace
 		inserted, err := scanNotePage(tx.QueryRow(r.Context(), `
 INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6, $3, $3)
-RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`, workspaceID, parentID, userID, title, source.Content, sortKey))
+RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`, page.WorkspaceID, parentID, userID, title, source.Content, sortKey))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
 			return
@@ -518,7 +521,7 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 }
 
 func (h *Handler) PermanentlyDeleteNotePage(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	_, userID, _, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
 		return
 	}
@@ -528,7 +531,7 @@ func (h *Handler) PermanentlyDeleteNotePage(w http.ResponseWriter, r *http.Reque
 	}
 	result, err := h.DB.Exec(r.Context(), `
 DELETE FROM note_page
-WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3 AND deleted_at IS NOT NULL`, pageUUID, workspaceID, userID)
+WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NOT NULL`, pageUUID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to permanently delete note page")
 		return
@@ -541,7 +544,7 @@ WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3 AND deleted_at IS NOT
 }
 
 func (h *Handler) RestoreNotePage(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	_, userID, _, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
 		return
 	}
@@ -552,7 +555,7 @@ func (h *Handler) RestoreNotePage(w http.ResponseWriter, r *http.Request) {
 	page, err := scanNotePage(h.DB.QueryRow(r.Context(), `
 SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
 FROM note_page
-WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3 AND deleted_at IS NOT NULL`, pageUUID, workspaceID, userID))
+WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NOT NULL`, pageUUID, userID))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "note page not found")
 		return
@@ -568,7 +571,7 @@ WITH RECURSIVE subtree AS (
 )
 UPDATE note_page
 SET deleted_at = NULL, updated_by = $3, updated_at = now()
-WHERE id IN (SELECT id FROM subtree)`, page.ID, workspaceID, userID)
+WHERE id IN (SELECT id FROM subtree)`, page.ID, page.WorkspaceID, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to restore note page")
 		return
@@ -576,7 +579,7 @@ WHERE id IN (SELECT id FROM subtree)`, page.ID, workspaceID, userID)
 	restored, err := scanNotePage(h.DB.QueryRow(r.Context(), `
 SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
 FROM note_page
-WHERE id = $1 AND workspace_id = $2`, page.ID, workspaceID))
+WHERE id = $1 AND workspace_id = $2`, page.ID, page.WorkspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to restore note page")
 		return
@@ -629,7 +632,7 @@ func (h *Handler) UpdateNotePageShares(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[key] = true
 		var exists bool
-		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $2)`, workspaceID, targetID).Scan(&exists); err != nil || !exists {
+		if err := tx.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $2)`, page.WorkspaceID, targetID).Scan(&exists); err != nil || !exists {
 			writeError(w, http.StatusBadRequest, "share user must be a workspace member")
 			return
 		}

@@ -837,7 +837,7 @@ function NoteEditor({
         onUpdate={(content) => setDraft((current) => ({ ...current, content }))}
         onUploadFile={uploadWithToast}
         placeholder={t(($) => $.notes_page.content_placeholder)}
-        className="mt-6 min-h-[55vh] px-0 py-2"
+        className="mt-6 min-h-[55vh] px-0 pb-[45vh] pt-2"
         debounceMs={150}
         disableMentions
         enableSlashCommands

@@ -47,7 +47,7 @@ func (s *Store) UpdateNode(ctx context.Context, in NodeUpdateInput) (Node, error
 	}
 	var out Node
 	var completion, budget []byte
-	err = tx.QueryRow(ctx, `UPDATE work_graph_node SET execution_status=COALESCE(NULLIF($4,''),execution_status),validity_status=COALESCE(NULLIF($5,''),validity_status),review_status=COALESCE(NULLIF($6,''),review_status),updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3 RETURNING id::text,issue_id::text,role,context_policy,execution_status,validity_status,review_status,objective,completion_contract,budget,based_on_graph_version,created_at`, w, g, n, in.ExecutionStatus, in.ValidityStatus, in.ReviewStatus).Scan(&out.ID, &out.IssueID, &out.Role, &out.ContextPolicy, &out.ExecutionStatus, &out.ValidityStatus, &out.ReviewStatus, &out.Objective, &completion, &budget, &out.BasedOnVersion, &out.CreatedAt)
+	err = tx.QueryRow(ctx, `UPDATE work_graph_node SET execution_status=COALESCE(NULLIF($4,''),execution_status),validity_status=COALESCE(NULLIF($5,''),validity_status),review_status=COALESCE(NULLIF($6,''),review_status),updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3 RETURNING id::text,issue_id::text,role,context_policy,execution_status,validity_status,review_status,completion_authority,effective_completion,objective,completion_contract,budget,based_on_graph_version,created_at`, w, g, n, in.ExecutionStatus, in.ValidityStatus, in.ReviewStatus).Scan(&out.ID, &out.IssueID, &out.Role, &out.ContextPolicy, &out.ExecutionStatus, &out.ValidityStatus, &out.ReviewStatus, &out.CompletionAuthority, &out.EffectiveCompletion, &out.Objective, &completion, &budget, &out.BasedOnVersion, &out.CreatedAt)
 	if err != nil {
 		return Node{}, err
 	}
@@ -57,6 +57,12 @@ func (s *Store) UpdateNode(ctx context.Context, in NodeUpdateInput) (Node, error
 		return Node{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
+		return Node{}, err
+	}
+	if err = s.RefreshNodeCompletion(ctx, in.WorkspaceID, in.GraphID, in.NodeID); err != nil {
+		return Node{}, err
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT effective_completion FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, n).Scan(&out.EffectiveCompletion); err != nil {
 		return Node{}, err
 	}
 	if out.ExecutionStatus == "succeeded" && out.ValidityStatus == "valid" {
@@ -94,6 +100,9 @@ func (s *Store) CompleteIssueNode(ctx context.Context, workspaceID, issueID stri
 		return err
 	}
 	for _, graphID := range graphs {
+		if err = s.RefreshNodeCompletionByIssue(ctx, workspaceID, graphID, issueID); err != nil {
+			return err
+		}
 		_, _ = s.ReconcileReady(ctx, workspaceID, graphID)
 		_ = s.RefreshDelivery(ctx, workspaceID, graphID)
 	}
@@ -180,6 +189,11 @@ func (s *Store) AddArtifact(ctx context.Context, in ArtifactInput) (ArtifactRevi
 		// recomputation; keep the producer itself eligible as their dependency.
 		_, _ = s.pool.Exec(ctx, `UPDATE work_graph_node SET validity_status='valid',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, producer)
 	}
+	if err = s.RefreshNodeCompletion(ctx, in.WorkspaceID, in.GraphID, in.ProducerNodeID); err != nil {
+		return ArtifactRevision{}, err
+	}
+	_, _ = s.ReconcileReady(ctx, in.WorkspaceID, in.GraphID)
+	_ = s.RefreshDelivery(ctx, in.WorkspaceID, in.GraphID)
 	return out, nil
 }
 
@@ -236,13 +250,62 @@ func (s *Store) AddVerification(ctx context.Context, in VerificationInput) (stri
 	if _, err = tx.Exec(ctx, `UPDATE work_graph_node SET review_status=$4,execution_status=$5,updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, verifier, review, execution); err != nil {
 		return "", err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE work_graph SET status='deliverable',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND status='active' AND NOT EXISTS(SELECT 1 FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND (execution_status NOT IN('succeeded','cancelled') OR validity_status<>'valid' OR (role='verifier' AND review_status<>'accepted')))`, w, g); err != nil {
-		return "", err
-	}
 	if err = tx.Commit(ctx); err != nil {
 		return "", err
 	}
+	if err = s.RefreshNodeCompletion(ctx, in.WorkspaceID, in.GraphID, in.VerifierNodeID); err != nil {
+		return "", err
+	}
+	_, _ = s.ReconcileReady(ctx, in.WorkspaceID, in.GraphID)
+	_ = s.RefreshDelivery(ctx, in.WorkspaceID, in.GraphID)
 	return id, nil
+}
+
+// RefreshNodeCompletion derives the only completion signal that may unlock
+// downstream nodes. Kernel-managed nodes require durable evidence; legacy
+// migrated graphs may retain issue_status authority until explicitly revised.
+func (s *Store) RefreshNodeCompletion(ctx context.Context, workspaceID, graphID, nodeID string) error {
+	w, err := uuid.Parse(workspaceID)
+	if err != nil {
+		return ErrInvalidGraph
+	}
+	g, err := uuid.Parse(graphID)
+	if err != nil {
+		return ErrInvalidGraph
+	}
+	n, err := uuid.Parse(nodeID)
+	if err != nil {
+		return ErrInvalidGraph
+	}
+	_, err = s.pool.Exec(ctx, `UPDATE work_graph_node n SET effective_completion=CASE
+		WHEN n.validity_status='invalidated' THEN 'revoked'
+		WHEN n.validity_status IN('stale','superseded') THEN 'stale'
+		WHEN n.completion_authority='issue_status' AND n.execution_status='succeeded' AND n.validity_status='valid' THEN 'satisfied'
+		WHEN n.completion_authority='kernel_evidence' AND n.role='verifier' AND n.execution_status='succeeded' AND n.validity_status='valid' AND n.review_status='accepted' THEN 'satisfied'
+		WHEN n.completion_authority='kernel_evidence' AND n.role<>'verifier' AND n.execution_status='succeeded' AND n.validity_status='valid' AND EXISTS(SELECT 1 FROM work_artifact_revision a WHERE a.workspace_id=n.workspace_id AND a.graph_id=n.graph_id AND a.producer_node_id=n.id AND a.validity_status='valid') THEN 'satisfied'
+		ELSE 'pending' END,updated_at=now()
+		WHERE n.workspace_id=$1 AND n.graph_id=$2 AND n.id=$3`, w, g, n)
+	return err
+}
+
+func (s *Store) RefreshNodeCompletionByIssue(ctx context.Context, workspaceID, graphID, issueID string) error {
+	w, err := uuid.Parse(workspaceID)
+	if err != nil {
+		return ErrInvalidGraph
+	}
+	g, err := uuid.Parse(graphID)
+	if err != nil {
+		return ErrInvalidGraph
+	}
+	i, err := uuid.Parse(issueID)
+	if err != nil {
+		return ErrInvalidGraph
+	}
+	var nodeID string
+	if err = s.pool.QueryRow(ctx, `SELECT id::text FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND issue_id=$3`, w, g, i).Scan(&nodeID); err != nil {
+		return err
+	}
+	return s.RefreshNodeCompletion(ctx, workspaceID, graphID, nodeID)
 }
 
 func (s *Store) RefreshDelivery(ctx context.Context, workspaceID, graphID string) error {
@@ -255,7 +318,7 @@ func (s *Store) RefreshDelivery(ctx context.Context, workspaceID, graphID string
 		return ErrInvalidGraph
 	}
 	var deliverable bool
-	err = s.pool.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND (execution_status NOT IN('succeeded','cancelled') OR validity_status<>'valid' OR (role='verifier' AND review_status<>'accepted')))`, w, g).Scan(&deliverable)
+	err = s.pool.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND effective_completion<>'satisfied')`, w, g).Scan(&deliverable)
 	if err != nil {
 		return err
 	}

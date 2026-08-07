@@ -48,6 +48,10 @@ func (h *Handler) GetAgentWorkGraph(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "work graph unavailable")
 		return
 	}
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, chi.URLParam(r, "graphId"), p.AgentID, "", workgraph.AccessRead); err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
 	graph, err := h.WorkGraph.Get(r.Context(), p.WorkspaceID, chi.URLParam(r, "graphId"))
 	if err != nil {
 		writeWorkGraphError(w, err)
@@ -59,6 +63,10 @@ func (h *Handler) GetAgentWorkGraph(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ReconcileAgentWorkGraph(w http.ResponseWriter, r *http.Request) {
 	p, ok := h.requireAgentPrincipal(w, r)
 	if !ok {
+		return
+	}
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, chi.URLParam(r, "graphId"), p.AgentID, "", workgraph.AccessCoordinate); err != nil {
+		writeWorkGraphError(w, err)
 		return
 	}
 	ids, err := h.WorkGraph.ReconcileReady(r.Context(), p.WorkspaceID, chi.URLParam(r, "graphId"))
@@ -73,6 +81,10 @@ func (h *Handler) ReconcileAgentWorkGraph(w http.ResponseWriter, r *http.Request
 func (h *Handler) InvalidateAgentWorkGraphNode(w http.ResponseWriter, r *http.Request) {
 	p, ok := h.requireAgentPrincipal(w, r)
 	if !ok {
+		return
+	}
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, chi.URLParam(r, "graphId"), p.AgentID, "", workgraph.AccessCoordinate); err != nil {
+		writeWorkGraphError(w, err)
 		return
 	}
 	var body struct {
@@ -104,6 +116,14 @@ func (h *Handler) UpdateAgentWorkGraphNode(w http.ResponseWriter, r *http.Reques
 	in.WorkspaceID = p.WorkspaceID
 	in.GraphID = chi.URLParam(r, "graphId")
 	in.NodeID = chi.URLParam(r, "nodeId")
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, in.GraphID, p.AgentID, in.NodeID, workgraph.AccessExecute); err != nil {
+		// Coordinators may repair state, but ordinary participants may mutate
+		// only the worker node assigned to them.
+		if coordinatorErr := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, in.GraphID, p.AgentID, "", workgraph.AccessCoordinate); coordinatorErr != nil {
+			writeWorkGraphError(w, err)
+			return
+		}
+	}
 	out, err := h.WorkGraph.UpdateNode(r.Context(), in)
 	if err != nil {
 		writeWorkGraphError(w, err)
@@ -125,6 +145,10 @@ func (h *Handler) AddAgentWorkGraphArtifact(w http.ResponseWriter, r *http.Reque
 	}
 	in.WorkspaceID = p.WorkspaceID
 	in.GraphID = chi.URLParam(r, "graphId")
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, in.GraphID, p.AgentID, in.ProducerNodeID, workgraph.AccessExecute); err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
 	out, err := h.WorkGraph.AddArtifact(r.Context(), in)
 	if err != nil {
 		writeWorkGraphError(w, err)
@@ -146,6 +170,10 @@ func (h *Handler) AddAgentWorkGraphVerification(w http.ResponseWriter, r *http.R
 	}
 	in.WorkspaceID = p.WorkspaceID
 	in.GraphID = chi.URLParam(r, "graphId")
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, in.GraphID, p.AgentID, in.VerifierNodeID, workgraph.AccessVerify); err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
 	id, err := h.WorkGraph.AddVerification(r.Context(), in)
 	if err != nil {
 		writeWorkGraphError(w, err)
@@ -169,12 +197,82 @@ func (h *Handler) ReviseAgentWorkGraph(w http.ResponseWriter, r *http.Request) {
 	in.GraphID = chi.URLParam(r, "graphId")
 	in.ActorType = "agent"
 	in.ActorID = p.AgentID
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, in.GraphID, p.AgentID, "", workgraph.AccessCoordinate); err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
 	out, err := h.WorkGraph.Revise(r.Context(), in)
 	if err != nil {
 		writeWorkGraphError(w, err)
 		return
 	}
 	h.publishAgentWorkGraphUpdated(r, p.WorkspaceID, p.AgentID, in.GraphID)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) ListAgentWorkGraphEpochs(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.requireAgentPrincipal(w, r)
+	if !ok {
+		return
+	}
+	graphID := chi.URLParam(r, "graphId")
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, graphID, p.AgentID, "", workgraph.AccessRead); err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
+	epochs, err := h.WorkGraph.ListEpochs(r.Context(), p.WorkspaceID, graphID)
+	if err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"epochs": epochs})
+}
+
+func (h *Handler) StartAgentWorkGraphEpoch(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.requireAgentPrincipal(w, r)
+	if !ok {
+		return
+	}
+	graphID := chi.URLParam(r, "graphId")
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, graphID, p.AgentID, "", workgraph.AccessCoordinate); err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
+	var in workgraph.StartEpochInput
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	in.WorkspaceID, in.GraphID, in.ActorAgentID = p.WorkspaceID, graphID, p.AgentID
+	out, err := h.WorkGraph.StartEpoch(r.Context(), in)
+	if err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (h *Handler) FinishAgentWorkGraphEpoch(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.requireAgentPrincipal(w, r)
+	if !ok {
+		return
+	}
+	graphID := chi.URLParam(r, "graphId")
+	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, graphID, p.AgentID, "", workgraph.AccessCoordinate); err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
+	var in workgraph.FinishEpochInput
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	in.WorkspaceID, in.GraphID, in.EpochID, in.ActorAgentID = p.WorkspaceID, graphID, chi.URLParam(r, "epochId"), p.AgentID
+	out, err := h.WorkGraph.FinishEpoch(r.Context(), in)
+	if err != nil {
+		writeWorkGraphError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -196,6 +294,8 @@ func (h *Handler) GetWorkGraph(w http.ResponseWriter, r *http.Request) {
 
 func writeWorkGraphError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, workgraph.ErrGraphForbidden):
+		writeError(w, http.StatusForbidden, "work graph access denied")
 	case errors.Is(err, workgraph.ErrInvalidGraph):
 		writeError(w, http.StatusBadRequest, "invalid work graph")
 	case errors.Is(err, workgraph.ErrGraphConflict), errors.Is(err, workgraph.ErrIdempotencyConflict):

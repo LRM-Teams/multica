@@ -20,9 +20,15 @@ var issueGraphInvalidateCmd = &cobra.Command{Use: "invalidate <graph-id> <node-i
 var issueGraphReviseCmd = &cobra.Command{Use: "revise <graph-id>", Short: "Create a new graph revision from a JSON plan", Args: exactArgs(1), RunE: runIssueGraphRevise}
 var issueGraphArtifactCmd = &cobra.Command{Use: "artifact <graph-id>", Short: "Register an immutable artifact revision from JSON", Args: exactArgs(1), RunE: runIssueGraphArtifact}
 var issueGraphVerificationCmd = &cobra.Command{Use: "verification <graph-id>", Short: "Submit PASS, FAIL, or BLOCKED verification JSON", Args: exactArgs(1), RunE: runIssueGraphVerification}
+var issueGraphEpochCmd = &cobra.Command{Use: "epoch", Short: "Operate bounded epochs for a continuous Goal"}
+var issueGraphEpochListCmd = &cobra.Command{Use: "list <graph-id>", Short: "List Goal execution epochs", Args: exactArgs(1), RunE: runIssueGraphEpochList}
+var issueGraphEpochStartCmd = &cobra.Command{Use: "start <graph-id>", Short: "Start the next bounded epoch", Args: exactArgs(1), RunE: runIssueGraphEpochStart}
+var issueGraphEpochFinishCmd = &cobra.Command{Use: "finish <graph-id> <epoch-id>", Short: "Evaluate an epoch and record its next decision", Args: exactArgs(2), RunE: runIssueGraphEpochFinish}
 
 func init() {
 	issueGraphCmd.AddCommand(issueGraphCreateCmd, issueGraphGetCmd, issueGraphReconcileCmd, issueGraphInvalidateCmd, issueGraphReviseCmd, issueGraphArtifactCmd, issueGraphVerificationCmd)
+	issueGraphCmd.AddCommand(issueGraphEpochCmd)
+	issueGraphEpochCmd.AddCommand(issueGraphEpochListCmd, issueGraphEpochStartCmd, issueGraphEpochFinishCmd)
 	issueCmd.AddCommand(issueGraphCmd)
 	issueGraphCreateCmd.Flags().String("plan-file", "", "JSON graph plan file")
 	issueGraphCreateCmd.Flags().String("idempotency-key", "", "Stable UUID for safe retry")
@@ -30,7 +36,7 @@ func init() {
 	_ = issueGraphCreateCmd.MarkFlagRequired("idempotency-key")
 	issueGraphInvalidateCmd.Flags().String("reason", "", "Reason for invalidation")
 	_ = issueGraphInvalidateCmd.MarkFlagRequired("reason")
-	for _, command := range []*cobra.Command{issueGraphReviseCmd, issueGraphArtifactCmd, issueGraphVerificationCmd} {
+	for _, command := range []*cobra.Command{issueGraphReviseCmd, issueGraphArtifactCmd, issueGraphVerificationCmd, issueGraphEpochStartCmd, issueGraphEpochFinishCmd} {
 		command.Flags().String("input-file", "", "JSON request file")
 		_ = command.MarkFlagRequired("input-file")
 	}
@@ -72,6 +78,24 @@ func runIssueGraphArtifact(cmd *cobra.Command, args []string) error {
 }
 func runIssueGraphVerification(cmd *cobra.Command, args []string) error {
 	return postGraphInput(cmd, "/api/agent/work-graphs/"+url.PathEscape(args[0])+"/verifications")
+}
+func runIssueGraphEpochList(cmd *cobra.Command, args []string) error {
+	c, ctx, cancel, err := graphClient(cmd)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	var out any
+	if err = c.GetJSON(ctx, "/api/agent/work-graphs/"+url.PathEscape(args[0])+"/epochs", &out); err != nil {
+		return err
+	}
+	return printGoalResponse(out)
+}
+func runIssueGraphEpochStart(cmd *cobra.Command, args []string) error {
+	return postGraphInput(cmd, "/api/agent/work-graphs/"+url.PathEscape(args[0])+"/epochs")
+}
+func runIssueGraphEpochFinish(cmd *cobra.Command, args []string) error {
+	return postGraphInput(cmd, "/api/agent/work-graphs/"+url.PathEscape(args[0])+"/epochs/"+url.PathEscape(args[1])+"/finish")
 }
 
 func graphClient(cmd *cobra.Command) (*cli.APIClient, context.Context, context.CancelFunc, error) {

@@ -53,6 +53,21 @@ func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task d
 		slog.Warn("load issue for Wendy task completion hook failed", "task_id", task.ID.String(), "issue_id", task.IssueID.String(), "error", err)
 		return
 	}
+	// A successful ordinary child task becomes reviewable. This is the light
+	// Issue-DAG completion boundary used by platform-level subagents. Managed
+	// Goal nodes are explicitly excluded inside UnlockIssueDependents.
+	if issue.Status != "done" && issue.Status != "cancelled" {
+		if updated, updateErr := h.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+			ID: issue.ID, WorkspaceID: issue.WorkspaceID, Status: "in_review",
+		}); updateErr == nil {
+			issue = updated
+		}
+	}
+	if ready, unlockErr := h.WorkGraph.UnlockIssueDependents(ctx, uuidToString(issue.WorkspaceID), uuidToString(issue.ID)); unlockErr != nil {
+		slog.Warn("unlock ordinary issue dependents failed", "issue_id", issue.ID.String(), "error", unlockErr)
+	} else {
+		h.WorkGraph.DispatchReadyIssues(ctx, uuidToString(issue.WorkspaceID), ready)
+	}
 	if err := h.WorkGraph.TouchIssueProgress(ctx, issue.WorkspaceID, issue.ID); err != nil {
 		slog.Warn("touch Wendy issue progress failed", "task_id", task.ID.String(), "issue_id", issue.ID.String(), "error", err)
 	}

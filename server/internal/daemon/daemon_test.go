@@ -2292,18 +2292,18 @@ func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 	}
 }
 
-func TestAcquireAgentWakeSlotSerializesSameAgentAndAllowsDifferentAgents(t *testing.T) {
+func TestAcquireAgentWakeSlotSerializesSameLaneAndAllowsDifferentLanes(t *testing.T) {
 	t.Parallel()
 
 	d := &Daemon{}
-	firstRelease, err := d.acquireAgentWakeSlot(context.Background(), "agent-a")
+	firstRelease, err := d.acquireAgentWakeSlot(context.Background(), "agent-a:conversation")
 	if err != nil {
 		t.Fatalf("acquire first agent-a slot: %v", err)
 	}
 
 	secondAcquired := make(chan func(), 1)
 	go func() {
-		release, acquireErr := d.acquireAgentWakeSlot(context.Background(), "agent-a")
+		release, acquireErr := d.acquireAgentWakeSlot(context.Background(), "agent-a:conversation")
 		if acquireErr == nil {
 			secondAcquired <- release
 		}
@@ -2315,7 +2315,7 @@ func TestAcquireAgentWakeSlotSerializesSameAgentAndAllowsDifferentAgents(t *test
 	case <-time.After(30 * time.Millisecond):
 	}
 
-	differentRelease, err := d.acquireAgentWakeSlot(context.Background(), "agent-b")
+	differentRelease, err := d.acquireAgentWakeSlot(context.Background(), "agent-b:conversation")
 	if err != nil {
 		t.Fatalf("different agent should acquire concurrently: %v", err)
 	}
@@ -2327,6 +2327,39 @@ func TestAcquireAgentWakeSlotSerializesSameAgentAndAllowsDifferentAgents(t *test
 		release()
 	case <-time.After(time.Second):
 		t.Fatal("second same-agent execution did not acquire after release")
+	}
+}
+
+func TestTaskWakeSerializationKeyAllowsSameAgentDifferentIssues(t *testing.T) {
+	t.Parallel()
+
+	a := Task{AgentID: "agent-a", IssueID: "issue-a"}
+	b := Task{AgentID: "agent-a", IssueID: "issue-b"}
+	if taskWakeSerializationKey(a) == taskWakeSerializationKey(b) {
+		t.Fatal("different Issues for one Agent must use independent execution lanes")
+	}
+	if got := taskWakeSerializationKey(Task{AgentID: "agent-a", IssueID: "issue-a"}); got != taskWakeSerializationKey(a) {
+		t.Fatal("follow-ups on the same Issue must remain serialized")
+	}
+	chat := taskWakeSerializationKey(Task{AgentID: "agent-a", ChatSessionID: "chat-a"})
+	channel := taskWakeSerializationKey(Task{AgentID: "agent-a", ChannelID: "channel-a"})
+	if chat != channel {
+		t.Fatal("message wakes for one Agent must share the conversational lane")
+	}
+}
+
+func TestTaskExecutionRootIsolatesIssuesAndReusesIssueLane(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent")
+	a := Task{IssueID: "11111111-1111-1111-1111-111111111111"}
+	b := Task{IssueID: "22222222-2222-2222-2222-222222222222"}
+	if taskExecutionRoot(root, a) == taskExecutionRoot(root, b) {
+		t.Fatal("different issues must not share an execution root")
+	}
+	if taskExecutionRoot(root, a) != taskExecutionRoot(root, a) {
+		t.Fatal("the same issue must reuse its execution root")
+	}
+	if got := taskExecutionRoot(root, Task{}); got != root {
+		t.Fatalf("non-issue task root = %q, want durable root %q", got, root)
 	}
 }
 

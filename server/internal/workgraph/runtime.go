@@ -6,17 +6,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var (
 	ErrInvalidGraph        = errors.New("invalid work graph")
 	ErrGraphConflict       = errors.New("work graph version conflict")
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different request")
+	ErrGraphForbidden      = errors.New("work graph access denied")
 )
 
 const (
@@ -40,10 +43,15 @@ func normalizeCreate(in CreateInput) (CreateInput, error) {
 	if in.Reason == "" || len(in.Nodes) < 2 || len(in.Nodes) > defaultMaxNodes {
 		return in, ErrInvalidGraph
 	}
-	if in.AnchorKind != AnchorChannelGoal && in.AnchorKind != AnchorIssue && in.AnchorKind != AnchorResearchRun {
+	// Goal Gate: executable graphs are internal plans of an explicitly active
+	// Goal. Ordinary Issues and standalone Research Runs stay on their light
+	// paths and cannot create a second control plane.
+	if in.AnchorKind != AnchorChannelGoal {
 		return in, ErrInvalidGraph
 	}
-	if in.Admission != AdmissionGraph && in.Admission != AdmissionProposeGraph {
+	// PROPOSE_GRAPH is a conversation state, not an executable graph. The
+	// caller may create a graph only after approval, represented by GRAPH.
+	if in.Admission != AdmissionGraph {
 		return in, ErrInvalidGraph
 	}
 	if in.ActorType != "member" && in.ActorType != "agent" {
@@ -187,8 +195,12 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 		return CreateResult{}, err
 	}
 
-	if err := validateAnchor(ctx, tx, workspaceID, in.AnchorKind, anchorID); err != nil {
+	if err := validateAnchor(ctx, tx, workspaceID, in.AnchorKind, anchorID, in.ActorType, actorID); err != nil {
 		return CreateResult{}, err
+	}
+	var anchorChannelID, anchorProjectID pgtype.UUID
+	if err = tx.QueryRow(ctx, `SELECT goal.channel_id,channel.project_id FROM channel_goal goal JOIN channel ON channel.id=goal.channel_id WHERE goal.workspace_id=$1 AND goal.id=$2`, workspaceID, anchorID).Scan(&anchorChannelID, &anchorProjectID); err != nil {
+		return CreateResult{}, ErrInvalidGraph
 	}
 	issueIDs := make([]uuid.UUID, 0, len(in.Nodes))
 	issueIDMap := make(map[string]string, len(in.Nodes))
@@ -224,9 +236,14 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 			parent = anchorID
 		}
 		var id uuid.UUID
-		err = tx.QueryRow(ctx, `INSERT INTO issue(workspace_id,title,description,status,priority,assignee_type,assignee_id,creator_type,creator_id,parent_issue_id,acceptance_criteria,position,number) VALUES($1,$2,$3,'backlog','none','agent',$4,$5,$6,$7,$8,COALESCE((SELECT min(position)-1 FROM issue WHERE workspace_id=$1 AND status='backlog'),0),$9) RETURNING id`, workspaceID, n.Title, n.Description, agentID, in.ActorType, actorID, parent, criteria, number).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO issue(workspace_id,title,description,status,priority,assignee_type,assignee_id,creator_type,creator_id,parent_issue_id,project_id,acceptance_criteria,position,number) VALUES($1,$2,$3,'backlog','none','agent',$4,$5,$6,$7,$8,$9,COALESCE((SELECT min(position)-1 FROM issue WHERE workspace_id=$1 AND status='backlog'),0),$10) RETURNING id`, workspaceID, n.Title, n.Description, agentID, in.ActorType, actorID, parent, anchorProjectID, criteria, number).Scan(&id)
 		if err != nil {
 			return CreateResult{}, err
+		}
+		if anchorChannelID.Valid {
+			if _, err = tx.Exec(ctx, `INSERT INTO issue_source_message(issue_id,workspace_id,channel_id,message_id) VALUES($1,$2,$3,NULL)`, id, workspaceID, anchorChannelID); err != nil {
+				return CreateResult{}, err
+			}
 		}
 		issueIDs = append(issueIDs, id)
 		issueIDMap[n.TempID] = id.String()
@@ -262,6 +279,12 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 			}
 		}
 	}
+	for _, n := range in.Nodes {
+		content := fmt.Sprintf("Goal-managed node\n\n- graph_id: `%s`\n- node_id: `%s`\n- goal_id: `%s`\n- objective: %s\n- completion: submit at least one durable artifact; verifier nodes must also submit PASS evidence.\n- artifact command: `multica issue graph artifact %s --input-file <json>`", graphID, nodeUUIDs[n.TempID], anchorID, n.Objective, graphID)
+		if _, err = tx.Exec(ctx, `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'system',$3,$4,'system')`, issueIDs[indexNode(in.Nodes, n.TempID)], workspaceID, uuid.Nil, content); err != nil {
+			return CreateResult{}, err
+		}
+	}
 	topology := topologyDigest(in.Nodes)
 	if _, err = tx.Exec(ctx, `INSERT INTO work_graph_revision (graph_id,version,reason,author_type,author_id,topology_digest) VALUES ($1,1,$2,$3,$4,$5)`, graphID, in.Reason, in.ActorType, actorID, topology); err != nil {
 		return CreateResult{}, err
@@ -293,18 +316,30 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 	return created, nil
 }
 
-func validateAnchor(ctx context.Context, tx pgx.Tx, workspaceID uuid.UUID, kind AnchorKind, anchorID uuid.UUID) error {
+func validateAnchor(ctx context.Context, tx pgx.Tx, workspaceID uuid.UUID, kind AnchorKind, anchorID uuid.UUID, actorType string, actorID uuid.UUID) error {
 	var ok bool
-	var query string
-	switch kind {
-	case AnchorChannelGoal:
-		query = `SELECT EXISTS(SELECT 1 FROM channel_goal WHERE workspace_id=$1 AND id=$2 AND status IN ('active','paused'))`
-	case AnchorIssue:
-		query = `SELECT EXISTS(SELECT 1 FROM issue WHERE workspace_id=$1 AND id=$2)`
-	case AnchorResearchRun:
-		query = `SELECT EXISTS(SELECT 1 FROM research_session WHERE workspace_id=$1 AND id=$2)`
+	if kind != AnchorChannelGoal || actorType != "agent" {
+		return ErrInvalidGraph
 	}
-	if err := tx.QueryRow(ctx, query, workspaceID, anchorID).Scan(&ok); err != nil || !ok {
+	// The Goal creator or a channel manager may coordinate its executable
+	// plan. Plain channel membership is intentionally insufficient.
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM channel_goal goal
+			LEFT JOIN channel_member participant
+			  ON participant.channel_id=goal.channel_id
+			 AND participant.workspace_id=goal.workspace_id
+			 AND participant.member_type='agent'
+			 AND participant.member_id=$3
+			WHERE goal.workspace_id=$1
+			  AND goal.id=$2
+			  AND goal.status='active'
+			  AND ((goal.created_by_type='agent' AND goal.created_by_id=$3)
+			       OR participant.role='manager')
+		)
+	`, workspaceID, anchorID, actorID).Scan(&ok)
+	if err != nil || !ok {
 		return ErrInvalidGraph
 	}
 	return nil
@@ -326,6 +361,15 @@ func dependencyDepth(nodes []NodeSpec, target string) int {
 		return max
 	}
 	return depth(target)
+}
+
+func indexNode(nodes []NodeSpec, tempID string) int {
+	for i := range nodes {
+		if nodes[i].TempID == tempID {
+			return i
+		}
+	}
+	return 0
 }
 
 func topologyDigest(nodes []NodeSpec) string {
@@ -365,14 +409,14 @@ func loadGraphTx(ctx context.Context, q rowQuerier, workspaceID, graphID uuid.UU
 	g.BudgetPolicy = budget
 	g.Nodes = []Node{}
 	g.Edges = []Edge{}
-	rows, err := q.Query(ctx, `SELECT id::text,issue_id::text,role,context_policy,execution_status,validity_status,review_status,objective,completion_contract,budget,based_on_graph_version,created_at FROM work_graph_node WHERE graph_id=$1 ORDER BY created_at,id`, graphID)
+	rows, err := q.Query(ctx, `SELECT id::text,issue_id::text,role,context_policy,execution_status,validity_status,review_status,completion_authority,effective_completion,objective,completion_contract,budget,based_on_graph_version,created_at FROM work_graph_node WHERE graph_id=$1 ORDER BY created_at,id`, graphID)
 	if err != nil {
 		return g, err
 	}
 	for rows.Next() {
 		var n Node
 		var completion, b []byte
-		if err = rows.Scan(&n.ID, &n.IssueID, &n.Role, &n.ContextPolicy, &n.ExecutionStatus, &n.ValidityStatus, &n.ReviewStatus, &n.Objective, &completion, &b, &n.BasedOnVersion, &n.CreatedAt); err != nil {
+		if err = rows.Scan(&n.ID, &n.IssueID, &n.Role, &n.ContextPolicy, &n.ExecutionStatus, &n.ValidityStatus, &n.ReviewStatus, &n.CompletionAuthority, &n.EffectiveCompletion, &n.Objective, &completion, &b, &n.BasedOnVersion, &n.CreatedAt); err != nil {
 			rows.Close()
 			return g, err
 		}
@@ -409,7 +453,7 @@ func (s *Store) ReconcileReady(ctx context.Context, workspaceID, graphID string)
 	if err != nil {
 		return nil, ErrInvalidGraph
 	}
-	rows, err := s.pool.Query(ctx, `UPDATE work_graph_node n SET execution_status='ready',updated_at=now() WHERE n.workspace_id=$1 AND n.graph_id=$2 AND n.execution_status IN ('queued','waiting') AND n.validity_status='valid' AND EXISTS (SELECT 1 FROM work_graph graph WHERE graph.id=$2 AND graph.workspace_id=$1 AND graph.status='active' AND n.based_on_graph_version=graph.current_version) AND NOT EXISTS (SELECT 1 FROM work_graph_edge e JOIN work_graph_node upstream ON upstream.id=e.from_node_id WHERE e.graph_id=n.graph_id AND e.to_node_id=n.id AND e.edge_type='depends_on' AND e.required AND e.retired_version IS NULL AND (upstream.execution_status<>'succeeded' OR upstream.validity_status<>'valid')) RETURNING n.id::text`, w, g)
+	rows, err := s.pool.Query(ctx, `UPDATE work_graph_node n SET execution_status='ready',updated_at=now() WHERE n.workspace_id=$1 AND n.graph_id=$2 AND n.execution_status IN ('queued','waiting') AND n.validity_status='valid' AND EXISTS (SELECT 1 FROM work_graph graph WHERE graph.id=$2 AND graph.workspace_id=$1 AND graph.status='active' AND n.based_on_graph_version=graph.current_version) AND NOT EXISTS (SELECT 1 FROM work_graph_edge e JOIN work_graph_node upstream ON upstream.id=e.from_node_id WHERE e.graph_id=n.graph_id AND e.to_node_id=n.id AND e.edge_type='depends_on' AND e.required AND e.retired_version IS NULL AND upstream.effective_completion<>'satisfied') RETURNING n.id::text`, w, g)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +501,7 @@ func (s *Store) InvalidateFrom(ctx context.Context, workspaceID, graphID, nodeID
 	if err != nil {
 		return nil, ErrInvalidGraph
 	}
-	rows, err := s.pool.Query(ctx, `WITH RECURSIVE affected(id) AS (SELECT id FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND id=$3 UNION SELECT e.to_node_id FROM work_graph_edge e JOIN affected a ON e.from_node_id=a.id WHERE e.workspace_id=$1 AND e.graph_id=$2 AND e.retired_version IS NULL AND e.edge_type IN ('depends_on','synthesizes','verifies','replicates')) UPDATE work_graph_node n SET validity_status=CASE WHEN n.id=$3 THEN 'invalidated' ELSE 'stale' END,updated_at=now() FROM affected a WHERE n.id=a.id AND n.workspace_id=$1 AND n.graph_id=$2 RETURNING n.id::text`, w, g, n)
+	rows, err := s.pool.Query(ctx, `WITH RECURSIVE affected(id) AS (SELECT id FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND id=$3 UNION SELECT e.to_node_id FROM work_graph_edge e JOIN affected a ON e.from_node_id=a.id WHERE e.workspace_id=$1 AND e.graph_id=$2 AND e.retired_version IS NULL AND e.edge_type IN ('depends_on','synthesizes','verifies','replicates')) UPDATE work_graph_node n SET validity_status=CASE WHEN n.id=$3 THEN 'invalidated' ELSE 'stale' END,effective_completion=CASE WHEN n.id=$3 THEN 'revoked' ELSE 'stale' END,updated_at=now() FROM affected a WHERE n.id=a.id AND n.workspace_id=$1 AND n.graph_id=$2 RETURNING n.id::text`, w, g, n)
 	if err != nil {
 		return nil, err
 	}

@@ -21,6 +21,8 @@ export interface ChannelGoalWorkGraphSummary {
 export interface WorkGraphNode {
   id: string; issue_id: string; role: string; context_policy: string;
   execution_status: string; validity_status: string; review_status: string;
+  completion_authority: "issue_status" | "kernel_evidence";
+  effective_completion: "pending" | "satisfied" | "stale" | "revoked";
   objective: string; completion_contract: string[]; based_on_graph_version: number;
 }
 export interface WorkGraphEdge { id: string; from_node_id: string; to_node_id: string; edge_type: string; required: boolean; }

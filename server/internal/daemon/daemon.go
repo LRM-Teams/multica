@@ -2710,24 +2710,25 @@ func (d *Daemon) nextTaskSlot() int {
 	return int(d.taskSlotCounter.Add(1))
 }
 
-// acquireAgentWakeSlot serializes every wake execution for one agent inside
-// this daemon. The returned release function is idempotent. Different agents
-// use different slots and remain fully concurrent.
-func (d *Daemon) acquireAgentWakeSlot(ctx context.Context, agentID string) (func(), error) {
-	agentID = strings.TrimSpace(agentID)
-	if agentID == "" {
-		return nil, errors.New("agent wake execution requires agent_id")
+// acquireAgentWakeSlot serializes executions that share mutable conversation
+// state. The key is agent-scoped for chat/channel wakes and
+// (agent, issue)-scoped for Issue work, so independent Issues can run as
+// platform-level subagents while follow-ups on the same Issue remain ordered.
+func (d *Daemon) acquireAgentWakeSlot(ctx context.Context, serializationKey string) (func(), error) {
+	serializationKey = strings.TrimSpace(serializationKey)
+	if serializationKey == "" {
+		return nil, errors.New("agent wake execution requires a serialization key")
 	}
 
 	d.agentWakeSlotsMu.Lock()
 	if d.agentWakeSlots == nil {
 		d.agentWakeSlots = make(map[string]chan struct{})
 	}
-	slot := d.agentWakeSlots[agentID]
+	slot := d.agentWakeSlots[serializationKey]
 	if slot == nil {
 		slot = make(chan struct{}, 1)
 		slot <- struct{}{}
-		d.agentWakeSlots[agentID] = slot
+		d.agentWakeSlots[serializationKey] = slot
 	}
 	d.agentWakeSlotsMu.Unlock()
 
@@ -2741,6 +2742,40 @@ func (d *Daemon) acquireAgentWakeSlot(ctx context.Context, agentID string) (func
 	return func() {
 		once.Do(func() { slot <- struct{}{} })
 	}, nil
+}
+
+func taskWakeSerializationKey(task Task) string {
+	agentID := strings.TrimSpace(task.AgentID)
+	if agentID == "" {
+		return ""
+	}
+	if issueID := strings.TrimSpace(task.IssueID); issueID != "" {
+		return agentID + ":issue:" + issueID
+	}
+	// Chat, DM, channel, onboarding and other message wakes share the Agent's
+	// conversational lane. They must not race the same durable conversation.
+	return agentID + ":conversation"
+}
+
+// taskExecutionRoot isolates mutable provider configuration and cwd files for
+// Issue lanes while preserving the AgentRoot as the durable identity/memory
+// store. The same Issue reuses one root (and is serialized above); different
+// Issues owned by the same Agent can therefore run concurrently without
+// replacing each other's AGENTS.md, .agent_context, CODEX_HOME or sidecars.
+func taskExecutionRoot(agentRoot string, task Task) string {
+	issueID := strings.TrimSpace(task.IssueID)
+	if agentRoot == "" || issueID == "" {
+		return agentRoot
+	}
+	lane := issueID
+	if parsed, err := uuid.Parse(issueID); err == nil {
+		lane = parsed.String()
+	} else {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(issueID))
+		lane = fmt.Sprintf("%x", h.Sum64())
+	}
+	return filepath.Join(agentRoot, ".multica", "issue-runs", lane)
 }
 
 func isAgentTaskTerminal(status string) bool {
@@ -2849,8 +2884,8 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 
 	// Server admission is the source-of-truth serialization gate, but a stale
 	// local executor may still be unwinding after server ownership has ended.
-	// Every wake therefore acquires the same daemon-side per-agent slot before
-	// touching current-turn state, provider sessions, or filesystems. Inbox
+	// Every wake therefore acquires its daemon-side conversation/Issue lane
+	// before touching current-turn state or provider sessions. Inbox
 	// wakes additionally renew their server lease while waiting and cancel
 	// immediately on permanent lease loss.
 	var inboxLeaseLost <-chan struct{}
@@ -2875,7 +2910,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		}()
 	}
 	if strings.TrimSpace(task.AgentID) != "" {
-		releaseWakeSlot, err := d.acquireAgentWakeSlot(executionCtx, task.AgentID)
+		releaseWakeSlot, err := d.acquireAgentWakeSlot(executionCtx, taskWakeSerializationKey(task))
 		if err != nil {
 			if task.isInboxTask() {
 				select {
@@ -3437,8 +3472,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, fmt.Errorf("provision agent workspace: %w", err)
 	}
 
-	// Every turn for an agent runs in one durable cwd. Per-Agent workspaces and
-	// project-local cwd overrides are intentionally not part of this path.
+	// Identity and memory remain in the durable AgentRoot. Mutable provider
+	// bootstrap files live in an Issue-scoped execution root so different
+	// Issues assigned to one Agent can safely execute in parallel.
+	executionRoot := taskExecutionRoot(workspace.AgentRoot, task)
+	if err := os.MkdirAll(executionRoot, 0o755); err != nil {
+		return TaskResult{}, fmt.Errorf("create task execution root: %w", err)
+	}
 	codexVersion := d.agentVersion("codex")
 	openclawBin := ""
 	if provider == "openclaw" {
@@ -3449,7 +3489,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentMcpConfig = task.Agent.McpConfig
 	}
 	env := execenv.Reuse(execenv.ReuseParams{
-		AgentRoot:    workspace.AgentRoot,
+		AgentRoot:    executionRoot,
 		Provider:     provider,
 		CodexVersion: codexVersion,
 		OpenclawBin:  openclawBin,

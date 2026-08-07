@@ -496,8 +496,8 @@ export function ChannelGoalCard({
                   <div key={node.id} className="flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-xs">
                     <span className="min-w-0 flex-1 truncate">{node.objective || node.issue_id}</span>
                     <span className="text-muted-foreground">{node.role}</span>
-                    <Badge variant={node.validity_status === "valid" ? "secondary" : "destructive"} className="h-5 px-1.5 text-[10px]">
-                      {node.validity_status === "valid" ? node.execution_status : node.validity_status}
+                    <Badge variant={node.effective_completion === "satisfied" ? "secondary" : node.effective_completion === "pending" ? "outline" : "destructive"} className="h-5 px-1.5 text-[10px]">
+                      {node.effective_completion}
                     </Badge>
                   </div>
                 ))}

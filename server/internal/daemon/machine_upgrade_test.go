@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestHandleMachineUpgradeAcceptsOnlyExactRunningVersion(t *testing.T) {
@@ -114,6 +115,78 @@ func TestHandleMachineUpgradeDifferentVersionStartsWithServerAcceptance(t *testi
 	d.handleMachineUpgrade(context.Background(), "runtime-1", &PendingMachineUpgrade{ID: "upgrade-1", TargetVersion: "v10.0.0"})
 	if !called {
 		t.Fatal("different target was not accepted before the durable stage path")
+	}
+}
+
+func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale(t *testing.T) {
+	storeRoot := filepath.Join(t.TempDir(), "store")
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	previousOpen := openVersionStoreFn
+	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
+		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
+	}
+	t.Cleanup(func() { openVersionStoreFn = previousOpen })
+
+	previousStage := downloadAndStageReleaseFn
+	downloadAndStageReleaseFn = func(
+		ctx context.Context,
+		store *cli.VersionStore,
+		targetVersion string,
+		_ time.Duration,
+		_ string,
+	) (cli.StageReleaseResult, error) {
+		candidate := []byte("#!/bin/sh\necho 'multica 0.4.17'\n")
+		return cli.StageReleaseBytes(ctx, store, targetVersion, candidate, "asset.tar.gz")
+	}
+	t.Cleanup(func() { downloadAndStageReleaseFn = previousStage })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/accept") {
+			_ = json.NewEncoder(w).Encode(MachineUpgradeReceipt{
+				ID:                 "upgrade-1",
+				RequestedTarget:    "v0.4.17",
+				Phase:              "staging",
+				AcceptedGeneration: stringPtr("generation-a"),
+				AcceptedRuntimeIDs: []string{"runtime-1"},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
+	if err := observation.Transition(func(current *protocol.DaemonUpdateObservation) {
+		current.TargetVersion = "v0.4.13"
+	}); err != nil {
+		t.Fatalf("persist stale update observation: %v", err)
+	}
+
+	d := &Daemon{
+		cfg:               Config{CLIVersion: "v0.4.16"},
+		client:            NewClient(server.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
+	}
+	d.client.SetToken("test-token")
+	d.handleMachineUpgrade(context.Background(), "runtime-1", &PendingMachineUpgrade{
+		ID:            "upgrade-1",
+		TargetVersion: "v0.4.17",
+	})
+
+	store, err := openVersionStoreFn(storeRoot)
+	if err != nil {
+		t.Fatalf("open version store: %v", err)
+	}
+	state, err := store.ReadActivationState()
+	if err != nil {
+		t.Fatalf("read activation state: %v", err)
+	}
+	if state.ActiveVersion != "v0.4.17" {
+		t.Fatalf("active version = %q, want the accepted target v0.4.17", state.ActiveVersion)
 	}
 }
 

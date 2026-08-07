@@ -152,7 +152,7 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "journal_persist_failed", err)
 		return
 	}
-	path, err := d.commitStagedActivation(ctx, upgrade.ID, stagedOutput)
+	path, err := d.commitStagedActivation(ctx, upgrade.ID, targetVersion)
 	if err != nil {
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "activation_failed", err)
 		return

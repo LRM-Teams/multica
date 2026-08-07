@@ -93,15 +93,8 @@ func (d *Daemon) verifyStagedBinary(targetVersion, updateOutput string) (string,
 // prepare → candidate_running → real --version probe (+ attempt_id env) →
 // candidate_healthy → CAS → committed. Full health+register is still a follow-up;
 // we do not mark healthy without a successful candidate binary probe.
-func (d *Daemon) commitStagedActivation(ctx context.Context, updateID, updateOutput string) (string, error) {
-	target := ""
-	if d.updateObservation != nil {
-		target = strings.TrimSpace(d.updateObservation.Snapshot().TargetVersion)
-	}
-	if target == "" {
-		target = parseStagedVersionFromOutput(updateOutput)
-	}
-	if target == "" {
+func (d *Daemon) commitStagedActivation(ctx context.Context, updateID, targetVersion string) (string, error) {
+	if strings.TrimSpace(targetVersion) == "" {
 		return "", fmt.Errorf("cannot activate: empty target version")
 	}
 
@@ -117,20 +110,9 @@ func (d *Daemon) commitStagedActivation(ctx context.Context, updateID, updateOut
 	if attemptID == "" {
 		attemptID = uuid.NewString()
 	}
-	_, path, err := store.OfflineActivateStaged(ctx, target, attemptID)
+	_, path, err := store.OfflineActivateStaged(ctx, targetVersion, attemptID)
 	if err != nil {
 		return "", err
 	}
 	return path, nil
-}
-
-func parseStagedVersionFromOutput(output string) string {
-	// StageReleaseBytes message: "Staged v0.3.78 into version store at ..."
-	fields := strings.Fields(output)
-	for i, f := range fields {
-		if f == "Staged" && i+1 < len(fields) {
-			return fields[i+1]
-		}
-	}
-	return ""
 }

@@ -217,9 +217,9 @@ type Daemon struct {
 	// would re-exec and confirms it already reports targetVersion. Set to
 	// d.verifyUpdatedBinary by New() and overridable in tests.
 	verifyUpdatedBinaryFn func(targetVersion, updateOutput string) (string, error)
-	// activateStagedFn CAS-commits staged Active and returns re-exec path.
-	// Nil → commitStagedActivation. Tests may no-op with ("", nil).
-	activateStagedFn func(ctx context.Context, updateID, updateOutput string) (string, error)
+	// activateStagedFn CAS-commits the explicit staged target and returns its
+	// re-exec path. Nil → commitStagedActivation. Tests may no-op with ("", nil).
+	activateStagedFn func(ctx context.Context, updateID, targetVersion string) (string, error)
 	// Machine Upgrade handoff seams keep the bounded drain deterministic in
 	// tests. Production defaults are installed by the helper methods.
 	machineUpgradeNow  func() time.Time
@@ -1998,7 +1998,7 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 			return
 		}
 		d.logger.Info("CLI update ready; force activating staged release and restarting", "runtime_id", runtimeID, "update_id", update.ID, "active_tasks", d.activeTasks.Load(), "claims_in_flight", d.claimsInFlight)
-		restartTriggered = d.activateStagedAndRestart(restartCtx, runtimeID, update.ID, stagedOutput)
+		restartTriggered = d.activateStagedAndRestart(restartCtx, runtimeID, update.ID, update.TargetVersion, stagedOutput)
 		return
 	}
 
@@ -2026,7 +2026,7 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		"output": stagedOutput,
 	})
 	// #110: old-server idle path must activate staged Active before restart too.
-	restartTriggered = d.activateStagedAndRestart(ctx, runtimeID, update.ID, stagedOutput)
+	restartTriggered = d.activateStagedAndRestart(ctx, runtimeID, update.ID, update.TargetVersion, stagedOutput)
 }
 
 // runUpdate stages targetVersion into the immutable VersionStore. It does not
@@ -2042,14 +2042,14 @@ func (d *Daemon) runUpdate(targetVersion string) (string, error) {
 // must both call this — never triggerRestart alone after a staged update (#110).
 // Returns true if restart was scheduled; false if activation failed (path A
 // abandon, no restart).
-func (d *Daemon) activateStagedAndRestart(ctx context.Context, runtimeID, updateID, output string) bool {
+func (d *Daemon) activateStagedAndRestart(ctx context.Context, runtimeID, updateID, targetVersion, output string) bool {
 	// Thin activate: CAS staged tag to Active, then re-exec staged path.
 	// Full candidate health/register is a follow-up; path A already safe.
 	activate := d.activateStagedFn
 	if activate == nil {
 		activate = d.commitStagedActivation
 	}
-	if path, err := activate(ctx, updateID, output); err != nil {
+	if path, err := activate(ctx, updateID, targetVersion); err != nil {
 		d.logger.Error("CLI update activate CAS failed; path A abandon", "error", err, "runtime_id", runtimeID, "update_id", updateID)
 		d.abandonStagedUpdatePathA(ctx, runtimeID, updateID, output)
 		return false
@@ -2061,7 +2061,7 @@ func (d *Daemon) activateStagedAndRestart(ctx context.Context, runtimeID, update
 	return true
 }
 
-func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, output string) bool {
+func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, targetVersion, output string) bool {
 	interval := d.cfg.PollInterval
 	if interval <= 0 || interval > 15*time.Second {
 		interval = 5 * time.Second
@@ -2070,6 +2070,7 @@ func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, ou
 		ctx,
 		runtimeID,
 		updateID,
+		targetVersion,
 		output,
 		stagedUpdateOpportunisticIdleWindow,
 		interval,
@@ -2134,13 +2135,14 @@ func (d *Daemon) finishUpdateObservationWithoutRestart() {
 
 func (d *Daemon) waitForSafeRestartWithWindow(
 	ctx context.Context,
-	runtimeID, updateID, output string,
+	runtimeID, updateID, targetVersion, output string,
 	opportunisticWindow, interval time.Duration,
 ) bool {
 	return d.waitForSafeRestartWithWindows(
 		ctx,
 		runtimeID,
 		updateID,
+		targetVersion,
 		output,
 		opportunisticWindow,
 		stagedUpdateHardDrainExtra,
@@ -2152,7 +2154,7 @@ func (d *Daemon) waitForSafeRestartWithWindow(
 // T_hard−T_idle windows. At T_hard without drain → path A abandon (no restart).
 func (d *Daemon) waitForSafeRestartWithWindows(
 	ctx context.Context,
-	runtimeID, updateID, output string,
+	runtimeID, updateID, targetVersion, output string,
 	opportunisticWindow, hardExtra, interval time.Duration,
 ) bool {
 	if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, false) {
@@ -2182,7 +2184,7 @@ func (d *Daemon) waitForSafeRestartWithWindows(
 		if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, barrierHeld) {
 			return false
 		}
-		return d.activateStagedAndRestart(ctx, runtimeID, updateID, output)
+		return d.activateStagedAndRestart(ctx, runtimeID, updateID, targetVersion, output)
 	}
 
 	for {

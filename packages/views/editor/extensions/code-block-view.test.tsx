@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { CodeBlockToolbar, languageLabel } from "./code-block-view";
+import { INSERTABLE_CODE_BLOCK_LANGUAGES } from "../code-block-language";
 
 vi.mock("../../i18n", () => ({
   useT: () => ({
@@ -114,6 +115,33 @@ describe("CodeBlockToolbar", () => {
     expect(screen.queryByTestId("code-block-mermaid-view")).toBeNull();
     expect(screen.queryByTestId("code-block-mermaid-zoom")).toBeNull();
     expect(screen.queryByTestId("code-block-mermaid-download")).toBeNull();
+  });
+
+  it("lists every insertable language (incl. markdown & html) in the dropdown (LRM-1492)", () => {
+    const props = renderToolbar({ language: "markdown" });
+
+    // The first DropdownMenuContent is the language menu. The toolbar also
+    // renders a second ("more")  menu, so scope to the first [data-testid=menu].
+    const menu = within(screen.getAllByTestId("menu")[0]!);
+    // Expected labels mirror LANGUAGE_LABELS in code-block-view.tsx.
+    const expected = {
+      plaintext: "Plaintext",
+      markdown: "Markdown",
+      python: "Python",
+      javascript: "JavaScript",
+      html: "HTML",
+      mermaid: "Mermaid",
+    } as const;
+    for (const lang of INSERTABLE_CODE_BLOCK_LANGUAGES) {
+      const label = expected[lang];
+      // The active language is prefixed with a checkmark ("✓ ").
+      expect(menu.getByText(new RegExp(`^✓?\\s*${label}$`))).toBeInTheDocument();
+    }
+
+    // Selecting e.g. html must route through onLanguageChange, proving the
+    // html entry is a real, clickable option (so it can be switched back to).
+    fireEvent.click(menu.getByText(/^HTML$/));
+    expect(props.onLanguageChange).toHaveBeenCalledWith("html");
   });
 
   it("shows mermaid view / zoom / download controls for mermaid blocks", () => {

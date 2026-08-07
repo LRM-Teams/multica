@@ -14,9 +14,8 @@ import "fmt"
 // thread. The issue-wide `--since` catch-up is kept as an explicit
 // "only if you need it" fallback.
 //
-// Both the per-turn prompt (daemon.buildCommentPrompt) and the CLAUDE.md
-// workflow (InjectRuntimeConfig) call this so the two surfaces cannot drift
-// (hard requirement from PR #2816).
+// The per-turn prompt calls this directly so resumed sessions receive the
+// current cursor and thread anchor instead of stale process-scoped guidance.
 //
 // Renders nothing on cold start (no prior run → newCommentsSince empty) or when
 // there are no new comments (newCommentCount <= 0) or issueID is empty. In those
@@ -84,10 +83,9 @@ func BuildResumedCommentsHint(issueID, triggerCommentID, triggerThreadID string)
 // context the triggering comment actually needs. A `--recent 20` pointer is kept
 // for cross-thread background the agent can pull on judgment.
 //
-// Both surfaces call this so the cold fallback cannot drift between them (same
-// single-source rule as BuildNewCommentsHint, PR #2816). Returns "" when there
-// is no triggering comment to thread from, so the caller can keep a final plain
-// fallback.
+// The per-turn prompt calls this as the single source for the cold fallback.
+// Returns "" when there is no triggering comment to thread from, so the caller
+// can keep a final plain fallback.
 func BuildColdCommentsHint(issueID, triggerCommentID, triggerThreadID string) string {
 	threadID := activeThreadID(triggerThreadID, triggerCommentID)
 	if issueID == "" || threadID == "" {
@@ -110,10 +108,9 @@ func activeThreadID(triggerThreadID, triggerCommentID string) string {
 }
 
 // BuildCommentReplyInstructions returns the canonical block telling an agent
-// how to post its reply for a comment-triggered task. Both the per-turn
-// prompt (daemon.buildCommentPrompt) and the CLAUDE.md workflow
-// (InjectRuntimeConfig) call this so the trigger comment ID and the
-// --parent value cannot drift between surfaces.
+// how to post its reply for a comment-triggered task. The per-turn prompt calls
+// this so the trigger comment ID and --parent value are always fresh. The
+// process-scoped runtime file intentionally contains no turn identifiers.
 //
 // The explicit "do not reuse --parent from previous turns" wording exists
 // because resumed Claude sessions keep prior turns' tool calls in context

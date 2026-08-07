@@ -3590,13 +3590,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
 	runtimeBrief := restrictedExecutionSystemPrompt(profile)
 	if !restrictedExecution {
-		runtimeBrief, err = execenv.InjectRuntimeConfig(env.AgentRoot, provider, taskCtx)
+		runtimeBrief, err = execenv.InjectRuntimeKernel(env.AgentRoot, provider, taskCtx)
 		if err != nil {
 			d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", err)
 		}
 	}
 
-	prompt := BuildPrompt(task, provider, agentRootPath)
+	prompt := execenv.RenderTurnContext(taskCtx) + BuildPrompt(task, provider, agentRootPath)
 
 	// Pass the product-task execution context so the spawned agent CLI can
 	// call its task APIs. Message commands use the separate local Credential
@@ -3821,20 +3821,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	// Some providers do not reliably load the Agent-scoped runtime config files we
 	// write into the Agent workspace:
-	//   - openclaw is pinned to the Agent workspace via the Agent-scoped config we
-	//     synthesize (see prepareOpenclawConfig), so AGENTS.md / .agent_context/
-	//     in the workdir ARE picked up by the CLI. Inline injection is retained
-	//     as a belt-and-suspenders for older openclaw releases until that load
-	//     path stabilises in production; remove this once a release tracks the
-	//     workdir bootstrap reliably end-to-end.
 	//   - kiro and kimi are wrapped through their own CLIs whose cwd handling
 	//     is opaque enough that we can't trust the file-based path either.
-	// Pass the full runtime brief inline (CLI catalog + workflow steps + agent
-	// identity/persona + skills + project context) so the backend prepends the
-	// same payload that file-based runtimes pick up from disk. Without this,
-	// these providers silently miss the workflow section and never call
-	// `multica issue status` / `multica issue comment add`, leaving issues
-	// stuck in `todo`.
+	// OpenClaw is pinned to the Agent workspace by prepareOpenclawConfig and
+	// loads AGENTS.md there, so inlining the same kernel would duplicate it.
+	// Pass the compact runtime kernel inline only for providers whose file load
+	// path is still opaque. Turn-specific workflow remains in the user prompt.
 	//
 	// Hermes is intentionally excluded: ACP sessions start in the task cwd and
 	// Hermes loads AGENTS.md / .agent_context itself. Prepending the full runtime
@@ -3853,6 +3845,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"provider", provider,
 		"model", model,
 		"prompt_bytes", len(prompt),
+		"runtime_brief_bytes", len(runtimeBrief),
 		"custom_args", len(customArgs),
 		"extra_args", len(extraArgs),
 		"mcp_config", len(mcpConfig) > 0,

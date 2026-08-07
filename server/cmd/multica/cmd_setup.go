@@ -19,21 +19,10 @@ import (
 
 var setupCmd = &cobra.Command{
 	Use:   "setup [/workspace]",
-	Short: "Configure the CLI, authenticate, and install the daemon service",
-	Long: `Configures the CLI to connect to Multica Cloud (leagent.me), then
-authenticates via browser and installs the agent daemon as a per-user OS
-service (LaunchAgent / systemd --user / Windows Scheduled Task) so it
-survives terminal close and restarts after upgrade.
-
-If a configuration already exists, you will be prompted before overwriting.
-
-Pass exactly one workspace path to connect this computer in that workspace:
-multica setup /my-workspace
-
-Use 'multica setup self-host' to connect to a self-hosted server instead.
-
-Use --profile to create an isolated configuration for a separate environment:
-  multica setup self-host --profile staging --server-url https://api-staging.co`,
+	Short: "Connect this Computer to Multica Cloud (leagent.me)",
+	Long: `Connects this machine to Multica Cloud (leagent.me), authenticates, and
+starts the machine-wide resident Computer as a detached process that survives
+terminal close. It does not install an OS service or a profile-scoped daemon.`,
 	Args: requireWorkspacePath,
 	RunE: runSetupCloud,
 }

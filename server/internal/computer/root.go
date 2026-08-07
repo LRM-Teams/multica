@@ -9,8 +9,12 @@ import (
 	"path/filepath"
 
 	"github.com/multica-ai/multica/server/internal/cli"
-	"github.com/multica-ai/multica/server/internal/daemon"
 )
+
+// DefaultHealthPort is the loopback health-check port for the default
+// Computer. It is intentionally the same value the legacy daemon used so the
+// two control surfaces stay on one port during the transition.
+const DefaultHealthPort = 19514
 
 // RootDir returns the machine-wide Computer state directory for the given
 // profile. Empty profile → ~/.multica/, named profile →
@@ -38,12 +42,12 @@ func LogPath(profile string) string {
 // deterministic offset derived from the profile name.
 func HealthPort(profile string) int {
 	if profile == "" {
-		return daemon.DefaultHealthPort
+		return DefaultHealthPort
 	}
 	// Simple hash: sum of bytes mod 1000, offset from base+1.
 	var h int
 	for _, b := range []byte(profile) {
 		h += int(b)
 	}
-	return daemon.DefaultHealthPort + 1 + (h % 1000)
+	return DefaultHealthPort + 1 + (h % 1000)
 }

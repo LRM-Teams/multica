@@ -265,7 +265,7 @@ func TestConcurrentCancellationSettlementIsIdempotent(t *testing.T) {
 	inboxID := uuid.NewString()
 	if _, err = pool.Exec(ctx, `
 		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'cancelled')
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'pending')
 	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
 		t.Fatal(err)
 	}

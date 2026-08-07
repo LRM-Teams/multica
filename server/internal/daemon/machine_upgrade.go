@@ -62,7 +62,17 @@ func (d *Daemon) markMachineUpgradeCandidateReady() error {
 		return fmt.Errorf("machine upgrade journal phase %q cannot become candidate_ready", journal.Phase)
 	}
 	journal.Phase = "candidate_ready"
-	return d.writeMachineUpgradeJournal(journal)
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		return err
+	}
+	d.appendMachineUpgradeEvent(machineUpgradeEvent{
+		Event:         machineUpgradeEventCandidateReady,
+		UpgradeID:     journal.ID,
+		Generation:    journal.Generation,
+		SourceVersion: journal.SourceVersion,
+		TargetVersion: journal.TargetVersion,
+	})
+	return nil
 }
 
 func (d *Daemon) machineUpgradeRollbackGenerationID() string {
@@ -99,9 +109,23 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 	receipt, err := d.client.AcceptMachineUpgrade(ctx, runtimeID, upgrade.ID, d.machineUpgradeGenerationID(), d.cfg.CLIVersion, targetVersion)
 	if err != nil {
 		d.logger.Warn("machine upgrade acceptance failed", "runtime_id", runtimeID, "upgrade_id", upgrade.ID, "error", err)
+		d.appendMachineUpgradeEvent(machineUpgradeEvent{
+			Event:         machineUpgradeEventFailed,
+			UpgradeID:     upgrade.ID,
+			SourceVersion: d.cfg.CLIVersion,
+			TargetVersion: targetVersion,
+			ErrorCode:     "acceptance_failed",
+			Error:         err.Error(),
+		})
 		return
 	}
 	if daemonVersionsMatch(d.cfg.CLIVersion, targetVersion) {
+		d.appendMachineUpgradeEvent(machineUpgradeEvent{
+			Event:         machineUpgradeEventAlreadyCurrent,
+			UpgradeID:     upgrade.ID,
+			SourceVersion: d.cfg.CLIVersion,
+			TargetVersion: targetVersion,
+		})
 		d.reregisterMachineUpgrade(ctx, runtimeID, upgrade.ID)
 		return
 	}
@@ -138,6 +162,13 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "journal_persist_failed", err)
 		return
 	}
+	d.appendMachineUpgradeEvent(machineUpgradeEvent{
+		Event:         machineUpgradeEventStaged,
+		UpgradeID:     journal.ID,
+		Generation:    journal.Generation,
+		SourceVersion: journal.SourceVersion,
+		TargetVersion: journal.TargetVersion,
+	})
 	_ = d.client.ReportMachineUpgradeProgress(ctx, runtimeID, upgrade.ID, "verifying", "", "")
 	if _, err := d.verifyStagedBinary(targetVersion, stagedOutput); err != nil {
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "verification_failed", err)
@@ -152,11 +183,25 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "journal_persist_failed", err)
 		return
 	}
+	d.appendMachineUpgradeEvent(machineUpgradeEvent{
+		Event:         machineUpgradeEventHandoff,
+		UpgradeID:     journal.ID,
+		Generation:    journal.Generation,
+		SourceVersion: journal.SourceVersion,
+		TargetVersion: journal.TargetVersion,
+	})
 	path, err := d.commitStagedActivation(ctx, upgrade.ID, targetVersion)
 	if err != nil {
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "activation_failed", err)
 		return
 	}
+	d.appendMachineUpgradeEvent(machineUpgradeEvent{
+		Event:         machineUpgradeEventActivated,
+		UpgradeID:     journal.ID,
+		Generation:    journal.Generation,
+		SourceVersion: journal.SourceVersion,
+		TargetVersion: journal.TargetVersion,
+	})
 	d.restartBinary = path
 	d.mu.Lock()
 	d.machineUpgradeTarget = targetVersion
@@ -177,7 +222,17 @@ func (d *Daemon) MarkMachineUpgradeRollbackPending() error {
 	if strings.TrimSpace(journal.RollbackGeneration) == "" {
 		journal.RollbackGeneration = uuid.NewString()
 	}
-	return d.writeMachineUpgradeJournal(journal)
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		return err
+	}
+	d.appendMachineUpgradeEvent(machineUpgradeEvent{
+		Event:         machineUpgradeEventRollbackPending,
+		UpgradeID:     journal.ID,
+		Generation:    journal.Generation,
+		SourceVersion: journal.SourceVersion,
+		TargetVersion: journal.TargetVersion,
+	})
+	return nil
 }
 
 func resolveMachineUpgradeTarget(requested string) (string, error) {
@@ -312,7 +367,33 @@ func (d *Daemon) reregisterMachineUpgrade(ctx context.Context, runtimeID, upgrad
 
 func (d *Daemon) failMachineUpgrade(ctx context.Context, runtimeID, upgradeID, code string, cause error) {
 	d.logger.Error("machine upgrade failed", "runtime_id", runtimeID, "upgrade_id", upgradeID, "code", code, "error", cause)
-	_ = d.client.ReportMachineUpgradeProgress(ctx, runtimeID, upgradeID, "failed", code, cause.Error())
+	event := machineUpgradeEvent{
+		Event:         machineUpgradeEventFailed,
+		UpgradeID:     upgradeID,
+		SourceVersion: d.cfg.CLIVersion,
+		ErrorCode:     code,
+	}
+	if cause != nil {
+		event.Error = cause.Error()
+	}
+	d.appendMachineUpgradeEvent(event)
+	reportError := ""
+	if cause != nil {
+		reportError = cause.Error()
+	}
+	_ = d.client.ReportMachineUpgradeProgress(ctx, runtimeID, upgradeID, "failed", code, reportError)
+}
+
+// appendMachineUpgradeEvent records one Machine Upgrade lifecycle transition
+// in the machine-local upgrade history. It never fails the caller: append
+// errors are logged at debug level and swallowed.
+func (d *Daemon) appendMachineUpgradeEvent(event machineUpgradeEvent) {
+	if d == nil || d.machineUpgradeLog == nil {
+		return
+	}
+	if err := d.machineUpgradeLog.Append(event); err != nil && d.logger != nil {
+		d.logger.Debug("machine upgrade event append failed", "event", event.Event, "error", err)
+	}
 }
 
 func (d *Daemon) machineUpgradeJournalDir() (string, error) {
@@ -336,7 +417,18 @@ func (d *Daemon) createMachineUpgradeJournal(receipt *MachineUpgradeReceipt, sou
 		}
 	}
 	journal := &machineUpgradeJournal{ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target, IncumbentGeneration: incumbent, RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), Phase: "accepted"}
-	return journal, d.writeMachineUpgradeJournal(journal)
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		return nil, err
+	}
+	d.appendMachineUpgradeEvent(machineUpgradeEvent{
+		Event:               machineUpgradeEventAccepted,
+		UpgradeID:           journal.ID,
+		Generation:          journal.Generation,
+		SourceVersion:       source,
+		TargetVersion:       target,
+		IncumbentGeneration: incumbent,
+	})
+	return journal, nil
 }
 
 func (d *Daemon) writeMachineUpgradeJournal(journal *machineUpgradeJournal) error {

@@ -104,6 +104,7 @@ type Daemon struct {
 	runnerMessageTransports map[string]workspaceRunnerMessageTransport
 	runnerMessageGeneration map[string]uint64
 	lifecycleDiagnostics    *lifecycleDiagnosticWriter
+	machineUpgradeLog       *machineUpgradeEventLog
 	runnerInstanceID        string
 
 	mu           sync.Mutex
@@ -424,6 +425,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	if cfg.WorkspacesRoot != "" {
 		d.lifecycleDiagnostics = newLifecycleDiagnosticWriter(filepath.Join(cfg.WorkspacesRoot, ".multica", "lifecycle-diagnostics"), time.Now)
 	}
+	d.machineUpgradeLog = newMachineUpgradeEventLog(time.Now)
 	d.agentLifecycleExecutor = &agentLifecycleExecutor{
 		workspacesRoot: cfg.WorkspacesRoot,
 		runtimes:       d.canonicalRuntimes,
@@ -935,7 +937,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.workspaceRunnerLoop(ctx)
-	go d.lifecycleDiagnosticsCleanupLoop(ctx)
+	go d.diagnosticsCleanupLoop(ctx)
 	go d.heartbeatLoop(ctx)
 	go d.residentCrashWatchLoop(ctx)
 	go d.tokenRenewalLoop(ctx)

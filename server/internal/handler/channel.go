@@ -4898,6 +4898,10 @@ func (h *Handler) dispatchTranscribedChannelMessageToAgents(ctx context.Context,
 }
 
 func (h *Handler) dispatchChannelMessageToAgentsWithCursorPolicy(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, replayTrigger bool) {
+	// Keep this literal stable — ops greps production binaries for it to prove the
+	// #2539 wake restore is actually present in the deployed image.
+	slog.Debug("channel human wake dispatch restored", "channel", ch.ID, "replay", replayTrigger)
+
 	dispatchWakeExcept := h.dispatchChannelMessageWakeExcept
 	if replayTrigger {
 		dispatchWakeExcept = h.dispatchTranscribedChannelMessageWakeExcept

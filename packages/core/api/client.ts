@@ -224,6 +224,7 @@ import type {
   NotePageListResponse,
   CreateNotePageRequest,
   DuplicateNotePageRequest,
+  MoveNotePageRequest,
   UpdateNotePageRequest,
   UpdateNotePageSharesRequest,
 } from "../types";
@@ -988,6 +989,16 @@ export class ApiClient {
     });
     return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
       endpoint: "PATCH /api/notes/pages/{id}",
+    });
+  }
+
+  async moveNotePage(id: string, data: MoveNotePageRequest): Promise<NotePage> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}/move`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
+      endpoint: "PATCH /api/notes/pages/{id}/move",
     });
   }
 

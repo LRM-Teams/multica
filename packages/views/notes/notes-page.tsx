@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bot, Check, ChevronDown, ChevronRight, Copy, Download, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
@@ -10,7 +10,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
-import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
+import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import type { Agent, MemberWithUser, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -29,6 +29,8 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
+type NoteDropPosition = "before" | "after" | "inside";
+type NoteDropTarget = { id: string; position: NoteDropPosition };
 
 type NoteExpansionOverrides = { selectionId: string | null; expanded: Set<string>; collapsed: Set<string> };
 
@@ -287,6 +289,52 @@ function buildNoteTree(pages: NotePage[]): NoteTreeNode[] {
   return roots;
 }
 
+function noteSortKeyBetween(previous?: string, next?: string) {
+  const nowKey = `${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, "0")}`;
+  const toBigInt = (value?: string) => (/^\d+$/.test(value ?? "") ? BigInt(value ?? "0") : null);
+  const previousNumber = toBigInt(previous);
+  const nextNumber = toBigInt(next);
+  if (previousNumber !== null && nextNumber !== null && nextNumber - previousNumber > 1n) {
+    return ((previousNumber + nextNumber) / 2n).toString().padStart(20, "0");
+  }
+  if (previous) return `${previous}~${nowKey}`;
+  if (next) return `!${next}:${nowKey}`;
+  return nowKey.padStart(20, "0");
+}
+
+function isNoteDescendant(pages: NotePage[], ancestorId: string, targetId: string) {
+  const byId = new Map(pages.map((page) => [page.id, page]));
+  const seen = new Set<string>();
+  let current = byId.get(targetId);
+  while (current?.parent_id) {
+    if (current.parent_id === ancestorId) return true;
+    if (seen.has(current.parent_id)) return false;
+    seen.add(current.parent_id);
+    current = byId.get(current.parent_id);
+  }
+  return false;
+}
+
+function findNoteDropPosition(event: DragEvent<HTMLElement>): NoteDropPosition {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const ratio = (event.clientY - rect.top) / Math.max(rect.height, 1);
+  if (ratio < 0.25) return "before";
+  if (ratio > 0.75) return "after";
+  return "inside";
+}
+
+function findSiblingSortKeys(pages: NotePage[], parentId: string | null, draggedId: string, targetId: string, position: NoteDropPosition) {
+  const siblings = pages
+    .filter((page) => page.parent_id === parentId && page.id !== draggedId)
+    .sort((a, b) => a.sort_key.localeCompare(b.sort_key) || a.created_at.localeCompare(b.created_at));
+  if (position === "inside") return { previous: siblings.at(-1)?.sort_key, next: undefined };
+  const targetIndex = siblings.findIndex((page) => page.id === targetId);
+  if (targetIndex < 0) return { previous: siblings.at(-1)?.sort_key, next: undefined };
+  return position === "before"
+    ? { previous: siblings[targetIndex - 1]?.sort_key, next: siblings[targetIndex]?.sort_key }
+    : { previous: siblings[targetIndex]?.sort_key, next: siblings[targetIndex + 1]?.sort_key };
+}
+
 function findNote(pages: NotePage[], id?: string): NotePage | null {
   if (!id) return null;
   return pages.find((page) => page.id === id) ?? null;
@@ -322,6 +370,12 @@ function NoteTreeRow({
   onShare,
   onDuplicate,
   onDelete,
+  draggingId,
+  dropTarget,
+  onDragStart,
+  onDragEnd,
+  onDragOverNode,
+  onDropNode,
 }: {
   node: NoteTreeNode;
   depth: number;
@@ -333,6 +387,12 @@ function NoteTreeRow({
   onShare: (page: NotePage) => void;
   onDuplicate: (page: NotePage) => void;
   onDelete: (page: NotePage) => void;
+  draggingId?: string | null;
+  dropTarget?: NoteDropTarget | null;
+  onDragStart: (id: string) => void;
+  onDragEnd: () => void;
+  onDragOverNode: (node: NotePage, event: DragEvent<HTMLDivElement>) => void;
+  onDropNode: (node: NotePage, event: DragEvent<HTMLDivElement>) => void;
 }) {
   const { t } = useT("layout");
   const updatePage = useUpdateNotePage();
@@ -345,6 +405,8 @@ function NoteTreeRow({
   const isExpanded = expandedIds.has(node.id);
   const title = node.title || "Untitled";
   const toggleLabel = isExpanded ? t(($) => $.notes_page.collapse_page, { title }) : t(($) => $.notes_page.expand_page, { title });
+  const canDrag = node.can_manage_shares && !editingTitle;
+  const activeDropPosition = dropTarget?.id === node.id ? dropTarget.position : null;
 
   const startEditingTitle = () => {
     if (!node.can_manage_shares) return;
@@ -367,9 +429,24 @@ function NoteTreeRow({
   return (
     <>
       <div
+        draggable={canDrag}
+        onDragStart={(event) => {
+          if (!canDrag) return;
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", node.id);
+          onDragStart(node.id);
+        }}
+        onDragEnd={onDragEnd}
+        onDragOver={(event) => onDragOverNode(node, event)}
+        onDrop={(event) => onDropNode(node, event)}
         className={cn(
           "group relative flex h-8 items-center gap-1 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+          canDrag && "cursor-grab active:cursor-grabbing",
+          draggingId === node.id && "opacity-45",
           isActive && "bg-muted text-foreground",
+          activeDropPosition === "inside" && "bg-primary/10 ring-1 ring-primary/50",
+          activeDropPosition === "before" && "before:absolute before:left-2 before:right-2 before:top-0 before:h-0.5 before:rounded-full before:bg-primary",
+          activeDropPosition === "after" && "after:absolute after:bottom-0 after:left-2 after:right-2 after:h-0.5 after:rounded-full after:bg-primary",
         )}
         style={{ paddingLeft: 8 + depth * 14 }}
       >
@@ -461,7 +538,7 @@ function NoteTreeRow({
       </div>
       {isExpanded &&
         node.children.map((child) => (
-          <NoteTreeRow key={child.id} node={child} depth={depth + 1} activeId={activeId} expandedIds={expandedIds} onOpen={onOpen} onToggle={onToggle} onCreateChild={onCreateChild} onShare={onShare} onDuplicate={onDuplicate} onDelete={onDelete} />
+          <NoteTreeRow key={child.id} node={child} depth={depth + 1} activeId={activeId} expandedIds={expandedIds} onOpen={onOpen} onToggle={onToggle} onCreateChild={onCreateChild} onShare={onShare} onDuplicate={onDuplicate} onDelete={onDelete} draggingId={draggingId} dropTarget={dropTarget} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOverNode={onDragOverNode} onDropNode={onDropNode} />
         ))}
     </>
   );
@@ -896,10 +973,13 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const selectedOwnerName = selected ? memberLabel(membersByUserId.get(selected.owner_user_id), selected.owner_user_id) : "";
   const createPage = useCreateNotePage();
   const duplicatePage = useDuplicateNotePage();
+  const movePage = useMoveNotePage();
   const deletePage = useDeleteNotePage();
   const permanentlyDeletePage = usePermanentlyDeleteNotePage();
   const restorePage = useRestoreNotePage();
   const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, showTrash: false }));
+  const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<NoteDropTarget | null>(null);
   const [aiAgentConfig, setAiAgentConfig] = useState<NoteAiAgentConfig>(() => ({ workspaceId: null, agentId: null }));
   const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
   const { sharePage, exportOpen, aiAgentOpen, showTrash } = uiState;
@@ -919,6 +999,57 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const openPage = (id: string) => {
     setUiState((current) => ({ ...current, showTrash: false }));
     navigation.push(paths.noteDetail(id));
+  };
+
+  const noteDragAllowed = (draggedId: string, target: NotePage, position: NoteDropPosition) => {
+    const dragged = findNote(list.pages, draggedId);
+    if (!dragged?.can_manage_shares || !target.can_manage_shares || dragged.id === target.id) return false;
+    if (position === "inside" && isNoteDescendant(list.pages, dragged.id, target.id)) return false;
+    if (position !== "inside" && target.parent_id && isNoteDescendant(list.pages, dragged.id, target.parent_id)) return false;
+    return true;
+  };
+
+  const handleNoteDragStart = (id: string) => {
+    setDraggingNoteId(id);
+    setDropTarget(null);
+  };
+
+  const handleNoteDragEnd = () => {
+    setDraggingNoteId(null);
+    setDropTarget(null);
+  };
+
+  const handleNoteDragOver = (target: NotePage, event: DragEvent<HTMLDivElement>) => {
+    if (!draggingNoteId) return;
+    const position = findNoteDropPosition(event);
+    if (!noteDragAllowed(draggingNoteId, target, position)) {
+      setDropTarget(null);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    setDropTarget((current) => (current?.id === target.id && current.position === position ? current : { id: target.id, position }));
+  };
+
+  const handleNoteDrop = async (target: NotePage, event: DragEvent<HTMLDivElement>) => {
+    if (!draggingNoteId) return;
+    const position = findNoteDropPosition(event);
+    if (!noteDragAllowed(draggingNoteId, target, position)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const parentId = position === "inside" ? target.id : target.parent_id;
+    const { previous, next } = findSiblingSortKeys(list.pages, parentId, draggingNoteId, target.id, position);
+    try {
+      await movePage.mutateAsync({ id: draggingNoteId, data: { parent_id: parentId, sort_key: noteSortKeyBetween(previous, next) } });
+      if (position === "inside") {
+        setNoteExpansionOverrides((current) => ({ ...current, expanded: new Set(current.expanded).add(target.id) }));
+      }
+    } catch (error) {
+      showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.note_save_failed));
+    } finally {
+      handleNoteDragEnd();
+    }
   };
 
   const saveConfiguredAiAgent = (agentId: string | null) => {
@@ -1083,7 +1214,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                     </button>
                   ) : (
                     ownTree.map((node) => (
-                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} draggingId={draggingNoteId} dropTarget={dropTarget} onDragStart={handleNoteDragStart} onDragEnd={handleNoteDragEnd} onDragOverNode={handleNoteDragOver} onDropNode={handleNoteDrop} />
                     ))
                   )}
                 </div>
@@ -1093,7 +1224,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                       {t(($) => $.notes_page.shared_directory)}
                     </div>
                     {sharedTree.map((node) => (
-                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} draggingId={draggingNoteId} dropTarget={dropTarget} onDragStart={handleNoteDragStart} onDragEnd={handleNoteDragEnd} onDragOverNode={handleNoteDragOver} onDropNode={handleNoteDrop} />
                     ))}
                   </div>
                 )}

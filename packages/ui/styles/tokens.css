@@ -284,8 +284,9 @@
     --research-stage-verify: oklch(0.83 0.14 80);
     --research-stage-deliver: oklch(0.80 0.13 160);
     /* Activity timeline command node (LRM-560). LRM-1519: brightened to match the
-       new light amber hue (82) at a higher L for contrast on dark surfaces. */
-    --running: oklch(0.83 0.16 82);
+       new light amber hue at a higher L for contrast on dark surfaces — design
+       lock v2 value oklch(0.86 0.17 88). Dot-only token (no text-warning share). */
+    --running: oklch(0.86 0.17 88);
     --scrollbar-thumb: oklch(1 0 0 / 8%);
     --scrollbar-thumb-hover: oklch(1 0 0 / 18%);
     --scrollbar-track: transparent;

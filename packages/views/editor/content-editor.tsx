@@ -174,6 +174,8 @@ interface ContentEditorRef {
   hasActiveUploads: () => boolean;
   /** Insert plain text at the current selection and focus the editor. */
   insertText: (text: string) => void;
+  /** Insert an empty paragraph before the first body block and focus it. */
+  insertBlankLineAtStart: () => void;
   /** Focus the editor and open the issue reference `#` picker. */
   openIssueReferences: () => void;
   /**
@@ -521,6 +523,15 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       },
       insertText: (text: string) => {
         editor?.chain().focus().insertContent(text).run();
+      },
+      insertBlankLineAtStart: () => {
+        if (!editor) return;
+        editor
+          .chain()
+          .focus("start")
+          .insertContentAt(0, { type: "paragraph" })
+          .setTextSelection(1)
+          .run();
       },
       openIssueReferences: () => {
         if (!editor) return;

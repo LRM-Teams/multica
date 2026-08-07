@@ -21,7 +21,7 @@ import { Separator } from "@multica/ui/components/ui/separator";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { toast } from "sonner";
-import { ContentEditor } from "../editor";
+import { ContentEditor, type ContentEditorRef } from "../editor";
 import { useNavigation } from "../navigation";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
@@ -487,6 +487,7 @@ function NoteEditor({
   onOpenShare: () => void;
 }) {
   const { t } = useT("layout");
+  const editorRef = useRef<ContentEditorRef | null>(null);
   const { mutateAsync: updateNotePage } = useUpdateNotePage();
   const { uploadWithToast, uploading } = useFileUpload(api, (error) => {
     showErrorToast(error.message || t(($) => $.notes_page.image_paste_failed));
@@ -555,7 +556,15 @@ function NoteEditor({
       <Input
         value={draft.title}
         onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
-        className="border-0 px-0 text-3xl font-semibold shadow-none focus-visible:ring-0 md:text-4xl"
+        onKeyDown={(event) => {
+          const input = event.currentTarget;
+          const caretAtEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+          if (event.key === "Enter" && caretAtEnd) {
+            event.preventDefault();
+            editorRef.current?.insertBlankLineAtStart();
+          }
+        }}
+        className="h-auto border-0 px-0 py-1 text-3xl font-semibold leading-tight shadow-none focus-visible:ring-0 md:text-4xl"
         placeholder="Untitled"
       />
       {childPages.length > 0 && (
@@ -575,6 +584,7 @@ function NoteEditor({
         </div>
       )}
       <ContentEditor
+        ref={editorRef}
         defaultValue={selected.content}
         onUpdate={(content) => setDraft((current) => ({ ...current, content }))}
         onUploadFile={uploadWithToast}

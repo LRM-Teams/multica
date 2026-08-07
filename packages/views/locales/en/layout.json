@@ -90,6 +90,7 @@
     "ai_optimize_timeout": "Timed out waiting for the agent to optimize the text.",
     "done": "Done",
     "share_description": "Private by default. Selected members can see this page and its child pages.",
+    "select_all": "Select all",
     "no_other_members": "There are no other members in this workspace.",
     "cancel": "Cancel",
     "save": "Save",

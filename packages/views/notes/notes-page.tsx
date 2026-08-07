@@ -22,7 +22,7 @@ import { Separator } from "@multica/ui/components/ui/separator";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { toast } from "sonner";
-import { ContentEditor, type ContentEditorRef } from "../editor";
+import { ContentEditor, type ContentEditorRef, type TextOptimizationRequest } from "../editor";
 import { useNavigation } from "../navigation";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
@@ -72,15 +72,36 @@ function writeNoteAiAgent(workspaceId: string, agentId: string | null) {
   else window.localStorage.removeItem(key);
 }
 
-function buildNoteOptimizationPrompt(text: string) {
-  return `You are optimizing a selected excerpt inside a user's note.
-Rewrite the excerpt to be clearer, more fluent, and more natural while preserving the original language, meaning, tone, and any useful Markdown formatting.
-Return ONLY the optimized excerpt. Do not add explanations, labels, greetings, or code fences.
+function buildNoteOptimizationPrompt(request: TextOptimizationRequest, noteTitle: string) {
+  const instruction = request.instruction.trim();
+  return `You are editing a selected excerpt inside a user's note.
+Use the nearby note context to understand references, terminology, and tone, but rewrite ONLY the selected excerpt.
+${instruction ? "Follow the user's instruction for the selected excerpt." : "Default task: optimize the selected excerpt to be clearer, more fluent, and more natural."}
+Preserve the original language, meaning, voice, and useful Markdown formatting unless the user explicitly asks otherwise.
+Return ONLY content that can directly replace the selected excerpt. Do not include explanations, labels, greetings, surrounding context, or code fences.
 
-Selected excerpt:
+Note title:
+${noteTitle || "Untitled"}
+
+Context before selection:
+<context_before>
+${request.contextBefore || "(none)"}
+</context_before>
+
+Selected excerpt to replace:
 <selection>
-${text}
-</selection>`;
+${request.selectedText}
+</selection>
+
+Context after selection:
+<context_after>
+${request.contextAfter || "(none)"}
+</context_after>
+
+User instruction:
+<instruction>
+${instruction || "Optimize the selected excerpt."}
+</instruction>`;
 }
 
 function normalizeOptimizedText(content: string) {
@@ -659,7 +680,7 @@ function NoteEditor({
   shareNames: string[];
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
-  onOptimizeSelection: (text: string) => Promise<string>;
+  onOptimizeSelection: (request: TextOptimizationRequest) => Promise<string>;
 }) {
   const { t } = useT("layout");
   const editorRef = useRef<ContentEditorRef | null>(null);
@@ -880,7 +901,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   };
 
   const optimizeSelectedNoteText = useCallback(
-    async (text: string) => {
+    async (request: TextOptimizationRequest) => {
       const agent = agents.find((item) => item.id === configuredAiAgentId);
       if (!agent) {
         setUiState((current) => ({ ...current, aiAgentOpen: true }));
@@ -891,7 +912,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         title: t(($) => $.notes_page.ai_optimize_chat_title, { title: selected?.title || t(($) => $.notes_page.title) }),
       });
       try {
-        const sent = await api.sendChatMessage(session.id, buildNoteOptimizationPrompt(text));
+        const sent = await api.sendChatMessage(session.id, buildNoteOptimizationPrompt(request, selected?.title || "Untitled"));
         const optimized = await waitForNoteOptimizationResult(session.id, sent.task_id, {
           failed: t(($) => $.notes_page.ai_optimize_failed),
           timeout: t(($) => $.notes_page.ai_optimize_timeout),

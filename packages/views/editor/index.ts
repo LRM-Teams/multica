@@ -8,6 +8,7 @@ export {
   type TitleEditorProps,
   type TitleEditorRef,
 } from "./title-editor";
+export type { TextOptimizationRequest } from "./bubble-menu";
 export { ReadonlyContent } from "./readonly-content";
 export { useFileDropZone } from "./use-file-drop-zone";
 export { FileDropOverlay } from "./file-drop-overlay";

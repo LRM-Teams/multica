@@ -32,6 +32,10 @@
       "replace": "Replace",
       "append": "Insert after",
       "discard": "Discard",
+      "instruction_title": "How should AI change this?",
+      "instruction_placeholder": "Leave blank to optimize the text, or type an instruction like \"make this more concise\".",
+      "cancel": "Cancel",
+      "run": "Run",
       "failed": "Failed to optimize text",
       "empty_result": "The agent returned an empty optimization."
     }

@@ -81,12 +81,41 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-type TextOptimizationAction = (text: string) => Promise<string>;
+export type TextOptimizationRequest = {
+  selectedText: string;
+  instruction: string;
+  contextBefore: string;
+  contextAfter: string;
+};
+
+type TextOptimizationAction = (request: TextOptimizationRequest) => Promise<string>;
+
+type TextOptimizationDraft = TextOptimizationRequest & { from: number; to: number };
 
 type TextOptimizationState =
   | { status: "idle" }
-  | { status: "loading"; from: number; to: number }
+  | ({ status: "prompt" } & TextOptimizationDraft)
+  | ({ status: "loading" } & TextOptimizationDraft)
   | { status: "review"; from: number; to: number; text: string };
+
+const OPTIMIZATION_CONTEXT_CHARS = 1600;
+
+function buildTextOptimizationDraft(editor: Editor): TextOptimizationDraft | null {
+  const { from, to } = editor.state.selection;
+  if (from === to) return null;
+  const selectedText = editor.state.doc.textBetween(from, to, "\n", "\n").trim();
+  if (!selectedText) return null;
+  const contextFrom = Math.max(0, from - OPTIMIZATION_CONTEXT_CHARS);
+  const contextTo = Math.min(editor.state.doc.content.size, to + OPTIMIZATION_CONTEXT_CHARS);
+  return {
+    from,
+    to,
+    selectedText,
+    instruction: "",
+    contextBefore: editor.state.doc.textBetween(contextFrom, from, "\n", "\n").trim(),
+    contextAfter: editor.state.doc.textBetween(to, contextTo, "\n", "\n").trim(),
+  };
+}
 
 function shouldShowBubbleMenu(editor: Editor): boolean {
   if (!editor.isEditable) return false;
@@ -400,37 +429,21 @@ function ListDropdown({ editor, onOpenChange, isBullet, isOrdered, isTask }: { e
 
 function OptimizeSelectionButton({
   editor,
-  onOptimizeSelection,
   onStateChange,
   pending,
 }: {
   editor: Editor;
-  onOptimizeSelection: TextOptimizationAction;
   onStateChange: (state: TextOptimizationState) => void;
   pending: boolean;
 }) {
   const { t } = useT("editor");
 
-  const handleClick = useCallback(async () => {
+  const handleClick = useCallback(() => {
     if (pending) return;
-    const { from, to } = editor.state.selection;
-    if (from === to) return;
-    const text = editor.state.doc.textBetween(from, to, "\n", "\n").trim();
-    if (!text) return;
-    onStateChange({ status: "loading", from, to });
-    try {
-      const optimized = (await onOptimizeSelection(text)).trim();
-      if (!optimized) throw new Error(t(($) => $.bubble_menu.optimize.empty_result));
-      onStateChange({ status: "review", from, to, text: optimized });
-    } catch (err) {
-      onStateChange({ status: "idle" });
-      showErrorToast(
-        err instanceof Error && err.message
-          ? err.message
-          : t(($) => $.bubble_menu.optimize.failed),
-      );
-    }
-  }, [editor, onOptimizeSelection, onStateChange, pending, t]);
+    const draft = buildTextOptimizationDraft(editor);
+    if (!draft) return;
+    onStateChange({ status: "prompt", ...draft });
+  }, [editor, onStateChange, pending]);
 
   return (
     <Tooltip>
@@ -449,6 +462,80 @@ function OptimizeSelectionButton({
       </TooltipTrigger>
       <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.optimize.tooltip)}</TooltipContent>
     </Tooltip>
+  );
+}
+
+function TextOptimizationPrompt({
+  state,
+  onOptimizeSelection,
+  onStateChange,
+  onClose,
+}: {
+  state: Extract<TextOptimizationState, { status: "prompt" }>;
+  onOptimizeSelection: TextOptimizationAction;
+  onStateChange: (state: TextOptimizationState) => void;
+  onClose: () => void;
+}) {
+  const { t } = useT("editor");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => textareaRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const submit = useCallback(async () => {
+    const request: TextOptimizationRequest = {
+      selectedText: state.selectedText,
+      instruction: state.instruction.trim(),
+      contextBefore: state.contextBefore,
+      contextAfter: state.contextAfter,
+    };
+    onStateChange({ status: "loading", from: state.from, to: state.to, ...request });
+    try {
+      const optimized = (await onOptimizeSelection(request)).trim();
+      if (!optimized) throw new Error(t(($) => $.bubble_menu.optimize.empty_result));
+      onStateChange({ status: "review", from: state.from, to: state.to, text: optimized });
+    } catch (err) {
+      onStateChange({ status: "idle" });
+      showErrorToast(
+        err instanceof Error && err.message
+          ? err.message
+          : t(($) => $.bubble_menu.optimize.failed),
+      );
+    }
+  }, [onOptimizeSelection, onStateChange, state, t]);
+
+  return (
+    <div className="w-[min(420px,calc(100vw-32px))] rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg" onMouseDown={(e) => e.preventDefault()}>
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <Sparkles className="size-3.5" />
+        {t(($) => $.bubble_menu.optimize.instruction_title)}
+      </div>
+      <textarea
+        ref={textareaRef}
+        value={state.instruction}
+        onChange={(event) => onStateChange({ ...state, instruction: event.target.value })}
+        onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            void submit();
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onClose();
+          }
+        }}
+        placeholder={t(($) => $.bubble_menu.optimize.instruction_placeholder)}
+        aria-label={t(($) => $.bubble_menu.optimize.instruction_title)}
+        className="min-h-24 w-full resize-none rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+      />
+      <div className="mt-3 flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onClose} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.cancel)}</Button>
+        <Button size="sm" onClick={() => void submit()} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.run)}</Button>
+      </div>
+    </div>
   );
 }
 
@@ -727,7 +814,9 @@ function EditorBubbleMenu({
       }}
       onMouseDown={(e) => e.preventDefault()}
     >
-      {optimizationState.status === "review" ? (
+      {optimizationState.status === "prompt" && onOptimizeSelection ? (
+        <TextOptimizationPrompt state={optimizationState} onOptimizeSelection={onOptimizeSelection} onStateChange={setOptimizationState} onClose={() => { setOptimizationState({ status: "idle" }); editor.commands.focus(); }} />
+      ) : optimizationState.status === "review" ? (
         <TextOptimizationReview editor={editor} state={optimizationState} onClose={() => { setOptimizationState({ status: "idle" }); editor.commands.focus(); }} />
       ) : mode === "link-edit" ? (
         <LinkEditBar editor={editor} onClose={() => { setMode("toolbar"); editor.commands.focus(); }} />
@@ -760,7 +849,7 @@ function EditorBubbleMenu({
               <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.quote)}</TooltipContent>
             </Tooltip>
             {onOptimizeSelection && (
-              <OptimizeSelectionButton editor={editor} onOptimizeSelection={onOptimizeSelection} onStateChange={setOptimizationState} pending={optimizationState.status === "loading"} />
+              <OptimizeSelectionButton editor={editor} onStateChange={setOptimizationState} pending={optimizationState.status === "loading"} />
             )}
             {currentIssueId && (
               <>

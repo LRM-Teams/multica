@@ -25,6 +25,15 @@
       "tooltip": "Create sub-issue from selection",
       "created": "Created {{identifier}}",
       "create_failed": "Failed to create sub-issue"
+    },
+    "optimize": {
+      "tooltip": "Optimize text with AI",
+      "result_title": "Optimized text",
+      "replace": "Replace",
+      "append": "Insert after",
+      "discard": "Discard",
+      "failed": "Failed to optimize text",
+      "empty_result": "The agent returned an empty optimization."
     }
   },
   "image": {

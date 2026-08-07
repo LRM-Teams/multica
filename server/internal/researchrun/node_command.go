@@ -182,10 +182,11 @@ func sourcePatchForNodeCommand(in NodeCommandInput) json.RawMessage {
 
 func nodeCommandClientKey(clientRequestID, suffix string) string {
 	key := fmt.Sprintf("node-cmd:%s:%s", clientRequestID, suffix)
-	if len(key) > maxClientKeyBytes {
-		return key[:maxClientKeyBytes]
+	if len(key) <= maxClientKeyBytes {
+		return key
 	}
-	return key
+	sum := sha256.Sum256([]byte(clientRequestID))
+	return fmt.Sprintf("node-cmd:%s:%s", hex.EncodeToString(sum[:]), suffix)
 }
 
 // nodeCommandRequestFingerprintV1 freezes the semantic command input behind a
@@ -208,10 +209,6 @@ type nodeCommandRequestFingerprintV1 struct {
 	SourceConstraints    json.RawMessage `json:"source_constraints"`
 	SourcePatch          json.RawMessage `json:"source_patch"`
 	TargetAgentID        string          `json:"target_agent_id"`
-	AnchorKind           string          `json:"anchor_kind"`
-	AnchorQuestionID     string          `json:"anchor_question_id"`
-	AnchorTaskID         string          `json:"anchor_task_id"`
-	AnchorTitle          string          `json:"anchor_title"`
 }
 
 // HashNodeCommandRequest fingerprints semantic JSON rather than raw formatting
@@ -234,8 +231,6 @@ func HashNodeCommandRequest(in NodeCommandInput) (string, error) {
 		Strategy: in.Strategy, StrategyPatch: in.StrategyPatch,
 		SourceConstraints: constraints, SourcePatch: patch,
 		TargetAgentID: in.TargetAgentID,
-		AnchorKind:    in.AnchorKind, AnchorQuestionID: in.AnchorQuestionID,
-		AnchorTaskID: in.AnchorTaskID, AnchorTitle: in.AnchorTitle,
 	}
 	encoded, err := json.Marshal(fingerprint)
 	if err != nil {

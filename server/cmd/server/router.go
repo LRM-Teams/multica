@@ -1225,6 +1225,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
+			// Workspace Execution Bindings for one Computer (machine-wide
+			// identity = daemon_id). Establishment is idempotent (#2489/#2490);
+			// removal revokes one Binding and never touches local Agent data
+			// (#2493).
+			r.Route("/api/daemons/{daemonId}/bindings", func(r chi.Router) {
+				r.Post("/", h.CreateComputerWorkspaceBinding)
+				r.Delete("/{workspaceId}", h.RevokeComputerWorkspaceBinding)
+			})
+
 			// Cloud Runtime fleet proxy. The remote service URL is configured
 			// on SaaS API nodes only; self-hosted deployments return 503.
 			r.Route("/api/cloud-runtime", func(r chi.Router) {

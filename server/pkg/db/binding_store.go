@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/multica-ai/multica/server/internal/computer"
-	dbgen "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // bindingStore adapts the computer.BindingStore contract to the
@@ -18,10 +18,19 @@ import (
 // deliberately bypasses the sqlc-generated layer so this branch does not need
 // to regenerate the repo's stale generated code. The execution credential is
 // stored only as a SHA-256 hash and never returned in plaintext.
-type bindingStore struct{ db dbgen.DBTX }
+// SQLExecutor is the minimal pgx executor the store needs. It matches the
+// repo's dbExecutor / sqlc DBTX shape so either a handler's DB or a raw pgx
+// handle satisfies it.
+type SQLExecutor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type bindingStore struct{ db SQLExecutor }
 
 // NewBindingStore returns a pgx-backed computer.BindingStore.
-func NewBindingStore(db dbgen.DBTX) computer.BindingStore { return &bindingStore{db: db} }
+func NewBindingStore(db SQLExecutor) computer.BindingStore { return &bindingStore{db: db} }
 
 func hashCredential(cred string) string {
 	sum := sha256.Sum256([]byte(cred))

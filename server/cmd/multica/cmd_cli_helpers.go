@@ -12,7 +12,17 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon"
 )
 
+// computerMode is set while running under `multica computer ...`. The
+// Computer lifecycle is machine-wide and never profile-scoped, so every
+// resolved profile is forced to "" (the machine-wide default) — a Workspace
+// selector is scoping/readiness only, never a profile or second resident
+// (#2487, #2490).
+var computerMode bool
+
 func resolveProfile(cmd *cobra.Command) string {
+	if computerMode {
+		return ""
+	}
 	val, _ := cmd.Flags().GetString("profile")
 	return val
 }

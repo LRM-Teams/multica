@@ -84,7 +84,10 @@ func init() {
 	setupSelfHostCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 
 	setupCmd.AddCommand(setupCloudCmd)
-	setupCmd.AddCommand(setupSelfHostCmd)
+	// #2496: self-host is no longer a supported setup surface; the retired
+	// command is unregistered + hidden (its helpers/tests remain for the
+	// bounded legacy-migration path).
+	setupSelfHostCmd.Hidden = true
 }
 
 // printConfigLocation prints the config file path and profile name.

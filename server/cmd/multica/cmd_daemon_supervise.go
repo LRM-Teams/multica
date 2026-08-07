@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon/supervisor"
 	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
 )
@@ -92,7 +93,7 @@ func init() {
 // runDaemonForeground's handoff sites know to exit with HandoffExitCode
 // rather than spawning a sibling themselves.
 func buildSuperviseConfig(profile, exePath string, workerArgs []string, stdout, stderr io.Writer) (supervisor.Config, error) {
-	dir := daemonDirForProfile(profile)
+	dir := computer.RootDir(profile)
 	if dir == "" {
 		return supervisor.Config{}, fmt.Errorf("resolve daemon directory for profile %q", profile)
 	}
@@ -215,7 +216,7 @@ func runVersionEscalationWatcher(
 
 			runningVersion := ""
 			hctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			health := checkDaemonHealthOnPort(hctx, healthPort)
+			health := computer.ProbeHealth(hctx, healthPort)
 			cancel()
 			if v, ok := health["cli_version"].(string); ok {
 				runningVersion = v
@@ -240,7 +241,7 @@ func runDaemonSupervise(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	dir := daemonDirForProfile(profile)
+	dir := computer.RootDir(profile)
 	if dir == "" {
 		return fmt.Errorf("resolve daemon directory for profile %q", profile)
 	}
@@ -251,7 +252,7 @@ func runDaemonSupervise(cmd *cobra.Command, _ []string) error {
 	// The supervised worker's stdout/stderr go to the same log file
 	// `daemon logs` already reads, so log behavior is unchanged whether or
 	// not the daemon happens to be running under supervision.
-	logPath := daemonLogPathForProfile(profile)
+	logPath := computer.LogPath(profile)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open daemon log file %s: %w", logPath, err)
@@ -297,7 +298,7 @@ func runDaemonSupervise(cmd *cobra.Command, _ []string) error {
 	if store, err := cli.OpenVersionStore(""); err != nil {
 		logger.Warn("version escalation watcher disabled: failed to open version store", "error", err)
 	} else {
-		go runVersionEscalationWatcher(ctx, sup, store, healthPortForProfile(profile),
+		go runVersionEscalationWatcher(ctx, sup, store, computer.HealthPort(profile),
 			versionEscalationPollInterval, versionEscalationGraceWindow, logger)
 	}
 

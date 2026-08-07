@@ -54,6 +54,7 @@ const DEFAULT_PREFS: DaemonPrefs = { autoStart: true, autoStop: false };
 interface ActiveProfile {
   name: string; // "" = default profile
   port: number;
+  logPath: string;
 }
 
 let statusPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -86,14 +87,9 @@ let authExpired = false;
 // corrupting the JSON.
 let configWriteChain: Promise<void> = Promise.resolve();
 
-// Keep the Go impl in sync: server/cmd/multica/cmd_daemon.go healthPortForProfile.
-function healthPortForProfile(profile: string): number {
-  if (!profile) return DEFAULT_HEALTH_PORT;
-  let sum = 0;
-  for (const b of Buffer.from(profile, "utf-8")) sum += b;
-  return DEFAULT_HEALTH_PORT + 1 + (sum % 1000);
-}
-
+// The health port and log path are owned by the Go Computer module; the
+// Desktop asks the bundled CLI for them (see computerLayoutForProfile /
+// resolveActiveProfile) rather than duplicating the module's layout rules.
 function profileDir(profile: string): string {
   return profile
     ? join(homedir(), ".multica", "profiles", profile)
@@ -102,10 +98,6 @@ function profileDir(profile: string): string {
 
 function profileConfigPath(profile: string): string {
   return join(profileDir(profile), "config.json");
-}
-
-function profileLogPath(profile: string): string {
-  return join(profileDir(profile), "daemon.log");
 }
 
 // Sidecar file that records which Multica user the cached PAT in config.json
@@ -277,7 +269,7 @@ async function writeProfileConfig(
  */
 async function resolveActiveProfile(): Promise<ActiveProfile> {
   const target = targetApiBaseUrl;
-  if (!target) return { name: "", port: DEFAULT_HEALTH_PORT };
+  if (!target) return { name: "", port: DEFAULT_HEALTH_PORT, logPath: "" };
 
   const name = deriveProfileName(target);
   const cfg = await readProfileConfig(name);
@@ -288,7 +280,51 @@ async function resolveActiveProfile(): Promise<ActiveProfile> {
     console.log(`[daemon] initialized profile "${name}" → ${target}`);
   }
 
-  return { name, port: healthPortForProfile(name) };
+  return { name, ...(await computerLayoutForProfile(name)) };
+}
+
+/**
+ * Asks the Go Computer module (via the bundled CLI's `daemon status`) for the
+ * Desktop-owned profile's health port and log path, so the Desktop does not
+ * duplicate the module's state-layout rules. Falls back to the default health
+ * port when no CLI is reachable (the caller is the disabled/setup path anyway).
+ */
+async function computerLayoutForProfile(
+  name: string,
+): Promise<{ port: number; logPath: string }> {
+  if (!name) return { port: DEFAULT_HEALTH_PORT, logPath: "" };
+  const bin = await resolveCliBinary();
+  if (!bin) return { port: DEFAULT_HEALTH_PORT, logPath: "" };
+  try {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        bin,
+        ["daemon", "status", "--output", "json", "--profile", name],
+        { timeout: 5_000 },
+        (err, out) => (err ? reject(err) : resolve(out)),
+      );
+    });
+    const parsed = JSON.parse(stdout) as {
+      health_port?: number;
+      log_path?: string;
+    };
+    return {
+      port:
+        typeof parsed.health_port === "number"
+          ? parsed.health_port
+          : DEFAULT_HEALTH_PORT,
+      logPath:
+        typeof parsed.log_path === "string" && parsed.log_path
+          ? parsed.log_path
+          : "",
+    };
+  } catch (err) {
+    console.warn(
+      `[daemon] could not resolve Computer layout for profile "${name}":`,
+      err,
+    );
+    return { port: DEFAULT_HEALTH_PORT, logPath: "" };
+  }
 }
 
 async function ensureActiveProfile(): Promise<ActiveProfile> {
@@ -1000,7 +1036,7 @@ function startLogTail(win: BrowserWindow, retryCount = 0): void {
   stopLogTail();
 
   void ensureActiveProfile().then(async (active) => {
-    const logPath = profileLogPath(active.name);
+    const logPath = active.logPath;
     if (!existsSync(logPath)) {
       if (retryCount < LOG_TAIL_MAX_RETRIES) {
         setTimeout(() => startLogTail(win, retryCount + 1), LOG_TAIL_RETRY_MS);
@@ -1142,7 +1178,7 @@ export function setupDaemonManager(
   // (full history, complex search, copy-to-clipboard at scale).
   ipcMain.handle("daemon:open-log-file", async () => {
     const active = await ensureActiveProfile();
-    const logPath = profileLogPath(active.name);
+    const logPath = active.logPath;
     if (!existsSync(logPath)) {
       return { success: false, error: "Log file not found yet" };
     }

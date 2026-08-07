@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 func init() {
@@ -78,14 +80,14 @@ func (darwinServiceInstaller) Install(profile, exePath string, args []string) er
 		return err
 	}
 
-	dir := daemonDirForProfile(profile)
+	dir := computer.RootDir(profile)
 	if dir == "" {
 		return fmt.Errorf("resolve daemon directory for profile %q", profile)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create daemon directory: %w", err)
 	}
-	// Deliberately not daemonLogPathForProfile: that file is the daemon
+	// Deliberately not computer.LogPath: that file is the daemon
 	// WORKER's own log (supervise redirects each spawned generation's
 	// stdout/stderr there already, see buildSuperviseConfig). This is the
 	// supervise PROCESS's own stdout/stderr — startup/shutdown/escalation

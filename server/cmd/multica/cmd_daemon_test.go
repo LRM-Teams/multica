@@ -2,65 +2,9 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/multica-ai/multica/server/internal/cli"
 )
-
-// TestDaemonAlive locks in the liveness predicate the lifecycle commands rely
-// on: both a ready ("running") and a still-booting ("starting") daemon count as
-// alive, so `daemon start` won't double-spawn over a starting daemon and
-// `restart`/`stop` will act on one; only "stopped"/unknown is "no daemon".
-func TestDaemonAlive(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		status any
-		want   bool
-	}{
-		{"running", true},
-		{"starting", true},
-		{"stopped", false},
-		{"", false},
-		{nil, false},
-		{"bogus", false},
-	}
-	for _, c := range cases {
-		if got := daemonAlive(map[string]any{"status": c.status}); got != c.want {
-			t.Errorf("daemonAlive(status=%v) = %v, want %v", c.status, got, c.want)
-		}
-	}
-	// A response with no status key at all (e.g. malformed) is not alive.
-	if daemonAlive(map[string]any{}) {
-		t.Errorf("daemonAlive(no status) = true, want false")
-	}
-}
-
-func TestRemoveDaemonPIDIfMatchesNeverDeletesSuccessorPID(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	profile := "upgrade"
-	path := daemonPIDPathForProfile(profile)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("2002"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	removeDaemonPIDIfMatches(profile, 1001)
-	if data, err := os.ReadFile(path); err != nil || string(data) != "2002" {
-		t.Fatalf("successor pid after incumbent cleanup = %q, %v", data, err)
-	}
-	removeDaemonPIDIfMatches(profile, 2002)
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("matching pid file remains: %v", err)
-	}
-}
 
 func TestPrintDaemonStatusIncludesCLIVersion(t *testing.T) {
 	t.Parallel()
@@ -83,10 +27,6 @@ func TestPrintDaemonStatusIncludesCLIVersion(t *testing.T) {
 	}
 }
 
-// TestPrintDaemonStatusOmitsVersionWhenMissing pins the back-compat contract:
-// when the daemon doesn't report cli_version (older daemon paired with a newer
-// CLI) or reports an empty string, the CLI must skip the line entirely instead
-// of printing "Version: ".
 func TestPrintDaemonStatusOmitsVersionWhenMissing(t *testing.T) {
 	t.Parallel()
 
@@ -119,10 +59,6 @@ func TestPrintDaemonStatusOmitsVersionWhenMissing(t *testing.T) {
 	}
 }
 
-// TestPrintDaemonStatusAlignsValuesWithProfileLabel guards the alignment fix:
-// before, a "Daemon [profile]" label was wider than the other keys, so the
-// Daemon row's value started further right than every subsequent row. The
-// report now pads every key to the widest one, so the value column lines up.
 func TestPrintDaemonStatusAlignsValuesWithProfileLabel(t *testing.T) {
 	t.Parallel()
 
@@ -143,8 +79,6 @@ func TestPrintDaemonStatusAlignsValuesWithProfileLabel(t *testing.T) {
 		t.Fatalf("expected multiple lines, got %q", out.String())
 	}
 
-	// Find the column where each row's value starts (first non-space after
-	// the colon). Every row must share the same column.
 	want := valueColumn(t, lines[0])
 	for _, line := range lines[1:] {
 		if got := valueColumn(t, line); got != want {
@@ -167,56 +101,4 @@ func valueColumn(t *testing.T, line string) int {
 	}
 	t.Fatalf("line missing value: %q", line)
 	return 0
-}
-
-// Negative case: a fresh HOME with no VersionStore activation must fall back
-// to the invoking binary's own path — the current, unchanged behavior for
-// any install that has never run `multica update`.
-func TestResolveDaemonLaunchBinaryNoActiveVersionFallsBackToExecutable(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	got, err := resolveDaemonLaunchBinary()
-	if err != nil {
-		t.Fatalf("resolveDaemonLaunchBinary: %v", err)
-	}
-	want, err := os.Executable()
-	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
-	}
-	if got != want {
-		t.Fatalf("resolveDaemonLaunchBinary = %q, want unchanged executable %q", got, want)
-	}
-}
-
-// Positive case (task #41): after `multica update` stages+activates a new
-// version into the VersionStore, resolveDaemonLaunchBinary must prefer that
-// staged binary over the invoking command's own path — this is exactly the
-// gap that left Frank's daemon stuck on the old version after `daemon
-// restart`, since update deliberately never touches the running binary.
-func TestResolveDaemonLaunchBinaryPrefersVersionStoreActive(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	storeRoot := filepath.Join(home, ".local", "share", "multica")
-	store, err := cli.NewVersionStore(storeRoot, "linux", func(context.Context, string, string) error { return nil })
-	if err != nil {
-		t.Fatalf("NewVersionStore: %v", err)
-	}
-	data := []byte("multica-v0.3.88")
-	sum := sha256.Sum256(data)
-	staged, err := store.StageBinary(context.Background(), "v0.3.88", data, hex.EncodeToString(sum[:]), 0o755)
-	if err != nil {
-		t.Fatalf("StageBinary: %v", err)
-	}
-	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.88"); err != nil {
-		t.Fatalf("CompareAndSwapActivation: %v", err)
-	}
-
-	got, err := resolveDaemonLaunchBinary()
-	if err != nil {
-		t.Fatalf("resolveDaemonLaunchBinary: %v", err)
-	}
-	if got != staged.BinaryPath {
-		t.Fatalf("resolveDaemonLaunchBinary = %q, want staged Active path %q", got, staged.BinaryPath)
-	}
 }

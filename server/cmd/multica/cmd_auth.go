@@ -18,6 +18,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 // loginTokenPrefixes are the token prefixes `multica login --token` accepts.
@@ -26,6 +27,15 @@ import (
 // authenticates both kinds. Keep this list in sync with the prefix branches
 // in server/internal/middleware/auth.go.
 var loginTokenPrefixes = []string{"mul_", auth.CloudPATPrefix}
+
+// cloudServerBaseURL is the canonical Cloud origin for `multica login`
+// (#2488). It is overridable only by tests (never by user-facing flags or
+// env vars), so Cloud login cannot be redirected by a legacy profile,
+// --server-url, or MULTICA_SERVER_URL.
+var cloudServerBaseURL = "https://leagent.me"
+
+// cloudServerURL returns the normalized Cloud API base used by login.
+func cloudServerURL() string { return normalizeAPIBaseURL(cloudServerBaseURL) }
 
 // validateLoginTokenPrefix returns nil if token starts with one of the
 // CLI-recognised PAT prefixes, or an error describing the accepted set.
@@ -182,6 +192,13 @@ func isWSL() bool {
 }
 
 func runAuthLogin(cmd *cobra.Command, args []string) error {
+	// #2488: reuse a valid machine-wide Cloud session instead of prompting
+	// again when one already works.
+	if reused, err := reuseValidCloudSession(); err != nil {
+		return err
+	} else if reused {
+		return nil
+	}
 	if cmd.Flags().Changed("token") {
 		tokenFlag, _ := cmd.Flags().GetString("token")
 		// `--token mul_xxx` (space form) is what users actually type — that's
@@ -284,7 +301,9 @@ type issueDeviceTokenResponse struct {
 // HTTPS to the server, and confirmation happens wherever the user opens the
 // printed link.
 func runAuthLoginDevice(cmd *cobra.Command) error {
-	serverURL := resolveServerURL(cmd)
+	// Cloud login always targets the canonical leagent.me origin; it cannot
+	// be redirected by --server-url, MULTICA_SERVER_URL, or a profile. #2488
+	serverURL := cloudServerURL()
 	client := cli.NewAPIClient(serverURL, "", "")
 
 	hostname, _ := os.Hostname()
@@ -415,7 +434,7 @@ func runAuthLoginToken(cmd *cobra.Command, providedToken string) error {
 		return err
 	}
 
-	serverURL := resolveServerURL(cmd)
+	serverURL := cloudServerURL()
 	client := cli.NewAPIClient(serverURL, "", token)
 
 	ctx, cancel := cli.APIContext(context.Background())
@@ -477,16 +496,43 @@ func runAuthStatus(cmd *cobra.Command, _ []string) error {
 func runAuthLogout(cmd *cobra.Command, _ []string) error {
 	profile := resolveProfile(cmd)
 	cfg, _ := cli.LoadCLIConfigForProfile(profile)
-	if cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "Not authenticated.")
-		return nil
+
+	if cfg.Token != "" {
+		cfg.Token = ""
+		if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
+			return fmt.Errorf("failed to save config: %w", err)
+		}
 	}
 
-	cfg.Token = ""
-	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+	// #2488: logout stops the resident Computer but retains Computer Identity,
+	// Bindings, and Agent Roots — only the user session is cleared.
+	if res := (&computer.Lifecycle{Profile: ""}).Stop(); res.Err != nil && res.Running {
+		return fmt.Errorf("cleared session but could not stop the Computer: %w", res.Err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Token removed. You are now logged out.")
+	fmt.Fprintln(os.Stderr, "Logged out. The Computer has been stopped; your Identity, Workspace Bindings, and Agent data are retained.")
 	return nil
+}
+
+// reuseValidCloudSession returns true when a machine-wide Cloud session is
+// already stored and verifies against the canonical origin, so `multica login`
+// does not prompt again while a valid session exists (#2488). It never
+// overwrites an existing valid session.
+func reuseValidCloudSession() (bool, error) {
+	cfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil || cfg.Token == "" {
+		return false, nil
+	}
+	client := cli.NewAPIClient(cloudServerURL(), "", cfg.Token)
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var me struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	if err := client.GetJSON(ctx, "/api/me", &me); err != nil {
+		return false, nil // invalid/expired or offline → fall through to prompt
+	}
+	fmt.Fprintf(os.Stderr, "Already authenticated as %s (%s). Reusing existing session.\n", me.Name, me.Email)
+	return true, nil
 }

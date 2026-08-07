@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 const detachedSuccessorPortReleaseTimeout = 5 * time.Second
@@ -26,7 +28,7 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string) erro
 	deadline := time.Now().Add(detachedSuccessorPortReleaseTimeout)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		live := daemonAlive(checkDaemonHealthOnPort(ctx, healthPortForProfile(profile)))
+		live := computer.Alive(computer.ProbeHealth(ctx, computer.HealthPort(profile)))
 		cancel()
 		if !live {
 			break
@@ -37,7 +39,7 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string) erro
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	logFile, err := os.OpenFile(daemonLogPathForProfile(profile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(computer.LogPath(profile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open daemon log: %w", err)
 	}
@@ -49,15 +51,15 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string) erro
 	child := exec.Command(binaryPath, args...)
 	child.Stdout = logFile
 	child.Stderr = logFile
-	child.SysProcAttr = daemonSysProcAttr(true)
+	child.SysProcAttr = computer.SysProcAttr(true)
 	if err := child.Start(); err != nil {
-		if !isAccessDeniedSpawnErr(err) {
+		if !computer.IsAccessDeniedSpawnErr(err) {
 			return err
 		}
 		child = exec.Command(binaryPath, args...)
 		child.Stdout = logFile
 		child.Stderr = logFile
-		child.SysProcAttr = daemonSysProcAttr(false)
+		child.SysProcAttr = computer.SysProcAttr(false)
 		if err := child.Start(); err != nil {
 			return err
 		}
@@ -69,7 +71,7 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string) erro
 	readyDeadline := time.Now().Add(detachedSuccessorReadyTimeout)
 	for time.Now().Before(readyDeadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		health := checkDaemonHealthOnPort(ctx, healthPortForProfile(profile))
+		health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
 		cancel()
 		if health["status"] == "running" {
 			actual, _ := health["cli_version"].(string)

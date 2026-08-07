@@ -95,7 +95,7 @@ jobs:
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
       - name: Upload deploy bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: deploy-bundle-${{ github.sha }}
           path: ${{ runner.temp }}/multica-deploy-bundle
@@ -143,7 +143,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
         with:
           # The docker-container driver does not inherit the host daemon's
           # registry mirrors. Docker Hub is unreachable from the Aliyun runner,
@@ -153,7 +153,7 @@ jobs:
               mirrors = ["docker.m.daocloud.io", "docker.1ms.run"]
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -161,7 +161,7 @@ jobs:
 
       # Deploy host is x86_64, so amd64-only — no QEMU, no multi-arch manifest merge.
       - name: Build & push backend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -179,7 +179,7 @@ jobs:
           cache-to: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-dev-amd64,mode=max
 
       - name: Build & push web
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.web
@@ -202,7 +202,7 @@ jobs:
         # overrides it to run_executor --side multica at deploy time. (The
         # public run_multica server is no longer deployed - no external LLM
         # relay is needed.)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: db_bridge
           platforms: linux/amd64
@@ -302,7 +302,7 @@ jobs:
           echo "Runner workspace ownership OK: phase=${phase} root=${runner_work_root} owner=${RUNNER_EXPECTED_USER}"
 
       - name: Download immutable deploy bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: deploy-bundle-${{ github.sha }}
           path: ${{ runner.temp }}/multica-deploy-bundle

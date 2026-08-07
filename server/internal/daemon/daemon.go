@@ -4525,7 +4525,11 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					})
 					mu.Unlock()
 				case agent.MessageThinking:
-					d.publishTaskRunnerActivity(task, protocol.ActivityKindThinking, "", "Thinking")
+					// Thinking is a B-chain state (snapshot activity_kind), not an
+					// A-chain timeline event. An empty narrative keeps publishLocked
+					// from writing an entry, so bursts of thinking never flood the
+					// activity timeline (raft-aligned; see workspace_runner_activity).
+					d.publishTaskRunnerActivity(task, protocol.ActivityKindThinking, "", "")
 					if msg.Content != "" {
 						mu.Lock()
 						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)

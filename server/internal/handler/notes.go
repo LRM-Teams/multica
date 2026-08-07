@@ -57,6 +57,11 @@ type noteShareRequest struct {
 	UserIDs []string `json:"user_ids"`
 }
 
+type noteMoveRequest struct {
+	ParentID *string `json:"parent_id"`
+	SortKey  string  `json:"sort_key"`
+}
+
 type noteDuplicateRequest struct {
 	Title *string `json:"title"`
 }
@@ -98,6 +103,18 @@ func normalizeNoteTitle(title string) string {
 		return string(runes[:200])
 	}
 	return title
+}
+
+func normalizeNoteSortKey(sortKey string) string {
+	sortKey = strings.TrimSpace(sortKey)
+	if sortKey == "" {
+		return fmt.Sprintf("%020d", time.Now().UnixMicro())
+	}
+	runes := []rune(sortKey)
+	if len(runes) > 120 {
+		return string(runes[:120])
+	}
+	return sortKey
 }
 
 func scanNotePage(row pgx.Row) (notePageRow, error) {
@@ -378,6 +395,93 @@ RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, 
 	shares, err := h.noteShareUserIDs(r.Context(), updated.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update note page")
+		return
+	}
+	writeJSON(w, http.StatusOK, notePageToResponse(updated, userID, shares))
+}
+
+func (h *Handler) MoveNotePage(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	page, owner, ok := h.loadAccessibleNote(w, r, chi.URLParam(r, "id"), workspaceID, userID)
+	if !ok {
+		return
+	}
+	if !owner {
+		writeError(w, http.StatusForbidden, "only the owner can move this note page")
+		return
+	}
+	var req noteMoveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	parentID := pgtype.UUID{}
+	pageWorkspaceID := page.WorkspaceID
+	if req.ParentID != nil && strings.TrimSpace(*req.ParentID) != "" {
+		parent, parentOwner, ok := h.loadAccessibleNote(w, r, *req.ParentID, workspaceID, userID)
+		if !ok {
+			return
+		}
+		if !parentOwner {
+			writeError(w, http.StatusForbidden, "only the owner can move notes under this parent")
+			return
+		}
+		if uuidToString(parent.ID) == uuidToString(page.ID) {
+			writeError(w, http.StatusBadRequest, "cannot move a note under itself")
+			return
+		}
+		var parentInSubtree bool
+		if err := h.DB.QueryRow(r.Context(), `
+WITH RECURSIVE subtree AS (
+    SELECT id FROM note_page WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+  UNION ALL
+    SELECT child.id
+    FROM note_page child
+    JOIN subtree parent ON child.parent_id = parent.id
+    WHERE child.owner_user_id = $2 AND child.deleted_at IS NULL
+)
+SELECT EXISTS (SELECT 1 FROM subtree WHERE id = $3)`, page.ID, userID, parent.ID).Scan(&parentInSubtree); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to move note page")
+			return
+		}
+		if parentInSubtree {
+			writeError(w, http.StatusBadRequest, "cannot move a note under one of its child pages")
+			return
+		}
+		parentID = parent.ID
+		pageWorkspaceID = parent.WorkspaceID
+	}
+	updated, err := scanNotePage(h.DB.QueryRow(r.Context(), `
+WITH RECURSIVE subtree AS (
+    SELECT id FROM note_page WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+  UNION ALL
+    SELECT child.id
+    FROM note_page child
+    JOIN subtree parent ON child.parent_id = parent.id
+    WHERE child.owner_user_id = $2 AND child.deleted_at IS NULL
+), moved AS (
+    UPDATE note_page
+    SET workspace_id = $3,
+        parent_id = CASE WHEN id = $1 THEN $4 ELSE parent_id END,
+        sort_key = CASE WHEN id = $1 THEN $5 ELSE sort_key END,
+        updated_by = $2,
+        updated_at = now()
+    WHERE id IN (SELECT id FROM subtree)
+    RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+)
+SELECT id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at
+FROM moved
+WHERE id = $1`, page.ID, userID, pageWorkspaceID, parentID, normalizeNoteSortKey(req.SortKey)))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to move note page")
+		return
+	}
+	shares, err := h.noteShareUserIDs(r.Context(), updated.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to move note page")
 		return
 	}
 	writeJSON(w, http.StatusOK, notePageToResponse(updated, userID, shares))

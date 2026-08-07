@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
-import type { CreateNotePageRequest, DuplicateNotePageRequest, NotePage, NotePageListResponse, UpdateNotePageRequest, UpdateNotePageSharesRequest } from "../types";
+import type { CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, NotePage, NotePageListResponse, UpdateNotePageRequest, UpdateNotePageSharesRequest } from "../types";
 import { noteKeys } from "./queries";
 
 export function useCreateNotePage() {
@@ -48,6 +48,39 @@ export function useUpdateNotePage() {
       const prevDetail = qc.getQueryData<NotePage>(noteKeys.detail(wsId, id));
       const prevList = qc.getQueryData<NotePageListResponse>(noteKeys.list(wsId));
       const patch = (page: NotePage): NotePage => ({ ...page, ...data });
+      qc.setQueryData<NotePage>(noteKeys.detail(wsId, id), (old) => (old ? patch(old) : old));
+      qc.setQueryData<NotePageListResponse>(noteKeys.list(wsId), (old) =>
+        old ? { pages: old.pages.map((p) => (p.id === id ? patch(p) : p)) } : old,
+      );
+      return { prevDetail, prevList, id };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prevDetail) qc.setQueryData(noteKeys.detail(wsId, ctx.id), ctx.prevDetail);
+      if (ctx?.prevList) qc.setQueryData(noteKeys.list(wsId), ctx.prevList);
+    },
+    onSuccess: (page) => {
+      qc.setQueryData(noteKeys.detail(wsId, page.id), page);
+      qc.setQueryData<NotePageListResponse>(noteKeys.list(wsId), (old) =>
+        old ? { pages: old.pages.map((p) => (p.id === page.id ? page : p)) } : old,
+      );
+    },
+    onSettled: (_data, _err, vars) => {
+      qc.invalidateQueries({ queryKey: noteKeys.detail(wsId, vars.id) });
+      qc.invalidateQueries({ queryKey: noteKeys.list(wsId) });
+    },
+  });
+}
+
+export function useMoveNotePage() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: MoveNotePageRequest }) => api.moveNotePage(id, data),
+    onMutate: async ({ id, data }) => {
+      await qc.cancelQueries({ queryKey: noteKeys.list(wsId) });
+      const prevDetail = qc.getQueryData<NotePage>(noteKeys.detail(wsId, id));
+      const prevList = qc.getQueryData<NotePageListResponse>(noteKeys.list(wsId));
+      const patch = (page: NotePage): NotePage => ({ ...page, parent_id: data.parent_id, sort_key: data.sort_key });
       qc.setQueryData<NotePage>(noteKeys.detail(wsId, id), (old) => (old ? patch(old) : old));
       qc.setQueryData<NotePageListResponse>(noteKeys.list(wsId), (old) =>
         old ? { pages: old.pages.map((p) => (p.id === id ? patch(p) : p)) } : old,

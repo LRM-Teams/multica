@@ -27,6 +27,11 @@ export interface UpdateNotePageRequest {
   content?: string;
 }
 
+export interface MoveNotePageRequest {
+  parent_id: string | null;
+  sort_key: string;
+}
+
 export interface DuplicateNotePageRequest {
   title?: string;
 }

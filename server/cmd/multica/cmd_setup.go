@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 var setupCmd = &cobra.Command{
@@ -308,9 +309,58 @@ func runSetupSelfHost(cmd *cobra.Command, args []string) error {
 // not treated as a completed machine setup — unsupervised processes stay
 // stopped after an auto-update self-stop (see daemon update logs).
 func startDaemonAfterSetup(cmd *cobra.Command) error {
+	// Establish the Workspace Binding (#2489). A failure here must not read as
+	// a successful setup.
+	if err := establishWorkspaceBinding(cmd); err != nil {
+		return fmt.Errorf("Setup incomplete (%w): the Computer identity is registered but this Workspace Binding could not be established; re-run `multica setup /<ws>` to repair", err)
+	}
+
+	// Start/install the resident so the Computer stays connected. (Per #2487/#2496
+	// this should eventually be the machine-wide detached resident with no OS
+	// supervisor; that live-verified cutover is tracked separately.)
 	fmt.Fprintln(os.Stderr, "\nInstalling daemon service (auto-start at login + auto-restart)...")
 	if err := runDaemonInstallService(cmd, nil); err != nil {
 		return fmt.Errorf("install daemon service: %w\n  For development only you can fall back to `multica daemon start`; setup expects install-service so upgrades can reconnect without a terminal", err)
+	}
+	return nil
+}
+
+// establishWorkspaceBinding records the selected Workspace as a Binding for
+// this Computer (#2489): persisted locally (machine-wide, keyed by the
+// immutable workspace_id) and registered with the server so the Web Computers
+// projection reflects a connected Machine. Returns an error (Setup
+// incomplete) so a partial setup never reads as successful.
+func establishWorkspaceBinding(cmd *cobra.Command) error {
+	profile := resolveProfile(cmd)
+	cfg, err := cli.LoadCLIConfigForProfile(profile)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	if cfg.WorkspaceID == "" {
+		return nil // no workspace selected; nothing to bind yet
+	}
+
+	identity, err := (&computer.Lifecycle{Profile: ""}).Identity()
+	if err != nil {
+		return fmt.Errorf("resolve computer identity: %w", err)
+	}
+	store := computer.NewBindingsStore(computer.RootDir(""))
+	if err := store.AddOrRepair(computer.WorkspaceBinding{
+		WorkspaceID: cfg.WorkspaceID,
+		ComputerID:  identity,
+		Active:      true,
+	}); err != nil {
+		return fmt.Errorf("persist binding: %w", err)
+	}
+
+	// Best-effort server registration; local persistence is the durable record.
+	if cfg.ServerURL != "" {
+		client := cli.NewAPIClient(cfg.ServerURL, "", cfg.Token)
+		ctx, cancel := cli.APIContext(context.Background())
+		defer cancel()
+		_ = client.PostJSON(ctx, "/api/daemons/"+identity+"/bindings", map[string]any{
+			"workspace_id": cfg.WorkspaceID,
+		}, nil)
 	}
 	return nil
 }

@@ -3,13 +3,49 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 )
+
+// TestEstablishWorkspaceBindingPersistsLocalBinding verifies #2489's local
+// Binding record is written machine-wide, keyed by the immutable workspace_id,
+// without any network dependency (server registration is best-effort).
+func TestEstablishWorkspaceBindingPersistsLocalBinding(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".multica"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".multica", "config.json"), []byte(`{"workspace_id":"ws-123","token":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := establishWorkspaceBinding(testCmd()); err != nil {
+		t.Fatalf("establishWorkspaceBinding: %v", err)
+	}
+
+	bs := computer.NewBindingsStore(filepath.Join(home, ".multica"))
+	all, err := bs.All()
+	if err != nil {
+		t.Fatalf("load bindings: %v", err)
+	}
+	found := false
+	for _, b := range all {
+		if b.WorkspaceID == "ws-123" && b.Active {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a local binding for workspace ws-123, got %+v", all)
+	}
+}
 
 func TestCloudCLIConfigUsesLeAgentOrigins(t *testing.T) {
 	cfg := cloudCLIConfig()

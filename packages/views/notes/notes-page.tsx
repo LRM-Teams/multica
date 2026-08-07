@@ -480,6 +480,7 @@ function ShareDialogBody({
   const [selected, setSelected] = useState<Set<string>>(() => new Set(page.share_user_ids));
   const updateShares = useUpdateNotePageShares();
   const shareableMembers = members.filter((member) => member.user_id !== page.owner_user_id);
+  const allShareableSelected = shareableMembers.length > 0 && shareableMembers.every((member) => selected.has(member.user_id));
 
   const save = async () => {
     try {
@@ -501,28 +502,46 @@ function ShareDialogBody({
         {shareableMembers.length === 0 ? (
           <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">{t(($) => $.notes_page.no_other_members)}</div>
         ) : (
-          shareableMembers.map((member) => {
-            const checked = selected.has(member.user_id);
-            return (
-              <label key={member.user_id} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/60">
-                <Checkbox
-                  checked={checked}
-                  onCheckedChange={(value) => {
-                    setSelected((current) => {
-                      const next = new Set(current);
+          <>
+            <label className="flex cursor-pointer items-center gap-3 rounded-md border bg-muted/20 px-2 py-2 hover:bg-muted/60">
+              <Checkbox
+                checked={allShareableSelected}
+                onCheckedChange={(value) => {
+                  setSelected((current) => {
+                    const next = new Set(current);
+                    shareableMembers.forEach((member) => {
                       if (value) next.add(member.user_id);
                       else next.delete(member.user_id);
-                      return next;
                     });
-                  }}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{member.display_name || member.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{member.email}</span>
-                </span>
-              </label>
-            );
-          })
+                    return next;
+                  });
+                }}
+              />
+              <span className="min-w-0 flex-1 text-sm font-medium">{t(($) => $.notes_page.select_all)}</span>
+            </label>
+            {shareableMembers.map((member) => {
+              const checked = selected.has(member.user_id);
+              return (
+                <label key={member.user_id} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/60">
+                  <Checkbox
+                    checked={checked}
+                    onCheckedChange={(value) => {
+                      setSelected((current) => {
+                        const next = new Set(current);
+                        if (value) next.add(member.user_id);
+                        else next.delete(member.user_id);
+                        return next;
+                      });
+                    }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{member.display_name || member.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{member.email}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </>
         )}
       </div>
       <DialogFooter>

@@ -90,6 +90,7 @@
     "ai_optimize_timeout": "等待智能体优化文本超时。",
     "done": "完成",
     "share_description": "默认仅自己可见。勾选后，该成员可以看到这个页面及其子页面。",
+    "select_all": "选择全部",
     "no_other_members": "当前工作区没有其它成员。",
     "cancel": "取消",
     "save": "保存",

@@ -438,7 +438,27 @@ func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionI
 			return updateErr
 		}
 		if command.RowsAffected() != 1 {
-			return fmt.Errorf("%w: cancellation request changed concurrently", ErrInvalidTransition)
+			var status, existingInboxID string
+			var completedAt *time.Time
+			stateErr := tx.QueryRow(ctx, `
+				SELECT status, COALESCE(inbox_task_id::text, ''), cancellation_completed_at
+				FROM research_task_attempt
+				WHERE session_id = $1::uuid AND id = $2::uuid
+				FOR UPDATE
+			`, sessionID, request.AttemptID).Scan(&status, &existingInboxID, &completedAt)
+			if stateErr != nil {
+				return fmt.Errorf("%w: cancellation request changed concurrently", ErrInvalidTransition)
+			}
+			if existingInboxID != "" && existingInboxID != request.InboxTaskID {
+				return fmt.Errorf("%w: cancellation request belongs to another Inbox task", ErrInvalidTransition)
+			}
+			// Another cancellation actor may have completed the same durable
+			// fact after this actor's external Cancel call. A completed marker
+			// is idempotent even though settlement moved the Attempt to failed.
+			if completedAt != nil {
+				continue
+			}
+			return fmt.Errorf("%w: cancellation request changed concurrently (status %s)", ErrInvalidTransition, status)
 		}
 	}
 	return tx.Commit(ctx)
@@ -458,12 +478,11 @@ func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID str
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT id::text, status, pending_failure_class,
-		       pending_failure_diagnostics, pending_failure_retryable
+		       pending_failure_diagnostics, pending_failure_retryable,
+		       cancellation_completed_at
 		FROM research_task_attempt
 		WHERE session_id = $1::uuid
 		  AND id::text = ANY($2::text[])
-		  AND status IN ('cancelling', 'cancelled')
-		  AND cancellation_completed_at IS NULL
 		ORDER BY id
 		FOR UPDATE
 	`, sessionID, attemptIDs)
@@ -473,11 +492,12 @@ func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID str
 	type completion struct {
 		id, status, failureClass, diagnostics string
 		retryable                             bool
+		completedAt                           *time.Time
 	}
 	items := make([]completion, 0, len(attemptIDs))
 	for rows.Next() {
 		var item completion
-		if err = rows.Scan(&item.id, &item.status, &item.failureClass, &item.diagnostics, &item.retryable); err != nil {
+		if err = rows.Scan(&item.id, &item.status, &item.failureClass, &item.diagnostics, &item.retryable, &item.completedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -493,6 +513,12 @@ func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID str
 	}
 	events := make([]RunEvent, 0, len(items))
 	for _, item := range items {
+		if item.completedAt != nil {
+			continue
+		}
+		if item.status != string(AttemptStatusCancelling) && item.status != string(AttemptStatusCancelled) {
+			return nil, fmt.Errorf("%w: attempt %s is %s, not awaiting cancellation", ErrInvalidTransition, item.id, item.status)
+		}
 		if item.status == string(AttemptStatusCancelled) {
 			if err = abandonAttemptCircuitProbesTx(ctx, tx, item.id); err != nil {
 				return nil, err

@@ -511,6 +511,9 @@
     "pair": "{{a}} and {{b}} are typing",
     "overflow": "{{a}}, {{b}} and {{count}} people are typing"
   },
+  "conversation_activity": {
+    "more_agents": "{{count}} more agents are working"
+  },
   "agent_status": {
     "queued": "Queued",
     "dispatched": "Starting up",

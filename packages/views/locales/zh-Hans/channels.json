@@ -511,6 +511,9 @@
     "pair": "{{a}}、{{b}} 正在输入",
     "overflow": "{{a}}、{{b}} 等 {{count}} 人正在输入"
   },
+  "conversation_activity": {
+    "more_agents": "还有 {{count}} 个 Agent 在工作"
+  },
   "agent_status": {
     "queued": "排队中",
     "dispatched": "启动中",

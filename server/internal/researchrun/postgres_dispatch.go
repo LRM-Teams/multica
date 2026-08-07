@@ -14,7 +14,7 @@ func (s *PostgresStore) ClaimDispatchIntents(ctx context.Context, sessionID, tok
 	if limit <= 0 {
 		return nil, nil
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpDispatchIntentClaim, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -72,14 +72,14 @@ func (s *PostgresStore) ClaimDispatchIntents(ctx context.Context, sessionID, tok
 		return nil, err
 	}
 	rows.Close()
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpDispatchIntentClaim, tx); err != nil {
 		return nil, err
 	}
 	return intents, nil
 }
 
 func (s *PostgresStore) RescheduleDispatchIntent(ctx context.Context, intentID, token, diagnostics string, next time.Time) (bool, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpDispatchIntentReschedule, pgx.TxOptions{})
 	if err != nil {
 		return false, err
 	}
@@ -103,14 +103,14 @@ func (s *PostgresStore) RescheduleDispatchIntent(ctx context.Context, intentID, 
 	if err != nil {
 		return false, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpDispatchIntentReschedule, tx); err != nil {
 		return false, err
 	}
 	return command.RowsAffected() == 1, nil
 }
 
 func (s *PostgresStore) FailDispatchIntent(ctx context.Context, intentID, token string, failure AttemptFailure) (bool, RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpDispatchIntentFail, pgx.TxOptions{})
 	if err != nil {
 		return false, RunEvent{}, err
 	}
@@ -138,7 +138,7 @@ func (s *PostgresStore) FailDispatchIntent(ctx context.Context, intentID, token 
 		return false, RunEvent{}, err
 	}
 	if status == "cancelled" || status == "failed" {
-		return false, RunEvent{}, tx.Commit(ctx)
+		return false, RunEvent{}, s.commitResearchTx(ctx, txOpDispatchIntentFail, tx)
 	}
 	if status != "delivering" || leaseToken != token || failure.AttemptID != attemptID {
 		return false, RunEvent{}, fmt.Errorf("%w: dispatch claim changed", ErrInvalidTransition)
@@ -153,12 +153,12 @@ func (s *PostgresStore) FailDispatchIntent(ctx context.Context, intentID, token 
 	}
 	event, err := failAttemptTx(ctx, tx, failure)
 	if errors.Is(err, ErrInvalidTransition) {
-		return false, RunEvent{}, tx.Commit(ctx)
+		return false, RunEvent{}, s.commitResearchTx(ctx, txOpDispatchIntentFail, tx)
 	}
 	if err != nil {
 		return false, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpDispatchIntentFail, tx); err != nil {
 		return false, RunEvent{}, err
 	}
 	return true, event, nil
@@ -168,7 +168,7 @@ func (s *PostgresStore) FailDispatchIntent(ctx context.Context, intentID, token 
 // advances Attempt/Task state. accepted=false means a concurrent control action
 // made the Attempt terminal; the caller must cancel the external task.
 func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID, token, inboxTaskID string) (accepted bool, attempt Attempt, event RunEvent, retErr error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpDispatchIntentAcknowledge, pgx.TxOptions{})
 	if err != nil {
 		return false, Attempt{}, RunEvent{}, err
 	}
@@ -197,7 +197,7 @@ func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID,
 		return false, Attempt{}, RunEvent{}, err
 	}
 	if outboxStatus == "cancelled" || attemptStatus != string(AttemptStatusDispatching) {
-		return false, Attempt{}, RunEvent{}, tx.Commit(ctx)
+		return false, Attempt{}, RunEvent{}, s.commitResearchTx(ctx, txOpDispatchIntentAcknowledge, tx)
 	}
 	if outboxStatus != "delivering" || leaseToken != token {
 		return false, Attempt{}, RunEvent{}, fmt.Errorf("%w: dispatch claim changed", ErrInvalidTransition)
@@ -251,7 +251,7 @@ func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID,
 	if err != nil {
 		return false, Attempt{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpDispatchIntentAcknowledge, tx); err != nil {
 		return false, Attempt{}, RunEvent{}, err
 	}
 	return true, attempt, event, nil

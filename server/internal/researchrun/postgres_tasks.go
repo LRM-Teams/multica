@@ -13,7 +13,7 @@ import (
 )
 
 func (s *PostgresStore) ActivateReadyTasks(ctx context.Context, sessionID string) (int, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpTaskActivateReady, pgx.TxOptions{})
 	if err != nil {
 		return 0, err
 	}
@@ -86,7 +86,7 @@ func (s *PostgresStore) ActivateReadyTasks(ctx context.Context, sessionID string
 	if err != nil {
 		return 0, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpTaskActivateReady, tx); err != nil {
 		return 0, err
 	}
 	return int(command.RowsAffected()), nil
@@ -348,7 +348,7 @@ func loadDispatchIntentReplay(
 }
 
 func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTaskID string) (Attempt, RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpAttemptAttachInbox, pgx.TxOptions{})
 	if err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
@@ -401,7 +401,7 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 			return Attempt{}, RunEvent{}, fmt.Errorf("%w: attach attempt", ErrInvalidTransition)
 		}
 		if attempt.InboxTaskID == inboxTaskID && (attempt.Status == AttemptStatusDispatching || attempt.Status == AttemptStatusRunning || attempt.Status == AttemptStatusSucceeded) {
-			return attempt, RunEvent{}, tx.Commit(ctx)
+			return attempt, RunEvent{}, s.commitResearchTx(ctx, txOpAttemptAttachInbox, tx)
 		}
 		return Attempt{}, RunEvent{}, fmt.Errorf("%w: attempt is not dispatching", ErrInvalidTransition)
 	}
@@ -422,14 +422,14 @@ func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTas
 	if err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpAttemptAttachInbox, tx); err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
 	return attempt, event, nil
 }
 
 func (s *PostgresStore) FailAttempt(ctx context.Context, in AttemptFailure) (RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpAttemptFail, pgx.TxOptions{})
 	if err != nil {
 		return RunEvent{}, err
 	}
@@ -438,7 +438,7 @@ func (s *PostgresStore) FailAttempt(ctx context.Context, in AttemptFailure) (Run
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpAttemptFail, tx); err != nil {
 		return RunEvent{}, err
 	}
 	return event, nil

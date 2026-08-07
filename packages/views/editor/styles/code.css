@@ -27,6 +27,19 @@
   border: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent);
 }
 
+.rich-text-editor .code-block-frame.code-block-frame-mermaid-diagram-only {
+  min-inline-size: 16ch;
+}
+
+.ProseMirror-selectednode .code-block-frame {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.ProseMirror-selectednode .code-block-select {
+  opacity: 1;
+}
+
 .rich-text-editor .code-block-frame .mermaid-diagram {
   background: transparent;
   border: 0;

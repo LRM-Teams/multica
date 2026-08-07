@@ -109,6 +109,8 @@
   "code_block": {
     "copy_code": "Copy code",
     "menu": "Code block menu",
+    "select_block": "Select code block",
+    "select_block_hint": "Select the whole block",
     "language": "Code language",
     "show_preview": "Show preview",
     "show_source": "Show source",

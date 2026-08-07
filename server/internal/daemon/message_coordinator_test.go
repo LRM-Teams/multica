@@ -33,6 +33,72 @@ func (r *blockingResidentMessageRuntime) AcceptMessageBatch(context.Context, []a
 	return agent.ResidentMessageAcceptance{Done: r.done}, nil
 }
 
+type startingResidentMessageRuntime struct {
+	started   chan struct{}
+	killed    chan struct{}
+	killOnce  sync.Once
+	killCalls int
+	mu        sync.Mutex
+}
+
+func (r *startingResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *startingResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	close(r.started)
+	<-r.killed
+	return agent.ResidentMessageAcceptance{}, errors.New("runtime killed during native acceptance")
+}
+
+func (r *startingResidentMessageRuntime) ForceKill() error {
+	r.mu.Lock()
+	r.killCalls++
+	r.mu.Unlock()
+	r.killOnce.Do(func() { close(r.killed) })
+	return nil
+}
+
+func TestRuntimePoolRestartInterruptsNativeAcceptance(t *testing.T) {
+	backend := &startingResidentMessageRuntime{started: make(chan struct{}), killed: make(chan struct{})}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	handoffErr := make(chan error, 1)
+	go func() {
+		handoffErr <- pool.handoffIdleMessages(
+			context.Background(), "agent-1", "runtime-1",
+			[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
+			nil, nil, nil, nil,
+		)
+	}()
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("native acceptance did not start")
+	}
+
+	restartDone := make(chan error, 1)
+	go func() { restartDone <- pool.forceInvalidateSession("agent-1", "runtime-1") }()
+	select {
+	case err := <-restartDone:
+		if err != nil {
+			t.Fatalf("forceInvalidateSession: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restart could not interrupt a runtime stuck before native acceptance")
+	}
+	select {
+	case err := <-handoffErr:
+		if err == nil {
+			t.Fatal("killed native acceptance reported success")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native acceptance did not return after restart")
+	}
+}
+
 type sequencedResidentMessageRuntime struct {
 	accepted chan chan error
 }

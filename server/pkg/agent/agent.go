@@ -78,11 +78,12 @@ type ResidentRuntimeForceKillable interface {
 // envelopes. PartsJSON preserves structured Message parts without making the
 // provider layer an alternate owner of their schema.
 type ResidentMessage struct {
-	ID        string
-	Target    string
-	Seq       int64
-	Content   string
-	PartsJSON json.RawMessage
+	ID          string
+	Target      string
+	ReplyTarget string
+	Seq         int64
+	Content     string
+	PartsJSON   json.RawMessage
 }
 
 // ResidentMessageInput is an optional capability for resident backends that

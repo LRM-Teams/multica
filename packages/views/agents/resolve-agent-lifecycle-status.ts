@@ -8,7 +8,7 @@ export interface AgentLifecycleStatusVisual {
   shape: AgentLifecycleShape;
   // All non-workload lifecycle states read grey — none of them is an alarm
   // state (Iris, 08-02: a deliberately-stopped machine isn't a fault; a
-  // disconnected one may recover on its own).
+  // offline one may recover on its own).
   toneClass: string;
   dotClass: string;
 }
@@ -36,7 +36,7 @@ const BRAND_DOT = "bg-brand";
  *
  * A missing/unrecognized value (older backend, or a status this FE doesn't
  * know about yet) falls back to the generic "offline" visual — never guess
- * a more specific state (stopped vs disconnected vs crashed) from an absent
+ * a more specific state (stopped vs crashed) from an absent
  * field. "crashed" isn't emitted by the backend yet (task #1803) but is
  * handled here already so turning it on server-side is a zero-FE-change flip.
  */
@@ -76,13 +76,10 @@ export function resolveAgentLifecycleStatus(
         toneClass: NEUTRAL_TONE,
         dotClass: NEUTRAL_DOT,
       };
+    // Backward compatibility for cached responses or an older server. The
+    // Agent-facing vocabulary is still Offline; Disconnected belongs to the
+    // Computer surface.
     case "disconnected":
-      return {
-        label: t(($) => $.lifecycle_status.disconnected),
-        shape: "dot",
-        toneClass: NEUTRAL_TONE,
-        dotClass: NEUTRAL_DOT,
-      };
     case "offline":
     default:
       return {

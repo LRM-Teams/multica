@@ -432,21 +432,27 @@ func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	}
 	payload := make([]residentMessageInput, 0, len(messages))
 	for _, message := range messages {
-		if strings.TrimSpace(message.ID) == "" || strings.TrimSpace(message.Target) == "" || message.Seq <= 0 {
+		replyTarget := strings.TrimSpace(message.ReplyTarget)
+		if replyTarget == "" {
+			replyTarget = strings.TrimSpace(message.Target)
+		}
+		if strings.TrimSpace(message.ID) == "" || replyTarget == "" || message.Seq <= 0 {
 			return "", errors.New("resident Message id, target, and positive seq are required")
 		}
 		if len(message.PartsJSON) > 0 && !json.Valid(message.PartsJSON) {
 			return "", errors.New("resident Message parts are invalid JSON")
 		}
 		payload = append(payload, residentMessageInput{
-			ID: message.ID, Target: message.Target, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON,
+			ID: message.ID, Target: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON,
 		})
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal resident Message batch: %w", err)
 	}
-	return "Canonical Messages received while the runtime was idle. Treat these as Message context in target sequence order:\n" + string(raw), nil
+	return "Canonical Messages received while the runtime was idle. Treat these as Message context in target sequence order. " +
+		"Reply visibly with `multica message send --target <target>` using each message's explicit target, or use `multica message react --message-id <id> --emoji \"...\"` for a pure acknowledgement. " +
+		"Final assistant output is not delivered. Do not run Issue commands unless a message asks for Issue or project work.\n" + string(raw), nil
 }
 
 // RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller

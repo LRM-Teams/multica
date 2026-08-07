@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -113,6 +114,9 @@ func TestAgentMessageRecoveryPagesStableSequenceFenceAcrossTargets(t *testing.T)
 	}
 	gotIDs := make(map[string]bool, len(all))
 	for _, message := range all {
+		if !strings.HasPrefix(message.ReplyTarget, "#message-recovery-") {
+			t.Fatalf("recovery Message reply target = %q, want reusable channel target", message.ReplyTarget)
+		}
 		gotIDs[message.ID] = true
 	}
 	for _, message := range before {
@@ -237,7 +241,8 @@ func TestCanonicalMessageProjectsAgentDeliveryEnvelope(t *testing.T) {
 	daemonID := "daemon-message-delivery-envelope-" + uuid.NewString()[:8]
 	runtimeID := seedMachineLockedRuntime(t, daemonID, "message delivery envelope")
 	agentID := createHandlerTestAgentOnRuntime(t, "message-delivery-envelope-"+uuid.NewString()[:8], runtimeID)
-	channelID := seedChannelForTest(t, "message-delivery-envelope-"+uuid.NewString(), testUserID)
+	channelName := "message-delivery-envelope-" + uuid.NewString()
+	channelID := seedChannelForTest(t, channelName, testUserID)
 	if _, err := testPool.Exec(ctx, `INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id) VALUES ($1, $2, 'agent', $3) ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("add Agent member: %v", err)
 	}
@@ -256,9 +261,9 @@ func TestCanonicalMessageProjectsAgentDeliveryEnvelope(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &message); err != nil {
 		t.Fatalf("decode canonical Message: %v", err)
 	}
-	want := protocol.AgentMessageProjection{ID: message.ID, Target: "channel:" + channelID, Seq: message.Seq, Content: "canonical body", Parts: message.Parts}
+	want := protocol.AgentMessageProjection{ID: message.ID, Target: "channel:" + channelID, ReplyTarget: "#" + channelName, Seq: message.Seq, Content: "canonical body", Parts: message.Parts}
 	got := notifier.payload.Message
-	if notifier.workspaceID != testWorkspaceID || notifier.daemonID != daemonID || notifier.payload.AgentID != agentID || notifier.payload.DeliveryID == "" || got.ID != want.ID || got.Target != want.Target || got.Seq != want.Seq || got.Content != want.Content || len(got.Parts) != len(want.Parts) {
+	if notifier.workspaceID != testWorkspaceID || notifier.daemonID != daemonID || notifier.payload.AgentID != agentID || notifier.payload.DeliveryID == "" || got.ID != want.ID || got.Target != want.Target || got.ReplyTarget != want.ReplyTarget || got.Seq != want.Seq || got.Content != want.Content || len(got.Parts) != len(want.Parts) {
 		t.Fatalf("delivery workspace=%q daemon=%q payload=%+v, want workspace=%q daemon=%q Message=%+v", notifier.workspaceID, notifier.daemonID, notifier.payload, testWorkspaceID, daemonID, want)
 	}
 	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
@@ -269,6 +274,36 @@ func TestCanonicalMessageProjectsAgentDeliveryEnvelope(t *testing.T) {
 	testHandler.deliverCanonicalMessageToChannelAgents(ctx, channel, message)
 	if got := len(notifier.deliveries); got != before {
 		t.Fatalf("duplicate canonical delivery notified %d times, want %d", got, before)
+	}
+}
+
+func TestCanonicalDMMessageProjectsRecipientRelativeReplyTarget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	daemonID := "daemon-message-delivery-dm-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "DM message delivery target")
+	agentID := createHandlerTestAgentOnRuntime(t, "message-delivery-dm-"+uuid.NewString()[:8], runtimeID)
+	channelID := seedAgentDMChannel(t, agentID)
+	var userHandle string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, testUserID).Scan(&userHandle); err != nil {
+		t.Fatalf("load DM user handle: %v", err)
+	}
+	notifier := &capturedAgentDeliveryNotifier{}
+	previous := testHandler.AgentDeliveryNotifier
+	testHandler.AgentDeliveryNotifier = notifier
+	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previous })
+	recorder := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content":           "hello in DM",
+		"client_message_id": uuid.NewString(),
+	})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create canonical DM Message: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if got, want := notifier.payload.Message.ReplyTarget, "dm:@"+userHandle; got != want {
+		t.Fatalf("DM reply target = %q, want %q; payload=%+v", got, want, notifier.payload)
 	}
 }
 

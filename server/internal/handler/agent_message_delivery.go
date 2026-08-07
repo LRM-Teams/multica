@@ -127,14 +127,34 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 
 	rows, err := h.DB.Query(ctx, `
 		WITH eligible AS (
-			SELECT m.id, delivery.seq, m.content, m.parts, delivery.target
+			SELECT m.id, delivery.seq, m.content, m.parts, delivery.target,
+			       CASE c.kind
+			         WHEN 'group' THEN '#' || c.name
+			         WHEN 'dm' THEN 'dm:@' || COALESCE(peer.handle, '')
+			         ELSE ''
+			       END || CASE
+			         WHEN m.thread_root_message_id IS NOT NULL THEN ':' || LEFT(m.thread_root_message_id::text, 8)
+			         ELSE ''
+			       END AS reply_target
 			FROM agent_message_delivery delivery
 			JOIN channel_message m ON m.id = delivery.message_id
+			JOIN channel c ON c.id = m.channel_id AND c.workspace_id = delivery.workspace_id
+			LEFT JOIN LATERAL (
+				SELECT COALESCE(NULLIF(u.name, ''), NULLIF(a.name, ''), '') AS handle
+				FROM channel_member cm
+				LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
+				LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id AND a.archived_at IS NULL
+				WHERE cm.channel_id = c.id
+				  AND cm.workspace_id = delivery.workspace_id
+				  AND NOT (cm.member_type = 'agent' AND cm.member_id = $2)
+				ORDER BY cm.created_at ASC
+				LIMIT 1
+			) peer ON c.kind = 'dm'
 			WHERE delivery.workspace_id = $1
 			  AND delivery.agent_id = $2
 			  AND m.deleted_at IS NULL
 		)
-		SELECT id, seq, content, parts, target
+		SELECT id, seq, content, parts, target, reply_target
 		FROM eligible
 		WHERE seq > COALESCE(($3::jsonb ->> target)::bigint, 0)
 		  AND seq <= COALESCE(($4::jsonb ->> target)::bigint, 0)
@@ -151,10 +171,13 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 	for rows.Next() {
 		var id pgtype.UUID
 		var seq int64
-		var content, target string
+		var content, target, replyTarget string
 		var rawParts []byte
-		if err := rows.Scan(&id, &seq, &content, &rawParts, &target); err != nil {
+		if err := rows.Scan(&id, &seq, &content, &rawParts, &target, &replyTarget); err != nil {
 			return protocol.AgentRecoveryPage{}, err
+		}
+		if strings.TrimSpace(replyTarget) == "" {
+			return protocol.AgentRecoveryPage{}, errors.New("canonical Message recovery reply target is unavailable")
 		}
 		var parts []protocol.MessagePart
 		if len(rawParts) > 0 && string(rawParts) != "null" {
@@ -163,7 +186,7 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 			}
 		}
 		items = append(items, protocol.AgentMessageProjection{
-			ID: uuidToString(id), Target: target, Seq: seq, Content: content, Parts: parts,
+			ID: uuidToString(id), Target: target, ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
 		})
 	}
 	if err := rows.Err(); err != nil {

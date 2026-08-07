@@ -1644,6 +1644,15 @@ func (h *Handler) resolveAgentTransportReadAnchor(ctx context.Context, target ag
 	if raw == "" {
 		return ChannelMessageResponse{}, fmt.Errorf("%w: anchor is required", errAgentTransportReadAnchorInvalid)
 	}
+	if decimalAgentMessageSequencePattern.MatchString(raw) && len(raw) >= 8 {
+		messages, err := h.findAgentTransportReadAnchors(ctx, target, `LOWER(m.id::text) LIKE LOWER($4) || '%'`, raw)
+		if err != nil {
+			return ChannelMessageResponse{}, err
+		}
+		if len(messages) > 0 {
+			return oneAgentTransportReadAnchor(messages)
+		}
+	}
 	if decimalAgentMessageSequencePattern.MatchString(raw) {
 		sequence, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {

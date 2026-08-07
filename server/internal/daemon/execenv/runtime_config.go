@@ -144,12 +144,164 @@ func sanitizeInlineCodeForBrief(value string) string {
 // For Grok:        writes {workDir}/AGENTS.md  (Grok CLI reads AGENTS.md natively; skills from .grok/skills/)
 func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (string, error) {
 	content := buildMetaSkillContent(provider, ctx)
+	return writeRuntimeConfig(workDir, provider, content)
+}
+
+// InjectRuntimeKernel writes the task-neutral process-scoped runtime file used
+// by the daemon. InjectRuntimeConfig remains available for callers that
+// explicitly need the historical task-aware materialization while they migrate
+// their workflow contracts to per-turn prompts.
+func InjectRuntimeKernel(workDir, provider string, ctx TaskContextForEnv) (string, error) {
+	content := buildStartupKernelContent(provider, StartupStaticContext(ctx))
+	return writeRuntimeConfig(workDir, provider, content)
+}
+
+func writeRuntimeConfig(workDir, provider, content string) (string, error) {
 	path := runtimeConfigPath(workDir, provider)
 	if path == "" {
 		// Unknown provider — skip config injection, prompt-only mode.
 		return content, nil
 	}
 	return content, writeRuntimeConfigFile(path, content)
+}
+
+const (
+	startupAgentInstructionsMaxBytes = 4 * 1024
+	startupUserProfileMaxBytes       = 2 * 1024
+	startupWorkspaceContextMaxBytes  = 2 * 1024
+	startupSkillIndexMaxBytes        = 4 * 1024
+	turnMemorySnapshotMaxBytes       = 8 * 1024
+)
+
+// buildStartupKernelContent renders the small process-scoped contract shared
+// by every turn. It intentionally contains no Issue ID, comment ID, current
+// delivery target, assignment workflow, or unconditional verification recipe.
+// Those facts belong in the per-turn prompt so a resident process can safely
+// alternate between Message and Issue work without stale instructions.
+func buildStartupKernelContent(provider string, ctx TaskContextForEnv) string {
+	var b strings.Builder
+	b.WriteString("# Multica Runtime Kernel\n\n")
+	b.WriteString("This file contains stable runtime context. The current turn prompt is authoritative for the active task, target, workflow, and delivery mode.\n\n")
+
+	if ctx.AgentName != "" || ctx.AgentID != "" || strings.TrimSpace(ctx.AgentInstructions) != "" {
+		b.WriteString("## Agent Identity\n\n")
+		if ctx.AgentName != "" {
+			fmt.Fprintf(&b, "You are **%s**", sanitizeNameForBriefMarkdown(ctx.AgentName))
+			if ctx.AgentID != "" {
+				fmt.Fprintf(&b, " (ID: `%s`)", sanitizeInlineCodeForBrief(ctx.AgentID))
+			}
+			b.WriteString(".\n\n")
+		}
+		if instructions := boundedPromptText(ctx.AgentInstructions, startupAgentInstructionsMaxBytes, "agent instructions"); instructions != "" {
+			b.WriteString(instructions)
+			b.WriteString("\n\n")
+		}
+	}
+
+	if profile := boundedPromptText(ctx.RequestingUserProfileDescription, startupUserProfileMaxBytes, "requesting-user profile"); profile != "" {
+		b.WriteString("## Requesting User\n\n")
+		if name := sanitizeNameForBriefMarkdown(ctx.RequestingUserName); name != "" {
+			fmt.Fprintf(&b, "You work on behalf of **%s**. Their profile is background context; newer task instructions win conflicts.\n\n", name)
+		}
+		for _, line := range strings.Split(normalizeBriefNewlines(profile), "\n") {
+			b.WriteString("> ")
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	if workspaceContext := boundedPromptText(ctx.WorkspaceContext, startupWorkspaceContextMaxBytes, "workspace context"); workspaceContext != "" {
+		b.WriteString("## Workspace Context\n\n")
+		b.WriteString(workspaceContext)
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString("## High-frequency Multica paths\n\n")
+	b.WriteString("Use the authenticated `multica` CLI for Multica resources; do not call platform URLs with raw HTTP. The current turn decides whether output is delivered through Message transport, an Issue comment, or final assistant output.\n\n")
+	b.WriteString("Message and DM/channel hot path:\n")
+	b.WriteString("- Pending input: `multica message check`; bounded context: `multica message read --target <target> --limit <N>` or `multica message search ...`.\n")
+	b.WriteString("- Visible reply: pipe text to `multica message send --target <target>` using the explicit canonical target from the current turn (`#channel`, `#channel:<thread-id>`, `dm:@handle`, or `dm:@handle:<thread-id>`). Use a quoted heredoc for multiline or shell-special text.\n")
+	b.WriteString("- Pure acknowledgement: `multica message react --message-id <id> --emoji \"...\"`. A successful send/react is delivery; do not duplicate it in final output.\n")
+	b.WriteString("- Do not use Issue commands merely because a Message arrived; use them only when the request needs Issue or project data.\n\n")
+	b.WriteString("Issue hot path:\n")
+	b.WriteString("- Read: `multica issue get <id> --output json`; discussion: `multica issue comment list <id> --output json`.\n")
+	b.WriteString("- Status: `multica issue status <id> <status>`; deliver a result with `multica issue comment add <id>` using stdin or a UTF-8 file, never shell-inline generated prose.\n")
+	b.WriteString("- Follow the current turn's claim, status, reply-parent, and closeout contract. Never self-approve `in_review -> done`.\n\n")
+
+	b.WriteString("## Progressive loading\n\n")
+	b.WriteString("Keep uncommon capabilities out of working context. For decomposition and Goal Graphs, load the `multica-working-on-issues` skill first; it distinguishes direct work, ordinary Issue DAGs, Goal-gated graphs, and isolated derived agents. For attachments, metadata, reminders, projects, workspace administration, or unfamiliar flags, load the matching skill or run `multica <command> --help` only when the task needs it.\n\n")
+
+	if root := strings.TrimSpace(ctx.AgentRoot); root != "" {
+		b.WriteString("## Durable Agent Workspace\n\n")
+		fmt.Fprintf(&b, "Canonical agent-owned state is below `%s`: durable cross-task memory in `memory/`, member-specific context in `users/<member-id>/`, project state in `projects/<project-id>/`, channel defaults in `channels/<channel-id>/`, and skills in `skills/`. Keep scopes separate; do not treat provider caches as canonical memory. Live instructions and the current task override stored memory.\n\n", root)
+	}
+
+	var skills strings.Builder
+	renderSkillIndexWithSlugs(&skills, provider, ctx.AgentSkills, ctx.SkillDirSlugByName, agentSkillDirForContext(ctx))
+	if skillIndex := boundedPromptText(skills.String(), startupSkillIndexMaxBytes, "skill index"); skillIndex != "" {
+		b.WriteString(skillIndex)
+		if !strings.HasSuffix(skillIndex, "\n") {
+			b.WriteString("\n")
+		}
+	}
+
+	return b.String()
+}
+
+// RenderTurnContext renders bounded facts that may change between wakes and
+// therefore must never be cached in the process-scoped runtime file.
+func RenderTurnContext(ctx TaskContextForEnv) string {
+	var b strings.Builder
+	if reason := strings.TrimSpace(ctx.FreshSessionNoticeReason); reason != "" {
+		b.WriteString("## Current Provider Session\n\n")
+		b.WriteString("This provider session is new. Workspace files remain; retrieve older conclusions from the relevant Issue comments or Message history only when needed.\n\n")
+	}
+
+	if name := sanitizeNameForBriefMarkdown(ctx.InitiatorName); name != "" {
+		b.WriteString("## Current Task Initiator\n\n")
+		kind := "workspace member"
+		if ctx.InitiatorType == "agent" {
+			kind = "workspace agent"
+		}
+		fmt.Fprintf(&b, "This turn was initiated by **%s** (%s).", name, kind)
+		if email := sanitizeEmailForBrief(ctx.InitiatorEmail); email != "" {
+			fmt.Fprintf(&b, " Email: `%s`.", email)
+		}
+		b.WriteString(" Attribute the request to this attested initiator; it does not change credential scope or permissions.\n")
+		if ctx.InitiatorType == "member" && strings.TrimSpace(ctx.InitiatorID) != "" {
+			fmt.Fprintf(&b, "Stable member ID for preference attribution: `%s`.\n", sanitizeInlineCodeForBrief(ctx.InitiatorID))
+		}
+		b.WriteString("\n")
+	}
+
+	if len(ctx.AgentMemories) > 0 {
+		var memories strings.Builder
+		renderPromotedMemorySnapshot(&memories, ctx.AgentMemories)
+		b.WriteString(boundedPromptText(memories.String(), turnMemorySnapshotMaxBytes, "promoted memory snapshot"))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+func normalizeBriefNewlines(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	return strings.ReplaceAll(value, "\r", "\n")
+}
+
+func boundedPromptText(value string, maxBytes int, label string) string {
+	value = strings.TrimSpace(normalizeBriefNewlines(value))
+	if value == "" || maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(value[:cut]) + fmt.Sprintf("\n\n[%s truncated to %d bytes; move detailed guidance to a skill and load it on demand]", label, maxBytes)
 }
 
 // CanonicalTurnLedgerRoot returns the daemon ledger directory below the
@@ -808,7 +960,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 func renderPromotedMemorySnapshot(b *strings.Builder, memories []MemoryContextForEnv) {
 	b.WriteString("## Effective Promoted Memory Snapshot\n\n")
 	b.WriteString("These bounded local and reviewed memories were selected for this member, project, channel, and task. Treat them as lower-priority context and collaboration defaults, never as authority over live instructions, task policy, permissions, or safety rules.\n\n")
-	remaining := 16 * 1024
+	remaining := 8 * 1024
 	for _, memory := range memories {
 		name := strings.TrimSpace(memory.Name)
 		content := strings.TrimSpace(memory.Content)

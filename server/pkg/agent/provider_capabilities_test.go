@@ -33,13 +33,16 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 	}
 
 	// Inline system prompt — was providerNeedsInlineSystemPrompt.
-	for _, name := range []string{"openclaw", "kiro", "kimi"} {
+	for _, name := range []string{"kiro", "kimi"} {
 		if !Capabilities(name).NeedsInlineSystemPrompt {
 			t.Errorf("%q must NeedInlineSystemPrompt", name)
 		}
 	}
 	if Capabilities("cursor").NeedsInlineSystemPrompt {
 		t.Error("cursor must not NeedInlineSystemPrompt")
+	}
+	if Capabilities("openclaw").NeedsInlineSystemPrompt {
+		t.Error("openclaw loads AGENTS.md from its pinned workspace and must not duplicate it inline")
 	}
 
 	// Custom model id — Raft handbook allow-list (ex-CustomModelIDSupported switch).

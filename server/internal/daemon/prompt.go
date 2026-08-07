@@ -224,6 +224,12 @@ func buildAssignmentPrompt(task Task) string {
 	} else {
 		b.WriteString("No comments existed when this assignment wake was enqueued. Do not run `multica issue comment list` merely to confirm the zero count.\n")
 	}
+	b.WriteString("\nCurrent-turn execution contract:\n")
+	fmt.Fprintf(&b, "- Unless your Agent Identity forbids status changes, set `%s` to `in_progress` before substantive work.\n", task.IssueID)
+	b.WriteString("- Default to direct execution. If the work has independently acceptable units or needs isolated workers, first open the `multica-working-on-issues` skill and follow its current DIRECT / Issue DAG / Goal Graph boundary; do not reconstruct graph rules from an old session.\n")
+	b.WriteString("- Complete the acceptance criteria and verify proportionately to the change. Run the relevant build, tests, or behavior check; visual comparison is required only for UI or visual acceptance criteria.\n")
+	fmt.Fprintf(&b, "- Deliver the outcome with `multica issue comment add %s` using `--content-stdin` with a quoted heredoc or a UTF-8 `--content-file`; never inline generated comment prose in the shell. Final assistant output is not the Issue reply.\n", task.IssueID)
+	fmt.Fprintf(&b, "- When complete, set `%s` to `in_review` unless status changes are forbidden. If genuinely blocked, set it to `blocked` and comment with the concrete blocker and required next action.\n", task.IssueID)
 	return b.String()
 }
 
@@ -456,6 +462,7 @@ func buildCommentPrompt(task Task, provider string) string {
 		fmt.Fprintf(&b, "Read the discussion: `multica issue comment list %s --output json` (long issue? use `--recent 20`).\n\n", task.IssueID)
 	}
 	b.WriteString(execenv.BuildCommentReplyInstructions(provider, task.IssueID, task.TriggerCommentID))
+	b.WriteString("Verify any requested change proportionately before replying. Do not change the issue status unless the triggering comment explicitly asks you to. Final assistant output is not delivered as the Issue reply.\n")
 	return b.String()
 }
 

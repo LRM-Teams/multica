@@ -198,9 +198,10 @@ export function MachineDaemonUpgrade({
     isApplying;
   // Health may flip off `update_available` after a failed attempt — still failed.
   const isFailed =
-    derivedStatus === "failed" ||
-    derivedStatus === "timeout" ||
-    (runtimeHealth === "failed" && !!updateError?.trim());
+    !versionsCaughtUp &&
+    (derivedStatus === "failed" ||
+      derivedStatus === "timeout" ||
+      (runtimeHealth === "failed" && !!updateError?.trim()));
   const isPinned = !!pinnedVersion?.trim();
   const canStartUpdate =
     hasUpdate &&

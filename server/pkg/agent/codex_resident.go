@@ -390,6 +390,15 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 				finalStatus = "aborted"
 				finalError = "execution cancelled"
 			}
+		case <-p.readerDone:
+			// A successful turn/start receipt is not a completion receipt. The
+			// app-server can exit immediately afterward (for example when a
+			// lifecycle restart kills a process that was still starting). Once
+			// stdout closes there can be no later turn/completed notification, so
+			// fail this turn now and release canonical Message admission.
+			waitingForTurn = false
+			finalStatus = "failed"
+			finalError = "codex app-server process exited before turn completion"
 		}
 	}
 

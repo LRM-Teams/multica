@@ -47,14 +47,13 @@ const (
 	//   "starting" — agent_runtime.starting_since / cold-start probe (#1802)
 	//   "crashed"  — agent.crashed_since from idle resident death (#1803)
 	//   "blocked"  — agent.provider_blocked_until (quota lock, #64/#77)
-	agentDisplayStatusIdle         = "idle"
-	agentDisplayStatusWorking      = "working"
-	agentDisplayStatusStarting     = "starting"
-	agentDisplayStatusCrashed      = "crashed"
-	agentDisplayStatusBlocked      = "blocked"
-	agentDisplayStatusDisconnected = "disconnected"
-	agentDisplayStatusOffline      = "offline"
-	agentDisplayStatusStopped      = "stopped"
+	agentDisplayStatusIdle     = "idle"
+	agentDisplayStatusWorking  = "working"
+	agentDisplayStatusStarting = "starting"
+	agentDisplayStatusCrashed  = "crashed"
+	agentDisplayStatusBlocked  = "blocked"
+	agentDisplayStatusOffline  = "offline"
+	agentDisplayStatusStopped  = "stopped"
 
 	// agentRuntimeStartingTTL bounds how long a fresh MarkAgentRuntimesStarting
 	// call keeps a runtime showing "starting" if the daemon never follows up
@@ -212,7 +211,7 @@ func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityT
 //
 // crashedSince is the per-agent idle-resident crash fact (agent.crashed_since).
 // It is checked only while connectivity is still Online: a whole-machine
-// drop is "offline"/"disconnected", not "crashed" — we no longer have a
+// drop is "offline", not "crashed" — we no longer have a
 // live daemon asserting the provider-death fact. Mid-turn process_failure
 // never sets this column (different fact; do not invent).
 //
@@ -237,7 +236,9 @@ func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, crashedSi
 	case runtimeConnectivityDead:
 		return agentDisplayStatusOffline
 	case runtimeConnectivityStale:
-		return agentDisplayStatusDisconnected
+		// Staleness is caused by Computer connectivity, but the Agent-facing
+		// status remains the binary presence value Offline.
+		return agentDisplayStatusOffline
 	}
 	if crashedSince.Valid {
 		return agentDisplayStatusCrashed

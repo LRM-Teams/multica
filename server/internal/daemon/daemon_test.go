@@ -1039,6 +1039,7 @@ func TestWaitForSafeRestartAllowsClaimsBeforeDeadlineThenStopsAndDrains(t *testi
 			ctx,
 			"rt-1",
 			"upd-1",
+			"v0.3.78",
 			"staged",
 			120*time.Millisecond,
 			2*time.Millisecond,
@@ -1100,6 +1101,7 @@ func TestWaitForSafeRestartDeadlineDrainsClaimAlreadyInFlight(t *testing.T) {
 			ctx,
 			"rt-1",
 			"upd-1",
+			"v0.3.78",
 			"staged",
 			20*time.Millisecond,
 			2*time.Millisecond,
@@ -1145,6 +1147,7 @@ func TestWaitForSafeRestartContextCancellationNeverForcesActiveTaskRestart(t *te
 			ctx,
 			"rt-1",
 			"upd-1",
+			"v0.3.78",
 			"staged",
 			20*time.Millisecond,
 			2*time.Millisecond,
@@ -1186,6 +1189,7 @@ func TestWaitForSafeRestartPreCanceledZeroDeadlineNeverRestarts(t *testing.T) {
 			ctx,
 			"rt-1",
 			"upd-1",
+			"v0.3.78",
 			"staged",
 			0,
 			time.Microsecond,
@@ -1223,6 +1227,7 @@ func TestWaitForSafeRestartCancelRacingFinalDrainNeverRestarts(t *testing.T) {
 				ctx,
 				"rt-1",
 				"upd-1",
+				"v0.3.78",
 				"staged",
 				0,
 				time.Microsecond,
@@ -1271,6 +1276,7 @@ func TestWaitForSafeRestartUsesIdleOpportunityBeforeDeadline(t *testing.T) {
 			ctx,
 			"rt-1",
 			"upd-1",
+			"v0.3.78",
 			"staged",
 			500*time.Millisecond,
 			2*time.Millisecond,
@@ -1371,7 +1377,7 @@ func TestProviderNeedsInlineSystemPrompt(t *testing.T) {
 		provider string
 		want     bool
 	}{
-		{provider: "openclaw", want: true},
+		{provider: "openclaw", want: false},
 		// Hermes ACP starts in the task cwd and loads AGENTS.md / .agent_context
 		// directly. Inlining the full runtime brief duplicates that context and
 		// can trip upstream provider safety filters on otherwise harmless tasks.

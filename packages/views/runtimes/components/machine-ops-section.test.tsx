@@ -163,6 +163,42 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     expect(screen.queryByTestId("machine-daemon-upgrade-btn")).not.toBeInTheDocument();
   });
 
+  it("ignores a failed machine upgrade whose target is older than the running version", () => {
+    const runtime = makeRuntime({
+      current_version: "0.4.18",
+      runtime_health: "ok",
+      machine_upgrade: {
+        id: "machine-upgrade-1",
+        daemon_id: "daemon-1",
+        request_id: "request-1",
+        requested_target: "v0.4.17",
+        resolved_target: "v0.4.17",
+        phase: "failed",
+        error_message: "prepare journal: candidate version v0.4.13 is not staged",
+        created_at: "2026-08-07T00:00:00Z",
+        updated_at: "2026-08-07T00:00:01Z",
+      },
+    });
+
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.4.18"
+        daemonTargetVersion="v0.4.17"
+        updateError="prepare journal: candidate version v0.4.13 is not staged"
+        isOnline
+        canUpdate
+      />,
+    );
+
+    expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
+      "0.4.18",
+    );
+    expect(screen.queryByTestId("machine-basics-daemon-target")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("machine-daemon-upgrade-fail")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("machine-daemon-upgrade-error")).not.toBeInTheDocument();
+  });
+
   it("shows outline Upgrade when an update is available", () => {
     const runtime = makeRuntime({
       runtime_health: "update_available",

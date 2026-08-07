@@ -10,7 +10,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestReapStaleRunnerActivityProjectsDisconnectedWithoutInventingIdle(t *testing.T) {
+func TestReapStaleRunnerActivityMarksAgentOfflineForComputerDisconnect(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}

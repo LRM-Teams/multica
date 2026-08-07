@@ -53,7 +53,7 @@ func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
 // Slim: only RuntimeBrief — no skill files, issue_context, or resources.json.
 type StartupMaterializationPlan struct {
 	Provider     string
-	RuntimeBrief string // buildMetaSkillContent body (before marker wrap)
+	RuntimeBrief string // buildStartupKernelContent body (before marker wrap)
 }
 
 // RenderStartupMaterializationPlan pure-renders the create-time AGENTS brief.
@@ -61,7 +61,7 @@ type StartupMaterializationPlan struct {
 func RenderStartupMaterializationPlan(provider string, ctx TaskContextForEnv) StartupMaterializationPlan {
 	return StartupMaterializationPlan{
 		Provider:     provider,
-		RuntimeBrief: buildMetaSkillContent(provider, ctx),
+		RuntimeBrief: buildStartupKernelContent(provider, ctx),
 	}
 }
 

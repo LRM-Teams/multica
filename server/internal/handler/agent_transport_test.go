@@ -975,9 +975,9 @@ func TestAgentTransportSendThreadReplyIDFlattensToRoot(t *testing.T) {
 		t.Fatalf("get channel name: %v", err)
 	}
 
-	// Send using the REPLY id as the thread target — should flatten to root.
+	// Send using the REPLY short id as the thread target — should flatten to root.
 	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
-		"target":            "#" + channelName + ":" + replyID,
+		"target":            "#" + channelName + ":" + replyID[:8],
 		"content":           "reply-to-thread-reply-id should flatten",
 		"client_message_id": "flatten-test-" + uuid.NewString(),
 	})

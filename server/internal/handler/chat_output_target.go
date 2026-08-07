@@ -156,7 +156,7 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 			if !ok {
 				return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 			}
-			rootID, err := util.ParseUUID(strings.TrimSpace(rawMessageID))
+			rootID, err := h.resolveOutputThreadMessageID(ctx, origin.workspaceID, parseUUID(ch.ID), rawMessageID)
 			if err != nil {
 				return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 			}
@@ -291,7 +291,7 @@ func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOut
 	if !hasMessageID {
 		return resolvedChatOutputTarget{kind: chatOutputTargetChannel, channel: ch}, nil
 	}
-	rootID, err := util.ParseUUID(strings.TrimSpace(rawMessageID))
+	rootID, err := h.resolveOutputThreadMessageID(ctx, origin.workspaceID, parseUUID(ch.ID), rawMessageID)
 	if err != nil {
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 	}
@@ -300,6 +300,44 @@ func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOut
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 	}
 	return resolvedChatOutputTarget{kind: chatOutputTargetThread, channel: ch, threadRoot: root}, nil
+}
+
+func (h *Handler) resolveOutputThreadMessageID(ctx context.Context, workspaceID, channelID pgtype.UUID, raw string) (pgtype.UUID, error) {
+	raw = strings.TrimSpace(raw)
+	if id, err := util.ParseUUID(raw); err == nil {
+		return id, nil
+	}
+	if !shortAgentMessageIDPattern.MatchString(raw) {
+		return pgtype.UUID{}, errChatOutputInvalidTarget
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id
+		FROM channel_message
+		WHERE workspace_id = $1
+		  AND channel_id = $2
+		  AND deleted_at IS NULL
+		  AND LOWER(id::text) LIKE LOWER($3) || '%'
+		ORDER BY created_at ASC
+		LIMIT 2`, workspaceID, channelID, raw)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	defer rows.Close()
+	var matches []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return pgtype.UUID{}, err
+		}
+		matches = append(matches, id)
+	}
+	if err := rows.Err(); err != nil {
+		return pgtype.UUID{}, err
+	}
+	if len(matches) != 1 {
+		return pgtype.UUID{}, errChatOutputInvalidTarget
+	}
+	return matches[0], nil
 }
 
 func (h *Handler) groupChannelByName(ctx context.Context, workspaceID pgtype.UUID, name string) (ChannelResponse, error) {

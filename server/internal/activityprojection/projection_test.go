@@ -30,7 +30,7 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 		{"working", "collaborating", "Collaborating..."},
 		{"working", "future_detail", "Working..."},
 		{"error", "", "Error"},
-		{"offline", "machine_disconnected", "Disconnected"},
+		{"offline", "machine_disconnected", "Offline"},
 		{"offline", "stopped", "Stopped"},
 	}
 	for _, tc := range cases {
@@ -160,6 +160,13 @@ func TestProjectTimelineEntryLabelsFineGrainedToolKinds(t *testing.T) {
 				t.Fatalf("row = %+v, want title %q subtext %q", row, tc.wantTitle, tc.wantSubtext)
 			}
 		})
+	}
+}
+
+func TestProjectTimelineEntryKeepsComputerDisconnectOutOfAgentVocabulary(t *testing.T) {
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"","activity_kind":"offline","detail_kind":"machine_disconnected"}`)}, Summary{Label: "Online", Tone: "success"})
+	if row.Title != "Offline" || row.Tone != "neutral" {
+		t.Fatalf("computer disconnect Agent row = %+v, want Offline", row)
 	}
 }
 

@@ -105,6 +105,39 @@ func TestCodexResidentAcceptsCanonicalMessageAtNativeTurnBoundary(t *testing.T) 
 	}
 }
 
+func TestCodexResidentProcessExitAfterAcceptanceCompletesTurn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	fakePath := writeFakeCodexAppServer(t, ""+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
+		`read line`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-exit"}}}'`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
+		`exit 0`+"\n")
+
+	backend := NewCodexAppServerBackend(Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	defer backend.Close()
+	acceptance, err := backend.AcceptMessageBatch(context.Background(), []ResidentMessage{{
+		ID: "message-exit", Target: "dm:user-1", Seq: 1, Content: "hello",
+	}})
+	if err != nil {
+		t.Fatalf("AcceptMessageBatch: %v", err)
+	}
+	select {
+	case err := <-acceptance.Done:
+		if err == nil || !strings.Contains(err.Error(), "process exited") {
+			t.Fatalf("completion error = %v, want process-exited failure", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("process exit after turn/start left canonical Message admission busy")
+	}
+}
+
 func TestCodexResidentSteersContentFreePendingNoticeIntoBusyTurn(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fixture is POSIX-only")

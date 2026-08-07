@@ -18,6 +18,16 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 		{"working", "running_command", "Running command..."},
 		{"working", "checking_messages", "Checking messages..."},
 		{"working", "compacting_context", "Compacting context..."},
+		{"working", "reading_file", "Reading file..."},
+		{"working", "editing_file", "Editing file..."},
+		{"working", "searching_code", "Searching code..."},
+		{"working", "fetching_url", "Fetching web..."},
+		{"working", "sending_message", "Sending message..."},
+		{"working", "waiting_for_message", "Waiting for messages..."},
+		{"working", "claiming_task", "Claiming tasks..."},
+		{"working", "commenting_issue", "Commenting on issue..."},
+		{"working", "scheduling_reminder", "Scheduling reminder..."},
+		{"working", "collaborating", "Collaborating..."},
 		{"working", "future_detail", "Working..."},
 		{"error", "", "Error"},
 		{"offline", "machine_disconnected", "Offline"},
@@ -94,6 +104,62 @@ func TestProjectTimelineEntryUsesEventLocalLifecycleInsteadOfLatestSnapshot(t *t
 	idle := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Idle","activity_kind":"online","detail_kind":"idle"}`)}, Summary{Label: "Error", Tone: "error"})
 	if idle.Title != "Idle" || idle.Subtext != "Idle" || idle.Tone != "success" {
 		t.Fatalf("idle row = %+v", idle)
+	}
+}
+
+func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"pnpm test","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
+	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "warning" || row.BodyKind != "none" {
+		t.Fatalf("command row = %+v, want title Running command with the command as subtext", row)
+	}
+	// The generic label narrative (no command in the tool input) must not
+	// echo the title as its own subtext.
+	plain := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Running command","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
+	if plain.Title != "Running command" || plain.Subtext != "" {
+		t.Fatalf("generic command row = %+v, want no subtext", plain)
+	}
+}
+
+func TestProjectTimelineEntryLabelsFineGrainedToolKinds(t *testing.T) {
+	latest := Summary{Label: "Online", Tone: "success"}
+	cases := []struct {
+		name        string
+		body        string
+		wantTitle   string
+		wantSubtext string
+	}{
+		{
+			name:        "sending message shows the target",
+			body:        `{"text":"#general","activity_kind":"working","detail_kind":"sending_message"}`,
+			wantTitle:   "Sending message",
+			wantSubtext: "#general",
+		},
+		{
+			name:        "reading file shows the path",
+			body:        `{"text":"/repo/main.go","activity_kind":"working","detail_kind":"reading_file"}`,
+			wantTitle:   "Reading file",
+			wantSubtext: "/repo/main.go",
+		},
+		{
+			name:        "tool without a summary renders the label alone",
+			body:        `{"text":"","activity_kind":"working","detail_kind":"checking_messages"}`,
+			wantTitle:   "Checking messages",
+			wantSubtext: "",
+		},
+		{
+			name:        "unknown detail kind falls back to Working",
+			body:        `{"text":"Using cursor-agent","activity_kind":"working","detail_kind":"other"}`,
+			wantTitle:   "Working",
+			wantSubtext: "Using cursor-agent",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(tc.body)}, latest)
+			if row.Title != tc.wantTitle || row.Subtext != tc.wantSubtext || row.Tone != "warning" {
+				t.Fatalf("row = %+v, want title %q subtext %q", row, tc.wantTitle, tc.wantSubtext)
+			}
+		})
 	}
 }
 

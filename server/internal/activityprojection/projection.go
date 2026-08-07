@@ -38,6 +38,60 @@ func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRo
 	}
 }
 
+// workingDetailLabels owns the Raft-aligned activity label for every working
+// detail kind the daemon can emit (see daemon toolDetailKind). Tool actions
+// carry the in-progress "..." suffix; lifecycle events/states (Starting,
+// Message received) do not. Labels only — a detail kind never carries command
+// text, paths, or tool input.
+var workingDetailLabels = map[string]string{
+	"starting":          "Starting",
+	"message_received":  "Message received",
+	"compacting_context": "Compacting context...",
+
+	"running_command": "Running command...",
+	"reading_file":    "Reading file...",
+	"writing_file":    "Writing file...",
+	"editing_file":    "Editing file...",
+	"searching_files": "Searching files...",
+	"searching_code":  "Searching code...",
+	"fetching_url":    "Fetching web...",
+	"searching_web":   "Searching web...",
+	"updating_tasks":  "Updating tasks...",
+
+	"sending_message":    "Sending message...",
+	"checking_messages":  "Checking messages...",
+	"waiting_for_message": "Waiting for messages...",
+	"reading_history":    "Reading history...",
+	"searching_messages": "Searching messages...",
+	"listing_server":     "Listing server...",
+	"listing_tasks":      "Listing tasks...",
+	"creating_tasks":     "Creating tasks...",
+	"claiming_task":      "Claiming tasks...",
+	"unclaiming_task":    "Unclaiming task...",
+	"updating_task_status": "Updating task status...",
+	"adding_channel_member": "Adding channel member...",
+	"joining_channel":       "Joining channel...",
+	"leaving_channel":       "Leaving channel...",
+	"uploading_file":        "Uploading file...",
+	"viewing_file":          "Viewing file...",
+
+	"listing_issues":         "Listing issues...",
+	"getting_issue":          "Getting issue...",
+	"searching_issues":       "Searching issues...",
+	"listing_issue_comments": "Listing issue comments...",
+	"commenting_issue":       "Commenting on issue...",
+	"deleting_issue_comment": "Deleting issue comment...",
+
+	"scheduling_reminder": "Scheduling reminder...",
+	"listing_reminders":   "Listing reminders...",
+	"canceling_reminder":  "Canceling reminder...",
+	"snoozing_reminder":   "Snoozing reminder...",
+	"updating_reminder":   "Updating reminder...",
+	"logging_reminder":    "Logging reminder...",
+
+	"collaborating": "Collaborating...",
+}
+
 // ProjectSummary deliberately never reads command text, paths, tool input,
 // prompts, stderr, or Entry bodies. Those facts cannot reach compact surfaces.
 func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
@@ -56,20 +110,10 @@ func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
 		// Computer connectivity vocabulary and must not leak into Agent state.
 		return Summary{Label: "Offline", Tone: "neutral", Visibility: "visible"}
 	case protocol.ActivityKindWorking:
-		switch snapshot.DetailKind {
-		case "starting":
-			return Summary{Label: "Starting", Tone: "warning", Visibility: "visible"}
-		case "message_received":
-			return Summary{Label: "Message received", Tone: "warning", Visibility: "visible"}
-		case "running_command":
-			return Summary{Label: "Running command...", Tone: "warning", Visibility: "visible"}
-		case "checking_messages":
-			return Summary{Label: "Checking messages...", Tone: "warning", Visibility: "visible"}
-		case "compacting_context":
-			return Summary{Label: "Compacting context...", Tone: "warning", Visibility: "visible"}
-		default:
-			return Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
+		if label, ok := workingDetailLabels[snapshot.DetailKind]; ok {
+			return Summary{Label: label, Tone: "warning", Visibility: "visible"}
 		}
+		return Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
 	default:
 		return Summary{Label: "Working...", Tone: "warning", Visibility: "visible"}
 	}

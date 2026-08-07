@@ -151,7 +151,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 
 	for _, message := range []agent.Message{
 		{Type: agent.MessageThinking},
-		{Type: agent.MessageToolUse, Tool: "exec_command"},
+		{Type: agent.MessageToolUse, Tool: "exec_command", Input: map[string]any{"command": "ls -la"}},
 		{Type: agent.MessageStatus, Status: "reconnecting"},
 		{Type: agent.MessageDiagnostic, Title: "Codex config warning", Level: "warning", Diagnostic: "configWarning", Content: "User namespaces are unavailable"},
 		{Type: agent.MessageError, Content: "sensitive provider text"},
@@ -167,6 +167,13 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 		if activities[index].Snapshot.ActivityKind != wantKinds[index] || activities[index].Snapshot.DetailKind != wantDetails[index] {
 			t.Fatalf("Activity[%d] = %+v", index, activities[index].Snapshot)
 		}
+	}
+	var toolBody protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(activities[1].Entries[0].Body, &toolBody); err != nil {
+		t.Fatal(err)
+	}
+	if toolBody.Text != "ls -la" || toolBody.ActivityKind != protocol.ActivityKindWorking || toolBody.DetailKind != "running_command" {
+		t.Fatalf("tool-use Activity body = %+v, want the actual command as narrative text", toolBody)
 	}
 	var diagnostic protocol.AgentActivitySystemBody
 	if err := json.Unmarshal(activities[2].Entries[0].Body, &diagnostic); err != nil {

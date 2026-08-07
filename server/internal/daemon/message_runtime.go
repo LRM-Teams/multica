@@ -162,7 +162,8 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 	case agent.MessageThinking:
 		activityKind, narrative = protocol.ActivityKindThinking, "Thinking"
 	case agent.MessageToolUse:
-		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "running_command", "Running command"
+		activityKind = protocol.ActivityKindWorking
+		detailKind, narrative = toolActivityFact(message.Tool, message.Input)
 	case agent.MessageCompactionStarted:
 		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "compacting_context", "Compacting context"
 	case agent.MessageCompactionFinished:

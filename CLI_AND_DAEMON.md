@@ -1,6 +1,13 @@
-# CLI and Agent Daemon Guide
+# CLI and Computer (agent daemon) Guide
 
-The `multica` CLI connects your local machine to Multica. It handles authentication, workspace management, issue tracking, and runs the agent daemon that executes AI tasks locally.
+> **Computer generation:** the local execution surface is now one machine-wide
+> **Computer** (`multica computer start/stop/restart/status/logs`), run as a
+> detached resident — not a profile-scoped `daemon` and not an OS service. The
+> hidden `multica daemon ...` commands are deprecated aliases that delegate to
+> the same Computer. `multica setup self-host` (custom-origin CLI setup) is
+> retired; setup connects the Computer through https://leagent.me.
+
+The `multica` CLI connects your local machine to Multica. It handles authentication, workspace management, issue tracking, and runs the machine-wide Computer (resident) that executes AI tasks locally.
 
 ## Installation
 
@@ -58,11 +65,8 @@ canonical installation.
 ## Quick Start
 
 ```bash
-# One-command setup: configure, authenticate, and start the daemon
-multica setup
-
-# For self-hosted (local) deployments:
-multica setup self-host
+# Connect this Computer to Multica Cloud (leagent.me): authenticate + start the resident Computer
+multica setup /<workspace>
 ```
 
 Or step by step:
@@ -71,8 +75,8 @@ Or step by step:
 # 1. Authenticate (opens browser for login)
 multica login
 
-# 2. Start the agent daemon
-multica daemon start
+# 2. Start the machine-wide resident Computer
+multica computer start
 
 # 3. Done — agents in your watched workspaces can now execute tasks on your machine
 ```
@@ -120,15 +124,15 @@ The daemon is the local agent runtime. It detects available AI CLIs on your mach
 ### Start
 
 ```bash
-multica daemon start
+multica computer start
 ```
 
-By default, the daemon runs in the background and logs to `~/.multica/daemon.log`.
+By default, the Computer runs detached in the background and logs to `~/.multica/daemon.log`.
 
 To run in the foreground (useful for debugging):
 
 ```bash
-multica daemon start --foreground
+multica computer start --foreground
 ```
 
 ### Stop
@@ -234,16 +238,15 @@ Agent-specific overrides:
 
 `MULTICA_CLAUDE_ARGS` and `MULTICA_CODEX_ARGS` are parsed with POSIX shellword quoting, so values such as `--model "gpt-5.1 codex" --sandbox read-only` are split like a shell command line. Agent arguments are applied in this order: hardcoded Multica defaults, daemon-wide env defaults, then per-agent `custom_args` from the task.
 
-### Self-Hosted Server
+### Self-Hosted Server (retired CLI surface)
 
-When connecting to a self-hosted Multica instance, the easiest approach is:
+The `multica setup self-host` CLI surface is retired in the Computer generation
+(see the top note); the resident Computer authenticates through https://leagent.me.
 
 ```bash
-# One command — configures for localhost, authenticates, starts daemon
-multica setup self-host
-
-# Or for on-premise with custom domains:
-multica setup self-host --server-url https://api.example.com --app-url https://app.example.com
+# (retired) this command is no longer exposed:
+#   multica setup self-host
+#   multica setup self-host --server-url https://api.example.com --app-url https://app.example.com
 ```
 
 Or configure manually:
@@ -258,22 +261,18 @@ multica config set app_url http://localhost:3000
 # multica config set app_url https://app.example.com
 
 multica login
-multica daemon start
+multica computer start
 ```
 
-### Profiles
+### Profiles (retired)
 
-Profiles let you run multiple daemons on the same machine — for example, one for production and one for a staging server.
+Per-profile daemons are retired with the machine-wide Computer (see the top note);
+the Computer is no longer profile-scoped and does not accept `setup self-host --profile`.
 
 ```bash
-# Set up a staging profile
-multica setup self-host --profile staging --server-url https://api-staging.example.com --app-url https://staging.example.com
-
-# Start its daemon
-multica daemon start --profile staging
-
-# Default profile runs separately
-multica daemon start
+# (retired) profile-scoped setup is no longer exposed:
+#   multica setup self-host --profile staging --server-url https://...
+#   multica daemon start --profile staging
 ```
 
 Each profile gets its own config directory (`~/.multica/profiles/<name>/`), daemon state, health port, and workspace root.
@@ -648,20 +647,17 @@ multica issue list --project <project-id>
 ## Setup
 
 ```bash
-# One-command setup for Multica Cloud: configure, authenticate, and start the daemon
-multica setup
+# Connect this Computer to Multica Cloud: authenticate + start the resident Computer
+multica setup /<workspace>
 
-# For local self-hosted deployments
-multica setup self-host
-
-# Custom ports
-multica setup self-host --port 9090 --frontend-port 4000
-
-# On-premise with custom domains
-multica setup self-host --server-url https://api.example.com --app-url https://app.example.com
+# (retired) the `setup self-host` / custom-origin CLI surface is no longer exposed,
+# so these are not valid commands in the Computer generation:
+#   multica setup self-host
+#   multica setup self-host --port 9090 --frontend-port 4000
+#   multica setup self-host --server-url https://api.example.com --app-url https://app.example.com
 ```
 
-`multica setup` configures the CLI, opens your browser for authentication, and starts the daemon — all in one step. Use `multica setup self-host` to connect to a self-hosted server instead of Multica Cloud.
+`multica setup /<workspace>` connects this Computer to Multica Cloud (leagent.me): it authenticates and starts the resident Computer in one step. The `multica setup self-host` surface for connecting to custom origins is retired.
 
 ## Configuration
 

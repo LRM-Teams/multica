@@ -660,3 +660,37 @@ func TestMigration246SeparatesDaemonCredentialsAndEnforcesOneUnrevokedSubject(t 
 		}
 	}
 }
+
+func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "307_computer_workspace_bindings.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 307 up: %v", err)
+	}
+	// Forward contract: keyed by immutable workspace_id, never by slug; idempotent;
+	// credential stored as a hash only; revocable via active/revoked_at.
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS computer_workspace_bindings",
+		"daemon_id          TEXT",
+		"workspace_id       UUID",
+		"execution_token_hash TEXT",
+		"revoked_at         TIMESTAMPTZ",
+		"PRIMARY KEY (daemon_id, workspace_id)",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Errorf("migration 307 up missing %q", required)
+		}
+	}
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "307_computer_workspace_bindings.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 307 down: %v", err)
+	}
+	if !strings.Contains(string(down), "DROP TABLE IF EXISTS computer_workspace_bindings") {
+		t.Error("migration 307 down must drop the bindings table")
+	}
+}

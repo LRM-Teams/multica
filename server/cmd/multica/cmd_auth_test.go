@@ -3,13 +3,27 @@ package main
 import (
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 )
+
+// newTestComputerIdentityStore returns a machine-wide Computer identity store
+// rooted under the given HOME (test temp dir).
+func newTestComputerIdentityStore(t *testing.T, home string) *computer.IdentityStore {
+	t.Helper()
+	return computer.NewIdentityStore(filepath.Join(home, ".multica"))
+}
+
+// cliProfileConfigPath is the machine-wide CLI config path under HOME.
+func cliProfileConfigPath(home string) string {
+	return filepath.Join(home, ".multica", "config.json")
+}
 
 // testCmd returns a minimal cobra.Command with the --profile persistent flag
 // registered, matching the rootCmd setup used in production.
@@ -484,5 +498,60 @@ func TestValidateLoginTokenPrefix(t *testing.T) {
 		if !strings.Contains(err.Error(), p) {
 			t.Errorf("error %q does not mention prefix %q", err.Error(), p)
 		}
+	}
+}
+
+// #2488: Cloud login origin is always the canonical leagent.me base and
+// cannot be redirected by MULTICA_SERVER_URL or a flag/profile.
+func TestCloudLoginOriginIsCanonicalNotRedirectable(t *testing.T) {
+	old := cloudServerBaseURL
+	t.Cleanup(func() { cloudServerBaseURL = old })
+
+	cloudServerBaseURL = "https://leagent.me"
+	t.Setenv("MULTICA_SERVER_URL", "http://evil.example:9999")
+
+	got := cloudServerURL()
+	if !strings.Contains(got, "leagent.me") || strings.Contains(got, "evil.example") {
+		t.Fatalf("cloudServerURL = %q, want canonical leagent.me (ignoring env)", got)
+	}
+}
+
+func TestCloudLoginOriginHonorsTestOverride(t *testing.T) {
+	old := cloudServerBaseURL
+	t.Cleanup(func() { cloudServerBaseURL = old })
+	cloudServerBaseURL = "http://127.0.0.1:12345"
+	if got := cloudServerURL(); got != "http://127.0.0.1:12345" {
+		t.Fatalf("cloudServerURL test override = %q", got)
+	}
+}
+
+// #2488: logout clears the user session but retains Computer Identity.
+func TestLogoutClearsSessionAndRetainsIdentity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Create a machine identity and a session token.
+	store := newTestComputerIdentityStore(t, home)
+	store.Load("")
+	if err := os.WriteFile(cliProfileConfigPath(home), []byte(`{"token":"mul_secret","server_url":"https://leagent.me"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := testCmd()
+	if err := runAuthLogout(cmd, nil); err != nil {
+		t.Fatalf("runAuthLogout: %v", err)
+	}
+
+	cfg, err := cli.LoadCLIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "" {
+		t.Fatalf("token not cleared after logout: %q", cfg.Token)
+	}
+	// Identity must be retained.
+	identityPath := filepath.Join(home, ".multica", "daemon.id")
+	if _, err := os.Stat(identityPath); err != nil {
+		t.Fatalf("Computer Identity was not retained after logout: %v", err)
 	}
 }

@@ -288,7 +288,7 @@ describe("DeleteRuntimeDialog", () => {
       cachedAgents: [],
     });
 
-    expect(screen.getByText("Stop the daemon first")).toBeInTheDocument();
+    expect(screen.getByText("Stop the Computer first")).toBeInTheDocument();
     expect(screen.getByText("multica daemon stop")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Delete runtime" }),
@@ -313,7 +313,7 @@ describe("DeleteRuntimeDialog", () => {
     expect(
       screen.getByRole("button", { name: "Delete runtime" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText("Stop the daemon first")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stop the Computer first")).not.toBeInTheDocument();
   });
 
   it("resolves the stop-daemon step's device label from the runtime's hostname suffix, not its provider-branded name", () => {
@@ -350,7 +350,7 @@ describe("DeleteRuntimeDialog", () => {
       });
       const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
-      expect(screen.getByText("Stop the daemon first")).toBeInTheDocument();
+      expect(screen.getByText("Stop the Computer first")).toBeInTheDocument();
       expect(invalidateSpy).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(4_000);
@@ -363,7 +363,7 @@ describe("DeleteRuntimeDialog", () => {
       // it must advance without the user reopening anything.
       rerenderWithRuntime({ ...online, status: "offline" });
 
-      expect(screen.queryByText("Stop the daemon first")).not.toBeInTheDocument();
+      expect(screen.queryByText("Stop the Computer first")).not.toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Delete runtime" }),
       ).toBeInTheDocument();
@@ -381,7 +381,7 @@ describe("DeleteRuntimeDialog", () => {
     expect(
       screen.getByText(/1 agent is still on this runtime/),
     ).toBeInTheDocument();
-    expect(screen.queryByText("Stop the daemon first")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stop the Computer first")).not.toBeInTheDocument();
   });
 
 });

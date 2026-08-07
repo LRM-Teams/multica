@@ -72,7 +72,7 @@
     "basics_display_name": "显示名称",
     "basics_hostname": "主机名",
     "basics_os": "操作系统",
-    "basics_daemon": "Daemon",
+    "basics_daemon": "Computer",
     "basics_pinned_version": "指定版本",
     "agents_section": "本机 Agents",
     "code_agents_section": "本机 Runtime",
@@ -163,7 +163,7 @@
     "daemon_version_chip": "daemon v{{version}}",
     "version_prefix": "v{{version}}",
     "basics_owner": "所有者",
-    "basics_daemon_id": "Daemon ID",
+    "basics_daemon_id": "Computer ID",
     "ops": {
       "section": "操作",
       "local_only": "仅本机",
@@ -256,15 +256,15 @@
         }
       },
       "blocked_by_online_daemon": {
-        "title": "请先停止守护进程",
-        "description": "「{{name}}」是一个正在运行的本地守护进程，在此删除后会在数秒内自动重新注册。请先在该设备上停止它。",
+        "title": "请先停止该 Computer",
+        "description": "「{{name}}」是一个正在运行的本地 Computer，在此删除后会在数秒内自动重新注册。请先在该设备上停止它。",
         "device_label": "设备",
         "stop_command_label": "在设备上运行此命令",
         "waiting_hint": "我们会检测到它离线后，让你完成删除。",
         "close": "关闭",
         "copy_aria": "复制命令"
       },
-      "self_healing_blocked_toast": "该运行时由正在运行的本地守护进程托管，删除后会自动重新注册。",
+      "self_healing_blocked_toast": "该 Computer 由正在运行的本地 Computer 托管，删除后会自动重新注册。",
       "delete_failed_toast": "删除运行时失败"
     },
     "toast_deleted": "已删除运行时",

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 var updateDownloadTimeout time.Duration = cli.DefaultUpdateDownloadTimeout
@@ -141,9 +142,9 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 func requestLiveMachineUpgrade(cmd *cobra.Command, targetVersion string) (bool, error) {
 	profile := resolveProfile(cmd)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	health := checkDaemonHealthOnPort(ctx, healthPortForProfile(profile))
+	health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
 	cancel()
-	if daemonAlive(health) {
+	if computer.Alive(health) {
 		daemonID, _ := health["daemon_id"].(string)
 		daemonID = strings.TrimSpace(daemonID)
 		if daemonID == "" {
@@ -164,7 +165,7 @@ func requestLiveMachineUpgrade(cmd *cobra.Command, targetVersion string) (bool, 
 			requestCancel()
 			return true, fmt.Errorf("upgrade_service_unreachable: encode owner request: %w", marshalErr)
 		}
-		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/machine-upgrades", healthPortForProfile(profile)), bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/machine-upgrades", computer.HealthPort(profile)), bytes.NewReader(body))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-Multica-Control-Token", controlToken)
@@ -192,7 +193,7 @@ func requestLiveMachineUpgrade(cmd *cobra.Command, targetVersion string) (bool, 
 		fmt.Fprintf(os.Stderr, "Machine Upgrade requested: %s (target %s). The live daemon owns staging and handoff.\n", strVal(operation, "id"), targetVersion)
 		return true, nil
 	}
-	if _, err := os.Stat(daemonPIDPathForProfile(profile)); err == nil {
+	if _, err := os.Stat(computer.PIDPath(profile)); err == nil {
 		return true, fmt.Errorf("upgrade_service_unreachable: daemon PID state exists but its local control surface is unavailable; refusing offline activation")
 	}
 	return false, nil

@@ -2,6 +2,13 @@
 
 Deploy Multica on your own infrastructure in minutes.
 
+> **Note (Computer generation):** the `multica setup self-host` CLI command is
+> **retired**. Setup now connects the machine-wide resident Computer through
+> Multica Cloud at https://leagent.me and does not install an OS service. The
+> self-hosting below provisions the *server*; operators who deploy it serve
+> their own backend, while the resident Computer still authenticates against
+> the Cloud origin the CLI is configured for.
+
 ## Architecture
 
 | Component | Description | Technology |
@@ -20,8 +27,9 @@ Two commands to set up everything — server, CLI, and configuration:
 # 1. Install CLI + provision the self-host server
 curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 
-# 2. Configure CLI, authenticate, and start the daemon
-multica setup self-host
+# 2. [retired in the Computer generation] connect the resident Computer
+#    via Multica Cloud (leagent.me); `multica setup self-host` is no longer exposed.
+multica setup /<workspace>
 ```
 
 This installs the `multica` CLI, checks out the latest self-host assets, pulls the official Multica images from GHCR, and configures everything for localhost.
@@ -103,11 +111,10 @@ You also need at least one AI agent CLI installed:
 - Kiro CLI (`kiro-cli` on PATH)
 - [Grok](https://grok.com) (`grok` on PATH)
 
-### b) One-command setup
+### b) One-command setup (retired CLI surface)
 
-```bash
-multica setup self-host
-```
+The `multica setup self-host` CLI command is retired in the Computer generation
+(see the note at the top); it no longer exposes custom-origin configuration.
 
 This automatically:
 1. Configures the CLI to connect to `localhost` (ports 8080/3000)
@@ -115,7 +122,8 @@ This automatically:
 3. Discovers your workspaces
 4. Starts the daemon in the background
 
-For on-premise deployments with custom domains:
+For on-premise deployments with custom domains (note: this CLI surface is retired
+in the Computer generation; see the note at the top):
 
 ```bash
 multica setup self-host --server-url https://api.example.com --app-url https://app.example.com
@@ -275,13 +283,7 @@ The chart defaults to `APP_ENV=production` (set in `values.yaml` under `backend.
 
 ### Step 6 — Install CLI & Start Daemon
 
-The daemon runs on your local machine, not in the cluster. Install the CLI and an AI agent as in [Step 3](#step-3--install-cli--start-daemon) above, then point the CLI at your Ingress hostnames:
-
-```bash
-multica setup self-host \
-  --server-url http://api.multica.dev.lan \
-  --app-url http://multica.dev.lan
-```
+The daemon runs on your local machine, not in the cluster. Install the CLI and an AI agent as in [Step 3](#step-3--install-cli--start-daemon) above. (The `multica setup self-host` CLI surface is retired in the Computer generation; see the note at the top.)
 
 Make sure the machine running the daemon has the same `/etc/hosts` (or DNS) entries from [Step 1](#step-1--point-hostnames-at-the-cluster).
 
@@ -408,13 +410,13 @@ multica daemon stop
 
 ## Switching to Multica Cloud
 
-If you've been self-hosting and want to switch your CLI to [Multica Cloud](https://multica.ai):
+If you've been self-hosting and want to switch your CLI to [Multica Cloud](https://leagent.me):
 
 ```bash
-multica setup
+multica setup /<workspace>
 ```
 
-This reconfigures the CLI for multica.ai, re-authenticates, and restarts the daemon. You will be prompted before overwriting the existing configuration.
+This reconfigures the CLI for Multica Cloud, re-authenticates, and restarts the daemon. You will be prompted before overwriting the existing configuration.
 
 > Your local Docker services are unaffected. Stop them separately if you no longer need them.
 

@@ -51,6 +51,21 @@ polls the canonical daemon-scoped machine-upgrade operation. Omit
 `--target-version` to request the latest version. Computer owners and workspace
 owners/admins can perform this action.
 
+The resident Computer is machine-wide: it runs as one detached process and is
+controlled by the Computer lifecycle, not an OS supervisor:
+
+```bash
+multica computer start      # run the machine-wide resident detached
+multica computer stop       # stop it gracefully
+multica computer restart    # stop + start
+multica computer status     # read-only status (identity, connect, bindings)
+multica computer logs       # tail the resident service log
+multica computer doctor     # read-only diagnostics (--fix only clears a confirmed-stopped stale PID)
+```
+
+`multica daemon ...` is a hidden, deprecated compatibility alias that delegates
+to the same machine-wide Computer; use `multica computer ...` instead.
+
 
 ## Debugging an Agent that did not run
 

@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 const machineUpgradeControlTokenFile = "machine-upgrade-control.token"
 
 func machineUpgradeControlTokenPath(profile string) string {
-	return filepath.Join(daemonDirForProfile(profile), machineUpgradeControlTokenFile)
+	return filepath.Join(computer.RootDir(profile), machineUpgradeControlTokenFile)
 }
 
 // ensureMachineUpgradeControlToken creates a per-profile secret readable only

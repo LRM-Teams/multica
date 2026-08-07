@@ -75,7 +75,7 @@
     "basics_display_name": "Display name",
     "basics_hostname": "Hostname",
     "basics_os": "OS",
-    "basics_daemon": "Daemon",
+    "basics_daemon": "Computer",
     "basics_pinned_version": "Version pin",
     "agents_section": "Agents on this computer",
     "code_agents_section": "Runtimes on this computer",
@@ -166,7 +166,7 @@
     "daemon_version_chip": "daemon v{{version}}",
     "version_prefix": "v{{version}}",
     "basics_owner": "Owner",
-    "basics_daemon_id": "Daemon ID",
+    "basics_daemon_id": "Computer ID",
     "ops": {
       "section": "Actions",
       "local_only": "Local only",
@@ -260,15 +260,15 @@
         }
       },
       "blocked_by_online_daemon": {
-        "title": "Stop the daemon first",
-        "description": "\"{{name}}\" is a running local daemon and will automatically re-register itself within seconds of being deleted here. Stop it on the device first.",
+        "title": "Stop the Computer first",
+        "description": "\"{{name}}\" is a running local Computer and will automatically re-register itself within seconds of being deleted here. Stop it on the device first.",
         "device_label": "Device",
         "stop_command_label": "Run this on the device",
         "waiting_hint": "We'll detect when it goes offline and let you finish deleting it.",
         "close": "Close",
         "copy_aria": "Copy command"
       },
-      "self_healing_blocked_toast": "This runtime is managed by a running local daemon and will re-register itself.",
+      "self_healing_blocked_toast": "This Computer is managed by a running local Computer and will re-register itself.",
       "delete_failed_toast": "Failed to delete runtime"
     },
     "toast_deleted": "Runtime deleted",

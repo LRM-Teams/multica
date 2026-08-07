@@ -35,3 +35,37 @@ export function workspaceDisplayPath(relPath: string): string {
   const trimmed = relPath.trim();
   return trimmed.replace(WORKSPACE_UUID_PREFIX, "");
 }
+
+/** Contract for a Binding-removal DELETE response (#2493). */
+export interface BindingRemovalResult {
+  ok: boolean;
+  workspaceID?: string;
+  /** true when the server refused to delete local data (contract drift). */
+  deleteBlocked?: boolean;
+  error?: string;
+}
+
+/**
+ * Fail-safe parse of a Binding-removal response. Malformed or drifted payloads
+ * (#2493) degrade to a safe "not applied / error" result instead of throwing,
+ * so the Web UI never misreports a partial or failed removal as success.
+ */
+export function parseBindingRemovalResult(payload: unknown): BindingRemovalResult {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { ok: false, error: "malformed response" };
+  }
+  const p = payload as Record<string, unknown>;
+  const result: BindingRemovalResult = { ok: p.ok === true };
+  if (typeof p.workspace_id === "string" && p.workspace_id) {
+    result.workspaceID = p.workspace_id;
+  }
+  // Contract drift: if the newest server keeps local data (rather than
+  // deleting on revocation), surface that instead of assuming a delete happened.
+  if (p.kept_local_data === true || p.deletes_local_data === false) {
+    result.deleteBlocked = true;
+  }
+  if (typeof p.error === "string" && p.error) {
+    result.error = p.error;
+  }
+  return result;
+}

@@ -14,25 +14,15 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 )
 
 var setupCmd = &cobra.Command{
 	Use:   "setup [/workspace]",
-	Short: "Configure the CLI, authenticate, and install the daemon service",
-	Long: `Configures the CLI to connect to Multica Cloud (leagent.me), then
-authenticates via browser and installs the agent daemon as a per-user OS
-service (LaunchAgent / systemd --user / Windows Scheduled Task) so it
-survives terminal close and restarts after upgrade.
-
-If a configuration already exists, you will be prompted before overwriting.
-
-Pass exactly one workspace path to connect this computer in that workspace:
-multica setup /my-workspace
-
-Use 'multica setup self-host' to connect to a self-hosted server instead.
-
-Use --profile to create an isolated configuration for a separate environment:
-  multica setup self-host --profile staging --server-url https://api-staging.co`,
+	Short: "Connect this Computer to Multica Cloud (leagent.me)",
+	Long: `Connects this machine to Multica Cloud (leagent.me), authenticates, and
+starts the machine-wide resident Computer as a detached process that survives
+terminal close. It does not install an OS service or a profile-scoped daemon.`,
 	Args: requireWorkspacePath,
 	RunE: runSetupCloud,
 }
@@ -84,7 +74,10 @@ func init() {
 	setupSelfHostCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 
 	setupCmd.AddCommand(setupCloudCmd)
-	setupCmd.AddCommand(setupSelfHostCmd)
+	// #2496: self-host is no longer a supported setup surface; the retired
+	// command is unregistered + hidden (its helpers/tests remain for the
+	// bounded legacy-migration path).
+	setupSelfHostCmd.Hidden = true
 }
 
 // printConfigLocation prints the config file path and profile name.
@@ -304,10 +297,66 @@ func runSetupSelfHost(cmd *cobra.Command, args []string) error {
 // Bare `multica daemon start` remains for development/emergency only and is
 // not treated as a completed machine setup — unsupervised processes stay
 // stopped after an auto-update self-stop (see daemon update logs).
+// startResidentAfterSetup launches the machine-wide detached resident after a
+// successful setup. It is a package var so tests can substitute a fake and
+// assert the resident-start contract without spawning a real OS process.
+var startResidentAfterSetup = startResidentAfterSetupReal
+
+func startResidentAfterSetupReal(cmd *cobra.Command) error {
+	_, err := (&computer.Lifecycle{Profile: ""}).StartBackground([]string{"daemon", "start", "--foreground"})
+	return err
+}
+
 func startDaemonAfterSetup(cmd *cobra.Command) error {
-	fmt.Fprintln(os.Stderr, "\nInstalling daemon service (auto-start at login + auto-restart)...")
-	if err := runDaemonInstallService(cmd, nil); err != nil {
-		return fmt.Errorf("install daemon service: %w\n  For development only you can fall back to `multica daemon start`; setup expects install-service so upgrades can reconnect without a terminal", err)
+	// Establish the Workspace Binding (#2489). A failure here must not read as
+	// a successful setup.
+	if err := establishWorkspaceBinding(cmd); err != nil {
+		return fmt.Errorf("Setup incomplete (%w): the Computer identity is registered but this Workspace Binding could not be established; re-run `multica setup /<ws>` to repair", err)
+	}
+
+	// #2487/#2496: the Computer runs as one machine-wide detached resident that
+	// survives terminal close; setup does NOT install an OS supervisor
+	// (LaunchAgent/systemd/Scheduled Task).
+	fmt.Fprintln(os.Stderr, "\nStarting the resident Computer...")
+	return startResidentAfterSetup(cmd)
+}
+
+// establishWorkspaceBinding records the selected Workspace as a Binding for
+// this Computer (#2489): persisted locally (machine-wide, keyed by the
+// immutable workspace_id) and registered with the server so the Web Computers
+// projection reflects a connected Machine. Returns an error (Setup
+// incomplete) so a partial setup never reads as successful.
+func establishWorkspaceBinding(cmd *cobra.Command) error {
+	profile := resolveProfile(cmd)
+	cfg, err := cli.LoadCLIConfigForProfile(profile)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	if cfg.WorkspaceID == "" {
+		return nil // no workspace selected; nothing to bind yet
+	}
+
+	identity, err := (&computer.Lifecycle{Profile: ""}).Identity()
+	if err != nil {
+		return fmt.Errorf("resolve computer identity: %w", err)
+	}
+	store := computer.NewBindingsStore(computer.RootDir(""))
+	if err := store.AddOrRepair(computer.WorkspaceBinding{
+		WorkspaceID: cfg.WorkspaceID,
+		ComputerID:  identity,
+		Active:      true,
+	}); err != nil {
+		return fmt.Errorf("persist binding: %w", err)
+	}
+
+	// Best-effort server registration; local persistence is the durable record.
+	if cfg.ServerURL != "" {
+		client := cli.NewAPIClient(cfg.ServerURL, "", cfg.Token)
+		ctx, cancel := cli.APIContext(context.Background())
+		defer cancel()
+		_ = client.PostJSON(ctx, "/api/daemons/"+identity+"/bindings", map[string]any{
+			"workspace_id": cfg.WorkspaceID,
+		}, nil)
 	}
 	return nil
 }

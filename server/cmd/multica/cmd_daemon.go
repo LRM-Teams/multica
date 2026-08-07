@@ -2,14 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon"
 	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -25,6 +22,7 @@ import (
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Control the local agent runtime daemon",
+	Hidden: true, // compatibility alias for the machine-wide Computer (#2487)
 }
 
 var daemonStartCmd = &cobra.Command{
@@ -76,7 +74,6 @@ func init() {
 
 	daemonStatusCmd.Flags().String("output", "table", "Output format: table or json")
 
-	// restart shares all the same flags as start
 	rf := daemonRestartCmd.Flags()
 	rf.Bool("foreground", false, "Run in the foreground instead of background")
 	rf.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
@@ -96,79 +93,20 @@ func init() {
 	daemonCmd.AddCommand(daemonLogsCmd)
 }
 
-// daemonDirForProfile returns the state directory for the given profile.
-// Empty profile → ~/.multica/, named profile → ~/.multica/profiles/<name>/.
-func daemonDirForProfile(profile string) string {
-	dir, err := cli.ProfileDir(profile)
-	if err != nil {
-		return ""
-	}
-	return dir
-}
-
-func daemonPIDPathForProfile(profile string) string {
-	return filepath.Join(daemonDirForProfile(profile), "daemon.pid")
-}
-
-func daemonLogPathForProfile(profile string) string {
-	return filepath.Join(daemonDirForProfile(profile), "daemon.log")
-}
-
-// removeDaemonPIDIfMatches avoids an incumbent's deferred cleanup deleting a
-// detached successor's freshly published PID during a Machine Upgrade handoff.
-func removeDaemonPIDIfMatches(profile string, pid int) {
-	path := daemonPIDPathForProfile(profile)
-	data, err := os.ReadFile(path)
-	if err != nil || strings.TrimSpace(string(data)) != strconv.Itoa(pid) {
+// daemonDeprecatedAliasNotices prints the deprecation guidance for the hidden
+// `multica daemon ...` lifecycle alias, which now delegates to the same
+// machine-wide Computer. Not printed when running as `multica computer ...`.
+func daemonDeprecatedAliasNotices() {
+	if computerMode {
 		return
 	}
-	_ = os.Remove(path)
-}
-
-// healthPortForProfile returns the health check port for the given profile.
-// Default profile uses the standard port (19514). Named profiles get a
-// deterministic offset derived from the profile name.
-func healthPortForProfile(profile string) int {
-	if profile == "" {
-		return daemon.DefaultHealthPort
-	}
-	// Simple hash: sum of bytes mod 1000, offset from base+1.
-	var h int
-	for _, b := range []byte(profile) {
-		h += int(b)
-	}
-	return daemon.DefaultHealthPort + 1 + (h % 1000)
-}
-
-// resolveDaemonLaunchBinary picks the binary to exec for a fresh daemon
-// process. It prefers a VersionStore Active version staged by `multica
-// update` (task #41: `daemon restart` previously always re-exec'd whatever
-// binary invoked the command, silently ignoring anything staged by a prior
-// `update` run) and falls back to the invoking binary's own path when there
-// is no Active version — the normal case for an install that has never run
-// `multica update`. Brew installs manage their own binary outside the
-// VersionStore and are left untouched.
-func resolveDaemonLaunchBinary() (string, error) {
-	exePath, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	if cli.IsBrewInstall() {
-		return exePath, nil
-	}
-	store, err := cli.OpenVersionStore("")
-	if err != nil {
-		return exePath, nil
-	}
-	if activePath, ok, err := store.ActiveBinaryPath(); err == nil && ok {
-		return activePath, nil
-	}
-	return exePath, nil
+	fmt.Fprintln(os.Stderr, "Note: `multica daemon ...` is deprecated and will be removed in a future release. Use `multica computer ...` instead.")
 }
 
 // --- daemon start ---
 
 func runDaemonStart(cmd *cobra.Command, _ []string) error {
+	daemonDeprecatedAliasNotices()
 	foreground, _ := cmd.Flags().GetBool("foreground")
 	if foreground {
 		return runDaemonForeground(cmd)
@@ -178,13 +116,13 @@ func runDaemonStart(cmd *cobra.Command, _ []string) error {
 
 func runDaemonBackground(cmd *cobra.Command) error {
 	profile := resolveProfile(cmd)
-	healthPort := healthPortForProfile(profile)
+	lc := &computer.Lifecycle{Profile: profile}
 
-	// Check if daemon is already running.
+	// Check if the Computer is already running.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := checkDaemonHealthOnPort(ctx, healthPort)
-	if daemonAlive(health) {
+	health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
+	if computer.Alive(health) {
 		label := "daemon"
 		if profile != "" {
 			label = fmt.Sprintf("daemon [%s]", profile)
@@ -193,105 +131,30 @@ func runDaemonBackground(cmd *cobra.Command) error {
 		return fmt.Errorf("%s is already running (pid %v). Use 'daemon restart' to restart it", label, int(pid))
 	}
 
-	// Resolve current executable. Prefer a VersionStore Active binary (staged
-	// by `multica update`) over the invoking binary's own path — otherwise a
-	// staged update never takes effect until the old path is deleted/replaced,
-	// since `multica update` deliberately never touches it (task #41).
-	exePath, err := resolveDaemonLaunchBinary()
-	if err != nil {
-		return fmt.Errorf("resolve executable path: %w", err)
-	}
-
 	// Build child args: daemon start --foreground + forwarded flags.
 	args := buildDaemonStartArgs(cmd)
 
-	// Ensure daemon directory exists.
-	dir := daemonDirForProfile(profile)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create daemon directory: %w", err)
-	}
-
-	logPath := daemonLogPathForProfile(profile)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	res, err := lc.StartBackground(args)
 	if err != nil {
-		return fmt.Errorf("open log file %s: %w", logPath, err)
+		return err
 	}
 
-	child := exec.Command(exePath, args...)
-	child.Stdout = logFile
-	child.Stderr = logFile
-	// On Windows we want to break the child out of the parent shell's Job
-	// Object so the daemon survives parent-shell exit. If the parent's Job
-	// has not granted BREAKAWAY_OK, CreateProcess returns
-	// ERROR_ACCESS_DENIED — fall back to spawning without breakaway, which
-	// matches the pre-fix behaviour. On Unix the bool is a no-op.
-	child.SysProcAttr = daemonSysProcAttr(true)
-
-	if err := child.Start(); err != nil {
-		if isAccessDeniedSpawnErr(err) {
-			// Retry without breakaway. Reset the cmd state — exec.Cmd is
-			// not safe to Start() twice, so build a fresh one.
-			child = exec.Command(exePath, args...)
-			child.Stdout = logFile
-			child.Stderr = logFile
-			child.SysProcAttr = daemonSysProcAttr(false)
-			if err := child.Start(); err != nil {
-				logFile.Close()
-				return fmt.Errorf("start daemon (no breakaway): %w", err)
-			}
+	if res.Started {
+		if profile != "" {
+			fmt.Fprintf(os.Stderr, "Daemon [%s] started (pid %d, version %s)\n", profile, res.Pid, version)
 		} else {
-			logFile.Close()
-			return fmt.Errorf("start daemon: %w", err)
+			fmt.Fprintf(os.Stderr, "Daemon started (pid %d, version %s)\n", res.Pid, version)
 		}
-	}
-	logFile.Close()
-	pid := child.Process.Pid
-
-	// Detach: we don't Wait() on the child — it runs independently.
-	child.Process.Release()
-
-	// Write PID file.
-	pidPath := daemonPIDPathForProfile(profile)
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write PID file: %v\n", err)
-	}
-
-	// Poll the health endpoint until the daemon reports ready ("running") or we
-	// time out. The daemon binds the health port almost immediately but reports
-	// status:"starting" until preflight finishes (PAT renew + initial workspace
-	// sync, which exec's every configured agent for version detection and can
-	// take ~20s on a cold cache). Wait long enough to cover that so a healthy
-	// cold start is not misreported as a failure.
-	const startupTimeout = 45 * time.Second
-	deadline := time.Now().Add(startupTimeout)
-	started := false
-	lastStatus := ""
-	for time.Now().Before(deadline) {
-		time.Sleep(500 * time.Millisecond)
-		hctx, hcancel := context.WithTimeout(context.Background(), 2*time.Second)
-		health = checkDaemonHealthOnPort(hctx, healthPort)
-		hcancel()
-		lastStatus, _ = health["status"].(string)
-		if lastStatus == "running" {
-			started = true
-			break
-		}
-	}
-	if !started {
-		if lastStatus == "starting" {
-			fmt.Fprintf(os.Stderr, "Daemon is still starting after %s (agent detection / workspace sync is taking longer than expected). Check logs:\n  %s\n", startupTimeout, logPath)
-		} else {
-			fmt.Fprintf(os.Stderr, "Daemon may not have started successfully. Check logs:\n  %s\n", logPath)
-		}
+		fmt.Fprintf(os.Stderr, "Logs: %s\n", res.LogPath)
 		return nil
 	}
 
-	if profile != "" {
-		fmt.Fprintf(os.Stderr, "Daemon [%s] started (pid %d, version %s)\n", profile, pid, version)
+	// Not ready within the startup window.
+	if res.LastStatus == "starting" {
+		fmt.Fprintf(os.Stderr, "Daemon is still starting after %s (agent detection / workspace sync is taking longer than expected). Check logs:\n  %s\n", computer.StartupTimeout, res.LogPath)
 	} else {
-		fmt.Fprintf(os.Stderr, "Daemon started (pid %d, version %s)\n", pid, version)
+		fmt.Fprintf(os.Stderr, "Daemon may not have started successfully. Check logs:\n  %s\n", res.LogPath)
 	}
-	fmt.Fprintf(os.Stderr, "Logs: %s\n", logPath)
 	return nil
 }
 
@@ -380,7 +243,7 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		DeviceName:  flagString(cmd, "device-name"),
 		RuntimeName: flagString(cmd, "runtime-name"),
 		Profile:     profile,
-		HealthPort:  healthPortForProfile(profile),
+		HealthPort:  computer.HealthPort(profile),
 	}
 	if d, _ := cmd.Flags().GetDuration("poll-interval"); d > 0 {
 		overrides.PollInterval = d
@@ -424,12 +287,20 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	logger := logger_pkg.NewLogger("daemon")
 	d := daemon.New(cfg, logger)
 
-	// Write PID file so "daemon stop" can find us.
-	if dir := daemonDirForProfile(profile); dir != "" {
-		os.MkdirAll(dir, 0o755)
-		os.WriteFile(daemonPIDPathForProfile(profile), []byte(strconv.Itoa(os.Getpid())), 0o644)
+	// Write PID file so "daemon stop" can find us. Best-effort: a resident
+	// whose state directory cannot be created simply runs without a PID file,
+	// exactly as before.
+	lc := &computer.Lifecycle{Profile: profile}
+	cleanupPID := func() {}
+	if computer.RootDir(profile) != "" {
+		cleanup, err := lc.PublishPID()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not write PID file: %v\n", err)
+		} else {
+			cleanupPID = cleanup
+		}
 	}
-	defer removeDaemonPIDIfMatches(profile, os.Getpid())
+	defer cleanupPID()
 
 	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
@@ -499,132 +370,72 @@ func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
 // --- daemon restart ---
 
 func runDaemonRestart(cmd *cobra.Command, args []string) error {
+	daemonDeprecatedAliasNotices()
 	profile := resolveProfile(cmd)
-	healthPort := healthPortForProfile(profile)
+	lc := &computer.Lifecycle{Profile: profile}
 
-	// Stop if running.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	health := checkDaemonHealthOnPort(ctx, healthPort)
-	if daemonAlive(health) {
-		pid, _ := health["pid"].(float64)
-		if pid > 0 {
-			fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", int(pid))
-			if err := requestDaemonShutdown(healthPort); err != nil {
-				if p, perr := os.FindProcess(int(pid)); perr == nil {
-					_ = p.Kill()
-				}
-			}
-			// Wait until the port is fully released (not merely past "running"),
-			// otherwise the fresh start below races the old daemon's listener.
-			for i := 0; i < 10; i++ {
-				time.Sleep(500 * time.Millisecond)
-				sctx, scancel := context.WithTimeout(context.Background(), 1*time.Second)
-				h := checkDaemonHealthOnPort(sctx, healthPort)
-				scancel()
-				if !daemonAlive(h) {
-					break
-				}
-			}
-		}
+	// Stop if running (graceful shutdown with kill fallback), then start fresh.
+	res := lc.Stop()
+	if res.Err != nil {
+		return res.Err
+	}
+	if res.Running && res.Pid > 0 {
+		fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", res.Pid)
 	}
 
-	// Start fresh.
 	return runDaemonStart(cmd, args)
 }
 
 // --- daemon stop ---
 
 func runDaemonStop(cmd *cobra.Command, _ []string) error {
+	daemonDeprecatedAliasNotices()
 	profile := resolveProfile(cmd)
-	healthPort := healthPortForProfile(profile)
+	lc := &computer.Lifecycle{Profile: profile}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	label := "Daemon"
+	if profile != "" {
+		label = fmt.Sprintf("Daemon [%s]", profile)
+	}
 
-	health := checkDaemonHealthOnPort(ctx, healthPort)
-	if !daemonAlive(health) {
-		label := "Daemon"
-		if profile != "" {
-			label = fmt.Sprintf("Daemon [%s]", profile)
-		}
+	res := lc.Stop()
+	if !res.Running {
 		fmt.Fprintf(os.Stderr, "%s is not running.\n", label)
 		return nil
 	}
-
-	pid, ok := health["pid"].(float64)
-	if !ok || pid == 0 {
-		return fmt.Errorf("could not determine daemon PID from health endpoint")
+	if res.Err != nil {
+		return res.Err
 	}
-
-	process, err := os.FindProcess(int(pid))
-	if err != nil {
-		return fmt.Errorf("find process %d: %w", int(pid), err)
-	}
-
-	// Request graceful shutdown via the daemon's HTTP /shutdown endpoint
-	// rather than an OS signal. On Windows the daemon is spawned with
-	// DETACHED_PROCESS so it shares no console with us, which means
-	// GenerateConsoleCtrlEvent can't reach it; HTTP works on both
-	// platforms and triggers the same context-cancel path the daemon
-	// already uses for self-restart.
-	if err := requestDaemonShutdown(healthPort); err != nil {
-		fmt.Fprintf(os.Stderr, "Graceful shutdown request failed: %v — falling back to forced kill.\n", err)
-		if kerr := process.Kill(); kerr != nil {
-			return fmt.Errorf("kill daemon (pid %d): %w", int(pid), kerr)
-		}
-	}
-
-	fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", int(pid))
-
-	// Poll health endpoint until daemon is gone.
-	for i := 0; i < 10; i++ {
-		time.Sleep(500 * time.Millisecond)
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Second)
-		h := checkDaemonHealthOnPort(ctx2, healthPort)
-		cancel2()
-		if !daemonAlive(h) {
-			os.Remove(daemonPIDPathForProfile(profile))
-			fmt.Fprintln(os.Stderr, "Daemon stopped.")
-			return nil
-		}
+	if res.Stopped {
+		fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", res.Pid)
+		fmt.Fprintln(os.Stderr, "Daemon stopped.")
+		return nil
 	}
 
 	fmt.Fprintln(os.Stderr, "Daemon is still stopping. It may be finishing a running task.")
 	return nil
 }
 
-// requestDaemonShutdown POSTs to the daemon's /shutdown endpoint to ask it
-// to exit gracefully. Returns an error if the request could not be delivered
-// (network error, non-2xx status, or the endpoint predates this change).
-func requestDaemonShutdown(healthPort int) error {
-	url := fmt.Sprintf("http://127.0.0.1:%d/shutdown", healthPort)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		return err
-	}
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	return nil
-}
-
 // --- daemon status ---
 
 func runDaemonStatus(cmd *cobra.Command, _ []string) error {
+	daemonDeprecatedAliasNotices()
 	profile := resolveProfile(cmd)
-	healthPort := healthPortForProfile(profile)
+	lc := &computer.Lifecycle{Profile: profile}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	health := lc.Status()
 
-	health := checkDaemonHealthOnPort(ctx, healthPort)
+	// Report the configured Workspace Bindings as part of truthful status.
+	if bs, err := computer.NewBindingsStore(computer.RootDir("")).AllActive(); err == nil {
+		health["bindings"] = len(bs)
+	}
+
+	// Surface the Computer's state layout so a Desktop-facing adapter can
+	// learn the health port and log path from the module instead of
+	// duplicating the layout rules.
+	health["health_port"] = computer.HealthPort(profile)
+	health["log_path"] = computer.LogPath(profile)
+	health["pid_path"] = computer.PIDPath(profile)
 
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
@@ -683,52 +494,14 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 // --- daemon logs ---
 
 func runDaemonLogs(cmd *cobra.Command, _ []string) error {
+	daemonDeprecatedAliasNotices()
 	profile := resolveProfile(cmd)
-	logPath := daemonLogPathForProfile(profile)
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		return fmt.Errorf("no log file found at %s\nThe daemon may not have been started in background mode", logPath)
-	}
+	lc := &computer.Lifecycle{Profile: profile}
 
 	follow, _ := cmd.Flags().GetBool("follow")
 	lines, _ := cmd.Flags().GetInt("lines")
 
-	return tailLogFile(logPath, lines, follow)
-}
-
-// daemonAlive reports whether a health response indicates a live daemon
-// process on the port — either fully "running" (ready) or still "starting"
-// (port bound, preflight in progress). Lifecycle commands that only need to
-// know "is a daemon there" (already-running guard, restart, stop) use this,
-// whereas `daemon start`'s readiness wait gates on the stricter "running".
-func daemonAlive(health map[string]any) bool {
-	switch health["status"] {
-	case "running", "starting":
-		return true
-	default:
-		return false
-	}
-}
-
-// checkDaemonHealthOnPort calls the daemon's local health endpoint on the given port.
-func checkDaemonHealthOnPort(ctx context.Context, port int) map[string]any {
-	addr := fmt.Sprintf("http://127.0.0.1:%d/health", port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr, nil)
-	if err != nil {
-		return map[string]any{"status": "stopped"}
-	}
-
-	httpClient := &http.Client{Timeout: 2 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return map[string]any{"status": "stopped"}
-	}
-	defer resp.Body.Close()
-
-	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return map[string]any{"status": "stopped"}
-	}
-	return result
+	return lc.Logs(lines, follow)
 }
 
 // flagString returns a string flag value or empty string.

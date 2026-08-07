@@ -95,9 +95,14 @@ type ResidentMessageInput interface {
 
 // ResidentMessageAcceptance separates native input acceptance from the
 // provider turn it may start. Done reports that the runtime is idle again;
-// callers must keep turn admission closed until it resolves.
+// callers must keep turn admission closed until it resolves. Messages exposes
+// optional provider-observed lifecycle events for Activity projection; it does
+// not carry canonical Message bodies or alter Context Boundary semantics. A
+// backend that supplies Messages must close it before resolving Done so a
+// terminal idle/error observation cannot overtake buffered lifecycle events.
 type ResidentMessageAcceptance struct {
-	Done <-chan error
+	Done     <-chan error
+	Messages <-chan Message
 }
 
 // ResidentPendingTarget is content-free metadata for one target represented by
@@ -223,6 +228,7 @@ const (
 	MessageStatus     MessageType = "status"
 	MessageError      MessageType = "error"
 	MessageLog        MessageType = "log"
+	MessageDiagnostic MessageType = "diagnostic"
 	// MessageCompactionStarted and MessageCompactionFinished preserve the
 	// provider's explicit context-compaction lifecycle. They are Activity
 	// events, not generated assistant text.
@@ -232,16 +238,18 @@ const (
 
 // Message is a unified event emitted by an agent during execution.
 type Message struct {
-	Type      MessageType
-	Content   string         // text content (Text, Error, Log)
-	Tool      string         // tool name (ToolUse, ToolResult)
-	CallID    string         // tool call ID (ToolUse, ToolResult)
-	Input     map[string]any // tool input (ToolUse); also on ToolResult when completed backfills started-empty args (LRM-689)
-	Output    string         // tool output (ToolResult)
-	Status    string         // agent status string (Status)
-	Level     string         // log level (Log)
-	Lineage   string         // runtime subagent lineage (Thinking, Text)
-	SessionID string         // backend session id (Status), for early resume-pointer pinning
+	Type       MessageType
+	Content    string         // text content (Text, Error, Log)
+	Tool       string         // tool name (ToolUse, ToolResult)
+	CallID     string         // tool call ID (ToolUse, ToolResult)
+	Input      map[string]any // tool input (ToolUse); also on ToolResult when completed backfills started-empty args (LRM-689)
+	Output     string         // tool output (ToolResult)
+	Status     string         // agent status string (Status)
+	Level      string         // log level (Log)
+	Title      string         // safe user-facing diagnostic title (Diagnostic)
+	Diagnostic string         // provider diagnostic kind (Diagnostic)
+	Lineage    string         // runtime subagent lineage (Thinking, Text)
+	SessionID  string         // backend session id (Status), for early resume-pointer pinning
 }
 
 // TokenUsage tracks token consumption for a single model.

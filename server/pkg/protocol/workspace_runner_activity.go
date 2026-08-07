@@ -129,6 +129,22 @@ type AgentActivityEntry struct {
 	Body     json.RawMessage `json:"body"`
 }
 
+// AgentActivityNarrativeBody retains the lifecycle state that was current
+// when a narrative fact occurred. The latest Snapshot is replaceable, so a
+// historical Entry cannot safely borrow its state during presentation.
+type AgentActivityNarrativeBody struct {
+	Text         string `json:"text"`
+	ActivityKind string `json:"activity_kind,omitempty"`
+	DetailKind   string `json:"detail_kind,omitempty"`
+}
+
+// AgentActivitySystemBody is a bounded, user-visible runtime diagnostic. It
+// is a timeline fact and does not replace the current lifecycle Snapshot.
+type AgentActivitySystemBody struct {
+	Title string `json:"title"`
+	Text  string `json:"text"`
+}
+
 type AgentActivityPayload struct {
 	Snapshot AgentActivitySnapshot `json:"snapshot"`
 	Entries  []AgentActivityEntry  `json:"entries,omitempty"`

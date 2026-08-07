@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,6 +10,26 @@ import (
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func activityNarrativeEntry(activityKind, detailKind, text string) (protocol.AgentActivityEntry, error) {
+	body, err := json.Marshal(protocol.AgentActivityNarrativeBody{
+		Text:         text,
+		ActivityKind: activityKind,
+		DetailKind:   detailKind,
+	})
+	if err != nil {
+		return protocol.AgentActivityEntry{}, err
+	}
+	return protocol.AgentActivityEntry{Kind: "narrative", Position: 0, Body: body}, nil
+}
+
+func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error) {
+	body, err := json.Marshal(protocol.AgentActivitySystemBody{Title: title, Text: text})
+	if err != nil {
+		return protocol.AgentActivityEntry{}, err
+	}
+	return protocol.AgentActivityEntry{Kind: "system", Position: 0, Body: body}, nil
+}
 
 const agentActivityHeartbeatInterval = time.Minute
 
@@ -220,6 +241,39 @@ func (p *agentActivityProducer) PublishForManagedAgent(agentID, daemonInstanceID
 	snapshot.ClientSequence = 0
 	snapshot.ProducerFactID = ""
 	snapshot.ObservedAt = time.Time{}
+	return p.publishLocked(snapshot, entries)
+}
+
+// PublishEntryForManagedAgent appends a timeline fact without replacing the
+// current lifecycle meaning. If no observation exists yet, Online is the
+// conservative baseline used by the runtime diagnostic contract.
+func (p *agentActivityProducer) PublishEntryForManagedAgent(agentID, daemonInstanceID string, entries []protocol.AgentActivityEntry) error {
+	if p == nil || agentID == "" || daemonInstanceID == "" {
+		return errors.New("Activity managed Agent identity is required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var snapshot protocol.AgentActivitySnapshot
+	for key, state := range p.states {
+		if key.agentID == agentID {
+			snapshot = state.snapshot
+			snapshot.AgentID = agentID
+			snapshot.LaunchID = key.launchID
+			break
+		}
+	}
+	if snapshot.LaunchID == "" {
+		return errors.New("Activity is not managed for this Agent")
+	}
+	if snapshot.ActivityKind == "" {
+		snapshot.ActivityKind = protocol.ActivityKindOnline
+		snapshot.DetailKind = "idle"
+	}
+	snapshot.DaemonInstanceID = daemonInstanceID
+	snapshot.ClientSequence = 0
+	snapshot.ProducerFactID = ""
+	snapshot.ObservedAt = time.Time{}
+	snapshot.ProbeID = ""
 	return p.publishLocked(snapshot, entries)
 }
 

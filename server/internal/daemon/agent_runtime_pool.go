@@ -585,7 +585,15 @@ func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string
 	return slot.mode == canonicalRuntimeResident && slot.backend != nil
 }
 
-func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection, onComplete func(error, uint64)) error {
+func (p *canonicalAgentRuntimePool) handoffIdleMessages(
+	ctx context.Context,
+	agentID, runtimeID string,
+	messages []protocol.AgentMessageProjection,
+	onStarting func(),
+	onAccepted func(),
+	onMessage func(agent.Message),
+	onComplete func(error, uint64),
+) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
 	}
@@ -608,6 +616,12 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, age
 	input, ok := slot.backend.(agent.ResidentMessageInput)
 	if !ok {
 		return errors.New("canonical resident runtime does not support idle Message input")
+	}
+	if liveness, ok := slot.backend.(agent.ResidentRuntimeLivenessChecker); ok {
+		alive, known := liveness.RuntimeAlive()
+		if (!known || !alive) && onStarting != nil {
+			onStarting()
+		}
 	}
 	batch := make([]agent.ResidentMessage, 0, len(messages))
 	for _, message := range messages {
@@ -633,7 +647,23 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, age
 	slot.messageInputDone = acceptance.Done
 	slot.messageInputGeneration++
 	generation := slot.messageInputGeneration
-	go p.finishResidentMessageInput(slot, acceptance.Done, generation, onComplete)
+	if onAccepted != nil {
+		onAccepted()
+	}
+	activityDone := make(chan struct{})
+	if acceptance.Messages != nil {
+		go func(runtimeMessages <-chan agent.Message) {
+			defer close(activityDone)
+			for message := range runtimeMessages {
+				if onMessage != nil {
+					onMessage(message)
+				}
+			}
+		}(acceptance.Messages)
+	} else {
+		close(activityDone)
+	}
+	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, generation, onComplete)
 	return nil
 }
 
@@ -685,8 +715,9 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	return nil
 }
 
-func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error, generation uint64, onComplete func(error, uint64)) {
+func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error, activityDone <-chan struct{}, generation uint64, onComplete func(error, uint64)) {
 	turnErr := <-done
+	<-activityDone
 	completed := false
 	slot.mu.Lock()
 	if slot.messageInputDone == done {

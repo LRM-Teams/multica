@@ -52,6 +52,15 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		return errors.New("handler database is unavailable")
 	}
 	switch eventType {
+	case protocol.EventWorkspaceRunnerReady:
+		var ready protocol.WorkspaceRunnerReadyPayload
+		if err := json.Unmarshal(raw, &ready); err != nil {
+			return fmt.Errorf("decode Runner ready: %w", err)
+		}
+		if ready.WorkspaceID != identity.WorkspaceID || ready.DaemonInstanceID != daemonInstanceID {
+			return errors.New("Runner ready identity does not match current connection")
+		}
+		return h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID)
 	case protocol.EventAgentStatus:
 		var status protocol.AgentStatusPayload
 		if err := json.Unmarshal(raw, &status); err != nil {
@@ -67,6 +76,78 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 	default:
 		return nil
 	}
+}
+
+// recordWorkspaceRunnerReady fences launches owned by an older daemon process.
+// A Computer may already be connected while none of its prior Agent processes
+// have restarted; those Agents stay Offline until a new launch is reported.
+func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string) error {
+	workspaceID, err := util.ParseUUID(identity.WorkspaceID)
+	if err != nil {
+		return errors.New("invalid Runner workspace identity")
+	}
+	if h.TxStarter == nil {
+		return errors.New("Runner transaction store is unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin Runner ready fence: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		UPDATE agent_activity_snapshot s
+		SET activity_kind = 'offline', detail_kind = 'computer_restarted',
+			observed_at = now(), received_at = now()
+		FROM agent_activity_launch l
+		WHERE l.workspace_id = s.workspace_id AND l.agent_id = s.agent_id
+		  AND l.workspace_id = $1 AND l.daemon_id = $2
+		  AND l.daemon_instance_id <> $3 AND l.status = 'active'
+		RETURNING s.agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
+	if err != nil {
+		return fmt.Errorf("fence prior Runner snapshots: %w", err)
+	}
+	var agentIDs []pgtype.UUID
+	for rows.Next() {
+		var agentID pgtype.UUID
+		if err := rows.Scan(&agentID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan fenced Runner Agent: %w", err)
+		}
+		agentIDs = append(agentIDs, agentID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate fenced Runner Agents: %w", err)
+	}
+	rows.Close()
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_activity_launch
+		SET status = 'inactive', updated_at = now()
+		WHERE workspace_id = $1 AND daemon_id = $2
+		  AND daemon_instance_id <> $3 AND status = 'active'`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
+		return fmt.Errorf("fence prior Runner launches: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM agent_activity_probe
+		WHERE workspace_id = $1 AND daemon_id = $2 AND daemon_instance_id <> $3`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
+		return fmt.Errorf("clear prior Runner probes: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit Runner ready fence: %w", err)
+	}
+
+	if h.Bus != nil {
+		for _, agentID := range agentIDs {
+			projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
+			if err != nil {
+				return err
+			}
+			h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
+				AgentID: util.UUIDToString(agentID), Activity: projected,
+			})
+		}
+	}
+	return nil
 }
 
 func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, status protocol.AgentStatusPayload) error {

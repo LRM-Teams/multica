@@ -658,8 +658,14 @@ func TestCodexRawErrorNotificationRetryingIgnored(t *testing.T) {
 	c, _, _ := newTestCodexClient(t)
 	c.notificationProtocol = "raw"
 	var activities []string
+	var statuses []string
 	c.onSemanticActivity = func(activity string) {
 		activities = append(activities, activity)
+	}
+	c.onMessage = func(message Message) {
+		if message.Type == MessageStatus {
+			statuses = append(statuses, message.Status)
+		}
 	}
 	c.onTurnDone = func(aborted bool) {
 		t.Fatal("retrying error should not finish the turn")
@@ -672,6 +678,28 @@ func TestCodexRawErrorNotificationRetryingIgnored(t *testing.T) {
 	}
 	if got, want := strings.Join(activities, ","), "error:retry"; got != want {
 		t.Fatalf("semantic activity = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(statuses, ","), "reconnecting"; got != want {
+		t.Fatalf("status activity = %q, want %q", got, want)
+	}
+}
+
+func TestCodexRuntimeDiagnosticNotificationIsBoundedAndStructured(t *testing.T) {
+	t.Parallel()
+	c, _, _ := newTestCodexClient(t)
+	c.notificationProtocol = "raw"
+	var got Message
+	c.onMessage = func(message Message) { got = message }
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"configWarning","params":{"summary":"Sandbox configuration","details":"User namespaces are unavailable"}}`)
+
+	if got.Type != MessageDiagnostic || got.Level != "warning" || got.Diagnostic != "configWarning" || got.Title != "Codex config warning" || got.Content != "Sandbox configuration\nUser namespaces are unavailable" {
+		t.Fatalf("diagnostic = %+v", got)
+	}
+	long := strings.Repeat("x", 1100)
+	bounded := boundedCodexDiagnosticString(long, 1000)
+	if len([]rune(bounded)) != 1000 || !strings.HasSuffix(bounded, "…") {
+		t.Fatalf("bounded diagnostic length=%d", len([]rune(bounded)))
 	}
 }
 

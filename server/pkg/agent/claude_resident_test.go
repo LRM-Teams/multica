@@ -100,6 +100,13 @@ func TestClaudeStreamJSONResidentGatesNoticeAndReusesProcessForIdleHandoff(t *te
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for idle handoff completion")
 	}
+	var sawHandoff bool
+	for message := range acceptance.Messages {
+		sawHandoff = sawHandoff || message.Type == MessageText && message.Content == "handoff"
+	}
+	if !sawHandoff {
+		t.Fatal("Claude idle handoff omitted resident lifecycle events")
+	}
 
 	raw, err := os.ReadFile(inputPath)
 	if err != nil {

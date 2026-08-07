@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -136,6 +138,52 @@ func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing
 	}
 }
 
+func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	installActivityProducerAgent(t, producer)
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	d.agentActivityProducers["workspace-1"] = producer
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+
+	for _, message := range []agent.Message{
+		{Type: agent.MessageThinking},
+		{Type: agent.MessageToolUse, Tool: "exec_command"},
+		{Type: agent.MessageStatus, Status: "reconnecting"},
+		{Type: agent.MessageDiagnostic, Title: "Codex config warning", Level: "warning", Diagnostic: "configWarning", Content: "User namespaces are unavailable"},
+		{Type: agent.MessageError, Content: "sensitive provider text"},
+	} {
+		d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", message)
+	}
+	wantKinds := []string{protocol.ActivityKindThinking, protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindError}
+	wantDetails := []string{"", "running_command", "running_command", "runtime_error"}
+	if len(activities) != len(wantKinds) {
+		t.Fatalf("Activity count = %d, want %d", len(activities), len(wantKinds))
+	}
+	for index := range wantKinds {
+		if activities[index].Snapshot.ActivityKind != wantKinds[index] || activities[index].Snapshot.DetailKind != wantDetails[index] {
+			t.Fatalf("Activity[%d] = %+v", index, activities[index].Snapshot)
+		}
+	}
+	var diagnostic protocol.AgentActivitySystemBody
+	if err := json.Unmarshal(activities[2].Entries[0].Body, &diagnostic); err != nil {
+		t.Fatal(err)
+	}
+	if activities[2].Entries[0].Kind != "system" || diagnostic.Title != "Codex config warning" || diagnostic.Text != "User namespaces are unavailable" {
+		t.Fatalf("runtime diagnostic Activity = kind:%q body:%+v", activities[2].Entries[0].Kind, diagnostic)
+	}
+	var errorBody protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(activities[len(activities)-1].Entries[0].Body, &errorBody); err != nil {
+		t.Fatal(err)
+	}
+	if errorBody.Text != "Runtime error" || errorBody.ActivityKind != protocol.ActivityKindError || errorBody.DetailKind != "runtime_error" {
+		t.Fatalf("runtime error Activity = %+v", errorBody)
+	}
+}
+
 func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
 	var sent []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
@@ -147,8 +195,15 @@ func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
 		t.Fatalf("sent = %d, want 1", len(sent))
 	}
 	got := sent[0]
-	if got.Snapshot.ActivityKind != protocol.ActivityKindWorking || got.Snapshot.DetailKind != "running_command" || len(got.Entries) != 1 || string(got.Entries[0].Body) != `{"text":"Running command"}` {
+	if got.Snapshot.ActivityKind != protocol.ActivityKindWorking || got.Snapshot.DetailKind != "running_command" || len(got.Entries) != 1 {
 		t.Fatalf("task Activity = %+v", got)
+	}
+	var body protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Text != "Running command" || body.ActivityKind != protocol.ActivityKindWorking || body.DetailKind != "running_command" {
+		t.Fatalf("task Activity body = %+v", body)
 	}
 }
 
@@ -166,8 +221,15 @@ func TestTaskFailurePublishesRunnerErrorWithoutRawFailureText(t *testing.T) {
 		t.Fatalf("sent = %d, want 1", len(sent))
 	}
 	got := sent[0]
-	if got.Snapshot.ActivityKind != protocol.ActivityKindError || got.Snapshot.DetailKind != "task_failed" || len(got.Entries) != 1 || string(got.Entries[0].Body) != `{"text":"Agent execution failed"}` {
+	if got.Snapshot.ActivityKind != protocol.ActivityKindError || got.Snapshot.DetailKind != "task_failed" || len(got.Entries) != 1 {
 		t.Fatalf("failure Activity = %+v", got)
+	}
+	var body protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Text != "Agent execution failed" || body.ActivityKind != protocol.ActivityKindError || body.DetailKind != "task_failed" {
+		t.Fatalf("failure Activity body = %+v", body)
 	}
 }
 

@@ -7,6 +7,7 @@ import enCommon from "../../../locales/en/common.json";
 const runnerActivity = vi.fn();
 vi.mock("@multica/core/agents", () => ({ useRunnerActivity: (...args: unknown[]) => runnerActivity(...args) }));
 vi.mock("@multica/ui/lib/clipboard", () => ({ copyText: vi.fn() }));
+vi.mock("../../../common/use-viewing-timezone", () => ({ useViewingTimezone: () => "UTC" }));
 
 import { ActivityTab } from "./activity-tab";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -23,11 +24,14 @@ function renderActivityTab() {
 }
 
 describe("ActivityTab", () => {
-  it("renders only the server-projected summary and timeline", () => {
+  it("renders the server-projected rows in the previous chronological timeline UI", () => {
     runnerActivity.mockReturnValue({
       data: {
         summary: { label: "Running command...", tone: "active", visibility: "visible" },
-        timeline: [{ id: "row-1", occurred_at: "2026-08-06T12:00:00Z", title: "Running command...", subtext: "Safe detail", tone: "active", body_kind: "text", body: "sanitized body" }],
+        timeline: [
+          { id: "row-2", occurred_at: "2026-08-06T12:01:00Z", title: "Idle", tone: "success", body_kind: "none" },
+          { id: "row-1", occurred_at: "2026-08-06T12:00:00Z", title: "Running command...", subtext: "Safe detail", tone: "active", body_kind: "text", body: "sanitized body" },
+        ],
       },
       isLoading: false,
       isError: false,
@@ -35,7 +39,13 @@ describe("ActivityTab", () => {
     });
     renderActivityTab();
     expect(runnerActivity).toHaveBeenCalledWith("workspace-1", "agent-1");
-    expect(screen.getAllByText("Running command...")).toHaveLength(2);
+    expect(screen.getByTestId("activity-timeline-spine")).toBeInTheDocument();
+    expect(screen.getAllByTestId("runner-activity-row").map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Running command..."),
+      expect.stringContaining("Idle"),
+    ]);
+    expect(screen.getAllByText("Running command...")).toHaveLength(1);
+    fireEvent.click(screen.getByText("Running command..."));
     expect(screen.getByText("sanitized body")).toBeInTheDocument();
   });
 
@@ -59,13 +69,13 @@ describe("ActivityTab", () => {
     });
 
     renderActivityTab();
-    expect(screen.getByText("Future status")).toBeInTheDocument();
+    expect(screen.queryByText("Future status")).not.toBeInTheDocument();
     expect(screen.getByText("not-a-date")).toBeInTheDocument();
     expect(screen.getByText("Future event")).toBeInTheDocument();
-    expect(screen.getByText("Expand")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("Expand"));
-    expect(screen.getByText("Collapse")).toBeInTheDocument();
+    const rowToggle = screen.getByRole("button", { name: /Future event/ });
+    expect(rowToggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(rowToggle);
+    expect(rowToggle).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(screen.getByText("Copy"));
     await waitFor(() => expect(copyText).toHaveBeenCalledWith(body.trim()));
     expect(screen.getByText("Copied")).toBeInTheDocument();

@@ -47,6 +47,21 @@ func (r *sequencedResidentMessageRuntime) AcceptMessageBatch(context.Context, []
 	return agent.ResidentMessageAcceptance{Done: done}, nil
 }
 
+type activityResidentMessageRuntime struct {
+	done     chan error
+	messages chan agent.Message
+}
+
+func (r *activityResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *activityResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	return agent.ResidentMessageAcceptance{Done: r.done, Messages: r.messages}, nil
+}
+
+func (r *activityResidentMessageRuntime) RuntimeAlive() (bool, bool) { return false, false }
+
 type pendingNoticeRuntime struct {
 	mu      sync.Mutex
 	notices []agent.ResidentPendingNotice
@@ -76,10 +91,10 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 		mode: canonicalRuntimeResident, backend: backend,
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"}}
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil); err != nil {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
 		t.Fatalf("first handoff: %v", err)
 	}
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		t.Fatalf("overlapping handoff error = %v, want busy", err)
 	}
 	backend.done <- nil
@@ -99,6 +114,92 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 	}
 }
 
+func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.T) {
+	backend := &activityResidentMessageRuntime{done: make(chan error, 1), messages: make(chan agent.Message, 1)}
+	backend.messages <- agent.Message{Type: agent.MessageThinking}
+	close(backend.messages)
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
+
+	var mu sync.Mutex
+	var observed []string
+	completionObserved := make(chan struct{})
+	err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1",
+		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
+		func() {
+			mu.Lock()
+			observed = append(observed, "starting")
+			mu.Unlock()
+		},
+		func() {
+			mu.Lock()
+			observed = append(observed, "accepted")
+			mu.Unlock()
+		},
+		func(agent.Message) {
+			mu.Lock()
+			observed = append(observed, "activity")
+			mu.Unlock()
+		},
+		func(error, uint64) {
+			mu.Lock()
+			observed = append(observed, "complete")
+			mu.Unlock()
+			close(completionObserved)
+		},
+	)
+	if err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	backend.done <- nil
+	close(backend.done)
+	select {
+	case <-completionObserved:
+	case <-time.After(time.Second):
+		t.Fatal("resident runtime completion was not observed")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(observed, []string{"starting", "accepted", "activity", "complete"}) {
+		t.Fatalf("callback order = %v, want starting, acceptance, runtime Activity, then completion", observed)
+	}
+}
+
+func TestRuntimePoolDrainsResidentActivityWithoutObserver(t *testing.T) {
+	backend := &activityResidentMessageRuntime{done: make(chan error, 1), messages: make(chan agent.Message)}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
+
+	completed := make(chan struct{})
+	if err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1",
+		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
+		nil, nil, nil, func(error, uint64) { close(completed) },
+	); err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	producerDone := make(chan struct{})
+	go func() {
+		backend.messages <- agent.Message{Type: agent.MessageThinking}
+		close(backend.messages)
+		close(producerDone)
+	}()
+	backend.done <- nil
+	close(backend.done)
+
+	select {
+	case <-producerDone:
+	case <-time.After(time.Second):
+		t.Fatal("resident Activity producer blocked without an Activity observer")
+	}
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("resident runtime completion was not observed after Activity drain")
+	}
+}
+
 func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testing.T) {
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	pool := newCanonicalAgentRuntimePool()
@@ -107,8 +208,8 @@ func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testin
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1}}
 	result := make(chan bool, 1)
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, func(_ error, generation uint64) {
-		if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil); err != nil {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, func(_ error, generation uint64) {
+		if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
 			result <- true
 			return
 		}
@@ -994,6 +1095,65 @@ func TestMessageCoordinatorRestartRecoversAcceptedMessageBeforeHandoff(t *testin
 	}
 	if len(recovered) != 1 || recovered[0].ID != delivery.Message.ID || restarted.Boundaries()[delivery.Target] != delivery.Seq {
 		t.Fatalf("recovered=%+v boundaries=%v", recovered, restarted.Boundaries())
+	}
+}
+
+func TestMessageCoordinatorUpgradeRestartRecoversBusyPendingMessage(t *testing.T) {
+	root := t.TempDir()
+	firstDelivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
+	pendingDelivery := testDelivery("message-2", "channel-1", 2, "delivery-2")
+	handoffCalls := 0
+	first, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffCalls++
+		if handoffCalls == 1 {
+			return nil
+		}
+		return ErrCanonicalAgentRuntimeBusy
+	}, nil)
+	if err != nil {
+		t.Fatalf("first NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, first)
+	if _, err := first.Accept(context.Background(), firstDelivery); err != nil {
+		t.Fatalf("accept first: %v", err)
+	}
+	if err := first.Flush(context.Background()); err != nil {
+		t.Fatalf("flush first: %v", err)
+	}
+	if _, err := first.Accept(context.Background(), pendingDelivery); err != nil {
+		t.Fatalf("accept pending: %v", err)
+	}
+	if err := first.Flush(context.Background()); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("busy flush = %v", err)
+	}
+	if got := first.Boundaries()[firstDelivery.Target]; got != firstDelivery.Seq {
+		t.Fatalf("pre-upgrade boundary = %d, want %d", got, firstDelivery.Seq)
+	}
+	first.Close()
+
+	var recovered []protocol.AgentMessageProjection
+	restarted, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+		recovered = append(recovered, messages...)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("restarted NewMessageCoordinator: %v", err)
+	}
+	request := restarted.BeginRecovery("agent-1", 10)
+	if err := restarted.MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "upgrade", HighWatermark: "upgrade",
+		Messages: []protocol.AgentMessageProjection{firstDelivery.Message, pendingDelivery.Message},
+	}); err != nil {
+		t.Fatalf("merge upgrade recovery: %v", err)
+	}
+	if err := restarted.Flush(context.Background()); err != nil {
+		t.Fatalf("flush upgrade recovery: %v", err)
+	}
+	if len(recovered) != 1 || recovered[0].ID != pendingDelivery.Message.ID {
+		t.Fatalf("recovered = %+v, want only busy pending Message", recovered)
+	}
+	if got := restarted.Boundaries()[pendingDelivery.Target]; got != pendingDelivery.Seq {
+		t.Fatalf("post-upgrade boundary = %d, want %d", got, pendingDelivery.Seq)
 	}
 }
 

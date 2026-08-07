@@ -1,0 +1,275 @@
+/* LRM-1496 — D5 five-level node visual system shared styles.
+ *
+ * Framework-light, theme-token driven surface for the tiered circular
+ * star-graph nodes, the compact Map Key, and the three-step on-boarding
+ * guide. These tokens are pure presentation for `@multica/ui`; no domain
+ * logic or `@multica/core` import lives here.
+ *
+ * Palettes mirror the D5 reference (multica-research-constellation-v2.html)
+ * as CSS custom properties so Web + Desktop share one surface. Consumers
+ * import this file from the CSS layer that already loads tokens.css.
+ */
+
+:root {
+  /* Tier nanocosms (sizes are applied via inline style from tier.ts; these
+     are the shared surface accents). */
+  --sg-accent-synthesis: #58d69a;
+  --sg-accent-stable: #4ba778;
+  --sg-accent-result: #48d3e4;
+  --sg-accent-agent: #7a9cc6;
+  --sg-line: #26384c;
+  --sg-line-strong: #32485e;
+  --sg-panel: rgba(11, 20, 30, 0.9);
+  --sg-panel-solid: #0d1723;
+  --sg-ring-inset: #4f9871;
+  /* State surfaces (map-key dots / badge accents) — semantic, not the only
+     cue. */
+  --sg-state-run: #74c7f2;
+  --sg-state-stable: #78ddb4;
+  --sg-state-review: #e3b970;
+  --sg-state-conflict: #ff9ab7;
+  --sg-state-abandoned: #c9bdb2;
+  --sg-state-restart: #f4c66d;
+  --sg-state-failed: #ff9ab7;
+}
+
+/* ---- Tiered circular node ---- */
+.sg-node {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--foreground);
+  text-align: center;
+  cursor: pointer;
+  transition: filter 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.sg-node.sg-tier-s {
+  border-radius: 50%;
+}
+.sg-node:hover {
+  filter: brightness(1.12);
+  z-index: 6;
+}
+.sg-node:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+  filter: brightness(1.12);
+}
+.sg-node[data-state="selected"] {
+  filter: brightness(1.14);
+  z-index: 7;
+}
+.sg-node[data-state="selected"]::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border: 1px solid var(--ring);
+  border-radius: 50%;
+  box-shadow: 0 0 18px var(--ring);
+  pointer-events: none;
+}
+.sg-node[data-state="abandoned"],
+.sg-node[data-state="failed"] {
+  opacity: 0.55;
+}
+
+/* Concentric decorative rings via background layering (tier ringCount).
+   We draw rings with repeating-radial-gradient so a single class inlines the
+   ring count token without extra DOM nodes. */
+.sg-node.sg-ring-1 {
+  background-image: repeating-radial-gradient(
+    circle,
+    transparent 0 78%,
+    var(--sg-ring-inset) 78% 81%
+  );
+}
+.sg-node.sg-ring-2 {
+  background-image:
+    repeating-radial-gradient(
+      circle,
+      transparent 0 78%,
+      var(--sg-ring-inset) 78% 81%
+    ),
+    repeating-radial-gradient(
+      circle,
+      transparent 0 88%,
+      rgba(79, 152, 113, 0.55) 88% 91%
+    );
+}
+.sg-node.sg-ring-3 {
+  background-image:
+    repeating-radial-gradient(
+      circle,
+      transparent 0 76%,
+      var(--sg-ring-inset) 76% 79%
+    ),
+    repeating-radial-gradient(
+      circle,
+      transparent 0 86%,
+      rgba(79, 152, 113, 0.55) 86% 89%
+    ),
+    repeating-radial-gradient(
+      circle,
+      transparent 0 93%,
+      rgba(79, 152, 113, 0.4) 93% 95%
+    );
+}
+
+/* Soft outer glow via layered box-shadows (glow token). */
+.sg-node.sg-glow-1 {
+  box-shadow: 0 0 18px rgba(88, 214, 154, 0.12);
+}
+.sg-node.sg-glow-2 {
+  box-shadow:
+    0 0 0 10px rgba(88, 214, 154, 0.05),
+    0 0 45px rgba(88, 214, 154, 0.2);
+}
+.sg-node.sg-glow-3 {
+  box-shadow:
+    0 0 0 10px rgba(88, 214, 154, 0.07),
+    0 0 0 22px rgba(88, 214, 154, 0.05),
+    0 0 0 38px rgba(88, 214, 154, 0.03),
+    0 0 90px rgba(88, 214, 154, 0.26);
+}
+
+.sg-node .sg-core {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 10%;
+  overflow: hidden;
+}
+
+/* Text truncation inside the circular core (never spills the circle). */
+.sg-node .sg-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.3;
+  margin: 0;
+}
+.sg-node .sg-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  color: var(--muted-foreground);
+}
+
+/* Status glyph mark (non-colour cue shared with the Map Key dots). */
+.sg-glyph {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.sg-glyph[data-glyph="pulse"] {
+  animation: sg-pulse 1.4s ease-in-out infinite;
+}
+.sg-glyph[data-glyph="restart"] {
+  animation: sg-spin 1s linear infinite;
+}
+@keyframes sg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@keyframes sg-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- Map Key (compact bottom tool area) ---- */
+.sg-map-key {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--sg-panel);
+  color: var(--muted-foreground);
+  backdrop-filter: blur(12px);
+}
+.sg-map-key .sg-menu-btn {
+  color: var(--muted-foreground);
+}
+.sg-map-key .sg-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.sg-map-key .sg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 0.75rem;
+  border-radius: 0.3rem;
+}
+.sg-map-key .sg-item:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.sg-dot {
+  display: inline-block;
+  border: 1px solid var(--sg-accent-synthesis);
+  border-radius: 50%;
+}
+.sg-dot.sg-lv1 { width: 19px; height: 19px; }
+.sg-dot.sg-lv2 { width: 16px; height: 16px; }
+.sg-dot.sg-lv3 { width: 13px; height: 13px; }
+.sg-dot.sg-lv4 { width: 10px; height: 10px; border-color: var(--sg-accent-result); }
+.sg-dot.sg-lv5 { width: 7px; height: 7px; border-color: var(--sg-accent-agent); }
+.sg-line-demo {
+  display: inline-block;
+  width: 1.5rem;
+  height: 2px;
+  background: var(--sg-line-strong);
+}
+.sg-line-demo.sg-support { background: var(--sg-accent-stable); }
+.sg-line-demo.sg-challenge {
+  height: 1px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--sg-state-conflict) 0 5px,
+    transparent 5px 9px
+  );
+}
+.sg-line-demo.sg-newdir {
+  height: 1px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--sg-accent-result) 0 2px,
+    transparent 2px 6px
+  );
+}
+
+/* ---- On-boarding guide (3-step, skippable) ---- */
+.sg-guide {
+  position: fixed;
+  z-index: 60;
+  max-width: min(92vw, 24rem);
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: var(--sg-panel-solid);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+.sg-guide .sg-step {
+  min-height: 3.5rem;
+}
+.sg-guide button {
+  min-height: 2rem;
+}

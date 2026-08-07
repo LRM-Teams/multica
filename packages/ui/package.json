@@ -9,6 +9,7 @@
   },
   "exports": {
     "./components/ui/*": "./components/ui/*.tsx",
+    "./components/star-graph": "./components/star-graph/index.ts",
     "./components/common/*": "./components/common/*.tsx",
     "./components/honor/*": "./components/honor/*.tsx",
     "./markdown": "./markdown/index.ts",

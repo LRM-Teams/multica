@@ -102,7 +102,7 @@ func normalizeDaemonUpdateObservation(observation protocol.DaemonUpdateObservati
 		}
 		lastAttemptAt = pgtype.Timestamptz{Time: parsed, Valid: true}
 	}
-	if !daemonUpdateValueAllowed(observation.LastOutcome, "never_checked", "up_to_date", "busy", "fetch_failed", "verification_failed", "update_failed", "update_succeeded", "interrupted", "explicit_only") {
+	if !daemonUpdateValueAllowed(observation.LastOutcome, "never_checked", "up_to_date", "busy", "pinned", "fetch_failed", "verification_failed", "update_failed", "update_succeeded", "interrupted", "explicit_only") {
 		return daemonUpdateStatusParams{}, fmt.Errorf("invalid auto_update.last_outcome %q", observation.LastOutcome)
 	}
 	if len(observation.ErrorCode) > 80 {

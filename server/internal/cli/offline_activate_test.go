@@ -102,6 +102,40 @@ func TestOfflineActivateAbortsOnBadCandidate(t *testing.T) {
 	}
 }
 
+func TestOfflineActivateStagedAlreadyActiveIsIdempotent(t *testing.T) {
+	previousProbe := probeStagedCandidate
+	probeStagedCandidate = func(context.Context, string, string, string) error {
+		t.Fatal("already-active release must not start a new candidate probe")
+		return nil
+	}
+	t.Cleanup(func() { probeStagedCandidate = previousProbe })
+
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	binary := []byte("multica-v0.3.78")
+	staged, err := store.StageBinary(context.Background(), "v0.3.78", binary, testBinaryDigest(binary), 0o755)
+	if err != nil {
+		t.Fatalf("stage binary: %v", err)
+	}
+	initial, err := store.CompareAndSwapActivation(context.Background(), 0, staged.Version)
+	if err != nil {
+		t.Fatalf("activate staged binary: %v", err)
+	}
+
+	got, path, err := store.OfflineActivateStaged(context.Background(), staged.Version, "same-active")
+	if err != nil {
+		t.Fatalf("OfflineActivateStaged already active: %v", err)
+	}
+	if got != initial {
+		t.Fatalf("state = %+v, want unchanged %+v", got, initial)
+	}
+	if path != staged.BinaryPath {
+		t.Fatalf("path = %q, want %q", path, staged.BinaryPath)
+	}
+	if _, err := store.ReadActivationJournal(); !errors.Is(err, ErrNoActivationJournal) {
+		t.Fatalf("idempotent activation wrote journal: %v", err)
+	}
+}
+
 func TestRollbackToPreviousActiveUsesVerifiedCASPath(t *testing.T) {
 	previousProbe := probeStagedCandidate
 	probeStagedCandidate = func(context.Context, string, string, string) error { return nil }

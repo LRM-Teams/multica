@@ -165,6 +165,7 @@ func TestWaitForSafeRestartPathAAtHardDeadline(t *testing.T) {
 		ctx,
 		"rt-1",
 		"upd-1",
+		"v0.3.78",
 		"Staged v0.3.78 into version store",
 		20*time.Millisecond,
 		40*time.Millisecond,

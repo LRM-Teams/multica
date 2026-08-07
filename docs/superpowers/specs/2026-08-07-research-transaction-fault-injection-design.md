@@ -18,6 +18,12 @@ The Chapter C exit condition is stronger: every canonical transaction commit poi
 
 Network killing or timing a backend termination can approximate these states but is nondeterministic and unsuitable for a permanent CI gate.
 
+## 1.1 No Scope Reduction
+
+This design does not remove, defer indefinitely, substitute, or weaken any item in `2026-08-05-autonomous-research-system.md`. Chapters D–N and completion criteria 1–19 remain mandatory exactly as written. “Scope: Chapter C” means only that this document defines the missing Chapter C verification infrastructure; after C passes, implementation continues through D, E, F, G, H, I, J, K, L, M and N in dependency order.
+
+The transaction runner is test and reliability infrastructure, not a replacement for Artifact Passports, Inquiry Graph, Corpus lineage, Integration, Dispute/Deliberation, Exploration, dynamic teams, report lineage, monitoring, Strategy evolution, projection, migration, or production acceptance. No Prompt-only substitute, fake fixture capability, reduced V6 schema, or skipped system evaluation is permitted.
+
 ## 2. Chosen Architecture
 
 Use one narrow internal transaction runner owned by `researchrun.PostgresStore`.

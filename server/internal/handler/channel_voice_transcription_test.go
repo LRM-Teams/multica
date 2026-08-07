@@ -259,9 +259,10 @@ ON CONFLICT DO NOTHING`,
 		agentID, voice.Message.ID).Scan(&deliveryCount, &inboxCount); err != nil {
 		t.Fatalf("count delayed voice delivery: %v", err)
 	}
-	if deliveryCount != 1 || inboxCount != 0 {
-		t.Fatalf("delayed voice delivery/inbox = %d/%d, want canonical delivery only", deliveryCount, inboxCount)
+	if deliveryCount != 1 || inboxCount != 1 {
+		t.Fatalf("delayed voice delivery/inbox = %d/%d, want 1 canonical delivery and 1 channel_message wake", deliveryCount, inboxCount)
 	}
+	assertChannelAgentWakeReasonPriority(t, channelID, agentID, voice.Message.ID, channelMessageWakeReason, channelMessageWakePriority)
 }
 
 func testPCM16MonoWAV(pcm []byte, sampleRate uint32) []byte {

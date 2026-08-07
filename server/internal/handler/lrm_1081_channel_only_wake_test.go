@@ -86,7 +86,7 @@ func TestChannelMentionEnqueueIsChannelOnly(t *testing.T) {
 	}
 }
 
-func TestReminderFireEnqueueIsChannelOnly(t *testing.T) {
+func TestReminderFireIsReceiptDeliveryWithoutInboxWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -98,34 +98,39 @@ func TestReminderFireEnqueueIsChannelOnly(t *testing.T) {
 		t.Fatalf("fire reminder: %v", err)
 	}
 
-	var chatSessionID pgtype.UUID
-	var channelID pgtype.UUID
-	var rawContext []byte
+	var receiptID pgtype.UUID
+	var receiptChannelID pgtype.UUID
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT event.chat_session_id, event.channel_id, event.context
+		SELECT occurrence.receipt_message_id, receipt.channel_id
 		FROM agent_reminder_occurrence occurrence
-		JOIN agent_inbox_event event ON event.id = occurrence.fired_task_id
-		WHERE occurrence.reminder_id = $1`, reminderID,
-	).Scan(&chatSessionID, &channelID, &rawContext); err != nil {
-		t.Fatalf("load fired reminder task: %v", err)
+		JOIN channel_message receipt ON receipt.id = occurrence.receipt_message_id
+		WHERE occurrence.reminder_id = $1 AND occurrence.status = 'fired'`, reminderID,
+	).Scan(&receiptID, &receiptChannelID); err != nil {
+		t.Fatalf("load fired reminder receipt: %v", err)
 	}
-	if chatSessionID.Valid {
-		t.Fatal("reminder wake must not create chat_session_id")
+	if !receiptID.Valid {
+		t.Fatal("reminder fire must create a receipt message")
 	}
-	if uuidToString(channelID) != fixture.channel.ID {
-		t.Fatalf("channel_id=%q, want %q", uuidToString(channelID), fixture.channel.ID)
+	if uuidToString(receiptChannelID) != fixture.channel.ID {
+		t.Fatalf("receipt channel_id=%q, want %q", uuidToString(receiptChannelID), fixture.channel.ID)
 	}
-	prompt, ok := channelWakePromptFromContext(rawContext)
-	if !ok {
-		t.Fatalf("missing channel_wake context: %s", string(rawContext))
+
+	var deliveryCount, wakeCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT
+		  (SELECT count(*) FROM agent_message_delivery
+		   WHERE agent_id = $1 AND message_id = $2),
+		  (SELECT count(*) FROM agent_inbox_event
+		   WHERE agent_id = $1 AND requires_wake = true
+		     AND (source_message_id = $2 OR reason = 'reminder'))`,
+		fixture.agentIDs[0], receiptID,
+	).Scan(&deliveryCount, &wakeCount); err != nil {
+		t.Fatalf("count reminder delivery/wake: %v", err)
 	}
-	for _, want := range []string{
-		"A self-scheduled reminder is due.",
-		"Reminder id: " + reminderID,
-		"msg-id: " + anchor.ID,
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("reminder prompt missing %q:\n%s", want, prompt)
-		}
+	if deliveryCount != 1 {
+		t.Fatalf("reminder author delivery count = %d, want 1", deliveryCount)
+	}
+	if wakeCount != 0 {
+		t.Fatalf("reminder created %d inbox wakes, want delivery-only (no task-shaped wake)", wakeCount)
 	}
 }

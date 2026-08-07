@@ -673,14 +673,21 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 	if deliveryCount != 2 {
 		t.Fatalf("canonical follow-up delivery count = %d, want 2", deliveryCount)
 	}
+	// Directed mention wakes are restored alongside canonical Delivery. Two
+	// pending @-mentions coalesce onto one requires_wake inbox event so the
+	// agent still sees an interruptible run while each message keeps its own
+	// independent Delivery projection.
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM agent_inbox_event
-		WHERE agent_id = $1 AND source_message_id IN ($2, $3)`, agentID, first.ID, second.ID).Scan(&inboxCount); err != nil {
-		t.Fatalf("count retired chat inbox events: %v", err)
+		WHERE agent_id = $1
+		  AND requires_wake = true
+		  AND reason = 'mention'
+		  AND source_message_id IN ($2, $3)`, agentID, first.ID, second.ID).Scan(&inboxCount); err != nil {
+		t.Fatalf("count mention wake inbox events: %v", err)
 	}
-	if inboxCount != 0 {
-		t.Fatalf("chat inbox event count = %d, want 0", inboxCount)
+	if inboxCount != 1 {
+		t.Fatalf("mention wake inbox event count = %d, want 1 coalesced wake", inboxCount)
 	}
 }
 
@@ -6133,6 +6140,16 @@ func seedThreadProductInboxEventForTest(t *testing.T, channelID, agentID, thread
 		SET source_message_id = $2, trigger_summary = 'Explicit product task'
 		WHERE id = $1`, eventID, reply.ID); err != nil {
 		t.Fatalf("link thread product task source: %v", err)
+	}
+	// Restored human-message wakes create a mention inbox event for the same
+	// reply. Snapshot fixtures need exactly one explicit product task, so drop
+	// the auto-dispatched wake(s) for this source message.
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM agent_inbox_event
+		WHERE agent_id = $1
+		  AND source_message_id = $2
+		  AND id <> $3`, agentID, reply.ID, eventID); err != nil {
+		t.Fatalf("clear auto mention wakes for product fixture: %v", err)
 	}
 	return root
 }

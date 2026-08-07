@@ -321,11 +321,11 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	}
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","around":"42","limit":2}`)))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","around_seq":42,"limit":2}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("message read status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if upstreamBody["target"] != "#one" || upstreamBody["around"] != "42" || upstreamBody["limit"] != float64(2) {
+	if upstreamBody["target"] != "#one" || upstreamBody["around_seq"] != float64(42) || upstreamBody["limit"] != float64(2) {
 		t.Fatalf("upstream request = %+v", upstreamBody)
 	}
 	var response map[string]any

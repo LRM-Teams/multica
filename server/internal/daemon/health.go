@@ -192,9 +192,12 @@ type credentialProxyMessageReadRequest struct {
 
 	WorkspaceID string `json:"workspace_id"`
 	Target      string `json:"target"`
-	Before      string `json:"before,omitempty"`
-	After       string `json:"after,omitempty"`
-	Around      string `json:"around,omitempty"`
+	BeforeID    string `json:"before_id,omitempty"`
+	BeforeSeq   int64  `json:"before_seq,omitempty"`
+	AfterID     string `json:"after_id,omitempty"`
+	AfterSeq    int64  `json:"after_seq,omitempty"`
+	AroundID    string `json:"around_id,omitempty"`
+	AroundSeq   int64  `json:"around_seq,omitempty"`
 	Limit       int    `json:"limit"`
 }
 
@@ -295,14 +298,23 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 			"target": request.Target,
 			"limit":  request.Limit,
 		}
-		if request.Before != "" {
-			upstreamRequest["before"] = request.Before
+		if request.BeforeID != "" {
+			upstreamRequest["before_id"] = request.BeforeID
 		}
-		if request.After != "" {
-			upstreamRequest["after"] = request.After
+		if request.BeforeSeq != 0 {
+			upstreamRequest["before_seq"] = request.BeforeSeq
 		}
-		if request.Around != "" {
-			upstreamRequest["around"] = request.Around
+		if request.AfterID != "" {
+			upstreamRequest["after_id"] = request.AfterID
+		}
+		if request.AfterSeq != 0 {
+			upstreamRequest["after_seq"] = request.AfterSeq
+		}
+		if request.AroundID != "" {
+			upstreamRequest["around_id"] = request.AroundID
+		}
+		if request.AroundSeq != 0 {
+			upstreamRequest["around_seq"] = request.AroundSeq
 		}
 		ctx, cancel := cli.APIContext(r.Context())
 		defer cancel()

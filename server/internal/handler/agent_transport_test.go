@@ -1967,7 +1967,7 @@ func TestAgentTransportReadAnchorsUseCanonicalTargetWindows(t *testing.T) {
 	}
 
 	before := agentTransportReadForTest(t, taskID, agentID, map[string]any{
-		"target": target, "before": seeded[2].ID, "limit": 2,
+		"target": target, "before_id": seeded[2].ID, "limit": 2,
 	})
 	if before.Code != http.StatusOK {
 		t.Fatalf("read before: status=%d body=%s", before.Code, before.Body.String())
@@ -1982,7 +1982,7 @@ func TestAgentTransportReadAnchorsUseCanonicalTargetWindows(t *testing.T) {
 	}
 
 	after := agentTransportReadForTest(t, taskID, agentID, map[string]any{
-		"target": target, "after": seeded[0].ID[:8], "limit": 2,
+		"target": target, "after_id": seeded[0].ID[:8], "limit": 2,
 	})
 	if after.Code != http.StatusOK {
 		t.Fatalf("read after short id: status=%d body=%s", after.Code, after.Body.String())
@@ -1994,7 +1994,7 @@ func TestAgentTransportReadAnchorsUseCanonicalTargetWindows(t *testing.T) {
 	assertAgentTransportReadMessageIDs(t, afterBody.Messages, seeded[1].ID, seeded[2].ID)
 
 	around := agentTransportReadForTest(t, taskID, agentID, map[string]any{
-		"target": target, "around": fmt.Sprint(seeded[2].Seq), "limit": 3,
+		"target": target, "around_seq": seeded[2].Seq, "limit": 3,
 	})
 	if around.Code != http.StatusOK {
 		t.Fatalf("read around sequence: status=%d body=%s", around.Code, around.Body.String())
@@ -2005,23 +2005,59 @@ func TestAgentTransportReadAnchorsUseCanonicalTargetWindows(t *testing.T) {
 	}
 	assertAgentTransportReadMessageIDs(t, aroundBody.Messages, seeded[1].ID, seeded[2].ID, seeded[3].ID)
 
+	// A digits-only id prefix must still resolve as an id: identity anchors
+	// never fall back to sequence interpretation.
+	digitID := "12345678" + seeded[3].ID[8:]
+	if _, err := testPool.Exec(ctx, `UPDATE channel_message SET id = $1 WHERE id = $2`, parseUUID(digitID), parseUUID(seeded[3].ID)); err != nil {
+		t.Fatalf("force digits-only id prefix: %v", err)
+	}
+	digitAnchor := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around_id": "12345678", "limit": 3,
+	})
+	if digitAnchor.Code != http.StatusOK {
+		t.Fatalf("read around digits-only id prefix: status=%d body=%s", digitAnchor.Code, digitAnchor.Body.String())
+	}
+	var digitBody AgentTransportReadResponse
+	if err := json.Unmarshal(digitAnchor.Body.Bytes(), &digitBody); err != nil {
+		t.Fatalf("decode digits-only anchor read: %v", err)
+	}
+	assertAgentTransportReadMessageIDs(t, digitBody.Messages, seeded[2].ID, digitID)
+
 	multipleAnchors := agentTransportReadForTest(t, taskID, agentID, map[string]any{
-		"target": target, "before": seeded[2].ID, "after": seeded[2].ID,
+		"target": target, "before_id": seeded[2].ID, "after_id": seeded[2].ID,
 	})
 	if multipleAnchors.Code != http.StatusBadRequest {
 		t.Fatalf("multiple anchors status=%d body=%s, want 400", multipleAnchors.Code, multipleAnchors.Body.String())
 	}
+	bothGrammars := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "before_id": seeded[2].ID, "before_seq": seeded[2].Seq,
+	})
+	if bothGrammars.Code != http.StatusBadRequest {
+		t.Fatalf("id+seq anchor status=%d body=%s, want 400", bothGrammars.Code, bothGrammars.Body.String())
+	}
 	missingAnchor := agentTransportReadForTest(t, taskID, agentID, map[string]any{
-		"target": target, "around": uuid.NewString(),
+		"target": target, "around_id": uuid.NewString(),
 	})
 	if missingAnchor.Code != http.StatusNotFound {
 		t.Fatalf("missing anchor status=%d body=%s, want 404", missingAnchor.Code, missingAnchor.Body.String())
 	}
-	nonDecimalSequence := agentTransportReadForTest(t, taskID, agentID, map[string]any{
-		"target": target, "around": "+7",
+	missingSequence := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around_seq": 999999,
 	})
-	if nonDecimalSequence.Code != http.StatusBadRequest {
-		t.Fatalf("non-decimal sequence status=%d body=%s, want 400", nonDecimalSequence.Code, nonDecimalSequence.Body.String())
+	if missingSequence.Code != http.StatusNotFound {
+		t.Fatalf("missing sequence status=%d body=%s, want 404", missingSequence.Code, missingSequence.Body.String())
+	}
+	negativeSequence := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around_seq": -7,
+	})
+	if negativeSequence.Code != http.StatusBadRequest {
+		t.Fatalf("negative sequence status=%d body=%s, want 400", negativeSequence.Code, negativeSequence.Body.String())
+	}
+	invalidIDAnchor := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": target, "around_id": "+7",
+	})
+	if invalidIDAnchor.Code != http.StatusBadRequest {
+		t.Fatalf("invalid id anchor status=%d body=%s, want 400", invalidIDAnchor.Code, invalidIDAnchor.Body.String())
 	}
 }
 

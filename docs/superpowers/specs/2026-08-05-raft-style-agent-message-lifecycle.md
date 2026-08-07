@@ -355,6 +355,16 @@ messages`.
 - `message read` requires the canonical `--target` spelling and supports bounded
   `before`, `after`, `around`, and `limit` windows. The legacy `--channel` alias
   is not retained.
+- Read anchors come in two grammars with separate fields at every layer:
+  message identity (`--before-id` / `before_id`, full or 8+ character unique ID
+  prefix) and target sequence (`--before-seq` / `before_seq`, positive integer).
+  The same split applies to `after` and `around`, the Credential Proxy request
+  contract rejects unknown fields, and combining both grammars of one direction
+  is a 400. Identity anchors never fall back to sequence interpretation, so a
+  digits-only ID prefix cannot be misread as a sequence. Agents are taught the
+  id flags only; sequence anchors are machine bookkeeping for Proxy recovery
+  and freshness, mirroring the response-side rule that cursor-like read state
+  (context target, seen-up-to sequence) never reaches the Agent process.
 - `message search` accepts query and canonical target/filter pagination options
   without retaining the legacy `--channel` spelling.
 - `message resolve` accepts one full or short Message ID as its positional

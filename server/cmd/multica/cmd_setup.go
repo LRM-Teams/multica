@@ -308,6 +308,16 @@ func runSetupSelfHost(cmd *cobra.Command, args []string) error {
 // Bare `multica daemon start` remains for development/emergency only and is
 // not treated as a completed machine setup — unsupervised processes stay
 // stopped after an auto-update self-stop (see daemon update logs).
+// startResidentAfterSetup launches the machine-wide detached resident after a
+// successful setup. It is a package var so tests can substitute a fake and
+// assert the resident-start contract without spawning a real OS process.
+var startResidentAfterSetup = startResidentAfterSetupReal
+
+func startResidentAfterSetupReal(cmd *cobra.Command) error {
+	_, err := (&computer.Lifecycle{Profile: ""}).StartBackground([]string{"daemon", "start", "--foreground"})
+	return err
+}
+
 func startDaemonAfterSetup(cmd *cobra.Command) error {
 	// Establish the Workspace Binding (#2489). A failure here must not read as
 	// a successful setup.
@@ -315,14 +325,11 @@ func startDaemonAfterSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("Setup incomplete (%w): the Computer identity is registered but this Workspace Binding could not be established; re-run `multica setup /<ws>` to repair", err)
 	}
 
-	// Start/install the resident so the Computer stays connected. (Per #2487/#2496
-	// this should eventually be the machine-wide detached resident with no OS
-	// supervisor; that live-verified cutover is tracked separately.)
-	fmt.Fprintln(os.Stderr, "\nInstalling daemon service (auto-start at login + auto-restart)...")
-	if err := runDaemonInstallService(cmd, nil); err != nil {
-		return fmt.Errorf("install daemon service: %w\n  For development only you can fall back to `multica daemon start`; setup expects install-service so upgrades can reconnect without a terminal", err)
-	}
-	return nil
+	// #2487/#2496: the Computer runs as one machine-wide detached resident that
+	// survives terminal close; setup does NOT install an OS supervisor
+	// (LaunchAgent/systemd/Scheduled Task).
+	fmt.Fprintln(os.Stderr, "\nStarting the resident Computer...")
+	return startResidentAfterSetup(cmd)
 }
 
 // establishWorkspaceBinding records the selected Workspace as a Binding for

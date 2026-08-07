@@ -1,11 +1,11 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -271,55 +271,28 @@ func TestServerHostIsLocal(t *testing.T) {
 	}
 }
 
-func TestStartDaemonAfterSetupUsesInstallServicePath(t *testing.T) {
-	prev := platformServiceInstaller
-	t.Cleanup(func() { platformServiceInstaller = prev })
+// #2487/#2496: setup starts the machine-wide detached resident and does NOT
+// install an OS supervisor service (LaunchAgent / systemd / Scheduled Task).
+func TestStartDaemonAfterSetupStartsDetachedResidentWithoutService(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // establishWorkspaceBinding needs HOME (no-op without a workspace)
+	var called bool
+	prev := startResidentAfterSetup
+	startResidentAfterSetup = func(*cobra.Command) error { called = true; return nil }
+	t.Cleanup(func() { startResidentAfterSetup = prev })
 
-	t.Run("nil installer fails with install-service guidance", func(t *testing.T) {
-		platformServiceInstaller = nil
-		cmd := &cobra.Command{}
-		err := startDaemonAfterSetup(cmd)
-		if err == nil {
-			t.Fatal("expected error when service install is unsupported")
-		}
-		msg := err.Error()
-		if !strings.Contains(msg, "install daemon service") {
-			t.Fatalf("error should wrap install path, got %q", msg)
-		}
-		if !strings.Contains(msg, "install-service") && !strings.Contains(msg, "not supported") {
-			// install wraps "service install is not supported on this platform"
-			t.Fatalf("error should mention service install failure, got %q", msg)
-		}
-	})
-
-	t.Run("installer install+running is success", func(t *testing.T) {
-		platformServiceInstaller = recordingServiceInstaller{
-			registered: true,
-			running:    true,
-			detail:     "test-service",
-		}
-		cmd := &cobra.Command{}
-		if err := startDaemonAfterSetup(cmd); err != nil {
-			t.Fatalf("startDaemonAfterSetup: %v", err)
-		}
-	})
-}
-
-// recordingServiceInstaller is a test double for daemonServiceInstaller.
-type recordingServiceInstaller struct {
-	registered bool
-	running    bool
-	detail     string
-	installN   *int
-}
-
-func (r recordingServiceInstaller) Install(profile, exePath string, args []string) error {
-	if r.installN != nil {
-		*r.installN++
+	if err := startDaemonAfterSetup(&cobra.Command{}); err != nil {
+		t.Fatalf("startDaemonAfterSetup: %v", err)
 	}
-	return nil
+	if !called {
+		t.Fatal("setup must start the detached resident, not install an OS service")
+	}
 }
-func (r recordingServiceInstaller) Uninstall(profile string) error { return nil }
-func (r recordingServiceInstaller) Status(profile string) (bool, bool, string, error) {
-	return r.registered, r.running, r.detail, nil
+
+func TestStartDaemonAfterSetupPropagatesResidentFailure(t *testing.T) {
+	prev := startResidentAfterSetup
+	startResidentAfterSetup = func(*cobra.Command) error { return errors.New("spawn failed") }
+	t.Cleanup(func() { startResidentAfterSetup = prev })
+	if err := startDaemonAfterSetup(&cobra.Command{}); err == nil {
+		t.Fatal("resident-start failure must surface as a setup error")
+	}
 }

@@ -8,4 +8,5 @@ export * from "./semantic-aggregation-visible-window";
 export * from "./schemas";
 export * from "./trajectory-lane-layout";
 export * from "./ui-store";
+export * from "./canvas-store";
 export * from "./ws-updaters";

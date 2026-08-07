@@ -59,7 +59,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Stage immutable deploy bundle
         run: |
@@ -125,7 +125,7 @@ jobs:
       db_bridge_image: ${{ steps.prep.outputs.db_bridge_image }}
     steps:
       # On dev push or manual dev dispatch, build the committed dev head.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # GHCR paths must be lowercase, but github.repository_owner preserves the
       # org's display case (e.g. "LRM-Teams"). Lowercase it here. The tag is the

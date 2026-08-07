@@ -643,13 +643,12 @@ func (h *Handler) ensureOnboardingAgentGeneralAndWelcomeTx(ctx context.Context, 
 		if exists {
 			continue
 		}
-		finalContent, parts, err := h.finalizeAgentChannelMessage(ctx, ChannelResponse{
-			ID: uuidToString(generalID), WorkspaceID: uuidToString(workspaceID), Kind: "group",
-		}, content, nil)
-		if err != nil {
-			return err
-		}
-		if _, err := insertChannelMessageWithPartsExec(ctx, tx, generalID, workspaceID, "agent", agentID, windyAgentName, finalContent, parts, "multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0); err != nil {
+		// These server-owned templates contain no user-authored mention or
+		// channel-reference syntax. Keep their insertion on the transaction's
+		// connection: finalizeAgentChannelMessage queries through h.DB and can
+		// deadlock with concurrent setup transactions waiting on the workspace
+		// row lock when the connection pool is small.
+		if _, err := insertChannelMessageWithPartsExec(ctx, tx, generalID, workspaceID, "agent", agentID, windyAgentName, content, nil, "multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0); err != nil {
 			return err
 		}
 	}

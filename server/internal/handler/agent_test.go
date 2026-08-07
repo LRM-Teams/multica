@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -2195,6 +2196,13 @@ func TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load runtime: %v", err)
 	}
+	// Two connections make the lock inversion deterministic: the winner holds
+	// one connection plus the Workspace row lock while a loser occupies the
+	// second connection waiting on that lock. Setup must not borrow a third
+	// connection from inside its transaction.
+	h := singleConnHandler(t, 2)
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 
 	// This is a smoke test, not a deterministic regression guard: it proves
 	// the ensure() path doesn't fall over under real concurrency, but the
@@ -2214,7 +2222,7 @@ func TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func(i int) {
 			defer wg.Done()
-			results[i], _, errs[i] = testHandler.provisionOnboardingAgent(ctx, workspace.ID, runtime, "race-model")
+			results[i], _, errs[i] = h.provisionOnboardingAgent(runCtx, workspace.ID, runtime, "race-model")
 		}(i)
 	}
 	wg.Wait()

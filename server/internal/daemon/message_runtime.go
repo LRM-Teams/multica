@@ -101,7 +101,6 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
 				d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
 			})
-			return
 		}
 		flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -109,7 +108,9 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		coordinator := d.messageCoordinators[agentID]
 		d.messageCoordinatorMu.RUnlock()
 		if coordinator == nil {
-			d.emitMessageTurnCompletionActivity(agentID, runtimeID, nil)
+			if turnErr == nil {
+				d.emitMessageTurnCompletionActivity(agentID, runtimeID, nil)
+			}
 			return
 		}
 		continued, err := coordinator.FlushOnTurnCompletion(flushCtx)
@@ -127,7 +128,7 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			})
 			return
 		}
-		if !continued {
+		if !continued && turnErr == nil {
 			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
 				d.emitMessageTurnCompletionActivity(agentID, runtimeID, nil)
 			})

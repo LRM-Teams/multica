@@ -363,6 +363,64 @@ func TestResidentMessageTurnCompletionContinuesPendingBeforeIdle(t *testing.T) {
 	}
 }
 
+func TestResidentMessageTurnErrorContinuesPendingAfterError(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-4111-8111-111111111111"
+		runtimeID   = "22222222-2222-4222-8222-222222222222"
+		agentID     = "agent-1"
+	)
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
+	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+		t.Fatalf("ensure coordinator: %v", err)
+	}
+	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(string, any) error { return nil })
+	d.messageCoordinatorMu.RLock()
+	coordinator := d.messageCoordinators[agentID]
+	d.messageCoordinatorMu.RUnlock()
+	completeCoordinatorRecovery(t, coordinator)
+
+	first := testDelivery("message-1", "channel:one", 1, "delivery-1")
+	second := testDelivery("message-2", "channel:one", 2, "delivery-2")
+	if _, err := coordinator.Accept(context.Background(), first); err != nil {
+		t.Fatalf("accept first: %v", err)
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("flush first: %v", err)
+	}
+	firstDone := <-backend.accepted
+	if _, err := coordinator.Accept(context.Background(), second); err != nil {
+		t.Fatalf("accept second: %v", err)
+	}
+	if err := coordinator.Flush(context.Background()); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("busy flush error = %v", err)
+	}
+	firstDone <- errors.New("provider stream failed")
+
+	var secondDone chan error
+	select {
+	case secondDone = <-backend.accepted:
+	case <-time.After(time.Second):
+		t.Fatal("pending Message did not start after the prior turn failed")
+	}
+	secondDone <- nil
+
+	deadline := time.Now().Add(time.Second)
+	for coordinator.Boundaries()["channel:one"] != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Context Boundary = %d, want 2", coordinator.Boundaries()["channel:one"])
+		}
+		runtime.Gosched()
+	}
+}
+
 func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTargets(t *testing.T) {
 	backend := &pendingNoticeRuntime{}
 	pool := newCanonicalAgentRuntimePool()

@@ -2,9 +2,11 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -76,6 +78,10 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 		return protocol.AgentDeliverPayload{}, false, nil
 	}
 	target := canonicalMessageDeliveryTarget(ch, message)
+	replyTarget, err := canonicalMessageReplyTarget(ctx, exec, ch, message, recipient.ID)
+	if err != nil {
+		return protocol.AgentDeliverPayload{}, false, err
+	}
 	tag, err := exec.Exec(ctx, `
 		INSERT INTO agent_message_delivery (workspace_id, agent_id, message_id, target, seq)
 		VALUES ($1, $2, $3, $4, $5)
@@ -93,7 +99,7 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 		Seq:        message.Seq,
 		DeliveryID: "message:" + message.ID + ":agent:" + agentID,
 		Message: protocol.AgentMessageProjection{
-			ID: message.ID, Target: target, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
+			ID: message.ID, Target: target, ReplyTarget: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
 		},
 	}, true, nil
 }
@@ -103,6 +109,53 @@ func canonicalMessageDeliveryTarget(ch ChannelResponse, message ChannelMessageRe
 		return "thread:" + *message.ThreadRootMessageID
 	}
 	return "channel:" + ch.ID
+}
+
+// canonicalMessageReplyTarget projects the internal delivery key into the
+// human-facing target syntax accepted by `multica message send`. The internal
+// target remains stable for coordinator boundaries; the reply target is safe
+// to expose to a runtime and can be reused verbatim.
+func canonicalMessageReplyTarget(ctx context.Context, exec dbExecutor, ch ChannelResponse, message ChannelMessageResponse, recipientID pgtype.UUID) (string, error) {
+	var base string
+	switch strings.TrimSpace(ch.Kind) {
+	case "", "group":
+		name := strings.TrimSpace(ch.Name)
+		if name == "" {
+			return "", fmt.Errorf("canonical Message group channel name is empty")
+		}
+		base = "#" + name
+	case "dm":
+		var handle string
+		if err := exec.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(u.name, ''), NULLIF(a.name, ''), '')
+			FROM channel_member cm
+			LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
+			LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id AND a.archived_at IS NULL
+			WHERE cm.channel_id = $1
+			  AND cm.workspace_id = $2
+			  AND NOT (cm.member_type = 'agent' AND cm.member_id = $3)
+			ORDER BY cm.created_at ASC
+			LIMIT 1`, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), recipientID).Scan(&handle); err != nil {
+			return "", fmt.Errorf("resolve canonical Message DM peer: %w", err)
+		}
+		handle = strings.TrimSpace(handle)
+		if handle == "" {
+			return "", fmt.Errorf("canonical Message DM peer handle is empty")
+		}
+		base = "dm:@" + handle
+	default:
+		return "", fmt.Errorf("unsupported canonical Message channel kind %q", ch.Kind)
+	}
+	if message.ThreadRootMessageID != nil {
+		rootID := strings.TrimSpace(*message.ThreadRootMessageID)
+		if rootID != "" {
+			if len(rootID) > 8 {
+				rootID = rootID[:8]
+			}
+			base += ":" + rootID
+		}
+	}
+	return base, nil
 }
 
 func (h *Handler) notifyCanonicalMessageDelivery(ctx context.Context, ch ChannelResponse, recipient db.Agent, delivery protocol.AgentDeliverPayload) {

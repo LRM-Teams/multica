@@ -32,6 +32,7 @@ var ErrOpenCodeServeTurnBusy = errors.New("opencode serve turn busy")
 // and failed turns — same contract as CursorACPBackend/GrokACPBackend.
 type OpenCodeServeBackend interface {
 	Backend
+	ResidentMessageInput
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -123,6 +124,10 @@ func (b *opencodeServeBackend) takeForceKilled() bool {
 }
 
 func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	return b.startTurn(ctx, prompt, opts, nil)
+}
+
+func (b *opencodeServeBackend) startTurn(ctx context.Context, prompt string, opts ExecOptions, onAdmitted func()) (*Session, error) {
 	b.noticeMu.Lock()
 	b.mu.Lock()
 	if b.running {
@@ -148,7 +153,7 @@ func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts 
 		}
 		defer release()
 		started := time.Now()
-		result := b.executeTurn(ctx, prompt, opts, msgCh)
+		result := b.executeTurn(ctx, prompt, opts, msgCh, onAdmitted)
 		result.DurationMs = time.Since(started).Milliseconds()
 		// Release admission before publishing the terminal result — same
 		// ordering cursorACPBackend.Execute uses, so an immediate follow-up
@@ -157,6 +162,60 @@ func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts 
 		resCh <- result
 	}()
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
+}
+
+// AcceptMessageBatch starts an idle OpenCode turn and reports acceptance only
+// after POST /session/:id/message succeeds. Process startup and session
+// creation alone are not native Message acceptance.
+func (b *opencodeServeBackend) AcceptMessageBatch(ctx context.Context, messages []ResidentMessage) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentMessageBatch(messages)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	admitted := make(chan struct{})
+	var admittedOnce sync.Once
+	session, err := b.startTurn(ctx, prompt, b.cfg.ResidentOptions, func() {
+		admittedOnce.Do(func() { close(admitted) })
+	})
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	completion := func(result Result) ResidentMessageAcceptance {
+		done := make(chan error, 1)
+		done <- errorForResidentTurn(result)
+		close(done)
+		return ResidentMessageAcceptance{Done: done, Messages: session.Messages}
+	}
+	select {
+	case <-admitted:
+		done := make(chan error, 1)
+		go func() {
+			result := <-session.Result
+			done <- errorForResidentTurn(result)
+			close(done)
+		}()
+		return ResidentMessageAcceptance{Done: done, Messages: session.Messages}, nil
+	case result := <-session.Result:
+		select {
+		case <-admitted:
+			return completion(result), nil
+		default:
+			go func() {
+				for range session.Messages {
+				}
+			}()
+			if err := errorForResidentTurn(result); err != nil {
+				return ResidentMessageAcceptance{}, err
+			}
+			return ResidentMessageAcceptance{}, errors.New("OpenCode canonical Message turn ended before native input acceptance")
+		}
+	case <-ctx.Done():
+		go func() {
+			for range session.Messages {
+			}
+		}()
+		return ResidentMessageAcceptance{}, ctx.Err()
+	}
 }
 
 func (b *opencodeServeBackend) releaseTurnAdmission() {
@@ -218,7 +277,7 @@ func (b *opencodeServeBackend) runtimeAlive() (bool, bool) {
 	return processAlive(b.server.cmd.Process)
 }
 
-func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message, onAdmitted func()) Result {
 	p, err := b.ensureServer(ctx, opts)
 	if err != nil {
 		return Result{Status: "failed", Error: err.Error()}
@@ -249,6 +308,9 @@ func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, o
 		b.noticeMu.Lock()
 		b.noticeReady = true
 		b.noticeMu.Unlock()
+		if onAdmitted != nil {
+			onAdmitted()
+		}
 	}, func(msg Message) {
 		if msg.Type == MessageText {
 			output.WriteString(msg.Content)

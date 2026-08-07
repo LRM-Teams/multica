@@ -80,7 +80,7 @@ func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T)
 	}
 	waitPiRPCResult(t, session, filepath.Join(dir, "session.jsonl"))
 	acceptance, err := b.AcceptMessageBatch(context.Background(), []ResidentMessage{{
-		ID: "message-1", Target: "channel:one", Seq: 7, Content: "concrete body", PartsJSON: json.RawMessage(`[{"type":"text","text":"concrete body"}]`),
+		ID: "message-1", Target: "channel:one", ReplyTarget: "#one", Seq: 7, Content: "concrete body", PartsJSON: json.RawMessage(`[{"type":"text","text":"concrete body"}]`),
 	}})
 	if err != nil {
 		t.Fatalf("AcceptMessageBatch: %v", err)
@@ -96,10 +96,13 @@ func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"multica-message-input", "message-1", "channel:one", "concrete body"} {
+	for _, want := range []string{"multica-message-input", "message-1", "#one", "concrete body"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("native Pi input %s does not contain %q", raw, want)
 		}
+	}
+	if strings.Contains(string(raw), "channel:one") {
+		t.Fatalf("native Pi input exposed internal target: %s", raw)
 	}
 }
 

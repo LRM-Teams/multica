@@ -432,14 +432,18 @@ func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	}
 	payload := make([]residentMessageInput, 0, len(messages))
 	for _, message := range messages {
-		if strings.TrimSpace(message.ID) == "" || strings.TrimSpace(message.Target) == "" || message.Seq <= 0 {
+		replyTarget := strings.TrimSpace(message.ReplyTarget)
+		if replyTarget == "" {
+			replyTarget = strings.TrimSpace(message.Target)
+		}
+		if strings.TrimSpace(message.ID) == "" || replyTarget == "" || message.Seq <= 0 {
 			return "", errors.New("resident Message id, target, and positive seq are required")
 		}
 		if len(message.PartsJSON) > 0 && !json.Valid(message.PartsJSON) {
 			return "", errors.New("resident Message parts are invalid JSON")
 		}
 		payload = append(payload, residentMessageInput{
-			ID: message.ID, Target: message.Target, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON,
+			ID: message.ID, Target: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON,
 		})
 	}
 	raw, err := json.Marshal(payload)

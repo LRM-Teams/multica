@@ -31,7 +31,7 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 		p := h.buildChannelMentionPrompt(context.Background(), ch, trigger, channelFacilitatorState{})
 		wantTarget := "#产品讨论"
 		if trigger.ThreadRootMessageID != nil {
-			wantTarget += ":" + *trigger.ThreadRootMessageID
+			wantTarget += ":" + (*trigger.ThreadRootMessageID)[:8]
 		}
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
@@ -91,7 +91,7 @@ func TestAgentMessageTargetUsesOnlyExplicitThreadSource(t *testing.T) {
 	}
 	if got := h.agentMessageTargetForPrompt(context.Background(), ch, ChannelMessageResponse{
 		ID: "22222222-2222-2222-2222-222222222222", ThreadRootMessageID: &rootID,
-	}); got != "#product:"+rootID {
+	}); got != "#product:"+rootID[:8] {
 		t.Fatalf("thread source target = %q, want explicit thread target", got)
 	}
 }

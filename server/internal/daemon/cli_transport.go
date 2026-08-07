@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
@@ -76,11 +77,8 @@ func prepareTaskCLITransport(cfg Config, workspaceID, agentID, runID, multicaBin
 		return "", "", fmt.Errorf("chmod cli token file: %w", err)
 	}
 
-	wrapper := filepath.Join(root, "multica")
-	body := "#!/bin/sh\n" +
-		"unset MULTICA_TOKEN\n" +
-		"export MULTICA_TOKEN_FILE=" + shellQuote(tokenFile) + "\n" +
-		"exec " + shellQuote(multicaBin) + " \"$@\"\n"
+	wrapper := filepath.Join(root, turntransport.CliWrapperFilename())
+	body := cliWrapperBody(tokenFile, multicaBin)
 	if err := os.WriteFile(wrapper, []byte(body), 0o700); err != nil {
 		return "", "", fmt.Errorf("write cli wrapper: %w", err)
 	}
@@ -89,6 +87,33 @@ func prepareTaskCLITransport(cfg Config, workspaceID, agentID, runID, multicaBin
 	}
 
 	return root, tokenFile, nil
+}
+
+// cliWrapperBody returns the credential CLI wrapper for the per-task cli
+// transport. POSIX gets a #!/bin/sh shim; Windows gets a .cmd batch (see
+// turntransport.CliWrapperFilename) so ShellExecute never opens the bare
+// extensionless file and pops the "How do you want to open this file?" dialog.
+func cliWrapperBody(tokenFile, multicaBin string) string {
+	if runtime.GOOS == "windows" {
+		return windowsCLIWrapperBody(tokenFile, multicaBin)
+	}
+	return "#!/bin/sh\n" +
+		"unset MULTICA_TOKEN\n" +
+		"export MULTICA_TOKEN_FILE=" + shellQuote(tokenFile) + "\n" +
+		"exec " + shellQuote(multicaBin) + " \"$@\"\n"
+}
+
+// windowsCLIWrapperBody emits a cmd.exe batch wrapper (see cliWrapperBody). No
+// bare extensionless shim is ever written on Windows, so ShellExecute cannot
+// open the "How do you want to open this file?" (选择应用的打开方式) dialog.
+func windowsCLIWrapperBody(tokenFile, multicaBin string) string {
+	var body strings.Builder
+	body.WriteString("@echo off\r\n")
+	body.WriteString("set \"MULTICA_TOKEN=\"\r\n")
+	body.WriteString("set \"MULTICA_TOKEN_FILE=" + tokenFile + "\"\r\n")
+	body.WriteString("call \"" + multicaBin + "\" %*\r\n")
+	body.WriteString("exit /b %ERRORLEVEL%\r\n")
+	return body.String()
 }
 
 func shellQuote(s string) string {

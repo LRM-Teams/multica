@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -124,7 +125,7 @@ func Prepare(root, binaryPath string) (*Transport, error) {
 		return nil, fmt.Errorf("chmod transport bin dir: %w", err)
 	}
 
-	wrapperPath := filepath.Join(binDir, "multica")
+	wrapperPath := filepath.Join(binDir, CliWrapperFilename())
 	body := wrapperBody(filepath.Join(root, envelopeName), binaryPath)
 	if err := writeFileAtomic(wrapperPath, []byte(body), 0o700); err != nil {
 		return nil, fmt.Errorf("write fixed cli wrapper: %w", err)
@@ -559,6 +560,20 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	return os.Chmod(path, mode)
 }
 
+// CliWrapperFilename returns the on-disk name for the credential CLI wrapper:
+// "multica" on POSIX and "multica.cmd" on Windows.
+//
+// Windows must never receive the bare extensionless "#!/bin/sh" wrapper that
+// POSIX shells consume: ShellExecute on a no-extension sh file pops Windows'
+// "How do you want to open this file?" (选择应用的打开方式) dialog on every agent
+// CLI invocation. A .cmd file is resolved through PATHEXT and runs silently.
+func CliWrapperFilename() string {
+	if runtime.GOOS == "windows" {
+		return "multica.cmd"
+	}
+	return "multica"
+}
+
 func wrapperBody(envelopePath, binaryPath string) string {
 	keys := make([]string, 0, len(turnEnvironmentKeys)+2)
 	keys = append(keys, "MULTICA_TOKEN", "MULTICA_TOKEN_FILE")
@@ -566,6 +581,10 @@ func wrapperBody(envelopePath, binaryPath string) string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+
+	if runtime.GOOS == "windows" {
+		return windowsWrapperBody(EnvelopePathEnv, envelopePath, keys, binaryPath)
+	}
 
 	var body bytes.Buffer
 	body.WriteString("#!/bin/sh\n")
@@ -580,6 +599,22 @@ func wrapperBody(envelopePath, binaryPath string) string {
 	body.WriteString("exec ")
 	body.WriteString(shellQuote(binaryPath))
 	body.WriteString(" \"$@\"\n")
+	return body.String()
+}
+
+// windowsWrapperBody emits a cmd.exe batch wrapper. "set \"KEY=\"" clears each
+// credential/current-turn key (the equivalent of the POSIX "unset"), the target
+// env var is set to the absolute path, and the real multica.exe is invoked so a
+// bare extensionless shim never appears on PATH.
+func windowsWrapperBody(targetEnv, targetValue string, clearKeys []string, binaryPath string) string {
+	var body bytes.Buffer
+	body.WriteString("@echo off\r\n")
+	for _, key := range clearKeys {
+		body.WriteString("set \"" + key + "=\"\r\n")
+	}
+	body.WriteString("set \"" + targetEnv + "=" + targetValue + "\"\r\n")
+	body.WriteString("call \"" + binaryPath + "\" %*\r\n")
+	body.WriteString("exit /b %ERRORLEVEL%\r\n")
 	return body.String()
 }
 

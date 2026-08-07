@@ -129,3 +129,28 @@ func mustStatMode(t *testing.T, path string) os.FileMode {
 	}
 	return info.Mode()
 }
+
+// TestWindowsCLIWrapperBodyIsCmdNotShell verifies the Windows per-task CLI
+// wrapper is a cmd.exe batch that clears and sets the token env and calls the
+// real exe — never a bare extensionless #!/bin/sh shim (the popup root cause).
+func TestWindowsCLIWrapperBodyIsCmdNotShell(t *testing.T) {
+	body := windowsCLIWrapperBody(`C:\agent\cli-transport\run-1\token`, `C:\multica\multica.exe`)
+
+	if strings.HasPrefix(body, "#!") {
+		t.Fatalf("windows wrapper starts with shebang: %q", body)
+	}
+	for _, want := range []string{
+		"@echo off",
+		`set "MULTICA_TOKEN="`,
+		`set "MULTICA_TOKEN_FILE=C:\agent\cli-transport\run-1\token"`,
+		`call "C:\multica\multica.exe" %*`,
+		"exit /b %ERRORLEVEL%",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("windows wrapper missing %q: %q", want, body)
+		}
+	}
+	if strings.Contains(body, "#/bin/sh") {
+		t.Fatalf("windows wrapper contains shell shebang: %q", body)
+	}
+}

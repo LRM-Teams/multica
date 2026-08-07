@@ -385,3 +385,25 @@ func assertPrivateFile(t *testing.T, path string, want os.FileMode) {
 		t.Fatalf("%s mode = %o, want %o", path, got, want)
 	}
 }
+
+// TestWindowsWrapperBodyIsCmdNotShell verifies the stable-transport wrapper on
+// Windows is a cmd.exe batch, not a bare extensionless #!/bin/sh shim.
+func TestWindowsWrapperBodyIsCmdNotShell(t *testing.T) {
+	keys := []string{"MULTICA_TOKEN", "MULTICA_TOKEN_FILE", "MULTICA_TASK_ID"}
+	body := windowsWrapperBody(EnvelopePathEnv, `C:\transport\current-turn.json`, keys, `C:\multica\multica.exe`)
+
+	if strings.HasPrefix(body, "#!") {
+		t.Fatalf("windows wrapper starts with shebang: %q", body)
+	}
+	for _, want := range []string{
+		"@echo off",
+		`set "MULTICA_TOKEN="`,
+		"set \"" + EnvelopePathEnv + `=C:\transport\current-turn.json"`,
+		`call "C:\multica\multica.exe" %*`,
+		"exit /b %ERRORLEVEL%",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("windows wrapper missing %q: %q", want, body)
+		}
+	}
+}

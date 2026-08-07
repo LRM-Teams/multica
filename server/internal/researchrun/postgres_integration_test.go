@@ -614,6 +614,9 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if err != nil || secondReplayable.ID != firstReplayable.ID || secondReplayable.Sequence != firstReplayable.Sequence {
 		t.Fatalf("event replay first=%+v second=%+v err=%v", firstReplayable, secondReplayable, err)
 	}
+	if _, err = appendEvent(ctx, eventTx, fixture.workspaceID, fixture.sessionID, "test_event", "test-event-idempotency", "system", "", map[string]any{"value": 2}); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("same event ID with different payload error=%v, want ErrResultConflict", err)
+	}
 	if err = eventTx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -664,6 +667,20 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	})
 	if err != nil || !replayed.Replayed {
 		t.Fatalf("replay=%+v err=%v", replayed, err)
+	}
+	conflictingResult := result
+	conflictingResult.Summary = result.Summary + " changed under the same request ID"
+	conflictingRaw, _ := json.Marshal(conflictingResult)
+	conflictingValidated, conflictingHash, decodeErr := DecodeAndValidateResultForVersion(run.OrchestratorVersion, conflictingRaw, tasks[0], run.Config)
+	if decodeErr != nil {
+		t.Fatalf("decode conflicting valid result: %v", decodeErr)
+	}
+	_, err = store.AcceptResult(ctx, AcceptResultInput{
+		SessionID: fixture.sessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
+		InboxTaskID: inboxID, Raw: conflictingRaw, Result: conflictingValidated, Hash: conflictingHash,
+	})
+	if !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("same request ID with different result error=%v, want ErrResultConflict", err)
 	}
 	questions, err := store.ListQuestions(ctx, fixture.sessionID)
 	if err != nil || len(questions) != 2 {
@@ -2587,4 +2604,135 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		}
 	}
 	return fixture
+}
+
+func TestStaleResultPreservesEvidenceWithoutAdvancingCurrentPlan(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	run, _, err := store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Investigate the original goal",
+		Title: "Stale result", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := upgradeResultToV5(validV4PlanResult(t))
+	plan.ClientRequestID = "stale-result-plan"
+	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
+	if _, err = store.ActivateReadyTasks(ctx, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var discover Task
+	for _, task := range tasks {
+		if task.ClientKey == "discover-1" {
+			discover = task
+			break
+		}
+	}
+	if discover.ID == "" || discover.Status != TaskStatusReady {
+		t.Fatalf("discover task is not ready: %+v", discover)
+	}
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(
+		t, ctx, store, fixture.sessionID, fixture.workspaceID, discover.ID, fixture.agentID,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inboxID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'draining')
+	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
+		t.Fatal(err)
+	}
+
+	steered, _, cancelIDs, err := store.Steer(ctx, SteerInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, UserID: fixture.userID,
+		Goal: "Investigate a materially different goal", Reason: "scope changed",
+		AllowRunningFinish: true,
+	})
+	if err != nil || len(cancelIDs) != 0 || steered.GoalVersion != 2 || steered.PlanVersion != 2 {
+		t.Fatalf("steer run=%+v cancelIDs=%v err=%v", steered, cancelIDs, err)
+	}
+
+	evidence := upgradeResultToV5(authoritativeRecordEvidenceV4())
+	evidence.ClientRequestID = "stale-result-evidence"
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, discover, run.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := store.AcceptResult(ctx, AcceptResultInput{
+		SessionID: fixture.sessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
+		InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.SourcesCreated != 1 || outcome.ObservationsCreated != 1 || outcome.ClaimsCreated != 1 ||
+		outcome.QuestionsCreated != 0 || outcome.TasksCreated != 0 || outcome.ReportID != "" {
+		t.Fatalf("stale result outcome=%+v", outcome)
+	}
+	var eventPayload map[string]any
+	if err = json.Unmarshal(outcome.Event.Payload, &eventPayload); err != nil {
+		t.Fatal(err)
+	}
+	if stale, _ := eventPayload["stale"].(bool); !stale {
+		t.Fatalf("stale result event payload=%+v", eventPayload)
+	}
+
+	var currentQuestions, currentTasks, oldClaims, reports, evaluations, informationGain int
+	if err = pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*) FROM research_question WHERE session_id=$1::uuid AND goal_version=2),
+		  (SELECT count(*) FROM research_task WHERE session_id=$1::uuid AND goal_version=2),
+		  (SELECT count(*) FROM research_claim WHERE session_id=$1::uuid AND goal_version=1),
+		  (SELECT count(*) FROM research_report WHERE session_id=$1::uuid),
+		  (SELECT count(*) FROM research_decision WHERE session_id=$1::uuid AND decision_kind IN ('quality_evaluation','citation_audit')),
+		  (SELECT count(*) FROM research_decision WHERE session_id=$1::uuid AND decision_kind='information_gain' AND inputs->>'attempt_id'=$2)
+	`, fixture.sessionID, attempt.ID).Scan(
+		&currentQuestions, &currentTasks, &oldClaims, &reports, &evaluations, &informationGain,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if currentQuestions != 1 || currentTasks != 0 || oldClaims != 1 || reports != 0 || evaluations != 0 || informationGain != 0 {
+		t.Fatalf("current questions=%d tasks=%d old claims=%d reports=%d evaluations=%d gain=%d",
+			currentQuestions, currentTasks, oldClaims, reports, evaluations, informationGain)
+	}
+	var attemptStatus, taskStatus string
+	if err = pool.QueryRow(ctx, `
+		SELECT a.status, t.status FROM research_task_attempt a
+		JOIN research_task t ON t.id=a.task_id WHERE a.id=$1::uuid
+	`, attempt.ID).Scan(&attemptStatus, &taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if attemptStatus != string(AttemptStatusSucceeded) || taskStatus != string(TaskStatusSucceeded) {
+		t.Fatalf("stale audit completion attempt=%q task=%q", attemptStatus, taskStatus)
+	}
 }

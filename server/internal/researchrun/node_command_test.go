@@ -118,3 +118,49 @@ func TestNodeCommandClientKeyBounded(t *testing.T) {
 		t.Fatalf("key len %d > %d", len(key), maxClientKeyBytes)
 	}
 }
+
+func TestHashNodeCommandRequestUsesSemanticJSONAndAllMutableInputs(t *testing.T) {
+	base := NodeCommandInput{
+		SessionID: "session-1", WorkspaceID: "workspace-1", NodeID: "task:task-1",
+		Action: NodeActionRetry, ClientRequestID: "request-1", ActorType: "user", ActorID: "user-1",
+		Objective: "retry with a fresh method", GoalPatch: "goal", Strategy: "strategy",
+		StrategyPatch: "patch", SourceConstraints: json.RawMessage(`{"domains":["example.com"]}`),
+		SourcePatch: json.RawMessage(`{"language":"en"}`), TargetAgentID: "agent-1",
+		AnchorKind: "task", AnchorQuestionID: "question-1", AnchorTaskID: "task-1", AnchorTitle: "Task",
+	}
+	first, err := HashNodeCommandRequest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semanticJSON := base
+	semanticJSON.SourceConstraints = json.RawMessage(`{ "domains": [ "example.com" ] }`)
+	semanticJSON.SourcePatch = json.RawMessage("{\n\"language\": \"en\"\n}")
+	second, err := HashNodeCommandRequest(semanticJSON)
+	if err != nil || second != first {
+		t.Fatalf("semantic JSON changed hash: first=%q second=%q err=%v", first, second, err)
+	}
+
+	changes := map[string]func(*NodeCommandInput){
+		"node":               func(in *NodeCommandInput) { in.NodeID = "task:task-2" },
+		"action":             func(in *NodeCommandInput) { in.Action = NodeActionReassign },
+		"actor":              func(in *NodeCommandInput) { in.ActorID = "user-2" },
+		"objective":          func(in *NodeCommandInput) { in.Objective = "different" },
+		"goal patch":         func(in *NodeCommandInput) { in.GoalPatch = "different" },
+		"strategy":           func(in *NodeCommandInput) { in.Strategy = "different" },
+		"strategy patch":     func(in *NodeCommandInput) { in.StrategyPatch = "different" },
+		"source constraints": func(in *NodeCommandInput) { in.SourceConstraints = json.RawMessage(`{"domains":["other.test"]}`) },
+		"source patch":       func(in *NodeCommandInput) { in.SourcePatch = json.RawMessage(`{"language":"zh"}`) },
+		"target agent":       func(in *NodeCommandInput) { in.TargetAgentID = "agent-2" },
+	}
+	for label, mutate := range changes {
+		changed := base
+		mutate(&changed)
+		hash, hashErr := HashNodeCommandRequest(changed)
+		if hashErr != nil {
+			t.Fatalf("%s: %v", label, hashErr)
+		}
+		if hash == first {
+			t.Fatalf("%s change did not move request hash", label)
+		}
+	}
+}

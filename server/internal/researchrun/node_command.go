@@ -1,6 +1,8 @@
 package researchrun
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -184,4 +186,76 @@ func nodeCommandClientKey(clientRequestID, suffix string) string {
 		return key[:maxClientKeyBytes]
 	}
 	return key
+}
+
+// nodeCommandRequestFingerprintV1 freezes the semantic command input behind a
+// client request ID. Adding or changing fields requires a new fingerprint
+// version; otherwise an old committed command could be accepted as a replay of
+// a different operation.
+type nodeCommandRequestFingerprintV1 struct {
+	SessionID            string          `json:"session_id"`
+	WorkspaceID          string          `json:"workspace_id"`
+	NodeID               string          `json:"node_id"`
+	Action               string          `json:"action"`
+	ClientRequestID      string          `json:"client_request_id"`
+	ExpectedStateVersion *int64          `json:"expected_state_version,omitempty"`
+	ActorType            string          `json:"actor_type"`
+	ActorID              string          `json:"actor_id"`
+	Objective            string          `json:"objective"`
+	GoalPatch            string          `json:"goal_patch"`
+	Strategy             string          `json:"strategy"`
+	StrategyPatch        string          `json:"strategy_patch"`
+	SourceConstraints    json.RawMessage `json:"source_constraints"`
+	SourcePatch          json.RawMessage `json:"source_patch"`
+	TargetAgentID        string          `json:"target_agent_id"`
+	AnchorKind           string          `json:"anchor_kind"`
+	AnchorQuestionID     string          `json:"anchor_question_id"`
+	AnchorTaskID         string          `json:"anchor_task_id"`
+	AnchorTitle          string          `json:"anchor_title"`
+}
+
+// HashNodeCommandRequest fingerprints semantic JSON rather than raw formatting
+// so harmless whitespace does not split one idempotent request into two.
+func HashNodeCommandRequest(in NodeCommandInput) (string, error) {
+	constraints, err := canonicalNodeCommandJSON(in.SourceConstraints)
+	if err != nil {
+		return "", err
+	}
+	patch, err := canonicalNodeCommandJSON(in.SourcePatch)
+	if err != nil {
+		return "", err
+	}
+	fingerprint := nodeCommandRequestFingerprintV1{
+		SessionID: in.SessionID, WorkspaceID: in.WorkspaceID, NodeID: in.NodeID,
+		Action: in.Action, ClientRequestID: in.ClientRequestID,
+		ExpectedStateVersion: in.ExpectedStateVersion,
+		ActorType:            in.ActorType, ActorID: in.ActorID,
+		Objective: in.Objective, GoalPatch: in.GoalPatch,
+		Strategy: in.Strategy, StrategyPatch: in.StrategyPatch,
+		SourceConstraints: constraints, SourcePatch: patch,
+		TargetAgentID: in.TargetAgentID,
+		AnchorKind:    in.AnchorKind, AnchorQuestionID: in.AnchorQuestionID,
+		AnchorTaskID: in.AnchorTaskID, AnchorTitle: in.AnchorTitle,
+	}
+	encoded, err := json.Marshal(fingerprint)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func canonicalNodeCommandJSON(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return json.RawMessage("null"), nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("canonicalize node command JSON: %w", err)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize node command JSON: %w", err)
+	}
+	return encoded, nil
 }

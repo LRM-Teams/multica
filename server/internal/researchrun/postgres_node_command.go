@@ -14,6 +14,10 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 	if err := validateNodeCommandInput(in); err != nil {
 		return NodeCommandOutcome{}, err
 	}
+	requestHash, err := HashNodeCommandRequest(in)
+	if err != nil {
+		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeInvalidRequest, "请求内容无效，请刷新后重试")
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return NodeCommandOutcome{}, err
@@ -49,6 +53,20 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 		return NodeCommandOutcome{}, err
 	}
 
+	eventKey := nodeCommandClientKey(in.ClientRequestID, "event")
+	if existing, loadErr := loadNodeCommandEvent(ctx, tx, in.SessionID, eventKey); loadErr == nil {
+		outcome, storedHash, decodeErr := decodeNodeCommandEvent(existing)
+		if decodeErr != nil || storedHash == "" || storedHash != requestHash ||
+			existing.ActorType != in.ActorType || existing.ActorID != in.ActorID {
+			return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeIdempotencyConflict, "相同请求标识已用于其他操作，请换新标识重试")
+		}
+		outcome.Replayed = true
+		outcome.Event = existing
+		return outcome, tx.Commit(ctx)
+	} else if !errors.Is(loadErr, pgx.ErrNoRows) {
+		return NodeCommandOutcome{}, loadErr
+	}
+
 	switch RunStatus(status) {
 	case RunStatusCompleted, RunStatusCancelled, RunStatusArchived, RunStatusFailed:
 		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeSessionTerminal, "调研已结束，无法继续该操作")
@@ -66,31 +84,18 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeStateVersionConflict, "画布已更新，请刷新后重试")
 	}
 
-	eventKey := nodeCommandClientKey(in.ClientRequestID, "event")
-	if existing, loadErr := loadNodeCommandEvent(ctx, tx, in.SessionID, eventKey); loadErr == nil {
-		outcome, decodeErr := decodeNodeCommandOutcome(existing)
-		if decodeErr != nil {
-			return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeIdempotencyConflict, "相同请求标识已用于其他操作，请换新标识重试")
-		}
-		outcome.Replayed = true
-		outcome.Event = existing
-		return outcome, tx.Commit(ctx)
-	} else if !errors.Is(loadErr, pgx.ErrNoRows) {
-		return NodeCommandOutcome{}, loadErr
-	}
-
 	switch in.Action {
 	case NodeActionRetry:
-		return s.nodeCommandRetry(ctx, tx, in, workspaceID, goalVersion, planVersion, maxAttempts)
+		return s.nodeCommandRetry(ctx, tx, in, requestHash, workspaceID, goalVersion, planVersion, maxAttempts)
 	case NodeActionReassign:
-		return s.nodeCommandReassign(ctx, tx, in, workspaceID, goalVersion, planVersion)
+		return s.nodeCommandReassign(ctx, tx, in, requestHash, workspaceID, goalVersion, planVersion)
 	}
 
-	return s.nodeCommandContinueFork(ctx, tx, in, workspaceID, orchestratorVersion, goalVersion, planVersion, maxTasks, maxAttempts, timeout)
+	return s.nodeCommandContinueFork(ctx, tx, in, requestHash, workspaceID, orchestratorVersion, goalVersion, planVersion, maxTasks, maxAttempts, timeout)
 }
 
 func (s *PostgresStore) nodeCommandContinueFork(
-	ctx context.Context, tx pgx.Tx, in NodeCommandInput,
+	ctx context.Context, tx pgx.Tx, in NodeCommandInput, requestHash string,
 	workspaceID, orchestratorVersion string,
 	goalVersion, planVersion, maxTasks, maxAttempts, timeout int,
 ) (NodeCommandOutcome, error) {
@@ -293,6 +298,7 @@ func (s *PostgresStore) nodeCommandContinueFork(
 		"command":            outcome,
 		"action":             in.Action,
 		"client_request_id":  in.ClientRequestID,
+		"request_hash":       requestHash,
 		"source_node_id":     in.NodeID,
 		"question_id":        questionID,
 		"task_id":            taskID,
@@ -317,7 +323,7 @@ func (s *PostgresStore) nodeCommandContinueFork(
 }
 
 func (s *PostgresStore) nodeCommandRetry(
-	ctx context.Context, tx pgx.Tx, in NodeCommandInput,
+	ctx context.Context, tx pgx.Tx, in NodeCommandInput, requestHash string,
 	workspaceID string, goalVersion, planVersion, defaultMaxAttempts int,
 ) (NodeCommandOutcome, error) {
 	taskID := strings.TrimSpace(in.AnchorTaskID)
@@ -424,6 +430,7 @@ func (s *PostgresStore) nodeCommandRetry(
 		"command":             outcome,
 		"action":              NodeActionRetry,
 		"client_request_id":   in.ClientRequestID,
+		"request_hash":        requestHash,
 		"source_node_id":      in.NodeID,
 		"task_id":             taskID,
 		"previous_attempt_id": lineage.PreviousAttemptID,
@@ -446,7 +453,7 @@ func (s *PostgresStore) nodeCommandRetry(
 }
 
 func (s *PostgresStore) nodeCommandReassign(
-	ctx context.Context, tx pgx.Tx, in NodeCommandInput,
+	ctx context.Context, tx pgx.Tx, in NodeCommandInput, requestHash string,
 	workspaceID string, goalVersion, planVersion int,
 ) (NodeCommandOutcome, error) {
 	taskID := strings.TrimSpace(in.AnchorTaskID)
@@ -629,6 +636,7 @@ func (s *PostgresStore) nodeCommandReassign(
 		"command":           outcome,
 		"action":            NodeActionReassign,
 		"client_request_id": in.ClientRequestID,
+		"request_hash":      requestHash,
 		"source_node_id":    in.NodeID,
 		"task_id":           taskID,
 		"from_agent_id":     fromAgent,
@@ -783,19 +791,25 @@ func loadNodeCommandEvent(ctx context.Context, tx pgx.Tx, sessionID, key string)
 }
 
 func decodeNodeCommandOutcome(event RunEvent) (NodeCommandOutcome, error) {
+	outcome, _, err := decodeNodeCommandEvent(event)
+	return outcome, err
+}
+
+func decodeNodeCommandEvent(event RunEvent) (NodeCommandOutcome, string, error) {
 	var wrapper struct {
-		Command NodeCommandOutcome `json:"command"`
+		Command     NodeCommandOutcome `json:"command"`
+		RequestHash string             `json:"request_hash"`
 	}
 	if err := json.Unmarshal(event.Payload, &wrapper); err != nil {
-		return NodeCommandOutcome{}, err
+		return NodeCommandOutcome{}, "", err
 	}
 	if wrapper.Command.ClientRequestID == "" && wrapper.Command.Task == nil {
-		return NodeCommandOutcome{}, fmt.Errorf("empty node command payload")
+		return NodeCommandOutcome{}, "", fmt.Errorf("empty node command payload")
 	}
 	wrapper.Command.CommandID = event.ID
 	wrapper.Command.StateVersion = event.Sequence
 	wrapper.Command.Event = event
-	return wrapper.Command, nil
+	return wrapper.Command, wrapper.RequestHash, nil
 }
 
 func jsonRawOrNil(raw json.RawMessage) any {

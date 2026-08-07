@@ -606,7 +606,7 @@ func TestAcknowledgeDispatchIntentTransactionRecovery(t *testing.T) {
 			assertCommitted:  func() { assertState("delivered", "", inboxID, 1) },
 			recover: func() error {
 				attached, event, err := run.store.AttachInboxTask(run.ctx, attempt.ID, inboxID)
-				if err == nil && (attached.ID != attempt.ID || event.ID != "") {
+				if err == nil && (attached.ID != attempt.ID || event.Type != "task_dispatched") {
 					return fmt.Errorf("legacy acknowledgement recovery attempt=%+v event=%+v", attached, event)
 				}
 				return err
@@ -640,7 +640,7 @@ func TestAttachInboxTaskTransactionRecovery(t *testing.T) {
 			assertCommitted:  func() { assertState("delivered", inboxID, 1) },
 			recover: func() error {
 				attached, event, err := run.store.AttachInboxTask(run.ctx, attempt.ID, inboxID)
-				if err == nil && (attached.ID != attempt.ID || event.ID != "") {
+				if err == nil && (attached.ID != attempt.ID || event.Type != "task_dispatched") {
 					return fmt.Errorf("attach replay attempt=%+v event=%+v", attached, event)
 				}
 				return err

@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Copy, FileText, Lock, MoreHorizontal, Plus, Share2, Trash2, Undo2, Users } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Copy, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
 import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
-import { memberListOptions } from "@multica/core/workspace/queries";
-import type { MemberWithUser, NotePage } from "@multica/core/types";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import type { Agent, MemberWithUser, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -32,6 +33,15 @@ type NoteExpansionOverrides = { selectionId: string | null; expanded: Set<string
 
 type NoteExportFormat = "html" | "pdf";
 
+type NotesPageUiState = {
+  sharePage: NotePage | null;
+  exportOpen: boolean;
+  aiAgentOpen: boolean;
+  showTrash: boolean;
+};
+
+type NoteAiAgentConfig = { workspaceId: string | null; agentId: string | null };
+
 function lastViewedNoteKey(workspaceId: string) {
   return `multica:last-viewed-note:${workspaceId}`;
 }
@@ -44,6 +54,66 @@ function readLastViewedNote(workspaceId: string) {
 function writeLastViewedNote(workspaceId: string, pageId: string) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(lastViewedNoteKey(workspaceId), pageId);
+}
+
+function noteAiAgentKey(workspaceId: string) {
+  return `multica:note-ai-agent:${workspaceId}`;
+}
+
+function readNoteAiAgent(workspaceId: string) {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(noteAiAgentKey(workspaceId));
+}
+
+function writeNoteAiAgent(workspaceId: string, agentId: string | null) {
+  if (typeof window === "undefined") return;
+  const key = noteAiAgentKey(workspaceId);
+  if (agentId) window.localStorage.setItem(key, agentId);
+  else window.localStorage.removeItem(key);
+}
+
+function buildNoteOptimizationPrompt(text: string) {
+  return `You are optimizing a selected excerpt inside a user's note.
+Rewrite the excerpt to be clearer, more fluent, and more natural while preserving the original language, meaning, tone, and any useful Markdown formatting.
+Return ONLY the optimized excerpt. Do not add explanations, labels, greetings, or code fences.
+
+Selected excerpt:
+<selection>
+${text}
+</selection>`;
+}
+
+function normalizeOptimizedText(content: string) {
+  const trimmed = content.trim();
+  const fenced = /^```(?:markdown|md|text)?\s*\n([\s\S]*?)\n```$/i.exec(trimmed);
+  return (fenced?.[1] ?? trimmed).trim();
+}
+
+async function waitForNoteOptimizationResult(
+  sessionId: string,
+  taskId: string,
+  messages: { failed: string; timeout: string },
+) {
+  for (let attempt = 0; attempt < 75; attempt += 1) {
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- polling must wait between dependent reads until the agent writes the assistant message.
+    const chatMessages = await api.listChatMessages(sessionId);
+    let assistant = chatMessages[chatMessages.length - 1];
+    for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = chatMessages[index];
+      if (message?.role === "assistant" && message.task_id === taskId) {
+        assistant = message;
+        break;
+      }
+    }
+    if (assistant?.role === "assistant" && assistant.task_id === taskId) {
+      if (assistant.failure_reason) throw new Error(assistant.content || messages.failed);
+      const optimized = normalizeOptimizedText(assistant.content);
+      if (optimized) return optimized;
+    }
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each delay spaces the next poll; parallel timers would hammer the API.
+    await new Promise((resolve) => window.setTimeout(resolve, 1200));
+  }
+  throw new Error(messages.timeout);
 }
 
 function escapeHtml(value: string) {
@@ -459,6 +529,59 @@ function ShareDialog({
   );
 }
 
+function NoteAiAgentDialog({
+  agents,
+  selectedAgentId,
+  open,
+  onOpenChange,
+  onSelect,
+}: {
+  agents: Agent[];
+  selectedAgentId: string | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (agentId: string | null) => void;
+}) {
+  const { t } = useT("layout");
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t(($) => $.notes_page.ai_agent_title)}</DialogTitle>
+          <DialogDescription>{t(($) => $.notes_page.ai_agent_description)}</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-72 space-y-1 overflow-y-auto py-2">
+          {agents.length === 0 ? (
+            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">{t(($) => $.notes_page.ai_agent_empty)}</div>
+          ) : (
+            agents.map((agent) => {
+              const selected = selectedAgentId === agent.id;
+              const name = resolveActorDisplayName(agent, agent.name || agent.id);
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-muted/70", selected && "bg-muted text-foreground")}
+                  onClick={() => onSelect(agent.id)}
+                >
+                  <Bot className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{name}</span>
+                  {selected && <Check className="size-4 text-primary" />}
+                </button>
+              );
+            })
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onSelect(null)} disabled={!selectedAgentId}>{t(($) => $.notes_page.ai_agent_clear)}</Button>
+          <Button onClick={() => onOpenChange(false)}>{t(($) => $.notes_page.done)}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ExportDialog({
   page,
   open,
@@ -527,6 +650,7 @@ function NoteEditor({
   shareNames,
   onOpenPage,
   onOpenShare,
+  onOptimizeSelection,
 }: {
   selected: NotePage;
   childPages: NotePage[];
@@ -535,6 +659,7 @@ function NoteEditor({
   shareNames: string[];
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
+  onOptimizeSelection: (text: string) => Promise<string>;
 }) {
   const { t } = useT("layout");
   const editorRef = useRef<ContentEditorRef | null>(null);
@@ -670,6 +795,7 @@ function NoteEditor({
         enableSlashCommands
         slashCommandMode="block"
         showBubbleMenu
+        onOptimizeSelection={onOptimizeSelection}
       />
     </div>
   );
@@ -684,6 +810,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const { data: list = { pages: [] }, isLoading } = useQuery(noteListOptions(wsId));
   const { data: trash = { pages: [] } } = useQuery(noteTrashOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const selectedFromList = findNote(list.pages, pageId);
   const selectedId = pageId ?? selectedFromList?.id;
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
@@ -724,9 +851,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const deletePage = useDeleteNotePage();
   const permanentlyDeletePage = usePermanentlyDeleteNotePage();
   const restorePage = useRestoreNotePage();
-  const [sharePage, setSharePage] = useState<NotePage | null>(null);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [showTrash, setShowTrash] = useState(false);
+  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, showTrash: false }));
+  const [aiAgentConfig, setAiAgentConfig] = useState<NoteAiAgentConfig>(() => ({ workspaceId: null, agentId: null }));
+  const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
+  const { sharePage, exportOpen, aiAgentOpen, showTrash } = uiState;
 
   useEffect(() => {
     if (!wsId || !selected?.id || showTrash) return;
@@ -741,9 +869,42 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   }, [isLoading, list.pages, navigation, ownTree, pageId, paths, sharedTree, showTrash, wsId]);
 
   const openPage = (id: string) => {
-    setShowTrash(false);
+    setUiState((current) => ({ ...current, showTrash: false }));
     navigation.push(paths.noteDetail(id));
   };
+
+  const saveConfiguredAiAgent = (agentId: string | null) => {
+    setAiAgentConfig({ workspaceId: wsId || null, agentId });
+    if (wsId) writeNoteAiAgent(wsId, agentId);
+    if (agentId) toast.success(t(($) => $.notes_page.ai_agent_saved));
+  };
+
+  const optimizeSelectedNoteText = useCallback(
+    async (text: string) => {
+      const agent = agents.find((item) => item.id === configuredAiAgentId);
+      if (!agent) {
+        setUiState((current) => ({ ...current, aiAgentOpen: true }));
+        throw new Error(t(($) => $.notes_page.ai_agent_required));
+      }
+      const session = await api.createChatSession({
+        agent_id: agent.id,
+        title: t(($) => $.notes_page.ai_optimize_chat_title, { title: selected?.title || t(($) => $.notes_page.title) }),
+      });
+      try {
+        const sent = await api.sendChatMessage(session.id, buildNoteOptimizationPrompt(text));
+        const optimized = await waitForNoteOptimizationResult(session.id, sent.task_id, {
+          failed: t(($) => $.notes_page.ai_optimize_failed),
+          timeout: t(($) => $.notes_page.ai_optimize_timeout),
+        });
+        await api.updateChatSession(session.id, { status: "archived" }).catch(() => undefined);
+        return optimized;
+      } catch (error) {
+        await api.updateChatSession(session.id, { status: "archived" }).catch(() => undefined);
+        throw error;
+      }
+    },
+    [agents, configuredAiAgentId, selected?.title, t],
+  );
 
   const toggleNoteExpanded = (id: string) => {
     const isExpanded = expandedNoteIds.has(id);
@@ -764,7 +925,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const handleCreate = async (parentId?: string | null) => {
     try {
       const page = await createPage.mutateAsync({ parent_id: parentId ?? null, title: "Untitled" });
-      setShowTrash(false);
+      setUiState((current) => ({ ...current, showTrash: false }));
       navigation.push(paths.noteDetail(page.id));
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.create_failed));
@@ -781,7 +942,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       const copiedPage = response.pages[0];
       toast.success(t(($) => $.notes_page.duplicated));
       if (copiedPage) {
-        setShowTrash(false);
+        setUiState((current) => ({ ...current, showTrash: false }));
         navigation.push(paths.noteDetail(copiedPage.id));
       }
     } catch (error) {
@@ -815,7 +976,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
     try {
       const restored = await restorePage.mutateAsync(page.id);
       toast.success(t(($) => $.notes_page.restored));
-      setShowTrash(false);
+      setUiState((current) => ({ ...current, showTrash: false }));
       navigation.push(paths.noteDetail(restored.id));
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.restore_failed));
@@ -835,7 +996,11 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               <MoreHorizontal className="size-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setExportOpen(true)}>
+              <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, aiAgentOpen: true }))}>
+                <Sparkles className="size-3.5" />
+                {t(($) => $.notes_page.ai_agent_action)}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, exportOpen: true }))}>
                 {t(($) => $.notes_page.export_action)}
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -847,7 +1012,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           <div className="flex items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground">
             <span>{t(($) => $.notes_page.my_directory)}</span>
             <Button size="icon" variant="ghost" className="size-7" onClick={() => {
-              setShowTrash(false);
+              setUiState((current) => ({ ...current, showTrash: false }));
               handleCreate(null);
             }}>
               <Plus className="size-4" />
@@ -869,7 +1034,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                     </button>
                   ) : (
                     ownTree.map((node) => (
-                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} />
                     ))
                   )}
                 </div>
@@ -879,7 +1044,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                       {t(($) => $.notes_page.shared_directory)}
                     </div>
                     {sharedTree.map((node) => (
-                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} />
                     ))}
                   </div>
                 )}
@@ -887,7 +1052,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
             )}
           </div>
           <div className="border-t p-2">
-            <Button variant={showTrash ? "secondary" : "ghost"} size="sm" className="w-full justify-start" onClick={() => setShowTrash((v) => !v)}>
+            <Button variant={showTrash ? "secondary" : "ghost"} size="sm" className="w-full justify-start" onClick={() => setUiState((current) => ({ ...current, showTrash: !current.showTrash }))}>
               <Trash2 className="size-4" />
               {t(($) => $.notes_page.trash)}
               {trash.pages.length > 0 && <span className="ml-auto text-xs text-muted-foreground">{trash.pages.length}</span>}
@@ -943,15 +1108,17 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               ownerName={selectedOwnerName}
               shareNames={selectedShareNames}
               onOpenPage={openPage}
-              onOpenShare={() => setSharePage(selected)}
+              onOpenShare={() => setUiState((current) => ({ ...current, sharePage: selected }))}
+              onOptimizeSelection={optimizeSelectedNoteText}
             />
           )}
         </main>
       </div>
       <ShareDialog page={sharePage} members={members} open={!!sharePage} onOpenChange={(open) => {
-        if (!open) setSharePage(null);
+        if (!open) setUiState((current) => ({ ...current, sharePage: null }));
       }} />
-      <ExportDialog page={selected} open={exportOpen} onOpenChange={setExportOpen} />
+      <NoteAiAgentDialog agents={agents} selectedAgentId={configuredAiAgentId} open={aiAgentOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, aiAgentOpen: open }))} onSelect={saveConfiguredAiAgent} />
+      <ExportDialog page={selected} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />
     </div>
   );
 }

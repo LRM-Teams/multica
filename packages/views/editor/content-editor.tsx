@@ -89,6 +89,8 @@ interface ContentEditorProps {
   onUploadFile?: (file: File) => Promise<UploadResult | null>;
   /** Show the floating formatting toolbar on text selection. Defaults true. */
   showBubbleMenu?: boolean;
+  /** Optional AI rewrite action for the selected plain text in the bubble menu. */
+  onOptimizeSelection?: (text: string) => Promise<string>;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
   submitOnEnter?: boolean;
   /**
@@ -204,6 +206,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onBlur,
       onUploadFile,
       showBubbleMenu = true,
+      onOptimizeSelection,
       submitOnEnter = false,
       currentIssueId,
       disableMentions = false,
@@ -588,7 +591,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         >
           <EditorContent className="flex flex-1 flex-col" editor={editor} />
           {showBubbleMenu && (
-            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} />
+            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} />
           )}
           <LinkHoverCard {...hover} />
         </div>

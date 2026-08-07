@@ -31,6 +31,7 @@ import {
 import { useEditorState } from "@tiptap/react";
 import type { Editor } from "@tiptap/core";
 import { posToDOMRect } from "@tiptap/core";
+import { Slice } from "@tiptap/pm/model";
 import { NodeSelection } from "@tiptap/pm/state";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -73,11 +74,19 @@ import {
   Heading3,
   FilePlus,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+type TextOptimizationAction = (text: string) => Promise<string>;
+
+type TextOptimizationState =
+  | { status: "idle" }
+  | { status: "loading"; from: number; to: number }
+  | { status: "review"; from: number; to: number; text: string };
 
 function shouldShowBubbleMenu(editor: Editor): boolean {
   if (!editor.isEditable) return false;
@@ -143,7 +152,7 @@ function MarkButton({
 }
 
 // ---------------------------------------------------------------------------
-// URL normalisation
+// Content replacement + URL normalisation
 // ---------------------------------------------------------------------------
 
 /** Protocols that can execute code in the browser — the only ones we block. */
@@ -161,6 +170,23 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * Tiptap's `isAllowedUri` in the `setLink` command provides a second
  * safety layer.
  */
+function replaceEditorRangeWithMarkdown(editor: Editor, from: number, to: number, markdown: string) {
+  if (!editor.markdown) {
+    editor.chain().focus().command(({ tr }) => {
+      tr.insertText(markdown, from, to);
+      return true;
+    }).run();
+    return;
+  }
+  const json = editor.markdown.parse(markdown);
+  const node = editor.schema.nodeFromJSON(json);
+  const slice = Slice.maxOpen(node.content);
+  editor.chain().focus().command(({ tr }) => {
+    tr.replaceRange(from, to, slice);
+    return true;
+  }).run();
+}
+
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return "";
@@ -369,6 +395,101 @@ function ListDropdown({ editor, onOpenChange, isBullet, isOrdered, isTask }: { e
 }
 
 // ---------------------------------------------------------------------------
+// AI Optimize Button
+// ---------------------------------------------------------------------------
+
+function OptimizeSelectionButton({
+  editor,
+  onOptimizeSelection,
+  onStateChange,
+  pending,
+}: {
+  editor: Editor;
+  onOptimizeSelection: TextOptimizationAction;
+  onStateChange: (state: TextOptimizationState) => void;
+  pending: boolean;
+}) {
+  const { t } = useT("editor");
+
+  const handleClick = useCallback(async () => {
+    if (pending) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const text = editor.state.doc.textBetween(from, to, "\n", "\n").trim();
+    if (!text) return;
+    onStateChange({ status: "loading", from, to });
+    try {
+      const optimized = (await onOptimizeSelection(text)).trim();
+      if (!optimized) throw new Error(t(($) => $.bubble_menu.optimize.empty_result));
+      onStateChange({ status: "review", from, to, text: optimized });
+    } catch (err) {
+      onStateChange({ status: "idle" });
+      showErrorToast(
+        err instanceof Error && err.message
+          ? err.message
+          : t(($) => $.bubble_menu.optimize.failed),
+      );
+    }
+  }, [editor, onOptimizeSelection, onStateChange, pending, t]);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            size="sm"
+            pressed={false}
+            disabled={pending}
+            onPressedChange={handleClick}
+            onMouseDown={(e) => e.preventDefault()}
+          />
+        }
+      >
+        {pending ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.optimize.tooltip)}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function TextOptimizationReview({
+  editor,
+  state,
+  onClose,
+}: {
+  editor: Editor;
+  state: Extract<TextOptimizationState, { status: "review" }>;
+  onClose: () => void;
+}) {
+  const { t } = useT("editor");
+  const replace = () => {
+    replaceEditorRangeWithMarkdown(editor, state.from, state.to, state.text);
+    onClose();
+  };
+  const append = () => {
+    replaceEditorRangeWithMarkdown(editor, state.to, state.to, `\n\n${state.text}`);
+    onClose();
+  };
+
+  return (
+    <div className="w-[min(520px,calc(100vw-32px))] rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg" onMouseDown={(e) => e.preventDefault()}>
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <Sparkles className="size-3.5" />
+        {t(($) => $.bubble_menu.optimize.result_title)}
+      </div>
+      <div className="max-h-52 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/60 p-3 text-sm leading-6">
+        {state.text}
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onClose} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.discard)}</Button>
+        <Button size="sm" variant="outline" onClick={append} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.append)}</Button>
+        <Button size="sm" onClick={replace} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.replace)}</Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Create Sub-Issue Button
 // ---------------------------------------------------------------------------
 
@@ -469,13 +590,16 @@ function CreateSubIssueButton({
 function EditorBubbleMenu({
   editor,
   currentIssueId,
+  onOptimizeSelection,
 }: {
   editor: Editor;
   currentIssueId?: string;
+  onOptimizeSelection?: TextOptimizationAction;
 }) {
   const { t } = useT("editor");
   const [visible, setVisible] = useState(false);
   const [mode, setMode] = useState<"toolbar" | "link-edit">("toolbar");
+  const [optimizationState, setOptimizationState] = useState<TextOptimizationState>({ status: "idle" });
   const floatingRef = useRef<HTMLDivElement>(null);
 
   // Precise subscription to formatting state — only re-renders when these
@@ -578,7 +702,10 @@ function EditorBubbleMenu({
 
   // Reset mode on selection change
   useEffect(() => {
-    const handler = () => setMode("toolbar");
+    const handler = () => {
+      setMode("toolbar");
+      setOptimizationState({ status: "idle" });
+    };
     editor.on("selectionUpdate", handler);
     return () => { editor.off("selectionUpdate", handler); };
   }, [editor]);
@@ -600,7 +727,9 @@ function EditorBubbleMenu({
       }}
       onMouseDown={(e) => e.preventDefault()}
     >
-      {mode === "link-edit" ? (
+      {optimizationState.status === "review" ? (
+        <TextOptimizationReview editor={editor} state={optimizationState} onClose={() => { setOptimizationState({ status: "idle" }); editor.commands.focus(); }} />
+      ) : mode === "link-edit" ? (
         <LinkEditBar editor={editor} onClose={() => { setMode("toolbar"); editor.commands.focus(); }} />
       ) : (
         <TooltipProvider delay={300}>
@@ -630,6 +759,9 @@ function EditorBubbleMenu({
               </TooltipTrigger>
               <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.quote)}</TooltipContent>
             </Tooltip>
+            {onOptimizeSelection && (
+              <OptimizeSelectionButton editor={editor} onOptimizeSelection={onOptimizeSelection} onStateChange={setOptimizationState} pending={optimizationState.status === "loading"} />
+            )}
             {currentIssueId && (
               <>
                 <Separator orientation="vertical" className="mx-0.5 h-5" />

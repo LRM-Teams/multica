@@ -25,6 +25,15 @@
       "tooltip": "用选中内容创建子 issue",
       "created": "已创建 {{identifier}}",
       "create_failed": "创建子 issue 失败"
+    },
+    "optimize": {
+      "tooltip": "用 AI 优化文本",
+      "result_title": "优化后的文本",
+      "replace": "替换",
+      "append": "插入到后面",
+      "discard": "舍弃",
+      "failed": "优化文本失败",
+      "empty_result": "智能体返回了空的优化结果。"
     }
   },
   "image": {

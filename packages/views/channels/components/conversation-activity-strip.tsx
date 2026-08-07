@@ -17,6 +17,9 @@ export interface ConversationActivityAgent {
   displayName: string;
 }
 
+const EMPTY_TYPING_ACTORS: readonly ConversationTypingActor[] = [];
+const EMPTY_WORKING_AGENTS: readonly ConversationActivityAgent[] = [];
+
 interface ActivityEntry {
   id: string;
   displayName: string;
@@ -39,8 +42,8 @@ const TONE_DOT_CLASS: Record<string, string> = {
  * thinking right now.
  */
 export function ConversationActivityStrip({
-  typingActors = [],
-  workingAgents = [],
+  typingActors = EMPTY_TYPING_ACTORS,
+  workingAgents = EMPTY_WORKING_AGENTS,
 }: {
   typingActors?: readonly ConversationTypingActor[];
   workingAgents?: readonly ConversationActivityAgent[];

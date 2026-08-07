@@ -1,4 +1,16 @@
-DELETE FROM daemon_update_status
+UPDATE daemon_update_status
+SET config_source = CASE
+        WHEN config_source = 'deprecated_noop' THEN 'cli_disabled'
+        ELSE config_source
+    END,
+    ineligible_reason = CASE
+        WHEN ineligible_reason = 'explicit_only' THEN NULL
+        ELSE ineligible_reason
+    END,
+    last_outcome = CASE
+        WHEN last_outcome IN ('pinned', 'explicit_only') THEN 'never_checked'
+        ELSE last_outcome
+    END
 WHERE config_source = 'deprecated_noop'
    OR ineligible_reason = 'explicit_only'
    OR last_outcome IN ('pinned', 'explicit_only');

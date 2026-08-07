@@ -66,6 +66,8 @@
     "delete_action": "删除",
     "page_menu": "页面菜单",
     "rename_page": "重命名页面",
+    "expand_page": "展开{{title}}",
+    "collapse_page": "收起{{title}}",
     "create_child": "创建子页面",
     "share_title": "分享笔记",
     "export_action": "导出",

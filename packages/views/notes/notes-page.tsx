@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Copy, FileText, Lock, MoreHorizontal, Plus, Share2, Trash2, Undo2, Users } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, FileText, Lock, MoreHorizontal, Plus, Share2, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -27,6 +27,8 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
+
+type NoteExpansionOverrides = { selectionId: string | null; expanded: Set<string>; collapsed: Set<string> };
 
 type NoteExportFormat = "html" | "pdf";
 
@@ -198,6 +200,21 @@ function findNote(pages: NotePage[], id?: string): NotePage | null {
   return pages.find((page) => page.id === id) ?? null;
 }
 
+function collectNoteAncestorIds(pages: NotePage[], id?: string) {
+  const expanded = new Set<string>();
+  if (!id) return expanded;
+  const byId = new Map(pages.map((page) => [page.id, page]));
+  const seen = new Set<string>();
+  let current = byId.get(id);
+  while (current?.parent_id) {
+    if (seen.has(current.parent_id)) break;
+    seen.add(current.parent_id);
+    expanded.add(current.parent_id);
+    current = byId.get(current.parent_id);
+  }
+  return expanded;
+}
+
 function memberLabel(member: MemberWithUser | undefined, fallback = "") {
   return member?.display_name || member?.name || member?.email || fallback;
 }
@@ -206,7 +223,9 @@ function NoteTreeRow({
   node,
   depth,
   activeId,
+  expandedIds,
   onOpen,
+  onToggle,
   onCreateChild,
   onShare,
   onDuplicate,
@@ -215,7 +234,9 @@ function NoteTreeRow({
   node: NoteTreeNode;
   depth: number;
   activeId?: string;
+  expandedIds: ReadonlySet<string>;
   onOpen: (id: string) => void;
+  onToggle: (id: string) => void;
   onCreateChild: (parentId: string) => void;
   onShare: (page: NotePage) => void;
   onDuplicate: (page: NotePage) => void;
@@ -228,6 +249,10 @@ function NoteTreeRow({
   const [draftTitle, setDraftTitle] = useState("");
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const isActive = activeId === node.id;
+  const hasChildren = node.children.length > 0;
+  const isExpanded = expandedIds.has(node.id);
+  const title = node.title || "Untitled";
+  const toggleLabel = isExpanded ? t(($) => $.notes_page.collapse_page, { title }) : t(($) => $.notes_page.expand_page, { title });
 
   const startEditingTitle = () => {
     if (!node.can_manage_shares) return;
@@ -264,6 +289,22 @@ function NoteTreeRow({
             aria-label={node.title || "Untitled"}
           />
         )}
+        {hasChildren ? (
+          <button
+            type="button"
+            className="relative z-10 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-background hover:text-foreground"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle(node.id);
+            }}
+            aria-expanded={isExpanded}
+            aria-label={toggleLabel}
+          >
+            {isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          </button>
+        ) : (
+          <span className="relative z-10 size-5 shrink-0" aria-hidden="true" />
+        )}
         {editingTitle ? (
           <input
             ref={titleInputRef}
@@ -291,7 +332,7 @@ function NoteTreeRow({
               startEditingTitle();
             }}
           >
-            <span className="truncate">{node.title || "Untitled"}</span>
+            <span className="truncate">{title}</span>
           </button>
         )}
         <div className={cn("relative z-10 ml-auto items-center gap-0.5", menuOpen ? "flex" : "hidden group-hover:flex")} onClick={(event) => event.stopPropagation()}>
@@ -326,9 +367,10 @@ function NoteTreeRow({
           </button>
         </div>
       </div>
-      {node.children.map((child) => (
-        <NoteTreeRow key={child.id} node={child} depth={depth + 1} activeId={activeId} onOpen={onOpen} onCreateChild={onCreateChild} onShare={onShare} onDuplicate={onDuplicate} onDelete={onDelete} />
-      ))}
+      {isExpanded &&
+        node.children.map((child) => (
+          <NoteTreeRow key={child.id} node={child} depth={depth + 1} activeId={activeId} expandedIds={expandedIds} onOpen={onOpen} onToggle={onToggle} onCreateChild={onCreateChild} onShare={onShare} onDuplicate={onDuplicate} onDelete={onDelete} />
+        ))}
     </>
   );
 }
@@ -646,9 +688,19 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const selectedId = pageId ?? selectedFromList?.id;
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
   const selected = detailPage?.id ? detailPage : selectedFromList;
+  const [noteExpansionOverrides, setNoteExpansionOverrides] = useState<NoteExpansionOverrides>(() => ({ selectionId: null, expanded: new Set(), collapsed: new Set() }));
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
   const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
   const sharedTree = useMemo(() => tree.filter((node) => node.owner_user_id !== currentUserId), [currentUserId, tree]);
+  const selectedExpansionId = selected?.id ?? pageId ?? null;
+  const selectedAncestorNoteIds = useMemo(() => collectNoteAncestorIds(list.pages, selectedExpansionId ?? undefined), [list.pages, selectedExpansionId]);
+  const expandedNoteIds = useMemo(() => {
+    const next = new Set([...noteExpansionOverrides.expanded, ...selectedAncestorNoteIds]);
+    if (noteExpansionOverrides.selectionId === selectedExpansionId) {
+      for (const id of noteExpansionOverrides.collapsed) next.delete(id);
+    }
+    return next;
+  }, [noteExpansionOverrides, selectedAncestorNoteIds, selectedExpansionId]);
   const selectedChildPages = useMemo(
     () =>
       selected
@@ -691,6 +743,22 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const openPage = (id: string) => {
     setShowTrash(false);
     navigation.push(paths.noteDetail(id));
+  };
+
+  const toggleNoteExpanded = (id: string) => {
+    const isExpanded = expandedNoteIds.has(id);
+    setNoteExpansionOverrides((current) => {
+      const expanded = new Set(current.expanded);
+      const collapsed = new Set(current.collapsed);
+      if (isExpanded) {
+        expanded.delete(id);
+        collapsed.add(id);
+      } else {
+        expanded.add(id);
+        collapsed.delete(id);
+      }
+      return { selectionId: selectedExpansionId, expanded, collapsed };
+    });
   };
 
   const handleCreate = async (parentId?: string | null) => {
@@ -801,7 +869,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                     </button>
                   ) : (
                     ownTree.map((node) => (
-                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} onOpen={openPage} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
                     ))
                   )}
                 </div>
@@ -811,7 +879,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                       {t(($) => $.notes_page.shared_directory)}
                     </div>
                     {sharedTree.map((node) => (
-                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} onOpen={openPage} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={setSharePage} onDuplicate={handleDuplicate} onDelete={handleDelete} />
                     ))}
                   </div>
                 )}

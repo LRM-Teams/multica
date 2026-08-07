@@ -350,6 +350,21 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 	if target != "channel:"+channelID {
 		t.Fatalf("canonical mention delivery target = %q, want channel:%s", target, channelID)
 	}
+
+	var wakeReason string
+	var requiresWake bool
+	var priority int32
+	if err := testPool.QueryRow(ctx, `
+		SELECT reason, requires_wake, priority
+		FROM agent_inbox_event
+		WHERE agent_id = $1 AND source_message_id = $2 AND requires_wake = true
+		ORDER BY created_at DESC
+		LIMIT 1`, agentID, trigger.ID).Scan(&wakeReason, &requiresWake, &priority); err != nil {
+		t.Fatalf("load mention wake inbox event: %v", err)
+	}
+	if wakeReason != "mention" || !requiresWake || priority != channelDirectedWakePriority {
+		t.Fatalf("mention wake = reason:%q requires_wake:%v priority:%d, want mention/true/%d", wakeReason, requiresWake, priority, channelDirectedWakePriority)
+	}
 }
 
 func TestChannelGreetingMentionStaysOnMainTimeline(t *testing.T) {

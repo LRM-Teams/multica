@@ -138,6 +138,8 @@ export const WorkGraphDetailSchema = z.object({
   nodes: z.array(z.object({
     id: z.string(), issue_id: z.string(), role: z.string(), context_policy: z.string(),
     execution_status: z.string(), validity_status: z.string(), review_status: z.string(),
+    completion_authority: z.enum(["issue_status", "kernel_evidence"]).default("kernel_evidence"),
+    effective_completion: z.enum(["pending", "satisfied", "stale", "revoked"]).default("pending"),
     objective: z.string().default(""), completion_contract: z.array(z.string()).default([]),
     based_on_graph_version: z.number(),
   }).loose()).default([]),

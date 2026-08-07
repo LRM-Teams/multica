@@ -25,6 +25,11 @@ func (h *Handler) syncWendyWorkGraphAfterIssueUpdate(ctx context.Context, issue 
 		return
 	}
 	_ = h.WorkGraph.SyncRuntimeIssue(ctx, issue)
+	if issue.Status == "done" || issue.Status == "cancelled" {
+		if archiveErr := h.WorkGraph.ArchiveDerivedAgentForIssue(ctx, uuidToString(issue.WorkspaceID), uuidToString(issue.ID)); archiveErr != nil {
+			slog.Warn("archive terminal derived Issue worker failed", "issue_id", issue.ID.String(), "error", archiveErr)
+		}
+	}
 
 	issues, err := h.wendyGraphConnectedIssues(ctx, issue)
 	if err != nil {
@@ -52,6 +57,24 @@ func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task d
 	if err != nil {
 		slog.Warn("load issue for Wendy task completion hook failed", "task_id", task.ID.String(), "issue_id", task.IssueID.String(), "error", err)
 		return
+	}
+	// Only explicitly decomposed children use the automatic review boundary.
+	// Unrelated user-created Issues retain their existing lifecycle semantics.
+	managed, managedErr := h.WorkGraph.IsDecomposedIssue(ctx, uuidToString(issue.WorkspaceID), uuidToString(issue.ID))
+	if managedErr != nil {
+		slog.Warn("inspect Issue-DAG ownership failed", "issue_id", issue.ID.String(), "error", managedErr)
+	}
+	if managed && issue.Status != "done" && issue.Status != "cancelled" {
+		if updated, updateErr := h.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+			ID: issue.ID, WorkspaceID: issue.WorkspaceID, Status: "in_review",
+		}); updateErr == nil {
+			issue = updated
+		}
+	}
+	if ready, unlockErr := h.WorkGraph.UnlockIssueDependents(ctx, uuidToString(issue.WorkspaceID), uuidToString(issue.ID)); unlockErr != nil {
+		slog.Warn("unlock ordinary issue dependents failed", "issue_id", issue.ID.String(), "error", unlockErr)
+	} else {
+		h.WorkGraph.DispatchReadyIssues(ctx, uuidToString(issue.WorkspaceID), ready)
 	}
 	if err := h.WorkGraph.TouchIssueProgress(ctx, issue.WorkspaceID, issue.ID); err != nil {
 		slog.Warn("touch Wendy issue progress failed", "task_id", task.ID.String(), "issue_id", issue.ID.String(), "error", err)

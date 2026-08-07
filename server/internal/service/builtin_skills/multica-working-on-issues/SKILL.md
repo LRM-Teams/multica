@@ -16,33 +16,61 @@ For building mention links, load `multica-mentioning` instead — not this skill
 Every contract below is traced to source in
 `references/working-on-issues-source-map.md`.
 
-## Decide before decomposing
+## Choose the lightest coordination layer
 
 The assignment runtime requires one decision before substantive execution:
 
 - `DIRECT`: do the work in the current Issue when it is tightly coupled and can
   be completed coherently in one bounded context.
-- `GRAPH`: use `multica issue graph create --plan-file <path>
-  --idempotency-key <uuid>` when there are at least two independently acceptable
-  deliverables, useful parallelism, distinct roles or permissions, a long
-  external wait, or a genuine independent-verification boundary.
-- `PROPOSE_GRAPH`: ask the human first when the split materially expands scope,
-  cost, permissions, or runtime.
+- `ISSUE_DAG`: for bounded parallel or staged work, atomically create child
+  Issues with `multica issue decompose <issue-id> --plan-file <path>
+  --idempotency-key <uuid>`. Use this for ordinary development, review, or a
+  one-off multi-source investigation. It creates no Work Graph.
+- `GOAL_GRAPH`: only while an explicit active channel Goal exists, and only for
+  a manager/coordinator. Use `multica issue graph create` with
+  `anchor_kind=channel_goal` when the work needs repeated evidence-driven
+  replanning, independent verification, epochs, or a long-running loop.
 
-Do not use task length by itself as the trigger. Do not create a graph node for a
-greeting, one tool call, a small low-risk edit, or a step with no independent
-completion boundary. Graph plans declare `depends_on`; the service atomically
-creates declared Issues, rejects cycles and budget violations, starts only
-roots, and readies downstream nodes after prerequisites succeed. Do not
-manually promote graph-managed Issues.
+Do not use task length by itself as the trigger. A greeting, one tool call, or a
+small edit stays direct. An Issue DAG declares `depends_on`, starts all roots,
+and promotes downstream Issues after all prerequisites become reviewable. The
+same Agent may own multiple roots: they use independent Issue sessions and
+execution roots and can run in parallel up to its concurrency cap.
+
+Use `worker_mode: derived_agent` only when the node needs strong identity or
+memory isolation: independent candidate implementations, blind/adversarial
+  review, replication, or experiments
+whose observations must not mutate the source Agent. A derived node requires a
+concrete `clone_reason`. It copies approved configuration and skills plus a
+point-in-time memory snapshot, inherits no credentials or sessions, writes no
+memory back to the source automatically, and remains available for review
+rework until its child Issue becomes `done` or `cancelled`, when it is archived.
+Ordinary parallelism stays `reuse_agent` (the default).
+
+Goal Graph nodes are stricter. A successful task or an Issue status is not
+completion. Workers must register a durable artifact; verifier nodes must also
+submit PASS evidence. Only kernel `effective_completion=satisfied` unlocks the
+next frontier. Do not manually promote graph-managed Issues.
 After delegating a bounded deliverable, the planner coordinates and integrates
 it rather than implementing the same deliverable again.
 
 Each plan node requires `temp_id`, `role`, and either an existing backlog
 `issue_id` or `title` plus `assignee_id`. Optional fields include `description`,
 `objective`, `completion_contract`, `context_policy`, `depends_on`, and `budget`.
-The plan root supplies `anchor_kind`, `anchor_id`, `admission_decision`,
-`reason`, and optional `budget_policy`.
+The Goal Graph plan root supplies `anchor_kind: channel_goal`, the Goal ID as
+`anchor_id`, `admission_decision: GRAPH`, `reason`, and optional `budget_policy`.
+
+For a logically continuous Goal, operate bounded epochs:
+
+```bash
+multica issue graph epoch start <graph-id> --input-file epoch-contract.json
+multica issue graph epoch finish <graph-id> <epoch-id> --input-file evaluation.json
+```
+
+Every epoch ends with a recorded decision such as `CONTINUE`, `WAIT`,
+`ASK_HUMAN`, `REPLAN_NEW_AXIS`, `STOP_CONVERGED`, `STOP_NO_GAIN`, or
+`STOP_BUDGET`. Never implement an unbounded process without epoch budgets and
+stop decisions.
 
 ## PR linking and close intent are two distinct contracts
 

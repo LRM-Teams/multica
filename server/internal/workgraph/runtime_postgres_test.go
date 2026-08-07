@@ -22,11 +22,11 @@ func TestCreateGraphAtomicallyCreatesIssuesAndSchedulesOnlyRoots(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model) VALUES($1,$2,$3,'Worker','local','{}',$4,'composer-1.5')`, agentID, workspace, "agent-"+uuid.NewString(), runtimeID); err != nil {
 		t.Fatal(err)
 	}
-	anchor := createWorkgraphIssue(t, ctx, workspace, agentID, 1, "Root", "in_progress")
+	anchor := createGoalAnchor(t, ctx, workspace, agentID)
 	if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_counter=1 WHERE id=$1`, workspace); err != nil {
 		t.Fatal(err)
 	}
-	in := CreateInput{WorkspaceID: uuidToTestString(workspace), AnchorKind: AnchorIssue, AnchorID: uuidToTestString(anchor.ID), Admission: AdmissionGraph, Reason: "parallel and verify", ActorType: "agent", ActorID: uuidToTestString(agentID), IdempotencyKey: uuid.NewString(), Nodes: []NodeSpec{{TempID: "build", Title: "Build", AssigneeID: uuidToTestString(agentID), Role: "worker", CompletionContract: []string{"tests pass"}}, {TempID: "verify", Title: "Verify", AssigneeID: uuidToTestString(agentID), Role: "verifier", ContextPolicy: "blind", DependsOn: []string{"build"}}}}
+	in := CreateInput{WorkspaceID: uuidToTestString(workspace), AnchorKind: AnchorChannelGoal, AnchorID: uuidToTestString(anchor), Admission: AdmissionGraph, Reason: "parallel and verify", ActorType: "agent", ActorID: uuidToTestString(agentID), IdempotencyKey: uuid.NewString(), Nodes: []NodeSpec{{TempID: "build", Title: "Build", AssigneeID: uuidToTestString(agentID), Role: "worker", CompletionContract: []string{"tests pass"}}, {TempID: "verify", Title: "Verify", AssigneeID: uuidToTestString(agentID), Role: "verifier", ContextPolicy: "blind", DependsOn: []string{"build"}}}}
 	store := NewStore(testPool)
 	result, err := store.Create(ctx, in)
 	if err != nil {
@@ -41,6 +41,33 @@ func TestCreateGraphAtomicallyCreatesIssuesAndSchedulesOnlyRoots(t *testing.T) {
 	}
 	if statuses["worker"] != "ready" || statuses["verifier"] != "queued" {
 		t.Fatalf("statuses=%v", statuses)
+	}
+	epoch, err := store.StartEpoch(ctx, StartEpochInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: result.Graph.ID, ActorAgentID: uuidToTestString(agentID),
+		Contract: []byte(`{"objective":"test one bounded loop"}`), Budget: []byte(`{"max_tasks":2}`),
+	})
+	if err != nil || epoch.Number != 1 || epoch.Status != "running" {
+		t.Fatalf("start epoch=%#v err=%v", epoch, err)
+	}
+	if epoch.LeaseToken == "" || epoch.LeaseExpiresAt == nil {
+		t.Fatalf("start epoch omitted fencing lease: %#v", epoch)
+	}
+	if _, err = store.FinishEpoch(ctx, FinishEpochInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: result.Graph.ID, EpochID: epoch.ID, ActorAgentID: uuidToTestString(agentID),
+		Evaluation: []byte(`{"information_gain":0.5}`), Decision: "CONTINUE", LeaseToken: uuid.NewString(),
+	}); !errors.Is(err, ErrGraphConflict) {
+		t.Fatalf("stale epoch lease err=%v, want ErrGraphConflict", err)
+	}
+	finished, err := store.FinishEpoch(ctx, FinishEpochInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: result.Graph.ID, EpochID: epoch.ID, ActorAgentID: uuidToTestString(agentID),
+		Evaluation: []byte(`{"information_gain":0.5}`), Decision: "CONTINUE", LeaseToken: epoch.LeaseToken,
+	})
+	if err != nil || finished.Status != "committed" {
+		t.Fatalf("finish epoch=%#v err=%v", finished, err)
+	}
+	next, err := store.StartEpoch(ctx, StartEpochInput{WorkspaceID: uuidToTestString(workspace), GraphID: result.Graph.ID, ActorAgentID: uuidToTestString(agentID)})
+	if err != nil || next.Number != 2 {
+		t.Fatalf("next epoch=%#v err=%v", next, err)
 	}
 	replay, err := store.Create(ctx, in)
 	if err != nil || !replay.Replayed || replay.Graph.ID != result.Graph.ID {
@@ -66,8 +93,8 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model) VALUES($1,$2,$3,'Worker','local','{}',$4,'composer-1.5')`, agentID, workspace, "agent-"+uuid.NewString(), runtimeID); err != nil {
 		t.Fatal(err)
 	}
-	anchorA := createWorkgraphIssue(t, ctx, workspace, agentID, 1, "Anchor A", "in_progress")
-	anchorB := createWorkgraphIssue(t, ctx, workspace, agentID, 2, "Anchor B", "in_progress")
+	anchorA := createGoalAnchor(t, ctx, workspace, agentID)
+	anchorB := createGoalAnchor(t, ctx, workspace, agentID)
 	if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_counter=2 WHERE id=$1`, workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +103,7 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 	create := func(anchor pgtype.UUID, prefix string) CreateResult {
 		t.Helper()
 		result, err := store.Create(ctx, CreateInput{
-			WorkspaceID: uuidToTestString(workspace), AnchorKind: AnchorIssue,
+			WorkspaceID: uuidToTestString(workspace), AnchorKind: AnchorChannelGoal,
 			AnchorID: uuidToTestString(anchor), Admission: AdmissionGraph,
 			Reason: "initial plan", ActorType: "agent", ActorID: uuidToTestString(agentID),
 			IdempotencyKey: uuid.NewString(),
@@ -90,8 +117,8 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 		}
 		return result
 	}
-	graphA := create(anchorA.ID, "A")
-	graphB := create(anchorB.ID, "B")
+	graphA := create(anchorA, "A")
+	graphB := create(anchorB, "B")
 
 	if _, err := testPool.Exec(ctx, `UPDATE work_graph_node SET execution_status='succeeded' WHERE id=$1::uuid`, graphA.NodeIDs["second"]); err != nil {
 		t.Fatal(err)
@@ -152,4 +179,113 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 	}
 }
 
+func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
+	ctx := t.Context()
+	workspace := pgUUID(uuid.New())
+	createWorkgraphWorkspace(t, ctx, workspace)
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id=$1`, workspace) })
+	runtimeID, agentID := pgUUID(uuid.New()), pgUUID(uuid.New())
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent_runtime(id,workspace_id,name,runtime_mode,provider,metadata) VALUES($1,$2,$3,'local','test','{}')`, runtimeID, workspace, "runtime-"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model,max_concurrent_tasks) VALUES($1,$2,$3,'Worker','local','{}',$4,'composer-1.5',6)`, agentID, workspace, "agent-"+uuid.NewString(), runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	parent := createWorkgraphIssue(t, ctx, workspace, agentID, 1, "Parent", "in_progress")
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_counter=1 WHERE id=$1`, workspace); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(testPool)
+	result, err := store.DecomposeIssue(ctx, DecomposeInput{
+		WorkspaceID: uuidToTestString(workspace), ParentIssueID: uuidToTestString(parent.ID), ActorAgentID: uuidToTestString(agentID),
+		IdempotencyKey: uuid.NewString(), Reason: "parallel research and synthesis",
+		Nodes: []IssuePlanNode{
+			{TempID: "a", Title: "Research A", AssigneeID: uuidToTestString(agentID), WorkerMode: WorkerModeDerivedAgent, CloneReason: "independent research lane"},
+			{TempID: "b", Title: "Research B", AssigneeID: uuidToTestString(agentID)},
+			{TempID: "merge", Title: "Merge", AssigneeID: uuidToTestString(agentID), DependsOn: []string{"a", "b"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ReadyIssueIDs) != 2 {
+		t.Fatalf("ready=%v, want two roots", result.ReadyIssueIDs)
+	}
+	if result.AgentIDs["a"] == uuidToTestString(agentID) || result.AgentIDs["a"] == "" {
+		t.Fatalf("derived worker id=%q, source=%q", result.AgentIDs["a"], uuidToTestString(agentID))
+	}
+	var sourceID, assigneeID string
+	if err = testPool.QueryRow(ctx, `SELECT source_agent_id::text FROM agent WHERE id=$1::uuid`, result.AgentIDs["a"]).Scan(&sourceID); err != nil {
+		t.Fatal(err)
+	}
+	if err = testPool.QueryRow(ctx, `SELECT assignee_id::text FROM issue WHERE id=$1::uuid`, result.IssueIDs["a"]).Scan(&assigneeID); err != nil {
+		t.Fatal(err)
+	}
+	if sourceID != uuidToTestString(agentID) || assigneeID != result.AgentIDs["a"] {
+		t.Fatalf("clone lineage source=%q assignee=%q", sourceID, assigneeID)
+	}
+	var status string
+	if err = testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id=$1::uuid`, result.IssueIDs["merge"]).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "backlog" {
+		t.Fatalf("join status=%q, want backlog", status)
+	}
+	var dependencies int
+	if err = testPool.QueryRow(ctx, `SELECT count(*) FROM issue_dependency WHERE issue_id=$1::uuid`, result.IssueIDs["merge"]).Scan(&dependencies); err != nil {
+		t.Fatal(err)
+	}
+	if dependencies != 2 {
+		t.Fatalf("dependencies=%d, want 2", dependencies)
+	}
+	var managedChildren int
+	if err = testPool.QueryRow(ctx, `SELECT count(*) FROM issue_decompose_child WHERE parent_issue_id=$1`, parent.ID).Scan(&managedChildren); err != nil || managedChildren != 3 {
+		t.Fatalf("managed children=%d err=%v, want 3", managedChildren, err)
+	}
+	foreignAgent := pgUUID(uuid.New())
+	if _, err = testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model,max_concurrent_tasks) VALUES($1,$2,$3,'Foreign','local','{}',$4,'composer-1.5',1)`, foreignAgent, workspace, "foreign-"+uuid.NewString(), runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.DecomposeIssue(ctx, DecomposeInput{
+		WorkspaceID: uuidToTestString(workspace), ParentIssueID: uuidToTestString(parent.ID), ActorAgentID: uuidToTestString(agentID),
+		IdempotencyKey: uuid.NewString(), Reason: "forbidden cross-agent snapshot",
+		Nodes: []IssuePlanNode{
+			{TempID: "foreign", Title: "Foreign", AssigneeID: uuidToTestString(foreignAgent), WorkerMode: WorkerModeDerivedAgent, CloneReason: "must not copy private memory"},
+			{TempID: "local", Title: "Local", AssigneeID: uuidToTestString(agentID)},
+		},
+	})
+	if !errors.Is(err, ErrGraphForbidden) {
+		t.Fatalf("cross-agent clone err=%v, want ErrGraphForbidden", err)
+	}
+	if _, err = testPool.Exec(ctx, `UPDATE issue SET status='done' WHERE id=$1::uuid`, result.IssueIDs["a"]); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ArchiveDerivedAgentForIssue(ctx, uuidToTestString(workspace), result.IssueIDs["a"]); err != nil {
+		t.Fatal(err)
+	}
+	var archived bool
+	if err = testPool.QueryRow(ctx, `SELECT archived_at IS NOT NULL FROM agent WHERE id=$1::uuid`, result.AgentIDs["a"]).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if !archived {
+		t.Fatal("derived worker was not archived")
+	}
+}
+
 func uuidToTestString(id pgtype.UUID) string { return uuid.UUID(id.Bytes).String() }
+
+func createGoalAnchor(t *testing.T, ctx context.Context, workspaceID, creatorAgentID pgtype.UUID) pgtype.UUID {
+	t.Helper()
+	var userID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `SELECT user_id FROM member WHERE workspace_id=$1 ORDER BY created_at LIMIT 1`, workspaceID).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	channelID, goalID := pgUUID(uuid.New()), pgUUID(uuid.New())
+	if _, err := testPool.Exec(ctx, `INSERT INTO channel(id,workspace_id,name,kind,created_by) VALUES($1,$2,$3,'group',$4)`, channelID, workspaceID, "goal-"+uuid.NewString(), userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO channel_goal(id,workspace_id,channel_id,title,objective,success_criteria,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,$2,$3,'Goal','Deliver evidence','["verified"]','agent',$4,'agent',$4)`, goalID, workspaceID, channelID, creatorAgentID); err != nil {
+		t.Fatal(err)
+	}
+	return goalID
+}

@@ -231,7 +231,7 @@ func (h *Handler) hydrateChannelGoalWorkGraph(ctx context.Context, goal *Channel
 		return
 	}
 	var s channelGoalWorkGraphSummary
-	err := h.DB.QueryRow(ctx, `SELECT g.id::text,g.current_version,g.status,count(n.id)::int,count(n.id) FILTER(WHERE n.execution_status='succeeded' AND n.validity_status='valid')::int,count(n.id) FILTER(WHERE n.execution_status='running')::int,count(n.id) FILTER(WHERE n.execution_status IN('draft','queued','ready','waiting'))::int,count(n.id) FILTER(WHERE n.validity_status IN('stale','invalidated'))::int FROM work_graph g LEFT JOIN work_graph_node n ON n.graph_id=g.id WHERE g.workspace_id=$1::uuid AND g.anchor_kind='channel_goal' AND g.anchor_id=$2::uuid GROUP BY g.id,g.current_version,g.status`, goal.WorkspaceID, goal.ID).Scan(&s.ID, &s.Version, &s.Status, &s.Total, &s.Completed, &s.Running, &s.Waiting, &s.Stale)
+	err := h.DB.QueryRow(ctx, `SELECT g.id::text,g.current_version,g.status,count(n.id)::int,count(n.id) FILTER(WHERE n.effective_completion='satisfied')::int,count(n.id) FILTER(WHERE n.execution_status='running')::int,count(n.id) FILTER(WHERE n.effective_completion='pending' AND n.execution_status IN('draft','queued','ready','waiting','succeeded'))::int,count(n.id) FILTER(WHERE n.effective_completion IN('stale','revoked'))::int FROM work_graph g LEFT JOIN work_graph_node n ON n.graph_id=g.id WHERE g.workspace_id=$1::uuid AND g.anchor_kind='channel_goal' AND g.anchor_id=$2::uuid GROUP BY g.id,g.current_version,g.status`, goal.WorkspaceID, goal.ID).Scan(&s.ID, &s.Version, &s.Status, &s.Total, &s.Completed, &s.Running, &s.Waiting, &s.Stale)
 	if err == nil {
 		goal.WorkGraph = &s
 	}

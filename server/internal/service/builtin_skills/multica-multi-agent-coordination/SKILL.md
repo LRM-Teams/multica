@@ -38,6 +38,10 @@ deliberative convergence, or staged work with a sequential step inside a stage.
 - Create a temporary coordination group when three or more participants need a
   private shared history.
 - Do not move work into a private surface merely to reduce visible traffic.
+- Prefer platform Issues over message-only delegation when each participant
+  needs independent state, logs, cancellation, retries, or a final artifact.
+  Use `multica issue decompose` for bounded collaboration; reserve Work Graph
+  for an already-active Goal.
 
 Inspect before acting:
 

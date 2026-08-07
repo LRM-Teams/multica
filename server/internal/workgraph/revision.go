@@ -30,7 +30,7 @@ func (s *Store) Revise(ctx context.Context, in ReviseInput) (Graph, error) {
 	if !json.Valid(in.ExpectedCostDelta) {
 		return Graph{}, ErrInvalidGraph
 	}
-	probe := CreateInput{AnchorKind: AnchorIssue, Admission: AdmissionGraph, Reason: in.Reason, ActorType: in.ActorType, BudgetPolicy: json.RawMessage(`{}`), Nodes: in.Nodes}
+	probe := CreateInput{AnchorKind: AnchorChannelGoal, Admission: AdmissionGraph, Reason: in.Reason, ActorType: in.ActorType, BudgetPolicy: json.RawMessage(`{}`), Nodes: in.Nodes}
 	normalized, err := normalizeCreate(probe)
 	if err != nil {
 		return Graph{}, err
@@ -75,7 +75,7 @@ func (s *Store) Revise(ctx context.Context, in ReviseInput) (Graph, error) {
 		} else {
 			// A revision is a new executable plan. Re-admit retained nodes instead of
 			// carrying terminal state across a changed contract or dependency set.
-			_, err = tx.Exec(ctx, `UPDATE work_graph_node SET role=$4,context_policy=$5,objective=$6,completion_contract=$7,depth=$8,budget=$9,based_on_graph_version=$10,execution_status='queued',validity_status='valid',review_status='unreviewed',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, nodeID, spec.Role, spec.ContextPolicy, spec.Objective, completion, dependencyDepth(normalized.Nodes, spec.TempID), spec.Budget, next)
+			_, err = tx.Exec(ctx, `UPDATE work_graph_node SET role=$4,context_policy=$5,objective=$6,completion_contract=$7,depth=$8,budget=$9,based_on_graph_version=$10,execution_status='queued',validity_status='valid',review_status='unreviewed',effective_completion='pending',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, nodeID, spec.Role, spec.ContextPolicy, spec.Objective, completion, dependencyDepth(normalized.Nodes, spec.TempID), spec.Budget, next)
 			if err != nil {
 				return Graph{}, err
 			}
@@ -83,7 +83,7 @@ func (s *Store) Revise(ctx context.Context, in ReviseInput) (Graph, error) {
 		nodeByTemp[spec.TempID] = nodeID
 		keep = append(keep, nodeID)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE work_graph_node SET execution_status='cancelled',validity_status='superseded',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND NOT(id=ANY($3::uuid[]))`, w, g, keep); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE work_graph_node SET execution_status='cancelled',validity_status='superseded',effective_completion='stale',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND NOT(id=ANY($3::uuid[]))`, w, g, keep); err != nil {
 		return Graph{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE work_graph_edge SET retired_version=$2 WHERE graph_id=$1 AND retired_version IS NULL`, g, next); err != nil {

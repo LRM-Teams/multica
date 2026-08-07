@@ -66,18 +66,20 @@ type CreateInput struct {
 }
 
 type Node struct {
-	ID              string          `json:"id"`
-	IssueID         string          `json:"issue_id"`
-	Role            string          `json:"role"`
-	ContextPolicy   string          `json:"context_policy"`
-	ExecutionStatus string          `json:"execution_status"`
-	ValidityStatus  string          `json:"validity_status"`
-	ReviewStatus    string          `json:"review_status"`
-	Objective       string          `json:"objective"`
-	Completion      []string        `json:"completion_contract"`
-	Budget          json.RawMessage `json:"budget"`
-	BasedOnVersion  int64           `json:"based_on_graph_version"`
-	CreatedAt       time.Time       `json:"created_at"`
+	ID                  string          `json:"id"`
+	IssueID             string          `json:"issue_id"`
+	Role                string          `json:"role"`
+	ContextPolicy       string          `json:"context_policy"`
+	ExecutionStatus     string          `json:"execution_status"`
+	ValidityStatus      string          `json:"validity_status"`
+	ReviewStatus        string          `json:"review_status"`
+	CompletionAuthority string          `json:"completion_authority"`
+	EffectiveCompletion string          `json:"effective_completion"`
+	Objective           string          `json:"objective"`
+	Completion          []string        `json:"completion_contract"`
+	Budget              json.RawMessage `json:"budget"`
+	BasedOnVersion      int64           `json:"based_on_graph_version"`
+	CreatedAt           time.Time       `json:"created_at"`
 }
 
 type Edge struct {
@@ -106,6 +108,33 @@ type CreateResult struct {
 	NodeIDs  map[string]string `json:"node_ids"`
 	IssueIDs map[string]string `json:"issue_ids"`
 	Replayed bool              `json:"replayed"`
+}
+
+type IssuePlanNode struct {
+	TempID      string   `json:"temp_id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	AssigneeID  string   `json:"assignee_id"`
+	WorkerMode  string   `json:"worker_mode,omitempty"`
+	CloneReason string   `json:"clone_reason,omitempty"`
+	DependsOn   []string `json:"depends_on,omitempty"`
+}
+
+type DecomposeInput struct {
+	WorkspaceID    string          `json:"-"`
+	ParentIssueID  string          `json:"-"`
+	ActorAgentID   string          `json:"-"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	Reason         string          `json:"reason"`
+	Nodes          []IssuePlanNode `json:"nodes"`
+}
+
+type DecomposeResult struct {
+	ParentIssueID string            `json:"parent_issue_id"`
+	IssueIDs      map[string]string `json:"issue_ids"`
+	AgentIDs      map[string]string `json:"agent_ids"`
+	ReadyIssueIDs []string          `json:"ready_issue_ids"`
+	Replayed      bool              `json:"replayed"`
 }
 
 type NodeUpdateInput struct {

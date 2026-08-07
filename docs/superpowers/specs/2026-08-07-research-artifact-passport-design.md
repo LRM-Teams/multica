@@ -1,25 +1,25 @@
 # Research Artifact Passport and Data-Access Design
 
-Status: approved for implementation planning; design only
+Status: proposed; awaiting user approval; design only
 
 Date: 2026-08-07
 
 Scope: autonomous research plan Chapter D. This document does not implement production code, does not freeze the V6 Plan/Result/Prompt/Gate schema reserved for Chapter E, and does not change the default orchestrator version.
 
-## 1. Decision
+## 1. Proposed decision
 
 Use a normalized PostgreSQL artifact-passport model with four distinct concerns:
 
 1. a stable passport identifies one canonical Research entity;
 2. append-only versions bind an immutable schema version, canonical content hash, provenance, run versions, and access class to that entity;
-3. a frozen context manifest records the exact artifact versions authorized for one Attempt;
+3. a frozen context manifest records the exact artifact versions and representation bytes authorized for one Attempt;
 4. typed input and supersession edges preserve derivation without copying domain content into the passport.
 
 This is a class-table-inheritance design: for a domain row that already has a UUID, `research_artifact_passport.id` equals that canonical row ID. The domain row references the passport through its own UUID. A result currently embedded in `research_task_attempt.result` gains a first-class `research_result_artifact` row and a distinct UUID. Future E–N entities use the same convention from creation.
 
 PostgreSQL remains the only canonical state store. No graph database, object-level ACL service, or second event store is introduced.
 
-The user brief already selected this normalized architecture. No unresolved design decision requires user confirmation.
+This proposal is not approved for implementation. User approval of this design is the only open decision; implementation planning and code changes must wait for that approval.
 
 ## 2. Existing system inspected
 
@@ -64,145 +64,129 @@ A stable supertype row identifies the entity; append-only version rows hold immu
 
 Advantages: foreign keys and unique constraints enforce tenant/session boundaries; immutable versions remain meaningful while domain status changes; future E–N entities reuse one contract; reverse lineage and Projection edges are queryable; context and acceptance can authorize the same version IDs; migration can represent partial legacy knowledge honestly.
 
-Cost: more joins and careful transaction ownership. This is accepted because context assembly and result acceptance are bounded backend operations, and PostgreSQL indexes can serve their access patterns without a second store.
+Cost: more joins and careful transaction ownership. The proposal accepts that cost because context assembly and result acceptance are bounded backend operations, and PostgreSQL indexes can serve their access patterns without a second store.
 
 ## 4. Canonical identity and normalized schema
 
 Names below are normative for implementation planning. The migration may use PostgreSQL domains or CHECK constraints rather than native enums so additive future values do not require blocking enum rewrites, but accepted values and fail-closed behavior remain as specified.
 
-### 4.1 `research_artifact_passport`
+### 4.1 Scope-key convention
+
+Every D-owned version, result, context, link, omission, supersession, lifecycle, and policy row has `workspace_id uuid not null` and `session_id uuid not null`. No relationship relies on globally unique UUIDs alone. Before adding D foreign keys, the migration adds `UNIQUE (workspace_id, id)` to `research_session` and `UNIQUE (workspace_id, session_id, id)` to each referenced session-owned table that does not already have that key: `research_task`, `research_task_attempt`, `research_contract_revision`, `research_question`, `research_source_snapshot`, `research_observation`, `research_claim`, `research_report`, `research_decision`, `research_stage_eval`, `research_message`, `research_product_round_card`, `research_source`, `research_graph_node`, `research_graph_edge`, `research_claim_evidence`, `research_run_event`, and the D tables below. Existing narrower unique keys remain.
+
+All scoped child references use `MATCH SIMPLE`, because the endpoint UUID may be nullable while the child scope is not. A non-null endpoint uses all three columns. Every two-ended link carries one scope pair and has a composite FK to each endpoint; therefore either endpoint in another workspace/session is rejected by PostgreSQL. Child indexes begin with `(workspace_id, session_id, ...)` in the same endpoint order as their FKs.
+
+### 4.2 `research_artifact_passport`
 
 One stable identity per canonical entity:
 
 | Field | Contract |
 | --- | --- |
-| `id uuid primary key` | Canonical artifact ID. Equals the domain entity UUID for existing/future entity tables; Result Artifact receives its own UUID. |
+| `id uuid primary key` | Canonical artifact ID. Equals the domain entity UUID for class-table kinds; Result Artifact and Context Manifest receive their own UUIDs. |
 | `workspace_id uuid not null` | Tenant boundary. |
 | `session_id uuid not null` | Research Run boundary; current Run identity is the durable Research Session ID. |
-| `entity_kind text not null` | Registered kind such as `task`, `attempt`, `result_artifact`, `source_snapshot`, `observation`, `claim`, `report_revision`, or `evaluation`; E–N adds its required kinds without changing the base model. |
-| `current_version integer` | Nullable until the first verifiable version exists; thereafter it is a monotonically increasing query projection of the latest committed version. |
-| `lifecycle_status text not null` | `registered | accepted | rejected | stale | superseded | withdrawn`. This is artifact admissibility, not a replacement for Task, Attempt, Claim, Dispute, or Report domain status. |
-| `provenance_completeness text not null` | `complete | partial | unknown`; legacy backfill uses only what storage proves. |
-| `source_created_at timestamptz` | Existing domain timestamp when one is stored. Null when unknown. |
-| `registered_at timestamptz not null` | When the passport was created; for backfill this is migration time, not fabricated historical acceptance. |
-| `accepted_at`, `superseded_at` | Write-once nullable facts, set only by the owning transaction. |
+| `entity_kind text not null` | Registered kind; the SQL registry fails closed for unknown values. |
+| `current_version integer` | Null until a verifiable version exists; thereafter a monotonically increasing projection of the latest committed version. |
+| `eligibility_revision bigint not null default 1` | CAS fence. Advances whenever lifecycle, current version, verification eligibility, supersession, withdrawal, or access classification can change admission. |
+| `lifecycle_status text not null` | `registered | accepted | rejected | stale | superseded | withdrawn`. Artifact admissibility, not domain status. |
+| `provenance_completeness text not null` | `complete | partial | unknown`; legacy backfill states only what storage proves. |
+| `source_created_at timestamptz` | Existing domain timestamp when stored; otherwise null. |
+| `registered_at timestamptz not null` | Registration time; migration time for backfill, never fabricated historical acceptance. |
+| `accepted_at`, `superseded_at` | Write-once nullable facts set only by the owning transaction. |
 
-Required constraints:
+Required constraints include `UNIQUE (workspace_id, session_id, id)` and `UNIQUE (workspace_id, session_id, entity_kind, id)`. `current_version IS NULL` exactly when no version exists; otherwise `(workspace_id, session_id, id, current_version)` names a version. Terminal status cannot return to `accepted`. The passport stores no Question text, source bytes, Claim prose, Report Markdown, rubric, or Result body.
 
-- unique `(workspace_id, session_id, id)` for composite foreign keys;
-- unique `(workspace_id, session_id, entity_kind, id)` for explicit kind identity;
-- `current_version IS NULL` exactly when no verifiable version exists; otherwise it is at least 1 and names an existing version;
-- `registered_at` records passport registration and may be later than proven historical source/acceptance times; when both acceptance and supersession are known, supersession cannot precede acceptance;
-- a passport cannot move from a terminal status back to `accepted`;
-- entity-kind registration is centralized in Go and constrained in SQL for all kinds implemented at that migration level.
-
-The passport stores no Question text, source bytes, Claim prose, Report Markdown, rubric, or result body.
-
-### 4.2 `research_artifact_version`
+### 4.3 `research_artifact_version`
 
 One append-only immutable metadata version:
 
 | Field | Contract |
 | --- | --- |
-| `id uuid primary key` | Stable version reference used by manifests and edges. |
-| `workspace_id`, `session_id`, `artifact_id` | Composite FK to the passport, preventing cross-tenant/session attachment. |
-| `version integer not null` | Monotonic per passport; unique `(artifact_id, version)`. |
-| `schema_name text not null` | Stable schema family, e.g. `research-task`, `research-result-v5`, `research-report-structured-v1`. |
-| `schema_version integer not null` | Entity-content schema version, independent from orchestrator version. |
-| `canonicalization_version text not null` | Initially `research-artifact-c14n-v1`. |
-| `content_hash text not null` | `sha256:<64 lowercase hex>` over the registered kind's canonical immutable content. |
-| `access_level text not null` | One of the four access profiles in section 6. |
-| `goal_version`, `plan_version` | Exact Run versions when known; nullable only for artifacts for which they are not applicable or provably unknown. |
-| `contract_revision_id` | Nullable FK to `research_contract_revision`; null means not applicable/unknown, never “current by implication.” |
-| `strategy_version_id` | Nullable until Chapter M creates canonical Strategy Versions. D does not invent one for V1–V5. |
-| `produced_by_task_id`, `produced_by_attempt_id` | Nullable exact provenance; use only proven references. |
-| `produced_by_agent_id uuid` | Immutable attribution value, deliberately not deletion-cascaded through `agent`. |
-| `model`, `provider`, `execution_adapter` | Frozen execution facts copied from the producing Attempt when known. |
-| `hash_origin text not null` | `production | migration_recomputed | legacy_stored`; distinguishes production hashing from a backfill observation. |
-| `created_at timestamptz not null` | Version registration time. |
+| `id uuid primary key` | Stable version reference. |
+| `workspace_id`, `session_id`, `artifact_id` | Required scope and composite FK to `(workspace_id, session_id, id)` on passport. |
+| `version integer not null` | Monotonic per passport; `UNIQUE (workspace_id, session_id, artifact_id, version)`. |
+| `schema_name`, `schema_version` | Stable entity-content schema family and version. |
+| `canonicalization_version` | Initially `research-artifact-c14n-v1`. |
+| `content_hash` | `sha256:<64 lowercase hex>` over canonical immutable content. |
+| `access_level` | One of section 6's four profiles. |
+| `goal_version`, `plan_version` | Exact Run versions where known; null only when inapplicable or provably unknown. |
+| `contract_revision_id` | Nullable scoped FK to `research_contract_revision`; null is not “current by implication.” |
+| `strategy_version_id` | `CHECK (strategy_version_id IS NULL)` in D. Chapter M replaces that check with its scoped FK in the same migration that creates Strategy Version. |
+| `produced_by_task_id`, `produced_by_attempt_id` | Nullable scoped FKs to Task and Attempt. |
+| `produced_by_agent_id` | Immutable attribution value, deliberately not deletion-cascaded through `agent`. |
+| `model`, `provider`, `execution_adapter` | Frozen producing Attempt facts when known. |
+| `hash_origin` | `production | migration_recomputed | legacy_stored`. |
+| `created_at` | Version registration time. |
 
-An immutable trigger rejects update or delete of every version field. Corrections create a new version; they never edit a hash or provenance claim. `research_artifact_passport.current_version` advances with compare-and-set in the same transaction that inserts the version.
+Required keys/FKs are executable, not comments:
 
-Canonicalization is per registered kind and excludes mutable lifecycle projections such as Task status or Claim verification status. A semantic content edit creates a new version; a pure lifecycle transition does not. Canonical JSON uses sorted object keys, exact array order where order is semantic, normalized UUID/RFC3339 forms, and no locale-dependent formatting. Source bytes are hashed before excerpting. The registry has test vectors for every kind, so two implementations cannot silently choose different hash inputs.
+- `UNIQUE (workspace_id, session_id, id)` on version;
+- FK `(workspace_id, session_id, artifact_id)` → passport;
+- FK `(workspace_id, session_id, produced_by_task_id)` → Task;
+- FK `(workspace_id, session_id, produced_by_attempt_id)` → Attempt;
+- FK `(workspace_id, session_id, contract_revision_id)` → Contract Revision;
+- when both producer IDs are non-null, a deferred check verifies the Attempt's `task_id` equals `produced_by_task_id`;
+- the passport current-version pointer is enforced by a deferred scoped FK from `(workspace_id, session_id, id, current_version)` to version `(workspace_id, session_id, artifact_id, version)`; PostgreSQL permits the insertion cycle because it is `DEFERRABLE INITIALLY DEFERRED`.
 
-### 4.3 `research_result_artifact`
+An immutable trigger rejects update or delete of every version field. Corrections insert a new version and CAS passport `(current_version, eligibility_revision)` in the same transaction. Canonicalization excludes lifecycle projections; semantic content or access-class change creates a version, while pure lifecycle changes increment `eligibility_revision`. Canonical JSON uses sorted keys, semantic array order, normalized UUID/RFC3339 forms, and no locale formatting. Every registered kind has fixed test vectors.
 
-A first-class Result Artifact is required because Attempt and Result are distinct completion/projection entities:
+### 4.4 `research_result_artifact`
 
-- `id uuid primary key` and FK to a passport of kind `result_artifact`;
-- `attempt_id uuid not null unique`;
-- `orchestrator_version text not null` and `result_schema_version integer not null`;
-- `result jsonb not null`, bounded by existing Run config;
-- `client_request_id text not null` and the existing canonical result hash;
-- `accepted_at timestamptz`, nullable only for a legacy stored Result whose acceptance time cannot be proven; new production Results require it.
+Result and Attempt are distinct canonical entities. The row has `workspace_id`, `session_id`, `id`, `attempt_id`, orchestrator/result schema versions, bounded `result jsonb`, `client_request_id`, canonical result hash, `acceptance_policy_watermark`, and `accepted_at` (the last two nullable only when legacy acceptance policy/time is unprovable).
 
-The new row becomes the canonical Result body. During the schema rollback window, `research_task_attempt.result`, `result_hash`, and `client_request_id` remain a compatibility projection written in the same transaction and checked for equality. New code reads the Result Artifact. The compatibility columns are not a second authority and are not dropped in D; contract removal belongs to a later expand/contract migration after old-server rollback support expires.
+It has `UNIQUE (workspace_id, session_id, id)`, `UNIQUE (workspace_id, session_id, attempt_id)`, FK `(workspace_id, session_id, id)` → passport, and FK `(workspace_id, session_id, attempt_id)` → Attempt. A deferred kind trigger requires that passport to be `result_artifact`. These constraints make Result↔Attempt cross-scope attachment impossible and enforce one Result Artifact per Attempt.
 
-### 4.4 `research_artifact_context_manifest` and entries
+The row is canonical for new writes. During rollback compatibility, Attempt `result`, `result_hash`, and `client_request_id` are written in the same `result.accept` transaction and equality-checked by a deferred constraint trigger. New readers use Result Artifact; old columns are not dropped in D.
 
-One manifest is frozen for each Attempt before its dispatch outbox is committed:
+### 4.5 Policy state, Context Manifest, entries, and omissions
 
-| Field | Contract |
-| --- | --- |
-| `id uuid primary key` | Context identity. The manifest itself receives a passport/version of kind `context_manifest`. |
-| `attempt_id uuid not null unique` | One effective task context per Attempt. Retry creates a new Attempt and manifest. |
-| `task_id`, `workspace_id`, `session_id` | Composite scope and query keys. |
-| `purpose text not null` | `research_execution | evaluation_subject | evaluation_grader | projection`. |
-| `policy_version text not null` | Initially `research-artifact-access-v1`. |
-| `through_state_version bigint not null` | Canonical Run watermark used for selection. |
-| `normal_clearance text not null` | `verified_only | redacted | raw`. |
-| `evaluation_compartment boolean not null` | Separate capability; not implied by raw clearance. |
-| `manifest_hash text not null` | Hash of ordered entry version IDs, representations, purpose, policy, and watermark. |
-| `created_at timestamptz not null` | Frozen with Attempt. |
+`research_artifact_policy_state` has `workspace_id`, `session_id`, `policy_version`, and `watermark bigint not null`; this `watermark` is the session policy/lifecycle watermark; primary key `(workspace_id, session_id)`, unique `(workspace_id, session_id, watermark)`, and FK `(workspace_id, session_id)` → session `(workspace_id, id)`. Every lifecycle/access/verification/supersession mutation locks this row first and increments `watermark` in the same transaction. Policy deployment that changes admission increments every affected session watermark before new dispatch/acceptance.
 
-`research_artifact_context_entry` contains `manifest_id`, stable `ordinal`, `artifact_version_id`, `representation` (`metadata | excerpt | full`), `use_kind` (`direct_target | prerequisite | evidence | method | contract | evaluation_material`), and a bounded machine reason. Unique `(manifest_id, artifact_version_id, representation, use_kind)` prevents accidental duplicates. Composite foreign keys prevent cross-workspace/session entries.
+`research_artifact_policy_mutation` is the append-only enforcement ledger. It has `workspace_id`, `session_id`, `watermark`, `artifact_id`, `old_eligibility_revision`, `new_eligibility_revision`, and `mutation_kind`; it has a scoped passport FK and unique `(workspace_id, session_id, watermark, artifact_id, new_eligibility_revision)`. An owner increments policy state once with `UPDATE ... SET watermark = watermark + 1 ... RETURNING watermark`, then inserts one ledger row per affected passport at that returned watermark. Deferred eligibility triggers require a matching ledger row and require policy state to be at least that watermark, so a direct lifecycle/access/verification/current-version update without the coupled advance fails at commit.
 
-Ordering is deterministic: direct target first, then relation/use kind, importance, canonical artifact kind, artifact ID, and version. Token-budget omissions are recorded in a separate bounded `research_artifact_context_omission` row containing candidate version ID and reason (`access_denied | stale | superseded | duplicate | token_budget | irrelevant`). It never stores denied content.
+One `research_artifact_context_manifest` is frozen per Attempt. It has `workspace_id`, `session_id`, `id`, `attempt_id`, `task_id`, `purpose`, `policy_version`, `policy_watermark`, `through_state_version`, normal/evaluation clearances, bounded `principal_header_bytes`, `principal_header_hash`, `manifest_hash`, and `created_at`. The principal header freezes the compatibility Fleet/roster metadata that is not itself a Research artifact. It has scoped unique keys for `id` and `attempt_id`, FKs to Attempt and Task, FK from its `id` to a `context_manifest` passport, and a deferred check that Attempt.task_id equals manifest.task_id.
 
-### 4.5 `research_artifact_input_reference`
+Each `research_artifact_context_entry` has `workspace_id`, `session_id`, `manifest_id`, stable `ordinal`, `artifact_version_id`, the selected passport `eligibility_revision`, `representation` (`metadata | excerpt | full`), bounded `representation_bytes bytea`, `representation_hash`, `use_kind`, and bounded reason. It has scoped FKs to manifest and version, unique `(workspace_id, session_id, manifest_id, ordinal)`, and unique `(workspace_id, session_id, manifest_id, artifact_version_id, representation, use_kind)`. The bytes are the exact frozen safe representation, not a pointer to mutable domain prose.
 
-The derivation graph references immutable versions, not mutable entities:
+Each `research_artifact_context_omission` also carries scope, manifest ID, candidate version ID, ordinal, and reason (`access_denied | stale | superseded | duplicate | token_budget | irrelevant`). It has scoped FKs to both manifest and candidate version and stores no denied content, representation bytes, private hash, or private metadata.
 
-- `consumer_version_id` and `input_version_id`;
-- `relation` in `consumed | derived_from | verifies | redacts | evaluates | summarizes | cites`;
-- `manifest_id` when the input came from an Attempt context;
-- `explicitly_used boolean`, false for context-available lineage and true when the Result explicitly names or structurally depends on the input;
-- bounded `purpose` and deterministic `ordinal`;
-- unique `(consumer_version_id, input_version_id, relation)`;
-- self-reference forbidden;
-- both versions must share workspace and session unless a future, separately authorized evaluation import contract is designed. D permits no cross-session reference.
+Ordering is deterministic: direct target, relation/use kind, importance, canonical kind, artifact ID, then version. `manifest_hash` covers scope, Attempt/Task, purpose, policy version/watermark, Run state watermark, and every ordered entry's version ID, eligibility revision, representation, and representation hash.
 
-The manifest's own artifact version has `consumed` edges to every entry. Accepted output artifacts have `derived_from` edges to the manifest version and direct edges for explicit references. Thus the server can prove both what was available and what the Result claimed to use without duplicating every available input edge onto every output.
+### 4.6 Input, supersession, and lifecycle links
 
-### 4.6 `research_artifact_supersession` and lifecycle history
+Every link row below carries `workspace_id` and `session_id` and references both endpoints with scoped composite FKs:
 
-Supersession is many-to-many and must not be a nullable “previous ID” column:
+- `research_artifact_input_reference`: `consumer_version_id`, `input_version_id`, relation, nullable `manifest_id`, `explicitly_used`, purpose, ordinal. Both version endpoints and optional manifest are scoped FKs; self-reference is forbidden; unique `(workspace_id, session_id, consumer_version_id, input_version_id, relation)`.
+- `research_artifact_supersession`: `successor_version_id`, `superseded_version_id`, reason, nullable `decision_id`, created time. Both versions and Decision are scoped FKs; self-reference and cycles are forbidden; unique scoped endpoint pair.
+- `research_artifact_lifecycle_event`: scoped passport ID, old/new status, nullable Decision, actor facts, reason, created time. Passport and Decision are scoped FKs; the table is append-only.
 
-- `successor_version_id`, `superseded_version_id`, `reason`, `decision_id`, `created_at`;
-- unique pair and self-reference prohibition;
-- same workspace/session enforcement;
-- a cycle check in the owning transaction;
-- old content/version remains immutable and readable to authorized audit paths.
+The manifest version has `consumed` edges to each entry. Accepted outputs have `derived_from` edges to the manifest version and direct edges for explicit typed references. No D reference crosses a session.
 
-`research_artifact_lifecycle_event` is append-only and records old/new status, actor, Decision, reason, and timestamp. The passport's `lifecycle_status` and timestamps are a transactionally maintained projection of this history. Domain statuses remain in their domain tables.
+### 4.7 Exact polymorphic class enforcement
+
+PostgreSQL cannot express “passport `entity_kind` selects one of many domain tables” as a declarative FK. D therefore uses exact deferred constraint triggers rather than pretending a direct FK exists:
+
+1. `research_artifact_passport_class_guard` is an `AFTER INSERT OR UPDATE OF workspace_id, session_id, entity_kind CONSTRAINT TRIGGER`, `DEFERRABLE INITIALLY DEFERRED`, on passport. Its function `CASE`s over every registered kind and performs `SELECT 1` against that kind's domain table using `(workspace_id, session_id, id)`; no row or unknown kind raises SQLSTATE `23503` with constraint name `research_artifact_passport_class_guard`.
+2. Each registered domain table gets a reciprocal `AFTER INSERT OR UPDATE OF id, workspace_id, session_id CONSTRAINT TRIGGER`, also deferred, which requires exactly one matching passport with the expected kind. Result Artifact and Context Manifest use this plus their direct scoped passport FK.
+3. `research_artifact_passport_delete_guard` is a `BEFORE DELETE` trigger that checks the kind-selected domain table and rejects while the reciprocal row exists. Each domain table has a matching `BEFORE DELETE` guard that rejects while its passport exists. Lifecycle withdrawal, not deletion, is the production removal operation. Migration rollback drops the guards before D tables.
+4. `research_artifact_version_producer_guard` is a deferred constraint trigger that, when both producer IDs exist, verifies scoped Attempt.task_id equals Task.id and that copied agent/model/provider/adapter facts equal the immutable Attempt facts when populated.
+5. `research_result_attempt_projection_guard` is a deferred trigger that verifies scope, one-to-one identity, and equality of the canonical Result hash/body/request ID with non-null Attempt compatibility columns.
+
+Integration tests force `SET CONSTRAINTS ALL IMMEDIATE` before commit to prove each valid and invalid case at the statement under test, then repeat at normal deferred commit. This is the executable enforcement strategy for class polymorphism; application checks are defense in depth only.
 
 ## 5. Entity coverage
 
-D1 registers at minimum the current canonical entities:
+D1 registers every current platform-selected Research artifact that can appear in a task Prompt, task-bound Session response, accepted Result, or provenance edge:
 
-- Research Task;
-- Research Attempt;
-- Result Artifact;
-- Source Snapshot;
-- Observation;
-- Claim;
-- Report Revision;
-- quality/citation Evaluation represented by the relevant `research_decision`, plus legacy `research_stage_eval` as `legacy_stage_evaluation`;
-- Context Manifest.
+- Research Run/Session, Contract Revision, Method Decision, Question, Task, Attempt, Result Artifact;
+- legacy `research_source`, durable Source Snapshot, Observation, Claim, Evidence Link, Report Revision;
+- quality/citation Evaluation Decision and legacy Stage Evaluation;
+- Research Message, Product Round Decision, Context Manifest, and Run Event;
+- legacy graph node/edge whenever the stored row is itself selected (including as the source of a Thought Strategy representation). Durable canvas nodes/edges and Gate that are regenerated from Run entities are projections and do not receive duplicate passports.
 
-Question, Contract Revision, Method Decision, Evidence Link, Decision, and Run Event are registered in D when they can enter a Task context or provenance edge. Registering them now avoids a false claim that a Context Manifest covers the complete prompt while Contract/Method inputs remain outside it.
+Fleet/member identity is principal and routing metadata, not a Research artifact. It is frozen as a bounded manifest header and hashed into the Context Manifest, but individual Agent/User rows do not become Research passports. Thought Strategy is a graph-node representation, not a second canonical entity.
 
-The registry is deliberately extensible for all final-plan entities: Search Plan, Query Execution, Source Candidate, Screening Decision, Hypothesis, Branch, Insight, Insight Derivation, Integration Round, Integration Contribution, Dispute, Position, Deliberation/Turn, Team Formation/Membership, Divergence Pass, Capability Observation, Monitoring Cycle, Episode, Strategy Version, Promotion Decision, and Evaluation Defect. Their domain schemas and state machines remain owned by E–N.
+The registry remains extensible for all final-plan entities: Search Plan, Query Execution, Source Candidate, Screening Decision, Hypothesis, Branch, Insight, Insight Derivation, Integration Round, Integration Contribution, Dispute, Position, Deliberation/Turn, Team Formation/Membership, Divergence Pass, Capability Observation, Monitoring Cycle, Episode, Strategy Version, Promotion Decision, and Evaluation Defect. Their domain schemas and state machines remain owned by E–N.
 
 ## 6. Data-access lattice
 
@@ -238,143 +222,155 @@ Every selection evaluates:
 
 Deny is the default. Unknown access levels, purposes, entity kinds, future enum values, missing passports, mismatched tenant/session, stale/superseded versions not explicitly requested for audit, and missing provenance required by the task all fail closed.
 
-## 7. Context assembly authorization
+## 7. Context assembly authorization and dispatch ownership
 
-Introduce one internal `artifactContextModule`; no Handler, Prompt builder, or CLI route may independently list Research tables for an Agent task.
+Introduce one internal `artifactContextModule`; no Handler, Prompt builder, or CLI route may independently list Research tables for a D-enabled Agent task.
 
-For dispatch:
+There is one executable transaction owner: `PostgresStore.CreateDispatchIntent`. Outside the transaction, `artifactContextModule` may read candidates and, only after a non-authoritative coarse access filter, precompute bounded representation bytes, hashes, token costs, and a candidate ordered selection. Access-denied candidates carry identity/reason only and are never fetched into representation bytes. That work is an optimization only and carries expected `(version ID, passport current_version, eligibility_revision, lifecycle, access level, verification fact, content hash, representation hash)` values. It grants no authority and creates no Attempt.
 
-1. lock Run and Task using the existing CreateDispatchIntent transaction order;
-2. compute the task principal, purpose, clearance, evaluation compartment, state watermark, and allowed graph roots;
-3. select candidate passport versions by typed domain relationships, never by summary-text search;
-4. apply workspace/session, lifecycle, freshness, verification, supersession, and access policy;
-5. choose safe representation and deterministic order within token/item limits;
-6. write the Context Manifest, entries, omissions, manifest passport/version, and input edges;
-7. render a `RunSnapshot` view only from manifest entries;
-8. build the immutable version-selected Prompt;
-9. commit Attempt, manifest, frozen Prompt/outbox request, and Run Event atomically.
+Inside `CreateDispatchIntent`, using merged Chapter C operation label `txOpDispatchIntentCreate`:
 
-A failure in steps 2–8 creates no Attempt or outbox. A process crash after commit replays the same frozen request and manifest hash.
+1. call `s.beginResearchTx(ctx, txOpDispatchIntentCreate, ...)`; no direct `BeginTx` is allowed;
+2. lock/re-read in this global order: Run/session row; session policy-state row; Task row; candidate passports by UUID; candidate versions by UUID; then kind-specific verification/contract/producer rows by `(kind, UUID)`;
+3. re-run root traversal, access, lifecycle, freshness, verification, supersession, deterministic ordering, and budget selection against those locked rows;
+4. require exact equality with the candidate selected/omitted sets and every expected fact. Insert entries through `INSERT ... SELECT` predicates over scoped passport/version facts and require the selected row count. CAS each selected passport with `UPDATE ... SET eligibility_revision = eligibility_revision WHERE workspace_id=? AND session_id=? AND id=? AND current_version=? AND eligibility_revision=? AND lifecycle_status=?`; any count mismatch aborts. CAS Run `state_version`, then reserve the final dispatch policy watermark with `UPDATE research_artifact_policy_state SET watermark = watermark + 1 WHERE workspace_id=? AND session_id=? AND watermark=? AND policy_version=? RETURNING watermark`; zero rows abort. Insert policy-mutation rows for the new Attempt/Manifest passports and store the returned final watermark in the manifest;
+5. validate or regenerate each precomputed representation from the locked canonical version; its bytes and hash must agree. Build the manifest-derived `RunSnapshot` and version-selected V1–V5 Prompt inside this method using pure renderers only;
+6. compute `manifest_hash` from the exact entry bytes/hashes and compute the dispatch request hash only after Prompt bytes and manifest identity are final;
+7. atomically insert Attempt + Attempt passport/version, Context Manifest + passport/version, entries/omissions/edges, frozen dispatch outbox payload containing those exact Prompt bytes and manifest ID/hash, Task transition, and dispatch Event;
+8. call `s.commitResearchTx(ctx, txOpDispatchIntentCreate, tx)`; no direct `Commit` is allowed.
+
+All lifecycle/access/verification/supersession writers use the same Run → policy-state → passport/version lock order and increment both the affected passport `eligibility_revision` and session policy watermark. They therefore cannot pass between dispatch recheck and commit. An unrelated watermark advance makes dispatch retry and recompute rather than silently using stale policy.
+
+Prompt and manifest cannot diverge: the renderer receives only the in-transaction manifest view built from the same `representation_bytes` inserted as entries; the outbox is encoded after that render; and persisted `prompt_hash`, request hash, and manifest hash bind all three. `CreateDispatchIntent` no longer accepts a caller-built context-bearing `DispatchRequest` as authority. Replay compares the stored hashes and returns the existing Attempt; it never re-renders. A failure before commit creates none of Attempt/manifest/outbox/Event, and an ambiguous post-commit error converges through Chapter C replay.
 
 For `multica research session get`:
 
-- a human workspace principal receives the existing product snapshot filtered through its human policy and safe representations;
-- a task-bound Agent credential receives the exact active Attempt manifest view, not a fresh whole-Run query;
-- an Agent credential without a valid task binding receives only an explicitly designed Fleet overview, never raw Task context;
-- an evaluation subject cannot access the grader route or evaluation-private entries;
-- an evaluation grader gets only the grader manifest, which is separate from the subject manifest.
+- human workspace principals keep the product snapshot filtered by human policy;
+- a task-bound Agent on a D-enabled Attempt receives the frozen manifest projection for that Attempt, not a fresh whole-Run query;
+- an Agent without valid task binding receives only a separately designed bounded Fleet overview;
+- evaluation subject and grader use separate manifests and grants.
 
-Prompt builders remain pure renderers. They cannot query storage or widen a manifest. V1–V5 Prompt bytes remain unchanged; their broad “complete session” command resolves to the manifest-equivalent view described in section 9.
+Historical non-D runs retain the existing live route as defined in section 9. Prompt builders remain pure and cannot query storage or widen a manifest.
 
 ## 8. Result-acceptance authorization
 
-Authorization is enforced twice for defense in depth, with the transaction check authoritative.
+Preflight checks credential/Attempt/Inbox binding and resolves every existing-artifact reference into an exact scoped version. Local keys created within one envelope continue to resolve under existing V1–V5 schemas. Existing report Claim/Source references, answer Claim references, verification reuse, and canonical references must be in the Attempt manifest or a server-created version explicitly granted to that task. Unmanifested, newer, denied, cross-scope, or evaluation-private references fail closed.
 
-Before decoding/materialization, `resultAcceptanceModule` loads the Attempt manifest and checks credential/Attempt/Inbox binding. It resolves every existing-artifact reference in the versioned envelope into an artifact version:
+`PostgresStore.AcceptResult` is authoritative and uses Chapter C label `txOpResultAccept`. It calls `s.beginResearchTx`/`s.commitResearchTx`; D adds no direct transaction boundary. Before any output insert it locks in this deterministic global order:
 
-- local Source/Observation/Claim keys created in the same envelope may reference each other according to the existing schema;
-- report Claim/Source references, answer Claim references, verification reuse, and any canonical existing references must be present in the manifest or be a server-created artifact explicitly granted to that task;
-- the submitted payload cannot name an entity outside workspace/session, a newer unmanifested version, a denied representation, or evaluation-private data;
-- a content hash supplied in a future V6 reference must match the manifest version exactly.
+1. Run/session;
+2. session policy-state watermark;
+3. Task, then Attempt;
+4. Context Manifest and its entries;
+5. every referenced passport ordered by UUID;
+6. every referenced version ordered by UUID;
+7. kind-specific verification/contract/producer rows ordered by `(kind, UUID)`.
 
-Inside `PostgresStore.AcceptResult`, after locking Run/Task/Attempt and before any domain insert:
+It then verifies manifest/Attempt/task/principal identity, Prompt/manifest hashes, Result schema version, and all scoped references. If the current policy watermark differs from the manifest watermark, it re-evaluates every reference under the locked current policy; withdrawal, lifecycle, access, verification, or supersession changes reject the Result. If the watermark advanced only for unrelated artifacts and all referenced eligibility revisions/facts still match, acceptance may proceed. Before writing outputs it reserves one new final watermark with the same compare-and-increment statement, inserts policy-mutation rows for every new/changed output passport, and records that returned value as `research_result_artifact.acceptance_policy_watermark`. Every referenced passport is CAS-checked on `(current_version, eligibility_revision, lifecycle_status)` and every version on immutable `(id, content_hash, access_level)` predicates before writes.
 
-1. re-read and lock the manifest;
-2. verify `manifest_hash`, Attempt, task, principal, state/version policy, and all resolved references;
-3. validate output access-level taint and any redaction/verification transformation;
-4. create the Result Artifact and passport/version;
-5. materialize Source/Observation/Claim/Report/Evaluation rows with their passports/versions and input edges;
-6. write lifecycle/supersession facts, Attempt compatibility projection, Decision, and Event;
-7. commit all or none.
+Only after those checks does the transaction create Result Artifact/passport/version, materialize produced domain rows and passports/versions, create scoped lineage/supersession/lifecycle rows, write the exact Attempt compatibility projection, Decision, and Event, and terminally transition the Attempt. Output access taint is derived from locked inputs; callers cannot choose it.
 
-A reference that passed preflight but changed or was revoked before the transaction returns a typed conflict/forbidden result and writes no partial artifact. Idempotent replay requires the same `client_request_id`, canonical result hash, manifest ID/hash, and resolved input version set. Same request ID with different lineage conflicts.
+A preflight success followed by revocation or version change therefore returns typed conflict/forbidden and commits no output. Idempotent replay requires identical client request ID, canonical Result hash, manifest ID/hash, resolved input version set, and acceptance policy watermark semantics; changed lineage conflicts.
 
-D does not add an `input_refs` field to V1–V5 envelopes and does not freeze V6. For legacy versions, explicit references are inferred from their existing typed fields, and the server records the manifest as the complete available input. Chapter E may require explicit V6 input references using this model.
+D adds no `input_refs` field to V1–V5 and does not freeze V6. Legacy explicit references are inferred from existing typed fields, and the manifest remains the complete available-input record. Chapter E may require explicit V6 references.
 
-## 9. V1–V5 compatibility
+## 9. V1–V5 compatibility, explicitly redefined
 
-The following are immutable compatibility requirements:
+Compatibility distinguishes immutable wire/content contracts from the old live-read behavior:
 
-1. Existing orchestrator selection, Result decoders, validators, materialization semantics, Gate rules, report reader schema, and complete Prompt hashes do not change.
-2. `taskPromptModule` receives a manifest-derived `RunSnapshot` with the same field ordering and content that the current whole-Run loader would expose to that V1–V5 task, subject only to denying data that was never valid for that historical protocol. Initial V1–V5 policy grants the same normal current-session ledger surface, so D creates no new behavior regression.
-3. The task-bound `session get` route returns the same manifest-derived view used to build the Prompt. It cannot show a later or broader state than dispatch input.
-4. Existing V1–V5 accepted Results are not re-parsed, re-gated, or reclassified under future rules.
-5. The new Result Artifact row is canonical for new writes. Existing Attempt result columns remain an exact compatibility projection during the rollback window.
-6. Old desktop/browser response fields remain readable. Passport summaries are additive and schema-parsed with defaults; raw passport bodies are not injected into existing response objects.
-7. Runs with `run_initialized_at IS NULL` remain legacy execution. Their existing routes are not silently converted into durable Research Run semantics.
-8. New D behavior is enabled only after shadow equivalence proves that each V1–V5 context and accepted Result resolves to the same domain artifacts. A mismatch fails rollout, not the historical Run.
+1. Existing V1–V5 Prompt renderer code, Result decoders/validators, canonical Result hashes, report schema, and version-selected Gate rubric remain unchanged. Stored Prompt and accepted Result bytes are never rewritten.
+2. Historical Attempts/Runs created before D enablement keep their existing live task-bound `session get` behavior. D does not fabricate a manifest and claim it was frozen at their dispatch.
+3. New D-enabled V1–V5 Attempts use the same renderer and Result/Gate versions, but context is frozen by manifest at dispatch. Their task-bound `session get` is manifest-derived and can intentionally differ from the later human live snapshot. Gate/reference authorization is evaluated against that frozen manifest plus the locked current revocation policy described in section 8.
+4. “Prompt compatibility” means identical bytes for identical authorized manifest representations and unchanged golden fixtures, not a promise that a newly dispatched task sees bytes from a hypothetical later whole-Run query. Any context change legitimately changes Prompt bytes through the existing renderer.
+5. Existing accepted Results are not re-parsed, re-gated, or reclassified. New Result Artifact rows are canonical only for new writes; Attempt columns remain exact rollback projections.
+6. Old desktop/browser fields remain readable. Passport summaries are additive and schema-parsed with defaults; full passports are not injected into existing objects.
+7. Runs with `run_initialized_at IS NULL` remain legacy execution. Historical durable runs without D enablement also retain historical live reads; D enablement is an explicit per-Run/Attempt fact, never inferred from current server version.
+8. Rollout requires the exact legacy-admission shadow contract in section 10. A mismatch blocks D enablement, not historical execution.
 
-Golden tests must continue to pin all V1–V5 Prompt SHA-256 values, Plan/Result canonical hashes, future-field rejection, Gate behavior, stale-result behavior, report/evaluation rules, and canonical business-state behavior.
+Golden tests continue to pin V1–V5 Prompt SHA-256 values for fixed fixtures, Plan/Result hashes, future-field rejection, Gate behavior, stale-result behavior, report/evaluation rules, and canonical business state. Separate tests pin the intended historical-live versus D-enabled-frozen route split.
 
-## 10. Migration and backfill: no fabricated history
+## 10. Migration, legacy admission, and shadow equivalence
 
-Migration is additive and restartable.
+Migration is additive, restartable, and never fabricates history.
 
-### 10.1 Facts that may be backfilled
+### 10.1 Backfillable facts
 
-- stable IDs, workspace, session, entity kind, current stored content, and stored timestamps;
-- Task/Attempt/Report producer references that existing columns prove;
-- Agent/model/provider/adapter from immutable Attempt fields where present;
-- stored Result hash only when it matches the current stored Result under the historical canonicalizer;
-- a recomputed hash of current stored content with `hash_origin=migration_recomputed`;
-- goal/plan/orchestrator versions explicitly stored on the relevant rows.
+Stable IDs/scope/kind/current stored content/stored timestamps; stored producer references; immutable Attempt attribution; historical stored Result hash only when it verifies under its historical canonicalizer; migration-time recomputed hashes; and explicitly stored goal/plan/orchestrator versions may be backfilled.
 
-### 10.2 Facts that must remain null/partial
+Historical inputs, actual read behavior, pre-M Strategy Version, unrecorded redaction/verification, acceptance time not proven by storage, missing producer identity, and nonexistent E–N lineage remain null/partial. No historical lifecycle event claims acceptance.
 
-- historical inputs that were not recorded;
-- whether an old Agent actually read every artifact that happened to be visible;
-- Strategy Version before Chapter M;
-- historical redaction or verification transformations not represented in storage;
-- an acceptance timestamp when only entity creation/update time exists;
-- producer Attempt/Agent/model when no existing foreign key or immutable attribution proves it;
-- Search Plan, Query, Screening, Dispute, Integration, or other E–N lineage that did not exist.
+Old succeeded Attempts with a valid stored Result may receive a Result Artifact; `result_submitted_at` is source time and is acceptance time only when existing invariants prove it. Missing/malformed payloads create no Result/passport and are recorded in a bounded diagnostic ledger.
 
-Backfilled passports use `lifecycle_status=registered`, `provenance_completeness=partial|unknown`, `registered_at` equal to migration time, and an exact `source_created_at` only when stored. They do not synthesize lifecycle events claiming prior acceptance. A version computed from current storage says `migration_recomputed`; it is an observation of migration-time state, not a claim that the same bytes existed at entity creation.
+### 10.2 Exact admission for `registered + partial|unknown`
 
-For old Attempts with stored Results, create one `research_result_artifact`; use stored `result_submitted_at` as source time when present, but do not call it acceptance time unless the Attempt is succeeded and existing invariants prove acceptance. Missing or malformed legacy payloads produce no Result Artifact or passport. A diagnostic backfill ledger row records the skipped Attempt and reason; migration continues, and D enforcement excludes the absent artifact from new task context rather than creating an orphan identity.
+Backfilled passports use `lifecycle_status=registered`, `provenance_completeness=partial|unknown`, and migration-time `registered_at`. `registered` is not generally equivalent to `accepted`. The only ordinary-task exception is named policy `legacy-v1-v5-compat-v1`:
 
-No historical Inquiry, Search, Dispute, Integration, Team, Divergence, Monitoring, Episode, or evaluation-private rows are invented. Chapter N must preserve the same rule in historical projection.
+- it applies only to a V1–V5 task on a Run explicitly D-enabled after shadow success;
+- the legacy row must have exact workspace/session identity, a recognized kind, a current immutable version, a recomputed/stored hash that verifies, a nonterminal domain state, and no withdrawn/rejected/stale/superseded fact;
+- the artifact must be reachable by the same typed current `TaskContext` relationship that made it visible before D; text search or session-wide fallback is forbidden;
+- `partial` and `unknown` refer only to producer/input provenance. If content identity, scope, current bytes, or access classification is unknown, no version is created and admission is denied;
+- both may be admitted using the conservative access class derived by migration: `raw` unless an existing persisted redaction/verification invariant proves `redacted` or `verified_only`; neither can become `evaluation_private` by inference;
+- admitted representation bytes must equal the legacy safe serializer bytes. Output lineage propagates the weaker completeness and cannot claim complete provenance;
+- this exception is forbidden for V6+, evaluation grader material, cross-session import, and new artifacts created after D enforcement. New production artifacts must become `accepted` through their owner transaction.
 
-Down migration removes only D-owned tables, triggers, indexes, and additive references. It restores old code's ability to read Attempt compatibility columns. It does not attempt to “unaccept” Results or reconstruct history that never existed.
+Thus `registered+unknown` is not a wildcard: unknown producer history is tolerable for byte-identified legacy compatibility; unknown content/scope/access is not.
 
-## 11. Status, supersession, and revocation
+### 10.3 Shadow equivalence
 
-Artifact lifecycle and domain lifecycle are separate:
+For each prospective D-enabled V1–V5 dispatch, shadow mode runs legacy `TaskContext` and manifest selection over one database snapshot and compares, in deterministic order: family/kind, canonical domain ID, version content hash, chosen representation bytes/hash, and omission classification. It also renders both Prompts and compares bytes/hash. The expected equal set includes every legacy family enumerated in section 13.
 
-- a running Task can have an `accepted` passport while its domain status is `running`;
-- a refuted Claim remains an accepted historical artifact whose domain status is `refuted`;
-- a new Claim/Report/Insight version may supersede an old version without deleting it;
-- access withdrawal can mark a passport `withdrawn`; derived artifacts are recomputed for taint/staleness and no longer enter new contexts;
-- a superseded/stale artifact is excluded from ordinary context but available to an authorized audit purpose.
+There are only two acceptable outcomes: exact equality, or an explicit deny that the old path exposed data already forbidden by a pre-D invariant, with a named policy reason and a positive allowed control. Any unexplained omission, addition, reorder, representation change, missing passport, or `registered` admission failure blocks Run enablement. Production task-bound reads switch only per Run after this comparison passes; historical runs continue live behavior.
 
-Supersession requires a typed reason and Decision. Claim equivalence/refinement remains a domain relationship in later chapters; it is not inferred from matching hashes. Content deduplication may point multiple discovery events to one version but never merges authorship or deletes provenance.
+Down migration removes only D-owned tables/triggers/indexes/additive keys after disabling enforcement. It preserves Attempt compatibility columns and never attempts to reconstruct or “unaccept” history.
 
-## 12. Transaction ownership
+## 11. Status, supersession, revocation, and watermarking
 
-Only the Module that owns the business invariant writes passports:
+Artifact and domain lifecycle remain separate. A running Task may have an accepted passport; a refuted Claim remains an accepted historical artifact with refuted domain status; superseded/stale content remains audit-readable; withdrawal removes future ordinary admission without deleting history.
 
-- plan/result acceptance transaction: Task, Question/Method inputs, Result Artifact, Source Snapshot, Observation, Claim, Report, Evaluation passports and versions;
-- `CreateDispatchIntent`: Attempt passport/version, Context Manifest, entries/omissions, input edges, frozen Prompt/outbox, and dispatch Event;
-- verification/quality/citation acceptance: verification-derived versions and `verifies` edges;
-- steering/replan/integration transactions: lifecycle, stale, and supersession facts for affected artifacts;
-- Corpus, Inquiry, Integration, Dispute, Exploration, Capability, Monitoring, and Evolution transactions in E–N: their own domain row and passport/version in the same transaction;
-- Projection: read-only consumption after commit.
+Every transaction that can change context or acceptance eligibility—passport lifecycle, domain verification status, current version/access class, supersession, withdrawal, policy version/grant, or legacy-admission eligibility—locks Run then policy state then affected passports in UUID order, increments each affected `eligibility_revision`, and increments the session policy watermark once. Direct updates that omit this path are rejected at deferred-constraint time because no `research_artifact_policy_mutation` row matches the old/new eligibility revisions at the transaction's returned watermark. This is the shared TOCTOU fence used by sections 7 and 8.
 
-There is no public artifact CRUD API. Internal helpers accept an existing `pgx.Tx`; they never begin or commit a transaction. A domain row cannot commit without its required passport/version once enforcement is enabled. Conversely, a passport for a new production artifact cannot commit without its matching domain row. Deferred constraint checks and per-kind integration tests enforce this class-table pairing.
+Supersession requires a typed reason and Decision and performs a cycle check under locked scoped endpoints. Claim equivalence/refinement remains a later domain relationship; matching hashes never merge authorship or provenance.
 
-## 13. Projection and API implications
+## 12. Transaction ownership and Chapter C dependency
 
-Chapter D exposes safe metadata needed by Chapter N but does not replace the current graph:
+Chapter C foundation PR #2526 is merged and lands before D. D extends that foundation; it does not recreate or bypass it.
 
-- canonical Projection identity remains `(run_id, entity_kind, entity_id)`; `entity_id` is the passport ID;
-- node detail may include schema/version, lifecycle, provenance completeness, safe hash prefix, producer IDs, access profile name, and input/supersession counts only after caller authorization;
-- raw content hash, raw locator, denied input IDs, evaluation-private existence, and omission detail are not broadcast to unauthorized clients;
-- `input_reference` and `supersession` can project as typed edges in N;
-- repeated projection uses artifact version IDs and deterministic hashes, so replay cannot create duplicate nodes;
-- unknown future entity kinds and access profiles render as generic/hidden rather than crashing an old client;
-- existing `projectRunV2Graph` remains a compatibility projection until N delivers the full Snapshot/Delta contract. It must not become a second authority for passport state.
+Only the module owning the business invariant writes passports. `CreateDispatchIntent` owns Attempt/manifest/Prompt/outbox atomicity; `AcceptResult` owns Result and produced artifacts; steering/replan/verification and E–N domain transactions own their lifecycle/lineage mutations. Projection remains post-commit and read-only.
 
-The existing Session snapshot gains optional, bounded passport summaries only when needed. A separate authorized artifact-detail endpoint is preferable to adding full passports to every list row.
+All D write boundaries use the merged `PostgresStore.beginResearchTx` and `PostgresStore.commitResearchTx` methods with existing labels `txOpDispatchIntentCreate` and `txOpResultAccept` (and the relevant existing label for every other owner). No D code calls `s.pool.BeginTx`, `tx.Commit`, or introduces a nested transaction. Transaction-scoped artifact helpers accept `pgx.Tx` and cannot begin/commit. The Chapter C structural guard is expanded to every D-mutated file, and Chapter C before-/after-commit recovery tests count D rows as canonical children.
+
+There is no public artifact CRUD API. Deferred class-pairing triggers prevent a required domain row from committing without its passport/version and prevent an orphan production passport.
+
+## 13. Complete task-visible response policy and API implications
+
+The current task-visible Session response is exhaustively classified below. D-enabled task routes may not silently add another table query; a new response family must update this table, passport registry/policy, and shadow test in the same change.
+
+| Current family | Passport / manifest representation for D-enabled task | Removal / compatibility policy |
+| --- | --- | --- |
+| `session` | Research Run/Session version; bounded metadata plus exact goal/version/state fields selected for the task. | Family retained. Historical runs remain live; D-enabled bytes are frozen. |
+| `fleet` | Not a Research passport; bounded authorized roster/principal header hashed into manifest. No secrets/config. | Family retained at compatibility shape; unauthorized members/config removed by existing membership policy. |
+| legacy `research_source` (`sources`) | `legacy_research_source` passport/version under section 10 admission; bounded legacy source representation. | Retained for historical and V1–V5 compatibility; no silent substitution with Source Snapshot. V6 removal requires an explicit versioned contract. |
+| graph `nodes` / `edges` | Stored graph rows use legacy graph passports when selected directly, including a node that supplies Thought Strategy. Durable canvas rows projected deterministically from manifested Run entities/versions are not second passports. | Family retained. D-enabled route cannot query unmanifested graph rows; historical route remains live. |
+| `messages` | `research_message` passport/version; bounded message/card representation with principal and target checks. | Family retained only for messages selected into the manifest; later messages are absent from the frozen task view. |
+| `product_rounds` | `product_round_decision` passport/version; bounded decision representation. | Family retained with manifest-selected rounds; no live later rounds. |
+| `thought_strategies` | Representation of the manifested legacy graph-node version that owns the strategy payload; no duplicate strategy passport. | Family retained when its source node is manifested; no fallback query over all nodes. |
+| `report` | Report Revision passport/version; authorized structured/Markdown representation. | Family retained; absent if no authorized version existed at dispatch. |
+| `evals` / legacy Stage Evaluations | `legacy_stage_evaluation` passport/version; safe normal representation. Evaluation-private rubric/ground truth uses separate grader manifest and never this family. | Family retained for safe evals selected at dispatch. |
+| durable `run` envelope | Envelope is a projection, not one opaque artifact. `Run`, Contract, Method, Questions, Tasks, Attempts, durable Source Snapshots, Observations, Claims, and Gate are handled as the rows below. | Top-level family retained for V1–V5 compatibility, assembled only from entries. |
+| durable Run metadata | Run/Session version representation. | Retained and frozen. |
+| durable Contract | Contract Revision passport/version with direct scoped version FK. | Retained and frozen. |
+| durable Method | Method Decision passport/version. | Retained when selected; null remains null. |
+| durable Questions | One passport/version per Question. | Retained ordered subset equal to shadow baseline. |
+| durable Tasks | One passport/version per Task. | Retained ordered subset equal to shadow baseline, including direct target. |
+| durable Attempts | One passport/version per Attempt; mutable runtime state is a bounded lifecycle projection tied to manifest watermark, not silently read later. | Retained frozen at dispatch for D-enabled task read. |
+| durable Source Snapshots | One passport/version each; excerpt/full according to clearance. | Retained authorized subset. |
+| durable Observations | One passport/version each. | Retained authorized subset. |
+| durable Claims | One passport/version each. | Retained authorized subset. |
+| durable Gate | Deterministic safe projection from manifested Evaluation/Decision versions and frozen gate policy version; no duplicate Gate passport. | Retained and frozen for D-enabled task view; later human Gate remains live outside task route. |
+
+Human snapshots remain product-live and principal-filtered; only task-bound D-enabled reads are frozen. Old clients receive the same top-level families and fail-safe additive passport summaries. A separate authorized detail endpoint is preferred over embedding full passports.
+
+Projection identity remains `(run_id, entity_kind, entity_id)` where entity ID is passport ID. Authorized detail may expose bounded schema/version/lifecycle/provenance/producer/access metadata and counts. Raw hashes, denied IDs, private existence, locators, and omission details are hidden. `projectRunV2Graph` remains a compatibility projection until N and cannot become passport authority.
 
 ## 14. Security properties
 
@@ -389,56 +385,63 @@ The existing Session snapshot gains optional, bounded passport summaries only wh
 - Errors are bounded and state which reference/policy class failed without revealing denied content or hidden artifact existence to an unauthorized principal.
 - No cross-workspace Capability Observation, Episode, or evaluation export can traverse an artifact reference; Chapter M must build privacy-preserving aggregates explicitly.
 
-## 15. Acceptance tests
+## 15. Exact acceptance tests
 
-D is complete only when all of the following are executable and passing:
+D is complete only when these executable tests pass:
 
-1. fresh database up, down/up replay, and migration lint for `308_research_artifact_passport`;
-2. backfill count reconciliation by entity kind, with zero invented E–N rows and explicit partial/unknown provenance counts;
-3. stored legacy Result hash match versus `migration_recomputed` distinction, including malformed/missing legacy payloads;
-4. version immutability: changing schema, hash, provenance, version, access, or Run-version fields fails at PostgreSQL;
-5. entity/passport class pairing: missing passport, wrong kind, orphan passport, and mismatched workspace/session all fail; valid controls pass;
-6. same-session input edge succeeds; self, cross-session, cross-workspace, missing-version, and supersession-cycle edges fail;
-7. access matrix covers all normal clearances plus evaluation compartment, with positive controls for each permitted path;
-8. raw input taints output raw; only an authorized redaction transform creates redacted; only verified inputs/operation create verified-only;
-9. evaluated subject serialization and task context contain zero evaluation-private IDs, hashes, metadata, or content; authorized grader context receives the expected private version;
-10. Context Manifest selection is deterministic under repeated execution and records access-denied, stale, duplicate, and token-budget omissions without denied content;
-11. Attempt, manifest, entries, frozen Prompt/outbox, and Event commit atomically under injected failure before begin, before commit, successful commit, and ambiguous commit recovery;
-12. result preflight and in-transaction recheck both reject an unmanifested, revoked, wrong-version, or cross-tenant reference before any domain output commits;
-13. idempotent replay requires identical payload hash and manifest lineage; same request ID with changed input versions fails conflict;
-14. accepted Result, Result Artifact, all produced domain rows, versions, edges, Decision, Event, and Attempt terminal transition commit atomically under the Chapter C commit-fault matrix;
-15. all V1–V5 full Prompt hashes, Result golden hashes, new-field rejection, Gate, stale result, report, evaluation, retry/cancel/recovery, and business canonical-state tests remain unchanged;
-16. a V1–V5 Prompt context and its task-bound `session get` response resolve to the same ordered manifest versions and preserve prior visible semantics;
-17. human snapshot, task Agent snapshot, unbound Fleet Agent, evaluation subject, evaluation grader, projector, and cross-workspace principal each receive exactly their authorized surface;
-18. superseding or withdrawing an input excludes it from new ordinary contexts, preserves authorized audit access, and marks/recomputes affected derived artifacts without deleting history;
-19. passport-derived Projection replay has stable node/edge IDs and content hash, and an unknown future kind/access value degrades safely;
-20. race tests prove one current version, one Attempt manifest, one Result Artifact per Attempt, and no duplicate input/supersession edge under concurrent workers.
+1. migration fresh up, down/up, lint, and backfill reconciliation; no fabricated E–N rows;
+2. scope-key DDL inspection proves every D version/result/context/entry/omission/input/supersession/lifecycle/policy-state/policy-mutation row has non-null workspace/session and both endpoint composite FKs;
+3. direct FK tests reject cross-workspace and cross-session Result↔Attempt, manifest↔Attempt/Task, entry/omission↔manifest/version, input-reference endpoints, supersession endpoints, lifecycle↔passport/Decision, policy-mutation↔passport, and version↔passport/Task/Attempt/Contract; same-scope controls pass;
+4. deferred class-trigger tests reject missing domain row, missing passport, wrong kind, wrong scope, orphan delete, producer Attempt/Task mismatch, and Result/Attempt projection mismatch under both `SET CONSTRAINTS ALL IMMEDIATE` and commit; valid controls pass;
+5. version immutability and current-version deferred FK reject update/delete, missing current version, and invalid CAS and eligibility change without a policy-mutation ledger row; concurrent writers leave one current version and monotonic watermark;
+6. legacy backfill distinguishes `legacy_stored` and `migration_recomputed`, skips malformed Results, and records partial/unknown counts without false acceptance time;
+7. legacy admission table tests cover `registered+partial`, `registered+unknown-producer`, and denial for unknown scope/content/access/hash, V6, evaluation-private inference, stale/withdrawn/superseded, and post-D artifacts; every denial has an allowed control;
+8. shadow equivalence fixture contains legacy source, graph nodes/edges, messages, product round, thought strategy, report, stage eval, and every durable Run subfamily; it compares ordered IDs/kinds, hashes, representation bytes, omissions, and Prompt hash. Removing any one family makes the test fail;
+9. access matrix covers all normal clearances plus evaluation compartment; raw taint, authorized redaction, and verified-only transformation have positive/negative controls;
+10. evaluated-subject serialization contains zero private IDs/hashes/metadata/content while grader receives the expected private version;
+11. dispatch race pauses after out-of-transaction representation precompute, then mutates lifecycle, access/current version, verification, supersession, Run state, and policy watermark in separate subtests. `CreateDispatchIntent` must conflict/recompute and leave zero Attempt/manifest/outbox/Event from the stale candidate;
+12. dispatch lock-order concurrency test runs inverse candidate UUID orders without deadlock and proves persisted entry order is canonical;
+13. dispatch CAS test changes one selected passport eligibility revision and one representation byte/hash; each mismatch aborts all writes;
+14. Prompt/manifest binding test reconstructs the Prompt solely from persisted ordered entry bytes and obtains the exact outbox Prompt bytes/hash; changing an entry, manifest hash, or outbox Prompt is detected. Replay never calls the renderer;
+15. Chapter C `txOpDispatchIntentCreate` after-begin, before-commit, successful commit, and after-commit-unknown tests count Attempt passport/version, manifest passport/version, entries/omissions/edges, outbox, Task transition, and Event as one atomic unit;
+16. historical task-bound `session get` remains live after later state mutation; D-enabled V1–V5 task-bound get remains byte-equivalent to its frozen manifest while the human snapshot advances;
+17. all fixed-fixture V1–V5 Prompt/Result hashes, decoder rejection, Gate rubric, stale Result, report/evaluation, retry/cancel/recovery, and business-state tests remain unchanged; a new test proves D gate authorization uses frozen manifest/policy version without changing the V1–V5 rubric;
+18. result-acceptance race pauses after preflight and mutates referenced lifecycle, version/access, verification, supersession, and policy watermark in separate subtests. Deterministic in-transaction locks/CAS reject revoked facts and commit no Result/domain/passport/edge/Decision/Event/Attempt transition;
+19. unrelated policy-watermark advance reauthorizes all locked references and may accept while recording the newly reserved final acceptance watermark; an affected eligibility revision cannot;
+20. result lock-order concurrency test submits references in opposite payload orders and proves UUID/kind lock normalization, no deadlock, one Result Artifact, and one terminal Attempt;
+21. Result replay requires identical payload hash, manifest ID/hash, resolved version set, and lineage. Same request ID with changed lineage conflicts;
+22. Chapter C `txOpResultAccept` fault matrix proves Result Artifact, compatibility projection, all outputs/passports/versions/links, Decision, Event, and terminal transition are all-or-none and converge after unknown commit;
+23. human, historical task Agent, D-enabled task Agent, unbound Fleet Agent, evaluation subject, grader, projector, and cross-workspace principal each receive exactly the classified section 13 surface;
+24. supersession/withdrawal increments passport eligibility and session watermark, excludes new context, blocks affected in-flight acceptance, preserves authorized audit, and never deletes history;
+25. projection replay has stable IDs/hash; unknown kind/access degrades safely;
+26. structural guard fails on any D direct `BeginTx`/`Commit` and passes only with `beginResearchTx`/`commitResearchTx` plus registered operation label.
 
-Negative “must not expose” tests require positive controls proving the intended allowed artifact remains visible; an empty response is not a passing isolation test.
+Negative exposure tests always include a positive allowed artifact; an empty response is not evidence of isolation.
 
 ## 16. Phased D1–D3 rollout
 
 ### D1 — normalized foundation and honest backfill
 
-- add passport, version, Result Artifact, context manifest/entry/omission, input reference, supersession, lifecycle, and backfill-diagnostic tables;
+- add passport, version, Result Artifact, context manifest/entry/omission, input reference, supersession, lifecycle, policy-state/mutation, and backfill-diagnostic tables;
 - register canonicalization and entity-kind contracts;
 - backfill only provable V1–V5 facts;
 - write passports/versions transactionally for new artifacts while old reads remain unchanged;
 - shadow-compare domain counts, hashes, producer facts, and legacy Result compatibility columns;
 - no Agent authorization behavior changes yet.
 
-Exit: every current artifact type can be addressed by stable passport/version IDs, immutability and tenant constraints pass, and backfill reports no fabricated history.
+Exit: every current canonical Research artifact type can be addressed by stable passport/version IDs, every projection/non-artifact family has the explicit section 13 policy, immutability and tenant constraints pass, and backfill reports no fabricated history.
 
 ### D2 — manifest-only context assembly and read authorization
 
 - add `artifactContextModule` and clearance/purpose policy;
-- freeze each Attempt manifest in `CreateDispatchIntent` and render Prompt snapshots only from it;
-- make task-bound Agent `session get` use the exact manifest;
-- preserve byte-exact V1–V5 Prompt rendering and equivalent ledger visibility;
+- precompute candidate representation bytes only as an optimization, then freeze each Attempt manifest under the locks/CAS in `CreateDispatchIntent`;
+- render and persist Prompt/outbox bytes from that exact manifest inside the owning transaction;
+- make D-enabled task-bound Agent `session get` use the exact manifest while historical runs retain live behavior;
+- preserve the V1–V5 renderer and fixed-fixture hashes while applying the explicit section 9 frozen semantics;
 - enforce evaluation subject/grader separation at context assembly;
 - run shadow mode first: legacy whole-Run candidate set versus manifest authorized set, with rollout blocked by unexplained differences.
 
-Exit: every dispatched Attempt has one deterministic manifest; all dynamic Research artifact bytes in Agent context originate from authorized entries; no evaluation-private or unauthorized raw artifact reaches a subject.
+Exit: every D-enabled dispatched Attempt has one deterministic manifest; every platform-selected Research artifact byte supplied by Multica in its Prompt or task-bound Session response originates from an authorized frozen entry; no evaluation-private or unauthorized raw artifact reaches a subject. This claim does not cover arbitrary bytes independently introduced by a model, tool, external website, runtime, or user outside the platform-selected Research context.
 
 ### D3 — acceptance enforcement, lineage, and projection metadata
 
@@ -449,9 +452,9 @@ Exit: every dispatched Attempt has one deterministic manifest; all dynamic Resea
 - complete failure-injection, race, security, legacy golden, and full Research PostgreSQL tests;
 - update built-in Research Fleet Skill/source map and engineering-principle pointers in the implementation PR that changes behavior.
 
-Exit: the Chapter D exit condition is met: the server can prove every Agent input/output's origin, exact version, and authorization, and rejects unauthorized references before commit.
+Exit: the Chapter D exit condition is met: the server can prove the origin, exact version, and authorization of every platform-selected Research artifact it supplies to an Agent and every canonical Research artifact output it accepts, and rejects unauthorized references before commit. It does not claim provenance for arbitrary model/tool inputs outside that boundary.
 
-D1–D3 are rollout phases of one architecture, not reduced product variants. No phase may become a permanent alternate context or acceptance path.
+D1–D3 are rollout phases of one architecture, not reduced product variants. No phase may become a permanent alternate context or acceptance path for new or D-enabled Runs; only the explicit historical-live compatibility contract in section 9 remains.
 
 ## 17. Exact implementation file map
 
@@ -462,22 +465,23 @@ Expected implementation plan; line numbers must be refreshed against its executi
 - `server/migrations/308_research_artifact_passport.up.sql` — normalized schema, constraints, triggers, indexes, and honest backfill.
 - `server/migrations/308_research_artifact_passport.down.sql` — D-owned rollback preserving Attempt compatibility columns.
 - `server/cmd/migrate/research_artifact_passport_migration_test.go` — fresh/up/down/up and backfill ledger tests.
-- `server/internal/researchrun/artifact.go` — entity kinds, access profiles, lifecycle, passport/version/reference types, canonicalization registry.
+- `server/internal/researchrun/artifact.go` — entity kinds, access profiles, lifecycle/eligibility revisions, passport/version/reference types, canonicalization registry.
 - `server/internal/researchrun/artifact_policy.go` — access-lattice dominance, purpose, taint, representation, and deny-reason rules.
 - `server/internal/researchrun/artifact_context.go` — context candidate traversal, deterministic ordering/budgeting, manifest construction, and view projection.
-- `server/internal/researchrun/postgres_artifact.go` — transaction-scoped passport/version/manifest/reference/supersession persistence and authorized readers.
+- `server/internal/researchrun/postgres_artifact.go` — transaction-scoped scoped-FK persistence, policy watermark/CAS helpers, manifest/reference/supersession writes, and authorized readers.
 - `server/internal/researchrun/artifact_test.go` — canonicalization, access matrix, taint, and ordering tests.
-- `server/internal/researchrun/artifact_integration_test.go` — PostgreSQL immutability, tenant isolation, manifests, refs, supersession, backfill, concurrency, and fault recovery.
+- `server/internal/researchrun/artifact_integration_test.go` — composite FKs, deferred class triggers, immutability, policy watermark, manifests, refs, supersession, backfill, lock order, CAS, and fault recovery.
 
 ### Modify
 
-- `server/internal/researchrun/types.go` — bounded passport summaries, manifest identity, and authorized context types; no V1–V5 contract mutation.
-- `server/internal/researchrun/postgres.go` — replace broad `TaskContext` assembly with manifest-backed context and keep human/audit snapshot operations explicit.
-- `server/internal/researchrun/postgres_tasks.go` — create Attempt passport and Context Manifest in the existing dispatch-intent transaction.
-- `server/internal/researchrun/execution.go` — request a frozen authorized context before Prompt render; carry manifest hash in immutable dispatch semantics.
-- `server/internal/researchrun/prompt.go` — consume manifest-derived snapshots only; V1–V5 builder bodies and hashes remain byte-identical.
-- `server/internal/researchrun/result_acceptance.go` — preflight manifest/reference authorization and lineage-aware replay input.
-- `server/internal/researchrun/postgres_result.go` — authoritative in-transaction authorization; Result Artifact and produced-artifact passport/version/edge writes.
+- `server/internal/researchrun/transaction.go` and `transaction_guard_test.go` — reuse merged Chapter C labels/runner and extend structural/fault coverage; no new direct boundary.
+- `server/internal/researchrun/types.go` — bounded passport summaries, candidate/manifest identity, policy watermark, and authorized context types; no V1–V5 Result schema mutation.
+- `server/internal/researchrun/postgres.go` — keep human/historical live snapshots explicit and route D-enabled task context through persisted manifests.
+- `server/internal/researchrun/postgres_tasks.go` — extend `CreateDispatchIntent` under `txOpDispatchIntentCreate` to lock/CAS selected facts and atomically create Attempt, manifest, Prompt/outbox, and Event.
+- `server/internal/researchrun/execution.go` — precompute candidate representations only; pass candidate facts to `CreateDispatchIntent` and perform no authoritative Prompt render.
+- `server/internal/researchrun/prompt.go` — pure manifest-derived rendering called by `CreateDispatchIntent`; V1–V5 builder bodies and fixed-fixture hashes remain byte-identical.
+- `server/internal/researchrun/result_acceptance.go` — non-authoritative preflight plus lineage-aware replay input.
+- `server/internal/researchrun/postgres_result.go` — use `txOpResultAccept`, lock policy/manifest/references in canonical order, CAS eligibility, and write Result/output lineage atomically.
 - `server/internal/researchrun/postgres_evidence.go` — access-aware artifact readers and safe representations.
 - `server/internal/researchrun/canonical_state.go` — add a separate passport/lineage hash surface without redefining historical V1–V5 business-state golden meaning.
 - `server/internal/researchrun/result_acceptance_test.go`, `server/internal/researchrun/execution_test.go`, `server/internal/researchrun/engine_test.go`, `server/internal/researchrun/legacy_result_golden_test.go`, `server/internal/researchrun/orchestrator_golden_test.go`, and `server/internal/researchrun/postgres_integration_test.go` — legacy equivalence and D enforcement tests.

@@ -102,7 +102,7 @@
     "permanent_delete_failed": "无法彻底删除笔记",
     "restored": "页面已找回",
     "restore_failed": "无法找回笔记",
-    "visibility_private": "仅自己可见，除非主动分享",
+    "visibility_private": "仅自己可见",
     "visibility_shared": "别人分享给你的页面",
     "content_placeholder": "开始写笔记...",
     "image_paste_failed": "无法添加图片",

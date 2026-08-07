@@ -102,7 +102,7 @@
     "permanent_delete_failed": "Could not permanently delete note",
     "restored": "Page restored",
     "restore_failed": "Could not restore note",
-    "visibility_private": "Private unless you share it",
+    "visibility_private": "Private",
     "visibility_shared": "Shared with you",
     "content_placeholder": "Start writing...",
     "image_paste_failed": "Could not add image",

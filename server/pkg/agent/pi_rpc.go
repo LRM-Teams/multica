@@ -196,6 +196,27 @@ type piRPCCompletion struct {
 	err      string
 }
 
+// piRPCCompletionError preserves Pi's runtime error semantics when the RPC
+// stream ends normally with agent_end. Pi reports provider failures inside the
+// final assistant message (stopReason=error), so treating agent_end alone as a
+// successful turn would hide failures such as certificate/connection errors.
+func piRPCCompletionError(completion piRPCCompletion) error {
+	if message := strings.TrimSpace(completion.err); message != "" {
+		return errors.New(message)
+	}
+	for i := len(completion.messages) - 1; i >= 0; i-- {
+		message := decodePiMessage(completion.messages[i])
+		if message == nil || message.StopReason != "error" {
+			continue
+		}
+		if detail := strings.TrimSpace(message.ErrorMessage); detail != "" {
+			return errors.New(detail)
+		}
+		return errors.New("Pi runtime error")
+	}
+	return nil
+}
+
 func newPiRPCBackend(cfg Config) *piRPCBackend {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -283,7 +304,7 @@ func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []Reside
 		}
 	}()
 
-	p, err := b.getProcess()
+	p, err := b.ensureProcess(b.cfg.ResidentOptions)
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
@@ -390,10 +411,9 @@ func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCI
 		p.idleInput = nil
 	}
 	p.stateMu.Unlock()
-	var turnErr error
-	if completion.err != "" {
+	turnErr := piRPCCompletionError(completion)
+	if turnErr != nil {
 		b.dispose(p)
-		turnErr = errors.New(completion.err)
 	}
 	// Dispose a failed native turn before reopening admission so a new Execute
 	// cannot obtain the process while it is being torn down.
@@ -509,9 +529,9 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 
 	select {
 	case completed := <-turn.done:
-		if completed.err != "" {
+		if completionErr := piRPCCompletionError(completed); completionErr != nil {
 			b.dispose(p)
-			return Result{Status: "failed", Error: completed.err}
+			return Result{Status: "failed", Error: completionErr.Error()}
 		}
 		usage := piRPCUsage(completed.messages, opts.Model)
 		return Result{Status: "completed", Output: output.String(), SessionID: p.sessionPath, Usage: usage, RuntimeStats: p.queryRuntimeStats(ctx, turn, opts.Model)}

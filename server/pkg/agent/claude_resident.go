@@ -123,7 +123,7 @@ func (b *claudeStreamJSONBackend) AcceptMessageBatch(ctx context.Context, messag
 	}
 	done := make(chan error, 1)
 	turn := &claudeStreamJSONTurn{started: time.Now(), done: done, completed: make(chan struct{}), usage: make(map[string]TokenUsage)}
-	if err := b.startTurn(context.Background(), prompt, ExecOptions{}, turn); err != nil {
+	if err := b.startTurn(context.Background(), prompt, b.cfg.ResidentOptions, turn); err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
 	return ResidentMessageAcceptance{Done: done}, nil

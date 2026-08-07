@@ -286,6 +286,10 @@ type Config struct {
 	ExecutablePath string            // path to CLI binary (claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro-cli, agy, grok)
 	Env            map[string]string // extra environment variables
 	Logger         *slog.Logger
+	// ResidentOptions are the stable agent-scoped defaults used when a native
+	// Message is the first input that starts a resident provider process. They
+	// must not contain task, delivery, lease, or current-turn identity.
+	ResidentOptions ExecOptions
 }
 
 // agentConstructors is the single source of truth for "what agent types does

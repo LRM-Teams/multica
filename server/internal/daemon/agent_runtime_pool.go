@@ -239,6 +239,7 @@ type canonicalAgentRuntimeSlot struct {
 	backend                      agent.Backend
 	close                        func()
 	messageInputDone             <-chan error
+	messageInputGeneration       uint64
 	lastPendingNoticeFingerprint string
 	lastPendingTargetFingerprint map[string]string
 }
@@ -584,7 +585,7 @@ func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string
 	return slot.mode == canonicalRuntimeResident && slot.backend != nil
 }
 
-func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection, onComplete func(error, uint64)) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
 	}
@@ -630,7 +631,9 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, age
 	// until its completion receipt resolves without delaying boundary persistence.
 	slot.running = true
 	slot.messageInputDone = acceptance.Done
-	go p.finishResidentMessageInput(slot, acceptance.Done)
+	slot.messageInputGeneration++
+	generation := slot.messageInputGeneration
+	go p.finishResidentMessageInput(slot, acceptance.Done, generation, onComplete)
 	return nil
 }
 
@@ -682,15 +685,46 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	return nil
 }
 
-func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error) {
-	<-done
+func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error, generation uint64, onComplete func(error, uint64)) {
+	turnErr := <-done
+	completed := false
 	slot.mu.Lock()
 	if slot.messageInputDone == done {
 		slot.messageInputDone = nil
 		slot.running = false
 		slot.idleSince = time.Now()
+		completed = true
 	}
 	slot.mu.Unlock()
+	if completed && onComplete != nil {
+		onComplete(turnErr, generation)
+	}
+}
+
+// publishIfMessageTurnStillIdle serializes a terminal Activity observation
+// with admission of the next Message turn. If another delivery already began,
+// its Working Activity remains authoritative and this stale terminal state is
+// suppressed.
+func (p *canonicalAgentRuntimePool) publishIfMessageTurnStillIdle(agentID, runtimeID string, generation uint64, publish func()) bool {
+	if p == nil || publish == nil {
+		return false
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return false
+	}
+	defer slot.mu.Unlock()
+	if slot.running || slot.messageInputDone != nil || slot.messageInputGeneration != generation {
+		return false
+	}
+	publish()
+	return true
 }
 
 // invalidateSession closes the idle provider process after the canonical

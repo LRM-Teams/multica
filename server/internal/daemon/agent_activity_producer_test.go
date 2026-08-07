@@ -101,6 +101,41 @@ func TestAgentActivityProducerPublishesManagedMessageHandoff(t *testing.T) {
 	}
 }
 
+func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing.T) {
+	now := time.Date(2026, time.August, 7, 0, 0, 0, 0, time.UTC)
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-instance-1"
+	d.agentActivityProducers["workspace-1"] = producer
+	d.messageRuntimeIDs["agent-1"] = "runtime-1"
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+
+	var frames []string
+	d.attachWorkspaceRunnerMessageTransport("workspace-1", func(eventType string, _ any) error {
+		frames = append(frames, eventType)
+		return nil
+	})
+	d.emitMessageReceivedActivity("agent-1", "runtime-1", []protocol.AgentMessageProjection{{
+		ID: "message-1", Target: "dm:agent-1", Seq: 1,
+	}})
+
+	wantFrames := []string{protocol.EventAgentStatus, protocol.EventAgentSession, protocol.EventAgentMessageHandoff}
+	if len(frames) != len(wantFrames) {
+		t.Fatalf("Runner frames=%v, want %v", frames, wantFrames)
+	}
+	for i := range wantFrames {
+		if frames[i] != wantFrames[i] {
+			t.Fatalf("Runner frames=%v, want %v", frames, wantFrames)
+		}
+	}
+	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.LaunchID == "" {
+		t.Fatalf("Message Activity=%+v", activities)
+	}
+}
+
 func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
 	var sent []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })

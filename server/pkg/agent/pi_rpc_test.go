@@ -28,7 +28,11 @@ func fakePiRPCProcessScript() string {
 	      if [ -n "$PI_RPC_TEST_MESSAGE_INPUT" ]; then printf '%s' "$line" > "$PI_RPC_TEST_MESSAGE_INPUT"; fi
 	      printf '{"id":"multica-message-input","type":"response","command":"prompt","success":true}\n'
 	      printf '{"type":"agent_start"}\n'
-	      printf '{"type":"agent_end","messages":[]}\n'
+	      if [ -n "$PI_RPC_TEST_MESSAGE_ERROR" ]; then
+	        printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","errorMessage":"Connection error."}]}\n'
+	      else
+	        printf '{"type":"agent_end","messages":[]}\n'
+	      fi
 	      ;;
 	    *'"type":"prompt"'*)
 	      turn=$((turn + 1))
@@ -96,6 +100,60 @@ func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T)
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("native Pi input %s does not contain %q", raw, want)
 		}
+	}
+}
+
+func TestPiRPCBackendStartsForFirstIdleMessageBatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	inputPath := filepath.Join(dir, "message-input.json")
+	b := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS":        filepath.Join(dir, "starts"),
+		"PI_RPC_TEST_MESSAGE_INPUT": inputPath,
+	}})
+	t.Cleanup(b.Close)
+
+	acceptance, err := b.AcceptMessageBatch(context.Background(), []ResidentMessage{{
+		ID: "message-1", Target: "dm:user-1", Seq: 1, Content: "first idle message",
+	}})
+	if err != nil {
+		t.Fatalf("AcceptMessageBatch: %v", err)
+	}
+	select {
+	case err := <-acceptance.Done:
+		if err != nil {
+			t.Fatalf("first idle Message turn: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first idle Message turn")
+	}
+	waitForPiRPCTestPath(t, inputPath)
+}
+
+func TestPiRPCBackendReportsAssistantStopReasonErrorForIdleMessage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	b := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS":        filepath.Join(dir, "starts"),
+		"PI_RPC_TEST_MESSAGE_ERROR": "1",
+	}})
+	t.Cleanup(b.Close)
+
+	acceptance, err := b.AcceptMessageBatch(context.Background(), []ResidentMessage{{
+		ID: "message-1", Target: "dm:user-1", Seq: 1, Content: "hello",
+	}})
+	if err != nil {
+		t.Fatalf("AcceptMessageBatch: %v", err)
+	}
+	select {
+	case err := <-acceptance.Done:
+		if err == nil || err.Error() != "Connection error." {
+			t.Fatalf("idle Message completion error = %v, want Connection error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for failed idle Message turn")
 	}
 }
 

@@ -56,7 +56,7 @@ import { createEditorExtensions } from "./extensions";
 import { uploadAndInsertFile } from "./extensions/file-upload";
 import { preprocessMarkdown } from "./utils/preprocess";
 import { openLink, isMentionHref } from "./utils/link-handler";
-import { EditorBubbleMenu } from "./bubble-menu";
+import { EditorBubbleMenu, type TextOptimizationRequest } from "./bubble-menu";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
 import { AttachmentDownloadProvider } from "./attachment-download-context";
 import "katex/dist/katex.min.css";
@@ -89,8 +89,8 @@ interface ContentEditorProps {
   onUploadFile?: (file: File) => Promise<UploadResult | null>;
   /** Show the floating formatting toolbar on text selection. Defaults true. */
   showBubbleMenu?: boolean;
-  /** Optional AI rewrite action for the selected plain text in the bubble menu. */
-  onOptimizeSelection?: (text: string) => Promise<string>;
+  /** Optional AI rewrite action for the selected text plus nearby context. */
+  onOptimizeSelection?: (request: TextOptimizationRequest) => Promise<string>;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
   submitOnEnter?: boolean;
   /**

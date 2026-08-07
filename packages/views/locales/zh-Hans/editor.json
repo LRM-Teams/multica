@@ -32,6 +32,10 @@
       "replace": "替换",
       "append": "插入到后面",
       "discard": "舍弃",
+      "instruction_title": "希望 AI 如何处理？",
+      "instruction_placeholder": "留空则默认优化文本，也可以输入“更简洁一点”等具体要求。",
+      "cancel": "取消",
+      "run": "运行",
       "failed": "优化文本失败",
       "empty_result": "智能体返回了空的优化结果。"
     }

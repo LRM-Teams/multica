@@ -28,7 +28,7 @@ var actionPrepareCmd = &cobra.Command{
 func init() {
 	actionCmd.AddCommand(actionPrepareCmd)
 	actionPrepareCmd.Flags().String("type", "agent:create", "Action type (only agent:create)")
-	actionPrepareCmd.Flags().String("name", "", "Agent display name seed (required)")
+	actionPrepareCmd.Flags().String("name", "", "Permanent lowercase Agent name (required)")
 	actionPrepareCmd.Flags().String("description", "", "Optional short catalog description")
 	actionPrepareCmd.Flags().String("preferred-computer", "", "Optional preferred Computer suggestion (human may change)")
 	actionPrepareCmd.Flags().String("target", "", "Required channel/DM/thread target (same as message send)")

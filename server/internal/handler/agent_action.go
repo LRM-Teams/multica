@@ -90,8 +90,8 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if utf8.RuneCountInString(name) > windyMaxDraftNameLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("name must be %d characters or fewer", windyMaxDraftNameLen))
+	if err := validateIdentityHandle(name); err != nil {
+		writeError(w, http.StatusBadRequest, "name must use 1-32 lowercase letters, digits, or hyphens")
 		return
 	}
 	if utf8.RuneCountInString(description) > maxAgentDescriptionLength {
@@ -254,7 +254,7 @@ func actionPartPayloadMatches(parts []protocol.MessagePart, name, description st
 }
 
 // buildAgentCreationProposalContent returns the canonical proposal Message
-// content. It is kept in lock-step with the UTF-16 anchor computed by
+// content. The name is permanent after creation. It is kept in lock-step with the UTF-16 anchor computed by
 // agentActionMessagePart.
 func buildAgentCreationProposalContent(name string) string {
 	return "[agent:create proposal] " + name

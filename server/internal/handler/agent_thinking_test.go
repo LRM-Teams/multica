@@ -37,6 +37,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 
 	t.Run("empty value succeeds", func(t *testing.T) {
 		body := map[string]any{
+			"name":                 "thinking-test-empty",
 			"display_name":         "thinking-test-empty",
 			"runtime_id":           claudeRuntimeID,
 			"model":                "composer-1.5",
@@ -53,6 +54,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 
 	t.Run("known claude value succeeds", func(t *testing.T) {
 		body := map[string]any{
+			"name":                 "thinking-test-known",
 			"display_name":         "thinking-test-known",
 			"runtime_id":           claudeRuntimeID,
 			"model":                "composer-1.5",
@@ -77,6 +79,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		// gate must always 400 regardless of which other fields the
 		// request also tried to change.
 		body := map[string]any{
+			"name":                 "thinking-test-codex-only",
 			"display_name":         "thinking-test-codex-only",
 			"runtime_id":           claudeRuntimeID,
 			"model":                "composer-1.5",
@@ -93,6 +96,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 
 	t.Run("garbage value rejected", func(t *testing.T) {
 		body := map[string]any{
+			"name":                 "thinking-test-garbage",
 			"display_name":         "thinking-test-garbage",
 			"runtime_id":           claudeRuntimeID,
 			"model":                "composer-1.5",

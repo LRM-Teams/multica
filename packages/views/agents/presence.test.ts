@@ -27,9 +27,7 @@ const LABELS = {
   workload: { working: "Working", queued: "Queued", idle: "Idle" },
   availability: {
     online: "Online",
-    unstable: "Unstable",
     offline: "Offline",
-    archived: "Archived",
   },
 } as const;
 
@@ -37,11 +35,9 @@ const t = ((selector: (res: typeof LABELS) => string) =>
   selector(LABELS)) as TFunction<"agents">;
 
 describe("toLiveAvailability", () => {
-  it("folds online + unstable → online, offline → offline, archived → null", () => {
+  it("preserves online and offline", () => {
     expect(toLiveAvailability("online")).toBe("online");
-    expect(toLiveAvailability("unstable")).toBe("online");
     expect(toLiveAvailability("offline")).toBe("offline");
-    expect(toLiveAvailability("archived")).toBeNull();
   });
 });
 
@@ -64,43 +60,24 @@ describe("formatPresenceStatus (LRM-248 Online/Offline only)", () => {
     ).toBe("Online");
   });
 
-  it("folds unstable → Online; offline → Offline; archived → null", () => {
+  it("shows Offline while disconnected", () => {
     expect(
       formatPresenceStatus(
         presence({ availability: "offline", workload: "working" }),
         t,
       ),
     ).toBe("Offline");
-    expect(
-      formatPresenceStatus(
-        presence({ availability: "unstable", workload: "idle" }),
-        t,
-      ),
-    ).toBe("Online");
-    expect(
-      formatPresenceStatus(
-        presence({ availability: "archived", workload: "idle" }),
-        t,
-      ),
-    ).toBeNull();
   });
 });
 
 describe("presenceStatusVisual", () => {
-  it("returns online config for online and unstable", () => {
+  it("returns the config for the binary state", () => {
     const onlineWorking = presence({ availability: "online", workload: "working" });
     expect(presenceStatusToken(onlineWorking)).toEqual({
       kind: "availability",
       value: "online",
     });
     expect(presenceStatusVisual(onlineWorking)).toBe(availabilityConfig.online);
-
-    const unstable = presence({ availability: "unstable", workload: "idle" });
-    expect(presenceStatusToken(unstable)).toEqual({
-      kind: "availability",
-      value: "online",
-    });
-    expect(presenceStatusVisual(unstable)).toBe(availabilityConfig.online);
 
     const offline = presence({ availability: "offline", workload: "working" });
     expect(presenceStatusToken(offline)).toEqual({
@@ -112,20 +89,14 @@ describe("presenceStatusVisual", () => {
 });
 
 describe("presenceStatusDotClass", () => {
-  it("returns null while loading or archived", () => {
+  it("returns null while loading", () => {
     expect(presenceStatusDotClass("loading")).toBeNull();
     expect(presenceStatusDotClass(null)).toBeNull();
-    expect(
-      presenceStatusDotClass(presence({ availability: "archived" })),
-    ).toBeNull();
   });
 
-  it("maps online + unstable to green; offline to gray", () => {
+  it("maps online to green and offline to gray", () => {
     expect(
       presenceStatusDotClass(presence({ availability: "online", workload: "working" })),
-    ).toBe("bg-success");
-    expect(
-      presenceStatusDotClass(presence({ availability: "unstable", workload: "idle" })),
     ).toBe("bg-success");
     expect(
       presenceStatusDotClass(presence({ availability: "offline", workload: "idle" })),
@@ -134,11 +105,9 @@ describe("presenceStatusDotClass", () => {
 });
 
 describe("matchesLiveAvailabilityFilter", () => {
-  it("counts unstable under Online", () => {
-    expect(matchesLiveAvailabilityFilter("unstable", "online")).toBe(true);
+  it("matches the binary state", () => {
     expect(matchesLiveAvailabilityFilter("online", "online")).toBe(true);
     expect(matchesLiveAvailabilityFilter("offline", "online")).toBe(false);
     expect(matchesLiveAvailabilityFilter("offline", "offline")).toBe(true);
-    expect(matchesLiveAvailabilityFilter("archived", "offline")).toBe(false);
   });
 });

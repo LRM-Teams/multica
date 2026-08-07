@@ -90,7 +90,7 @@ import type { AgentPresenceDetail } from "@multica/core/agents";
 //                    so a user can drill from a machine into the agents
 //                    hosted on it.
 //   Availability   = "Can the agent take work right now?" — 3-state chip
-//                    group (online / unstable / offline) sourced from
+//                    group (online / offline) sourced from
 //                    AgentAvailability. The only chip filter we keep —
 //                    the previous Workload axis was dropped because its
 //                    "queued / failed / cancelled" buckets became
@@ -463,7 +463,7 @@ export function AgentsPage({
   // would match on the currently-selected machine" rather than
   // collapsing to 0 for the unselected chips.
   const availabilityCounts = useMemo(() => {
-    // LRM-248: Online / Offline only — unstable folds into Online.
+    // Agent presence is Online / Offline only.
     const counts: Record<LiveAvailability, number> = {
       online: 0,
       offline: 0,

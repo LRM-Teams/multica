@@ -88,6 +88,7 @@ func TestAgentAvatar_AttachmentBindsAtMostOneAgentUnderConcurrentCreate(t *testi
 			<-start
 			recorder := httptest.NewRecorder()
 			testHandler.CreateAgent(recorder, newRequest(http.MethodPost, "/api/agents", map[string]any{
+				"name":                 fmt.Sprintf("avatar-unique-%d-%s", i, marker),
 				"display_name":         fmt.Sprintf("avatar-unique-%d-%s", i, marker),
 				"runtime_id":           testRuntimeID,
 				"model":                "composer-1.5",
@@ -164,6 +165,7 @@ func TestAgentAvatar_TrustedDraftMapsAvatarToAssigned(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	testHandler.CreateAgent(recorder, newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"name":                 "avatar-from-draft-" + marker,
 		"display_name":         "avatar-from-draft-" + marker,
 		"runtime_id":           testRuntimeID,
 		"model":                "composer-1.5",
@@ -191,6 +193,7 @@ func TestAgentAvatar_CreateAndUpdateRejectRawURL(t *testing.T) {
 	requireAvatarTestDatabase(t)
 
 	body := map[string]any{
+		"name":                 "avatar-raw-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 		"display_name":         "avatar-raw-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 		"runtime_id":           testRuntimeID,
 		"model":                "composer-1.5",
@@ -244,6 +247,7 @@ func TestAgentAvatar_UploadSelectionFailsClosed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			attachmentID := createAvatarTestAttachment(t, "/uploads/agents/"+uuid.NewString()+".png", tt.content, tt.uploaderID, tt.bound)
 			body := map[string]any{
+				"name":                 "avatar-invalid-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 				"display_name":         "avatar-invalid-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10],
 				"runtime_id":           testRuntimeID,
 				"model":                "composer-1.5",
@@ -301,11 +305,11 @@ func TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete(t *testing.T) 
 		go func() {
 			defer wg.Done()
 			<-start
-			name := fmt.Sprintf("avatar-api-concurrent-%d-%s", i, strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
+			name := fmt.Sprintf("avatar-api-%d-%s", i, strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
 			recorder := httptest.NewRecorder()
 			testHandler.CreateAgent(recorder, newRequest(http.MethodPost, "/api/agents", map[string]any{
-				"display_name": name, "runtime_id": testRuntimeID, "visibility": "private", "max_concurrent_tasks": 1,
-				"model":                "composer-1.5",
+				"name": name, "display_name": name, "runtime_id": testRuntimeID, "visibility": "private", "max_concurrent_tasks": 1,
+				"model": "composer-1.5",
 			}))
 			if recorder.Code != http.StatusCreated {
 				errCh <- fmt.Errorf("api create %d: %s", recorder.Code, recorder.Body.String())
@@ -326,7 +330,7 @@ func TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete(t *testing.T) 
 		go func() {
 			defer wg.Done()
 			<-start
-			name := fmt.Sprintf("avatar-sql-concurrent-%d-%s", i, strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
+			name := fmt.Sprintf("avatar-sql-%d-%s", i, strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
 			var id, avatarURL, source string
 			err := testPool.QueryRow(context.Background(), `
 				INSERT INTO agent (
@@ -458,6 +462,7 @@ func requireAvatarTestDatabase(t *testing.T) {
 func createAvatarTestAgent(t *testing.T, displayName string, selection map[string]any) AgentResponse {
 	t.Helper()
 	body := map[string]any{
+		"name":                 "avatar-agent-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8],
 		"display_name":         displayName,
 		"runtime_id":           testRuntimeID,
 		"model":                "composer-1.5",

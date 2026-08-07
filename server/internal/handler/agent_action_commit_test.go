@@ -47,7 +47,7 @@ func TestCommitAgentFromActionMessage_ConcurrentConfirmationCreatesOneAgent(t *t
 	})
 
 	params := db.CreateAgentParams{
-		WorkspaceID: ws, Description: "concurrent proposal", RuntimeMode: "cloud",
+		WorkspaceID: ws, Name: "concurrent-proposal-agent", DisplayName: "concurrent-proposal-agent", Description: "concurrent proposal", RuntimeMode: "cloud",
 		RuntimeConfig: []byte("{}"), RuntimeID: parseUUID(testRuntimeID),
 		MaxConcurrentTasks: 6, OwnerID: owner, CustomEnv: []byte("{}"),
 		CustomArgs: []byte("[]"), Model: pgtype.Text{String: "composer-1.5", Valid: true},
@@ -130,19 +130,19 @@ func seedPreparedActionForTest(t *testing.T, channelID string) string {
 	ctx := context.Background()
 	ws := parseUUID(testWorkspaceID)
 
-	actionPart := agentActionMessagePart("Proposal Agent", "summary", nil)
-	partsRaw := "[{\"type\":\"reference\",\"ref_type\":\"agent:create\",\"ref_id\":\"Proposal Agent\",\"label\":\"Proposal Agent\",\"params\":" + string(actionPart.Params) + "}]"
+	actionPart := agentActionMessagePart("proposal-agent", "summary", nil)
+	partsRaw := "[{\"type\":\"reference\",\"ref_type\":\"agent:create\",\"ref_id\":\"proposal-agent\",\"label\":\"proposal-agent\",\"params\":" + string(actionPart.Params) + "}]"
 
 	var msgID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source, parts)
-		VALUES ($1, $2, 'agent', NULL, 'proposer', '[agent:create proposal] Proposal Agent', 'multica', $3::jsonb)
+		VALUES ($1, $2, 'agent', NULL, 'proposer', '[agent:create proposal] proposal-agent', 'multica', $3::jsonb)
 		RETURNING id::text`, parseUUID(channelID), ws, partsRaw).Scan(&msgID); err != nil {
 		t.Fatalf("insert action message: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_action (channel_message_id, workspace_id, action_type, status, proposed_payload, prepared_by_agent_id, prepared_at)
-		VALUES ($1, $2, 'agent:create', 'prepared', '{"name":"Proposal Agent","description":"summary"}'::jsonb, NULL, now())`,
+		VALUES ($1, $2, 'agent:create', 'prepared', '{"name":"proposal-agent","description":"summary"}'::jsonb, NULL, now())`,
 		parseUUID(msgID), ws); err != nil {
 		t.Fatalf("seed agent_action: %v", err)
 	}
@@ -175,6 +175,8 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 
 	createParams := db.CreateAgentParams{
 		WorkspaceID:        ws,
+		Name:               "proposal-agent",
+		DisplayName:        "proposal-agent",
 		Description:        "summary",
 		RuntimeMode:        "cloud",
 		RuntimeConfig:      []byte("{}"),
@@ -194,6 +196,9 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 	}
 	if !created.ID.Valid {
 		t.Fatalf("commit returned no agent")
+	}
+	if created.Name != "proposal-agent" || created.DisplayName != "proposal-agent" {
+		t.Fatalf("created identity = name %q display %q", created.Name, created.DisplayName)
 	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, created.ID)

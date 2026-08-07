@@ -12,13 +12,12 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-name";
 import { useMemberOnline } from "@multica/core/workspace/use-member-presence";
 import {
-  useAgentHealth,
   useAgentPresenceDetail,
+  useRunnerActivity,
 } from "@multica/core/agents";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useMemberPanelStore } from "@multica/core/workspace";
-import { resolveHealthDotClass } from "../agents/health";
 import { ActorProfileContent } from "./actor-profile-popover";
 import { availabilityConfig, toLiveAvailability } from "../agents/presence";
 import { useNavigation } from "../navigation";
@@ -396,29 +395,23 @@ export function AgentPresenceOverlay({
 export function AgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
   const ws = useCurrentWorkspace();
   const detail = useAgentPresenceDetail(ws?.id, agentId);
-  // COLOR source: connectivity health (Iris §1) — the SAME source as the
-  // Activity tab Health block, so the dot can never drift from the tab.
-  const { summary: healthSummary } = useAgentHealth(agentId);
+  const { data: runnerActivity } = useRunnerActivity(ws?.id, agentId);
   if (detail === "loading") return null;
-  // LRM-248: archived / deleted → gray avatar, NO live badge.
-  if (detail.availability === "archived") return null;
-
   const live = toLiveAvailability(detail.availability);
   if (!live) return null;
   const { dotClass: availabilityDotClass, label } = availabilityConfig[live];
-  // Live badge folds reconnecting / suspected_disconnect → Online green
-  // (LRM-248). Offline stays gray.
-  const dotClass = resolveHealthDotClass(healthSummary, availabilityDotClass);
   // Diameter tracks the avatar so the indicator is proportional everywhere,
   // with a floor so it never disappears on the smallest (14–16px) avatars.
   const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
   const dotStyle = { width: diameter, height: diameter };
-  // Pulse is a motion cue on Online while a task runs — not a third presence
-  // word. Gate on the live Online axis (unstable counts as online).
-  const connectivityOk = healthSummary
-    ? healthSummary.state !== "offline"
-    : live === "online";
-  const isWorking = connectivityOk && detail.workload === "working";
+  // Presence remains binary. A live Agent's current Runner observation adds
+  // a yellow motion cue while it works, including chat turns that have no
+  // Task row. Task workload remains a fallback for non-chat work.
+  const isWorking =
+    live === "online" &&
+    (["warning", "info", "active"].includes(runnerActivity?.summary?.tone ?? "") ||
+      detail.workload === "working");
+  const dotClass = isWorking ? "bg-warning" : availabilityDotClass;
   // aria/title: Online / Offline only — never "Working" / "Unstable" as a
   // live status label (LRM-248).
   const statusLabel = label;
@@ -429,8 +422,7 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
   // back to the filled gray. Only the known-offline health state is hollow;
   // the transitional availability fallback and all other states stay filled.
   const HOLLOW_MIN_PX = 8;
-  const isOfflineHollow =
-    healthSummary?.state === "offline" && diameter >= HOLLOW_MIN_PX;
+  const isOfflineHollow = live === "offline" && diameter >= HOLLOW_MIN_PX;
   const dotColorClass = isOfflineHollow
     ? "border-2 border-muted-foreground/50 bg-transparent"
     : dotClass;

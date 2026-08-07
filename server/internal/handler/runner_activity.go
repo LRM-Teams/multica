@@ -44,6 +44,12 @@ type RunnerActivityRealtimePayload struct {
 	Activity RunnerActivityResponse `json:"activity"`
 }
 
+type runnerActivityTimelineEntry struct {
+	ID         pgtype.UUID
+	Entry      protocol.AgentActivityEntry
+	OccurredAt time.Time
+}
+
 // HandleWorkspaceRunnerFrame is dormant until the hard cut. The daemonws hub
 // invokes it only for a current ready Runner; this method adds durable Agent,
 // launch, daemon-instance, fact, and sequence fencing before persistence.
@@ -509,7 +515,7 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	if err != nil {
 		return RunnerActivityResponse{}, fmt.Errorf("load Runner Activity timeline: %w", err)
 	}
-	defer rows.Close()
+	entries := make([]runnerActivityTimelineEntry, 0, runnerActivityTimelineLimit)
 	for rows.Next() {
 		var id pgtype.UUID
 		var entry protocol.AgentActivityEntry
@@ -517,16 +523,117 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 		if err := rows.Scan(&id, &entry.Kind, &entry.Body, &occurredAt); err != nil {
 			return RunnerActivityResponse{}, fmt.Errorf("scan Runner Activity timeline: %w", err)
 		}
-		response.Timeline = append(response.Timeline, RunnerActivityTimelineResponseRow{
-			ID:          util.UUIDToString(id),
-			OccurredAt:  occurredAt.Time.UTC().Format(time.RFC3339Nano),
-			TimelineRow: activityprojection.ProjectTimelineEntry(entry, summary),
-		})
+		entries = append(entries, runnerActivityTimelineEntry{ID: id, Entry: entry, OccurredAt: occurredAt.Time})
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return RunnerActivityResponse{}, fmt.Errorf("iterate Runner Activity timeline: %w", err)
 	}
+	rows.Close()
+
+	issueTitles, err := h.runnerActivityIssueTitles(ctx, workspaceID, entries)
+	if err != nil {
+		return RunnerActivityResponse{}, err
+	}
+	for _, entry := range entries {
+		response.Timeline = append(response.Timeline, RunnerActivityTimelineResponseRow{
+			ID:          util.UUIDToString(entry.ID),
+			OccurredAt:  entry.OccurredAt.UTC().Format(time.RFC3339Nano),
+			TimelineRow: projectRunnerActivityTimelineEntry(entry.Entry, summary, issueTitles),
+		})
+	}
+	if summary.Tone == "error" {
+		for _, row := range response.Timeline {
+			if row.Title == "Error" && row.Subtext != "" {
+				summary.Label = "Error: " + truncateRunnerActivitySummary(row.Subtext, 240)
+				break
+			}
+		}
+	}
 	return response, nil
+}
+
+func truncateRunnerActivitySummary(value string, maxRunes int) string {
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes]) + "…"
+}
+
+// runnerActivityIssueTitles resolves every concrete issue UUID in one
+// workspace-scoped query. Raw UUIDs, shell variables, and guessed identifiers
+// never reach the presentation response.
+func (h *Handler) runnerActivityIssueTitles(ctx context.Context, workspaceID pgtype.UUID, entries []runnerActivityTimelineEntry) (map[string]string, error) {
+	idsByString := make(map[string]pgtype.UUID)
+	for _, entry := range entries {
+		ref, ok := runnerActivityIssueReference(entry.Entry)
+		if !ok {
+			continue
+		}
+		id, err := util.ParseUUID(ref)
+		if err != nil {
+			continue
+		}
+		idsByString[util.UUIDToString(id)] = id
+	}
+	if len(idsByString) == 0 {
+		return map[string]string{}, nil
+	}
+	ids := make([]pgtype.UUID, 0, len(idsByString))
+	for _, id := range idsByString {
+		ids = append(ids, id)
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, title
+		FROM issue
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[])`, workspaceID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Runner Activity issue titles: %w", err)
+	}
+	defer rows.Close()
+	titles := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id pgtype.UUID
+		var title string
+		if err := rows.Scan(&id, &title); err != nil {
+			return nil, fmt.Errorf("scan Runner Activity issue title: %w", err)
+		}
+		titles[util.UUIDToString(id)] = title
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Runner Activity issue titles: %w", err)
+	}
+	return titles, nil
+}
+
+func projectRunnerActivityTimelineEntry(entry protocol.AgentActivityEntry, summary activityprojection.Summary, issueTitles map[string]string) activityprojection.TimelineRow {
+	row := activityprojection.ProjectTimelineEntry(entry, summary)
+	ref, ok := runnerActivityIssueReference(entry)
+	if !ok {
+		return row
+	}
+	row.Subtext = ""
+	if id, err := util.ParseUUID(ref); err == nil {
+		row.Subtext = issueTitles[util.UUIDToString(id)]
+	}
+	return row
+}
+
+func runnerActivityIssueReference(entry protocol.AgentActivityEntry) (string, bool) {
+	if entry.Kind != "narrative" {
+		return "", false
+	}
+	var body protocol.AgentActivityNarrativeBody
+	if json.Unmarshal(entry.Body, &body) != nil {
+		return "", false
+	}
+	switch body.DetailKind {
+	case "getting_issue", "listing_issue_comments", "commenting_issue", "deleting_issue_comment":
+		return body.Text, true
+	default:
+		return "", false
+	}
 }
 
 func (h *Handler) runnerActivityAgentScope(ctx context.Context, workspaceIDText, agentIDText string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, error) {

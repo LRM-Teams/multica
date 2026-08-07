@@ -170,7 +170,7 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 	case agent.MessageCompactionFinished:
 		activityKind, detailKind, narrative = protocol.ActivityKindOnline, "idle", "Context compaction finished"
 	case agent.MessageError:
-		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", "Runtime error"
+		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(message.Content)
 	}
 	if activityKind == "" {
 		return
@@ -221,7 +221,7 @@ func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, tu
 	producer := d.workspaceAgentActivityProducer(workspaceID)
 	activityKind, detailKind, narrative := protocol.ActivityKindOnline, "idle", "Idle"
 	if turnErr != nil {
-		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", "Runtime error"
+		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(turnErr.Error())
 	}
 	entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
 	if err != nil {
@@ -230,6 +230,14 @@ func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, tu
 	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner Message completion Activity publish deferred", "error", err, "agent_id", agentID)
 	}
+}
+
+func runtimeErrorNarrative(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "Runtime error"
+	}
+	return truncateRunes(reason, 400)
 }
 
 func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {

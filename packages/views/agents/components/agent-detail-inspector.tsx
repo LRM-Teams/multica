@@ -41,8 +41,8 @@ import { SkillAttach } from "./inspector/skill-attach";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
 import { RuntimeConfigDialog } from "./runtime-config-dialog";
 import { LarkAgentBindButton } from "../../settings/components/lark-tab";
-import { AgentLifecycleStatusLine } from "./agent-lifecycle-status-line";
 import { AgentWorkspaceRole } from "./agent-workspace-role";
+import { AgentActivityStatus } from "./agent-activity-list-item";
 
 interface InspectorProps {
   agent: Agent;
@@ -93,7 +93,6 @@ export function AgentDetailInspector({
   agent,
   runtime,
   owner,
-  presence,
   runtimes,
   members,
   currentUserId,
@@ -123,16 +122,18 @@ export function AgentDetailInspector({
           canEdit={canEdit}
           onUpdate={update}
         />
-        {/* LRM-248: live Online/Offline is avatar-badge only — no name-row text.
-            Archived stays muted secondary copy under the identity.
-            Lifecycle (Stopped / Starting / Crashed / …) is denser-surface only
-            via runtime_display_status — not presence.ts. */}
-        {agent.archived_at || presence?.availability === "archived" ? (
+        {/* Live status stays on the avatar. Runtime work and failures belong
+            to the Activity timeline rather than a second persistent status. */}
+        {agent.archived_at ? (
           <span className="text-xs text-muted-foreground">
             {t(($) => $.row.archived)}
           </span>
         ) : (
-          <AgentLifecycleStatusLine status={agent.runtime_display_status} />
+          <AgentActivityStatus
+            agentId={agent.id}
+            className="max-w-none"
+            testId="agent-inspector-current-status"
+          />
         )}
         {agent.start_intent_status === "failed" ? (
           <div

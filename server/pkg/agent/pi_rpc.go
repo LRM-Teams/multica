@@ -167,6 +167,8 @@ type piRPCProcess struct {
 type piRPCIdleInput struct {
 	done     chan piRPCCompletion
 	turnDone chan error
+	messages chan Message
+	stream   *piRPCTurn
 }
 
 type piRPCTurn struct {
@@ -308,7 +310,17 @@ func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []Reside
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
-	idleInput := &piRPCIdleInput{done: make(chan piRPCCompletion, 1), turnDone: make(chan error, 1)}
+	idleInput := &piRPCIdleInput{
+		done:     make(chan piRPCCompletion, 1),
+		turnDone: make(chan error, 1),
+		messages: make(chan Message, 256),
+	}
+	idleInput.stream = &piRPCTurn{
+		done: idleInput.done,
+		message: func(message Message) {
+			trySend(idleInput.messages, message)
+		},
+	}
 	p.stateMu.Lock()
 	if p.turn != nil || p.idleInput != nil {
 		p.stateMu.Unlock()
@@ -347,7 +359,7 @@ func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []Reside
 	// Context Boundary; a concurrent canonical turn must not overlap the Pi turn.
 	releaseAdmission = false
 	go b.finishIdleMessageInput(p, idleInput)
-	return ResidentMessageAcceptance{Done: idleInput.turnDone}, nil
+	return ResidentMessageAcceptance{Done: idleInput.turnDone, Messages: idleInput.messages}, nil
 }
 
 // AcceptPendingNotice queues a content-free steering input while Pi is busy.
@@ -418,6 +430,7 @@ func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCI
 	// Dispose a failed native turn before reopening admission so a new Execute
 	// cannot obtain the process while it is being torn down.
 	b.running.Store(false)
+	close(idleInput.messages)
 	idleInput.turnDone <- turnErr
 	close(idleInput.turnDone)
 }
@@ -698,12 +711,7 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 			piRPCDispatchEvent(event, turn)
 			continue
 		}
-		switch event.Type {
-		case "error":
-			trySendPiRPCCompletion(idleInput.done, piRPCCompletion{err: decodePiString(event.Message)})
-		case "agent_end":
-			trySendPiRPCCompletion(idleInput.done, piRPCCompletion{messages: event.Messages})
-		}
+		piRPCDispatchEvent(event, idleInput.stream)
 	}
 	p.stateMu.Lock()
 	turn := p.turn

@@ -109,7 +109,11 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 	// prepared -> create Agent + #general membership + durable first-start
 	// intent + snapshots in one tx.
 	qtx := h.Queries.WithTx(tx)
-	created, err := h.createAgentWithIdentityTx(ctx, tx, qtx, createParams, displayName, displayName)
+	if strings.TrimSpace(createParams.Name) == "" {
+		return db.Agent{}, errIdentityHandleInvalid
+	}
+	createParams.DisplayName = firstNonEmpty(createParams.DisplayName, createParams.Name)
+	created, err := qtx.CreateAgent(ctx, createParams)
 	if err != nil {
 		return db.Agent{}, err
 	}

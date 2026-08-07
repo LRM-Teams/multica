@@ -127,12 +127,13 @@ func TestCreateAgent_AllowsAnyWorkspaceRuntime(t *testing.T) {
 		testWorkspaceID, plainMemberID); err != nil {
 		t.Fatalf("promote create actor to owner: %v", err)
 	}
-	name := "visibility-retired-" + uuid.NewString()
+	name := "visibility-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, name)
 	})
 
 	body := map[string]any{
+		"name":                 name,
 		"display_name":         name,
 		"description":          "",
 		"runtime_id":           runtimeID,

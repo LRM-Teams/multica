@@ -28,8 +28,8 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 |---|---|---|
 | `maxAgentDescriptionLength = 255` | 31 | Cap is 255 **Unicode code points** (`utf8.RuneCountInString`) |
 | `AgentResponse` no plaintext `custom_env` | 36–147 | Only `has_custom_env`, `custom_env_key_count`; avatar truth persisted |
-| `CreateAgentRequest` fields | `agent.go:CreateAgentRequest` | username/display_name, description, instructions, runtime_id, model, thinking_level, custom_env, mcp_config, … |
-| identity seed required | `agent.go:CreateAgent` | `username` or `display_name` required; raw legacy `name` → 400 |
+| `CreateAgentRequest` fields | `agent.go:CreateAgentRequest` | name/optional display_name, description, instructions, runtime_id, model, thinking_level, custom_env, mcp_config, … |
+| permanent name required | `agent.go:CreateAgent` | lowercase ASCII `name` is required; display_name cannot replace it |
 | `description` ≤ 255 | ~660–662 | excess → 400 |
 | `runtime_id` required + workspace resolve | ~664–679 | missing/unknown → 400 |
 | `thinking_level` provider validation | ~702–708 | unknown literal → 400; model-specific gaps deferred to daemon |
@@ -37,7 +37,7 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | `mcp_config` null-skip on create; redacted on read | ~56, 573–739 | |
 | Avatar verification | `agent.go` + `agent_avatar.go` | omit → assigned; picked/uploaded verified; raw URL rejected |
 | `UpdateAgent` rejects `custom_env` | ~929–938 / 1476 | 400 → use `PUT /api/agents/{id}/env` |
-| `UpdateAgent` treats `name` as display rename | ~944–958 | stable handle unchanged |
+| `UpdateAgent` rejects `name` / `username` | `agent.go:UpdateAgent` | permanent name can only be set during creation; edit display_name instead |
 
 ## LRM-2343 Proposal and first-start lifecycle
 

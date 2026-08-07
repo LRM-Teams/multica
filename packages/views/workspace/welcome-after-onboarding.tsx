@@ -130,7 +130,8 @@ export function WelcomeAfterOnboarding() {
 // Runtime sub-template
 // ---------------------------------------------------------------------------
 
-const HELPER_AGENT_NAME = "Multica Helper";
+const HELPER_AGENT_NAME = "multica-helper";
+const HELPER_AGENT_DISPLAY_NAME = "Multica Helper";
 
 const HELPER_AVATAR_URL =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Cdefs%3E%3ClinearGradient id='t' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%2323242C'/%3E%3Cstop offset='100%25' stop-color='%2313141A'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='128' height='128' rx='28' fill='url(%23t)'/%3E%3Cg stroke='%23FFFFFF' stroke-width='13' stroke-linecap='round'%3E%3Cline x1='64' y1='32' x2='64' y2='96'/%3E%3Cline x1='32' y1='64' x2='96' y2='64'/%3E%3Cline x1='41.4' y1='41.4' x2='86.6' y2='86.6'/%3E%3Cline x1='86.6' y1='41.4' x2='41.4' y2='86.6'/%3E%3C/g%3E%3C/svg%3E";
@@ -163,12 +164,13 @@ async function findOrCreateHelper(
     const agents = await api.listAgents({ workspace_id: workspaceId });
     const found = agents.find(
       (a) =>
-        (a.display_name || a.name) === HELPER_AGENT_NAME && !a.archived_at,
+        (a.name === HELPER_AGENT_NAME || a.display_name === HELPER_AGENT_DISPLAY_NAME) && !a.archived_at,
     );
     if (found) return found;
     const lang = pickContentLang(language);
     return api.createAgent({
-      display_name: HELPER_AGENT_NAME,
+      name: HELPER_AGENT_NAME,
+      display_name: HELPER_AGENT_DISPLAY_NAME,
       description: HELPER_DESCRIPTION[lang],
       instructions: HELPER_INSTRUCTIONS[lang],
       // #599: no trusted avatar fact exists for this inline SVG brand mark

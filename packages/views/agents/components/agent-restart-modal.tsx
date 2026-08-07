@@ -32,7 +32,7 @@ const TIERS: AgentLifecycleActionKind[] = [
  * and click CTA.
  *
  * #34 (Frank): on successful start, close immediately — progress lives on the
- * agent (`runtime_display_status` / AgentLifecycleStatusLine), not in-modal
+ * agent's current Runner Activity, not in-modal
  * running/succeeded chrome that trapped users on "Done".
  */
 export function AgentRestartModal({

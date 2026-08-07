@@ -38,7 +38,7 @@ Proposal in the originating conversation with:
 ```bash
 multica action prepare \
   --type agent:create \
-  --name "<display name>" \
+  --name "<permanent lowercase name>" \
   --description "<short role summary>" \
   --target "#<channel>" \
   --client-request-id "<stable retry id>"
@@ -80,12 +80,12 @@ Human create goes through Web UI Create Agent (or agent:create Proposal Message
 human `manageAgents` capability (workspace owner/admin) and rejects agent
 principals on this route.
 
-On current servers, `name` is the stable handle (`@handle`) in persisted API
-responses. Create accepts `display_name` as the display seed and optional
-`username` as an explicit handle; the server otherwise derives a unique
-workspace-scoped handle in `agent.name`.
+On current servers, `name` is the permanent Agent name used by mentions and in
+persisted API responses. It is required at creation. `display_name`
+is optional at creation and remains editable later; when omitted, the initial
+display name is `name`.
 
-The HTTP body (`CreateAgentRequest`) accepts: `username`, `display_name`,
+The HTTP body (`CreateAgentRequest`) accepts: `name`, optional `display_name`,
 `description`, `instructions`, `runtime_id`, `runtime_config`,
 `avatar_selection`, `custom_env`, `custom_args`, `model`, `thinking_level`,
 `visibility`, `max_concurrent_tasks`, `mcp_config`.
@@ -94,8 +94,8 @@ The HTTP body (`CreateAgentRequest`) accepts: `username`, `display_name`,
 
 | Field | Persisted as | Validated? | Consumed by |
 |---|---|---|---|
-| `name` | `agent.name` (derived handle) + display seed | create requires either `name` or `display_name`; handle unique per workspace | handle routing / bare @handle fallback |
-| `display_name` | `agent.display_name` | create requires either `name` or `display_name`; update rejects empty | listings, runtime payload labels |
+| `name` | `agent.name` + initial display fallback | required at create; permanent; lowercase ASCII name unique per workspace | mention routing / bare @name fallback |
+| `display_name` | `agent.display_name` | optional at create; update rejects empty | listings, runtime payload labels |
 | `description` | `agent.description` | 400 if > 255 code points | catalog/listing only — NOT the runtime prompt |
 | `instructions` | `agent.instructions` | none | daemon → provider at claim time |
 | `avatar_selection` | server-derived `avatar_url` / `avatar_source` / optional attachment | omit create → assigned preset; omit update → no change; picked/uploaded verified | durable member identity |
@@ -189,8 +189,8 @@ a human with `manageAgents`. Research fleet hire is a separate specialty path.
 
 - "`description` is the prompt." It is not — only `instructions` reaches the
   runtime.
-- "`agent.name` is the display label." `agent.name` is the stable handle;
-  render `display_name` when present.
+- "`agent.name` is the editable display label." `agent.name` is permanent;
+  render and edit `display_name` when present.
 - "Create binds the agent's skills." It does not; bind afterward.
 - "Generic update can rotate env." It cannot — 400 on `custom_env`; use the
   env endpoint.

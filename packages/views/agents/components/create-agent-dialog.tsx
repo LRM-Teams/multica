@@ -49,6 +49,23 @@ import { randomPickedAvatarSelection } from "./avatar-preset";
 import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { useT } from "../../i18n";
 
+const AGENT_NAME_MAX_LENGTH = 32;
+const AGENT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function duplicateName(name: string): string {
+  const suffix = "-copy";
+  const base = name.trim().toLowerCase().slice(0, AGENT_NAME_MAX_LENGTH - suffix.length);
+  return `${base.replace(/-+$/u, "")}${suffix}`;
+}
+
+function validateAgentName(name: string, invalidMessage: string): string | null {
+  const value = name.trim();
+  if (!value || value.length > AGENT_NAME_MAX_LENGTH || !AGENT_NAME_PATTERN.test(value)) {
+    return invalidMessage;
+  }
+  return null;
+}
+
 export function CreateAgentDialog({
   runtimes,
   runtimesLoading,
@@ -95,10 +112,11 @@ export function CreateAgentDialog({
   const isDraft = !!draft && !isDuplicate && !isProposal;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
-  // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
+  // Agent creation establishes the permanent name. The initial display
+  // name matches it and remains editable later from Profile.
   const [name, setName] = useState(
     template
-      ? `${resolveActorDisplayName(template, template.id)}${t(($) => $.create_dialog.duplicate_copy_suffix)}`
+      ? duplicateName(template.name)
       : creationProposal?.name ?? draft?.name ?? "",
   );
   const [description, setDescription] = useState(
@@ -206,8 +224,12 @@ export function CreateAgentDialog({
   // app). Computed once so both dropdowns below agree.
   const selectedRuntimeOnline =
     !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
+  const nameError = validateAgentName(
+    name,
+    t(($) => $.create_dialog.name_invalid),
+  );
   const handleSubmit = async () => {
-    if (!name.trim() || !selectedRuntime) return;
+    if (nameError || !selectedRuntime) return;
     const trimmedModel = model.trim();
     if (!trimmedModel) {
       showErrorToast(t(($) => $.model_dropdown.select_required));
@@ -217,8 +239,9 @@ export function CreateAgentDialog({
 
     try {
       const trimmedInstructions = instructions.trim();
+      const agentName = name.trim();
       const data: CreateAgentRequest = {
-        display_name: name.trim(),
+        name: agentName,
         description: description.trim(),
         runtime_id: selectedRuntime.id,
         model: trimmedModel,
@@ -308,9 +331,9 @@ export function CreateAgentDialog({
 
         <div className="flex-1 overflow-y-auto p-5">
           <div className="space-y-4 min-w-0">
-            {/* Identity row: avatar (left) + display name & description stack
+            {/* Identity row: avatar (left) + permanent name & description stack
                 (right). The avatar visually anchors the identity of
-                what the user is creating; pairing it with the display-name
+                what the user is creating; pairing it with the name
                 field reads as "this is the agent's face + name",
                 same shape as detail-page header so the affordance is
                 instantly familiar. */}
@@ -318,21 +341,23 @@ export function CreateAgentDialog({
               <AvatarPicker value={avatarPreviewUrl} onChange={handleAvatarChange} size={64} />
               <div className="flex-1 min-w-0 space-y-3">
                 <div>
-                  <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.display_name_label)}</Label>
+                  <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.name_label)}</Label>
                   <Input
                     autoFocus
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder={t(($) => $.create_dialog.name_placeholder)}
+                    maxLength={AGENT_NAME_MAX_LENGTH}
+                    aria-invalid={nameError ? true : undefined}
                     className="mt-1"
                     onKeyDown={(e) => {
                       if (isImeComposing(e)) return;
                       if (e.key === "Enter") handleSubmit();
                     }}
                   />
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t(($) => $.create_dialog.handle_auto_hint)}
+                  <p className={nameError ? "mt-1 text-xs text-destructive" : "mt-1 text-xs text-muted-foreground"}>
+                    {nameError ?? t(($) => $.create_dialog.name_hint)}
                   </p>
                 </div>
 
@@ -431,7 +456,7 @@ export function CreateAgentDialog({
             onClick={handleSubmit}
             disabled={
               creating ||
-              !name.trim() ||
+              !!nameError ||
               !selectedRuntime ||
               !model.trim()
             }

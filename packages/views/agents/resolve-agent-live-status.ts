@@ -19,8 +19,7 @@ export type AgentLiveStatusView = {
 
 /**
  * Live presence for headers / profile cards — Online or Offline only.
- * `unstable` folds to Online. Archived returns null (caller shows gray avatar
- * + muted Archived secondary line; not a third live state).
+ * Entity lifecycle is handled by callers.
  */
 export function resolveAgentLiveStatus(args: {
   presence: AgentPresenceDetail | "loading" | null | undefined;

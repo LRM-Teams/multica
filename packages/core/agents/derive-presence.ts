@@ -11,7 +11,7 @@
 // terminal state. Past failures / completions live on the detail page
 // (Recent Work, failure_reason) and Inbox.
 
-import { deriveRuntimeHealth, FIVE_MINUTES_MS } from "../runtimes/derive-health";
+import { deriveRuntimeHealth } from "../runtimes/derive-health";
 import type { Agent, AgentRuntime, AgentTask } from "../types";
 import type {
   AgentAvailability,
@@ -22,10 +22,9 @@ import type {
 /** Presence-safe runtime fields. Enough for online/offline without full runtime details. */
 export type RuntimeReachability = Pick<AgentRuntime, "status" | "last_seen_at">;
 
-// AgentAvailability mirrors RuntimeHealth's reachability buckets but folds
-// `about_to_gc` into `offline` — both mean "long unreachable" from the
-// user's standpoint; the GC-warning copy belongs to the runtime card, not
-// the agent dot.
+// Runtime health has diagnostic grace states, but Agent presence does not.
+// Only a currently reachable runtime is online; every other health state is
+// offline. Runtime diagnostics remain available on Computer/runtime surfaces.
 export function deriveAgentAvailability(
   runtime: RuntimeReachability | null,
   now: number,
@@ -33,8 +32,7 @@ export function deriveAgentAvailability(
   if (!runtime) return "offline";
   const health = deriveRuntimeHealth(runtime, now);
   if (health === "online") return "online";
-  if (health === "recently_lost") return "unstable";
-  return "offline"; // offline | about_to_gc collapse here
+  return "offline";
 }
 
 // Atomic workload derivation: pure 3-way classification of running/queued
@@ -90,82 +88,12 @@ interface DerivePresenceInput {
 }
 
 export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPresenceDetail {
-  // Archived wins over every runtime/task signal — a retired agent must
-  // never read as live anywhere. Short-circuit before deriving runtime
-  // health or workload so a leftover online runtime row or a stale snapshot
-  // task can't leak "Online" / "Working" into any consumer.
-  if (input.agent.archived_at) {
-    return {
-      availability: "archived",
-      workload: "idle",
-      runningCount: 0,
-      queuedCount: 0,
-      capacity: input.agent.max_concurrent_tasks,
-    };
-  }
-
   // Availability comes from runtime reachability (heartbeat). LRM-248 AC5:
   // when a private runtime is filtered from the list, callers must still pass
   // a reachability stub (status + last_seen) so "can't see runtime details"
   // does not collapse to offline.
-  let availability = deriveAgentAvailability(input.runtime, input.now);
+  const availability = deriveAgentAvailability(input.runtime, input.now);
   const workloadDetail = deriveWorkloadDetail(input.tasks);
-
-  // Sticky provider-quota lock (tasks #64/#77): Online means "can take work".
-  // Heartbeats must not paint Online during lockout — keep the LRM-248 binary
-  // chrome (Online/Offline) but fold lockout into Offline.
-  //
-  // INTENTIONAL (Parker / Iris): a locked agent is unreachable for work even
-  // when the machine/daemon is alive — presence answers "can I find them to
-  // do work?", so Offline is the true answer, not a bug. Do NOT "fix" this
-  // by painting Online during lockout. The real reason + recovery time live
-  // on the denser blocked / lifecycle surface (runtime_display_status), not
-  // on the presence dot — both halves are required; presence alone would
-  // mislead ("machine looks dead").
-  //
-  // detail non-empty locks; until null while locked = unknown end (still
-  // locked); until known and elapsed = unlocked.
-  const providerBlockDetail = (input.agent.provider_block_detail ?? "").trim();
-  if (providerBlockDetail !== "") {
-    const untilMs =
-      typeof input.agent.provider_blocked_until === "string"
-        ? Date.parse(input.agent.provider_blocked_until)
-        : Number.NaN;
-    const untilKnown = Number.isFinite(untilMs);
-    const stillLocked = !untilKnown || untilMs > input.now;
-    if (stillLocked) {
-      return {
-        availability: "offline",
-        workload: "idle",
-        runningCount: 0,
-        queuedCount: 0,
-        capacity: input.agent.max_concurrent_tasks,
-      };
-    }
-  }
-
-  // LRM-248: unstable/reconnecting/running → online for live chrome. An
-  // in-flight running task proves the agent is reachable even when heartbeat
-  // lags or the runtime row is missing from the visible list — but ONLY
-  // while the runtime's own last_seen_at is still plausibly fresh. Task
-  // status is a RESULT of the heartbeat, not a substitute for it: once the
-  // heartbeat has been gone for as long as deriveRuntimeHealth already
-  // treats as genuinely offline (not just "recently lost"), a lingering
-  // 'running' task is stale server-side bookkeeping, not evidence of life
-  // (task #106 — daemon can die mid-task and its task can stay 'running'
-  // for hours via the server's coarse wall-clock backstop, long after the
-  // runtime itself was correctly marked offline).
-  const lastSeenMs = input.runtime?.last_seen_at
-    ? new Date(input.runtime.last_seen_at).getTime()
-    : null;
-  const runtimeRecentlyFresh = lastSeenMs !== null && input.now - lastSeenMs < FIVE_MINUTES_MS;
-  if (
-    workloadDetail.runningCount > 0 &&
-    runtimeRecentlyFresh &&
-    (availability === "offline" || availability === "unstable")
-  ) {
-    availability = "online";
-  }
 
   return {
     availability,

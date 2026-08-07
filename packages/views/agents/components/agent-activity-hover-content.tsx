@@ -74,7 +74,7 @@ export function AgentActivityHoverContent({
           // and not user-meaningful here.
           const wl = isRunning ? workloadConfig.working : workloadConfig.queued;
           // queued + online → muted gray (transient race, no warning);
-          // queued + offline/unstable → keep warning amber from
+          // queued + offline → keep warning amber from
           // workloadConfig. Mirrors prior presence indicator.
           const dotClass = isRunning
             ? "bg-brand"

@@ -62,12 +62,12 @@ function sourceReason(agent: CommentTriggerPreviewAgent, t: IssuesT): string {
 }
 
 // Presence is display metadata only — the trigger list itself is always the
-// backend preview. Online-ish agents start right away; offline ones queue.
+// backend preview. Online agents start right away; offline ones queue.
 function useTriggerPresenceLine(agentId: string, t: IssuesT): string | null {
   const ws = useCurrentWorkspace();
   const detail = useAgentPresenceDetail(ws?.id, agentId);
   if (detail === "loading") return null;
-  return detail.availability === "online" || detail.availability === "unstable"
+  return detail.availability === "online"
     ? t(($) => $.comment.trigger_starts_now)
     : t(($) => $.comment.trigger_starts_when_online);
 }

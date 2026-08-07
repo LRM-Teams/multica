@@ -82,7 +82,6 @@ function pickStage(
   ) {
     return { label: "Offline", static: true };
   }
-  // LRM-248: unstable folds to Online — never "Reconnecting".
   if (status === "queued") return { label: "Queued" };
   if (status === "dispatched") return { label: "Starting up" };
 

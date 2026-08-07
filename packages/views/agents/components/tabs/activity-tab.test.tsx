@@ -45,6 +45,7 @@ describe("ActivityTab", () => {
       expect.stringContaining("Idle"),
     ]);
     expect(screen.getAllByText("Running command...")).toHaveLength(1);
+    expect(screen.getByText("Safe detail")).toHaveClass("block", "break-words");
     fireEvent.click(screen.getByText("Running command..."));
     expect(screen.getByText("sanitized body")).toBeInTheDocument();
   });

@@ -591,6 +591,7 @@ export interface AgentCreationDraft {
 export interface AgentCreationProposal {
   message_id: string;
   status: "prepared" | "executed";
+  /** Permanent Agent name proposed for creation. */
   name: string;
   description: string;
   preferred_computer?: string;
@@ -624,11 +625,10 @@ export type AgentAvatarSelection =
   | { kind: "picked"; preset_url: string; attachment_id?: never };
 
 export interface CreateAgentRequest {
-  /** Optional explicit stable username. Duplicate values are rejected; when
-   * omitted the server derives one from the display name and suffixes collisions. */
-  username?: string;
-  /** Preferred human-facing label for new clients. */
-  display_name: string;
+  /** Permanent Agent name used for @mentions. */
+  name: string;
+  /** Optional human-facing label. Editable later from Profile. */
+  display_name?: string;
   description?: string;
   instructions?: string;
   avatar_selection?: AgentAvatarSelection;
@@ -732,12 +732,6 @@ export interface CreateAgentFromTemplateFailure {
 }
 
 export interface UpdateAgentRequest {
-  /**
-   * Stable `@handle` (updates `Agent.name`, NOT `display_name`). Server
-   * validates the ASCII grammar (lowercase letters/digits/hyphens) and owns
-   * uniqueness — returns 409 on conflict. Owner/admin only.
-   */
-  username?: string;
   /** Preferred human-facing label for new clients. */
   display_name?: string;
   description?: string;

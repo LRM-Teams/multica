@@ -216,6 +216,7 @@ func TestCreateAgent_FromDraftAllowsNonTargetWorkspaceMember(t *testing.T) {
 	})
 
 	req := newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"name":                 "from-draft-" + marker,
 		"display_name":         "from-draft-" + marker,
 		"runtime_id":           handlerTestRuntimeID(t),
 		"model":                "composer-1.5",
@@ -270,6 +271,7 @@ func TestCreateAgent_FromDraftAlreadyUsedReturnsConflict(t *testing.T) {
 	})
 
 	req := newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"name":                 "reuse-draft-" + marker,
 		"display_name":         "reuse-draft-" + marker,
 		"runtime_id":           handlerTestRuntimeID(t),
 		"model":                "composer-1.5",

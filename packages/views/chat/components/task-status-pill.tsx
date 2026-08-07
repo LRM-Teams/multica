@@ -82,8 +82,6 @@ export function pickStageKeys(
   ) {
     return { stageKey: "offline", static: true };
   }
-  // LRM-248: unstable folds to Online — never surface "Reconnecting" as a
-  // live status label. Fall through to the normal online stage decision.
   if (status === "queued") return { stageKey: "queued" };
   if (status === "dispatched") return { stageKey: "starting_up" };
 

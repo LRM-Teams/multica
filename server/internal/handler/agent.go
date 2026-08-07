@@ -946,10 +946,8 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateAgentRequest struct {
-	// Username is an explicit, stable handle chosen by the caller. When it is
-	// omitted, the server generates the username from display_name and applies
-	// numeric collision suffixes.
-	Username           *string               `json:"username"`
+	// Name is the permanent Agent name chosen at creation and used for mentions.
+	Name               string                `json:"name"`
 	DisplayName        string                `json:"display_name"`
 	Description        string                `json:"description"`
 	Instructions       string                `json:"instructions"`
@@ -1005,12 +1003,12 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if _, ok := rawFields["name"]; ok {
-		writeError(w, http.StatusBadRequest, "name is no longer accepted; use display_name")
-		return
-	}
 	if _, ok := rawFields["avatar_url"]; ok {
 		writeError(w, http.StatusBadRequest, "avatar_url is no longer accepted; use avatar_selection")
+		return
+	}
+	if _, ok := rawFields["username"]; ok {
+		writeError(w, http.StatusBadRequest, "username is not accepted; use name")
 		return
 	}
 	if _, ok := rawFields["action_card_id"]; ok {
@@ -1030,8 +1028,13 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	displayName := strings.TrimSpace(req.DisplayName)
-	if displayName == "" && req.Username == nil {
-		writeError(w, http.StatusBadRequest, "display_name is required")
+	requestedName := strings.TrimSpace(req.Name)
+	if requestedName == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := validateIdentityHandle(requestedName); err != nil {
+		writeError(w, http.StatusBadRequest, "name must be 1-32 lowercase letters, digits, or hyphens")
 		return
 	}
 	if utf8.RuneCountInString(req.Description) > maxAgentDescriptionLength {
@@ -1177,6 +1180,8 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	applyCreateAgentAvatar(&createParams, avatar)
+	createParams.Name = requestedName
+	createParams.DisplayName = firstNonEmpty(displayName, requestedName)
 
 	var created db.Agent
 	if hasActionMessageID {
@@ -1197,23 +1202,15 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if req.Username != nil {
-			if err := validateIdentityHandle(*req.Username); err != nil {
-				writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
-				return
-			}
-			createParams.Name = *req.Username
-			createParams.DisplayName = firstNonEmpty(displayName, *req.Username)
-		}
 		created, err = h.createAgentManagedCommit(r.Context(), wsUUID, createParams, displayName)
-		if identityUniqueViolation(err, "agent_workspace_name_unique") {
-			writeError(w, http.StatusConflict, "username is already in use")
-			return
-		}
 	}
 	if err != nil {
+		if identityUniqueViolation(err, "agent_workspace_name_unique") {
+			writeError(w, http.StatusConflict, "name is already in use")
+			return
+		}
 		if errors.Is(err, errIdentityHandleInvalid) {
-			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
+			writeError(w, http.StatusBadRequest, "name must be 1-32 lowercase letters, digits, or hyphens")
 			return
 		}
 		if identityUniqueViolation(err, "agent_avatar_attachment_unique") {
@@ -1288,7 +1285,6 @@ func (h *Handler) seedAgentInitialContext(r *http.Request, agent db.Agent, initi
 }
 
 type UpdateAgentRequest struct {
-	Username        *string               `json:"username"`
 	DisplayName     *string               `json:"display_name"`
 	Description     *string               `json:"description"`
 	Instructions    *string               `json:"instructions"`
@@ -1494,7 +1490,11 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok := rawFields["name"]; ok {
-		writeError(w, http.StatusBadRequest, "name is no longer accepted; use display_name")
+		writeError(w, http.StatusBadRequest, "name is permanent and can only be set when the agent is created")
+		return
+	}
+	if _, ok := rawFields["username"]; ok {
+		writeError(w, http.StatusBadRequest, "name is permanent and can only be set when the agent is created")
 		return
 	}
 	if _, ok := rawFields["avatar_url"]; ok {
@@ -1523,13 +1523,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 	params := db.UpdateAgentParams{
 		ID: existing.ID,
-	}
-	if req.Username != nil {
-		if err := validateIdentityHandle(*req.Username); err != nil {
-			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
-			return
-		}
-		params.Name = pgtype.Text{String: *req.Username, Valid: true}
 	}
 	if req.DisplayName != nil {
 		displayName := strings.TrimSpace(*req.DisplayName)

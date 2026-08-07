@@ -68,6 +68,12 @@ vi.mock("../../agents/components/tabs/activity-tab", () => ({
   ActivityTab: () => <div>Activity content</div>,
 }));
 
+vi.mock("../../agents/components/agent-activity-list-item", () => ({
+  AgentActivityStatus: ({ testId }: { testId?: string }) => (
+    <div data-testid={testId ?? "agent-activity-status"}>Online</div>
+  ),
+}));
+
 vi.mock("../../agents/components/agent-honor-panel-section", () => ({
   AgentHonorPanelSection: () => (
     <div data-testid="agent-honor-panel-section">Honor</div>
@@ -493,12 +499,11 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
   });
 
-  it("header shows avatar badge only — no Online/Offline name-row text (LRM-248)", () => {
+  it("shows the current dynamic status under the agent handle", () => {
     renderPanel();
     expect(screen.getByTestId("agent-profile-identity")).toHaveTextContent("Atlas");
     expect(screen.getByTestId("agent-profile-avatar")).toBeInTheDocument();
-    expect(screen.queryByText("Online")).toBeNull();
-    expect(screen.queryByText("Offline")).toBeNull();
+    expect(screen.getByTestId("agent-profile-current-status")).toHaveTextContent("Online");
     expect(screen.queryByTestId("presence-status")).toBeNull();
     expect(screen.queryByTestId("agent-live-status")).toBeNull();
   });

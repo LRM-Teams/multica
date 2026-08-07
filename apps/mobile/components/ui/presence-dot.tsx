@@ -1,5 +1,5 @@
 /**
- * Three-state presence dot — drives the agent availability indicator across
+ * Binary presence dot — drives the agent availability indicator across
  * the app. Mirror of web's AgentStatusDot (`packages/views/common/actor-avatar.tsx:188`)
  * with one platform tweak: React Native has no `ring-*` utility, so the
  * "cut out the avatar background" effect uses `border-2 border-background`
@@ -8,7 +8,6 @@
  * Color mapping is identical to the web `availabilityConfig`
  * (`packages/views/agents/presence.ts:46`):
  *   online   → success         (green)
- *   unstable → warning         (amber) — runtime offline < 5 min
  *   offline  → muted/40        (gray)
  *
  * Pure presentation. Caller passes the already-derived `AgentAvailability`
@@ -27,11 +26,7 @@ interface Props {
 
 const DOT_CLASS: Record<AgentAvailability, string> = {
   online: "bg-success",
-  unstable: "bg-warning",
   offline: "bg-muted-foreground/40",
-  // Retired agent (agent.archived_at set) — gray, mirrors web's archived dot
-  // in packages/views/agents/presence.ts.
-  archived: "bg-muted-foreground/40",
 };
 
 export function PresenceDot({ availability, size = 8 }: Props) {

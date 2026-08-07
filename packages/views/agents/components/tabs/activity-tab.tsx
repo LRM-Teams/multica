@@ -80,7 +80,7 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
                 {row.title}
               </span>
               {!expanded && row.subtext ? (
-                <span className="mt-0.5 block line-clamp-2 whitespace-pre-wrap break-words text-[13px] text-muted-foreground">
+                <span data-testid="runner-activity-subtext" className="mt-0.5 block line-clamp-2 whitespace-pre-wrap break-words text-[13px] text-muted-foreground">
                   {row.subtext}
                 </span>
               ) : null}
@@ -93,14 +93,16 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
             </span>
           </button>
         ) : (
-          <div className="flex min-w-0 items-baseline gap-2">
-            <span className="shrink-0 text-[13.5px] font-semibold text-foreground">{row.title}</span>
-            {row.subtext ? (
-              <span className="min-w-0 whitespace-pre-wrap break-words text-[13px] text-muted-foreground">
-                {row.subtext}
-              </span>
-            ) : null}
-            <time className={TIMESTAMP_CLASS} dateTime={row.occurred_at} title={exactTime}>
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3">
+            <div className="min-w-0">
+              <span className="block text-[13.5px] font-semibold leading-snug text-foreground">{row.title}</span>
+              {row.subtext ? (
+                <span data-testid="runner-activity-subtext" className="mt-0.5 block whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted-foreground">
+                  {row.subtext}
+                </span>
+              ) : null}
+            </div>
+            <time className={cn(TIMESTAMP_CLASS, "pt-0.5")} dateTime={row.occurred_at} title={exactTime}>
               {formatRelativeTime(row.occurred_at)}
             </time>
           </div>

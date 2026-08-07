@@ -1,5 +1,4 @@
 import {
-  Archive,
   Circle,
   CircleDot,
   CircleSlash,
@@ -16,10 +15,8 @@ import type {
 
 // LRM-248 — live presence is Online / Offline only.
 //
-// Backend may still emit `unstable` (recently_lost grace window). Display
-// folds it to Online (green). `archived` is NOT a third live presence —
-// surfaces gray the avatar and omit the live badge; detail may show a
-// muted "Archived" secondary line.
+// Runtime diagnostic grace states and entity lifecycle are kept outside this
+// live presence vocabulary.
 //
 // Workload words (Working / Queued / Idle) are never live presence labels.
 // Activity timeline history rows keep their own non-live event copy.
@@ -38,32 +35,17 @@ export interface AvailabilityVisual {
 export type LiveAvailability = "online" | "offline";
 
 /**
- * Fold raw availability into the live Online/Offline axis.
- * - online / unstable → online
- * - offline → offline
- * - archived → null (not a live presence; caller grays avatar, no badge)
+ * Normalize optional availability into the live Online/Offline axis.
  */
 export function toLiveAvailability(
   availability: AgentAvailability | null | undefined,
 ): LiveAvailability | null {
   if (!availability) return null;
-  if (availability === "archived") return null;
-  if (availability === "offline") return "offline";
-  // online | unstable
-  return "online";
+  return availability;
 }
 
 export const availabilityConfig: Record<AgentAvailability, AvailabilityVisual> = {
   online: {
-    label: "Online",
-    dotClass: "bg-success",
-    textClass: "text-success",
-    icon: CircleDot,
-  },
-  // Display-identical to online (LRM-248). Kept as a key because the backend
-  // still emits `unstable`; consumers must go through `toLiveAvailability` /
-  // `presenceStatusToken` so the word "Unstable" never surfaces.
-  unstable: {
     label: "Online",
     dotClass: "bg-success",
     textClass: "text-success",
@@ -75,17 +57,9 @@ export const availabilityConfig: Record<AgentAvailability, AvailabilityVisual> =
     textClass: "text-muted-foreground",
     icon: CircleSlash,
   },
-  // Lifecycle — not live presence. Visuals kept for archive filter/detail
-  // secondary copy; live badge dots must not render for archived agents.
-  archived: {
-    label: "Archived",
-    dotClass: "bg-muted-foreground/40",
-    textClass: "text-muted-foreground",
-    icon: Archive,
-  },
 };
 
-// Filter chips: Online / Offline only (unstable folded into Online counts).
+// Filter chips: Online / Offline only.
 export const availabilityOrder: LiveAvailability[] = ["online", "offline"];
 
 export interface WorkloadVisual {
@@ -133,7 +107,7 @@ export function presenceStatusToken(
 
 /**
  * One-line localized live status word: Online / Offline only.
- * Returns null while loading/unknown, or when archived (not live).
+ * Returns null while loading or unknown.
  */
 export function formatPresenceStatus(
   presence: AgentPresenceDetail | "loading" | null | undefined,
@@ -164,7 +138,7 @@ export function presenceStatusDotClass(
 
 /**
  * Match an agent against an Online/Offline filter chip.
- * `unstable` counts as Online (LRM-248).
+ * Presence filters use the same binary availability contract.
  */
 export function matchesLiveAvailabilityFilter(
   availability: AgentAvailability | null | undefined,

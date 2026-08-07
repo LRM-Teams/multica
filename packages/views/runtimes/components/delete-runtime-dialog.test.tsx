@@ -70,6 +70,13 @@ vi.mock("@multica/core/agents", () => ({
   // Empty presence map keeps the cell renderers honest without dragging in
   // the full presence pipeline.
   useWorkspacePresenceMap: () => ({ byAgent: new Map(), loading: false }),
+  useAgentPresenceDetail: () => ({
+    availability: "online",
+    workload: "idle",
+    runningCount: 0,
+    queuedCount: 0,
+    capacity: 1,
+  }),
   useRunnerActivity: () => ({ data: undefined }),
 }));
 
@@ -78,6 +85,7 @@ vi.mock("@multica/core/hooks", () => ({
 }));
 
 vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1" }),
   useWorkspacePaths: () => ({
     agentDetail: (id: string) => `/agents/${id}`,
   }),
@@ -109,9 +117,13 @@ vi.mock("./provider-logo", () => ({
   knownProviderLabel: (p: string) => p,
 }));
 vi.mock("../../agents/presence", () => ({
+  toLiveAvailability: (availability: string) => availability,
+  formatPresenceStatus: (presence: { availability: string }) =>
+    presence.availability === "online" ? "Online" : "Offline",
+  presenceStatusVisual: () => ({ textClass: "" }),
+  presenceStatusDotClass: () => "bg-success",
   availabilityConfig: {
     online: { dotClass: "", textClass: "" },
-    unstable: { dotClass: "", textClass: "" },
     offline: { dotClass: "", textClass: "" },
   },
   workloadConfig: {

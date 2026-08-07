@@ -141,6 +141,7 @@ func createSecondAgent(t *testing.T) string {
 	runtimeID := agents[0]["runtime_id"].(string)
 
 	resp = authRequest(t, "POST", "/api/agents?workspace_id="+testWorkspaceID, map[string]any{
+		"name":         uniqueName("second-test-agent"),
 		"display_name": "Second Test Agent",
 		"runtime_id":   runtimeID,
 		"model":        "composer-1.5",

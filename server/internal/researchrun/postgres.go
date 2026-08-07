@@ -449,13 +449,14 @@ func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionI
 			if stateErr != nil {
 				return fmt.Errorf("%w: cancellation request changed concurrently", ErrInvalidTransition)
 			}
-			if existingInboxID != "" && existingInboxID != request.InboxTaskID {
-				return fmt.Errorf("%w: cancellation request belongs to another Inbox task", ErrInvalidTransition)
+			if existingInboxID == "" || request.InboxTaskID == "" || existingInboxID != request.InboxTaskID {
+				return fmt.Errorf("%w: cancellation request Inbox identity does not match", ErrInvalidTransition)
 			}
 			// Another cancellation actor may have completed the same durable
-			// fact after this actor's external Cancel call. A completed marker
-			// is idempotent even though settlement moved the Attempt to failed.
-			if completedAt != nil {
+			// fact after this actor's external Cancel call. Only a settled
+			// cancellation terminal state with the exact Inbox identity is an
+			// idempotent replay; a marker on any other state is corruption.
+			if completedAt != nil && (status == string(AttemptStatusFailed) || status == string(AttemptStatusCancelled)) {
 				continue
 			}
 			return fmt.Errorf("%w: cancellation request changed concurrently (status %s)", ErrInvalidTransition, status)
@@ -514,7 +515,10 @@ func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID str
 	events := make([]RunEvent, 0, len(items))
 	for _, item := range items {
 		if item.completedAt != nil {
-			continue
+			if item.status == string(AttemptStatusFailed) || item.status == string(AttemptStatusCancelled) {
+				continue
+			}
+			return nil, fmt.Errorf("%w: attempt %s has cancellation completion in non-terminal status %s", ErrInvalidTransition, item.id, item.status)
 		}
 		if item.status != string(AttemptStatusCancelling) && item.status != string(AttemptStatusCancelled) {
 			return nil, fmt.Errorf("%w: attempt %s is %s, not awaiting cancellation", ErrInvalidTransition, item.id, item.status)

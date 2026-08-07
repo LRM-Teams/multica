@@ -309,6 +309,19 @@ func TestConcurrentCancellationSettlementIsIdempotent(t *testing.T) {
 	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{request}); err != nil {
 		t.Fatalf("late cancellation marker was not idempotent: %v", err)
 	}
+	mismatched := CancellationRequest{AttemptID: attempt.ID, InboxTaskID: uuid.NewString()}
+	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{mismatched}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("mismatched Inbox identity error=%v, want ErrInvalidTransition", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET inbox_task_id=NULL WHERE id=$1::uuid`, attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{request}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("missing persisted Inbox identity error=%v, want ErrInvalidTransition", err)
+	}
+	if _, err = store.CompleteCancellations(ctx, fixture.sessionID, []string{uuid.NewString()}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("missing cancellation attempt error=%v, want ErrInvalidTransition", err)
+	}
 
 	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
 	if err != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusFailed || attempts[0].CancelCompletedAt == nil {
@@ -327,5 +340,23 @@ func TestConcurrentCancellationSettlementIsIdempotent(t *testing.T) {
 	repairs, err := store.ListTargetRepairs(ctx, fixture.sessionID)
 	if err != nil || len(repairs) != 1 || repairs[0].OccurrenceCount != 1 {
 		t.Fatalf("repairs=%+v err=%v", repairs, err)
+	}
+
+	if _, err = pool.Exec(ctx, `UPDATE research_task SET ready_at=now() WHERE id=$1::uuid`, tasks[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	corrupt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(
+		t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_task_attempt SET cancellation_completed_at=now() WHERE id=$1::uuid
+	`, corrupt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.CompleteCancellations(ctx, fixture.sessionID, []string{corrupt.ID}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("completion marker on dispatching attempt error=%v, want ErrInvalidTransition", err)
 	}
 }

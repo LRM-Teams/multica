@@ -17,7 +17,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@multica/ui/components/ui/popover";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@multica/ui/components/ui/hover-card";
 import { Input } from "@multica/ui/components/ui/input";
 import { Separator } from "@multica/ui/components/ui/separator";
 import { cn } from "@multica/ui/lib/utils";
@@ -721,29 +721,6 @@ function NoteEditor({
   }
   const dirty = draft.title !== draft.serverTitle || draft.content !== draft.serverContent;
   const [saveState, setSaveState] = useState<"saved" | "pending" | "saving" | "error">("saved");
-  const [shareRecipientsOpen, setShareRecipientsOpen] = useState(false);
-  const shareRecipientsCloseTimer = useRef<number | null>(null);
-
-  const clearShareRecipientsCloseTimer = useCallback(() => {
-    if (shareRecipientsCloseTimer.current === null) return;
-    window.clearTimeout(shareRecipientsCloseTimer.current);
-    shareRecipientsCloseTimer.current = null;
-  }, []);
-
-  const openShareRecipients = useCallback(() => {
-    clearShareRecipientsCloseTimer();
-    setShareRecipientsOpen(true);
-  }, [clearShareRecipientsCloseTimer]);
-
-  const scheduleShareRecipientsClose = useCallback(() => {
-    clearShareRecipientsCloseTimer();
-    shareRecipientsCloseTimer.current = window.setTimeout(() => {
-      setShareRecipientsOpen(false);
-      shareRecipientsCloseTimer.current = null;
-    }, 120);
-  }, [clearShareRecipientsCloseTimer]);
-
-  useEffect(() => clearShareRecipientsCloseTimer, [clearShareRecipientsCloseTimer]);
 
   // react-doctor-disable-next-line react-doctor/no-cascading-set-state -- autosave status follows local draft dirtiness and async save lifecycle.
   useEffect(() => {
@@ -788,25 +765,16 @@ function NoteEditor({
           ) : shareNames.length > 0 ? (
             <span className="inline-flex min-w-0 items-center gap-1">
               <span className="text-muted-foreground">{t(($) => $.notes_page.visibility_shared_to_prefix)}</span>
-              <Popover modal={false} open={shareRecipientsOpen} onOpenChange={setShareRecipientsOpen}>
-                <PopoverTrigger
-                  type="button"
-                  aria-label={t(($) => $.notes_page.current_shares)}
-                  className="inline-flex max-w-44 items-center gap-1 truncate rounded-sm font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  onMouseEnter={openShareRecipients}
-                  onMouseLeave={scheduleShareRecipientsClose}
-                  onFocus={openShareRecipients}
-                  onBlur={scheduleShareRecipientsClose}
+              <HoverCard>
+                <HoverCardTrigger
+                  render={<button type="button" aria-label={t(($) => $.notes_page.current_shares)} />}
+                  delay={120}
+                  closeDelay={160}
+                  className="inline-flex max-w-36 items-center truncate rounded-sm font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 >
                   <span className="truncate">{shareNames[0]}</span>
-                  {shareNames.length > 1 && <span className="shrink-0 text-muted-foreground/70">{t(($) => $.notes_page.visibility_shared_etc)}</span>}
-                </PopoverTrigger>
-                <PopoverContent
-                  align="start"
-                  className="w-56 gap-1 p-2"
-                  onMouseEnter={openShareRecipients}
-                  onMouseLeave={scheduleShareRecipientsClose}
-                >
+                </HoverCardTrigger>
+                <HoverCardContent align="start" className="w-56 p-2">
                   <div className="px-1 pb-1 text-xs font-medium text-muted-foreground">{t(($) => $.notes_page.current_shares)}</div>
                   <div className="max-h-56 overflow-y-auto">
                     {shareNames.map((name, index) => (
@@ -815,8 +783,9 @@ function NoteEditor({
                       </div>
                     ))}
                   </div>
-                </PopoverContent>
-              </Popover>
+                </HoverCardContent>
+              </HoverCard>
+              {shareNames.length > 1 && <span className="text-muted-foreground/70">{t(($) => $.notes_page.visibility_shared_etc)}</span>}
             </span>
           ) : (
             <span>{t(($) => $.notes_page.visibility_private)}</span>

@@ -19,12 +19,13 @@ import { isImeComposing } from "@multica/core/utils";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { useT } from "../../i18n";
+import { getLastInsertedCodeBlockLanguage } from "../code-block-language";
 import { createSuggestionPopupRender } from "./suggestion-popup";
 
 const MAX_ITEMS = 20;
 
 /** Known built-in command ids — the keys under editor `slash_command.commands`. */
-export type BuiltinCommandKey = "note" | "code" | "mermaid" | "python" | "javascript";
+export type BuiltinCommandKey = "note" | "code";
 
 export interface SlashCommandItem {
   id: string;
@@ -37,8 +38,6 @@ export interface SlashCommandItem {
    * so the visible string stays localized (the typed `/label` does not).
    */
   descriptionKey?: BuiltinCommandKey;
-  /** Optional block command payload for Notion-style insertions. */
-  block?: { type: "codeBlock"; language?: string };
 }
 
 interface SlashCommandListProps {
@@ -121,10 +120,12 @@ export const SlashCommandList = forwardRef<
 
   // Built-in commands carry an i18n key so the visible description stays
   // localized; skills carry a raw description string from their config.
-  const describe = (item: SlashCommandItem): string | undefined =>
-    item.descriptionKey === "note"
-      ? t(($) => $.slash_command.commands.note)
-      : item.description;
+  const describe = (item: SlashCommandItem): string | undefined => {
+    if (item.descriptionKey === "note") return t(($) => $.slash_command.commands.note);
+    // Keep Notion-style block commands compact: `/code` is self-explanatory.
+    if (item.descriptionKey === "code") return undefined;
+    return item.description;
+  };
 
   return (
     <div className="rounded-md border bg-popover py-1 shadow-md w-72 max-h-[300px] overflow-y-auto">
@@ -253,12 +254,11 @@ export const BUILTIN_COMMANDS: SlashCommandItem[] = [
 ];
 
 // react-doctor-disable-next-line react-doctor/only-export-components -- suggestion factories consume this static command table and tests import it directly.
-export const BLOCK_COMMANDS: SlashCommandItem[] = [
-  { id: "code", label: "code", descriptionKey: "code", block: { type: "codeBlock" } },
-  { id: "mermaid", label: "mermaid", descriptionKey: "mermaid", block: { type: "codeBlock", language: "mermaid" } },
-  { id: "python", label: "python", descriptionKey: "python", block: { type: "codeBlock", language: "python" } },
-  { id: "javascript", label: "javascript", descriptionKey: "javascript", block: { type: "codeBlock", language: "javascript" } },
-];
+export const BLOCK_COMMAND: SlashCommandItem = {
+  id: "code",
+  label: "code",
+  descriptionKey: "code",
+};
 
 // Match on the command label as a prefix only — the description is for display,
 // not search. With a single command this keeps the menu predictable (typing
@@ -271,7 +271,7 @@ export function buildBuiltinCommandItems(query: string): SlashCommandItem[] {
 // react-doctor-disable-next-line react-doctor/only-export-components -- pure command filtering helper used by the suggestion factory/tests.
 export function buildBlockCommandItems(query: string): SlashCommandItem[] {
   const q = query.toLowerCase();
-  return BLOCK_COMMANDS.filter((c) => c.label.toLowerCase().startsWith(q));
+  return BLOCK_COMMAND.label.startsWith(q) ? [BLOCK_COMMAND] : [];
 }
 
 export function createBuiltinCommandSuggestion(): Omit<
@@ -322,13 +322,13 @@ export function createBlockCommandSuggestion(): Omit<
     char: "/",
     pluginKey,
     items: ({ query }) => buildBlockCommandItems(query),
-    command: ({ editor, range, props }) => {
-      if (props.block?.type !== "codeBlock") return;
+    command: ({ editor, range }) => {
+      const language = getLastInsertedCodeBlockLanguage();
       editor
         .chain()
         .focus()
         .deleteRange(range)
-        .setCodeBlock({ language: props.block.language })
+        .setCodeBlock({ language })
         .run();
     },
     render: createSuggestionPopupRender<SlashCommandItem, SlashCommandItem, SlashCommandListRef, SlashCommandListProps>({

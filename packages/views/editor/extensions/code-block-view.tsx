@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { NodeViewWrapper, NodeViewContent } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
+import { NodeSelection } from "@tiptap/pm/state";
 import {
   Check,
   ChevronDown,
   Code as CodeIcon,
   Copy,
+  GripVertical,
   Download,
   Eye,
   MoreHorizontal,
@@ -23,6 +25,11 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useT } from "../../i18n";
+import {
+  INSERTABLE_CODE_BLOCK_LANGUAGES,
+  setLastInsertedCodeBlockLanguage,
+  type InsertableCodeBlockLanguage,
+} from "../code-block-language";
 import {
   MermaidDiagram,
   type MermaidDiagramHandle,
@@ -45,16 +52,7 @@ const PREVIEW_DEBOUNCE_MS = 200;
 
 const HTML_PREVIEW_HEIGHT = "h-[480px]";
 
-const CODE_LANGUAGES = [
-  "plaintext",
-  "markdown",
-  "python",
-  "javascript",
-  "html",
-  "mermaid",
-] as const;
-
-type CodeLanguage = (typeof CODE_LANGUAGES)[number];
+type CodeLanguage = InsertableCodeBlockLanguage | "markdown" | "html";
 
 const LANGUAGE_LABELS: Record<CodeLanguage, string> = {
   plaintext: "Plaintext",
@@ -76,7 +74,7 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 
 function normalizeLanguage(language: string): CodeLanguage {
   const parsed = parseCodeFenceInfo(language).language;
-  if ((CODE_LANGUAGES as readonly string[]).includes(parsed)) {
+  if (parsed === "markdown" || parsed === "html" || (INSERTABLE_CODE_BLOCK_LANGUAGES as readonly string[]).includes(parsed)) {
     return parsed as CodeLanguage;
   }
   return "plaintext";
@@ -160,7 +158,7 @@ function CodeBlockToolbar({
           <ChevronDown className="h-3 w-3 opacity-70" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" onMouseDown={preserveMenuFocus}>
-          {CODE_LANGUAGES.map((item) => (
+          {INSERTABLE_CODE_BLOCK_LANGUAGES.map((item) => (
             <DropdownMenuItem
               key={item}
               onClick={() => onLanguageChange(item)}
@@ -296,7 +294,8 @@ function CodeBlockToolbar({
   );
 }
 
-function CodeBlockView({ node, updateAttributes, deleteNode }: NodeViewProps) {
+function CodeBlockView({ node, updateAttributes, deleteNode, editor, getPos }: NodeViewProps) {
+  const { t } = useT("editor");
   const [copied, setCopied] = useState(false);
   // HTML blocks default to "preview"; the user can flip to "source" to
   // edit the markup directly. Note: the source `<pre>` MUST stay mounted
@@ -339,16 +338,20 @@ function CodeBlockView({ node, updateAttributes, deleteNode }: NodeViewProps) {
   };
 
   const showHtmlPreview = isHtml && view === "preview";
-  const showMermaidDiagram = isMermaid && mermaidView !== "source" && debouncedChart.trim();
-  const showMermaidSource = !isMermaid || mermaidView !== "diagram";
+  const hasMermaidChart = Boolean(debouncedChart.trim());
+  const showMermaidDiagram = isMermaid && mermaidView !== "source" && hasMermaidChart;
+  // Empty diagram-only Mermaid fences keep the source editor visible so the
+  // block still has a normal one-line editing footprint instead of collapsing.
+  const showMermaidSource = !isMermaid || mermaidView !== "diagram" || !hasMermaidChart;
   const hideSource = showHtmlPreview || !showMermaidSource;
   const mermaidActionsEnabled = Boolean(showMermaidDiagram);
   const toggleView = () =>
     setView((v) => (v === "preview" ? "source" : "preview"));
   const setLanguage = (nextLanguage: CodeLanguage) => {
+    const languageToUse = setLastInsertedCodeBlockLanguage(nextLanguage);
     updateAttributes({
-      language: nextLanguage,
-      mermaidView: nextLanguage === "mermaid" ? "both" : "source",
+      language: languageToUse,
+      mermaidView: languageToUse === "mermaid" ? "both" : "source",
     });
   };
   const setMermaidView = (mode: MermaidViewMode) => {
@@ -357,9 +360,37 @@ function CodeBlockView({ node, updateAttributes, deleteNode }: NodeViewProps) {
     updateAttributes({ language: "mermaid", mermaidView: mode });
   };
 
+  const selectCodeBlock = () => {
+    if (!editor || typeof getPos !== "function") return;
+    const pos = getPos();
+    if (typeof pos !== "number") return;
+    const tr = editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, pos));
+    editor.view.dispatch(tr);
+    editor.view.focus();
+  };
+
   return (
     <NodeViewWrapper className="code-block-wrapper group/code relative my-2">
-      <div className="code-block-frame relative overflow-hidden rounded-md bg-muted">
+      <div
+        className={cn(
+          "code-block-frame relative overflow-hidden rounded-md bg-muted",
+          isMermaid && mermaidView === "diagram" && !hasMermaidChart && "code-block-frame-mermaid-diagram-only",
+        )}
+      >
+        <button
+          type="button"
+          data-testid="code-block-select"
+          className="absolute left-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover/code:opacity-100 focus-visible:opacity-100"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            selectCodeBlock();
+          }}
+          aria-label={t(($) => $.code_block.select_block)}
+          title={t(($) => $.code_block.select_block)}
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
         {showMermaidDiagram && (
           <div
             contentEditable={false}

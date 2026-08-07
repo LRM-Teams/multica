@@ -109,6 +109,8 @@
   "code_block": {
     "copy_code": "复制代码",
     "menu": "代码块菜单",
+    "select_block": "选择代码块",
+    "select_block_hint": "选择整个代码块",
     "language": "代码语言",
     "show_preview": "显示预览",
     "show_source": "显示源码",

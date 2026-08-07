@@ -218,6 +218,13 @@ Issue、Goal 和来源群是厚共享场；Agent DM 或临时私群只承载确�
 普通协作：
 
 - 人或 Agent 可在单聊、群聊和 Issue 中创建或分配 Issue；
+- 普通并行默认复用同一 Agent 的独立 Issue Session；仅在候选实现、盲审、对抗验证、独立复现、
+  不兼容模型/工具或实验污染风险下，显式选择 `worker_mode=derived_agent`；
+- derived Agent 必须记录 source lineage 和 `clone_reason`，复制 approved config/skills 与只读源 Memory 快照，
+  不继承凭据、会话或 Memory 写历史，不自动把经验写回源 Agent；
+- derived Agent 只负责一个子 Issue，结果经 Issue/Artifact 回流；`in_review` 期间保留以处理返工，
+  Issue 到达 `done` 或 `cancelled` 后自动归档；
+- 仅仅“任务很多”或“想更快”不得隐式触发克隆；成本、并发和生命周期必须可见；
 - 谁被指派谁负责，调度者不自动成为永久负责人；
 - 完成结果必须回写 Issue，并回到来源 conversation；
 - 多个 Issue 的结果由明确的汇总 Issue 或发起人整合。

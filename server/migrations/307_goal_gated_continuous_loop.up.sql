@@ -76,3 +76,30 @@ CREATE TABLE issue_decompose_request (
 -- hard-delete closure (actor_agent_id is not the leading PK column).
 CREATE INDEX issue_decompose_request_actor_agent_idx
   ON issue_decompose_request(actor_agent_id);
+
+-- Optional strong-isolation workers for ordinary Issue DAG nodes. The source
+-- Agent remains the user-facing identity; the derived Agent owns exactly one
+-- child Issue and is archived when that Issue becomes done or cancelled.
+CREATE TABLE issue_derived_agent_assignment (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  parent_issue_id UUID NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
+  issue_id UUID NOT NULL UNIQUE REFERENCES issue(id) ON DELETE CASCADE,
+  source_agent_id UUID NOT NULL REFERENCES agent(id) ON DELETE RESTRICT,
+  derived_agent_id UUID NOT NULL UNIQUE REFERENCES agent(id) ON DELETE CASCADE,
+  memory_policy TEXT NOT NULL DEFAULT 'snapshot_readonly_source'
+    CHECK (memory_policy IN ('snapshot_readonly_source')),
+  lifecycle_policy TEXT NOT NULL DEFAULT 'archive_on_issue_terminal'
+    CHECK (lifecycle_policy IN ('archive_on_issue_terminal')),
+  clone_reason TEXT NOT NULL CHECK (length(btrim(clone_reason)) BETWEEN 1 AND 1000),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+  archived_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX issue_derived_agent_assignment_source_idx
+  ON issue_derived_agent_assignment(source_agent_id);
+CREATE INDEX issue_derived_agent_assignment_derived_idx
+  ON issue_derived_agent_assignment(derived_agent_id);
+CREATE INDEX issue_derived_agent_assignment_parent_idx
+  ON issue_derived_agent_assignment(parent_issue_id);

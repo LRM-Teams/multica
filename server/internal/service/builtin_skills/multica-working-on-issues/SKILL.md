@@ -37,6 +37,16 @@ and promotes downstream Issues after all prerequisites become reviewable. The
 same Agent may own multiple roots: they use independent Issue sessions and
 execution roots and can run in parallel up to its concurrency cap.
 
+Use `worker_mode: derived_agent` only when the node needs strong identity or
+memory isolation: independent candidate implementations, blind/adversarial
+review, replication, incompatible model/tool configuration, or experiments
+whose observations must not mutate the source Agent. A derived node requires a
+concrete `clone_reason`. It copies approved configuration and skills plus a
+point-in-time memory snapshot, inherits no credentials or sessions, writes no
+memory back to the source automatically, and remains available for review
+rework until its child Issue becomes `done` or `cancelled`, when it is archived.
+Ordinary parallelism stays `reuse_agent` (the default).
+
 Goal Graph nodes are stricter. A successful task or an Issue status is not
 completion. Workers must register a durable artifact; verifier nodes must also
 submit PASS evidence. Only kernel `effective_completion=satisfied` unlocks the

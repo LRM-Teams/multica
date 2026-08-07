@@ -30,3 +30,21 @@ func TestNormalizeDecomposeRejectsCyclesAndMissingDependencies(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeDecomposeRequiresReasonForDerivedAgent(t *testing.T) {
+	in := DecomposeInput{Reason: "isolated implementation", Nodes: []IssuePlanNode{
+		{TempID: "a", Title: "A", AssigneeID: "agent", WorkerMode: WorkerModeDerivedAgent},
+		{TempID: "b", Title: "B", AssigneeID: "agent"},
+	}}
+	if _, err := normalizeDecompose(in); err == nil {
+		t.Fatal("derived agent without clone_reason unexpectedly accepted")
+	}
+	in.Nodes[0].CloneReason = "independent implementation must not share mutable memory"
+	out, err := normalizeDecompose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Nodes[1].WorkerMode != WorkerModeReuseAgent {
+		t.Fatalf("default worker mode=%q", out.Nodes[1].WorkerMode)
+	}
+}

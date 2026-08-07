@@ -25,7 +25,18 @@ func normalizeDecompose(in DecomposeInput) (DecomposeInput, error) {
 		n.TempID = strings.TrimSpace(n.TempID)
 		n.Title = strings.TrimSpace(n.Title)
 		n.AssigneeID = strings.TrimSpace(n.AssigneeID)
+		n.WorkerMode = strings.TrimSpace(n.WorkerMode)
+		n.CloneReason = strings.TrimSpace(n.CloneReason)
+		if n.WorkerMode == "" {
+			n.WorkerMode = WorkerModeReuseAgent
+		}
 		if n.TempID == "" || n.Title == "" || n.AssigneeID == "" {
+			return in, ErrInvalidGraph
+		}
+		if n.WorkerMode != WorkerModeReuseAgent && n.WorkerMode != WorkerModeDerivedAgent {
+			return in, ErrInvalidGraph
+		}
+		if n.WorkerMode == WorkerModeDerivedAgent && (n.CloneReason == "" || len(n.CloneReason) > 1000) {
 			return in, ErrInvalidGraph
 		}
 		if _, exists := seen[n.TempID]; exists {
@@ -145,15 +156,22 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 	}
 
 	issueByTemp := make(map[string]uuid.UUID, len(in.Nodes))
-	result := DecomposeResult{ParentIssueID: parent.String(), IssueIDs: map[string]string{}, ReadyIssueIDs: []string{}}
+	result := DecomposeResult{ParentIssueID: parent.String(), IssueIDs: map[string]string{}, AgentIDs: map[string]string{}, ReadyIssueIDs: []string{}}
 	for _, node := range in.Nodes {
-		agentID, parseErr := uuid.Parse(node.AssigneeID)
+		sourceAgentID, parseErr := uuid.Parse(node.AssigneeID)
 		if parseErr != nil {
 			return DecomposeResult{}, ErrInvalidGraph
 		}
 		var agentOK bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL AND runtime_id IS NOT NULL)`, w, agentID).Scan(&agentOK); err != nil || !agentOK {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL AND runtime_id IS NOT NULL)`, w, sourceAgentID).Scan(&agentOK); err != nil || !agentOK {
 			return DecomposeResult{}, ErrInvalidGraph
+		}
+		agentID := sourceAgentID
+		if node.WorkerMode == WorkerModeDerivedAgent {
+			agentID, err = cloneIssueWorker(ctx, tx, w, sourceAgentID, in.IdempotencyKey, node.TempID)
+			if err != nil {
+				return DecomposeResult{}, err
+			}
 		}
 		var number int
 		if err = tx.QueryRow(ctx, `UPDATE workspace SET issue_counter=issue_counter+1 WHERE id=$1 RETURNING issue_counter`, w).Scan(&number); err != nil {
@@ -181,8 +199,14 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 				return DecomposeResult{}, err
 			}
 		}
+		if node.WorkerMode == WorkerModeDerivedAgent {
+			if _, err = tx.Exec(ctx, `INSERT INTO issue_derived_agent_assignment(workspace_id,parent_issue_id,issue_id,source_agent_id,derived_agent_id,clone_reason) VALUES($1,$2,$3,$4,$5,$6)`, w, parent, issueID, sourceAgentID, agentID, node.CloneReason); err != nil {
+				return DecomposeResult{}, err
+			}
+		}
 		issueByTemp[node.TempID] = issueID
 		result.IssueIDs[node.TempID] = issueID.String()
+		result.AgentIDs[node.TempID] = agentID.String()
 		if status == "todo" {
 			result.ReadyIssueIDs = append(result.ReadyIssueIDs, issueID.String())
 		}

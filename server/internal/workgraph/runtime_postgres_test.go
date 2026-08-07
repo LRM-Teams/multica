@@ -191,7 +191,7 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 		WorkspaceID: uuidToTestString(workspace), ParentIssueID: uuidToTestString(parent.ID), ActorAgentID: uuidToTestString(agentID),
 		IdempotencyKey: uuid.NewString(), Reason: "parallel research and synthesis",
 		Nodes: []IssuePlanNode{
-			{TempID: "a", Title: "Research A", AssigneeID: uuidToTestString(agentID)},
+			{TempID: "a", Title: "Research A", AssigneeID: uuidToTestString(agentID), WorkerMode: WorkerModeDerivedAgent, CloneReason: "independent research lane"},
 			{TempID: "b", Title: "Research B", AssigneeID: uuidToTestString(agentID)},
 			{TempID: "merge", Title: "Merge", AssigneeID: uuidToTestString(agentID), DependsOn: []string{"a", "b"}},
 		},
@@ -201,6 +201,19 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 	}
 	if len(result.ReadyIssueIDs) != 2 {
 		t.Fatalf("ready=%v, want two roots", result.ReadyIssueIDs)
+	}
+	if result.AgentIDs["a"] == uuidToTestString(agentID) || result.AgentIDs["a"] == "" {
+		t.Fatalf("derived worker id=%q, source=%q", result.AgentIDs["a"], uuidToTestString(agentID))
+	}
+	var sourceID, assigneeID string
+	if err = testPool.QueryRow(ctx, `SELECT source_agent_id::text FROM agent WHERE id=$1::uuid`, result.AgentIDs["a"]).Scan(&sourceID); err != nil {
+		t.Fatal(err)
+	}
+	if err = testPool.QueryRow(ctx, `SELECT assignee_id::text FROM issue WHERE id=$1::uuid`, result.IssueIDs["a"]).Scan(&assigneeID); err != nil {
+		t.Fatal(err)
+	}
+	if sourceID != uuidToTestString(agentID) || assigneeID != result.AgentIDs["a"] {
+		t.Fatalf("clone lineage source=%q assignee=%q", sourceID, assigneeID)
 	}
 	var status string
 	if err = testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id=$1::uuid`, result.IssueIDs["merge"]).Scan(&status); err != nil {
@@ -215,6 +228,19 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 	}
 	if dependencies != 2 {
 		t.Fatalf("dependencies=%d, want 2", dependencies)
+	}
+	if _, err = testPool.Exec(ctx, `UPDATE issue SET status='done' WHERE id=$1::uuid`, result.IssueIDs["a"]); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ArchiveDerivedAgentForIssue(ctx, uuidToTestString(workspace), result.IssueIDs["a"]); err != nil {
+		t.Fatal(err)
+	}
+	var archived bool
+	if err = testPool.QueryRow(ctx, `SELECT archived_at IS NOT NULL FROM agent WHERE id=$1::uuid`, result.AgentIDs["a"]).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if !archived {
+		t.Fatal("derived worker was not archived")
 	}
 }
 

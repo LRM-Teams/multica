@@ -115,6 +115,8 @@ type IssuePlanNode struct {
 	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
 	AssigneeID  string   `json:"assignee_id"`
+	WorkerMode  string   `json:"worker_mode,omitempty"`
+	CloneReason string   `json:"clone_reason,omitempty"`
 	DependsOn   []string `json:"depends_on,omitempty"`
 }
 
@@ -130,6 +132,7 @@ type DecomposeInput struct {
 type DecomposeResult struct {
 	ParentIssueID string            `json:"parent_issue_id"`
 	IssueIDs      map[string]string `json:"issue_ids"`
+	AgentIDs      map[string]string `json:"agent_ids"`
 	ReadyIssueIDs []string          `json:"ready_issue_ids"`
 	Replayed      bool              `json:"replayed"`
 }

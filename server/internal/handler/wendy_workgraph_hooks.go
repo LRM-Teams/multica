@@ -25,6 +25,11 @@ func (h *Handler) syncWendyWorkGraphAfterIssueUpdate(ctx context.Context, issue 
 		return
 	}
 	_ = h.WorkGraph.SyncRuntimeIssue(ctx, issue)
+	if issue.Status == "done" || issue.Status == "cancelled" {
+		if archiveErr := h.WorkGraph.ArchiveDerivedAgentForIssue(ctx, uuidToString(issue.WorkspaceID), uuidToString(issue.ID)); archiveErr != nil {
+			slog.Warn("archive terminal derived Issue worker failed", "issue_id", issue.ID.String(), "error", archiveErr)
+		}
+	}
 
 	issues, err := h.wendyGraphConnectedIssues(ctx, issue)
 	if err != nil {

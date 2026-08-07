@@ -52,6 +52,12 @@ const (
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
 	taskMessageTrajectoryMaxChars       = 2000
+	// recoveryFlushTimeout bounds a background recovery Flush so a busy /
+	// idle-input-unsupported resident runtime can never stall the workspace
+	// runner read loop while waiting on the provider (see
+	// handleMessageRecoveryPageWithSend). The coordinator's pending-notice
+	// retry completes the batch if the runtime is transiently busy.
+	recoveryFlushTimeout = 30 * time.Second
 )
 
 // taskRunner executes a single agent task and returns the result.
@@ -377,7 +383,22 @@ func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page pro
 	if page.HasMore {
 		return send(coordinator.RecoveryRequest(page.AgentID, 100))
 	}
-	return coordinator.Flush(ctx)
+	// Terminal page: hand recovered bodies to the resident runtime WITHOUT
+	// blocking the workspace runner read loop. A busy / idle-input-unsupported
+	// resident runtime (e.g. Pi mid-turn with ErrCanonicalAgentRuntimeBusy /
+	// resident idle-input overlap) must not stall recovery of this agent or of
+	// any other agent whose RecoveryPage arrives on the same connection. Flush
+	// is executed on a bounded-timeout background task; the coordinator's
+	// pending-notice retry path completes it if the runtime is transiently busy.
+	flushCtx, cancel := context.WithTimeout(context.Background(), recoveryFlushTimeout)
+	go func() {
+		defer cancel()
+		if err := coordinator.Flush(flushCtx); err != nil && d.logger != nil {
+			d.logger.Warn("workspace Runner Message recovery flush deferred",
+				"error", err, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
+		}
+	}()
+	return nil
 }
 
 // New creates a new Daemon instance.

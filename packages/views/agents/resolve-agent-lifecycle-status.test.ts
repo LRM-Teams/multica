@@ -34,16 +34,16 @@ describe("resolveAgentLifecycleStatus", () => {
     });
   });
 
-  it("disconnected is a dot, grey — may recover on its own", () => {
+  it("folds a legacy disconnected value into Agent Offline", () => {
     expect(resolveAgentLifecycleStatus("disconnected", t)).toEqual({
-      label: "Disconnected",
+      label: "Offline",
       shape: "dot",
       toneClass: "text-muted-foreground",
       dotClass: "bg-muted-foreground/40",
     });
   });
 
-  it("crashed is a dot, grey — same shape as disconnected (both recoverable), text is the only differentiator", () => {
+  it("crashed is a recoverable grey dot", () => {
     expect(resolveAgentLifecycleStatus("crashed", t)).toEqual({
       label: "Crashed",
       shape: "dot",

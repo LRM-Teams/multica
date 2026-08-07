@@ -20,7 +20,7 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 		{"working", "compacting_context", "Compacting context..."},
 		{"working", "future_detail", "Working..."},
 		{"error", "", "Error"},
-		{"offline", "machine_disconnected", "Disconnected"},
+		{"offline", "machine_disconnected", "Offline"},
 		{"offline", "stopped", "Stopped"},
 	}
 	for _, tc := range cases {
@@ -94,6 +94,13 @@ func TestProjectTimelineEntryUsesEventLocalLifecycleInsteadOfLatestSnapshot(t *t
 	idle := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Idle","activity_kind":"online","detail_kind":"idle"}`)}, Summary{Label: "Error", Tone: "error"})
 	if idle.Title != "Idle" || idle.Subtext != "Idle" || idle.Tone != "success" {
 		t.Fatalf("idle row = %+v", idle)
+	}
+}
+
+func TestProjectTimelineEntryKeepsComputerDisconnectOutOfAgentVocabulary(t *testing.T) {
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"","activity_kind":"offline","detail_kind":"machine_disconnected"}`)}, Summary{Label: "Online", Tone: "success"})
+	if row.Title != "Offline" || row.Tone != "neutral" {
+		t.Fatalf("computer disconnect Agent row = %+v, want Offline", row)
 	}
 }
 

@@ -331,7 +331,7 @@ func dbAgentForHealthTest(t *testing.T) db.Agent {
 // equivalent of runtimeConnectivity for that surface (agentHealthSummary
 // already does this for the separate Activity Health tab).
 
-func TestAgentRuntimeDisplayStatus_StaleOnlineRuntimeShowsDisconnectedNotOnline(t *testing.T) {
+func TestAgentRuntimeDisplayStatus_StaleOnlineRuntimeShowsOfflineNotComputerDisconnected(t *testing.T) {
 	now := time.Now()
 	rt := db.AgentRuntime{
 		Status:     "online",
@@ -339,8 +339,8 @@ func TestAgentRuntimeDisplayStatus_StaleOnlineRuntimeShowsDisconnectedNotOnline(
 		UpdatedAt:  pgtimestamptz(now.Add(-2 * time.Minute)),
 	}
 	got := agentRuntimeDisplayStatus("idle", rt, pgtype.Timestamptz{}, "", pgtype.Timestamptz{}, now)
-	if got != agentDisplayStatusDisconnected {
-		t.Fatalf("display status = %q, want %q (stale heartbeat must not show as still working/idle-online)", got, agentDisplayStatusDisconnected)
+	if got != agentDisplayStatusOffline {
+		t.Fatalf("display status = %q, want %q (stale heartbeat must make the Agent offline)", got, agentDisplayStatusOffline)
 	}
 }
 
@@ -501,8 +501,8 @@ func TestAttachAgentRuntimeNames_StaleOnlineRuntimeGetsHonestDisplayStatusNotRaw
 	if resps[0].RuntimeStatus != "online" {
 		t.Fatalf("RuntimeStatus = %q, want raw %q (this field must stay a passthrough for callers that need the dispatch-relevant raw value)", resps[0].RuntimeStatus, "online")
 	}
-	if resps[0].RuntimeDisplayStatus != agentDisplayStatusDisconnected {
-		t.Fatalf("RuntimeDisplayStatus = %q, want %q — a stale-but-DB-online runtime must not display as online", resps[0].RuntimeDisplayStatus, agentDisplayStatusDisconnected)
+	if resps[0].RuntimeDisplayStatus != agentDisplayStatusOffline {
+		t.Fatalf("RuntimeDisplayStatus = %q, want %q — Computer disconnect must make the Agent offline", resps[0].RuntimeDisplayStatus, agentDisplayStatusOffline)
 	}
 }
 

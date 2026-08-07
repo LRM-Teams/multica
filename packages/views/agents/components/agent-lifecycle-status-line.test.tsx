@@ -29,14 +29,6 @@ vi.mock("../resolve-agent-lifecycle-status", () => ({
         dotClass: "bg-muted-foreground/40",
       };
     }
-    if (status === "disconnected") {
-      return {
-        label: "Disconnected",
-        shape: "dot",
-        toneClass: "text-muted-foreground",
-        dotClass: "bg-muted-foreground/40",
-      };
-    }
     return {
       label: "Offline",
       shape: "dot",
@@ -51,8 +43,8 @@ vi.mock("../../i18n/use-t", () => ({
 }));
 
 describe("AgentLifecycleStatusLine", () => {
-  it("renders nothing for idle/working/offline/missing (LRM-248 + denser filter)", () => {
-    for (const status of ["idle", "working", "offline", null, undefined] as const) {
+  it("renders nothing for idle/working/offline/legacy disconnected/missing", () => {
+    for (const status of ["idle", "working", "offline", "disconnected", null, undefined] as const) {
       const { container } = render(
         <AgentLifecycleStatusLine status={status} />,
       );
@@ -77,19 +69,14 @@ describe("AgentLifecycleStatusLine", () => {
     expect(mark.className).toContain("text-brand");
   });
 
-  it("renders crashed and disconnected as gray dots", () => {
-    const { unmount } = render(<AgentLifecycleStatusLine status="crashed" />);
+  it("renders crashed as a gray dot", () => {
+    render(<AgentLifecycleStatusLine status="crashed" />);
     expect(screen.getByTestId("agent-lifecycle-status")).toHaveTextContent(
       "Crashed",
     );
     expect(screen.getByTestId("agent-lifecycle-status")).toHaveAttribute(
       "data-shape",
       "dot",
-    );
-    unmount();
-    render(<AgentLifecycleStatusLine status="disconnected" />);
-    expect(screen.getByTestId("agent-lifecycle-status")).toHaveTextContent(
-      "Disconnected",
     );
   });
 });

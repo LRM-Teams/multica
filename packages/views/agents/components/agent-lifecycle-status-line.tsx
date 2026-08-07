@@ -21,7 +21,7 @@ export function AgentLifecycleStatusLine({
   className?: string;
 }) {
   const { t } = useT("agents");
-  // Denser surfaces paint Stopped / Starting / Crashed / Disconnected only.
+  // Denser surfaces paint Stopped / Starting / Crashed / Blocked only.
   // idle/working → null from the mapper. offline / missing also map to an
   // offline visual in ①, but we intentionally do NOT render it here — the
   // LRM-248 avatar badge already says Online/Offline; a second "Offline"
@@ -30,7 +30,6 @@ export function AgentLifecycleStatusLine({
     status !== "starting" &&
     status !== "stopped" &&
     status !== "crashed" &&
-    status !== "disconnected" &&
     status !== "blocked"
   ) {
     return null;

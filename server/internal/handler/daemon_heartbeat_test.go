@@ -75,10 +75,10 @@ func TestComputerConnected_IndependentOfRuntimeHealth(t *testing.T) {
 	now := time.Now()
 
 	daemonHeartbeat := &db.DaemonHeartbeat{LastSeenAt: pgtimestamptz(now.Add(-5 * time.Second))}
-	// Same fixture shape as TestAgentRuntimeDisplayStatus_StaleOnlineRuntimeShowsDisconnectedNotOnline:
+	// Same fixture shape as TestAgentRuntimeDisplayStatus_StaleOnlineRuntimeShowsOfflineNotComputerDisconnected:
 	// status still says "online" (the lying field #1687 stopped trusting)
 	// but the heartbeat itself is stale (> 150s) and within the reconnect
-	// window (< 5m), which resolves to "disconnected" rather than "offline".
+	// window (< 5m). That connectivity detail still resolves to Agent Offline.
 	staleRuntime := db.AgentRuntime{
 		Status:     "online",
 		LastSeenAt: pgtimestamptz(now.Add(-3 * time.Minute)),
@@ -88,8 +88,8 @@ func TestComputerConnected_IndependentOfRuntimeHealth(t *testing.T) {
 	if !computerConnected(daemonHeartbeat, now) {
 		t.Fatal("computer must show connected: the daemon itself just heartbeat, independent of any runtime")
 	}
-	if got := agentRuntimeDisplayStatus("idle", staleRuntime, pgtype.Timestamptz{}, "", pgtype.Timestamptz{}, now); got != agentDisplayStatusDisconnected {
-		t.Fatalf("agent display status = %q, want %q — the runtime's own heartbeat is genuinely stale", got, agentDisplayStatusDisconnected)
+	if got := agentRuntimeDisplayStatus("idle", staleRuntime, pgtype.Timestamptz{}, "", pgtype.Timestamptz{}, now); got != agentDisplayStatusOffline {
+		t.Fatalf("agent display status = %q, want %q — Computer disconnect makes the Agent offline", got, agentDisplayStatusOffline)
 	}
 }
 

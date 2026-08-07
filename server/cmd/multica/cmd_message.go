@@ -176,15 +176,18 @@ func newMessageReadCmd() *cobra.Command {
 		Use:   "read",
 		Short: "Read bounded canonical history from a targeted chat surface",
 		Long: "Read bounded canonical history from a targeted chat surface. " +
-			"Use at most one of --before, --after, or --around with a full message ID, a unique 8+ character ID prefix, or a positive target sequence. " +
-			"A digits-only anchor is interpreted as a target sequence. " +
-			"--before and --after exclude the anchor; --around includes it. Results are returned in ascending sequence order.",
+			"Use at most one anchor: --before-id, --after-id, or --around-id with a full message ID or a unique 8+ character ID prefix. " +
+			"--before-id and --after-id exclude the anchor; --around-id includes it. Results are returned in ascending sequence order. " +
+			"The --before-seq/--after-seq/--around-seq variants address messages by target sequence and exist for runtime bookkeeping; prefer the id flags.",
 		RunE: runAgentMessageRead,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
-	cmd.Flags().String("before", "", "Read messages before a full id, unique short id, or target sequence")
-	cmd.Flags().String("after", "", "Read messages after a full id, unique short id, or target sequence")
-	cmd.Flags().String("around", "", "Read a window around a full id, unique short id, or target sequence")
+	cmd.Flags().String("before-id", "", "Read messages before a full message id or unique 8+ character id prefix")
+	cmd.Flags().String("after-id", "", "Read messages after a full message id or unique 8+ character id prefix")
+	cmd.Flags().String("around-id", "", "Read a window around a full message id or unique 8+ character id prefix")
+	cmd.Flags().Int64("before-seq", 0, "Read messages before a target sequence (runtime bookkeeping; prefer --before-id)")
+	cmd.Flags().Int64("after-seq", 0, "Read messages after a target sequence (runtime bookkeeping; prefer --after-id)")
+	cmd.Flags().Int64("around-seq", 0, "Read a window around a target sequence (runtime bookkeeping; prefer --around-id)")
 	cmd.Flags().Int("limit", 20, "Maximum messages to return")
 	return cmd
 }
@@ -324,9 +327,14 @@ func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
 		"target": target,
 		"limit":  limit,
 	}
-	for _, name := range []string{"before", "after", "around"} {
+	for _, name := range []string{"before-id", "after-id", "around-id"} {
 		if value := strings.TrimSpace(flagString(cmd, name)); value != "" {
-			body[name] = value
+			body[strings.ReplaceAll(name, "-", "_")] = value
+		}
+	}
+	for _, name := range []string{"before-seq", "after-seq", "around-seq"} {
+		if value, _ := cmd.Flags().GetInt64(name); value != 0 {
+			body[strings.ReplaceAll(name, "-", "_")] = value
 		}
 	}
 	var out map[string]any

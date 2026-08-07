@@ -297,7 +297,7 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 
 	cmd := newMessageReadCmd()
 	_ = cmd.Flags().Set("target", "#one")
-	_ = cmd.Flags().Set("around", "123")
+	_ = cmd.Flags().Set("around-id", "12345678")
 	_ = cmd.Flags().Set("limit", "2")
 	readOut, writeOut, err := os.Pipe()
 	if err != nil {
@@ -318,7 +318,7 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	}
 	for field, want := range map[string]any{
 		"agent_id": "agent-1", "workspace_id": "workspace-1",
-		"target": "#one", "around": "123", "limit": float64(2),
+		"target": "#one", "around_id": "12345678", "limit": float64(2),
 	} {
 		if got := body[field]; got != want {
 			t.Errorf("Credential Proxy body[%q] = %#v, want %#v (body=%+v)", field, got, want, body)

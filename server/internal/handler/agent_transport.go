@@ -119,10 +119,17 @@ type AgentTransportReactResponse struct {
 
 type AgentTransportReadRequest struct {
 	Target string `json:"target"`
-	Before string `json:"before,omitempty"`
-	After  string `json:"after,omitempty"`
-	Around string `json:"around,omitempty"`
-	Limit  int    `json:"limit"`
+	// Read anchors come in two grammars with separate fields: message identity
+	// (*_id, what agents are taught to use) and target sequence (*_seq, machine
+	// bookkeeping for proxy recovery). Splitting them keeps anchor resolution
+	// free of shape-based guessing.
+	BeforeID  string `json:"before_id,omitempty"`
+	BeforeSeq int64  `json:"before_seq,omitempty"`
+	AfterID   string `json:"after_id,omitempty"`
+	AfterSeq  int64  `json:"after_seq,omitempty"`
+	AroundID  string `json:"around_id,omitempty"`
+	AroundSeq int64  `json:"around_seq,omitempty"`
+	Limit     int    `json:"limit"`
 }
 
 type AgentTransportReadResponse struct {
@@ -140,7 +147,6 @@ var (
 	errAgentTransportReadAnchorInvalid   = errors.New("invalid read anchor")
 	errAgentTransportReadAnchorNotFound  = errors.New("read anchor not found")
 	errAgentTransportReadAnchorAmbiguous = errors.New("read anchor is ambiguous")
-	decimalAgentMessageSequencePattern   = regexp.MustCompile(`^[0-9]+$`)
 	shortAgentMessageIDPattern           = regexp.MustCompile(`^[0-9a-fA-F]{8,35}$`)
 )
 
@@ -575,7 +581,7 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	anchorMode, anchorRaw, err := req.anchor()
+	anchorMode, anchorID, anchorSeq, err := req.anchor()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -590,7 +596,7 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
-	messages, err := h.readAgentTransportMessages(r.Context(), target, anchorMode, anchorRaw, limit)
+	messages, err := h.readAgentTransportMessages(r.Context(), target, anchorMode, anchorID, anchorSeq, limit)
 	if err != nil {
 		switch {
 		case errors.Is(err, errAgentTransportReadAnchorInvalid):
@@ -1582,25 +1588,31 @@ func agentTransportCanonicalReactionResponse(channelID, id, messageID, actorID p
 	}
 }
 
-func (req AgentTransportReadRequest) anchor() (mode, raw string, err error) {
+func (req AgentTransportReadRequest) anchor() (mode, idAnchor string, seqAnchor int64, err error) {
 	anchors := []struct {
 		mode string
-		raw  string
+		id   string
+		seq  int64
 	}{
-		{mode: "before", raw: strings.TrimSpace(req.Before)},
-		{mode: "after", raw: strings.TrimSpace(req.After)},
-		{mode: "around", raw: strings.TrimSpace(req.Around)},
+		{mode: "before", id: strings.TrimSpace(req.BeforeID), seq: req.BeforeSeq},
+		{mode: "after", id: strings.TrimSpace(req.AfterID), seq: req.AfterSeq},
+		{mode: "around", id: strings.TrimSpace(req.AroundID), seq: req.AroundSeq},
 	}
 	for _, candidate := range anchors {
-		if candidate.raw == "" {
+		hasID := candidate.id != ""
+		hasSeq := candidate.seq != 0
+		if !hasID && !hasSeq {
 			continue
 		}
-		if mode != "" {
-			return "", "", errors.New("only one of before, after, or around may be set")
+		if hasID && hasSeq {
+			return "", "", 0, fmt.Errorf("use either %s_id or %s_seq, not both", candidate.mode, candidate.mode)
 		}
-		mode, raw = candidate.mode, candidate.raw
+		if mode != "" {
+			return "", "", 0, errors.New("only one of before, after, or around may be set")
+		}
+		mode, idAnchor, seqAnchor = candidate.mode, candidate.id, candidate.seq
 	}
-	return mode, raw, nil
+	return mode, idAnchor, seqAnchor, nil
 }
 
 func agentTransportCanonicalMessageTarget(target agentTransportTarget) string {
@@ -1610,11 +1622,17 @@ func agentTransportCanonicalMessageTarget(target agentTransportTarget) string {
 	return "channel:" + target.channel.ID
 }
 
-func (h *Handler) readAgentTransportMessages(ctx context.Context, target agentTransportTarget, mode, rawAnchor string, limit int) ([]ChannelMessageResponse, error) {
+func (h *Handler) readAgentTransportMessages(ctx context.Context, target agentTransportTarget, mode, anchorID string, anchorSeq int64, limit int) ([]ChannelMessageResponse, error) {
 	if mode == "" {
 		return h.readAgentTransportMessageWindow(ctx, target, "recent", 0, limit)
 	}
-	anchor, err := h.resolveAgentTransportReadAnchor(ctx, target, rawAnchor)
+	var anchor ChannelMessageResponse
+	var err error
+	if anchorID != "" {
+		anchor, err = h.resolveAgentTransportReadAnchorByID(ctx, target, anchorID)
+	} else {
+		anchor, err = h.resolveAgentTransportReadAnchorBySeq(ctx, target, anchorSeq)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1639,34 +1657,11 @@ func (h *Handler) readAgentTransportMessages(ctx context.Context, target agentTr
 	}
 }
 
-func (h *Handler) resolveAgentTransportReadAnchor(ctx context.Context, target agentTransportTarget, raw string) (ChannelMessageResponse, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ChannelMessageResponse{}, fmt.Errorf("%w: anchor is required", errAgentTransportReadAnchorInvalid)
-	}
-	if decimalAgentMessageSequencePattern.MatchString(raw) && len(raw) >= 8 {
-		messages, err := h.findAgentTransportReadAnchors(ctx, target, `LOWER(m.id::text) LIKE LOWER($4) || '%'`, raw)
-		if err != nil {
-			return ChannelMessageResponse{}, err
-		}
-		if len(messages) > 0 {
-			return oneAgentTransportReadAnchor(messages)
-		}
-	}
-	if decimalAgentMessageSequencePattern.MatchString(raw) {
-		sequence, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return ChannelMessageResponse{}, fmt.Errorf("%w: sequence is out of range", errAgentTransportReadAnchorInvalid)
-		}
-		if sequence <= 0 {
-			return ChannelMessageResponse{}, fmt.Errorf("%w: sequence must be positive", errAgentTransportReadAnchorInvalid)
-		}
-		messages, err := h.findAgentTransportReadAnchors(ctx, target, `m.seq = $4`, sequence)
-		if err != nil {
-			return ChannelMessageResponse{}, err
-		}
-		return oneAgentTransportReadAnchor(messages)
-	}
+// resolveAgentTransportReadAnchorByID resolves a message identity anchor: a
+// full message id or a unique 8+ character id prefix. Identity anchors never
+// fall back to sequence interpretation, so a digits-only prefix (UUIDs
+// sometimes have one) still resolves as an id.
+func (h *Handler) resolveAgentTransportReadAnchorByID(ctx context.Context, target agentTransportTarget, raw string) (ChannelMessageResponse, error) {
 	if id, err := uuid.Parse(raw); err == nil {
 		messages, err := h.findAgentTransportReadAnchors(ctx, target, `m.id = $4`, id)
 		if err != nil {
@@ -1675,9 +1670,23 @@ func (h *Handler) resolveAgentTransportReadAnchor(ctx context.Context, target ag
 		return oneAgentTransportReadAnchor(messages)
 	}
 	if !shortAgentMessageIDPattern.MatchString(raw) {
-		return ChannelMessageResponse{}, fmt.Errorf("%w: use a full message id, a unique 8+ character short id, or a positive sequence", errAgentTransportReadAnchorInvalid)
+		return ChannelMessageResponse{}, fmt.Errorf("%w: use a full message id or a unique 8+ character id prefix", errAgentTransportReadAnchorInvalid)
 	}
 	messages, err := h.findAgentTransportReadAnchors(ctx, target, `LOWER(m.id::text) LIKE LOWER($4) || '%'`, raw)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	return oneAgentTransportReadAnchor(messages)
+}
+
+// resolveAgentTransportReadAnchorBySeq resolves a target sequence anchor.
+// Sequences are machine bookkeeping (proxy recovery and freshness), so the
+// value arrives as an integer and only ever means a position in the target.
+func (h *Handler) resolveAgentTransportReadAnchorBySeq(ctx context.Context, target agentTransportTarget, sequence int64) (ChannelMessageResponse, error) {
+	if sequence <= 0 {
+		return ChannelMessageResponse{}, fmt.Errorf("%w: sequence must be positive", errAgentTransportReadAnchorInvalid)
+	}
+	messages, err := h.findAgentTransportReadAnchors(ctx, target, `m.seq = $4`, sequence)
 	if err != nil {
 		return ChannelMessageResponse{}, err
 	}

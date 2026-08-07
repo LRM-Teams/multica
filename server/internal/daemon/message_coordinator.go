@@ -383,7 +383,16 @@ func (c *MessageCoordinator) acceptLocked(delivery protocol.AgentDeliverPayload)
 // Flush hands all currently Pending bodies to an idle runtime in target-sequence
 // order. The boundary file is atomically replaced before Pending is forgotten.
 func (c *MessageCoordinator) Flush(ctx context.Context) error {
-	return c.flush(ctx, true)
+	_, err := c.flushWithResult(ctx, true)
+	return err
+}
+
+// FlushOnTurnCompletion advances a queued batch immediately after the prior
+// resident turn ends. The boolean reports whether a new concrete batch crossed
+// the runtime boundary, allowing Activity to remain Working without an
+// intermediate Idle transition.
+func (c *MessageCoordinator) FlushOnTurnCompletion(ctx context.Context) (bool, error) {
+	return c.flushWithResult(ctx, false)
 }
 
 // Check non-blockingly moves one bounded Pending window into the current
@@ -482,14 +491,20 @@ func (c *MessageCoordinator) MarkRead(target string, throughSeq int64) error {
 }
 
 func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool) error {
+	_, err := c.flushWithResult(ctx, scheduleBusyNotice)
+	return err
+}
+
+func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNotice bool) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return errors.New("Message coordinator is closed")
+		return false, errors.New("Message coordinator is closed")
 	}
 	if c.recovery.status != messageFreshnessComplete && c.recovery.status != messageFreshnessReadyToHandoff {
-		return errors.New("Message freshness is unknown until recovery completes")
+		return false, errors.New("Message freshness is unknown until recovery completes")
 	}
+	handedOff := false
 	for {
 		if c.handedOff == nil {
 			batch := c.pendingBatchLocked()
@@ -497,14 +512,15 @@ func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool)
 				if c.recovery.status == messageFreshnessReadyToHandoff {
 					c.recovery.status = messageFreshnessComplete
 				}
-				return nil
+				return handedOff, nil
 			}
 			if err := c.handoff(ctx, batch); err != nil {
 				if scheduleBusyNotice && errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 					c.schedulePendingNoticeLocked(c.noticeCoalesce)
 				}
-				return fmt.Errorf("runtime Message handoff: %w", err)
+				return handedOff, fmt.Errorf("runtime Message handoff: %w", err)
 			}
+			handedOff = true
 			next := cloneBoundaries(c.boundaries)
 			for _, message := range batch {
 				if message.Seq > next[message.Target] {
@@ -524,7 +540,7 @@ func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool)
 			// A process crash may conservatively replay because bodies are forbidden
 			// from durable local state; it may never skip them.
 			c.boundaryHealthy = false
-			return fmt.Errorf("persist Context Boundary after runtime handoff: %w", err)
+			return handedOff, fmt.Errorf("persist Context Boundary after runtime handoff: %w", err)
 		}
 		c.boundaries = handoff.nextBoundaries
 		c.boundaryHealthy = true

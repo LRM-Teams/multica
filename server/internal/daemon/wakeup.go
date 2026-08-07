@@ -159,7 +159,6 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	go d.runWSWriter(conn, writes, writerDone)
 	d.setReminderWS(writes, writerDone, conn.Close)
 	d.requestAgentLifecycleReplay()
-	d.beginMessageRecovery(writes)
 
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	hbDone := make(chan struct{})
@@ -505,39 +504,6 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 			continue
 		}
 		switch msg.Type {
-		case protocol.EventAgentDeliver:
-			var delivery protocol.AgentDeliverPayload
-			if err := json.Unmarshal(msg.Payload, &delivery); err != nil {
-				d.logger.Debug("agent delivery invalid payload", "error", err)
-				continue
-			}
-			ack, err := d.acceptIdleAgentDelivery(context.Background(), delivery)
-			if err != nil {
-				d.logger.Warn("agent delivery not acknowledged", "error", err, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-				continue
-			}
-			frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliverAck, Payload: marshalRaw(ack)})
-			if err != nil {
-				d.logger.Warn("agent delivery acknowledgement marshal failed", "error", err, "agent_id", delivery.AgentID)
-				continue
-			}
-			select {
-			case writes <- frame:
-			default:
-				d.logger.Warn("agent delivery acknowledgement dropped", "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-			}
-			if err := d.flushIdleAgentDelivery(context.Background(), delivery.AgentID); err != nil {
-				d.logger.Warn("idle agent Message handoff failed after delivery acknowledgement", "error", err, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-			}
-		case protocol.EventAgentRecoveryPage:
-			var page protocol.AgentRecoveryPage
-			if err := json.Unmarshal(msg.Payload, &page); err != nil {
-				d.logger.Warn("agent Message recovery page invalid", "error", err)
-				continue
-			}
-			if err := d.handleMessageRecoveryPage(context.Background(), page, writes); err != nil {
-				d.logger.Warn("agent Message recovery failed", "error", err, "agent_id", page.AgentID, "snapshot_id", page.SnapshotID)
-			}
 		case protocol.EventDaemonTaskAvailable:
 			var payload protocol.TaskAvailablePayload
 			if len(msg.Payload) > 0 {
@@ -600,12 +566,9 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				d.logger.Debug("daemon agent start invalid payload", "error", err)
 				continue
 			}
-			if err := d.handleDaemonAgentStart(payload); err != nil {
+			if err := d.handleDaemonAgentStartFrame(payload); err != nil {
 				d.logger.Warn("persist daemon agent start failed; reconnecting", "error", err, "agent_id", payload.AgentID)
 				return err
-			}
-			if !payload.Replay {
-				d.beginAgentMessageRecovery(payload.AgentID, writes)
 			}
 		case protocol.EventDaemonAgentLifecycleEnd:
 			var payload protocol.DaemonAgentLifecycleReplayEndPayload
@@ -617,7 +580,6 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				d.logger.Warn("persist daemon lifecycle cursor failed; reconnecting", "error", err)
 				return err
 			}
-			d.beginMessageRecovery(writes)
 		case protocol.EventReminderProjectionEnd:
 			var payload protocol.ReminderProjectionReplayEndPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
@@ -729,8 +691,28 @@ func (d *Daemon) handleDaemonAgentStop(payload protocol.DaemonAgentStopPayload) 
 }
 
 func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload) error {
+	_, err := d.applyDaemonAgentStart(payload)
+	return err
+}
+
+// handleDaemonAgentStartFrame starts Message recovery only when this lifecycle
+// frame creates or replaces the local Message coordinator. Replayed Task
+// lifecycle state must not restart recovery for every existing Agent: the
+// Workspace Runner connection owns reconnect recovery for chat.
+func (d *Daemon) handleDaemonAgentStartFrame(payload protocol.DaemonAgentStartPayload) error {
+	created, err := d.applyDaemonAgentStart(payload)
+	if err != nil {
+		return err
+	}
+	if created {
+		d.beginAgentMessageRecovery(payload.AgentID)
+	}
+	return nil
+}
+
+func (d *Daemon) applyDaemonAgentStart(payload protocol.DaemonAgentStartPayload) (bool, error) {
 	if d == nil || d.reminderAgents == nil {
-		return nil
+		return false, nil
 	}
 	// A server-originated owner frame is the capability proof. The registration
 	// response may predate a server upgrade, so only local runtime/workspace and
@@ -740,19 +722,21 @@ func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload
 	d.mu.Unlock()
 	if !runtimeKnown || runtime.WorkspaceID != payload.WorkspaceID {
 		d.logger.Warn("daemon agent start rejected outside local runtime", "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID, "workspace_id", payload.WorkspaceID)
-		return nil
+		return false, nil
 	}
 	changed, accepted, err := d.reminderAgents.applyStart(payload.AgentID, payload.RuntimeID, payload.WorkspaceID, payload.PlacementGeneration)
 	if err != nil {
-		return err
+		return false, err
 	}
+	coordinatorCreated := false
 	if accepted {
 		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, payload.WorkspaceID, payload.AgentID)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
-			return fmt.Errorf("create Agent root for Message coordinator: %w", err)
+			return false, fmt.Errorf("create Agent root for Message coordinator: %w", err)
 		}
-		if _, err := d.ensureIdleMessageCoordinator(payload.AgentID, payload.RuntimeID, agentRoot); err != nil {
-			return fmt.Errorf("register Agent Message coordinator: %w", err)
+		coordinatorCreated, err = d.ensureIdleMessageCoordinator(payload.AgentID, payload.RuntimeID, agentRoot)
+		if err != nil {
+			return false, fmt.Errorf("register Agent Message coordinator: %w", err)
 		}
 	}
 	if accepted && changed && !payload.Replay {
@@ -765,7 +749,7 @@ func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload
 		d.reminderPendingSnapshots[payload.AgentID] = struct{}{}
 		d.reminderGateMu.Unlock()
 	}
-	return nil
+	return coordinatorCreated, nil
 }
 
 func (d *Daemon) handleDaemonAgentLifecycleReplayEnd(payload protocol.DaemonAgentLifecycleReplayEndPayload) error {
@@ -831,38 +815,37 @@ func (d *Daemon) clearReminderWS(writes chan<- []byte) {
 	d.reminderGateMu.Unlock()
 }
 
-func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
+func (d *Daemon) queueTaskWakeupFrame(writes chan<- []byte, eventType string, payload any) error {
 	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
 	if err != nil {
-		d.logger.Warn("reminder websocket marshal failed", "type", eventType, "error", err)
-		return false
+		return fmt.Errorf("marshal %s frame: %w", eventType, err)
 	}
 	d.reminderWSMu.RLock()
 	defer d.reminderWSMu.RUnlock()
-	if d.reminderWrites == nil {
-		// Task #69: previously silent. No WS established yet (or torn
-		// down) — the caller's local retry (task #68) will re-attempt this
-		// send once a connection exists, so this isn't fatal, but it is
-		// exactly the kind of drop that went unlogged for 20+ hours.
-		d.logger.Warn("reminder websocket frame dropped: no connection established", "type", eventType)
-		return false
+	if d.reminderWrites == nil || d.reminderWSDone == nil {
+		return errors.New("task wakeup websocket is unavailable")
 	}
+	if writes != nil && d.reminderWrites != writes {
+		return errors.New("task wakeup websocket generation changed")
+	}
+	// Raft-style transport contract: application frames wait for the single
+	// serialized writer. Only reconstructible signals such as heartbeat may be
+	// dropped under local backpressure. The writer deadline closes genuinely
+	// broken network connections and unblocks this wait through reminderWSDone.
 	select {
 	case d.reminderWrites <- frame:
-		return true
+		return nil
 	case <-d.reminderWSDone:
-		// Task #69: same shape as the reminderWrites==nil case above — the
-		// connection this frame was headed for tore down between the nil
-		// check and this select. Previously silent too.
-		d.logger.Warn("reminder websocket frame dropped: connection closing", "type", eventType)
-		return false
-	default:
-		if d.reminderClose != nil {
-			go d.reminderClose()
-		}
-		d.logger.Warn("reminder websocket writer backlog; reconnecting for snapshot recovery", "type", eventType)
+		return errors.New("task wakeup websocket writer stopped")
+	}
+}
+
+func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
+	if err := d.queueTaskWakeupFrame(nil, eventType, payload); err != nil {
+		d.logger.Warn("reminder websocket frame not queued", "type", eventType, "error", err)
 		return false
 	}
+	return true
 }
 
 func (d *Daemon) requestReminderSnapshot(agentID string) {

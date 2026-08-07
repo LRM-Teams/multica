@@ -290,7 +290,16 @@ func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.
 	runtimeID := d.messageRuntimeIDs[delivery.AgentID]
 	d.messageCoordinatorMu.RUnlock()
 	if coordinator == nil {
-		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("no idle Message coordinator for agent %q", delivery.AgentID)
+		if err := d.ensureIdleMessageCoordinatorForDelivery(delivery.AgentID); err != nil {
+			return protocol.AgentDeliverAckPayload{}, err
+		}
+		d.messageCoordinatorMu.RLock()
+		coordinator = d.messageCoordinators[delivery.AgentID]
+		runtimeID = d.messageRuntimeIDs[delivery.AgentID]
+		d.messageCoordinatorMu.RUnlock()
+		if coordinator == nil {
+			return protocol.AgentDeliverAckPayload{}, fmt.Errorf("no idle Message coordinator for agent %q", delivery.AgentID)
+		}
 	}
 	if err := d.ensureResidentMessageRuntime(ctx, delivery.AgentID, runtimeID); err != nil {
 		return protocol.AgentDeliverAckPayload{}, err
@@ -303,19 +312,12 @@ func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.
 
 func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, agentID string) error {
 	d.messageCoordinatorMu.RLock()
-	defer d.messageCoordinatorMu.RUnlock()
 	coordinator := d.messageCoordinators[agentID]
+	d.messageCoordinatorMu.RUnlock()
 	if coordinator == nil {
 		return fmt.Errorf("no idle Message coordinator for agent %q", agentID)
 	}
 	return coordinator.Flush(ctx)
-}
-
-func (d *Daemon) beginMessageRecovery(writes chan<- []byte) {
-	d.beginMessageRecoveryWithSend(func(request protocol.AgentRecoveryRequest) error {
-		d.enqueueMessageRecoveryRequest(request, writes)
-		return nil
-	})
 }
 
 func (d *Daemon) beginMessageRecoveryWithSend(send func(protocol.AgentRecoveryRequest) error) {
@@ -335,7 +337,7 @@ func (d *Daemon) beginMessageRecoveryWithSend(send func(protocol.AgentRecoveryRe
 	}
 }
 
-func (d *Daemon) beginAgentMessageRecovery(agentID string, writes chan<- []byte) {
+func (d *Daemon) beginAgentMessageRecovery(agentID string) {
 	d.messageCoordinatorMu.RLock()
 	coordinator := d.messageCoordinators[agentID]
 	d.messageCoordinatorMu.RUnlock()
@@ -343,31 +345,9 @@ func (d *Daemon) beginAgentMessageRecovery(agentID string, writes chan<- []byte)
 		return
 	}
 	request := coordinator.BeginRecovery(agentID, 100)
-	if writes != nil {
-		d.enqueueMessageRecoveryRequest(request, writes)
-		return
+	if !d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentRecoveryRequest, request) && d.logger != nil {
+		d.logger.Warn("agent Message recovery request failed", "error", "workspace Runner Message transport unavailable", "agent_id", agentID)
 	}
-	d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentRecoveryRequest, request)
-}
-
-func (d *Daemon) enqueueMessageRecoveryRequest(request protocol.AgentRecoveryRequest, writes chan<- []byte) {
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentRecoveryRequest, Payload: marshalRaw(request)})
-	if err != nil {
-		d.logger.Warn("agent Message recovery request marshal failed", "error", err, "agent_id", request.AgentID)
-		return
-	}
-	select {
-	case writes <- frame:
-	default:
-		d.logger.Warn("agent Message recovery request dropped", "agent_id", request.AgentID)
-	}
-}
-
-func (d *Daemon) handleMessageRecoveryPage(ctx context.Context, page protocol.AgentRecoveryPage, writes chan<- []byte) error {
-	return d.handleMessageRecoveryPageWithSend(ctx, page, func(request protocol.AgentRecoveryRequest) error {
-		d.enqueueMessageRecoveryRequest(request, writes)
-		return nil
-	})
 }
 
 func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
@@ -375,10 +355,20 @@ func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page pro
 		return errors.New("Message recovery sender is unavailable")
 	}
 	d.messageCoordinatorMu.RLock()
-	defer d.messageCoordinatorMu.RUnlock()
 	coordinator := d.messageCoordinators[page.AgentID]
+	runtimeID := d.messageRuntimeIDs[page.AgentID]
+	d.messageCoordinatorMu.RUnlock()
 	if coordinator == nil {
 		return fmt.Errorf("no Message coordinator for recovery agent %q", page.AgentID)
+	}
+	// Recovery bodies cross the same resident runtime boundary as live
+	// Deliveries. On daemon restart recovery can arrive before any live
+	// Delivery has created that runtime, so prepare it before merging a page
+	// that will need handoff.
+	if len(page.Messages) > 0 {
+		if err := d.ensureResidentMessageRuntime(ctx, page.AgentID, runtimeID); err != nil {
+			return fmt.Errorf("prepare resident Message runtime for recovery: %w", err)
+		}
 	}
 	if err := coordinator.MergeRecoveryPage(page); err != nil {
 		return err

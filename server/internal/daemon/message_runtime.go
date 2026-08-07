@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -27,7 +29,7 @@ func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot stri
 		existing.Close()
 	}
 	coordinator, err := NewMessageCoordinator(agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
-		return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages)
+		return d.handoffIdleMessageBatch(ctx, agentID, runtimeID, messages)
 	}, func(messages []protocol.AgentMessageProjection) {
 		d.emitMessageReceivedActivity(agentID, runtimeID, messages)
 	})
@@ -46,6 +48,108 @@ func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot stri
 	d.messageCoordinators[agentID] = coordinator
 	d.messageRuntimeIDs[agentID] = runtimeID
 	return true, nil
+}
+
+// ensureIdleMessageCoordinatorForDelivery repairs restart-time coordinator
+// loss from the daemon's durable Agent placement. Runtime routing remains out
+// of the Message envelope; only an already-authorized local residency may
+// recreate this receive-side projection.
+func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(agentID string) error {
+	if d == nil || strings.TrimSpace(agentID) == "" {
+		return errors.New("agent id is required")
+	}
+	d.messageCoordinatorMu.RLock()
+	existing := d.messageCoordinators[agentID]
+	d.messageCoordinatorMu.RUnlock()
+	if existing != nil {
+		return nil
+	}
+	if d.reminderAgents == nil {
+		return fmt.Errorf("no durable Agent placement for %q", agentID)
+	}
+	residency, ok := d.reminderAgents.get(agentID)
+	if !ok || residency.RuntimeID == "" || residency.WorkspaceID == "" || residency.PlacementGeneration < 1 {
+		return fmt.Errorf("no durable Agent placement for %q", agentID)
+	}
+	d.mu.Lock()
+	runtime, runtimeKnown := d.runtimeIndex[residency.RuntimeID]
+	d.mu.Unlock()
+	if !runtimeKnown || runtime.WorkspaceID != residency.WorkspaceID {
+		return fmt.Errorf("durable Agent placement for %q is not owned by this daemon", agentID)
+	}
+	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, residency.WorkspaceID, agentID)
+	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+		return fmt.Errorf("create Agent root for Message coordinator: %w", err)
+	}
+	created, err := d.ensureIdleMessageCoordinator(agentID, residency.RuntimeID, agentRoot)
+	if err != nil {
+		return fmt.Errorf("repair Agent Message coordinator: %w", err)
+	}
+	if created {
+		d.beginAgentMessageRecovery(agentID)
+	}
+	return nil
+}
+
+func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+	return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, func(turnErr error, generation uint64) {
+		if turnErr != nil {
+			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
+				d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
+			})
+			return
+		}
+		flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		d.messageCoordinatorMu.RLock()
+		coordinator := d.messageCoordinators[agentID]
+		d.messageCoordinatorMu.RUnlock()
+		if coordinator == nil {
+			d.emitMessageTurnCompletionActivity(agentID, runtimeID, nil)
+			return
+		}
+		continued, err := coordinator.FlushOnTurnCompletion(flushCtx)
+		if err != nil {
+			// Another delivery may have won admission after the prior turn
+			// released. Its Message received Activity is already authoritative.
+			if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+				return
+			}
+			if d.logger != nil {
+				d.logger.Warn("resident Message completion flush failed", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+			}
+			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
+				d.emitMessageTurnCompletionActivity(agentID, runtimeID, err)
+			})
+			return
+		}
+		if !continued {
+			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
+				d.emitMessageTurnCompletionActivity(agentID, runtimeID, nil)
+			})
+		}
+	})
+}
+
+func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, turnErr error) {
+	d.mu.Lock()
+	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+	d.mu.Unlock()
+	if workspaceID == "" {
+		return
+	}
+	producer := d.workspaceAgentActivityProducer(workspaceID)
+	activityKind, detailKind, narrative := protocol.ActivityKindOnline, "idle", "Idle"
+	if turnErr != nil {
+		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", "Runtime error"
+	}
+	entryBody, err := json.Marshal(map[string]string{"text": narrative})
+	if err != nil {
+		return
+	}
+	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: entryBody}}); err != nil && d.logger != nil {
+		d.logger.Debug("workspace Runner Message completion Activity publish deferred", "error", err, "agent_id", agentID)
+	}
 }
 
 func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
@@ -67,9 +171,16 @@ func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages
 	sort.Strings(targets)
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	producer := d.agentActivityProducers[workspaceID]
 	d.mu.Unlock()
-	if producer != nil {
+	if workspaceID != "" {
+		producer := d.workspaceAgentActivityProducer(workspaceID)
+		status, session, created, manageErr := producer.EnsureManagedAgent(agentID)
+		if manageErr == nil && created {
+			// Status must cross the same serialized Runner writer before Activity
+			// so the server can fence the new launch authoritatively.
+			d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentStatus, status)
+			d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentSession, session)
+		}
 		entryBody, err := json.Marshal(map[string]string{"text": "Message received"})
 		if err == nil {
 			if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, protocol.ActivityKindWorking, "message_received", []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: entryBody}}); err != nil && d.logger != nil {
@@ -84,7 +195,7 @@ func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages
 	// boundary. It belongs to the same Workspace Runner as delivery/recovery;
 	// if the Runner is absent we intentionally drop this best-effort fact rather
 	// than revive the retired runtime socket path.
-	d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentMessageHandoff, payload)
+	d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentMessageHandoff, payload)
 }
 
 // CredentialProxy is the machine-local freshness boundary. The first repair

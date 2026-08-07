@@ -149,10 +149,21 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 	}
 
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity:      identity,
-		Mode:          canonicalRuntimeResident,
-		BackendConfig: agent.Config{ExecutablePath: entry.Path, Env: agentEnv, Logger: d.logger},
-		Factory:       d.canonicalResidentMessageFactory(runtime.Provider),
+		Identity: identity,
+		Mode:     canonicalRuntimeResident,
+		BackendConfig: agent.Config{
+			ExecutablePath: entry.Path,
+			Env:            agentEnv,
+			Logger:         d.logger,
+			ResidentOptions: agent.ExecOptions{
+				Cwd:           env.AgentRoot,
+				Model:         model,
+				CustomArgs:    append([]string(nil), config.Agent.CustomArgs...),
+				McpConfig:     append([]byte(nil), config.Agent.McpConfig...),
+				ThinkingLevel: thinking,
+			},
+		},
+		Factory: d.canonicalResidentMessageFactory(runtime.Provider),
 		BeforeCreate: func() error {
 			ledgerRoot := execenv.CanonicalTurnLedgerRoot(workspace.AgentRoot)
 			_, _, err := execenv.MaterializeCanonicalTurnContextB(env.AgentRoot, ledgerRoot, runtime.Provider, taskCtx)

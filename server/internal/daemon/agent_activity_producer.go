@@ -66,6 +66,14 @@ func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, s
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// One Agent has one current managed launch. A server-commanded launch may
+	// replace a resident Message launch (or vice versa); retaining both would
+	// make PublishForManagedAgent choose a launch nondeterministically.
+	for existing := range p.states {
+		if existing.agentID == status.AgentID && existing.launchID != status.LaunchID {
+			delete(p.states, existing)
+		}
+	}
 	key := agentActivityProducerKey{agentID: status.AgentID, launchID: status.LaunchID}
 	state := p.states[key]
 	if state == nil {
@@ -75,6 +83,35 @@ func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, s
 	state.status = status
 	state.session = session
 	return nil
+}
+
+// EnsureManagedAgent establishes the wakeable resident launch observed at the
+// concrete Message handoff boundary. It is idempotent for an already managed
+// Agent and deliberately does not invent a provider process or session ID.
+func (p *agentActivityProducer) EnsureManagedAgent(agentID string) (protocol.AgentStatusPayload, protocol.AgentSessionPayload, bool, error) {
+	if p == nil || agentID == "" {
+		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, false, errors.New("Activity managed Agent identity is required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, state := range p.states {
+		if key.agentID == agentID {
+			return state.status, state.session, false, nil
+		}
+	}
+	launchID := p.newID()
+	status := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive}
+	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID}
+	if err := status.Validate(); err != nil {
+		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, false, err
+	}
+	if err := session.Validate(); err != nil {
+		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, false, err
+	}
+	p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}] = &agentActivityProducerState{
+		status: status, session: session, connected: true,
+	}
+	return status, session, true, nil
 }
 
 func (p *agentActivityProducer) SetConnected(agentID, launchID string, connected bool) {
@@ -177,6 +214,12 @@ func (p *agentActivityProducer) PublishForManagedAgent(agentID, daemonInstanceID
 	snapshot.ActivityKind = activityKind
 	snapshot.DetailKind = detailKind
 	snapshot.ProbeID = ""
+	// This call observes a new Manager fact for the same launch. Reusing the
+	// prior fact identity would make publishLocked reject every transition after
+	// the first one as a client-sequence regression.
+	snapshot.ClientSequence = 0
+	snapshot.ProducerFactID = ""
+	snapshot.ObservedAt = time.Time{}
 	return p.publishLocked(snapshot, entries)
 }
 

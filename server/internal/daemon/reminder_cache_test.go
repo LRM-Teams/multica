@@ -1074,6 +1074,68 @@ func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testin
 	}
 }
 
+func TestReminderProjectionReplaySnapshotBurstWaitsForWriterCapacity(t *testing.T) {
+	root := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := newReminderAgentManager(root, logger)
+	for _, agentID := range []string{"agent-a", "agent-b", "agent-c"} {
+		if changed, accepted, err := mgr.applyStart(agentID, "runtime-a", "workspace-a", 1); err != nil || !changed || !accepted {
+			t.Fatalf("seed %s: changed=%v accepted=%v err=%v", agentID, changed, accepted, err)
+		}
+	}
+	writes := make(chan []byte, 2)
+	done := make(chan struct{})
+	closed := make(chan struct{}, 1)
+	d := &Daemon{
+		logger:         logger,
+		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		reminderAgents: mgr,
+		reminderCache:  newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil),
+	}
+	d.setReminderWS(writes, done, func() error {
+		closed <- struct{}{}
+		return nil
+	})
+
+	result := make(chan error, 1)
+	go func() {
+		result <- d.handleReminderProjectionReplayEnd(protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 0}})
+	}()
+
+	select {
+	case err := <-result:
+		t.Fatalf("snapshot burst returned before the writer made room: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	seenSnapshots := map[string]bool{}
+	for range 4 { // projection ACK plus one snapshot for each resident agent
+		var message protocol.Message
+		if err := json.Unmarshal(<-writes, &message); err != nil {
+			t.Fatal(err)
+		}
+		if message.Type != protocol.EventReminderSnapshotRequest {
+			continue
+		}
+		var snapshot protocol.ReminderSnapshotRequestPayload
+		if err := json.Unmarshal(message.Payload, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		seenSnapshots[snapshot.AgentID] = true
+	}
+	if err := <-result; err != nil {
+		t.Fatalf("snapshot burst replay: %v", err)
+	}
+	if len(seenSnapshots) != 3 || !seenSnapshots["agent-a"] || !seenSnapshots["agent-b"] || !seenSnapshots["agent-c"] {
+		t.Fatalf("snapshot owners = %#v", seenSnapshots)
+	}
+	select {
+	case <-closed:
+		t.Fatal("snapshot burst closed a healthy websocket")
+	default:
+	}
+}
+
 func TestReminderLifecycleHeartbeatCatchupRecoversLostMoveWithoutReconnect(t *testing.T) {
 	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
 	clock := &fakeReminderClock{now: now}

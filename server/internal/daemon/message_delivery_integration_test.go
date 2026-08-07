@@ -294,7 +294,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
 		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
 	}
-	d.beginAgentMessageRecovery(agentID, nil)
+	d.beginAgentMessageRecovery(agentID)
 	select {
 	case request := <-recoveryRequests:
 		if request.AgentID != agentID || request.RecoveryID == "" || request.Boundaries[target] != busyCreated.Seq {

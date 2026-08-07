@@ -15,6 +15,8 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+const workspaceRunnerWriteTimeout = 10 * time.Second
+
 // workspaceRunnerLoop owns one WebSocket per authenticated workspace. It is
 // intentionally separate from the legacy runtime-multiplexed wake socket: a
 // Runner survives a workspace with zero runtimes and can never receive another
@@ -133,6 +135,11 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 		return err
 	}
 	defer conn.Close()
+	connectionCtx, cancelConnection := context.WithCancel(ctx)
+	defer cancelConnection()
+	if err := conn.SetWriteDeadline(time.Now().Add(workspaceRunnerWriteTimeout)); err != nil {
+		return err
+	}
 	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: marshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: workspaceID, DaemonInstanceID: d.runnerInstanceID})})
 	if err != nil {
 		return err
@@ -146,6 +153,33 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 		defer writeMu.Unlock()
 		return writeWorkspaceRunnerFrame(conn, eventType, payload)
 	}
+	var closeConnectionOnce sync.Once
+	failConnection := func(err error) {
+		if err == nil {
+			return
+		}
+		if d.logger != nil {
+			d.logger.Debug("workspace Runner delivery writer failed", "workspace_id", workspaceID, "error", err)
+		}
+		cancelConnection()
+		closeConnectionOnce.Do(func() { _ = conn.Close() })
+	}
+	deliveryDispatcher := newWorkspaceRunnerDeliveryDispatcher(connectionCtx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
+		ack, err := d.acceptIdleAgentDelivery(deliveryCtx, delivery)
+		if err != nil {
+			if d.logger != nil {
+				d.logger.Warn("workspace Runner agent delivery not acknowledged", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+			}
+			return
+		}
+		if err := writeFrame(protocol.EventAgentDeliverAck, ack); err != nil {
+			failConnection(err)
+			return
+		}
+		if err := d.flushIdleAgentDelivery(deliveryCtx, delivery.AgentID); err != nil && d.logger != nil {
+			d.logger.Warn("workspace Runner idle agent Message handoff failed after delivery acknowledgement", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+		}
+	})
 	messageTransportGeneration := d.attachWorkspaceRunnerMessageTransport(workspaceID, writeFrame)
 	defer d.detachWorkspaceRunnerMessageTransport(workspaceID, messageTransportGeneration)
 	producer := d.workspaceAgentActivityProducer(workspaceID)
@@ -246,19 +280,7 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {
 				continue
 			}
-			ack, err := d.acceptIdleAgentDelivery(context.Background(), delivery)
-			if err != nil {
-				if d.logger != nil {
-					d.logger.Warn("workspace Runner agent delivery not acknowledged", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-				}
-				continue
-			}
-			if err := writeFrame(protocol.EventAgentDeliverAck, ack); err != nil {
-				return err
-			}
-			if err := d.flushIdleAgentDelivery(context.Background(), delivery.AgentID); err != nil && d.logger != nil {
-				d.logger.Warn("workspace Runner idle agent Message handoff failed after delivery acknowledgement", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-			}
+			deliveryDispatcher.Enqueue(delivery)
 		case protocol.EventAgentRecoveryPage:
 			var page protocol.AgentRecoveryPage
 			if json.Unmarshal(message.Payload, &page) != nil {
@@ -295,6 +317,9 @@ func (d *Daemon) ownsWorkspaceRunnerRuntime(workspaceID, runtimeID string) bool 
 func writeWorkspaceRunnerFrame(conn *websocket.Conn, eventType string, payload any) error {
 	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
 	if err != nil {
+		return err
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(workspaceRunnerWriteTimeout)); err != nil {
 		return err
 	}
 	return conn.WriteMessage(websocket.TextMessage, frame)

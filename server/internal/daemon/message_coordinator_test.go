@@ -33,6 +33,20 @@ func (r *blockingResidentMessageRuntime) AcceptMessageBatch(context.Context, []a
 	return agent.ResidentMessageAcceptance{Done: r.done}, nil
 }
 
+type sequencedResidentMessageRuntime struct {
+	accepted chan chan error
+}
+
+func (r *sequencedResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *sequencedResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	done := make(chan error, 1)
+	r.accepted <- done
+	return agent.ResidentMessageAcceptance{Done: done}, nil
+}
+
 type pendingNoticeRuntime struct {
 	mu      sync.Mutex
 	notices []agent.ResidentPendingNotice
@@ -62,10 +76,10 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 		mode: canonicalRuntimeResident, backend: backend,
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"}}
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages); err != nil {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil); err != nil {
 		t.Fatalf("first handoff: %v", err)
 	}
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		t.Fatalf("overlapping handoff error = %v, want busy", err)
 	}
 	backend.done <- nil
@@ -82,6 +96,103 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 			t.Fatal("runtime pool did not release admission after native turn completion")
 		}
 		runtime.Gosched()
+	}
+}
+
+func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testing.T) {
+	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1}}
+	result := make(chan bool, 1)
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, func(_ error, generation uint64) {
+		if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil); err != nil {
+			result <- true
+			return
+		}
+		result <- pool.publishIfMessageTurnStillIdle("agent-1", "runtime-1", generation, func() {})
+	}); err != nil {
+		t.Fatalf("first handoff: %v", err)
+	}
+	firstDone := <-backend.accepted
+	firstDone <- nil
+	if stalePublished := <-result; stalePublished {
+		t.Fatal("prior turn published a terminal Activity after the next turn started")
+	}
+	secondDone := <-backend.accepted
+	secondDone <- nil
+}
+
+func TestResidentMessageTurnCompletionContinuesPendingBeforeIdle(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-4111-8111-111111111111"
+		runtimeID   = "22222222-2222-4222-8222-222222222222"
+		agentID     = "agent-1"
+	)
+	root := t.TempDir()
+	d := New(Config{WorkspacesRoot: root}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
+	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+		t.Fatalf("ensure coordinator: %v", err)
+	}
+	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(string, any) error { return nil })
+	producer := d.workspaceAgentActivityProducer(workspaceID)
+	activities := make(chan protocol.AgentActivityPayload, 8)
+	producer.AttachTransport(func(activity protocol.AgentActivityPayload) { activities <- activity })
+	d.messageCoordinatorMu.RLock()
+	coordinator := d.messageCoordinators[agentID]
+	d.messageCoordinatorMu.RUnlock()
+	completeCoordinatorRecovery(t, coordinator)
+
+	first := testDelivery("message-1", "channel:one", 1, "delivery-1")
+	second := testDelivery("message-2", "channel:one", 2, "delivery-2")
+	if _, err := coordinator.Accept(context.Background(), first); err != nil {
+		t.Fatalf("accept first: %v", err)
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("flush first: %v", err)
+	}
+	firstDone := <-backend.accepted
+	if _, err := coordinator.Accept(context.Background(), second); err != nil {
+		t.Fatalf("accept second: %v", err)
+	}
+	if err := coordinator.Flush(context.Background()); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("busy flush error = %v", err)
+	}
+	firstDone <- nil
+
+	var secondDone chan error
+	select {
+	case secondDone = <-backend.accepted:
+	case <-time.After(time.Second):
+		t.Fatal("pending Message did not start after prior turn completed")
+	}
+	secondDone <- nil
+
+	wantKinds := []string{protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindOnline}
+	gotKinds := make([]string, 0, len(wantKinds))
+	deadline := time.After(time.Second)
+	for len(gotKinds) < len(wantKinds) {
+		select {
+		case activity := <-activities:
+			gotKinds = append(gotKinds, activity.Snapshot.ActivityKind)
+		case <-deadline:
+			t.Fatalf("Activity kinds = %v, want %v", gotKinds, wantKinds)
+		}
+	}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("Activity kinds = %v, want %v", gotKinds, wantKinds)
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 2 {
+		t.Fatalf("Context Boundary = %d, want 2", got)
 	}
 }
 

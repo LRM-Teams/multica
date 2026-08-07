@@ -108,13 +108,16 @@ type TaskAvailablePayload struct {
 }
 
 // AgentMessageProjection is the canonical Message data the coordinator may
-// hand to a runtime. It deliberately has no delivery or read-state fields.
+// hand to a runtime. Target is the internal Context Boundary key;
+// ReplyTarget is the recipient-relative CLI target exposed to the runtime.
+// The projection deliberately has no delivery or read-state fields.
 type AgentMessageProjection struct {
-	ID      string        `json:"id"`
-	Target  string        `json:"target"`
-	Seq     int64         `json:"seq"`
-	Content string        `json:"content"`
-	Parts   []MessagePart `json:"parts,omitempty"`
+	ID          string        `json:"id"`
+	Target      string        `json:"target"`
+	ReplyTarget string        `json:"reply_target,omitempty"`
+	Seq         int64         `json:"seq"`
+	Content     string        `json:"content"`
+	Parts       []MessagePart `json:"parts,omitempty"`
 }
 
 // AgentDeliverPayload is an at-least-once transfer attempt to a single local

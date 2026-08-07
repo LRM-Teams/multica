@@ -240,6 +240,9 @@ type canonicalAgentRuntimeSlot struct {
 	close                        func()
 	messageInputDone             <-chan error
 	messageInputGeneration       uint64
+	messageInputAttempt          uint64
+	invalidationGeneration       uint64
+	invalidateAfterInput         bool
 	lastPendingNoticeFingerprint string
 	lastPendingTargetFingerprint map[string]string
 }
@@ -552,6 +555,7 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	slot.close = nil
 	slot.lastPendingNoticeFingerprint = ""
 	slot.lastPendingTargetFingerprint = nil
+	slot.invalidateAfterInput = false
 }
 
 func (p *canonicalAgentRuntimePool) slotCount() int {
@@ -606,15 +610,17 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	}
 	slot.mu.Lock()
 	p.mu.Unlock()
-	defer slot.mu.Unlock()
 	if slot.running {
+		slot.mu.Unlock()
 		return ErrCanonicalAgentRuntimeBusy
 	}
 	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
+		slot.mu.Unlock()
 		return errors.New("canonical resident runtime is unavailable")
 	}
 	input, ok := slot.backend.(agent.ResidentMessageInput)
 	if !ok {
+		slot.mu.Unlock()
 		return errors.New("canonical resident runtime does not support idle Message input")
 	}
 	if liveness, ok := slot.backend.(agent.ResidentRuntimeLivenessChecker); ok {
@@ -627,44 +633,101 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	for _, message := range messages {
 		partsJSON, err := json.Marshal(message.Parts)
 		if err != nil {
+			slot.mu.Unlock()
 			return fmt.Errorf("marshal resident Message parts: %w", err)
 		}
 		batch = append(batch, agent.ResidentMessage{
-			ID: message.ID, Target: message.Target, Seq: message.Seq, Content: message.Content, PartsJSON: partsJSON,
+			ID: message.ID, Target: message.Target, ReplyTarget: message.ReplyTarget, Seq: message.Seq, Content: message.Content, PartsJSON: partsJSON,
 		})
 	}
+	// Starting native acceptance is itself an admission state. Publish it
+	// before calling the provider so a lifecycle restart can observe and kill a
+	// runtime stuck in initialize/thread-start instead of blocking on slot.mu.
+	// This mirrors Raft's starting-process inbox plus stop-epoch fence: the
+	// canonical Message is not acknowledged until native acceptance succeeds.
+	slot.running = true
+	slot.messageInputAttempt++
+	attempt := slot.messageInputAttempt
+	invalidationGeneration := slot.invalidationGeneration
+	slot.mu.Unlock()
+
 	acceptance, err := input.AcceptMessageBatch(ctx, batch)
+	slot.mu.Lock()
 	if err != nil {
+		freed := false
+		if slot.messageInputAttempt == attempt {
+			slot.running = false
+			slot.idleSince = time.Now()
+			if slot.invalidateAfterInput {
+				freed = slot.backend != nil
+				slot.closeBackend()
+				slot.fingerprint = ""
+				slot.mode = ""
+			}
+		}
+		slot.mu.Unlock()
+		if freed {
+			p.signalAgentProcessCapacityFreed()
+		}
 		return err
 	}
 	if acceptance.Done == nil {
+		freed := false
+		if slot.messageInputAttempt == attempt {
+			slot.running = false
+			slot.idleSince = time.Now()
+			if slot.invalidateAfterInput {
+				freed = slot.backend != nil
+				slot.closeBackend()
+				slot.fingerprint = ""
+				slot.mode = ""
+			}
+		}
+		slot.mu.Unlock()
+		if freed {
+			p.signalAgentProcessCapacityFreed()
+		}
 		return errors.New("canonical resident runtime returned no Message input completion receipt")
 	}
+	invalidated := slot.messageInputAttempt != attempt || slot.invalidationGeneration != invalidationGeneration
 	// Native acceptance is the Context Boundary receipt. The provider may keep
 	// processing that accepted input afterward, so retain pool-level admission
 	// until its completion receipt resolves without delaying boundary persistence.
-	slot.running = true
 	slot.messageInputDone = acceptance.Done
-	slot.messageInputGeneration++
-	generation := slot.messageInputGeneration
+	var generation uint64
+	if !invalidated {
+		slot.messageInputGeneration++
+		generation = slot.messageInputGeneration
+	}
+	slot.mu.Unlock()
+	if invalidated {
+		activityDone := drainResidentActivity(acceptance.Messages, nil)
+		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, 0, nil)
+		return errors.New("canonical resident runtime was invalidated during Message input acceptance")
+	}
 	if onAccepted != nil {
 		onAccepted()
 	}
-	activityDone := make(chan struct{})
-	if acceptance.Messages != nil {
-		go func(runtimeMessages <-chan agent.Message) {
-			defer close(activityDone)
-			for message := range runtimeMessages {
-				if onMessage != nil {
-					onMessage(message)
-				}
-			}
-		}(acceptance.Messages)
-	} else {
-		close(activityDone)
-	}
+	activityDone := drainResidentActivity(acceptance.Messages, onMessage)
 	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, generation, onComplete)
 	return nil
+}
+
+func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.Message)) <-chan struct{} {
+	done := make(chan struct{})
+	if messages == nil {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		for message := range messages {
+			if onMessage != nil {
+				onMessage(message)
+			}
+		}
+	}()
+	return done
 }
 
 func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot) error {
@@ -719,14 +782,24 @@ func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAg
 	turnErr := <-done
 	<-activityDone
 	completed := false
+	freed := false
 	slot.mu.Lock()
 	if slot.messageInputDone == done {
 		slot.messageInputDone = nil
 		slot.running = false
 		slot.idleSince = time.Now()
+		if slot.invalidateAfterInput {
+			freed = slot.backend != nil
+			slot.closeBackend()
+			slot.fingerprint = ""
+			slot.mode = ""
+		}
 		completed = true
 	}
 	slot.mu.Unlock()
+	if freed {
+		p.signalAgentProcessCapacityFreed()
+	}
 	if completed && onComplete != nil {
 		onComplete(turnErr, generation)
 	}
@@ -844,6 +917,11 @@ func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID st
 	if !ok {
 		return ErrCanonicalAgentRuntimeBusy
 	}
+	// Fence any native acceptance that races this restart. The in-flight owner
+	// keeps admission until the killed process actually finishes, then closes
+	// and detaches this backend so the next handoff creates a fresh instance.
+	slot.invalidationGeneration++
+	slot.invalidateAfterInput = true
 	return killable.ForceKill()
 }
 

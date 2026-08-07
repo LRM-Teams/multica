@@ -4593,7 +4593,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	for _, want := range []string{
 		"not a must-reply directed mention",
 		"finish without visible output",
-		"Message target for chat transport: #" + ch.Name + ":" + root.ID,
+		"Message target for chat transport: #" + ch.Name + ":" + root.ID[:8],
 		"Current follow-up:",
 		"never mind",
 	} {
@@ -4637,7 +4637,7 @@ func TestChannelDMThreadContinuationPromptIncludesDMThreadTarget(t *testing.T) {
 	}
 
 	prompt := testHandler.buildChannelThreadContinuationPrompt(ctx, ch, agent, followup)
-	wantTarget := "dm:@" + userHandleForTransportTest(t, testUserID) + ":" + root.ID
+	wantTarget := "dm:@" + userHandleForTransportTest(t, testUserID) + ":" + root.ID[:8]
 	for _, want := range []string{
 		"thread inside a Multica DM",
 		"Message target for chat transport: " + wantTarget,

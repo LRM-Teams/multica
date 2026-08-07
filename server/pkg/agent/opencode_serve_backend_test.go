@@ -188,6 +188,30 @@ func TestExecuteEndToEndAgainstFakeServeProcess(t *testing.T) {
 	}
 }
 
+func TestOpenCodeServeAcceptsIdleMessageBatchAtNativeHTTPBoundary(t *testing.T) {
+	cfg := newTestOpenCodeServeBackendConfig(t)
+	cfg.ResidentOptions = ExecOptions{}
+	backend := newOpenCodeServeBackend(cfg)
+	t.Cleanup(backend.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	acceptance, err := backend.AcceptMessageBatch(ctx, []ResidentMessage{{
+		ID: "message-1", Target: "channel:internal", ReplyTarget: "#general", Seq: 1, Content: "hello",
+	}})
+	if err != nil {
+		t.Fatalf("AcceptMessageBatch: %v", err)
+	}
+	if acceptance.Done == nil || acceptance.Messages == nil {
+		t.Fatalf("native acceptance = %+v, want completion and Activity streams", acceptance)
+	}
+	for range acceptance.Messages {
+	}
+	if err := <-acceptance.Done; err != nil {
+		t.Fatalf("native OpenCode Message turn: %v", err)
+	}
+}
+
 // TestEnsureServerBlocksUntilSSEHandshakeCompletes proves ensureServer
 // itself waits for the SSE subscription to be live before returning a
 // usable process — not just that runEventLoop eventually closes

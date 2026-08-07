@@ -6118,7 +6118,7 @@ func (h *Handler) agentMessageTargetForPrompt(ctx context.Context, ch ChannelRes
 		}
 		target := "#" + strings.TrimSpace(ch.Name)
 		if rootID != "" {
-			target += ":" + rootID
+			target += ":" + rootID[:min(8, len(rootID))]
 		}
 		return target
 	case "dm":
@@ -6128,7 +6128,7 @@ func (h *Handler) agentMessageTargetForPrompt(ctx context.Context, ch ChannelRes
 		}
 		target := "dm:@" + handle
 		if rootID != "" {
-			target += ":" + rootID
+			target += ":" + rootID[:min(8, len(rootID))]
 		}
 		return target
 	default:

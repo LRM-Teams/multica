@@ -52,7 +52,7 @@ const PREVIEW_DEBOUNCE_MS = 200;
 
 const HTML_PREVIEW_HEIGHT = "h-[480px]";
 
-type CodeLanguage = InsertableCodeBlockLanguage | "markdown" | "html";
+type CodeLanguage = InsertableCodeBlockLanguage;
 
 const LANGUAGE_LABELS: Record<CodeLanguage, string> = {
   plaintext: "Plaintext",
@@ -74,7 +74,7 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 
 function normalizeLanguage(language: string): CodeLanguage {
   const parsed = parseCodeFenceInfo(language).language;
-  if (parsed === "markdown" || parsed === "html" || (INSERTABLE_CODE_BLOCK_LANGUAGES as readonly string[]).includes(parsed)) {
+  if ((INSERTABLE_CODE_BLOCK_LANGUAGES as readonly string[]).includes(parsed)) {
     return parsed as CodeLanguage;
   }
   return "plaintext";

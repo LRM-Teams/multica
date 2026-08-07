@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { CodeBlockToolbar, languageLabel } from "./code-block-view";
+import { INSERTABLE_CODE_BLOCK_LANGUAGES } from "../code-block-language";
 
 vi.mock("../../i18n", () => ({
   useT: () => ({
@@ -138,15 +139,51 @@ describe("CodeBlockToolbar", () => {
     expect(props.onMermaidViewChange).toHaveBeenCalledWith("both");
   });
 
-  it("disables zoom and download when the diagram is not visible", () => {
-    renderToolbar({
-      language: "mermaid",
-      isMermaid: true,
-      mermaidView: "source",
-      mermaidActionsEnabled: false,
-    });
+  it("lists every insertable language (incl. Markdown/HTML) as a dropdown item", () => {
+    renderToolbar({ language: "markdown", isMermaid: false });
 
-    expect(screen.getByTestId("code-block-mermaid-zoom")).toBeDisabled();
-    expect(screen.getByTestId("code-block-mermaid-download")).toBeDisabled();
+    // The DropdownMenu mock renders the content tree unconditionally. There
+    // are two popovers (language + "more"), so find the one with language items.
+    const menus = screen.getAllByTestId("menu");
+    const languageMenu =
+      menus.find((m) =>
+        Array.from(m.querySelectorAll("button")).some(
+          (b) => b.textContent === "Markdown",
+        ),
+      ) ?? menus[0]!;
+    // Each item renders as a button whose text is the label (with a "✓ "
+    // prefix only for the currently selected language — strip it).
+    const itemTexts = new Set(
+      Array.from(languageMenu.querySelectorAll("button")).map(
+        (el) => el.textContent?.replace(/^✓ /, ""),
+      ),
+    );
+
+    // Markdown and HTML (the two that PR #2479 dropped) must be offered.
+    expect(itemTexts.has("Markdown")).toBe(true);
+    expect(itemTexts.has("HTML")).toBe(true);
+    // The dropdown mirrors INSERTABLE_CODE_BLOCK_LANGUAGES exactly: every
+    // insertable language is offered, and nothing else is.
+    const labelFor = (lang: string) =>
+      ({
+        plaintext: "Plaintext",
+        markdown: "Markdown",
+        python: "Python",
+        javascript: "JavaScript",
+        html: "HTML",
+        mermaid: "Mermaid",
+      } as Record<string, string>)[lang];
+    const expected = new Set(INSERTABLE_CODE_BLOCK_LANGUAGES.map(labelFor));
+    expect(itemTexts).toEqual(expected);
+  });
+
+  it("offers Markdown and HTML as convertible destinations", () => {
+    const props = renderToolbar({ language: "mermaid", isMermaid: true });
+
+    fireEvent.click(screen.getByText("Markdown"));
+    expect(props.onLanguageChange).toHaveBeenCalledWith("markdown");
+
+    fireEvent.click(screen.getByText("HTML"));
+    expect(props.onLanguageChange).toHaveBeenCalledWith("html");
   });
 });

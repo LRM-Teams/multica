@@ -156,4 +156,81 @@ describe("CodeBlockView controls (TipTap integration)", () => {
       );
     });
   });
+
+  it("converts an HTML block to Python and back to HTML via the dropdown", async () => {
+    const user = userEvent.setup();
+    const box = editorBox();
+
+    render(
+      <CodeBlockEditorHarness
+        markdown={"```html\n<p>hi</p>\n```"}
+        onEditor={(ed) => {
+          box.current = ed;
+        }}
+      />,
+    );
+
+    const languageTrigger = await screen.findByTestId("code-block-language");
+    expect(languageTrigger).toHaveTextContent("HTML");
+
+    // Away from html → python.
+    await user.click(languageTrigger);
+    await user.click(await screen.findByRole("menuitem", { name: "Python" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("code-block-language")).toHaveTextContent("Python");
+    });
+    expect(box.current?.getMarkdown()).toMatch(/^```python/m);
+
+    // And back to html (PR #2479 regression: this item was missing).
+    await user.click(screen.getByTestId("code-block-language"));
+    await user.click(await screen.findByRole("menuitem", { name: "HTML" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("code-block-language")).toHaveTextContent("HTML");
+    });
+    expect(box.current?.getMarkdown()).toMatch(/^```html/m);
+  });
+
+  it("converts a Markdown block to Python and back to Markdown via the dropdown", async () => {
+    const user = userEvent.setup();
+    const box = editorBox();
+
+    render(
+      <CodeBlockEditorHarness
+        markdown={"```markdown\n# title\n```"}
+        onEditor={(ed) => {
+          box.current = ed;
+        }}
+      />,
+    );
+
+    const languageTrigger = await screen.findByTestId("code-block-language");
+    expect(languageTrigger).toHaveTextContent("Markdown");
+
+    await user.click(languageTrigger);
+    await user.click(await screen.findByRole("menuitem", { name: "Python" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("code-block-language")).toHaveTextContent("Python");
+    });
+
+    await user.click(screen.getByTestId("code-block-language"));
+    await user.click(await screen.findByRole("menuitem", { name: "Markdown" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("code-block-language")).toHaveTextContent("Markdown");
+    });
+    expect(box.current?.getMarkdown()).toMatch(/^```markdown/m);
+  });
+
+  it("renders an HTML block with its preview active and the HTML pill", async () => {
+    render(<CodeBlockEditorHarness markdown={"```html\n<h1>hello</h1>\n```"} />);
+
+    // AC4: HTML code blocks still render with the HTML pill (and default to
+    // preview mode — the source `<pre>` is kept mounted but visually hidden).
+    expect(await screen.findByTestId("code-block-language")).toHaveTextContent("HTML");
+    await waitFor(() => {
+      expect(document.querySelector("pre.code-block-source")).toHaveClass(
+        "code-block-source-visually-hidden",
+      );
+    });
+  });
 });
+

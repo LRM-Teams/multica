@@ -15,7 +15,8 @@ import (
 )
 
 type PostgresStore struct {
-	pool *pgxpool.Pool
+	pool        *pgxpool.Pool
+	txFaultHook researchTxFaultHook
 }
 
 var (

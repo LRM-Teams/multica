@@ -120,13 +120,21 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		in.Request.Run.StateVersion != in.ExpectedStateVersion {
 		return Attempt{}, RunEvent{}, fmt.Errorf("%w: dispatch request identity mismatch", ErrInvalidTransition)
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpDispatchIntentCreate, pgx.TxOptions{})
 	if err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
 	defer tx.Rollback(ctx)
 	if err = lockRunForMutation(ctx, tx, in.SessionID, in.Request.Run.WorkspaceID); err != nil {
 		return Attempt{}, RunEvent{}, err
+	}
+	if attempt, event, replayed, replayErr := loadDispatchIntentReplay(ctx, tx, in, target, requestHash); replayErr != nil {
+		return Attempt{}, RunEvent{}, replayErr
+	} else if replayed {
+		if err = s.commitResearchTx(ctx, txOpDispatchIntentCreate, tx); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
+		return attempt, event, nil
 	}
 
 	var workspaceID, status string
@@ -275,10 +283,68 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	if err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpDispatchIntentCreate, tx); err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
 	return attempt, event, nil
+}
+
+func loadDispatchIntentReplay(
+	ctx context.Context,
+	tx pgx.Tx,
+	in CreateDispatchIntentInput,
+	target ExecutionTarget,
+	requestHash string,
+) (Attempt, RunEvent, bool, error) {
+	var workspaceID, sessionID, taskID, agentID, dispatchKey, storedRequestHash string
+	err := tx.QueryRow(ctx, `
+		SELECT outbox.workspace_id::text, outbox.session_id::text, outbox.task_id::text,
+		       attempt.assigned_agent_id::text, outbox.dispatch_key, outbox.request_hash
+		FROM research_dispatch_outbox outbox
+		JOIN research_task_attempt attempt ON attempt.id = outbox.attempt_id
+		WHERE outbox.attempt_id = $1::uuid
+	`, in.AttemptID).Scan(&workspaceID, &sessionID, &taskID, &agentID, &dispatchKey, &storedRequestHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Attempt{}, RunEvent{}, false, nil
+	}
+	if err != nil {
+		return Attempt{}, RunEvent{}, false, err
+	}
+	if workspaceID != in.Request.Run.WorkspaceID || sessionID != in.SessionID || taskID != in.TaskID ||
+		agentID != in.AgentID || dispatchKey != in.Request.Key || storedRequestHash != requestHash {
+		return Attempt{}, RunEvent{}, false, fmt.Errorf("%w: dispatch intent replay does not match committed request", ErrResultConflict)
+	}
+	attempt, err := scanAttempt(tx.QueryRow(ctx, attemptSelectSQL+` WHERE a.id = $1::uuid`, in.AttemptID))
+	if err != nil {
+		return Attempt{}, RunEvent{}, false, err
+	}
+	var event RunEvent
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, workspace_id::text, session_id::text, sequence,
+		       event_type, idempotency_key, actor_type, COALESCE(actor_id::text, ''),
+		       payload, projection_attempts, created_at
+		FROM research_run_event
+		WHERE session_id = $1::uuid AND idempotency_key = $2
+	`, in.SessionID, in.Request.Key).Scan(
+		&event.ID, &event.WorkspaceID, &event.SessionID, &event.Sequence,
+		&event.Type, &event.IdempotencyKey, &event.ActorType, &event.ActorID,
+		&event.Payload, &event.ProjectionAttempts, &event.CreatedAt,
+	)
+	if err != nil {
+		return Attempt{}, RunEvent{}, false, err
+	}
+	expectedPayload, err := json.Marshal(map[string]any{
+		"task_id": in.TaskID, "attempt_id": attempt.ID, "attempt_number": attempt.AttemptNumber, "agent_id": in.AgentID,
+		"request_hash": requestHash, "execution_target": target,
+	})
+	if err != nil {
+		return Attempt{}, RunEvent{}, false, err
+	}
+	if event.Type != "task_dispatching" || event.ActorType != "system" || event.ActorID != "" ||
+		!semanticJSONEqual(event.Payload, expectedPayload) {
+		return Attempt{}, RunEvent{}, false, fmt.Errorf("%w: dispatch intent event does not match committed request", ErrResultConflict)
+	}
+	return attempt, event, true, nil
 }
 
 func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTaskID string) (Attempt, RunEvent, error) {

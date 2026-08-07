@@ -20,6 +20,9 @@ type channelMentionCandidate struct {
 	ID     string
 	Handle string
 	Label  string
+	// Match is the exact surface form registered for bare @ lookup (handle or
+	// unique display-name alias). Matching is case-insensitive.
+	Match string
 }
 
 type channelMentionOccurrence struct {
@@ -347,16 +350,15 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 
 	candidates := map[string]channelMentionCandidate{}
 	ambiguous := map[string]bool{}
-	add := func(mentionType, id, name, displayName string) {
-		handle := strings.TrimSpace(name)
-		if mentionType == "agent" && validateIdentityHandle(handle) != nil {
-			return
-		}
-		key := normalizeMentionCandidateLabel(handle)
+	addMatch := func(matchText string, candidate channelMentionCandidate) {
+		key := normalizeMentionCandidateLabel(matchText)
 		if key == "" || key == "all" {
 			return
 		}
-		candidate := channelMentionCandidate{Type: mentionType, ID: id, Handle: handle, Label: firstNonEmpty(displayName, name)}
+		candidate.Match = strings.TrimSpace(matchText)
+		if candidate.Match == "" {
+			return
+		}
 		if existing, ok := candidates[key]; ok && (existing.Type != candidate.Type || existing.ID != candidate.ID) {
 			delete(candidates, key)
 			ambiguous[key] = true
@@ -365,6 +367,31 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 		if !ambiguous[key] {
 			candidates[key] = candidate
 		}
+	}
+	add := func(mentionType, id, name, displayName string) {
+		handle := strings.TrimSpace(name)
+		if mentionType == "agent" && validateIdentityHandle(handle) != nil {
+			return
+		}
+		if normalizeMentionCandidateLabel(handle) == "" {
+			return
+		}
+		candidate := channelMentionCandidate{
+			Type:   mentionType,
+			ID:     id,
+			Handle: handle,
+			Label:  firstNonEmpty(displayName, name),
+		}
+		// Canonical @handle always wins when unique.
+		addMatch(handle, candidate)
+		// Unique display names are aliases so hand-typed "@Kai" resolves when
+		// the durable handle is "kai-2". Ambiguous display names stay
+		// non-routable — callers must use a structured mention or exact handle.
+		alias := strings.TrimSpace(displayName)
+		if alias == "" || strings.EqualFold(alias, handle) {
+			return
+		}
+		addMatch(alias, candidate)
 	}
 	for userRows.Next() {
 		var userID pgtype.UUID
@@ -515,7 +542,9 @@ func findBareMentionCandidates(content string, candidates map[string]channelMent
 		labels = append(labels, label)
 	}
 	sort.Slice(labels, func(i, j int) bool {
-		return utf8.RuneCountInString(candidates[labels[i]].Handle) > utf8.RuneCountInString(candidates[labels[j]].Handle)
+		left := mentionCandidateMatchText(candidates[labels[i]])
+		right := mentionCandidateMatchText(candidates[labels[j]])
+		return utf8.RuneCountInString(left) > utf8.RuneCountInString(right)
 	})
 
 	out := make([]channelMentionOccurrence, 0)
@@ -532,7 +561,7 @@ func findBareMentionCandidates(content string, candidates map[string]channelMent
 		matchEnd := at + 1
 		for _, label := range labels {
 			candidate := candidates[label]
-			end, ok := mentionHandlePrefix(content, at+1, candidate.Handle)
+			end, ok := mentionHandlePrefix(content, at+1, mentionCandidateMatchText(candidate))
 			if !ok {
 				continue
 			}
@@ -548,10 +577,17 @@ func findBareMentionCandidates(content string, candidates map[string]channelMent
 	return out
 }
 
+func mentionCandidateMatchText(candidate channelMentionCandidate) string {
+	if match := strings.TrimSpace(candidate.Match); match != "" {
+		return match
+	}
+	return strings.TrimSpace(candidate.Handle)
+}
+
 // mentionHandlePrefix compares one handle at a time without changing original
 // byte offsets. Agent candidates are canonical ASCII usernames; member
-// candidates remain Unicode-capable because user handles are a separate
-// identity contract.
+// candidates and unique display-name aliases remain Unicode-capable because
+// those surfaces are a separate identity contract.
 func mentionHandlePrefix(content string, start int, handle string) (int, bool) {
 	offset := start
 	for _, want := range handle {

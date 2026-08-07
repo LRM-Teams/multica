@@ -1167,21 +1167,27 @@ func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	handle := "wendy-" + suffix
 	secondHandle := handle + "-2"
+	uniqueHandle := "kai-" + suffix
 	displayName := "Wendy"
+	uniqueDisplay := "Kai"
 	agentID := createHandlerTestAgent(t, handle, nil)
 	secondAgentID := createHandlerTestAgent(t, secondHandle, nil)
+	uniqueAgentID := createHandlerTestAgent(t, uniqueHandle, nil)
 	for _, id := range []string{agentID, secondAgentID} {
 		if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = $2 WHERE id = $1`, id, displayName); err != nil {
 			t.Fatalf("set duplicate display_name: %v", err)
 		}
 	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = $2 WHERE id = $1`, uniqueAgentID, uniqueDisplay); err != nil {
+		t.Fatalf("set unique display_name: %v", err)
+	}
 
 	channelID := seedChannelForTest(t, "identity-mentions-"+suffix, testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4), ($1, $2, 'agent', $5)
 ON CONFLICT DO NOTHING`,
-		channelID, testWorkspaceID, agentID, secondAgentID,
+		channelID, testWorkspaceID, agentID, secondAgentID, uniqueAgentID,
 	); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
@@ -1193,7 +1199,9 @@ ON CONFLICT DO NOTHING`,
 		wantID  string
 	}{
 		{"bare unique handle", "please @" + handle + " jump in", nil, agentID},
-		{"bare display name is not routable", "please @Wendy jump in", nil, ""},
+		{"bare duplicate display name is not routable", "please @Wendy jump in", nil, ""},
+		{"bare unique display alias is routable", "please @Kai jump in", nil, uniqueAgentID},
+		{"bare unique display alias is case insensitive", "please @kai jump in", nil, uniqueAgentID},
 		{"structured mention targets first duplicate", "please @Wendy jump in", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: agentID}}, agentID},
 		{"structured mention targets second duplicate", "please @Wendy jump in", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: secondAgentID}}, secondAgentID},
 		{"exact handle remains routable", "please @" + secondHandle + " review", nil, secondAgentID},

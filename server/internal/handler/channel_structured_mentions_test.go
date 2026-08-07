@@ -18,9 +18,11 @@ func TestContentUTF16SpanUsesJavaScriptOffsets(t *testing.T) {
 
 func TestFindBareMentionCandidatesUsesStableASCIIHandles(t *testing.T) {
 	candidates := map[string]channelMentionCandidate{
-		normalizeMentionCandidateLabel("xiaolin"):        {Type: "agent", ID: "short", Handle: "xiaolin", Label: "小林"},
-		normalizeMentionCandidateLabel("xiaolin-review"): {Type: "agent", ID: "long", Handle: "xiaolin-review", Label: "小林"},
-		normalizeMentionCandidateLabel("backend-eng"):    {Type: "member", ID: "backend", Handle: "backend-eng", Label: "后端工程师"},
+		normalizeMentionCandidateLabel("xiaolin"):        {Type: "agent", ID: "short", Handle: "xiaolin", Label: "小林", Match: "xiaolin"},
+		normalizeMentionCandidateLabel("xiaolin-review"): {Type: "agent", ID: "long", Handle: "xiaolin-review", Label: "小林", Match: "xiaolin-review"},
+		normalizeMentionCandidateLabel("backend-eng"):    {Type: "member", ID: "backend", Handle: "backend-eng", Label: "后端工程师", Match: "backend-eng"},
+		normalizeMentionCandidateLabel("Kai"):            {Type: "agent", ID: "kai", Handle: "kai-2", Label: "Kai", Match: "Kai"},
+		normalizeMentionCandidateLabel("kai-2"):          {Type: "agent", ID: "kai", Handle: "kai-2", Label: "Kai", Match: "kai-2"},
 	}
 
 	for _, tt := range []struct {
@@ -32,6 +34,9 @@ func TestFindBareMentionCandidatesUsesStableASCIIHandles(t *testing.T) {
 		{"longest handle", "please @xiaolin-review confirm", "long", len("please @xiaolin-review")},
 		{"short handle", "please @xiaolin confirm", "short", len("please @xiaolin")},
 		{"case insensitive ASCII", "please @BACKEND-ENG confirm", "backend", len("please @BACKEND-ENG")},
+		{"unique display alias", "please @Kai confirm", "kai", len("please @Kai")},
+		{"display alias case insensitive", "please @kai confirm", "kai", len("please @kai")},
+		{"canonical handle still wins", "please @kai-2 confirm", "kai", len("please @kai-2")},
 		{"email is not a mention", "mail xiaolin@example.com", "", 0},
 		{"handle prefix is not a mention", "please @xiaolin-reviewers", "", 0},
 	} {

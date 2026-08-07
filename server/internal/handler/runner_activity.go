@@ -345,7 +345,7 @@ func (h *Handler) sendRunnerActivityProbes(ctx context.Context, now time.Time) e
 			continue
 		}
 		if h.DaemonHub == nil || !h.DaemonHub.NotifyWorkspaceRunner(candidate.daemonID, util.UUIDToString(candidate.workspaceID), protocol.EventAgentActivityProbe, protocol.AgentActivityProbePayload{AgentID: util.UUIDToString(candidate.agentID), LaunchID: candidate.launchID, ProbeID: probeID}) {
-			if err := h.markRunnerActivityDisconnected(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
+			if err := h.markRunnerActivityOfflineForComputerDisconnect(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
 				return err
 			}
 		}
@@ -383,14 +383,14 @@ func (h *Handler) timeoutRunnerActivityProbes(ctx context.Context, now time.Time
 		if h.DaemonHub != nil {
 			h.DaemonHub.CloseWorkspaceRunner(candidate.daemonID, util.UUIDToString(candidate.workspaceID), candidate.daemonInstanceID)
 		}
-		if err := h.markRunnerActivityDisconnected(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
+		if err := h.markRunnerActivityOfflineForComputerDisconnect(ctx, candidate.workspaceID, candidate.agentID, candidate.daemonID, candidate.daemonInstanceID, candidate.launchID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (h *Handler) markRunnerActivityDisconnected(ctx context.Context, workspaceID, agentID pgtype.UUID, daemonID, daemonInstanceID, launchID string) error {
+func (h *Handler) markRunnerActivityOfflineForComputerDisconnect(ctx context.Context, workspaceID, agentID pgtype.UUID, daemonID, daemonInstanceID, launchID string) error {
 	if _, err := h.DB.Exec(ctx, `UPDATE agent_activity_launch SET status = 'inactive', updated_at = now()
 		WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
 		return fmt.Errorf("deactivate stale Runner launch: %w", err)

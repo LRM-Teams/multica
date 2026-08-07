@@ -29,6 +29,8 @@ export type AgentRuntimeDisplayStatus =
   | "idle"
   | "working"
   | "starting"
+  // Read compatibility for older servers; current presentation folds this
+  // Computer-connectivity term into Agent Offline.
   | "disconnected"
   | "offline"
   | "stopped"

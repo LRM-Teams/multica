@@ -52,9 +52,8 @@ func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
 		if snapshot.DetailKind == "stopped" {
 			return Summary{Label: "Stopped", Tone: "neutral", Visibility: "visible"}
 		}
-		if snapshot.DetailKind == "machine_disconnected" {
-			return Summary{Label: "Disconnected", Tone: "neutral", Visibility: "visible"}
-		}
+		// A disconnected Computer makes its Agents offline. "Disconnected" is
+		// Computer connectivity vocabulary and must not leak into Agent state.
 		return Summary{Label: "Offline", Tone: "neutral", Visibility: "visible"}
 	case protocol.ActivityKindWorking:
 		switch snapshot.DetailKind {

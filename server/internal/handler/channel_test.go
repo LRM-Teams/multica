@@ -350,6 +350,21 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 	if target != "channel:"+channelID {
 		t.Fatalf("canonical mention delivery target = %q, want channel:%s", target, channelID)
 	}
+
+	var wakeReason string
+	var requiresWake bool
+	var priority int32
+	if err := testPool.QueryRow(ctx, `
+		SELECT reason, requires_wake, priority
+		FROM agent_inbox_event
+		WHERE agent_id = $1 AND source_message_id = $2 AND requires_wake = true
+		ORDER BY created_at DESC
+		LIMIT 1`, agentID, trigger.ID).Scan(&wakeReason, &requiresWake, &priority); err != nil {
+		t.Fatalf("load mention wake inbox event: %v", err)
+	}
+	if wakeReason != "mention" || !requiresWake || priority != channelDirectedWakePriority {
+		t.Fatalf("mention wake = reason:%q requires_wake:%v priority:%d, want mention/true/%d", wakeReason, requiresWake, priority, channelDirectedWakePriority)
+	}
 }
 
 func TestChannelGreetingMentionStaysOnMainTimeline(t *testing.T) {
@@ -614,7 +629,8 @@ func TestChannelRementionFollowupCreatesIndependentCanonicalDeliveries(t *testin
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgentOnRuntime(t, "Remention Agent", handlerTestRuntimeID(t))
+	agentHandle := "remention-agent-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	agentID := createHandlerTestAgentOnRuntime(t, agentHandle, handlerTestRuntimeID(t))
 	var channelID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, created_by)
@@ -634,14 +650,18 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	first, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Remention Agent start the long task", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("interrupt-thread"), 0)
+	firstContent := "@" + agentHandle + " start the long task"
+	firstParts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: agentID, Label: "@" + agentHandle}}
+	first, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", firstContent, firstParts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("interrupt-thread"), 0)
 	if err != nil {
 		t.Fatalf("insert first trigger: %v", err)
 	}
 	testHandler.dispatchChannelMentions(ctx, ch, first, parseUUID(testUserID))
 	testHandler.deliverCanonicalMessageToChannelAgents(ctx, ch, first)
 
-	second, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Remention Agent stop and use this corrected direction", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("interrupt-thread"), 1)
+	secondContent := "@" + agentHandle + " stop and use this corrected direction"
+	secondParts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: agentID, Label: "@" + agentHandle}}
+	second, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", secondContent, secondParts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("interrupt-thread"), 1)
 	if err != nil {
 		t.Fatalf("insert second trigger: %v", err)
 	}
@@ -658,14 +678,20 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 	if deliveryCount != 2 {
 		t.Fatalf("canonical follow-up delivery count = %d, want 2", deliveryCount)
 	}
+	// Directed mention wakes are restored alongside canonical Delivery. Each
+	// human @mention keeps its own must-reply wake while each message also keeps
+	// its own independent Delivery projection.
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM agent_inbox_event
-		WHERE agent_id = $1 AND source_message_id IN ($2, $3)`, agentID, first.ID, second.ID).Scan(&inboxCount); err != nil {
-		t.Fatalf("count retired chat inbox events: %v", err)
+		WHERE agent_id = $1
+		  AND requires_wake = true
+		  AND reason = 'mention'
+		  AND source_message_id IN ($2, $3)`, agentID, first.ID, second.ID).Scan(&inboxCount); err != nil {
+		t.Fatalf("count mention wake inbox events: %v", err)
 	}
-	if inboxCount != 0 {
-		t.Fatalf("chat inbox event count = %d, want 0", inboxCount)
+	if inboxCount != 2 {
+		t.Fatalf("mention wake inbox event count = %d, want 2 directed wakes", inboxCount)
 	}
 }
 
@@ -6118,6 +6144,16 @@ func seedThreadProductInboxEventForTest(t *testing.T, channelID, agentID, thread
 		SET source_message_id = $2, trigger_summary = 'Explicit product task'
 		WHERE id = $1`, eventID, reply.ID); err != nil {
 		t.Fatalf("link thread product task source: %v", err)
+	}
+	// Restored human-message wakes create a mention inbox event for the same
+	// reply. Snapshot fixtures need exactly one explicit product task, so drop
+	// the auto-dispatched wake(s) for this source message.
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM agent_inbox_event
+		WHERE agent_id = $1
+		  AND source_message_id = $2
+		  AND id <> $3`, agentID, reply.ID, eventID); err != nil {
+		t.Fatalf("clear auto mention wakes for product fixture: %v", err)
 	}
 	return root
 }

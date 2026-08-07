@@ -66,6 +66,8 @@
     "delete_action": "Delete",
     "page_menu": "Page menu",
     "rename_page": "Rename page",
+    "expand_page": "Expand {{title}}",
+    "collapse_page": "Collapse {{title}}",
     "create_child": "Create child page",
     "share_title": "Share note",
     "export_action": "Export",

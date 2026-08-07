@@ -23,7 +23,7 @@ type acceptedResultState struct {
 }
 
 func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) (AcceptResultOutcome, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpResultAccept, pgx.TxOptions{})
 	if err != nil {
 		return AcceptResultOutcome{}, err
 	}
@@ -35,7 +35,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	state, replay, err := lockResultAttempt(ctx, tx, in)
 	if err != nil || replay != nil {
 		if replay != nil {
-			if err = tx.Commit(ctx); err != nil {
+			if err = s.commitResearchTx(ctx, txOpResultAccept, tx); err != nil {
 				return AcceptResultOutcome{}, err
 			}
 			return *replay, nil
@@ -218,7 +218,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	outcome.Event = event
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpResultAccept, tx); err != nil {
 		return AcceptResultOutcome{}, err
 	}
 	return outcome, nil

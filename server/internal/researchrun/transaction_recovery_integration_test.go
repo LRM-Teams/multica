@@ -2,6 +2,7 @@ package researchrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -762,4 +763,346 @@ func TestCompleteCancellationsTransactionRecovery(t *testing.T) {
 			},
 		}
 	})
+}
+
+type resultAcceptanceRecoveryCounts struct {
+	sourceSnapshots int
+	sources         int
+	observations    int
+	claims          int
+	reports         int
+	evaluations     int
+	decisions       int
+	repairs         int
+	questions       int
+	tasks           int
+	acceptedEvents  int
+	attemptStatus   string
+	resultHash      string
+}
+
+func loadResultAcceptanceRecoveryCounts(t *testing.T, run *transactionRecoveryRun, attemptID string) resultAcceptanceRecoveryCounts {
+	t.Helper()
+	var counts resultAcceptanceRecoveryCounts
+	if err := run.pool.QueryRow(run.ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_source_snapshot WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_source WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_observation WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_claim WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_report WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid AND decision_kind IN ('quality_gate', 'citation_audit')),
+		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_target_repair WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND event_type = 'task_result_accepted'),
+		  attempt.status, COALESCE(attempt.result_hash, '')
+		FROM research_task_attempt attempt WHERE attempt.id = $2::uuid
+	`, run.fixture.sessionID, attemptID).Scan(
+		&counts.sourceSnapshots, &counts.sources, &counts.observations, &counts.claims,
+		&counts.reports, &counts.evaluations, &counts.decisions, &counts.repairs,
+		&counts.questions, &counts.tasks, &counts.acceptedEvents,
+		&counts.attemptStatus, &counts.resultHash,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return counts
+}
+
+func TestAcceptResultTransactionRecovery(t *testing.T) {
+	runTransactionRecoveryMatrix(t, txOpResultAccept, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+		attempt, _ := mustCreateRecoveryDispatch(t, run)
+		inboxID := mustCreateRecoveryInbox(t, run)
+		if _, _, err := run.store.AttachInboxTask(run.ctx, attempt.ID, inboxID); err != nil {
+			t.Fatal(err)
+		}
+		current, err := run.store.GetRun(run.ctx, run.fixture.sessionID, run.fixture.workspaceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tasks, err := run.store.ListTasks(run.ctx, run.fixture.sessionID)
+		if err != nil || len(tasks) != 1 {
+			t.Fatalf("tasks=%+v err=%v", tasks, err)
+		}
+		result := upgradeResultToV5(validV4PlanResult(t))
+		result.ClientRequestID = "tx-result-" + uuid.NewString()
+		raw, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		validated, hash, err := DecodeAndValidateResultForVersion(current.OrchestratorVersion, raw, tasks[0], current.Config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := AcceptResultInput{
+			SessionID: run.fixture.sessionID, AttemptID: attempt.ID, AgentID: run.fixture.agentID,
+			InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
+		}
+		invoke := func() error {
+			_, invokeErr := run.store.AcceptResult(run.ctx, input)
+			return invokeErr
+		}
+		assertState := func(committed bool) {
+			t.Helper()
+			counts := loadResultAcceptanceRecoveryCounts(t, run, attempt.ID)
+			if !committed {
+				if counts != (resultAcceptanceRecoveryCounts{questions: 1, tasks: 1, attemptStatus: string(AttemptStatusDispatching)}) {
+					t.Fatalf("rolled-back result state=%+v", counts)
+				}
+				return
+			}
+			want := resultAcceptanceRecoveryCounts{
+				decisions: 1, questions: 2, tasks: 6, acceptedEvents: 1,
+				attemptStatus: string(AttemptStatusSucceeded), resultHash: hash,
+			}
+			if counts != want {
+				t.Fatalf("committed result state=%+v want=%+v", counts, want)
+			}
+			conflicting := result
+			conflicting.Summary += " conflicting payload"
+			conflictingRaw, marshalErr := json.Marshal(conflicting)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			conflictingResult, conflictingHash, decodeErr := DecodeAndValidateResultForVersion(
+				current.OrchestratorVersion, conflictingRaw, tasks[0], current.Config,
+			)
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			_, conflictErr := run.store.AcceptResult(run.ctx, AcceptResultInput{
+				SessionID: run.fixture.sessionID, AttemptID: attempt.ID, AgentID: run.fixture.agentID,
+				InboxTaskID: inboxID, Raw: conflictingRaw, Result: conflictingResult, Hash: conflictingHash,
+			})
+			if !errors.Is(conflictErr, ErrResultConflict) {
+				t.Fatalf("same result request with different payload error=%v", conflictErr)
+			}
+		}
+		return transactionRecoveryOperation{
+			invoke: invoke,
+			assertRolledBack: func() {
+				assertState(false)
+			},
+			assertCommitted: func() {
+				assertState(true)
+			},
+			recover: func() error {
+				replayed, replayErr := run.store.AcceptResult(run.ctx, input)
+				if replayErr == nil && !replayed.Replayed {
+					return fmt.Errorf("result replay=%+v, want replayed", replayed)
+				}
+				return replayErr
+			},
+		}
+	})
+}
+
+type controlTaskRecoveryState struct {
+	taskID    string
+	tasks     int
+	decisions int
+	events    int
+}
+
+func loadControlTaskRecoveryState(t *testing.T, run *transactionRecoveryRun, objective string) controlTaskRecoveryState {
+	t.Helper()
+	var state controlTaskRecoveryState
+	if err := run.pool.QueryRow(run.ctx, `
+		SELECT COALESCE((SELECT id::text FROM research_task WHERE session_id = $1::uuid AND objective = $2 LIMIT 1), ''),
+		       (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND objective = $2),
+		       (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid AND decision_kind = 'remediation_routing'),
+		       (SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND event_type = 'control_task_created' AND payload->>'objective' = $2)
+	`, run.fixture.sessionID, objective).Scan(&state.taskID, &state.tasks, &state.decisions, &state.events); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func TestCreateControlTaskTransactionRecovery(t *testing.T) {
+	runTransactionRecoveryMatrix(t, txOpControlTaskCreate, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+		input := ControlTaskInput{
+			SessionID: run.fixture.sessionID, Kind: TaskKindDiscover,
+			Objective: "transaction recovery control " + uuid.NewString(), Capability: "scout", Priority: 0.9,
+			Findings: []GateFinding{{Code: "required_questions_unanswered"}},
+		}
+		var createdID string
+		invoke := func() error {
+			task, _, err := run.store.CreateControlTask(run.ctx, input)
+			if err == nil {
+				createdID = task.ID
+			}
+			return err
+		}
+		assertCommitted := func() {
+			t.Helper()
+			state := loadControlTaskRecoveryState(t, run, input.Objective)
+			if state.taskID == "" || state.tasks != 1 || state.decisions != 1 || state.events != 1 {
+				t.Fatalf("committed control task state=%+v", state)
+			}
+			if createdID != "" && createdID != state.taskID {
+				t.Fatalf("created control task=%s committed=%s", createdID, state.taskID)
+			}
+			createdID = state.taskID
+		}
+		return transactionRecoveryOperation{
+			invoke: invoke,
+			assertRolledBack: func() {
+				if state := loadControlTaskRecoveryState(t, run, input.Objective); state != (controlTaskRecoveryState{}) {
+					t.Fatalf("rolled-back control task state=%+v", state)
+				}
+			},
+			assertCommitted: assertCommitted,
+			recover: func() error {
+				task, event, err := run.store.CreateControlTask(run.ctx, input)
+				if err == nil && (task.ID != createdID || event.ID != "") {
+					return fmt.Errorf("control task replay task=%+v event=%+v want task %s and no event", task, event, createdID)
+				}
+				return err
+			},
+		}
+	})
+}
+
+type nodeCommandRecoveryState struct {
+	tasks            int
+	questions        int
+	commandEvents    int
+	createdTasks     int
+	createdQuestions int
+	taskStatus       string
+	terminalReason   string
+	assignedAgent    string
+	eventID          string
+}
+
+func loadNodeCommandRecoveryState(t *testing.T, run *transactionRecoveryRun, input NodeCommandInput) nodeCommandRecoveryState {
+	t.Helper()
+	var state nodeCommandRecoveryState
+	if err := run.pool.QueryRow(run.ctx, `
+		SELECT
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid),
+		  (SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND idempotency_key = $2),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND client_key = $3),
+		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid AND client_key = $4),
+		  task.status, task.terminal_reason, COALESCE(task.assigned_agent_id::text, ''),
+		  COALESCE((SELECT id::text FROM research_run_event WHERE session_id = $1::uuid AND idempotency_key = $2), '')
+		FROM research_task task WHERE task.id = $5::uuid
+	`, run.fixture.sessionID, nodeCommandClientKey(input.ClientRequestID, "event"),
+		nodeCommandClientKey(input.ClientRequestID, "task"), nodeCommandClientKey(input.ClientRequestID, "question"),
+		input.AnchorTaskID).Scan(
+		&state.tasks, &state.questions, &state.commandEvents, &state.createdTasks, &state.createdQuestions,
+		&state.taskStatus, &state.terminalReason, &state.assignedAgent, &state.eventID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func TestNodeCommandTransactionRecovery(t *testing.T) {
+	for _, action := range []string{NodeActionContinue, NodeActionFork, NodeActionRetry, NodeActionReassign} {
+		t.Run(action, func(t *testing.T) {
+			runTransactionRecoveryMatrix(t, txOpNodeCommand, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+				var rootQuestionID string
+				if err := run.pool.QueryRow(run.ctx, `
+					SELECT id::text FROM research_question WHERE session_id = $1::uuid AND client_key = 'root'
+				`, run.fixture.sessionID).Scan(&rootQuestionID); err != nil {
+					t.Fatal(err)
+				}
+				input := NodeCommandInput{
+					SessionID: run.fixture.sessionID, WorkspaceID: run.fixture.workspaceID,
+					NodeID: "task:" + run.taskID, Action: action, ClientRequestID: uuid.NewString(),
+					ActorType: "user", ActorID: run.fixture.userID,
+					AnchorKind: "task", AnchorTaskID: run.taskID, AnchorQuestionID: rootQuestionID,
+					Objective: "transaction recovery " + action,
+				}
+				switch action {
+				case NodeActionRetry:
+					if _, err := run.pool.Exec(run.ctx, `UPDATE research_task SET status = 'dispatching' WHERE id = $1::uuid`, run.taskID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := run.pool.Exec(run.ctx, `UPDATE research_task SET status = 'running' WHERE id = $1::uuid`, run.taskID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := run.pool.Exec(run.ctx, `
+						UPDATE research_task SET status = 'failed', terminal_reason = 'test_failure', completed_at = now()
+						WHERE id = $1::uuid
+					`, run.taskID); err != nil {
+						t.Fatal(err)
+					}
+				case NodeActionReassign:
+					input.TargetAgentID = run.fixture.reporterID
+				}
+				baseline := loadNodeCommandRecoveryState(t, run, input)
+				var firstOutcome NodeCommandOutcome
+				invoke := func() error {
+					outcome, err := run.store.NodeCommand(run.ctx, input)
+					if err == nil {
+						if outcome.Replayed || outcome.Event.ID == "" {
+							return fmt.Errorf("fresh node command outcome=%+v", outcome)
+						}
+						firstOutcome = outcome
+					}
+					return err
+				}
+				assertCommitted := func() {
+					t.Helper()
+					state := loadNodeCommandRecoveryState(t, run, input)
+					wantTasks := baseline.tasks
+					wantQuestions := baseline.questions
+					wantCreatedTasks := 0
+					wantCreatedQuestions := 0
+					if action == NodeActionContinue || action == NodeActionFork {
+						wantTasks++
+						wantCreatedTasks = 1
+					}
+					if action == NodeActionFork {
+						wantQuestions++
+						wantCreatedQuestions = 1
+					}
+					if state.tasks != wantTasks || state.questions != wantQuestions || state.commandEvents != 1 ||
+						state.createdTasks != wantCreatedTasks || state.createdQuestions != wantCreatedQuestions || state.eventID == "" {
+						t.Fatalf("committed %s state=%+v baseline=%+v", action, state, baseline)
+					}
+					if action == NodeActionRetry && (state.taskStatus != string(TaskStatusReady) || state.terminalReason != "") {
+						t.Fatalf("retry task state=%+v", state)
+					}
+					if action == NodeActionReassign && (state.taskStatus != string(TaskStatusReady) || state.assignedAgent != run.fixture.reporterID) {
+						t.Fatalf("reassign task state=%+v", state)
+					}
+					if firstOutcome.CommandID != "" && firstOutcome.CommandID != state.eventID {
+						t.Fatalf("fresh command id=%s committed event=%s", firstOutcome.CommandID, state.eventID)
+					}
+				}
+				return transactionRecoveryOperation{
+					invoke: invoke,
+					assertRolledBack: func() {
+						if state := loadNodeCommandRecoveryState(t, run, input); state != baseline {
+							t.Fatalf("rolled-back %s state=%+v baseline=%+v", action, state, baseline)
+						}
+					},
+					assertCommitted: assertCommitted,
+					recover: func() error {
+						state := loadNodeCommandRecoveryState(t, run, input)
+						replayed, err := run.store.NodeCommand(run.ctx, input)
+						if err != nil {
+							return err
+						}
+						if !replayed.Replayed || replayed.CommandID != state.eventID {
+							return fmt.Errorf("%s replay=%+v want event %s", action, replayed, state.eventID)
+						}
+						conflicting := input
+						conflicting.Objective += " conflicting payload"
+						_, conflictErr := run.store.NodeCommand(run.ctx, conflicting)
+						var denied *NodeCommandDenied
+						if !errors.As(conflictErr, &denied) || denied.MachineCode != NodeCmdCodeIdempotencyConflict {
+							return fmt.Errorf("%s semantic conflict error=%v", action, conflictErr)
+						}
+						return nil
+					},
+				}
+			})
+		})
+	}
 }

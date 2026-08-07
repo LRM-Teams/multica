@@ -91,6 +91,12 @@ func TestMigratedTransactionsUseResearchTransactionRunner(t *testing.T) {
 		{file: "postgres_tasks.go", function: "FailAttempt", wantBegins: 1, wantCommits: 1},
 		{file: "postgres.go", function: "MarkCancellationsRequested", wantBegins: 1, wantCommits: 1},
 		{file: "postgres.go", function: "CompleteCancellations", wantBegins: 1, wantCommits: 1},
+		{file: "postgres_result.go", function: "AcceptResult", wantBegins: 1, wantCommits: 2},
+		{file: "postgres_tasks.go", function: "CreateControlTask", wantBegins: 1, wantCommits: 2},
+		{file: "postgres_node_command.go", function: "NodeCommand", wantBegins: 1, wantCommits: 1},
+		{file: "postgres_node_command.go", function: "nodeCommandContinueFork", wantBegins: 0, wantCommits: 1},
+		{file: "postgres_node_command.go", function: "nodeCommandRetry", wantBegins: 0, wantCommits: 1},
+		{file: "postgres_node_command.go", function: "nodeCommandReassign", wantBegins: 0, wantCommits: 1},
 	}
 
 	for _, test := range tests {

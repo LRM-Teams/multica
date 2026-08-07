@@ -18,7 +18,7 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 	if err != nil {
 		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeInvalidRequest, "请求内容无效，请刷新后重试")
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpNodeCommand, pgx.TxOptions{})
 	if err != nil {
 		return NodeCommandOutcome{}, err
 	}
@@ -62,7 +62,7 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 		}
 		outcome.Replayed = true
 		outcome.Event = existing
-		return outcome, tx.Commit(ctx)
+		return outcome, s.commitResearchTx(ctx, txOpNodeCommand, tx)
 	} else if !errors.Is(loadErr, pgx.ErrNoRows) {
 		return NodeCommandOutcome{}, loadErr
 	}
@@ -316,7 +316,7 @@ func (s *PostgresStore) nodeCommandContinueFork(
 	outcome.CommandID = event.ID
 	outcome.StateVersion = event.Sequence
 	outcome.Event = event
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpNodeCommand, tx); err != nil {
 		return NodeCommandOutcome{}, err
 	}
 	return outcome, nil
@@ -446,7 +446,7 @@ func (s *PostgresStore) nodeCommandRetry(
 	outcome.CommandID = event.ID
 	outcome.StateVersion = event.Sequence
 	outcome.Event = event
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpNodeCommand, tx); err != nil {
 		return NodeCommandOutcome{}, err
 	}
 	return outcome, nil
@@ -654,7 +654,7 @@ func (s *PostgresStore) nodeCommandReassign(
 	outcome.CommandID = event.ID
 	outcome.StateVersion = event.Sequence
 	outcome.Event = event
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpNodeCommand, tx); err != nil {
 		return NodeCommandOutcome{}, err
 	}
 	return outcome, nil

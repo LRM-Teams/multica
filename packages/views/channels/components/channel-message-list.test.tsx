@@ -121,13 +121,7 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
 // stays free of QueryClient/workspace-provider wiring.
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => "loading",
-  // #271 single-hook: summary + events fetched together.
-  useAgentHealth: () => ({
-    summary: undefined,
-    events: undefined,
-    isLoading: false,
-    isError: false,
-  }),
+  useRunnerActivity: () => ({ data: undefined }),
 }));
 
 // LRM-364: bubble reaction hover resolves names via member-profile queries.

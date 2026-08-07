@@ -305,7 +305,7 @@ func TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete(t *testing.T) 
 		go func() {
 			defer wg.Done()
 			<-start
-			name := fmt.Sprintf("avatar-api-concurrent-%d-%s", i, strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
+			name := fmt.Sprintf("avatar-api-%d-%s", i, strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
 			recorder := httptest.NewRecorder()
 			testHandler.CreateAgent(recorder, newRequest(http.MethodPost, "/api/agents", map[string]any{
 				"name": name, "display_name": name, "runtime_id": testRuntimeID, "visibility": "private", "max_concurrent_tasks": 1,
@@ -330,7 +330,7 @@ func TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete(t *testing.T) 
 		go func() {
 			defer wg.Done()
 			<-start
-			name := fmt.Sprintf("avatar-sql-concurrent-%d-%s", i, strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
+			name := fmt.Sprintf("avatar-sql-%d-%s", i, strings.ReplaceAll(uuid.NewString(), "-", "")[:8])
 			var id, avatarURL, source string
 			err := testPool.QueryRow(context.Background(), `
 				INSERT INTO agent (

@@ -4247,9 +4247,9 @@ func (d *Daemon) publishTaskRunnerActivity(task Task, activityKind, detailKind, 
 	}
 	var entries []protocol.AgentActivityEntry
 	if narrative != "" {
-		body, err := json.Marshal(map[string]string{"text": narrative})
+		entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
 		if err == nil {
-			entries = []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: body}}
+			entries = []protocol.AgentActivityEntry{entry}
 		}
 	}
 	if err := producer.PublishForManagedAgent(task.AgentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {

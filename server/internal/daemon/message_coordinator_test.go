@@ -60,6 +60,8 @@ func (r *activityResidentMessageRuntime) AcceptMessageBatch(context.Context, []a
 	return agent.ResidentMessageAcceptance{Done: r.done, Messages: r.messages}, nil
 }
 
+func (r *activityResidentMessageRuntime) RuntimeAlive() (bool, bool) { return false, false }
+
 type pendingNoticeRuntime struct {
 	mu      sync.Mutex
 	notices []agent.ResidentPendingNotice
@@ -89,10 +91,10 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 		mode: canonicalRuntimeResident, backend: backend,
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"}}
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil); err != nil {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
 		t.Fatalf("first handoff: %v", err)
 	}
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		t.Fatalf("overlapping handoff error = %v, want busy", err)
 	}
 	backend.done <- nil
@@ -127,6 +129,11 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
 		func() {
 			mu.Lock()
+			observed = append(observed, "starting")
+			mu.Unlock()
+		},
+		func() {
+			mu.Lock()
 			observed = append(observed, "accepted")
 			mu.Unlock()
 		},
@@ -154,8 +161,8 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !reflect.DeepEqual(observed, []string{"accepted", "activity", "complete"}) {
-		t.Fatalf("callback order = %v, want acceptance, runtime Activity, then completion", observed)
+	if !reflect.DeepEqual(observed, []string{"starting", "accepted", "activity", "complete"}) {
+		t.Fatalf("callback order = %v, want starting, acceptance, runtime Activity, then completion", observed)
 	}
 }
 
@@ -168,7 +175,7 @@ func TestRuntimePoolDrainsResidentActivityWithoutObserver(t *testing.T) {
 	if err := pool.handoffIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
-		nil, nil, func(error, uint64) { close(completed) },
+		nil, nil, nil, func(error, uint64) { close(completed) },
 	); err != nil {
 		t.Fatalf("handoff: %v", err)
 	}
@@ -201,8 +208,8 @@ func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testin
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1}}
 	result := make(chan bool, 1)
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, func(_ error, generation uint64) {
-		if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil); err != nil {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, func(_ error, generation uint64) {
+		if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
 			result <- true
 			return
 		}

@@ -684,6 +684,25 @@ func TestCodexRawErrorNotificationRetryingIgnored(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeDiagnosticNotificationIsBoundedAndStructured(t *testing.T) {
+	t.Parallel()
+	c, _, _ := newTestCodexClient(t)
+	c.notificationProtocol = "raw"
+	var got Message
+	c.onMessage = func(message Message) { got = message }
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"configWarning","params":{"summary":"Sandbox configuration","details":"User namespaces are unavailable"}}`)
+
+	if got.Type != MessageDiagnostic || got.Level != "warning" || got.Diagnostic != "configWarning" || got.Title != "Codex config warning" || got.Content != "Sandbox configuration\nUser namespaces are unavailable" {
+		t.Fatalf("diagnostic = %+v", got)
+	}
+	long := strings.Repeat("x", 1100)
+	bounded := boundedCodexDiagnosticString(long, 1000)
+	if len([]rune(bounded)) != 1000 || !strings.HasSuffix(bounded, "…") {
+		t.Fatalf("bounded diagnostic length=%d", len([]rune(bounded)))
+	}
+}
+
 func TestCodexFirstTurnProgressActivity(t *testing.T) {
 	t.Parallel()
 

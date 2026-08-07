@@ -43,6 +43,38 @@ func TestReapStaleRunnerActivityProjectsDisconnectedWithoutInventingIdle(t *test
 	}
 }
 
+func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "ready-fence-"+uuid.NewString()[:8], nil)
+	launchID := "launch-" + uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
+		VALUES ($1, $2, $3, 'daemon-1', 'old-instance', $4, 'active')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_snapshot (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, client_sequence, producer_fact_id, activity_kind, observed_at)
+		VALUES ($1, $2, $3, 'daemon-1', 'old-instance', $4, 1, 'fact-1', 'online', now())`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testHandler.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance"); err != nil {
+		t.Fatal(err)
+	}
+	var kind, detail, status string
+	if err := testPool.QueryRow(ctx, `SELECT activity_kind, detail_kind FROM agent_activity_snapshot WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&kind, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if kind != protocol.ActivityKindOffline || detail != "computer_restarted" || status != protocol.AgentStatusInactive {
+		t.Fatalf("ready fence = kind:%q detail:%q status:%q", kind, detail, status)
+	}
+}
+
 func TestRunnerActivityProbeResponseMustMatchPendingProbe(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

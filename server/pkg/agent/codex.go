@@ -1438,7 +1438,9 @@ func (c *codexClient) handleNotification(raw map[string]json.RawMessage) {
 	if c.notificationProtocol != "legacy" {
 		if c.notificationProtocol == "unknown" &&
 			(method == "turn/started" || method == "turn/completed" ||
-				method == "thread/started" || strings.HasPrefix(method, "item/")) {
+				method == "thread/started" || strings.HasPrefix(method, "item/") ||
+				method == "configWarning" || method == "warning" ||
+				method == "guardianWarning" || method == "deprecationNotice") {
 			c.notificationProtocol = "raw"
 		}
 
@@ -1535,6 +1537,13 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 	case "thread/tokenUsage/updated":
 		c.updateRuntimeStats(params)
 
+	case "configWarning", "warning", "guardianWarning", "deprecationNotice":
+		if c.onMessage != nil {
+			if diagnostic, ok := normalizeCodexDiagnostic(method, params); ok {
+				c.onMessage(diagnostic)
+			}
+		}
+
 	case "turn/started":
 		c.setActiveTurn(true, extractNestedString(params, "turn", "id"))
 		if c.onMessage != nil {
@@ -1621,6 +1630,63 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 			c.handleItemNotification(method, params)
 		}
 	}
+}
+
+func normalizeCodexDiagnostic(method string, params map[string]any) (Message, bool) {
+	var title, text, details string
+	switch method {
+	case "configWarning":
+		title = "Codex config warning"
+		text = boundedCodexDiagnosticString(params["summary"], 1000)
+		details = boundedCodexDiagnosticString(params["details"], 1000)
+		if text == "" {
+			text = details
+		}
+		if text == "" {
+			text = "Codex configuration warning"
+		}
+	case "warning":
+		title = "Codex warning"
+		text = boundedCodexDiagnosticString(params["message"], 1000)
+		if text == "" {
+			text = title
+		}
+	case "guardianWarning":
+		title = "Codex guardian warning"
+		text = boundedCodexDiagnosticString(params["message"], 1000)
+		if text == "" {
+			text = title
+		}
+	case "deprecationNotice":
+		title = "Codex deprecation notice"
+		text = boundedCodexDiagnosticString(params["summary"], 1000)
+		details = boundedCodexDiagnosticString(params["details"], 1000)
+		if text == "" {
+			text = details
+		}
+		if text == "" {
+			text = title
+		}
+	default:
+		return Message{}, false
+	}
+	if details != "" && details != text {
+		text += "\n" + details
+	}
+	return Message{Type: MessageDiagnostic, Content: text, Level: "warning", Title: title, Diagnostic: method}, true
+}
+
+func boundedCodexDiagnosticString(value any, limit int) string {
+	text, _ := value.(string)
+	text = strings.TrimSpace(text)
+	if text == "" || limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func (c *codexClient) updateRuntimeStats(params map[string]any) {

@@ -589,6 +589,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	ctx context.Context,
 	agentID, runtimeID string,
 	messages []protocol.AgentMessageProjection,
+	onStarting func(),
 	onAccepted func(),
 	onMessage func(agent.Message),
 	onComplete func(error, uint64),
@@ -615,6 +616,12 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	input, ok := slot.backend.(agent.ResidentMessageInput)
 	if !ok {
 		return errors.New("canonical resident runtime does not support idle Message input")
+	}
+	if liveness, ok := slot.backend.(agent.ResidentRuntimeLivenessChecker); ok {
+		alive, known := liveness.RuntimeAlive()
+		if (!known || !alive) && onStarting != nil {
+			onStarting()
+		}
 	}
 	batch := make([]agent.ResidentMessage, 0, len(messages))
 	for _, message := range messages {

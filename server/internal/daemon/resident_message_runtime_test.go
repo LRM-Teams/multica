@@ -161,7 +161,7 @@ func TestMessageRecoveryCreatesResidentRuntimeBeforeHandoff(t *testing.T) {
 		messageRuntimeIDs:   map[string]string{agentID: runtimeID},
 	}
 	coordinator, err := NewMessageCoordinator(t.TempDir(), func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
-		return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, nil, nil, nil)
+		return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, nil, nil, nil, nil)
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

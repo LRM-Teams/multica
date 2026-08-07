@@ -103,17 +103,19 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			t.Error(err)
 			return
 		}
-		_, raw, err = conn.ReadMessage()
-		if err != nil {
-			t.Error(err)
-			return
+		for i := 0; i < 2; i++ {
+			_, raw, err = conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var stoppedFrame protocol.Message
+			if err := json.Unmarshal(raw, &stoppedFrame); err != nil {
+				t.Error(err)
+				return
+			}
+			frames <- stoppedFrame
 		}
-		var inactive protocol.Message
-		if err := json.Unmarshal(raw, &inactive); err != nil {
-			t.Error(err)
-			return
-		}
-		frames <- inactive
 	}))
 	defer server.Close()
 	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -125,8 +127,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, "ws-1") }()
-	var ready, ack, status, inactive, session, activity protocol.Message
-	for i := 0; i < 6; i++ {
+	var ready, ack, status, inactive, session, initialActivity, stoppedActivity protocol.Message
+	for i := 0; i < 7; i++ {
 		select {
 		case msg := <-frames:
 			switch msg.Type {
@@ -147,7 +149,15 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			case protocol.EventAgentSession:
 				session = msg
 			case protocol.EventAgentActivity:
-				activity = msg
+				var candidate protocol.AgentActivityPayload
+				if err := json.Unmarshal(msg.Payload, &candidate); err != nil {
+					t.Fatal(err)
+				}
+				if candidate.Snapshot.DetailKind == "stopped" {
+					stoppedActivity = msg
+				} else {
+					initialActivity = msg
+				}
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for Runner frames")
@@ -172,11 +182,17 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		t.Fatalf("ack=%+v status=%+v session=%+v", accepted, active, reportedSession)
 	}
 	var snapshot protocol.AgentActivityPayload
-	if err := json.Unmarshal(activity.Payload, &snapshot); err != nil {
+	if err := json.Unmarshal(initialActivity.Payload, &snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.Snapshot.AgentID != accepted.AgentID || snapshot.Snapshot.LaunchID != accepted.LaunchID || snapshot.Snapshot.ActivityKind != protocol.ActivityKindOnline || snapshot.Snapshot.ClientSequence != 1 {
 		t.Fatalf("initial Activity = %+v, want online snapshot for launch %q", snapshot.Snapshot, accepted.LaunchID)
+	}
+	if err := json.Unmarshal(stoppedActivity.Payload, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Snapshot.ActivityKind != protocol.ActivityKindOffline || snapshot.Snapshot.DetailKind != "stopped" || snapshot.Snapshot.ClientSequence != 2 {
+		t.Fatalf("stopped Activity = %+v", snapshot.Snapshot)
 	}
 	var stopped protocol.AgentStatusPayload
 	if err := json.Unmarshal(inactive.Payload, &stopped); err != nil {

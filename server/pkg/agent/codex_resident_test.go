@@ -50,6 +50,7 @@ func TestCodexResidentAcceptsCanonicalMessageAtNativeTurnBoundary(t *testing.T) 
 	inputPath := t.TempDir() + "/turn-start.json"
 	fakePath := writeFakeCodexAppServer(t, ""+
 		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"configWarning","params":{"summary":"Sandbox configuration","details":"User namespaces are unavailable"}}'`+"\n"+
 		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
 		`read line`+"\n"+
 		`read line`+"\n"+
@@ -85,13 +86,14 @@ func TestCodexResidentAcceptsCanonicalMessageAtNativeTurnBoundary(t *testing.T) 
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for canonical Message turn completion")
 	}
-	var sawReconnect, sawText bool
+	var sawReconnect, sawText, sawDiagnostic bool
 	for message := range acceptance.Messages {
 		sawReconnect = sawReconnect || message.Type == MessageStatus && message.Status == "reconnecting"
 		sawText = sawText || message.Type == MessageText && message.Content == "acknowledged"
+		sawDiagnostic = sawDiagnostic || message.Type == MessageDiagnostic && message.Title == "Codex config warning" && strings.Contains(message.Content, "User namespaces")
 	}
-	if !sawReconnect || !sawText {
-		t.Fatalf("resident lifecycle events reconnect=%v text=%v", sawReconnect, sawText)
+	if !sawReconnect || !sawText || !sawDiagnostic {
+		t.Fatalf("resident lifecycle events reconnect=%v text=%v diagnostic=%v", sawReconnect, sawText, sawDiagnostic)
 	}
 
 	raw, err := os.ReadFile(inputPath)

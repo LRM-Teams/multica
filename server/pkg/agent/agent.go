@@ -228,6 +228,7 @@ const (
 	MessageStatus     MessageType = "status"
 	MessageError      MessageType = "error"
 	MessageLog        MessageType = "log"
+	MessageDiagnostic MessageType = "diagnostic"
 	// MessageCompactionStarted and MessageCompactionFinished preserve the
 	// provider's explicit context-compaction lifecycle. They are Activity
 	// events, not generated assistant text.
@@ -237,16 +238,18 @@ const (
 
 // Message is a unified event emitted by an agent during execution.
 type Message struct {
-	Type      MessageType
-	Content   string         // text content (Text, Error, Log)
-	Tool      string         // tool name (ToolUse, ToolResult)
-	CallID    string         // tool call ID (ToolUse, ToolResult)
-	Input     map[string]any // tool input (ToolUse); also on ToolResult when completed backfills started-empty args (LRM-689)
-	Output    string         // tool output (ToolResult)
-	Status    string         // agent status string (Status)
-	Level     string         // log level (Log)
-	Lineage   string         // runtime subagent lineage (Thinking, Text)
-	SessionID string         // backend session id (Status), for early resume-pointer pinning
+	Type       MessageType
+	Content    string         // text content (Text, Error, Log)
+	Tool       string         // tool name (ToolUse, ToolResult)
+	CallID     string         // tool call ID (ToolUse, ToolResult)
+	Input      map[string]any // tool input (ToolUse); also on ToolResult when completed backfills started-empty args (LRM-689)
+	Output     string         // tool output (ToolResult)
+	Status     string         // agent status string (Status)
+	Level      string         // log level (Log)
+	Title      string         // safe user-facing diagnostic title (Diagnostic)
+	Diagnostic string         // provider diagnostic kind (Diagnostic)
+	Lineage    string         // runtime subagent lineage (Thinking, Text)
+	SessionID  string         // backend session id (Status), for early resume-pointer pinning
 }
 
 // TokenUsage tracks token consumption for a single model.

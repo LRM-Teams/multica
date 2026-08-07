@@ -54,6 +54,7 @@ type codexAppServerProcess struct {
 
 	stateMu     sync.Mutex
 	message     func(Message)
+	pending     []Message
 	disposeOnce sync.Once
 }
 
@@ -210,7 +211,12 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 		}
 		trySend(msgCh, msg)
 	}
+	pending := append([]Message(nil), p.pending...)
+	p.pending = nil
 	p.stateMu.Unlock()
+	for _, msg := range pending {
+		trySend(msgCh, msg)
+	}
 
 	// Per-turn client state: the same process/client spans many turns.
 	p.client.clearTurnError()
@@ -573,6 +579,8 @@ func (b *codexAppServerBackend) ensureProcess(ctx context.Context, opts ExecOpti
 			defer p.stateMu.Unlock()
 			if p.message != nil {
 				p.message(msg)
+			} else if msg.Type == MessageDiagnostic {
+				p.pending = append(p.pending, msg)
 			}
 		},
 	}

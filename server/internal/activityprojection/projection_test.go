@@ -13,14 +13,15 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 	}{
 		{"online", "idle", "Online"},
 		{"thinking", "", "Thinking..."},
+		{"working", "starting", "Starting"},
 		{"working", "message_received", "Message received"},
-		{"working", "runtime_reconnecting", "Reconnecting..."},
 		{"working", "running_command", "Running command..."},
 		{"working", "checking_messages", "Checking messages..."},
 		{"working", "compacting_context", "Compacting context..."},
 		{"working", "future_detail", "Working..."},
-		{"error", "", "Runtime error"},
+		{"error", "", "Error"},
 		{"offline", "machine_disconnected", "Disconnected"},
+		{"offline", "stopped", "Stopped"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind+"/"+tc.detail, func(t *testing.T) {
@@ -29,6 +30,23 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 				t.Fatalf("label = %q, want %q", got.Label, tc.want)
 			}
 		})
+	}
+}
+
+func TestProjectSummaryUsesLifecycleToneVocabulary(t *testing.T) {
+	cases := []struct {
+		kind, detail, want string
+	}{
+		{protocol.ActivityKindOnline, "idle", "success"},
+		{protocol.ActivityKindWorking, "message_received", "warning"},
+		{protocol.ActivityKindError, "runtime_error", "error"},
+		{protocol.ActivityKindOffline, "machine_disconnected", "neutral"},
+	}
+	for _, tc := range cases {
+		got := ProjectSummary(protocol.AgentActivitySnapshot{ActivityKind: tc.kind, DetailKind: tc.detail})
+		if got.Tone != tc.want {
+			t.Fatalf("%s/%s tone = %q, want %q", tc.kind, tc.detail, got.Tone, tc.want)
+		}
 	}
 }
 
@@ -58,7 +76,30 @@ func TestProjectTimelineEntryUsesGenericFallbackAndBoundsText(t *testing.T) {
 	}
 	long := strings.Repeat("x", maxTimelineBodyBytes+1)
 	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"` + long + `"}`)}, Summary{Label: "Working...", Tone: "info"})
-	if row.BodyKind != "text" || len(row.Body) != maxTimelineBodyBytes {
+	if row.BodyKind != "none" || len(row.Subtext) != maxTimelineBodyBytes || row.Body != "" {
 		t.Fatalf("bounded row = %+v", row)
+	}
+}
+
+func TestProjectTimelineEntryUsesEventLocalLifecycleInsteadOfLatestSnapshot(t *testing.T) {
+	latest := Summary{Label: "Online", Tone: "success", Visibility: "visible"}
+	message := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Message received","activity_kind":"working","detail_kind":"message_received"}`)}, latest)
+	if message.Title != "Working" || message.Subtext != "Message received" || message.Tone != "warning" || message.BodyKind != "none" {
+		t.Fatalf("message row = %+v", message)
+	}
+	errorRow := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Runtime error","activity_kind":"error","detail_kind":"runtime_error"}`)}, latest)
+	if errorRow.Title != "Error" || errorRow.Subtext != "Runtime error" || errorRow.Tone != "error" {
+		t.Fatalf("error row = %+v", errorRow)
+	}
+	idle := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Idle","activity_kind":"online","detail_kind":"idle"}`)}, Summary{Label: "Error", Tone: "error"})
+	if idle.Title != "Idle" || idle.Subtext != "Idle" || idle.Tone != "success" {
+		t.Fatalf("idle row = %+v", idle)
+	}
+}
+
+func TestProjectTimelineEntryProjectsRuntimeDiagnosticWithoutChangingLifecycle(t *testing.T) {
+	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "system", Body: []byte(`{"title":"Codex config warning","text":"User namespaces are unavailable"}`)}, Summary{Label: "Online", Tone: "success"})
+	if row.Title != "Codex config warning" || row.Subtext != "User namespaces are unavailable" || row.Tone != "warning" || row.BodyKind != "none" {
+		t.Fatalf("diagnostic row = %+v", row)
 	}
 }

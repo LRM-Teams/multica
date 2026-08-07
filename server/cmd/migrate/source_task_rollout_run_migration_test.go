@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -213,4 +214,74 @@ func readTaskTemplateMigrationPair(t *testing.T, name string) (upSQL, downSQL st
 		t.Fatalf("read %s down: %v", name, err)
 	}
 	return string(up), string(down)
+}
+
+func TestSweLegoTemplateCacheClaimReclaim(t *testing.T) {
+	upSQL, _ := readTaskTemplateMigrationPair(t, "275_swe_lego_template_cache")
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn := taskTemplateMigrationSchema(t, ctx, pool, "template_cache_claim")
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `
+		CREATE TABLE sandbox_node (id UUID PRIMARY KEY DEFAULT gen_random_uuid());
+		CREATE TABLE sandbox_instance (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+	`); err != nil {
+		t.Fatalf("create pre-275 schema: %v", err)
+	}
+	if _, err := conn.Exec(ctx, upSQL); err != nil {
+		t.Fatalf("apply 275 up: %v", err)
+	}
+
+	var nodeID string
+	if err := conn.QueryRow(ctx, `INSERT INTO sandbox_node DEFAULT VALUES RETURNING id`).Scan(&nodeID); err != nil {
+		t.Fatalf("seed sandbox node: %v", err)
+	}
+	nodeUUID := pgtype.UUID{}
+	if err := nodeUUID.Scan(nodeID); err != nil {
+		t.Fatalf("parse node id: %v", err)
+	}
+	queries := db.New(conn)
+	cacheKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	// First claim on an empty key succeeds.
+	if _, err := queries.ClaimSweLegoTemplateBuild(ctx, db.ClaimSweLegoTemplateBuildParams{
+		NodeID: nodeUUID, CacheKey: cacheKey, ParentTemplateID: "parent-template",
+	}); err != nil {
+		t.Fatalf("initial claim: %v", err)
+	}
+	// A fresh building row holds the claim: a concurrent claim gets no row.
+	if _, err := queries.ClaimSweLegoTemplateBuild(ctx, db.ClaimSweLegoTemplateBuildParams{
+		NodeID: nodeUUID, CacheKey: cacheKey, ParentTemplateID: "parent-template",
+	}); err == nil {
+		t.Fatal("claim over a fresh building row succeeded")
+	}
+	// A stale building row (older than the materializer build timeout) is reclaimable.
+	if _, err := conn.Exec(ctx, `
+		UPDATE swe_lego_template_cache SET updated_at = now() - interval '30 minutes'
+		WHERE node_id = $1 AND cache_key = $2
+	`, nodeID, cacheKey); err != nil {
+		t.Fatalf("backdate building row: %v", err)
+	}
+	if _, err := queries.ClaimSweLegoTemplateBuild(ctx, db.ClaimSweLegoTemplateBuildParams{
+		NodeID: nodeUUID, CacheKey: cacheKey, ParentTemplateID: "parent-template",
+	}); err != nil {
+		t.Fatalf("stale building row was not reclaimed: %v", err)
+	}
+	// A failed row is always reclaimable.
+	if _, err := conn.Exec(ctx, `
+		UPDATE swe_lego_template_cache SET status = 'failed', error = 'boom', updated_at = now()
+		WHERE node_id = $1 AND cache_key = $2
+	`, nodeID, cacheKey); err != nil {
+		t.Fatalf("fail cache row: %v", err)
+	}
+	if _, err := queries.ClaimSweLegoTemplateBuild(ctx, db.ClaimSweLegoTemplateBuildParams{
+		NodeID: nodeUUID, CacheKey: cacheKey, ParentTemplateID: "parent-template",
+	}); err != nil {
+		t.Fatalf("failed row was not reclaimable: %v", err)
+	}
 }

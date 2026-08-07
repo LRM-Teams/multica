@@ -1097,6 +1097,8 @@ SET status = 'building',
     builder_instance_id = NULL,
     updated_at = now()
 WHERE swe_lego_template_cache.status = 'failed'
+   OR (swe_lego_template_cache.status = 'building'
+       AND swe_lego_template_cache.updated_at < now() - interval '25 minutes')
 RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
           builder_instance_id, created_at, updated_at
 `

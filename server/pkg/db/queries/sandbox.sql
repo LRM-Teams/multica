@@ -354,6 +354,10 @@ FROM swe_lego_template_cache
 WHERE node_id = $1 AND cache_key = $2;
 
 -- name: ClaimSweLegoTemplateBuild :one
+-- Reclaim policy: failed rows are always reclaimable; building rows become
+-- reclaimable once updated_at is older than the materializer's 20-minute
+-- build timeout (25m margin), so a builder killed by a deploy/restart does
+-- not wedge the cache key in "building" forever.
 INSERT INTO swe_lego_template_cache (node_id, cache_key, parent_template_id, status)
 VALUES ($1, $2, $3, 'building')
 ON CONFLICT (node_id, cache_key) DO UPDATE
@@ -363,6 +367,8 @@ SET status = 'building',
     builder_instance_id = NULL,
     updated_at = now()
 WHERE swe_lego_template_cache.status = 'failed'
+   OR (swe_lego_template_cache.status = 'building'
+       AND swe_lego_template_cache.updated_at < now() - interval '25 minutes')
 RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
           builder_instance_id, created_at, updated_at;
 

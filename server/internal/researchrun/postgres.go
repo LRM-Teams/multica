@@ -415,7 +415,7 @@ func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionI
 	if len(requests) == 0 {
 		return nil
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpAttemptCancelRequest, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -463,14 +463,14 @@ func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionI
 			return fmt.Errorf("%w: cancellation request changed concurrently (status %s)", ErrInvalidTransition, status)
 		}
 	}
-	return tx.Commit(ctx)
+	return s.commitResearchTx(ctx, txOpAttemptCancelRequest, tx)
 }
 
 func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID string, attemptIDs []string) ([]RunEvent, error) {
 	if len(attemptIDs) == 0 {
 		return nil, nil
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpAttemptCancelComplete, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +550,7 @@ func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID str
 		}
 		events = append(events, event)
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpAttemptCancelComplete, tx); err != nil {
 		return nil, err
 	}
 	return events, nil

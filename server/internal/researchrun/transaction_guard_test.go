@@ -74,16 +74,41 @@ func (s *store) CreateDispatchIntent(ctx context.Context) error {
 	}
 }
 
-func TestCreateDispatchIntentUsesResearchTransactionRunner(t *testing.T) {
-	source, err := os.ReadFile("postgres_tasks.go")
-	if err != nil {
-		t.Fatal(err)
+func TestMigratedTransactionsUseResearchTransactionRunner(t *testing.T) {
+	tests := []struct {
+		file        string
+		function    string
+		wantBegins  int
+		wantCommits int
+	}{
+		{file: "postgres_tasks.go", function: "CreateDispatchIntent", wantBegins: 1, wantCommits: 2},
+		{file: "postgres_tasks.go", function: "ActivateReadyTasks", wantBegins: 1, wantCommits: 1},
+		{file: "postgres_dispatch.go", function: "ClaimDispatchIntents", wantBegins: 1, wantCommits: 1},
+		{file: "postgres_dispatch.go", function: "RescheduleDispatchIntent", wantBegins: 1, wantCommits: 1},
+		{file: "postgres_dispatch.go", function: "FailDispatchIntent", wantBegins: 1, wantCommits: 3},
+		{file: "postgres_dispatch.go", function: "AcknowledgeDispatchIntent", wantBegins: 1, wantCommits: 2},
+		{file: "postgres_tasks.go", function: "AttachInboxTask", wantBegins: 1, wantCommits: 2},
+		{file: "postgres_tasks.go", function: "FailAttempt", wantBegins: 1, wantCommits: 1},
+		{file: "postgres.go", function: "MarkCancellationsRequested", wantBegins: 1, wantCommits: 1},
+		{file: "postgres.go", function: "CompleteCancellations", wantBegins: 1, wantCommits: 1},
 	}
-	calls := inspectTransactionBoundaryCalls(t, source, "CreateDispatchIntent")
-	if len(calls.direct) != 0 {
-		t.Errorf("CreateDispatchIntent has direct transaction boundaries: %v", calls.direct)
-	}
-	if calls.runner["beginResearchTx"] != 1 || calls.runner["commitResearchTx"] != 2 {
-		t.Errorf("CreateDispatchIntent runner calls=%v, want one beginResearchTx and two commitResearchTx exits", calls.runner)
+
+	for _, test := range tests {
+		t.Run(test.function, func(t *testing.T) {
+			source, err := os.ReadFile(test.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := inspectTransactionBoundaryCalls(t, source, test.function)
+			if len(calls.direct) != 0 {
+				t.Errorf("%s has direct transaction boundaries: %v", test.function, calls.direct)
+			}
+			if calls.runner["beginResearchTx"] != test.wantBegins || calls.runner["commitResearchTx"] != test.wantCommits {
+				t.Errorf(
+					"%s runner calls=%v, want %d beginResearchTx and %d commitResearchTx calls",
+					test.function, calls.runner, test.wantBegins, test.wantCommits,
+				)
+			}
+		})
 	}
 }

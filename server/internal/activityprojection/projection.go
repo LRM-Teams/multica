@@ -57,6 +57,8 @@ func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
 		switch snapshot.DetailKind {
 		case "message_received":
 			return Summary{Label: "Message received", Tone: "info", Visibility: "visible"}
+		case "runtime_reconnecting":
+			return Summary{Label: "Reconnecting...", Tone: "info", Visibility: "visible"}
 		case "running_command":
 			return Summary{Label: "Running command...", Tone: "info", Visibility: "visible"}
 		case "checking_messages":

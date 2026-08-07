@@ -95,9 +95,14 @@ type ResidentMessageInput interface {
 
 // ResidentMessageAcceptance separates native input acceptance from the
 // provider turn it may start. Done reports that the runtime is idle again;
-// callers must keep turn admission closed until it resolves.
+// callers must keep turn admission closed until it resolves. Messages exposes
+// optional provider-observed lifecycle events for Activity projection; it does
+// not carry canonical Message bodies or alter Context Boundary semantics. A
+// backend that supplies Messages must close it before resolving Done so a
+// terminal idle/error observation cannot overtake buffered lifecycle events.
 type ResidentMessageAcceptance struct {
-	Done <-chan error
+	Done     <-chan error
+	Messages <-chan Message
 }
 
 // ResidentPendingTarget is content-free metadata for one target represented by

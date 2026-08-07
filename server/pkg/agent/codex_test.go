@@ -658,8 +658,14 @@ func TestCodexRawErrorNotificationRetryingIgnored(t *testing.T) {
 	c, _, _ := newTestCodexClient(t)
 	c.notificationProtocol = "raw"
 	var activities []string
+	var statuses []string
 	c.onSemanticActivity = func(activity string) {
 		activities = append(activities, activity)
+	}
+	c.onMessage = func(message Message) {
+		if message.Type == MessageStatus {
+			statuses = append(statuses, message.Status)
+		}
 	}
 	c.onTurnDone = func(aborted bool) {
 		t.Fatal("retrying error should not finish the turn")
@@ -672,6 +678,9 @@ func TestCodexRawErrorNotificationRetryingIgnored(t *testing.T) {
 	}
 	if got, want := strings.Join(activities, ","), "error:retry"; got != want {
 		t.Fatalf("semantic activity = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(statuses, ","), "reconnecting"; got != want {
+		t.Fatalf("status activity = %q, want %q", got, want)
 	}
 }
 

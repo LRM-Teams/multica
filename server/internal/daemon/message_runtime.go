@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -30,9 +31,7 @@ func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot stri
 	}
 	coordinator, err := NewMessageCoordinator(agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
 		return d.handoffIdleMessageBatch(ctx, agentID, runtimeID, messages)
-	}, func(messages []protocol.AgentMessageProjection) {
-		d.emitMessageReceivedActivity(agentID, runtimeID, messages)
-	})
+	}, nil)
 	if err != nil {
 		return false, err
 	}
@@ -92,7 +91,11 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(agentID string) error {
 }
 
 func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
-	return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, func(turnErr error, generation uint64) {
+	return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, func() {
+		d.emitMessageReceivedActivity(agentID, runtimeID, messages)
+	}, func(message agent.Message) {
+		d.emitResidentMessageRuntimeActivity(agentID, runtimeID, message)
+	}, func(turnErr error, generation uint64) {
 		if turnErr != nil {
 			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
 				d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
@@ -129,6 +132,43 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			})
 		}
 	})
+}
+
+func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, message agent.Message) {
+	activityKind, detailKind, narrative := "", "", ""
+	switch message.Type {
+	case agent.MessageThinking:
+		activityKind, narrative = protocol.ActivityKindThinking, "Thinking"
+	case agent.MessageToolUse:
+		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "running_command", "Running command"
+	case agent.MessageCompactionStarted:
+		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "compacting_context", "Compacting context"
+	case agent.MessageCompactionFinished:
+		activityKind, detailKind, narrative = protocol.ActivityKindOnline, "idle", "Context compaction finished"
+	case agent.MessageStatus:
+		if message.Status == "reconnecting" {
+			activityKind, detailKind, narrative = protocol.ActivityKindWorking, "runtime_reconnecting", "Runtime reconnecting"
+		}
+	case agent.MessageError:
+		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", "Runtime error"
+	}
+	if activityKind == "" {
+		return
+	}
+	d.mu.Lock()
+	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+	d.mu.Unlock()
+	if workspaceID == "" {
+		return
+	}
+	entryBody, err := json.Marshal(map[string]string{"text": narrative})
+	if err != nil {
+		return
+	}
+	producer := d.workspaceAgentActivityProducer(workspaceID)
+	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: entryBody}}); err != nil && d.logger != nil {
+		d.logger.Debug("workspace Runner resident runtime Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+	}
 }
 
 func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, turnErr error) {

@@ -122,11 +122,12 @@ func (b *claudeStreamJSONBackend) AcceptMessageBatch(ctx context.Context, messag
 		return ResidentMessageAcceptance{}, err
 	}
 	done := make(chan error, 1)
-	turn := &claudeStreamJSONTurn{started: time.Now(), done: done, completed: make(chan struct{}), usage: make(map[string]TokenUsage)}
+	msgCh := make(chan Message, 256)
+	turn := &claudeStreamJSONTurn{started: time.Now(), done: done, msgCh: msgCh, completed: make(chan struct{}), usage: make(map[string]TokenUsage)}
 	if err := b.startTurn(context.Background(), prompt, b.cfg.ResidentOptions, turn); err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
-	return ResidentMessageAcceptance{Done: done}, nil
+	return ResidentMessageAcceptance{Done: done, Messages: msgCh}, nil
 }
 
 // AcceptPendingNotice writes only at a provider-observed safe boundary. A

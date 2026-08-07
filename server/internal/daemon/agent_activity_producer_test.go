@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -133,6 +134,40 @@ func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing
 	}
 	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.LaunchID == "" {
 		t.Fatalf("Message Activity=%+v", activities)
+	}
+}
+
+func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	installActivityProducerAgent(t, producer)
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	d.agentActivityProducers["workspace-1"] = producer
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+
+	for _, message := range []agent.Message{
+		{Type: agent.MessageThinking},
+		{Type: agent.MessageToolUse, Tool: "exec_command"},
+		{Type: agent.MessageStatus, Status: "reconnecting"},
+		{Type: agent.MessageError, Content: "sensitive provider text"},
+	} {
+		d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", message)
+	}
+	wantKinds := []string{protocol.ActivityKindThinking, protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindError}
+	wantDetails := []string{"", "running_command", "runtime_reconnecting", "runtime_error"}
+	if len(activities) != len(wantKinds) {
+		t.Fatalf("Activity count = %d, want %d", len(activities), len(wantKinds))
+	}
+	for index := range wantKinds {
+		if activities[index].Snapshot.ActivityKind != wantKinds[index] || activities[index].Snapshot.DetailKind != wantDetails[index] {
+			t.Fatalf("Activity[%d] = %+v", index, activities[index].Snapshot)
+		}
+	}
+	if string(activities[len(activities)-1].Entries[0].Body) != `{"text":"Runtime error"}` {
+		t.Fatalf("runtime error Activity leaked provider text: %s", activities[len(activities)-1].Entries[0].Body)
 	}
 }
 

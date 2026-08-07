@@ -24,6 +24,7 @@ var ErrCodexResidentTurnBusy = errors.New("codex app-server turn busy")
 // config mismatch, and unhealthy release.
 type CodexAppServerBackend interface {
 	Backend
+	ResidentMessageInput
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -99,7 +100,7 @@ func (b *codexAppServerBackend) Execute(ctx context.Context, prompt string, opts
 		defer close(msgCh)
 		defer close(resCh)
 		started := time.Now()
-		result := b.executeTurn(ctx, prompt, opts, msgCh)
+		result := b.executeTurn(ctx, prompt, opts, msgCh, nil)
 		result.DurationMs = time.Since(started).Milliseconds()
 		// Release before publish so an immediate follow-up turn does not race
 		// a still-true running flag (same ordering as cursor/pi residents).
@@ -107,6 +108,65 @@ func (b *codexAppServerBackend) Execute(ctx context.Context, prompt string, opts
 		resCh <- result
 	}()
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
+}
+
+// AcceptMessageBatch starts one native Codex app-server turn for canonical
+// Message bodies while the resident runtime is idle. The acceptance receipt is
+// published only after turn/start succeeds; scheduling the goroutine alone is
+// not a Context Boundary receipt.
+func (b *codexAppServerBackend) AcceptMessageBatch(ctx context.Context, messages []ResidentMessage) (ResidentMessageAcceptance, error) {
+	if len(messages) == 0 {
+		done := make(chan error)
+		close(done)
+		return ResidentMessageAcceptance{Done: done}, nil
+	}
+	prompt, err := formatResidentMessageBatch(messages)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	if !b.running.CompareAndSwap(false, true) {
+		return ResidentMessageAcceptance{}, fmt.Errorf("%w: canonical Message handoff overlaps an active turn", ErrCodexResidentTurnBusy)
+	}
+
+	accepted := make(chan error, 1)
+	done := make(chan error, 1)
+	msgCh := make(chan Message, 256)
+	turnCtx, cancelTurn := context.WithCancel(context.Background())
+	go func() {
+		defer cancelTurn()
+		result := b.executeTurn(turnCtx, prompt, b.cfg.ResidentOptions, msgCh, func(err error) {
+			accepted <- err
+		})
+		close(msgCh)
+		b.running.Store(false)
+		if result.Status == "completed" {
+			done <- nil
+		} else if result.Error != "" {
+			done <- errors.New(result.Error)
+		} else {
+			done <- fmt.Errorf("Codex canonical Message turn ended with status %q", result.Status)
+		}
+		close(done)
+	}()
+
+	select {
+	case err := <-accepted:
+		if err != nil {
+			return ResidentMessageAcceptance{}, err
+		}
+		return ResidentMessageAcceptance{Done: done, Messages: msgCh}, nil
+	case <-ctx.Done():
+		select {
+		case err := <-accepted:
+			if err != nil {
+				return ResidentMessageAcceptance{}, err
+			}
+			return ResidentMessageAcceptance{Done: done, Messages: msgCh}, nil
+		default:
+			cancelTurn()
+			return ResidentMessageAcceptance{}, ctx.Err()
+		}
+	}
 }
 
 func (b *codexAppServerBackend) RuntimeAlive() (bool, bool) {
@@ -121,10 +181,13 @@ func (b *codexAppServerBackend) runtimeAlive() (bool, bool) {
 	return processAlive(p.cmd.Process)
 }
 
-func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message, reportAcceptance func(error)) Result {
 	hadResidentProcess := b.process.Load() != nil
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
+		if reportAcceptance != nil {
+			reportAcceptance(err)
+		}
 		if b.forceKilled.CompareAndSwap(true, false) {
 			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
 		}
@@ -190,6 +253,9 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 	applyCodexReasoningEffort(turnParams, opts.ThinkingLevel)
 	_, err = p.client.request(ctx, "turn/start", turnParams)
 	if err != nil {
+		if reportAcceptance != nil {
+			reportAcceptance(err)
+		}
 		p.stateMu.Lock()
 		p.message = nil
 		p.stateMu.Unlock()
@@ -203,6 +269,9 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 			Error:     fmt.Sprintf("codex turn/start failed: %v", err),
 			SessionID: sessionID,
 		}
+	}
+	if reportAcceptance != nil {
+		reportAcceptance(nil)
 	}
 
 	timeout := opts.Timeout

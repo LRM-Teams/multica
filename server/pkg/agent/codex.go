@@ -1029,7 +1029,10 @@ func codexFirstTurnNoProgressTimeout(semanticInactivityTimeout time.Duration) ti
 }
 
 func isCodexFirstTurnProgressActivity(activity string) bool {
-	return activity != "" && activity != "status:running" && activity != "error:retry"
+	return activity != "" &&
+		activity != "status:running" &&
+		activity != "status:reconnecting" &&
+		activity != "error:retry"
 }
 
 func buildCodexTimeoutDiagnosticError(diag codexTimeoutDiagnostic, stderrTail string) string {
@@ -1587,6 +1590,9 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 		}
 		if errMsg != "" {
 			c.cfg.Logger.Warn("codex error notification", "message", errMsg, "will_retry", willRetry)
+			if willRetry && c.onMessage != nil {
+				c.onMessage(Message{Type: MessageStatus, Status: "reconnecting"})
+			}
 			if c.onSemanticActivity != nil {
 				if willRetry {
 					c.onSemanticActivity("error:retry")

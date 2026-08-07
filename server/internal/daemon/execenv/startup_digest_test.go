@@ -1,6 +1,10 @@
 package execenv
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 func TestStartupStaticDigestIgnoresPerTurnFields(t *testing.T) {
 	base := TaskContextForEnv{
@@ -164,6 +168,108 @@ func TestRenderStartupPlanDigestMatchesMaterializeInput(t *testing.T) {
 	// Per-turn initiator must not be in the brief plan.
 	if containsIgnoreCase(plan.RuntimeBrief, "should-not-appear-in-static") {
 		t.Fatal("static brief must not include per-turn initiator/issue strings")
+	}
+}
+
+func TestStartupKernelKeepsHotPathsAndExcludesTurnWorkflow(t *testing.T) {
+	ctx := TaskContextForEnv{
+		AgentID:           "agent-a",
+		AgentName:         "Agent A",
+		AgentInstructions: "Prefer concise results.",
+		AgentRoot:         "/tmp/agent-a",
+		WorkspaceContext:  "Workspace conventions.",
+		IssueID:           "issue-must-not-leak",
+		TriggerCommentID:  "comment-must-not-leak",
+		AutopilotRunID:    "run-must-not-leak",
+		AgentSkills: []SkillContextForEnv{{
+			Name: "multica-working-on-issues", Description: "Issue workflow and decomposition.",
+		}},
+	}
+	brief := RenderStartupMaterializationPlan("codex", StartupStaticContext(ctx)).RuntimeBrief
+
+	for _, want := range []string{
+		"multica message check",
+		"multica message send --target <target>",
+		"multica message react --message-id <id>",
+		"multica issue get <id>",
+		"multica-working-on-issues",
+		"ordinary Issue DAGs",
+		"multica <command> --help",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("startup kernel missing hot-path or lazy-loading pointer %q\n--- brief ---\n%s", want, brief)
+		}
+	}
+	for _, forbidden := range []string{
+		"issue-must-not-leak",
+		"comment-must-not-leak",
+		"run-must-not-leak",
+		"Work Decomposition Gate",
+		"## Comment Formatting",
+		"Execution Discipline",
+	} {
+		if strings.Contains(brief, forbidden) {
+			t.Errorf("startup kernel leaked turn workflow %q\n--- brief ---\n%s", forbidden, brief)
+		}
+	}
+	if len(brief) > 8*1024 {
+		t.Fatalf("representative startup kernel = %d bytes, want <= 8192", len(brief))
+	}
+}
+
+func TestStartupKernelBoundsConfigurableSections(t *testing.T) {
+	large := strings.Repeat("界", 10*1024)
+	ctx := TaskContextForEnv{
+		AgentID:                          "agent-a",
+		AgentInstructions:                large,
+		RequestingUserProfileDescription: large,
+		WorkspaceContext:                 large,
+		AgentSkills: []SkillContextForEnv{{
+			Name: "large-skill", Description: large,
+		}},
+	}
+	brief := RenderStartupMaterializationPlan("codex", StartupStaticContext(ctx)).RuntimeBrief
+
+	if !utf8.ValidString(brief) {
+		t.Fatal("startup section truncation split a UTF-8 code point")
+	}
+	for _, label := range []string{"agent instructions truncated", "requesting-user profile truncated", "workspace context truncated", "skill index truncated"} {
+		if !strings.Contains(brief, label) {
+			t.Errorf("startup kernel missing %q marker", label)
+		}
+	}
+	if len(brief) > 16*1024 {
+		t.Fatalf("maximal startup kernel = %d bytes, want <= 16384", len(brief))
+	}
+}
+
+func TestRenderTurnContextKeepsDynamicFactsOutOfStartupAndBoundsMemory(t *testing.T) {
+	ctx := TaskContextForEnv{
+		AgentInstructions:        "stable instructions must not repeat",
+		FreshSessionNoticeReason: "runtime switched",
+		InitiatorType:            "member",
+		InitiatorID:              "member-1",
+		InitiatorName:            "Alice",
+		InitiatorEmail:           "alice@example.com",
+		AgentMemories: []MemoryContextForEnv{{
+			Name: "Large selected memory", Content: strings.Repeat("记", 8*1024), Scope: "user",
+		}},
+	}
+	turn := RenderTurnContext(ctx)
+
+	for _, want := range []string{"## Current Provider Session", "## Current Task Initiator", "Alice", "member-1", "## Effective Promoted Memory Snapshot"} {
+		if !strings.Contains(turn, want) {
+			t.Errorf("turn context missing %q", want)
+		}
+	}
+	if strings.Contains(turn, ctx.AgentInstructions) {
+		t.Fatal("stable agent instructions repeated in per-turn context")
+	}
+	if !utf8.ValidString(turn) {
+		t.Fatal("turn memory truncation split a UTF-8 code point")
+	}
+	if len(turn) > 10*1024 {
+		t.Fatalf("turn context = %d bytes, want <= 10240", len(turn))
 	}
 }
 

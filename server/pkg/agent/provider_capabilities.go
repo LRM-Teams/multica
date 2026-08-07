@@ -75,7 +75,7 @@ var providerCapabilities = map[string]ProviderCapabilities{
 	// ThinkingDiscovery must stay true so IsKnownThinkingValue / FE gating
 	// don't silently reject a capability the adapters already honour (#59).
 	"opencode":    caps(true, false, true, false, true),
-	"openclaw":    caps(false, true, true, false, false),
+	"openclaw":    caps(false, false, true, false, false),
 	"hermes":      caps(false, false, true, false, false),
 	"gemini":      caps(false, false, true, false, false),
 	"pi":          caps(true, false, true, true, true),

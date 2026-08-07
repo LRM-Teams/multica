@@ -63,6 +63,26 @@ func fakePiRPCProcessScript() string {
 	`
 }
 
+func TestFormatResidentMessageBatchCarriesDeliveryContract(t *testing.T) {
+	prompt, err := formatResidentMessageBatch([]ResidentMessage{{
+		ID: "message-1", Target: "dm:@alice", Seq: 1, Content: "hello",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"multica message send --target <target>",
+		"multica message react --message-id <id>",
+		"Final assistant output is not delivered",
+		"Do not run Issue commands unless",
+		`"target":"dm:@alice"`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("resident Message prompt missing %q\n--- prompt ---\n%s", want, prompt)
+		}
+	}
+}
+
 func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pi")

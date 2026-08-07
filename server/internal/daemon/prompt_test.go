@@ -197,6 +197,32 @@ func TestBuildPromptAssignmentSnapshotUsesCommentCursorWhenNeeded(t *testing.T) 
 	}
 }
 
+func TestBuildPromptAssignmentCarriesTurnWorkflowAndLazyDecomposition(t *testing.T) {
+	out := BuildPrompt(Task{
+		IssueID: "issue-active-1",
+		AssignmentSnapshot: &protocol.IssueAssignmentSnapshot{
+			Version: 1, Title: "Implement it", Status: "todo", Metadata: map[string]any{},
+		},
+	}, "codex", "")
+
+	for _, want := range []string{
+		"Current-turn execution contract:",
+		"set `issue-active-1` to `in_progress`",
+		"open the `multica-working-on-issues` skill",
+		"DIRECT / Issue DAG / Goal Graph",
+		"verify proportionately",
+		"multica issue comment add issue-active-1",
+		"set `issue-active-1` to `in_review`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("assignment turn prompt missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "multica issue graph create --plan-file") {
+		t.Fatal("low-frequency graph command should live in the skill, not every assignment prompt")
+	}
+}
+
 func TestBuildPromptCommentTriggerIgnoresAssignmentSnapshot(t *testing.T) {
 	out := BuildPrompt(Task{
 		IssueID:               "issue-comment-1",

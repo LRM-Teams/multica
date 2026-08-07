@@ -446,7 +446,9 @@ func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal resident Message batch: %w", err)
 	}
-	return "Canonical Messages received while the runtime was idle. Treat these as Message context in target sequence order:\n" + string(raw), nil
+	return "Canonical Messages received while the runtime was idle. Treat these as Message context in target sequence order. " +
+		"Reply visibly with `multica message send --target <target>` using each message's explicit target, or use `multica message react --message-id <id> --emoji \"...\"` for a pure acknowledgement. " +
+		"Final assistant output is not delivered. Do not run Issue commands unless a message asks for Issue or project work.\n" + string(raw), nil
 }
 
 // RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller

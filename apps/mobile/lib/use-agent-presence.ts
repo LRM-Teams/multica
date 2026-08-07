@@ -14,9 +14,9 @@
  *
  * Two differences from the web hook:
  *   1. AppState gate on the 30s tick — iOS freezes JS timers in the
- *      background, and a stale `Date.now()` baseline would leave the
- *      `unstable → offline` transition stuck until the next unrelated
- *      refetch. We clearInterval on background and force a recompute
+ *      background, and a stale `Date.now()` baseline would leave an expired
+ *      online heartbeat visible until the next unrelated refetch. We clear
+ *      the interval on background and force a recompute
  *      (`setTick(t => t + 1)`) the instant the app comes back active.
  *   2. No `useWorkspaceId` Context — accept `wsId` as a param so the hook
  *      works outside `WorkspaceIdProvider` (e.g. avatars rendered before
@@ -64,9 +64,8 @@ function usePresenceTick(): number {
     const sub = AppState.addEventListener("change", (next: AppStateStatus) => {
       if (next === "active") {
         // Force one recompute before scheduling the next interval — the
-        // wall clock has moved while we were backgrounded, so e.g. a
-        // runtime that was "unstable" 4 min ago is now "offline" and we
-        // want that visible on the very first frame after resume.
+        // wall clock has moved while we were backgrounded, so an expired
+        // heartbeat becomes offline on the first frame after resume.
         setTick((t) => t + 1);
         start();
       } else {

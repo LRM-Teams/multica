@@ -147,6 +147,18 @@ func TestProjectTimelineEntryLabelsFineGrainedToolKinds(t *testing.T) {
 			wantSubtext: "",
 		},
 		{
+			name:        "issue lookup uses checking vocabulary",
+			body:        `{"text":"Fix message delivery","activity_kind":"working","detail_kind":"getting_issue"}`,
+			wantTitle:   "Checking issue",
+			wantSubtext: "Fix message delivery",
+		},
+		{
+			name:        "issue comments use checking vocabulary",
+			body:        `{"text":"Fix message delivery","activity_kind":"working","detail_kind":"listing_issue_comments"}`,
+			wantTitle:   "Checking issue comments",
+			wantSubtext: "Fix message delivery",
+		},
+		{
 			name:        "unknown detail kind falls back to Working",
 			body:        `{"text":"Using cursor-agent","activity_kind":"working","detail_kind":"other"}`,
 			wantTitle:   "Working",

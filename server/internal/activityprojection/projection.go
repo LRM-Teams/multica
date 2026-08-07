@@ -44,8 +44,8 @@ func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRo
 // Message received) do not. Labels only — a detail kind never carries command
 // text, paths, or tool input.
 var workingDetailLabels = map[string]string{
-	"starting":          "Starting",
-	"message_received":  "Message received",
+	"starting":           "Starting...",
+	"message_received":   "Message received",
 	"compacting_context": "Compacting context...",
 
 	"running_command": "Running command...",
@@ -58,17 +58,17 @@ var workingDetailLabels = map[string]string{
 	"searching_web":   "Searching web...",
 	"updating_tasks":  "Updating tasks...",
 
-	"sending_message":    "Sending message...",
-	"checking_messages":  "Checking messages...",
-	"waiting_for_message": "Waiting for messages...",
-	"reading_history":    "Reading history...",
-	"searching_messages": "Searching messages...",
-	"listing_server":     "Listing server...",
-	"listing_tasks":      "Listing tasks...",
-	"creating_tasks":     "Creating tasks...",
-	"claiming_task":      "Claiming tasks...",
-	"unclaiming_task":    "Unclaiming task...",
-	"updating_task_status": "Updating task status...",
+	"sending_message":       "Sending message...",
+	"checking_messages":     "Checking messages...",
+	"waiting_for_message":   "Waiting for messages...",
+	"reading_history":       "Reading history...",
+	"searching_messages":    "Searching messages...",
+	"listing_server":        "Listing server...",
+	"listing_tasks":         "Listing tasks...",
+	"creating_tasks":        "Creating tasks...",
+	"claiming_task":         "Claiming tasks...",
+	"unclaiming_task":       "Unclaiming task...",
+	"updating_task_status":  "Updating task status...",
 	"adding_channel_member": "Adding channel member...",
 	"joining_channel":       "Joining channel...",
 	"leaving_channel":       "Leaving channel...",
@@ -76,9 +76,9 @@ var workingDetailLabels = map[string]string{
 	"viewing_file":          "Viewing file...",
 
 	"listing_issues":         "Listing issues...",
-	"getting_issue":          "Getting issue...",
+	"getting_issue":          "Checking issue...",
 	"searching_issues":       "Searching issues...",
-	"listing_issue_comments": "Listing issue comments...",
+	"listing_issue_comments": "Checking issue comments...",
 	"commenting_issue":       "Commenting on issue...",
 	"deleting_issue_comment": "Deleting issue comment...",
 

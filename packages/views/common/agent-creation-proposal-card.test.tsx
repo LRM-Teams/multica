@@ -61,6 +61,7 @@ describe("AgentCreationProposalCard", () => {
     );
 
     expect(screen.queryByRole("button", { name: /create agent/i })).toBeNull();
+    expect(screen.getByText("@Proposal Agent")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View created Agent" })).toHaveAttribute(
       "href",
       "/acme/profile/agent/agent-42",

@@ -274,9 +274,9 @@
     "description_create": "为工作区创建一个新的 AI 智能体。",
     "description_duplicate": "基于\"{{name}}\"创建一个新智能体。指令、环境变量和 skill 会一并复制。",
     "name_label": "名称",
-    "display_name_label": "显示名称",
-    "handle_auto_hint": "系统会自动生成稳定用户名，这里不可修改。",
-    "name_placeholder": "例如：深度研究智能体",
+    "name_hint": "这个永久名称用于 @提及。",
+    "name_invalid": "请输入 1-32 位小写字母、数字或连字符。",
+    "name_placeholder": "例如：deep-research-agent",
     "description_label": "描述",
     "description_placeholder": "这个智能体做什么？",
     "thinking_label": "思考等级",
@@ -536,14 +536,7 @@
     "role_updated": "角色已更新",
     "role_update_failed": "更新角色失败",
     "runtime_config_section": "运行时配置",
-    "unknown_runtime": "未知运行时",
-    "username_label": "用户名",
-    "username_edit_title": "编辑用户名",
-    "username_placeholder": "agent-handle",
-    "username_error_empty": "用户名不能为空",
-    "username_error_invalid": "只能使用小写字母、数字和连字符",
-    "username_error_too_long": "用户名过长",
-    "username_taken": "该 @handle 已被占用"
+    "unknown_runtime": "未知运行时"
   },
   "memory_growth": {
     "label": "记忆成长",

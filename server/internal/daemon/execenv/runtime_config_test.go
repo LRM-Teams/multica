@@ -644,6 +644,8 @@ func TestMessageRuntimeBriefHasNoTaskOrSessionDeliveryContract(t *testing.T) {
 	for _, want := range []string{
 		"multica message check",
 		"Visible output is delivered only by the durable agent-credential Multica CLI transport",
+		"take the recipient's exact `name` field",
+		"write it as `@handle` in the message body",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Fatalf("Message runtime brief missing %q:\n%s", want, brief)
@@ -656,6 +658,7 @@ func TestMessageRuntimeBriefHasNoTaskOrSessionDeliveryContract(t *testing.T) {
 		"MULTICA_TASK_ID",
 		"MULTICA_EXECUTION_ID",
 		"MULTICA_AGENT_INBOX_LEASE_TOKEN",
+		"[@DisplayName](mention://member/<uuid>)",
 	} {
 		if strings.Contains(brief, forbidden) {
 			t.Fatalf("Message runtime brief leaked %q:\n%s", forbidden, brief)

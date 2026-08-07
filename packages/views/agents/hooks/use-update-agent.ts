@@ -41,8 +41,6 @@ function touchesExecutionConfig(data: Record<string, unknown>): boolean {
  *  - Cancels in-flight list/detail fetches, then optimistically patches
  *    `workspaceKeys.agents(wsId)` AND `agentDetailKeys.detail(wsId, id)`
  *    BEFORE the network round-trip so the picker chips flip immediately.
- *    The request's `username` key maps to the cached `Agent.name` (the
- *    @handle the UI reads), not a literal `agent.username`.
  *  - On success: write the server's canonical touched fields into both
  *    caches. Detail uses the PATCH payload as authority — we do NOT
  *    invalidate+refetch detail (that race can briefly restore the pre-PATCH
@@ -70,23 +68,13 @@ export function useUpdateAgent(wsId: string) {
     const prevAgentFromDetail = qc.getQueryData<Agent>(detailKey);
     const prevAgent = prevAgentFromList ?? prevAgentFromDetail;
 
-    // Request keys are API field names; the cached `Agent` is keyed by its
-    // OWN field names, which are 1:1 EXCEPT for the @handle: the request sends
-    // `username`, but the server (and the cached Agent the UI renders) stores
-    // it under `name`. So translate `username` → `name` for the optimistic
-    // patch AND its rollback. Merging the request verbatim would write a stray
-    // `agent.username` that nothing reads — leaving the UI (which shows
-    // `agent.name`) on the OLD handle until the refetch converges (a stale
-    // flash), and reverting the WRONG field if the update fails.
-    const cacheField = (key: string) => (key === "username" ? "name" : key);
     const optimistic: Record<string, unknown> = {};
     const prevFields: Record<string, unknown> = {};
     for (const key of Object.keys(data)) {
-      const field = cacheField(key);
-      optimistic[field] = data[key];
+      optimistic[key] = data[key];
       if (prevAgent) {
-        prevFields[field] = (prevAgent as unknown as Record<string, unknown>)[
-          field
+        prevFields[key] = (prevAgent as unknown as Record<string, unknown>)[
+          key
         ];
       }
     }
@@ -112,8 +100,7 @@ export function useUpdateAgent(wsId: string) {
     patchDetail(optimistic);
     try {
       // The server returns the persisted `Agent`; write back its canonical
-      // values for the fields THIS call touched (e.g. `name` for a `username`
-      // edit) so the displayed handle matches the server exactly — no stale
+      // values for the fields THIS call touched so the UI matches the server exactly — no stale
       // flash before the refetch, and no dependence on the request value
       // equalling what the server ultimately stored. Only the touched fields
       // are patched (not the whole agent) so a concurrent successful mutation

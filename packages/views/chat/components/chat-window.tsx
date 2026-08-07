@@ -986,7 +986,7 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
         />
       )}
 
-      {/* No-agent banner above the input. Presence (online/offline/unstable)
+      {/* No-agent banner above the input. Presence (online/offline)
        *  belongs to the header only (#624, Parker/Iris) — this slot used to
        *  also render an OfflineBanner duplicating that state here, which
        *  produced a second "Offline" line stacked on top of a real live

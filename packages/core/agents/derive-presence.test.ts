@@ -91,21 +91,16 @@ describe("deriveAgentAvailability", () => {
   });
 
 
-  it("returns unstable ONLY for an ONLINE runtime whose heartbeat lagged (150s–5min)", () => {
-    // Post-#571 unstable is reserved for a STALE ONLINE heartbeat — never an
-    // explicitly-offline runtime. Online + last_seen 3.5 min ago → recently_lost
-    // → unstable.
+  it("returns offline when an ONLINE row no longer has a current heartbeat", () => {
     expect(
       deriveAgentAvailability(
         makeRuntime({ status: "online", last_seen_at: "2026-04-27T11:56:30Z" }),
         NOW,
       ),
-    ).toBe("unstable");
+    ).toBe("offline");
   });
 
-  it("returns offline (NOT unstable) the moment a runtime is EXPLICITLY offline (#571)", () => {
-    // #571 core regression: status="offline" + last_seen 30s ago must read
-    // offline, not the old buggy "unstable" for the first 5 minutes.
+  it("returns offline the moment a runtime is explicitly offline", () => {
     expect(
       deriveAgentAvailability(
         makeRuntime({ status: "offline", last_seen_at: "2026-04-27T11:59:30Z" }),
@@ -259,7 +254,7 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.capacity).toBe(6);
   });
 
-  it("provider quota lock folds Online→Offline even with a fresh heartbeat (#64/#77)", () => {
+  it("keeps real connectivity online while provider quota is blocked", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent({
         provider_block_detail: "429 code 1310 usage cap",
@@ -269,12 +264,12 @@ describe("deriveAgentPresenceDetail", () => {
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(detail.availability).toBe("offline");
-    expect(detail.workload).toBe("idle");
-    expect(detail.runningCount).toBe(0);
+    expect(detail.availability).toBe("online");
+    expect(detail.workload).toBe("working");
+    expect(detail.runningCount).toBe(1);
   });
 
-  it("provider lock with unknown until (null) stays Offline — never invents a reset (#815)", () => {
+  it("keeps real connectivity online when provider block expiry is unknown", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent({
         provider_block_detail: "quota exceeded",
@@ -284,7 +279,7 @@ describe("deriveAgentPresenceDetail", () => {
       tasks: [],
       now: NOW,
     });
-    expect(detail.availability).toBe("offline");
+    expect(detail.availability).toBe("online");
   });
 
   it("composes offline + queued — the canonical 'stuck' case (was previously misleading 'running 0/N')", () => {
@@ -310,7 +305,7 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.queuedCount).toBe(2);
   });
 
-  it("composes online + working when heartbeat is unstable but a task is running (LRM-248)", () => {
+  it("does not promote a stale heartbeat to online because a task is running", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
       runtime: makeRuntime({
@@ -320,11 +315,11 @@ describe("deriveAgentPresenceDetail", () => {
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(detail.availability).toBe("online");
+    expect(detail.availability).toBe("offline");
     expect(detail.workload).toBe("working");
   });
 
-  it("composes online + working for an EXPLICITLY offline runtime with a running task (LRM-248 running→在线)", () => {
+  it("does not promote an explicitly offline runtime because a task is running", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
       runtime: makeRuntime({
@@ -334,7 +329,7 @@ describe("deriveAgentPresenceDetail", () => {
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(detail.availability).toBe("online");
+    expect(detail.availability).toBe("offline");
     expect(detail.workload).toBe("working");
   });
 
@@ -414,21 +409,16 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.capacity).toBe(3);
   });
 
-  it("reports archived over any runtime/task signal for an archived agent", () => {
-    // Archived wins over presence: a leftover online runtime and a running
-    // task must never make a retired agent read as live. Availability
-    // collapses to "archived" and workload is forced idle with zero counts
-    // so no consumer (dot, hover card, list row) can surface "Online" or
-    // "Working" for an archived agent.
+  it("keeps archived lifecycle outside presence and reports real connectivity", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent({ archived_at: "2026-04-27T10:00:00Z" }),
       runtime: makeRuntime(),
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(detail.availability).toBe("archived");
-    expect(detail.workload).toBe("idle");
-    expect(detail.runningCount).toBe(0);
+    expect(detail.availability).toBe("online");
+    expect(detail.workload).toBe("working");
+    expect(detail.runningCount).toBe(1);
     expect(detail.queuedCount).toBe(0);
   });
 });
@@ -471,8 +461,7 @@ describe("buildPresenceMap", () => {
   it("threads the same `now` so every agent on a shared runtime gets the same availability", () => {
     // Multi-agent scenario: one local daemon backs N agents, its heartbeat
     // lags (still ONLINE, last_seen 4 min ago → recently_lost). All dependent
-    // agents should report unstable together — the shared `now` parameter is
-    // what guarantees consistent bucket boundaries.
+    // agents should report offline together; task state cannot override it.
     const agentA = makeAgent({ id: "a", runtime_id: "rt-1" });
     const agentB = makeAgent({ id: "b", runtime_id: "rt-1" });
     const map = buildPresenceMap({
@@ -489,8 +478,8 @@ describe("buildPresenceMap", () => {
       ],
       now: NOW,
     });
-    expect(map.get("a")?.availability).toBe("unstable");
-    expect(map.get("b")?.availability).toBe("online");
+    expect(map.get("a")?.availability).toBe("offline");
+    expect(map.get("b")?.availability).toBe("offline");
     // Workload remains independent: a is queued (waiting), b is working.
     expect(map.get("a")?.workload).toBe("queued");
     expect(map.get("b")?.workload).toBe("working");

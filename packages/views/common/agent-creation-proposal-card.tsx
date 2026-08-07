@@ -78,7 +78,7 @@ export function AgentCreationProposalCard({
               <p className="text-xs font-medium text-muted-foreground">
                 {t(($) => $.windy.hiring_card_badge)}
               </p>
-              <p className="mt-0.5 break-words text-sm font-semibold leading-snug">{proposalName}</p>
+              <p className="mt-0.5 break-words text-sm font-semibold leading-snug">@{proposalName}</p>
               {proposal.description ? (
                 <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
                   {proposal.description}

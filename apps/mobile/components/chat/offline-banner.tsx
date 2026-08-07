@@ -3,9 +3,7 @@
  * runtime isn't reachable. Mirror of
  * `packages/views/chat/components/offline-banner.tsx`.
  *
- * Two states render copy:
- *   - `unstable` (runtime offline < 5 min) → amber, "may reconnect"
- *   - `offline`  (runtime offline ≥ 5 min) → muted, "won't run until back"
+ * Offline renders a clear queueing notice. Online/loading renders nothing.
  *
  * Loading silence: `undefined` and the implicit "online" case render nothing.
  * The chat composer never sees a speculative offline flash during the cold
@@ -22,29 +20,15 @@ interface Props {
   agentName?: string;
   /**
    * Resolved presence availability. Pass `undefined` to suppress the banner
-   * — we only surface known offline / unstable states, never speculative
+   * — we only surface known offline state, never speculative
    * copy during loading.
    */
   availability: AgentAvailability | undefined;
 }
 
 export function OfflineBanner({ agentName, availability }: Props) {
-  if (availability !== "offline" && availability !== "unstable") return null;
+  if (availability !== "offline") return null;
   const name = agentName?.trim() || "This agent";
-
-  if (availability === "unstable") {
-    return (
-      <View className="mx-3 mb-1.5 flex-row items-center gap-1.5 rounded-md bg-warning/15 px-2.5 py-1.5">
-        <Ionicons name="alert-circle-outline" size={14} color="#a16207" />
-        <Text
-          className="flex-1 text-xs text-warning"
-          numberOfLines={1}
-        >
-          {name} may have just disconnected — your message will queue.
-        </Text>
-      </View>
-    );
-  }
 
   return (
     <View className="mx-3 mb-1.5 flex-row items-center gap-1.5 rounded-md bg-muted px-2.5 py-1.5">

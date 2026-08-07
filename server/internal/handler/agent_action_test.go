@@ -46,7 +46,7 @@ func TestAgentTransportPrepareAction_AtomicallyCreatesCanonicalProposal(t *testi
 		return rec
 	}
 
-	rec := prepare("Canonical Bot", "created via one message transaction")
+	rec := prepare("canonical-bot", "created via one message transaction")
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("prepare status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -57,7 +57,7 @@ func TestAgentTransportPrepareAction_AtomicallyCreatesCanonicalProposal(t *testi
 	if proposal.ActionType != agentActionTypeCreate || proposal.Status != agentActionStatusPrepared || proposal.MessageID == "" {
 		t.Fatalf("unexpected proposal: %+v", proposal)
 	}
-	if proposal.Payload != (agentActionCreatePayload{Name: "Canonical Bot", Description: "created via one message transaction"}) || proposal.PreparedByAgentID != agentID {
+	if proposal.Payload != (agentActionCreatePayload{Name: "canonical-bot", Description: "created via one message transaction"}) || proposal.PreparedByAgentID != agentID {
 		t.Fatalf("unexpected proposal payload: %+v", proposal)
 	}
 	if strings.Contains(rec.Body.String(), "action_card") || strings.Contains(rec.Body.String(), "runtime_id") {
@@ -77,7 +77,7 @@ func TestAgentTransportPrepareAction_AtomicallyCreatesCanonicalProposal(t *testi
 	}
 
 	// The same key and payload reuses the same canonical Message and action.
-	retry := prepare("Canonical Bot", "created via one message transaction")
+	retry := prepare("canonical-bot", "created via one message transaction")
 	if retry.Code != http.StatusCreated {
 		t.Fatalf("repeat prepare=%d body=%s", retry.Code, retry.Body.String())
 	}
@@ -91,7 +91,7 @@ func TestAgentTransportPrepareAction_AtomicallyCreatesCanonicalProposal(t *testi
 
 	// Reusing an idempotency key with another proposal must never mutate the
 	// canonical Message or create a second proposal record.
-	conflict := prepare("Different Bot", "changed")
+	conflict := prepare("different-bot", "changed")
 	if conflict.Code != http.StatusConflict {
 		t.Fatalf("changed replay=%d body=%s", conflict.Code, conflict.Body.String())
 	}
@@ -112,6 +112,7 @@ func TestAgentTransportPrepareAction_RequiresCanonicalTargetAndClientID(t *testi
 		{"missing type", map[string]any{"name": "x", "target": target, "client_request_id": "a"}},
 		{"bad type", map[string]any{"action_type": "channel:create", "name": "x", "target": target, "client_request_id": "a"}},
 		{"missing name", map[string]any{"action_type": "agent:create", "target": target, "client_request_id": "a"}},
+		{"invalid name", map[string]any{"action_type": "agent:create", "name": "中文 Name", "target": target, "client_request_id": "a"}},
 		{"missing target", map[string]any{"action_type": "agent:create", "name": "x", "client_request_id": "a"}},
 		{"missing client id", map[string]any{"action_type": "agent:create", "name": "x", "target": target}},
 		{"retired field", map[string]any{"action_type": "agent:create", "name": "x", "target": target, "client_request_id": "a", "channel_id": channelID}},

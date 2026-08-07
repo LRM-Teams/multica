@@ -2,11 +2,20 @@
 
 import { ChevronRight } from "lucide-react";
 import type { AgentPresenceDetail } from "@multica/core/agents";
-import { useRunnerActivity } from "@multica/core/agents";
-import { useWorkspaceId } from "@multica/core/hooks";
+import { useAgentPresenceDetail, useRunnerActivity } from "@multica/core/agents";
+import { useCurrentWorkspace } from "@multica/core/paths";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
+import { useAgentLiveStatus } from "../use-agent-live-status";
+
+const activityToneDotClass: Record<string, string> = {
+  neutral: "bg-muted-foreground/40",
+  info: "bg-blue-500",
+  warning: "bg-warning",
+  error: "bg-destructive",
+  success: "bg-success",
+};
 
 /**
  * Shared list Activity mark. Labels and tones are supplied by the server-owned
@@ -27,10 +36,35 @@ export function AgentActivityStatus({
   unknownLabel?: string;
   testId?: string;
 }) {
-  const workspaceId = useWorkspaceId();
+  const workspaceId = useCurrentWorkspace()?.id;
   const { data } = useRunnerActivity(workspaceId, agentId);
   const summary = data?.summary;
-  if (!summary || summary.visibility !== "visible") {
+  const presenceDetail = useAgentPresenceDetail(workspaceId, agentId);
+  const presence = useAgentLiveStatus(workspaceId, agentId);
+  const isOnline =
+    presenceDetail !== "loading" && presenceDetail.availability === "online";
+  const hasDynamicActivity =
+    isOnline &&
+    summary?.visibility === "visible" &&
+    summary.tone !== "success" &&
+    summary.tone !== "neutral";
+  if (!hasDynamicActivity) {
+    if (presence) {
+      return (
+        <span
+          className={cn(
+            "inline-flex min-w-0 max-w-[50%] items-center gap-1.5 text-muted-foreground",
+            alignEnd && "ml-auto shrink-0",
+            className,
+          )}
+          data-testid={testId}
+          data-activity-tone="success"
+        >
+          <span className={cn("size-1.5 shrink-0 rounded-full", presence.dotClass)} aria-hidden />
+          <span className="truncate text-[13px]">{presence.label}</span>
+        </span>
+      );
+    }
     return (
       <span
         className={cn(
@@ -44,6 +78,12 @@ export function AgentActivityStatus({
       </span>
     );
   }
+  const isWorkingTone =
+    summary.tone === "warning" || summary.tone === "info" || summary.tone === "active";
+  const dotClass = isWorkingTone
+    ? "bg-warning"
+    : activityToneDotClass[summary.tone] ?? "bg-muted-foreground";
+  const pulses = isWorkingTone;
   return (
     <span
       className={cn(
@@ -54,7 +94,12 @@ export function AgentActivityStatus({
       data-testid={testId}
       data-activity-tone={summary.tone}
     >
-      <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground" aria-hidden />
+      <span className="relative size-1.5 shrink-0" aria-hidden>
+        {pulses ? (
+          <span className={cn("absolute inset-0 animate-ping rounded-full opacity-60 motion-reduce:hidden", dotClass)} />
+        ) : null}
+        <span className={cn("absolute inset-0 rounded-full", dotClass)} />
+      </span>
       <span className="truncate text-[13px]">{summary.label}</span>
     </span>
   );
@@ -101,7 +146,7 @@ export function AgentActivityListItem({
   /** Optional trailing text (e.g. "View agent" in delete dialogs). */
   trailingLabel?: string;
 }) {
-	void presence;
+  void presence;
   const size = avatarSize ?? (layout === "stacked" ? 28 : 22);
   const trailing = trailingLabel ? (
     <span className="shrink-0 text-primary">{trailingLabel}</span>
@@ -153,6 +198,7 @@ export function AgentActivityListItem({
           actorType="agent"
           actorId={agentId}
           size={size}
+          showStatusDot
           profileLink={false}
         />
         <span className="min-w-0 flex-1">
@@ -193,6 +239,7 @@ export function AgentActivityListItem({
         actorType="agent"
         actorId={agentId}
         size={size}
+        showStatusDot
         profileLink={false}
       />
       <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">

@@ -186,8 +186,8 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if err := json.Unmarshal(activities[len(activities)-1].Entries[0].Body, &errorBody); err != nil {
 		t.Fatal(err)
 	}
-	if errorBody.Text != "Runtime error" || errorBody.ActivityKind != protocol.ActivityKindError || errorBody.DetailKind != "runtime_error" {
-		t.Fatalf("runtime error Activity = %+v", errorBody)
+	if errorBody.Text != "sensitive provider text" || errorBody.ActivityKind != protocol.ActivityKindError || errorBody.DetailKind != "runtime_error" {
+		t.Fatalf("runtime error Activity = %+v, want provider reason", errorBody)
 	}
 }
 

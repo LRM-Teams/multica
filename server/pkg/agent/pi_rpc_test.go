@@ -31,6 +31,8 @@ func fakePiRPCProcessScript() string {
 	      if [ -n "$PI_RPC_TEST_MESSAGE_ERROR" ]; then
 	        printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","errorMessage":"Connection error."}]}\n'
 	      else
+	        printf '{"type":"tool_execution_start","toolCallId":"tool-1","toolName":"bash","args":{"command":"pwd"}}\n'
+	        printf '{"type":"tool_execution_end","toolCallId":"tool-1","result":"/tmp"}\n'
 	        printf '{"type":"agent_end","messages":[]}\n'
 	      fi
 	      ;;
@@ -108,8 +110,20 @@ func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T)
 	if acceptance.Done == nil {
 		t.Fatal("AcceptMessageBatch returned no native turn completion receipt")
 	}
+	var activity []Message
+	activityDone := make(chan struct{})
+	go func() {
+		defer close(activityDone)
+		for message := range acceptance.Messages {
+			activity = append(activity, message)
+		}
+	}()
 	if err := <-acceptance.Done; err != nil {
 		t.Fatalf("native Message turn completion: %v", err)
+	}
+	<-activityDone
+	if len(activity) != 3 || activity[0].Type != MessageStatus || activity[1].Type != MessageToolUse || activity[1].Tool != "bash" || activity[1].Input["command"] != "pwd" || activity[2].Type != MessageToolResult {
+		t.Fatalf("native Message activity = %+v, want status, tool use, and tool result", activity)
 	}
 	waitForPiRPCTestPath(t, inputPath)
 	raw, err := os.ReadFile(inputPath)

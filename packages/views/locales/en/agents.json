@@ -279,9 +279,9 @@
     "description_create": "Create a new AI agent for your workspace.",
     "description_duplicate": "Create a new agent based on \"{{name}}\". Instructions, env, and skills are copied for you.",
     "name_label": "Name",
-    "display_name_label": "Display name",
-    "handle_auto_hint": "A stable username is generated automatically and cannot be changed here.",
-    "name_placeholder": "e.g. Deep Research Agent",
+    "name_hint": "This permanent name is used for @mentions.",
+    "name_invalid": "Use 1-32 lowercase letters, digits, or hyphens.",
+    "name_placeholder": "e.g. deep-research-agent",
     "description_label": "Description",
     "description_placeholder": "What does this agent do?",
     "thinking_label": "Thinking",
@@ -546,14 +546,7 @@
     "role_updated": "Role updated",
     "role_update_failed": "Failed to update role",
     "runtime_config_section": "Runtime config",
-    "unknown_runtime": "Unknown runtime",
-    "username_label": "Username",
-    "username_edit_title": "Edit username",
-    "username_placeholder": "agent-handle",
-    "username_error_empty": "Username is required",
-    "username_error_invalid": "Use lowercase letters, digits, and hyphens only",
-    "username_error_too_long": "Username is too long",
-    "username_taken": "That @handle is already taken"
+    "unknown_runtime": "Unknown runtime"
   },
   "memory_growth": {
     "label": "Memory growth",

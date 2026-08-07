@@ -12,12 +12,9 @@ import {
 } from "./derive-presence";
 import type { AgentPresenceDetail } from "./types";
 
-// 30s tick, mirroring useRuntimeHealth. Presence depends on wall-clock time
-// for one reason: `unstable` (= RuntimeHealth.recently_lost) decays into
-// `offline` at the 5-minute mark with no new server data. Without a tick the
-// transition would only render on the next unrelated query update.
-// The earlier 2-minute "clear failed badge" tick was removed when failed
-// became sticky; this one re-introduces ticking with a different motivation.
+// 30s tick, mirroring useRuntimeHealth. Presence depends on wall-clock time:
+// a stale online heartbeat must become offline without waiting for unrelated
+// query data to change.
 const PRESENCE_TICK_MS = 30_000;
 
 function usePresenceTick(): number {

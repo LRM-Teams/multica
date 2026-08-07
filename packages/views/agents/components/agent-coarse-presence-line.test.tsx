@@ -71,18 +71,6 @@ describe("AgentCoarsePresenceLine (LRM-248)", () => {
     expect(mark).not.toHaveTextContent(/Working|command|Reading/i);
   });
 
-  it("folds unstable → Online", () => {
-    mockPresence.current = {
-      availability: "unstable",
-      workload: "idle",
-      runningCount: 0,
-      capacity: 1,
-      queuedCount: 0,
-    };
-    renderLine();
-    expect(screen.getByTestId("agent-live-status")).toHaveTextContent("Online");
-  });
-
   it("shows Offline when the runtime is down", () => {
     mockPresence.current = {
       availability: "offline",

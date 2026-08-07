@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import type { Agent, MemberWithUser, RuntimeDevice } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { WorkspaceSlugProvider } from "@multica/core/paths";
@@ -189,6 +189,25 @@ describe("CreateAgentDialog workspace runtime selection", () => {
     const teammateRow = screen.getByText("Cursor").closest("button") as HTMLButtonElement;
     expect(teammateRow).not.toBeNull();
     expect(teammateRow.disabled).toBe(false);
+  });
+
+  it("requires name and creates with name while omitting display_name", async () => {
+    const runtime = makeRuntime({ id: "rt-create", owner_id: ME, provider: "claude" });
+    const { onCreate } = renderDialog([runtime]);
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. deep-research-agent"), {
+      target: { value: "research-agent" },
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      name: "research-agent",
+      runtime_id: "rt-create",
+    }));
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("display_name");
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("username");
   });
 
 

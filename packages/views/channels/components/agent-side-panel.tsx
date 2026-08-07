@@ -20,6 +20,7 @@ import { dashboardUsageByAgentOptions } from "@multica/core/dashboard/queries";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { cn } from "@multica/ui/lib/utils";
 import { AgentHonorPanelSection } from "../../agents/components/agent-honor-panel-section";
+import { AgentActivityStatus } from "../../agents/components/agent-activity-list-item";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
 import { AgentProfileAvatarEditor } from "../../agents/components/agent-profile-avatar-editor";
@@ -30,7 +31,6 @@ import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop
 import { RuntimeConfigDialog } from "../../agents/components/runtime-config-dialog";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
-import { AgentLifecycleStatusLine } from "../../agents/components/agent-lifecycle-status-line";
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
@@ -208,9 +208,10 @@ export function AgentSidePanel({
             ) : null}
           </p>
           {!agent.archived_at ? (
-            <AgentLifecycleStatusLine
-              status={agent.runtime_display_status}
-              className="mt-0.5"
+            <AgentActivityStatus
+              agentId={agent.id}
+              className="mt-0.5 max-w-none"
+              testId="agent-profile-current-status"
             />
           ) : null}
         </div>

@@ -141,62 +141,8 @@ beforeEach(() => {
   mockStartLifecycle.mockResolvedValue({ id: "op-1", status: "running" });
 });
 
-describe("useUpdateAgent — username → name mapping", () => {
-  it("optimistically writes the new @handle to agent.name (no stale flash, no stray username field)", async () => {
-    const { qc, result } = setup([makeAgent()]);
-    // Server echoes the persisted handle back under `name`.
-    mockUpdateAgent.mockResolvedValue(makeAgent({ name: "new-handle" }));
-
-    // Do NOT await yet: the optimistic cache write is synchronous, so the new
-    // handle must already be visible before the network round-trip resolves.
-    const pending = result.current("agent-1", { username: "new-handle" });
-
-    const optimistic = cachedAgent(qc, "agent-1")!;
-    expect(optimistic.name).toBe("new-handle");
-    // The bug wrote a stray `agent.username` that nothing reads; there must be
-    // none, and the payload key must map onto `name`.
-    expect((optimistic as unknown as Record<string, unknown>).username).toBeUndefined();
-
-    await pending;
-
-    // The request carries the API field name, unchanged.
-    expect(mockUpdateAgent).toHaveBeenCalledWith("agent-1", {
-      username: "new-handle",
-    });
-    // After success the server's canonical handle is written to `name`.
-    expect(cachedAgent(qc, "agent-1")!.name).toBe("new-handle");
-    expect(
-      (cachedAgent(qc, "agent-1") as unknown as Record<string, unknown>).username,
-    ).toBeUndefined();
-  });
-
-  it("writes the server's canonical handle, not the raw request value", async () => {
-    const { qc, result } = setup([makeAgent()]);
-    // Server normalizes the handle (e.g. lowercases) — the cache must reflect
-    // what the server stored, not what was typed.
-    mockUpdateAgent.mockResolvedValue(makeAgent({ name: "new-handle" }));
-
-    await result.current("agent-1", { username: "New-Handle" });
-
-    expect(cachedAgent(qc, "agent-1")!.name).toBe("new-handle");
-  });
-
-  it("rolls back agent.name to the previous handle when the update fails", async () => {
-    const { qc, result } = setup([makeAgent()]);
-    mockUpdateAgent.mockRejectedValue(new Error("409 handle taken"));
-
-    await expect(
-      result.current("agent-1", { username: "taken-handle" }),
-    ).rejects.toThrow();
-
-    // Rollback restores the PREVIOUS handle on `name` (the field the UI reads),
-    // and never leaves a stray `username` behind.
-    const rolledBack = cachedAgent(qc, "agent-1")!;
-    expect(rolledBack.name).toBe("old-handle");
-    expect((rolledBack as unknown as Record<string, unknown>).username).toBeUndefined();
-  });
-
-  it("still maps non-username fields 1:1 (e.g. model) and rolls them back on failure", async () => {
+describe("useUpdateAgent — optimistic fields", () => {
+  it("maps fields 1:1 and rolls them back on failure", async () => {
     const { qc, result } = setup([makeAgent()]);
 
     mockUpdateAgent.mockResolvedValueOnce(
@@ -334,17 +280,6 @@ describe("useUpdateAgent — restart after execution-config save (task #33 / A1�
       "restart",
       expect.any(String),
     );
-  });
-
-  it("A6: username-only save does NOT restart", async () => {
-    const { result } = setup([makeAgent()]);
-    mockUpdateAgent.mockResolvedValue(makeAgent({ name: "new-handle" }));
-
-    await result.current("agent-1", { username: "new-handle" });
-
-    expect(mockGetPreflight).not.toHaveBeenCalled();
-    expect(mockStartLifecycle).not.toHaveBeenCalled();
-    expect(mockToastSuccess).toHaveBeenCalledWith("Agent updated");
   });
 
   it("A4: force_restart false → save + next-run toast, no lifecycle start", async () => {

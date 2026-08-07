@@ -111,7 +111,6 @@ vi.mock("./provider-logo", () => ({
 vi.mock("../../agents/presence", () => ({
   availabilityConfig: {
     online: { dotClass: "", textClass: "" },
-    unstable: { dotClass: "", textClass: "" },
     offline: { dotClass: "", textClass: "" },
   },
   workloadConfig: {

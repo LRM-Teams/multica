@@ -726,84 +726,61 @@ func TestProjectTextActivity_ProjectsActionWithoutSummary(t *testing.T) {
 	}
 }
 
-func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T) {
+func TestCreateAgent_RequiresNameAndUsesItAsDefaultDisplayName(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
-	displayName := "小雅"
-	handle := "xiao-ya"
-	cleanup := func() {
-		testPool.Exec(context.Background(),
-			`DELETE FROM agent
-			 WHERE workspace_id = $1
-			   AND (display_name = $2 OR name LIKE $3)`,
-			testWorkspaceID, displayName, handle+"%",
-		)
-	}
-	cleanup()
-	t.Cleanup(cleanup)
-
-	body := map[string]any{
-		"display_name":         displayName,
+	missing := map[string]any{
+		"display_name":         "Optional Display",
 		"description":          "first description",
 		"runtime_id":           testRuntimeID,
 		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}
-
-	// First call — creates the agent.
-	w1 := httptest.NewRecorder()
-	testHandler.CreateAgent(w1, newRequest(http.MethodPost, "/api/agents", body))
-	if w1.Code != http.StatusCreated {
-		t.Fatalf("first CreateAgent: expected 201, got %d: %s", w1.Code, w1.Body.String())
-	}
-	var resp1 AgentResponse
-	if err := json.NewDecoder(w1.Body).Decode(&resp1); err != nil {
-		t.Fatalf("decode first response: %v", err)
-	}
-	if resp1.ID == "" {
-		t.Fatalf("first CreateAgent: no id in response: %v", resp1)
-	}
-	if resp1.Name != handle {
-		t.Fatalf("first handle = %q, want %q", resp1.Name, handle)
-	}
-	if resp1.DisplayName != displayName {
-		t.Fatalf("first display_name = %q, want %q", resp1.DisplayName, displayName)
+	missingRec := httptest.NewRecorder()
+	testHandler.CreateAgent(missingRec, newRequest(http.MethodPost, "/api/agents", missing))
+	if missingRec.Code != http.StatusBadRequest || !strings.Contains(missingRec.Body.String(), "name is required") {
+		t.Fatalf("missing name: expected 400 name required, got %d: %s", missingRec.Code, missingRec.Body.String())
 	}
 
-	// Second call — same display input is allowed. The server keeps the
-	// display label and suffixes only the stable handle.
-	body["description"] = "updated description"
-	w2 := httptest.NewRecorder()
-	testHandler.CreateAgent(w2, newRequest(http.MethodPost, "/api/agents", body))
-	if w2.Code != http.StatusCreated {
-		t.Fatalf("second CreateAgent with duplicate display name: expected 201, got %d: %s", w2.Code, w2.Body.String())
+	name := "required-name-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	body := map[string]any{
+		"name":                 name,
+		"runtime_id":           testRuntimeID,
+		"model":                "composer-1.5",
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
 	}
-	var resp2 AgentResponse
-	if err := json.NewDecoder(w2.Body).Decode(&resp2); err != nil {
-		t.Fatalf("decode second response: %v", err)
+	createdRec := httptest.NewRecorder()
+	testHandler.CreateAgent(createdRec, newRequest(http.MethodPost, "/api/agents", body))
+	if createdRec.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent: expected 201, got %d: %s", createdRec.Code, createdRec.Body.String())
 	}
-	if resp2.DisplayName != displayName {
-		t.Fatalf("second display_name = %q, want %q", resp2.DisplayName, displayName)
+	var created AgentResponse
+	if err := json.NewDecoder(createdRec.Body).Decode(&created); err != nil {
+		t.Fatal(err)
 	}
-	if resp2.Name != handle+"-2" {
-		t.Fatalf("second handle = %q, want %q", resp2.Name, handle+"-2")
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, parseUUID(created.ID))
+	})
+	if created.Name != name || created.DisplayName != name {
+		t.Fatalf("created identity = name %q display %q, want %q", created.Name, created.DisplayName, name)
 	}
 }
 
-func TestCreateAgent_RejectsDuplicateExplicitUsername(t *testing.T) {
+func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
-	handle := "qa-bot-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	name := "qa-bot-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, handle)
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, name)
 	})
 	body := map[string]any{
-		"username":             handle,
+		"name":                 name,
 		"runtime_id":           testRuntimeID,
 		"model":                "composer-1.5",
 		"visibility":           "private",
@@ -813,36 +790,36 @@ func TestCreateAgent_RejectsDuplicateExplicitUsername(t *testing.T) {
 	first := httptest.NewRecorder()
 	testHandler.CreateAgent(first, newRequest(http.MethodPost, "/api/agents", body))
 	if first.Code != http.StatusCreated {
-		t.Fatalf("first explicit username: expected 201, got %d: %s", first.Code, first.Body.String())
+		t.Fatalf("first name: expected 201, got %d: %s", first.Code, first.Body.String())
 	}
 	var created AgentResponse
 	if err := json.NewDecoder(first.Body).Decode(&created); err != nil {
 		t.Fatalf("decode first response: %v", err)
 	}
-	if created.Name != handle || created.DisplayName != handle {
-		t.Fatalf("created agent = %+v, want username/display_name %q", created, handle)
+	if created.Name != name || created.DisplayName != name {
+		t.Fatalf("created agent = %+v, want name/display_name %q", created, name)
 	}
 	second := httptest.NewRecorder()
 	testHandler.CreateAgent(second, newRequest(http.MethodPost, "/api/agents", body))
 	if second.Code != http.StatusConflict {
-		t.Fatalf("duplicate explicit username: expected 409, got %d: %s", second.Code, second.Body.String())
+		t.Fatalf("duplicate name: expected 409, got %d: %s", second.Code, second.Body.String())
 	}
 }
 
-func TestCreateAgent_RejectsNonASCIIExplicitUsername(t *testing.T) {
+func TestCreateAgent_RejectsNonASCIIName(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	w := httptest.NewRecorder()
 	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", map[string]any{
-		"username":             "小雅",
+		"name":                 "小雅",
 		"runtime_id":           testRuntimeID,
 		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
 	}))
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("non-ASCII username: expected 400, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("non-ASCII name: expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -854,7 +831,7 @@ func TestCreateAgent_RejectsEmptyModel(t *testing.T) {
 	// still showed a fake "provider default". Fail closed with a visible 400.
 	for _, model := range []any{nil, "", "   "} {
 		body := map[string]any{
-			"display_name":         "No Model Agent",
+			"name":                 "no-model-agent",
 			"runtime_id":           testRuntimeID,
 			"max_concurrent_tasks": 1,
 		}
@@ -872,71 +849,17 @@ func TestCreateAgent_RejectsEmptyModel(t *testing.T) {
 	}
 }
 
-func TestCreateAgent_GeneratesASCIIUsernamesFromDisplayNames(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	marker := "identity-preservation-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1 AND description = $2`, testWorkspaceID, marker)
-	})
-
-	for _, tt := range []struct {
-		displayName string
-		wantHandle  string
-	}{
-		{"阿策", "a-ce"},
-		{"café", "cafe"},
-		{"qa-bot", "qa-bot"},
-	} {
-		t.Run(tt.displayName, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", map[string]any{
-				"display_name":         tt.displayName,
-				"description":          marker,
-				"runtime_id":           testRuntimeID,
-				"model":                "composer-1.5",
-				"visibility":           "private",
-				"max_concurrent_tasks": 1,
-			}))
-			if w.Code != http.StatusCreated {
-				t.Fatalf("CreateAgent: expected 201, got %d: %s", w.Code, w.Body.String())
-			}
-			var created AgentResponse
-			if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
-				t.Fatalf("decode create response: %v", err)
-			}
-			if created.Name != tt.wantHandle {
-				t.Fatalf("username = %q, want %q", created.Name, tt.wantHandle)
-			}
-		})
-	}
-}
-
-func TestAgentRejectsLegacyNameField(t *testing.T) {
+func TestAgentNameIsImmutableAfterCreate(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	createBody := map[string]any{
-		"display_name":         "Legacy Rename Agent",
+		"name":                 "immutable-agent-name",
 		"runtime_id":           testRuntimeID,
 		"model":                "composer-1.5",
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
-	}
-	legacyCreate := map[string]any{
-		"name":                 "Legacy Rename Agent",
-		"runtime_id":           testRuntimeID,
-		"model":                "composer-1.5",
-		"visibility":           "private",
-		"max_concurrent_tasks": 1,
-	}
-	legacyCreateRec := httptest.NewRecorder()
-	testHandler.CreateAgent(legacyCreateRec, newRequest(http.MethodPost, "/api/agents", legacyCreate))
-	if legacyCreateRec.Code != http.StatusBadRequest {
-		t.Fatalf("CreateAgent legacy name: expected 400, got %d: %s", legacyCreateRec.Code, legacyCreateRec.Body.String())
 	}
 	createRec := httptest.NewRecorder()
 	testHandler.CreateAgent(createRec, newRequest(http.MethodPost, "/api/agents", createBody))
@@ -947,24 +870,24 @@ func TestAgentRejectsLegacyNameField(t *testing.T) {
 	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
-	if created.Name == "" {
-		t.Fatal("created agent missing generated handle")
+	if created.Name != "immutable-agent-name" {
+		t.Fatalf("created name = %q", created.Name)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, parseUUID(created.ID))
 	})
 
 	req := withURLParam(newRequest(http.MethodPut, "/api/agents/"+created.ID, map[string]any{
-		"name": "Renamed Legacy Display",
+		"name": "renamed-agent-name",
 	}), "id", created.ID)
 	updateRec := httptest.NewRecorder()
 	testHandler.UpdateAgent(updateRec, req)
 	if updateRec.Code != http.StatusBadRequest {
-		t.Fatalf("UpdateAgent legacy name: expected 400, got %d: %s", updateRec.Code, updateRec.Body.String())
+		t.Fatalf("UpdateAgent name: expected 400, got %d: %s", updateRec.Code, updateRec.Body.String())
 	}
 }
 
-func TestUpdateAgent_UsernameChangesHandle(t *testing.T) {
+func TestUpdateAgent_RejectsUsernameAlias(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -972,6 +895,7 @@ func TestUpdateAgent_UsernameChangesHandle(t *testing.T) {
 	marker := "username-update-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	createRec := httptest.NewRecorder()
 	testHandler.CreateAgent(createRec, newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"name":                 "beckham-agent-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8],
 		"display_name":         "贝克汉姆",
 		"description":          marker,
 		"runtime_id":           testRuntimeID,
@@ -995,18 +919,8 @@ func TestUpdateAgent_UsernameChangesHandle(t *testing.T) {
 		"username": "beckham-eng",
 	}), "id", created.ID)
 	testHandler.UpdateAgent(updateRec, request)
-	if updateRec.Code != http.StatusOK {
-		t.Fatalf("UpdateAgent: expected 200, got %d: %s", updateRec.Code, updateRec.Body.String())
-	}
-	var updated AgentResponse
-	if err := json.NewDecoder(updateRec.Body).Decode(&updated); err != nil {
-		t.Fatalf("decode updated agent: %v", err)
-	}
-	if updated.Name != "beckham-eng" {
-		t.Fatalf("username = %q, want beckham-eng", updated.Name)
-	}
-	if updated.DisplayName != "贝克汉姆" {
-		t.Fatalf("display_name = %q, want 贝克汉姆", updated.DisplayName)
+	if updateRec.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateAgent username alias: expected 400, got %d: %s", updateRec.Code, updateRec.Body.String())
 	}
 }
 

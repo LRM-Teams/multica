@@ -430,6 +430,7 @@
 - Workspace 先创建；唯一 Owner 连接 Computer/Runtime、选择 Runtime/Model 后显式创建 Wendy。Wendy 身份、绑定、核心招聘 skill、`#general` 成员和版本化欢迎消息同事务提交。
 - Owner/Admin 可编辑 Wendy 配置；只有唯一 Owner 可首次 Setup、归档或恢复。归档保留 binding、立即停用招聘、不自动补建。
 - `agent:create` Hiring Proposal 由 Wendy 准备，由 Owner/Admin 最终提交；卡片消费与 Agent 创建同事务且仅能成功一次。structured card 存在时当前 UI 不显示协议 fallback 文本。
+- Agent 创建时 `name` 必填，使用 1–32 位小写字母、数字或连字符，并在创建后保持不变；`display_name` 创建时可省略，默认显示 `name`，后续只编辑 `display_name`。Wendy 的 Proposal `name` 与创建弹窗使用同一契约。
 - 完整契约、迁移矩阵与负向控制见 `docs/superpowers/specs/2026-08-06-workspace-onboarding-agent-boundary.md` 与 ADR-0012。
 
 ---

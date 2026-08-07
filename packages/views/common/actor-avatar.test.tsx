@@ -7,7 +7,7 @@ import { ActorAvatar, AgentPresenceOverlay, AgentStatusDot } from "./actor-avata
 // workspace via useCurrentWorkspace. Default to "online + idle" so the dot
 // renders; individual tests override the availability/workload per case.
 type PresenceDetail = {
-  availability: "online" | "unstable" | "offline" | "archived";
+  availability: "online" | "offline";
   workload: "idle" | "working" | "queued";
   runningCount: number;
   queuedCount: number;
@@ -21,25 +21,15 @@ const presenceDetailMock = vi.fn((): PresenceDetail => ({
   capacity: 1,
 }));
 
-// The dot COLOR now derives from connectivity health (#266). Default to "no
-// summary yet" so the dot falls back to the availability color — this keeps
-// the pre-existing availability-based assertions valid while the transitional
-// fallback is in place. Individual tests override to prove health drives color.
-type HealthResult = {
-  summary:
-    | { agent_id: string; state: string; state_since: string; last_seen_at: string; last_event_at: string }
-    | undefined;
-  events: unknown[] | undefined;
-  isLoading: boolean;
-  isError: boolean;
-};
-const healthSummaryMock = vi.fn(
-  (): HealthResult => ({ summary: undefined, events: undefined, isLoading: false, isError: false }),
-);
+const runnerActivityMock = vi.fn((): {
+  data: { summary: { label: string; tone: string; visibility: string }; timeline: never[] };
+} => ({
+  data: { summary: { label: "Online", tone: "success", visibility: "visible" }, timeline: [] },
+}));
 
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => presenceDetailMock(),
-  useAgentHealth: () => healthSummaryMock(),
+  useRunnerActivity: () => runnerActivityMock(),
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -233,11 +223,8 @@ describe("AgentStatusDot", () => {
       queuedCount: 0,
       capacity: 1,
     });
-    healthSummaryMock.mockReturnValue({
-      summary: undefined,
-      events: undefined,
-      isLoading: false,
-      isError: false,
+    runnerActivityMock.mockReturnValue({
+      data: { summary: { label: "Online", tone: "success", visibility: "visible" }, timeline: [] },
     });
   });
 
@@ -279,7 +266,8 @@ describe("AgentStatusDot", () => {
     rerender(<AgentStatusDot agentId="agent-1" size={28} />);
     const dot = screen.getByLabelText(/^Status:/);
     expect(dot).not.toHaveClass("bg-success");
-    expect(dot).toHaveClass("bg-muted-foreground/40");
+    expect(dot).toHaveClass("border-muted-foreground/50");
+    expect(dot).toHaveClass("bg-transparent");
   });
 
   it("renders nothing while presence is still loading", () => {
@@ -288,9 +276,7 @@ describe("AgentStatusDot", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("folds suspected_disconnect health into Online green (LRM-248)", () => {
-    // Availability online + health wobbling used to paint amber (#266). LRM-248
-    // collapses live badge to Online/Offline only — suspected_disconnect → green.
+  it("shows a yellow pulse for an online Runner working on chat", () => {
     presenceDetailMock.mockReturnValue({
       availability: "online",
       workload: "idle",
@@ -298,61 +284,19 @@ describe("AgentStatusDot", () => {
       queuedCount: 0,
       capacity: 1,
     });
-    healthSummaryMock.mockReturnValue({
-      summary: {
-        agent_id: "agent-1",
-        state: "suspected_disconnect",
-        state_since: "2026-07-06T09:00:00Z",
-        last_seen_at: "2026-07-06T09:40:00Z",
-        last_event_at: "2026-07-06T09:40:00Z",
-      },
-      events: undefined,
-      isLoading: false,
-      isError: false,
-    });
-    render(<AgentStatusDot agentId="agent-1" size={28} />);
-    const dot = screen.getByLabelText(/^Status:/);
-    expect(dot).toHaveClass("bg-success");
-    expect(dot).not.toHaveClass("bg-warning");
-  });
-
-  it("shows the working pulse only when health is online/recovered (#266, Iris)", () => {
-    // Working on a healthy link → breathing pulse present.
-    presenceDetailMock.mockReturnValue({
-      availability: "online",
-      workload: "working",
-      runningCount: 1,
-      queuedCount: 0,
-      capacity: 1,
-    });
-    healthSummaryMock.mockReturnValue({
-      summary: {
-        agent_id: "agent-1",
-        state: "online",
-        state_since: "2026-07-06T09:00:00Z",
-        last_seen_at: "2026-07-06T09:40:00Z",
-        last_event_at: "2026-07-06T09:40:00Z",
-      },
-      events: undefined,
-      isLoading: false,
-      isError: false,
+    runnerActivityMock.mockReturnValue({
+      data: { summary: { label: "Running command...", tone: "warning", visibility: "visible" }, timeline: [] },
     });
     const { container, rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container.querySelector(".animate-ping")).not.toBeNull();
+    expect(screen.getByLabelText(/^Status:/)).toHaveClass("bg-warning");
 
-    // Same "working" workload but the link is offline — a disconnected agent
-    // must NOT appear to be working, so the pulse is suppressed.
-    healthSummaryMock.mockReturnValue({
-      summary: {
-        agent_id: "agent-1",
-        state: "offline",
-        state_since: "2026-07-06T09:00:00Z",
-        last_seen_at: "2026-07-06T09:40:00Z",
-        last_event_at: "2026-07-06T09:40:00Z",
-      },
-      events: undefined,
-      isLoading: false,
-      isError: false,
+    presenceDetailMock.mockReturnValue({
+      availability: "offline",
+      workload: "idle",
+      runningCount: 0,
+      queuedCount: 0,
+      capacity: 1,
     });
     rerender(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container.querySelector(".animate-ping")).toBeNull();
@@ -365,18 +309,6 @@ describe("AgentStatusDot", () => {
       runningCount: 0,
       queuedCount: 0,
       capacity: 1,
-    });
-    healthSummaryMock.mockReturnValue({
-      summary: {
-        agent_id: "agent-1",
-        state: "offline",
-        state_since: "2026-07-06T09:00:00Z",
-        last_seen_at: "2026-07-06T09:40:00Z",
-        last_event_at: "2026-07-06T09:40:00Z",
-      },
-      events: undefined,
-      isLoading: false,
-      isError: false,
     });
     // Legible size (40 → ~11px dot) → hollow ring, no filled gray.
     const { rerender } = render(<AgentStatusDot agentId="agent-1" size={40} />);

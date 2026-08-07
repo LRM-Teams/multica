@@ -158,6 +158,27 @@ func TestMaterializeSourceTaskTemplate_BuildAlreadyInProgress(t *testing.T) {
 	backend.assertNoBuild(t)
 }
 
+// A failed row is retried and the previous error is surfaced, never hidden.
+func TestMaterializeSourceTaskTemplate_FailedRetrySurfacesLastError(t *testing.T) {
+	backend := newFakeSweLegoWarmupBackend()
+	backend.source = issueWarmupSource(`{"repo_url":"https://example.test/r.git","base_commit":"abc","issue_date":"2025-01-02T03:04:05Z"}`)
+	backend.status = sweLegoMaterializeStatus{
+		Resolved:    service.SweLegoTemplateRequest{NodeID: "node-1", ParentTemplateID: "tpl-parent"},
+		CacheStatus: "failed",
+		LastError:   "execute builder: exit 1: git filter-repo: command not found",
+	}
+	h := &Handler{SweLegoWarmup: backend}
+
+	rec := serveMaterialize(h, newMaterializeRequest(warmupSourceTaskID))
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"building"`) {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"cache_status":"failed"`) || !strings.Contains(rec.Body.String(), "git filter-repo") {
+		t.Fatalf("previous failure not surfaced: %s", rec.Body)
+	}
+	backend.buildTriggered(t)
+}
+
 // Message source tasks are rejected.
 func TestMaterializeSourceTaskTemplate_RejectsMessageSource(t *testing.T) {
 	backend := newFakeSweLegoWarmupBackend()

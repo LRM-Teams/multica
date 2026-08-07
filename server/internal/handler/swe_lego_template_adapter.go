@@ -499,6 +499,10 @@ type sweLegoMaterializeStatus struct {
 	// "failed"), empty when no cache row exists. Lets read-only callers
 	// (the env-dispatch resolver) report the precise state.
 	CacheStatus string
+	// LastError carries the cache row's recorded build error (failed rows),
+	// so a warm-up retry can surface why the previous build failed instead
+	// of silently retriggering.
+	LastError string
 }
 
 // sweLegoWarmupBackend backs the manual source-task materialize endpoint.
@@ -559,6 +563,7 @@ func (m *sweLegoTemplatePlacement) CheckCache(ctx context.Context, req service.S
 		return status, nil
 	}
 	status.Building = rec.Status == "building"
+	status.LastError = rec.Error
 	return status, nil
 }
 
@@ -596,6 +601,12 @@ func (h *Handler) sweLegoWarmup() sweLegoWarmupBackend {
 type materializeSourceTaskResponse struct {
 	Status         string `json:"status"` // "ready" | "building"
 	TaskTemplateID string `json:"task_template_id,omitempty"`
+	// CacheStatus is the cache row state observed before this response
+	// ("building" / "failed"); empty when no row existed (fresh trigger).
+	CacheStatus string `json:"cache_status,omitempty"`
+	// LastError surfaces the previous build's recorded error when a failed
+	// row is being retried, so operators can see why builds keep failing.
+	LastError string `json:"last_error,omitempty"`
 }
 
 // sweLegoWarmupIssuePayload is the subset of the canonical issue source-task
@@ -708,5 +719,5 @@ func (h *Handler) MaterializeSourceTaskTemplate(w http.ResponseWriter, r *http.R
 			}
 		}()
 	}
-	writeJSON(w, http.StatusAccepted, materializeSourceTaskResponse{Status: "building"})
+	writeJSON(w, http.StatusAccepted, materializeSourceTaskResponse{Status: "building", CacheStatus: status.CacheStatus, LastError: status.LastError})
 }

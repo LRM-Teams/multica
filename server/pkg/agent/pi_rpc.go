@@ -617,7 +617,15 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
-	cmd.Env = buildEnv(b.cfg.Env)
+	// Use buildPiEnv (not buildEnv) so the inherited PI_PACKAGE_DIR blocklist
+	// applies. The host (Raft computer SEA launcher) sets PI_PACKAGE_DIR to its
+	// own resource stub (~/.slock/runtime-pkg). If that leaks into a resident Pi
+	// RPC process, Pi searches the Raft stub for its bundled themes instead of
+	// its installed package, fails to load dark.json (ENOENT), never reaches its
+	// RPC command loop, and never responds to multica-message-input — blocking
+	// idle Message handoff / recovery completion. The JSON (non-resident) backend
+	// already blocks this; the resident path must too.
+	cmd.Env = buildPiEnv(b.cfg.Env)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		if mcpConfigPath != "" {

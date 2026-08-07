@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -81,7 +82,28 @@ type MessageCoordinator struct {
 	noticeCoalesce  time.Duration
 	noticeRetry     time.Duration
 	noticeTimer     *time.Timer
+	logger          *slog.Logger
 	closed          bool
+}
+
+// SetLogger installs a diagnostic logger for recovery/notice frame tracing.
+// A nil logger disables trace logging. It is safe to call before use.
+func (c *MessageCoordinator) SetLogger(logger *slog.Logger) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.logger = logger
+}
+
+func (c *MessageCoordinator) debug(msg string, agentID string, args ...any) {
+	if c.logger == nil {
+		return
+	}
+	keyvals := make([]any, 0, len(args)+2)
+	if agentID != "" {
+		keyvals = append(keyvals, "agent_id", agentID)
+	}
+	keyvals = append(keyvals, args...)
+	c.logger.Debug(msg, keyvals...)
 }
 
 // MessageSendFreshness is the local preflight result for one target.  The
@@ -179,6 +201,7 @@ func (c *MessageCoordinator) BeginRecovery(agentID string, limit int) protocol.A
 	}
 	recoveryID := uuid.NewString()
 	c.recovery = messageRecoveryState{status: messageFreshnessUnknown, agentID: agentID, recoveryID: recoveryID}
+	c.debug("message recovery begin", agentID, "recovery_id", recoveryID, "boundary_count", len(c.boundaries), "limit", limit)
 	return protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: recoveryID, Boundaries: cloneBoundaries(c.boundaries), Limit: limit}
 }
 
@@ -189,6 +212,7 @@ func (c *MessageCoordinator) RecoveryRequest(agentID string, limit int) protocol
 	if limit <= 0 {
 		limit = 100
 	}
+	c.debug("message recovery page request", agentID, "recovery_id", c.recovery.recoveryID, "snapshot_id", c.recovery.snapshotID, "next_cursor", c.recovery.nextCursor, "limit", limit)
 	return protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: c.recovery.recoveryID, Boundaries: cloneBoundaries(c.boundaries), SnapshotID: c.recovery.snapshotID, Cursor: c.recovery.nextCursor, Limit: limit}
 }
 
@@ -235,12 +259,14 @@ func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) 
 	c.recovery.nextCursor = page.NextCursor
 	if page.HasMore {
 		c.recovery.status = messageFreshnessUnknown
+		c.debug("message recovery page", page.AgentID, "recovery_id", page.RecoveryID, "messages", len(page.Messages), "has_more", true, "next_cursor", page.NextCursor, "snapshot_id", page.SnapshotID)
 	} else {
 		c.recovery.status = messageFreshnessReadyToHandoff
 		// A complete snapshot rebuilds conservative coverage even when the file
 		// was previously missing or malformed. Freshness itself remains blocked
 		// until Flush hands recovered bodies to the runtime and persists them.
 		c.boundaryHealthy = true
+		c.debug("message recovery terminal page", page.AgentID, "recovery_id", page.RecoveryID, "messages", len(page.Messages), "has_more", false, "snapshot_id", page.SnapshotID, "high_watermark", page.HighWatermark)
 	}
 	return nil
 }
@@ -249,6 +275,7 @@ func (c *MessageCoordinator) FailRecovery() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.recovery.status = messageFreshnessFailed
+	c.debug("message recovery failed", c.recovery.agentID, "recovery_id", c.recovery.recoveryID)
 }
 
 func (c *MessageCoordinator) FreshnessKnown() bool {
@@ -511,12 +538,14 @@ func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNo
 			if len(batch) == 0 {
 				if c.recovery.status == messageFreshnessReadyToHandoff {
 					c.recovery.status = messageFreshnessComplete
+					c.debug("message recovery complete", c.recovery.agentID, "recovery_id", c.recovery.recoveryID, "boundary_count", len(c.boundaries))
 				}
 				return handedOff, nil
 			}
 			if err := c.handoff(ctx, batch); err != nil {
 				if scheduleBusyNotice && errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 					c.schedulePendingNoticeLocked(c.noticeCoalesce)
+					c.debug("message handoff busy, scheduled pending notice", c.recovery.agentID, "recovery_id", c.recovery.recoveryID, "pending_count", c.pendingCountLocked())
 				}
 				return handedOff, fmt.Errorf("runtime Message handoff: %w", err)
 			}
@@ -554,6 +583,7 @@ func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNo
 		c.handedOff = nil
 		if c.recovery.status == messageFreshnessReadyToHandoff {
 			c.recovery.status = messageFreshnessComplete
+			c.debug("message recovery complete after handoff", c.recovery.agentID, "recovery_id", c.recovery.recoveryID, "handoffs", len(handoff.messages), "boundary_count", len(c.boundaries))
 		}
 	}
 }
@@ -571,18 +601,23 @@ func (c *MessageCoordinator) schedulePendingNoticeLocked(delay time.Duration) {
 func (c *MessageCoordinator) runPendingNoticeAttempt() {
 	c.mu.Lock()
 	c.noticeTimer = nil
+	agentID := c.recovery.agentID
+	recoveryID := c.recovery.recoveryID
 	closed := c.closed
 	c.mu.Unlock()
 	if closed {
 		return
 	}
 
+	c.debug("message pending notice attempt", agentID, "recovery_id", recoveryID)
 	ctx, cancel := context.WithTimeout(context.Background(), pendingNoticeWriteTimeout)
 	defer cancel()
 	err := c.flush(ctx, false)
 	if err == nil {
+		c.debug("message pending notice cleared by flush", agentID, "recovery_id", recoveryID)
 		return
 	}
+	c.debug("message pending notice attempt err", agentID, "recovery_id", recoveryID, "error", err)
 	if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		err = c.deliverPendingNotice(ctx)
 	}
@@ -590,6 +625,7 @@ func (c *MessageCoordinator) runPendingNoticeAttempt() {
 		c.mu.Lock()
 		c.schedulePendingNoticeLocked(c.noticeRetry)
 		c.mu.Unlock()
+		c.debug("message pending notice retry scheduled", agentID, "recovery_id", recoveryID, "error", err)
 	}
 }
 
@@ -603,7 +639,9 @@ func (c *MessageCoordinator) deliverPendingNotice(ctx context.Context) error {
 	if snapshot.Notice.TotalPending == 0 {
 		return nil
 	}
-	return c.noticeHandoff(ctx, snapshot)
+	err := c.noticeHandoff(ctx, snapshot)
+	c.debug("message notice deliver", c.recovery.agentID, "recovery_id", c.recovery.recoveryID, "total_pending", snapshot.Notice.TotalPending, "changed_targets", len(snapshot.Notice.ChangedTargets), "fingerprint", snapshot.Fingerprint, "error", err)
+	return err
 }
 
 func (c *MessageCoordinator) pendingNoticeLocked() PendingNoticeSnapshot {

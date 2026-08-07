@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -88,10 +89,13 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 	if strings.TrimSpace(request.RecoveryID) == "" {
 		return protocol.AgentRecoveryPage{}, errors.New("recovery id is required")
 	}
+	slog.Info("agent message recovery request", "agent_id", request.AgentID, "workspace_id", identity.WorkspaceID, "recovery_id", request.RecoveryID, "boundary_count", len(request.Boundaries), "limit", request.Limit, "daemon_id", identity.DaemonID)
 	if err := h.requireAgentMessageDaemonScope(ctx, identity, request.AgentID); err != nil {
+		slog.Warn("agent message recovery rejected by daemon scope", "agent_id", request.AgentID, "workspace_id", identity.WorkspaceID, "recovery_id", request.RecoveryID, "error", err)
 		return protocol.AgentRecoveryPage{}, err
 	}
 	if err := validateAgentRecoveryBoundaries(request.Boundaries); err != nil {
+		slog.Warn("agent message recovery invalid boundaries", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "error", err)
 		return protocol.AgentRecoveryPage{}, err
 	}
 	limit := request.Limit
@@ -104,15 +108,19 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 
 	snapshot, snapshotID, err := h.resolveAgentRecoverySnapshot(ctx, identity.WorkspaceID, request.AgentID, request.SnapshotID)
 	if err != nil {
+		slog.Warn("agent message recovery snapshot resolution failed", "agent_id", request.AgentID, "workspace_id", identity.WorkspaceID, "recovery_id", request.RecoveryID, "error", err)
 		return protocol.AgentRecoveryPage{}, err
 	}
+	slog.Info("agent message recovery snapshot resolved", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "target_count", len(snapshot.Targets), "snapshot_id", truncateString(snapshotID, 24))
 	cursor, err := decodeAgentRecoveryCursor(request.Cursor, snapshotID)
 	if err != nil {
+		slog.Warn("agent message recovery cursor decode failed", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "error", err)
 		return protocol.AgentRecoveryPage{}, err
 	}
 	if cursor.Target != "" {
 		fence, ok := snapshot.Targets[cursor.Target]
 		if !ok || cursor.Seq > fence {
+			slog.Warn("agent message recovery cursor exceeds fence", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "target", cursor.Target, "seq", cursor.Seq)
 			return protocol.AgentRecoveryPage{}, errors.New("recovery cursor exceeds snapshot fence")
 		}
 	}
@@ -163,6 +171,7 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 		LIMIT $8`, parseUUID(identity.WorkspaceID), parseUUID(request.AgentID),
 		boundariesJSON, fenceJSON, cursor.Target, cursor.Seq, parseUUIDOrZero(cursor.ID), limit+1)
 	if err != nil {
+		slog.Warn("agent message recovery query failed", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "error", err)
 		return protocol.AgentRecoveryPage{}, err
 	}
 	defer rows.Close()
@@ -174,9 +183,11 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 		var content, target, replyTarget string
 		var rawParts []byte
 		if err := rows.Scan(&id, &seq, &content, &rawParts, &target, &replyTarget); err != nil {
+			slog.Warn("agent message recovery row scan failed", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "error", err)
 			return protocol.AgentRecoveryPage{}, err
 		}
 		if strings.TrimSpace(replyTarget) == "" {
+			slog.Warn("agent message recovery reply target unavailable", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "target", target, "seq", seq)
 			return protocol.AgentRecoveryPage{}, errors.New("canonical Message recovery reply target is unavailable")
 		}
 		var parts []protocol.MessagePart
@@ -190,6 +201,7 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 		})
 	}
 	if err := rows.Err(); err != nil {
+		slog.Warn("agent message recovery rows iteration failed", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "error", err)
 		return protocol.AgentRecoveryPage{}, err
 	}
 
@@ -205,6 +217,7 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 			return protocol.AgentRecoveryPage{}, err
 		}
 	}
+	slog.Info("agent message recovery page", "agent_id", request.AgentID, "recovery_id", request.RecoveryID, "messages", len(items), "has_more", hasMore, "next_cursor", truncateString(nextCursor, 24))
 	return protocol.AgentRecoveryPage{
 		AgentID: request.AgentID, RecoveryID: request.RecoveryID, SnapshotID: snapshotID, HighWatermark: snapshotID,
 		Messages: items, NextCursor: nextCursor, HasMore: hasMore,

@@ -291,11 +291,21 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 			if json.Unmarshal(message.Payload, &page) != nil {
 				continue
 			}
-			if err := d.handleMessageRecoveryPageWithSend(context.Background(), page, func(request protocol.AgentRecoveryRequest) error {
-				return writeFrame(protocol.EventAgentRecoveryRequest, request)
-			}); err != nil && d.logger != nil {
-				d.logger.Warn("workspace Runner agent Message recovery failed", "error", err, "workspace_id", workspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
-			}
+			// Task #2: recovery page handling (MergeRecoveryPage + Flush → runtime
+			// handoff) can block on a resident runtime that is busy or slow to
+			// accept idle Message input. Handling it synchronously here would stall
+			// this workspace-runner read loop, so recovery pages for the remaining
+			// agents in the same batch would never be read (freshness stays unknown
+			// for them). Dispatch each page to its own goroutine so one blocked
+			// handoff no longer blocks the other agents' recovery. writeFrame is
+			// mutex-guarded, so concurrent request re-sends are safe.
+			go func(page protocol.AgentRecoveryPage) {
+				if err := d.handleMessageRecoveryPageWithSend(context.Background(), page, func(request protocol.AgentRecoveryRequest) error {
+					return writeFrame(protocol.EventAgentRecoveryRequest, request)
+				}); err != nil && d.logger != nil {
+					d.logger.Warn("workspace Runner agent Message recovery failed", "error", err, "workspace_id", workspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
+				}
+			}(page)
 		case protocol.EventAgentActivityProbe:
 			var probe protocol.AgentActivityProbePayload
 			if json.Unmarshal(message.Payload, &probe) != nil || probe.Validate() != nil {

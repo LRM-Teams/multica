@@ -346,6 +346,9 @@ func (d *Daemon) beginAgentMessageRecovery(agentID string) {
 		return
 	}
 	request := coordinator.BeginRecovery(agentID, 100)
+	if d.logger != nil {
+		d.logger.Debug("agent Message recovery request", "agent_id", agentID, "recovery_id", request.RecoveryID, "boundary_count", len(request.Boundaries))
+	}
 	if !d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentRecoveryRequest, request) && d.logger != nil {
 		d.logger.Warn("agent Message recovery request failed", "error", "workspace Runner Message transport unavailable", "agent_id", agentID)
 	}
@@ -375,7 +378,13 @@ func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page pro
 		return err
 	}
 	if page.HasMore {
+		if d.logger != nil {
+			d.logger.Debug("agent Message recovery page received", "agent_id", page.AgentID, "recovery_id", page.RecoveryID, "messages", len(page.Messages), "has_more", true, "next_cursor", page.NextCursor)
+		}
 		return send(coordinator.RecoveryRequest(page.AgentID, 100))
+	}
+	if d.logger != nil {
+		d.logger.Debug("agent Message recovery terminal page, flushing", "agent_id", page.AgentID, "recovery_id", page.RecoveryID, "messages", len(page.Messages))
 	}
 	return coordinator.Flush(ctx)
 }

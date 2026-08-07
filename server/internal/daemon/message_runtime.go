@@ -34,6 +34,7 @@ func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot stri
 	if err != nil {
 		return false, err
 	}
+	coordinator.SetLogger(d.logger)
 	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot) error {
 		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot)
 	}, 0, 0)

@@ -33,6 +33,7 @@ type NoteDropPosition = "before" | "after" | "inside";
 type NoteDropTarget = { id: string; position: NoteDropPosition };
 
 type NoteExpansionOverrides = { selectionId: string | null; expanded: Set<string>; collapsed: Set<string> };
+type NoteDragState = { draggingId: string | null; dropTarget: NoteDropTarget | null };
 
 type NoteExportFormat = "html" | "pdf";
 
@@ -978,11 +979,11 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const permanentlyDeletePage = usePermanentlyDeleteNotePage();
   const restorePage = useRestoreNotePage();
   const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, showTrash: false }));
-  const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<NoteDropTarget | null>(null);
+  const [dragState, setDragState] = useState<NoteDragState>({ draggingId: null, dropTarget: null });
   const [aiAgentConfig, setAiAgentConfig] = useState<NoteAiAgentConfig>(() => ({ workspaceId: null, agentId: null }));
   const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
   const { sharePage, exportOpen, aiAgentOpen, showTrash } = uiState;
+  const { draggingId: draggingNoteId } = dragState;
 
   useEffect(() => {
     if (!wsId || !selected?.id || showTrash) return;
@@ -1010,26 +1011,24 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   };
 
   const handleNoteDragStart = (id: string) => {
-    setDraggingNoteId(id);
-    setDropTarget(null);
+    setDragState({ draggingId: id, dropTarget: null });
   };
 
   const handleNoteDragEnd = () => {
-    setDraggingNoteId(null);
-    setDropTarget(null);
+    setDragState({ draggingId: null, dropTarget: null });
   };
 
   const handleNoteDragOver = (target: NotePage, event: DragEvent<HTMLDivElement>) => {
     if (!draggingNoteId) return;
     const position = findNoteDropPosition(event);
     if (!noteDragAllowed(draggingNoteId, target, position)) {
-      setDropTarget(null);
+      setDragState((current) => (current.dropTarget ? { ...current, dropTarget: null } : current));
       return;
     }
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
-    setDropTarget((current) => (current?.id === target.id && current.position === position ? current : { id: target.id, position }));
+    setDragState((current) => (current.dropTarget?.id === target.id && current.dropTarget.position === position ? current : { ...current, dropTarget: { id: target.id, position } }));
   };
 
   const handleNoteDrop = async (target: NotePage, event: DragEvent<HTMLDivElement>) => {
@@ -1214,7 +1213,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                     </button>
                   ) : (
                     ownTree.map((node) => (
-                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} draggingId={draggingNoteId} dropTarget={dropTarget} onDragStart={handleNoteDragStart} onDragEnd={handleNoteDragEnd} onDragOverNode={handleNoteDragOver} onDropNode={handleNoteDrop} />
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} draggingId={dragState.draggingId} dropTarget={dragState.dropTarget} onDragStart={handleNoteDragStart} onDragEnd={handleNoteDragEnd} onDragOverNode={handleNoteDragOver} onDropNode={handleNoteDrop} />
                     ))
                   )}
                 </div>
@@ -1224,7 +1223,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                       {t(($) => $.notes_page.shared_directory)}
                     </div>
                     {sharedTree.map((node) => (
-                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} draggingId={draggingNoteId} dropTarget={dropTarget} onDragStart={handleNoteDragStart} onDragEnd={handleNoteDragEnd} onDragOverNode={handleNoteDragOver} onDropNode={handleNoteDrop} />
+                      <NoteTreeRow key={node.id} node={node} depth={0} activeId={selected?.id} expandedIds={expandedNoteIds} onOpen={openPage} onToggle={toggleNoteExpanded} onCreateChild={(parentId) => handleCreate(parentId)} onShare={(page) => setUiState((current) => ({ ...current, sharePage: page }))} onDuplicate={handleDuplicate} onDelete={handleDelete} draggingId={dragState.draggingId} dropTarget={dragState.dropTarget} onDragStart={handleNoteDragStart} onDragEnd={handleNoteDragEnd} onDragOverNode={handleNoteDragOver} onDropNode={handleNoteDrop} />
                     ))}
                   </div>
                 )}

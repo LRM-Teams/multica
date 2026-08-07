@@ -166,8 +166,10 @@
     --research-stage-explore-2: #a21caf;
     --research-stage-verify: #b45309;
     --research-stage-deliver: #047857;
-    /* Activity timeline command node (LRM-560; replaces hardcoded #F5B301) */
-    --running: #e5a00d;
+    /* Activity timeline command node (LRM-560; replaces hardcoded #F5B301).
+       LRM-1519: brightened back to the original amber (was deepened to #e5a00d,
+       read as too-dark mud brown) — brighter but restrained, not high-sat yellow. */
+    --running: #F5B301;
     /* Charts stay brand-anchored (hue ≈ #1264a3) */
     --chart-1: #1264a3;
     --chart-2: #3d8ec4;
@@ -281,8 +283,9 @@
     --research-stage-explore-2: oklch(0.76 0.17 330);
     --research-stage-verify: oklch(0.83 0.14 80);
     --research-stage-deliver: oklch(0.80 0.13 160);
-    /* Activity timeline command node (LRM-560) */
-    --running: oklch(0.78 0.14 85);
+    /* Activity timeline command node (LRM-560). LRM-1519: brightened to match the
+       new light amber hue (82) at a higher L for contrast on dark surfaces. */
+    --running: oklch(0.83 0.16 82);
     --scrollbar-thumb: oklch(1 0 0 / 8%);
     --scrollbar-thumb-hover: oklch(1 0 0 / 18%);
     --scrollbar-track: transparent;

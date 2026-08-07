@@ -190,12 +190,13 @@ export function MachineDaemonUpgrade({
     derivedStatus === "ready_to_apply" ||
     (derivedStatus === "completed" && !versionsCaughtUp);
   const isActive =
-    updating ||
-    derivedStatus === "pending" ||
-    derivedStatus === "running" ||
-    // poll may report "queued" before pending (older type packages omit it)
-    effectiveStatus === "queued" ||
-    isApplying;
+    !versionsCaughtUp &&
+    (updating ||
+      derivedStatus === "pending" ||
+      derivedStatus === "running" ||
+      // poll may report "queued" before pending (older type packages omit it)
+      effectiveStatus === "queued" ||
+      isApplying);
   // Health may flip off `update_available` after a failed attempt — still failed.
   const isFailed =
     !versionsCaughtUp &&

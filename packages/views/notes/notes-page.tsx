@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, Check, ChevronDown, ChevronRight, Copy, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Copy, Download, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -16,7 +16,8 @@ import type { Agent, MemberWithUser, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@multica/ui/components/ui/popover";
 import { Input } from "@multica/ui/components/ui/input";
 import { Separator } from "@multica/ui/components/ui/separator";
 import { cn } from "@multica/ui/lib/utils";
@@ -701,6 +702,29 @@ function NoteEditor({
   }
   const dirty = draft.title !== draft.serverTitle || draft.content !== draft.serverContent;
   const [saveState, setSaveState] = useState<"saved" | "pending" | "saving" | "error">("saved");
+  const [shareRecipientsOpen, setShareRecipientsOpen] = useState(false);
+  const shareRecipientsCloseTimer = useRef<number | null>(null);
+
+  const clearShareRecipientsCloseTimer = useCallback(() => {
+    if (shareRecipientsCloseTimer.current === null) return;
+    window.clearTimeout(shareRecipientsCloseTimer.current);
+    shareRecipientsCloseTimer.current = null;
+  }, []);
+
+  const openShareRecipients = useCallback(() => {
+    clearShareRecipientsCloseTimer();
+    setShareRecipientsOpen(true);
+  }, [clearShareRecipientsCloseTimer]);
+
+  const scheduleShareRecipientsClose = useCallback(() => {
+    clearShareRecipientsCloseTimer();
+    shareRecipientsCloseTimer.current = window.setTimeout(() => {
+      setShareRecipientsOpen(false);
+      shareRecipientsCloseTimer.current = null;
+    }, 120);
+  }, [clearShareRecipientsCloseTimer]);
+
+  useEffect(() => clearShareRecipientsCloseTimer, [clearShareRecipientsCloseTimer]);
 
   // react-doctor-disable-next-line react-doctor/no-cascading-set-state -- autosave status follows local draft dirtiness and async save lifecycle.
   useEffect(() => {
@@ -745,20 +769,35 @@ function NoteEditor({
           ) : shareNames.length > 0 ? (
             <span className="inline-flex min-w-0 items-center gap-1">
               <span className="text-muted-foreground">{t(($) => $.notes_page.visibility_shared_to_prefix)}</span>
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.current_shares)} />} className="inline-flex max-w-36 items-center truncate font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground">
+              <Popover modal={false} open={shareRecipientsOpen} onOpenChange={setShareRecipientsOpen}>
+                <PopoverTrigger
+                  type="button"
+                  aria-label={t(($) => $.notes_page.current_shares)}
+                  className="inline-flex max-w-44 items-center gap-1 truncate rounded-sm font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  onMouseEnter={openShareRecipients}
+                  onMouseLeave={scheduleShareRecipientsClose}
+                  onFocus={openShareRecipients}
+                  onBlur={scheduleShareRecipientsClose}
+                >
                   <span className="truncate">{shareNames[0]}</span>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="min-w-48">
-                  <DropdownMenuLabel>{t(($) => $.notes_page.current_shares)}</DropdownMenuLabel>
-                  {shareNames.map((name, index) => (
-                    <DropdownMenuItem key={`${name}:${index}`} disabled className="text-muted-foreground opacity-100">
-                      <span className="truncate">{name}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <span className="text-muted-foreground/70">{t(($) => $.notes_page.visibility_shared_etc)}</span>
+                  {shareNames.length > 1 && <span className="shrink-0 text-muted-foreground/70">{t(($) => $.notes_page.visibility_shared_etc)}</span>}
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  className="w-56 gap-1 p-2"
+                  onMouseEnter={openShareRecipients}
+                  onMouseLeave={scheduleShareRecipientsClose}
+                >
+                  <div className="px-1 pb-1 text-xs font-medium text-muted-foreground">{t(($) => $.notes_page.current_shares)}</div>
+                  <div className="max-h-56 overflow-y-auto">
+                    {shareNames.map((name, index) => (
+                      <div key={`${name}:${index}`} className="truncate rounded-md px-2 py-1.5 text-sm text-foreground/80">
+                        {name}
+                      </div>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </span>
           ) : (
             <span>{t(($) => $.notes_page.visibility_private)}</span>
@@ -1022,6 +1061,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                 {t(($) => $.notes_page.ai_agent_action)}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, exportOpen: true }))}>
+                <Download className="size-3.5" />
                 {t(($) => $.notes_page.export_action)}
               </DropdownMenuItem>
             </DropdownMenuContent>

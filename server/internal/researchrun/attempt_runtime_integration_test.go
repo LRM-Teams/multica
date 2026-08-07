@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -222,5 +223,109 @@ func TestCreateDispatchIntentRejectsPendingPriorCancellation(t *testing.T) {
 	}
 	if _, _, err = store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)); err != nil {
 		t.Fatalf("dispatch remained fenced after cancellation acknowledgement: %v", err)
+	}
+}
+
+// Two cancellation actors can observe the same pending Attempt around an
+// external Cancel call. Durable settlement is idempotent: one actor performs
+// the transition and every loser observes the already-completed fact as
+// success, rather than reporting a false control failure.
+func TestConcurrentCancellationSettlementIsIdempotent(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchCircuitFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	if _, _, err = store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Test concurrent cancellation",
+		Title: "Concurrent cancellation", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard")); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(
+		t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inboxID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'cancelled')
+	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_task_attempt
+		SET status='cancelling', pending_failure_class=$2,
+		    pending_failure_diagnostics='timeout', pending_failure_retryable=true
+		WHERE id=$1::uuid
+	`, attempt.ID, string(FailureTimeout)); err != nil {
+		t.Fatal(err)
+	}
+	request := CancellationRequest{AttemptID: attempt.ID, InboxTaskID: inboxID}
+	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{request}); err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 4
+	start := make(chan struct{})
+	errs := make([]error, workers)
+	var wait sync.WaitGroup
+	for index := 0; index < workers; index++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			<-start
+			_, errs[index] = store.CompleteCancellations(context.Background(), fixture.sessionID, []string{attempt.ID})
+		}(index)
+	}
+	close(start)
+	wait.Wait()
+	for index, settleErr := range errs {
+		if settleErr != nil {
+			t.Fatalf("worker %d reported false cancellation failure: %v", index, settleErr)
+		}
+	}
+	// A late marker can occur after another worker observed the terminal Inbox
+	// state and completed settlement. It is the same cancellation fact.
+	if err = store.MarkCancellationsRequested(ctx, fixture.sessionID, []CancellationRequest{request}); err != nil {
+		t.Fatalf("late cancellation marker was not idempotent: %v", err)
+	}
+
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusFailed || attempts[0].CancelCompletedAt == nil {
+		t.Fatalf("settled attempt=%+v err=%v", attempts, err)
+	}
+	var failedEvents int
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_run_event
+		WHERE session_id=$1::uuid AND event_type='task_attempt_failed' AND payload->>'attempt_id'=$2
+	`, fixture.sessionID, attempt.ID).Scan(&failedEvents); err != nil {
+		t.Fatal(err)
+	}
+	if failedEvents != 1 {
+		t.Fatalf("task_attempt_failed events=%d, want 1", failedEvents)
+	}
+	repairs, err := store.ListTargetRepairs(ctx, fixture.sessionID)
+	if err != nil || len(repairs) != 1 || repairs[0].OccurrenceCount != 1 {
+		t.Fatalf("repairs=%+v err=%v", repairs, err)
 	}
 }

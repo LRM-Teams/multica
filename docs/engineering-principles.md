@@ -425,6 +425,13 @@
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。
 - **物**：`CreateSandboxInstance` 写入 `metadata.docker_container_name` / job `docker_container_name`；`sandboxd` 使用该字段作为 `--name`，旧 payload 只回退到 instance-id 名称。
 
+### 4.21 Workspace 招聘能力只属于结构化绑定的 Onboarding Agent — `待执行`
+- 每个已配置 Workspace 只有一个 `workspace.onboarding_agent_id`；Wendy 只是默认显示名，改名不影响权限，同名不获得权限。普通 Agent 不注入招聘 skill/instructions，并在 Agent API 边界 fail closed。
+- Workspace 先创建；唯一 Owner 连接 Computer/Runtime、选择 Runtime/Model 后显式创建 Wendy。Wendy 身份、绑定、核心招聘 skill、`#general` 成员和版本化欢迎消息同事务提交。
+- Owner/Admin 可编辑 Wendy 配置；只有唯一 Owner 可首次 Setup、归档或恢复。归档保留 binding、立即停用招聘、不自动补建。
+- `agent:create` Hiring Proposal 由 Wendy 准备，由 Owner/Admin 最终提交；卡片消费与 Agent 创建同事务且仅能成功一次。structured card 存在时当前 UI 不显示协议 fallback 文本。
+- 完整契约、迁移矩阵与负向控制见 `docs/superpowers/specs/2026-08-06-workspace-onboarding-agent-boundary.md` 与 ADR-0012。
+
 ---
 
 ### 4.15 Agent 临时协作空间必须保留人类所有权与幂等来源 — `可执行`（①数据库约束 + ③Agent 专用入口 + ⑤合同测试；owner: @Codex）

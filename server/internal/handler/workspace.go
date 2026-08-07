@@ -34,17 +34,18 @@ func generateIssuePrefix(name string) string {
 }
 
 type WorkspaceResponse struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Slug         string  `json:"slug"`
-	Description  *string `json:"description"`
-	Context      *string `json:"context"`
-	Settings     any     `json:"settings"`
-	IssuePrefix  string  `json:"issue_prefix"`
-	AvatarURL    *string `json:"avatar_url"`
-	LastActiveAt *string `json:"last_active_at"`
-	CreatedAt    string  `json:"created_at"`
-	UpdatedAt    string  `json:"updated_at"`
+	ID                string  `json:"id"`
+	Name              string  `json:"name"`
+	Slug              string  `json:"slug"`
+	Description       *string `json:"description"`
+	Context           *string `json:"context"`
+	Settings          any     `json:"settings"`
+	IssuePrefix       string  `json:"issue_prefix"`
+	AvatarURL         *string `json:"avatar_url"`
+	OnboardingAgentID *string `json:"onboarding_agent_id"`
+	LastActiveAt      *string `json:"last_active_at"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 func workspaceToResponse(w db.Workspace) WorkspaceResponse {
@@ -57,6 +58,7 @@ func workspaceToResponse(w db.Workspace) WorkspaceResponse {
 		w.Settings,
 		w.IssuePrefix,
 		w.AvatarUrl,
+		w.OnboardingAgentID,
 		pgtype.Timestamptz{},
 		w.CreatedAt,
 		w.UpdatedAt,
@@ -73,6 +75,7 @@ func listedWorkspaceToResponse(w db.ListWorkspacesRow) WorkspaceResponse {
 		w.Settings,
 		w.IssuePrefix,
 		w.AvatarUrl,
+		w.OnboardingAgentID,
 		w.LastActiveAt,
 		w.CreatedAt,
 		w.UpdatedAt,
@@ -88,6 +91,7 @@ func workspaceFieldsToResponse(
 	settingsBytes []byte,
 	issuePrefix string,
 	avatarURL pgtype.Text,
+	onboardingAgentID pgtype.UUID,
 	lastActiveAt pgtype.Timestamptz,
 	createdAt pgtype.Timestamptz,
 	updatedAt pgtype.Timestamptz,
@@ -100,17 +104,18 @@ func workspaceFieldsToResponse(
 		settings = map[string]any{}
 	}
 	return WorkspaceResponse{
-		ID:           uuidToString(id),
-		Name:         name,
-		Slug:         slug,
-		Description:  textToPtr(description),
-		Context:      textToPtr(context),
-		Settings:     settings,
-		IssuePrefix:  issuePrefix,
-		AvatarURL:    textToPtr(avatarURL),
-		LastActiveAt: timestampToPtr(lastActiveAt),
-		CreatedAt:    timestampToString(createdAt),
-		UpdatedAt:    timestampToString(updatedAt),
+		ID:                uuidToString(id),
+		Name:              name,
+		Slug:              slug,
+		Description:       textToPtr(description),
+		Context:           textToPtr(context),
+		Settings:          settings,
+		IssuePrefix:       issuePrefix,
+		AvatarURL:         textToPtr(avatarURL),
+		OnboardingAgentID: uuidToPtr(onboardingAgentID),
+		LastActiveAt:      timestampToPtr(lastActiveAt),
+		CreatedAt:         timestampToString(createdAt),
+		UpdatedAt:         timestampToString(updatedAt),
 	}
 }
 
@@ -492,8 +497,8 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid member role")
 		return
 	}
-	if role == "owner" && requester.Role != "owner" {
-		writeError(w, http.StatusForbidden, "insufficient permissions")
+	if role == "owner" {
+		writeCodedError(w, http.StatusConflict, "workspace_owner_immutable", "workspace already has its owner")
 		return
 	}
 
@@ -576,21 +581,13 @@ func (h *Handler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if (target.Role == "owner" || role == "owner") && requester.Role != "owner" {
+	if target.Role == "owner" && requester.Role != "owner" {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
-
-	if target.Role == "owner" && role != "owner" {
-		members, err := h.Queries.ListMembers(r.Context(), target.WorkspaceID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to update member")
-			return
-		}
-		if countOwners(members) <= 1 {
-			writeError(w, http.StatusBadRequest, "workspace must have at least one owner")
-			return
-		}
+	if (target.Role == "owner" && role != "owner") || (target.Role != "owner" && role == "owner") {
+		writeCodedError(w, http.StatusConflict, "workspace_owner_immutable", "workspace ownership cannot be changed")
+		return
 	}
 
 	updatedMember, err := h.Queries.UpdateMemberRole(r.Context(), db.UpdateMemberRoleParams{
@@ -642,15 +639,8 @@ func (h *Handler) DeleteMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if target.Role == "owner" {
-		members, err := h.Queries.ListMembers(r.Context(), target.WorkspaceID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to delete member")
-			return
-		}
-		if countOwners(members) <= 1 {
-			writeError(w, http.StatusBadRequest, "workspace must have at least one owner")
-			return
-		}
+		writeCodedError(w, http.StatusConflict, "workspace_owner_immutable", "workspace owner cannot be removed")
+		return
 	}
 
 	requesterUserID := requestUserID(r)
@@ -685,15 +675,8 @@ func (h *Handler) LeaveWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if member.Role == "owner" {
-		members, err := h.Queries.ListMembers(r.Context(), member.WorkspaceID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to leave workspace")
-			return
-		}
-		if countOwners(members) <= 1 {
-			writeError(w, http.StatusBadRequest, "workspace must have at least one owner")
-			return
-		}
+		writeCodedError(w, http.StatusConflict, "workspace_owner_immutable", "workspace owner cannot leave")
+		return
 	}
 
 	result, err := h.revokeAndRemoveMember(r.Context(), member.WorkspaceID, member.UserID, member.ID, member.UserID)

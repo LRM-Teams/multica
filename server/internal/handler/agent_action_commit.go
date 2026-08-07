@@ -46,11 +46,9 @@ const agentActionMessageNotPrepared = "agent_action_not_prepared"
 // createAgentFromActionMessage performs the canonical, atomic, idempotent commit
 // of a prepared agent:create proposal Message (LRM-2343 S2). It runs in a single
 // DB transaction: FOR UPDATE lock + prepared->executed CAS, Agent creation,
-// system #general membership and commit snapshots. Idempotency is keyed on
-// action_message_id + the full final-input hash: the same Message re-committed
-// with the same final configuration returns the same Agent; a different final
-// configuration returns 409. The separately stored summary is non-sensitive
-// (stories 28-29).
+// system #general membership and commit snapshots. A successful confirmation
+// is terminal: every later attempt returns 409, regardless of whether its final
+// input matches. The separately stored summary is non-sensitive (stories 28-29).
 func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, committerID, actionMessageID pgtype.UUID, createParams db.CreateAgentParams, displayName string) (db.Agent, error) {
 	if !actionMessageID.Valid {
 		return db.Agent{}, actionCommitError(404, agentActionMessageMissingCode, "action message not found")
@@ -101,22 +99,7 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 
 	switch status {
 	case agentActionStatusExecuted:
-		// Idempotent replay: already executed. Same final hash -> same Agent.
-		if resultAgent.Valid && finalHash.Valid {
-			hash := agentActionFinalPayloadHash(createParams, preExisting.proposed)
-			if finalHash.String == hash {
-				existing, gerr := h.Queries.GetAgent(ctx, resultAgent)
-				if gerr == nil {
-					_ = tx.Commit(ctx)
-					return existing, nil
-				}
-				if gerr != pgx.ErrNoRows {
-					return db.Agent{}, gerr
-				}
-			}
-			return db.Agent{}, actionCommitError(409, agentActionMessageNotPrepared, "action message already committed with different content")
-		}
-		return db.Agent{}, actionCommitError(500, "", "action already committed but missing result")
+		return db.Agent{}, actionCommitError(409, agentActionMessageNotPrepared, "action message is already committed")
 	case agentActionStatusPrepared:
 		// proceed below
 	default:

@@ -367,7 +367,7 @@ VALUES ($1, $2, 'inv bilateral', 'IBL') RETURNING id`,
 		t.Fatalf("workspace: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')
+INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
 ON CONFLICT DO NOTHING`, otherWS, testUserID); err != nil {
 		t.Fatalf("member other ws: %v", err)
 	}
@@ -445,7 +445,8 @@ func TestEligibleOwnerAuditRepairs239WindowMismatch(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Isolated workspace B; owner is only a member of A (fixture).
+	// Isolated workspace B has the same sole Workspace Owner as A. The damaged
+	// channel membership row is still in A until the repair runs.
 	var wsB string
 	suffix := uuid.NewString()[:8]
 	if err := testPool.QueryRow(ctx, `
@@ -489,10 +490,10 @@ WHERE c.id = $1`, chID).Scan(&eligibleBefore)
 		t.Fatalf("setup: expected 0 eligible owners before repair, got %d", eligibleBefore)
 	}
 
-	// Owner is not a member of B → repair cannot align workspace; must insert/promote fails
-	// unless we also seed owner into B. Seed owner into B so align-workspace repair works.
+	// Seed the Workspace Owner into B so both the Workspace invariant and the
+	// channel align-workspace repair have a valid target principal.
 	if _, err := testPool.Exec(ctx, `
-INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')
+INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
 ON CONFLICT DO NOTHING`, wsB, testUserID); err != nil {
 		t.Fatalf("seed owner into B: %v", err)
 	}

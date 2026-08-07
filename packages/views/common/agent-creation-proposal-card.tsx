@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { runtimeListOptions } from "@multica/core/runtimes";
 import type { Agent, AgentCreationProposal, CreateAgentRequest } from "@multica/core/types";
@@ -14,6 +15,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { CreateAgentDialog } from "../agents/components/create-agent-dialog";
 import { useT } from "../i18n";
+import { AppLink } from "../navigation";
 
 /**
  * Message-backed agent:create Proposal. Its state is read directly from the
@@ -31,6 +33,7 @@ export function AgentCreationProposalCard({
   const wsId = useWorkspaceId();
   const currentUser = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
+  const workspacePaths = useWorkspacePaths();
   const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const [dialogOpen, setDialogOpen] = React.useState(false);
@@ -87,9 +90,19 @@ export function AgentCreationProposalCard({
                 </p>
               ) : null}
               {isExecuted ? (
-                <p className="mt-1.5 text-xs text-success">
-                  {t(($) => $.windy.card_created, { name: proposalName })}
-                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                  <span className="text-success">
+                    {t(($) => $.windy.card_created, { name: proposalName })}
+                  </span>
+                  {proposal.result_agent_id ? (
+                    <AppLink
+                      href={workspacePaths.actorProfile("agent", proposal.result_agent_id)}
+                      className="font-medium text-primary underline-offset-4 hover:underline"
+                    >
+                      {t(($) => $.windy.view_created_agent)}
+                    </AppLink>
+                  ) : null}
+                </div>
               ) : null}
               {proposal.status === "prepared" && !canManageAgents ? (
                 <p className="mt-1.5 text-xs text-muted-foreground">

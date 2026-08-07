@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -779,23 +780,38 @@ func TestDeleteWorkspaceRequiresOwner(t *testing.T) {
 	_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, slug)
 
 	var wsID string
-	if err := testPool.QueryRow(ctx, `
+	ownerID := uuid.NewString()
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin workspace fixture: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO "user" (id, name, email)
+		VALUES ($1, 'Delete Workspace Owner', $2)
+	`, ownerID, "delete-workspace-owner-"+ownerID+"@multica.test"); err != nil {
+		t.Fatalf("create owner user: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO workspace (name, slug, description)
 		VALUES ($1, $2, $3)
 		RETURNING id
 	`, "Integration Tests Delete 403", slug, "DeleteWorkspace permission test").Scan(&wsID); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'owner'), ($1, $3, 'admin')
+	`, wsID, ownerID, testUserID); err != nil {
+		t.Fatalf("create owner and admin members: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit workspace fixture: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, wsID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, ownerID)
 	})
-
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO member (workspace_id, user_id, role)
-		VALUES ($1, $2, 'admin')
-	`, wsID, testUserID); err != nil {
-		t.Fatalf("create admin member: %v", err)
-	}
 
 	req, err := http.NewRequest("DELETE", testServer.URL+"/api/workspaces/"+wsID, nil)
 	if err != nil {

@@ -11,12 +11,25 @@ import (
 	"github.com/google/uuid"
 )
 
+func bindOnboardingAgentForTest(t *testing.T, agentID string) {
+	t.Helper()
+	ctx := context.Background()
+	resetTestWorkspaceOnboardingAgent(t, ctx)
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET onboarding_agent_id = $2 WHERE id = $1`, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("bind onboarding Agent: %v", err)
+	}
+}
+
 func TestAgentTransportPrepareAction_AtomicallyCreatesCanonicalProposal(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
 	agentID := agentIDForTask(t, taskID)
+	bindOnboardingAgentForTest(t, agentID)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Renamed Onboarding Agent' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("rename bound onboarding agent: %v", err)
+	}
 	target := "#" + channelNameForTransportTest(t, channelID)
 	clientID := "prepare-" + uuid.NewString()
 
@@ -90,6 +103,7 @@ func TestAgentTransportPrepareAction_RequiresCanonicalTargetAndClientID(t *testi
 	}
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
 	agentID := agentIDForTask(t, taskID)
+	bindOnboardingAgentForTest(t, agentID)
 	target := "#" + channelNameForTransportTest(t, channelID)
 	for _, tc := range []struct {
 		name string
@@ -110,6 +124,28 @@ func TestAgentTransportPrepareAction_RequiresCanonicalTargetAndClientID(t *testi
 				t.Fatalf("status=%d want 400 body=%s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestAgentTransportPrepareAction_RejectsOrdinaryAgentNamedWendy(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
+	agentID := agentIDForTask(t, taskID)
+	resetTestWorkspaceOnboardingAgent(t, context.Background())
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET display_name = 'Wendy' WHERE id = $1`, agentID); err != nil {
+		t.Fatal(err)
+	}
+	req := agentTransportRequest(t, http.MethodPost, "/api/agent/actions/prepare", taskID, agentID, map[string]any{
+		"action_type": "agent:create", "name": "Denied Hire",
+		"target":            "#" + channelNameForTransportTest(t, channelID),
+		"client_request_id": "denied-" + uuid.NewString(),
+	})
+	rec := httptest.NewRecorder()
+	testHandler.AgentTransportPrepareAction(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("ordinary Agent named Wendy status=%d body=%s, want 403", rec.Code, rec.Body.String())
 	}
 }
 

@@ -172,7 +172,7 @@ func TestPromoteSkillChannelRequiresOwnerOrManager(t *testing.T) {
 
 	// Channel owned by a different human; insertSkillPromoteGroupChannel seeds
 	// created_by=testUser as owner via triggers, so build the channel under otherOwner.
-	otherOwner := insertSkillPromoteWorkspaceMember(t, "owner")
+	otherOwner := insertSkillPromoteWorkspaceMember(t, "admin")
 	var channelID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, kind, created_by)

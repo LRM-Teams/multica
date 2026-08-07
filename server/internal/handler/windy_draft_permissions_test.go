@@ -71,6 +71,7 @@ func TestAgentPrepareAction_RequiresCanonicalProposalTarget(t *testing.T) {
 	}
 	taskID, _ := createChannelCompletionTaskWithCapabilities(t, "group", nil)
 	agentID := agentIDForTask(t, taskID)
+	bindOnboardingAgentForTest(t, agentID)
 	req := agentTransportRequest(t, http.MethodPost, "/api/agent/actions/prepare", taskID, agentID, map[string]any{
 		"action_type": "agent:create",
 		"name":        "Targeted Hire",

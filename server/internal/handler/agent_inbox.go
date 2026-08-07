@@ -1396,7 +1396,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	}
 	if agent, err := h.Queries.GetAgent(ctx, event.AgentID); err == nil {
 		skills := h.TaskService.LoadAgentSkillsForInbox(ctx, event.AgentID, event.ID)
-		skills = append(skills, h.TaskService.BuiltinSkills()...)
+		skills = append(skills, h.builtinSkillsForAgent(ctx, agent)...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {
 			if err := json.Unmarshal(agent.CustomEnv, &customEnv); err != nil {

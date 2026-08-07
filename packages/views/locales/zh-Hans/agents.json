@@ -934,6 +934,7 @@
   },
   "dashboard": {
     "all_agents": "全部智能体",
+    "onboarding_agent_badge": "Onboarding Agent",
     "edit_config": "编辑配置",
     "delete": "删除",
     "metric_tasks": "累计任务",
@@ -977,6 +978,19 @@
     "loading_card": "正在加载提案…",
     "load_card_failed": "加载提案失败",
     "card_created": "已创建：{{name}}",
-    "card_dismissed": "已忽略"
+    "view_created_agent": "查看已创建的 Agent",
+    "card_dismissed": "已忽略",
+    "setup_waiting_title": "工作区正在设置",
+    "setup_waiting_description": "工作区 Owner 需要先连接电脑并创建 Onboarding Agent，团队才能进入。",
+    "setup_title": "认识 Wendy",
+    "setup_description": "选择在线 Runtime 和模型，然后显式创建工作区的 Onboarding Agent。",
+    "setup_runtime": "Runtime",
+    "setup_runtime_placeholder": "选择在线 Runtime…",
+    "setup_model": "模型",
+    "setup_model_placeholder": "选择或输入模型",
+    "setup_runtime_offline": "请先连接电脑并等待 Runtime 上线。",
+    "setup_creating": "正在创建 Wendy…",
+    "setup_create": "创建 Wendy",
+    "setup_failed": "创建 Wendy 失败"
   }
 }

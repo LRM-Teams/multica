@@ -2059,7 +2059,7 @@ func TestEnsureWindyRestoreDoesNotForceVisibilityToPrivate(t *testing.T) {
 	}
 }
 
-func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
+func TestEnsureWindyRejectsMultipleLegacyWendyCandidates(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("handler test fixture unavailable")
 	}
@@ -2095,38 +2095,9 @@ func TestEnsureWindyPrefersActiveConfiguredWendy(t *testing.T) {
 	resetTestWorkspaceOnboardingAgent(t, ctx)
 
 	req := newRequest(http.MethodPost, "/api/agents/windy", nil)
-	updated, created, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), db.AgentRuntime{})
-	if err != nil {
-		t.Fatalf("ensureWindyAgent: %v", err)
-	}
-	if created {
-		t.Fatal("ensureWindyAgent created a new agent despite existing Wendy")
-	}
-	if uuidToString(updated.ID) != activeID {
-		t.Fatalf("ensureWindyAgent chose %q, want active configured %q", uuidToString(updated.ID), activeID)
-	}
-}
-
-func TestPreferWindyAgentRanksActiveConfiguredCanonicalLatest(t *testing.T) {
-	base := db.Agent{ID: parseUUID("00000000-0000-0000-0000-000000000001"), OwnerID: parseUUID(testUserID), DisplayName: "Joe", CreatedAt: pgtype.Timestamptz{Time: time.Now().Add(-3 * time.Hour), Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: time.Now().Add(-3 * time.Hour), Valid: true}}
-	configured := base
-	configured.ID = parseUUID("00000000-0000-0000-0000-000000000002")
-	configured.RuntimeID = parseUUID("99999999-9999-9999-9999-999999999999")
-	if !preferWindyAgent(configured, base) {
-		t.Fatal("configured Wendy should beat unconfigured legacy Wendy")
-	}
-	archived := configured
-	archived.ID = parseUUID("00000000-0000-0000-0000-000000000003")
-	archived.UpdatedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
-	archived.ArchivedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
-	if preferWindyAgent(archived, configured) {
-		t.Fatal("archived Wendy should not beat active Wendy")
-	}
-	canonical := configured
-	canonical.ID = parseUUID("00000000-0000-0000-0000-000000000004")
-	canonical.DisplayName = windyAgentName
-	if !preferWindyAgent(canonical, configured) {
-		t.Fatal("canonical Wendy should beat legacy configured Wendy")
+	_, _, err := testHandler.ensureWindyAgent(req, parseUUID(testWorkspaceID), db.AgentRuntime{})
+	if err == nil || !strings.Contains(err.Error(), "multiple legacy") {
+		t.Fatalf("ensureWindyAgent ambiguity error = %v", err)
 	}
 }
 
@@ -2225,6 +2196,13 @@ func TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load runtime: %v", err)
 	}
+	// Two connections make the lock inversion deterministic: the winner holds
+	// one connection plus the Workspace row lock while a loser occupies the
+	// second connection waiting on that lock. Setup must not borrow a third
+	// connection from inside its transaction.
+	h := singleConnHandler(t, 2)
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 
 	// This is a smoke test, not a deterministic regression guard: it proves
 	// the ensure() path doesn't fall over under real concurrency, but the
@@ -2244,8 +2222,7 @@ func TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func(i int) {
 			defer wg.Done()
-			req := newRequest(http.MethodPost, "/api/agents/windy", nil)
-			results[i], _, errs[i] = testHandler.ensureWindyAgent(req, workspace.ID, runtime)
+			results[i], _, errs[i] = h.provisionOnboardingAgent(runCtx, workspace.ID, runtime, "race-model")
 		}(i)
 	}
 	wg.Wait()

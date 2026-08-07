@@ -20,7 +20,7 @@ import {
 import { api, ApiError } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import {
   agentListOptions,
   memberListOptions,
@@ -55,6 +55,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
+  const workspace = useCurrentWorkspace();
   const navigation = useNavigation();
   const qc = useQueryClient();
   const currentUser = useAuthStore((s) => s.user);
@@ -97,6 +98,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   // returns below don't violate the rules of hooks. Backend gates archive
   // and restore identically to edit, so a single `canEdit` covers them all.
   const { canEdit, canChangeRole } = useAgentPermissions(agent, wsId);
+  const currentMemberRole = members.find((member) => member.user_id === currentUser?.id)?.role;
+  const canManageLifecycle =
+    canEdit.allowed &&
+    (workspace?.onboarding_agent_id !== agent?.id || currentMemberRole === "owner");
 
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -217,7 +222,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       <DetailHeader
         agent={agent}
         backHref={paths.agents()}
-        canArchive={canEdit.allowed}
+        canArchive={canManageLifecycle}
         onArchive={() => setConfirmArchive(true)}
       />
 
@@ -237,7 +242,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           <span className="flex-1">
             {t(($) => $.detail.archived_banner)}
           </span>
-          {canEdit.allowed && (
+          {canManageLifecycle && (
             <Button
               variant="outline"
               size="sm"

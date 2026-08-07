@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestCreateWorkspace_RejectsReservedSlug(t *testing.T) {
@@ -258,11 +260,8 @@ WHERE workspace_id = $1 AND user_id = $2
 		t.Fatalf("secondary user saw owner last_active_at %q; want nil member-scoped value", *secondaryResp.LastActiveAt)
 	}
 
-	if _, err := testPool.Exec(ctx, `
-DELETE FROM member
-WHERE workspace_id = $1 AND user_id = $2
-`, wsID, testUserID); err != nil {
-		t.Fatalf("remove owner membership: %v", err)
+	if _, err := testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, wsID); err != nil {
+		t.Fatalf("remove workspace: %v", err)
 	}
 	if inaccessible, ok := findWorkspace(listWorkspaces(testUserID), wsID); ok {
 		t.Fatalf("inaccessible workspace still surfaced in ListWorkspaces: %#v", inaccessible)
@@ -379,6 +378,16 @@ RETURNING id
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, wsID)
 	})
+	var ownerID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
+`, "Delete Fixture Owner "+uuid.NewString(), "delete-owner-"+uuid.NewString()+"@multica.test").Scan(&ownerID); err != nil {
+		t.Fatalf("create fixture owner: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, ownerID) })
+	if _, err := testPool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`, wsID, ownerID); err != nil {
+		t.Fatalf("create owner member: %v", err)
+	}
 
 	if _, err := testPool.Exec(ctx, `
 INSERT INTO member (workspace_id, user_id, role)
@@ -565,9 +574,9 @@ RETURNING id
 		t.Fatalf("create workspace: %v", err)
 	}
 
-	// Requester (= testUserID) is always an owner so DeleteMember authorization
-	// passes. Two owners total so LeaveWorkspace doesn't trip the "must keep
-	// at least one owner" guard.
+	// Requester (= testUserID) is the Workspace's sole owner so DeleteMember
+	// authorization passes. The revocation target is an admin and may leave or
+	// be removed without changing Workspace ownership.
 	if _, err := testPool.Exec(ctx, `
 INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
 `, wsID, testUserID); err != nil {
@@ -592,7 +601,7 @@ INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
 
 	var memberID string
 	if err := testPool.QueryRow(ctx, `
-INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner') RETURNING id
+INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin') RETURNING id
 `, wsID, targetUserID).Scan(&memberID); err != nil {
 		t.Fatalf("create target member: %v", err)
 	}

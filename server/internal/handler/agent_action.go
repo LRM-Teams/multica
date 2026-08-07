@@ -63,7 +63,10 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		return
 	}
 	origin := source.origin
-
+	if !h.isActiveOnboardingAgent(r.Context(), origin.workspaceID, origin.agentID) {
+		writeError(w, http.StatusForbidden, "only the active onboarding agent may prepare hiring proposals")
+		return
+	}
 	var req agentActionPrepareRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()

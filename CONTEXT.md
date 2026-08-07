@@ -194,6 +194,22 @@ object storage. The Attachment becomes sendable only after the service verifies
 the uploaded object and completes the session.
 _Avoid_: Message send, presigned URL
 
+## Workspace Onboarding
+
+### Onboarding Agent
+
+The single Workspace-scoped Agent bound by `workspace.onboarding_agent_id` to
+help humans form the Agent team. Its display name may change; a name such as
+Wendy never establishes this role.
+_Avoid_: Wendy role, HR by name, recruiting Agent by convention
+
+### Hiring Proposal
+
+A human-confirmable request prepared by the Onboarding Agent to create one
+Workspace Agent. Preparing a proposal does not create the Agent; an authorized
+human must commit it exactly once.
+_Avoid_: Agent creation draft, autonomous hire, executable suggestion
+
 ## Research
 
 ### Research Session

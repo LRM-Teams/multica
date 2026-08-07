@@ -84,7 +84,7 @@ func (h *Handler) DaemonGetAgentRuntimeConfig(w http.ResponseWriter, r *http.Req
 	}
 
 	skills := h.TaskService.LoadAgentSkills(r.Context(), agent.ID)
-	skills = append(skills, h.TaskService.BuiltinSkills()...)
+	skills = append(skills, h.builtinSkillsForAgent(r.Context(), agent)...)
 	response := DaemonAgentRuntimeConfigResponse{
 		WorkspaceID: util.UUIDToString(runtime.WorkspaceID),
 		RuntimeID:   util.UUIDToString(runtime.ID),

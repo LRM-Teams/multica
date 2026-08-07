@@ -9,6 +9,7 @@ import {
 import { setCurrentWorkspace } from "@multica/core/platform";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceSeen } from "@multica/views/workspace/use-workspace-seen";
+import { OnboardingAgentSetup } from "@multica/views/workspace/onboarding-agent-setup";
 import { WelcomeAfterOnboarding } from "@multica/views/workspace/welcome-after-onboarding";
 import { WorkspacePresencePrefetch } from "@multica/views/layout";
 import { SourceBackfillModal } from "@multica/views/onboarding";
@@ -92,6 +93,13 @@ export function WorkspaceRouteLayout() {
   if (!workspaceSlug) return null;
   if (!listFetched) return null;
   if (!workspace) return null; // auto-heal effect above handles the cleanup
+  if (workspace.onboarding_agent_id === null) {
+    return (
+      <WorkspaceSlugProvider slug={workspaceSlug}>
+        <OnboardingAgentSetup workspace={workspace} />
+      </WorkspaceSlugProvider>
+    );
+  }
 
   return (
     <WorkspaceSlugProvider slug={workspaceSlug}>

@@ -42,6 +42,17 @@ function mentionRefPart(): MessagePart {
   } as MessagePart;
 }
 
+function hiringProposalPart(): MessagePart {
+  return {
+    type: "reference",
+    ref_type: "agent:create",
+    ref_id: "fullstack-agent",
+    label: "全栈开发",
+    spans: [],
+    params: { name: "全栈开发", status: "prepared" },
+  } as MessagePart;
+}
+
 describe("MessageBody reference-only messages", () => {
   it("renders content when parts contain only a mention reference (agent @mentions)", () => {
     // Regression: reference-only parts + non-empty content used to collapse to an
@@ -70,5 +81,30 @@ describe("MessageBody reference-only messages", () => {
       "data-source-message-id",
       "message-42",
     );
+  });
+
+  it("suppresses the agent:create protocol fallback when the structured card exists", () => {
+    render(
+      <MessageBody
+        content="[agent:create proposal] 全栈开发"
+        parts={[hiringProposalPart()]}
+        choiceContext={{ channelId: "channel-1", messageId: "message-1" }}
+      />,
+    );
+
+    expect(screen.queryByText("[agent:create proposal] 全栈开发")).toBeNull();
+    expect(screen.getByTestId("message-parts-body")).toBeInTheDocument();
+  });
+
+  it("suppresses the agent:create protocol fallback in compact previews", () => {
+    render(
+      <MessageBody
+        compact
+        content="[agent:create proposal] 全栈开发"
+        parts={[hiringProposalPart()]}
+      />,
+    );
+
+    expect(screen.queryByText("[agent:create proposal] 全栈开发")).toBeNull();
   });
 });

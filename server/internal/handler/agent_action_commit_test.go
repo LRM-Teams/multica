@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -27,6 +28,77 @@ func ensureSystemGeneralForTest(t *testing.T) string {
 		VALUES ($1, 'general', 'Workspace-wide conversation', $2, 'group', 'general')
 		RETURNING id::text`, parseUUID(testWorkspaceID), parseUUID(testUserID)).Scan(&id)
 	return id
+}
+
+func TestCommitAgentFromActionMessage_ConcurrentConfirmationCreatesOneAgent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	ws := parseUUID(testWorkspaceID)
+	owner := parseUUID(testUserID)
+	_ = ensureSystemGeneralForTest(t)
+	channelID := seedTestChannelForOwner(t)
+	messageID := seedPreparedActionForTest(t, channelID)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM agent_action WHERE channel_message_id = $1`, parseUUID(messageID))
+		_, _ = testPool.Exec(ctx, `DELETE FROM channel_message WHERE id = $1`, parseUUID(messageID))
+		_, _ = testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, parseUUID(channelID))
+	})
+
+	params := db.CreateAgentParams{
+		WorkspaceID: ws, Description: "concurrent proposal", RuntimeMode: "cloud",
+		RuntimeConfig: []byte("{}"), RuntimeID: parseUUID(testRuntimeID),
+		MaxConcurrentTasks: 6, OwnerID: owner, CustomEnv: []byte("{}"),
+		CustomArgs: []byte("[]"), Model: pgtype.Text{String: "composer-1.5", Valid: true},
+	}
+	type result struct {
+		agent db.Agent
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for range 2 {
+		go func() {
+			ready.Done()
+			<-start
+			agent, err := testHandler.createAgentFromActionMessage(ctx, ws, owner, parseUUID(messageID), params, "Concurrent Proposal Agent")
+			results <- result{agent: agent, err: err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+	first, second := <-results, <-results
+
+	successes := 0
+	conflicts := 0
+	var createdID pgtype.UUID
+	for _, got := range []result{first, second} {
+		if got.err == nil {
+			successes++
+			createdID = got.agent.ID
+			continue
+		}
+		if ce, ok := got.err.(*codedActionCommitError); ok && ce.status == 409 && ce.code == agentActionMessageNotPrepared {
+			conflicts++
+			continue
+		}
+		t.Fatalf("unexpected concurrent result: %v", got.err)
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent results: successes=%d conflicts=%d, want 1/1", successes, conflicts)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, createdID) })
+
+	var agentCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent a
+		JOIN agent_action aa ON aa.result_agent_id = a.id
+		WHERE aa.channel_message_id = $1 AND aa.status = 'executed'`, parseUUID(messageID)).Scan(&agentCount); err != nil || agentCount != 1 {
+		t.Fatalf("committed Agent count=%d err=%v, want 1", agentCount, err)
+	}
 }
 
 // seedTestChannelForOwner creates a disposable group channel the workspace owner
@@ -79,8 +151,8 @@ func seedPreparedActionForTest(t *testing.T, channelID string) string {
 
 // TestCommitAgentFromActionMessage verifies LRM-2343 S2 atomic, idempotent
 // commit: a prepared agent:create proposal Message commits to an Agent, the
-// action becomes executed, the Agent lands in system #general, and replay
-// returns the same Agent while a different final payload returns a conflict.
+// action becomes executed, the Agent lands in system #general, and every replay
+// returns a terminal conflict without creating another Agent.
 func TestCommitAgentFromActionMessage(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -194,13 +266,17 @@ func TestCommitAgentFromActionMessage(t *testing.T) {
 		t.Fatalf("start intent = id=%q status=%q, want stable pending intent", dispatchID, dispatchStatus)
 	}
 
-	// Idempotent replay: same final payload returns the same Agent.
-	replayed, err := testHandler.createAgentFromActionMessage(ctx, ws, owner, parseUUID(messageID), createParams, "Proposal Agent")
-	if err != nil {
-		t.Fatalf("replay failed: %v", err)
+	// A completed confirmation is terminal. Even an identical replay conflicts;
+	// clients recover by reloading the completed Message, never by treating the
+	// second click as another successful commit.
+	if _, err := testHandler.createAgentFromActionMessage(ctx, ws, owner, parseUUID(messageID), createParams, "Proposal Agent"); err == nil {
+		t.Fatal("expected 409 conflict on identical replay, got nil")
+	} else if ce, ok := err.(*codedActionCommitError); !ok || ce.status != 409 || ce.code != agentActionMessageNotPrepared {
+		t.Fatalf("expected terminal coded 409, got %v", err)
 	}
-	if replayed.ID != created.ID {
-		t.Fatalf("replay returned different agent %v vs %v", replayed.ID, created.ID)
+	var createdCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent WHERE id = $1`, created.ID).Scan(&createdCount); err != nil || createdCount != 1 {
+		t.Fatalf("replay changed created Agent count: count=%d err=%v", createdCount, err)
 	}
 
 	// Different final payload -> 409.

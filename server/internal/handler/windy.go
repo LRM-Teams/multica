@@ -169,17 +169,67 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
-		return
-	}
-
-	runtime, ok := h.pickWindyRuntime(w, r, wsUUID, parseUUID(userID))
+	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
 		return
 	}
-	agent, created, err := h.ensureWindyAgent(r, wsUUID, runtime)
+	if member.Role != "owner" {
+		writeError(w, http.StatusForbidden, "only the workspace owner may set up the onboarding agent")
+		return
+	}
+	// A completed Setup is idempotent even if its Runtime has since gone
+	// offline or a retry carries stale form values. The structured binding is
+	// the completion record, so return it before validating creation inputs.
+	if boundID, err := h.Queries.GetWorkspaceOnboardingAgentID(r.Context(), wsUUID); err == nil && boundID.Valid {
+		agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: boundID, WorkspaceID: wsUUID})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load Wendy")
+			return
+		}
+		dmID := ""
+		if ch, ok := h.ensureWindyDM(r, workspaceID, parseUUID(userID), agent.ID); ok {
+			dmID = ch.ID
+		}
+		resp := agentToResponse(agent)
+		redactAgentResponseForActor(&resp, "member")
+		writeJSON(w, http.StatusOK, WindyResponse{Agent: resp, DMID: dmID})
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to inspect Wendy setup")
+		return
+	}
+	var setup struct {
+		RuntimeID string `json:"runtime_id"`
+		Model     string `json:"model"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&setup); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	setup.RuntimeID = strings.TrimSpace(setup.RuntimeID)
+	setup.Model = strings.TrimSpace(setup.Model)
+	if setup.RuntimeID == "" {
+		writeError(w, http.StatusBadRequest, "runtime_id is required")
+		return
+	}
+	if setup.Model == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+
+	runtime, ok := h.pickWindyRuntime(w, r, wsUUID, setup.RuntimeID)
+	if !ok {
+		return
+	}
+	agent, created, err := h.provisionOnboardingAgent(r.Context(), wsUUID, runtime, setup.Model)
 	if err != nil {
 		slog.Warn("ensure Wendy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
+		if errors.Is(err, errMultipleLegacyOnboardingAgents) {
+			writeCodedError(w, http.StatusConflict, "onboarding_agent_ambiguous", err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create Wendy")
 		return
 	}
@@ -212,8 +262,75 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, WindyResponse{Agent: resp, DMID: dmID})
 }
 
-func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID) (db.AgentRuntime, bool) {
-	runtimeID := strings.TrimSpace(r.URL.Query().Get("runtime_id"))
+var errMultipleLegacyOnboardingAgents = errors.New("multiple legacy onboarding-agent candidates require owner repair")
+
+// provisionOnboardingAgent is the setup commit boundary. The workspace row lock
+// serializes retries while the transaction creates or adopts Wendy, binds her,
+// joins #general, and writes the deterministic welcome messages.
+func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID pgtype.UUID, runtime db.AgentRuntime, model string) (db.Agent, bool, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	qtx := db.New(tx)
+
+	var boundID pgtype.UUID
+	if err := tx.QueryRow(ctx, `SELECT onboarding_agent_id FROM workspace WHERE id = $1 FOR UPDATE`, workspaceID).Scan(&boundID); err != nil {
+		return db.Agent{}, false, err
+	}
+	if boundID.Valid {
+		agent, err := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: boundID, WorkspaceID: workspaceID})
+		if err != nil {
+			return db.Agent{}, false, err
+		}
+		if err := h.ensureOnboardingAgentGeneralAndWelcomeTx(ctx, tx, workspaceID, agent.ID); err != nil {
+			return db.Agent{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return db.Agent{}, false, err
+		}
+		return agent, false, nil
+	}
+
+	ownerID, err := qtx.GetFirstWorkspaceOwnerUserID(ctx, workspaceID)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	agents, err := qtx.ListAllAgents(ctx, workspaceID)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	agent, candidateCount := selectOwnedWindyAgent(agents, ownerID)
+	if candidateCount > 1 {
+		return db.Agent{}, false, errMultipleLegacyOnboardingAgents
+	}
+	created := candidateCount == 0
+	if created {
+		agent, err = h.createAgentWithIdentityTx(ctx, tx, qtx, db.CreateAgentParams{
+			WorkspaceID: workspaceID, Description: windyDescription, Instructions: windyInstructions,
+			AvatarUrl: pgtype.Text{String: windyAvatarURL, Valid: true}, AvatarSource: agentAvatarSourceAssigned,
+			RuntimeMode: runtime.RuntimeMode, RuntimeConfig: []byte("{}"), RuntimeID: runtime.ID,
+			MaxConcurrentTasks: 6, OwnerID: ownerID, CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+			Model: pgtype.Text{String: model, Valid: true},
+		}, windyAgentName, windyAgentName)
+		if err != nil {
+			return db.Agent{}, false, err
+		}
+	}
+	if err := qtx.SetWorkspaceOnboardingAgentID(ctx, db.SetWorkspaceOnboardingAgentIDParams{ID: workspaceID, OnboardingAgentID: agent.ID}); err != nil {
+		return db.Agent{}, false, err
+	}
+	if err := h.ensureOnboardingAgentGeneralAndWelcomeTx(ctx, tx, workspaceID, agent.ID); err != nil {
+		return db.Agent{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Agent{}, false, err
+	}
+	return agent, created, nil
+}
+
+func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, runtimeID string) (db.AgentRuntime, bool) {
 	if runtimeID != "" {
 		runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
 		if !ok {
@@ -233,28 +350,7 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 		return runtime, true
 	}
 
-	runtimes, err := h.Queries.ListAgentRuntimes(r.Context(), workspaceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list runtimes")
-		return db.AgentRuntime{}, false
-	}
-	if len(runtimes) == 0 {
-		writeError(w, http.StatusBadRequest, "connect a runtime before creating Wendy")
-		return db.AgentRuntime{}, false
-	}
-	now := time.Now()
-	for _, rt := range runtimes {
-		if rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(userID) && runtimeIsPickableOnline(rt, now) {
-			return rt, true
-		}
-	}
-	for _, rt := range runtimes {
-		if runtimeIsPickableOnline(rt, now) {
-			return rt, true
-		}
-	}
-	// Fail closed: do not fall back to a ghost first row.
-	writeError(w, http.StatusUnprocessableEntity, "no online runtime with a fresh heartbeat; start or reconnect a machine first")
+	writeError(w, http.StatusBadRequest, "runtime_id is required")
 	return db.AgentRuntime{}, false
 }
 
@@ -316,7 +412,11 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID pgtype.UUID, run
 	if err != nil {
 		return db.Agent{}, false, err
 	}
-	candidate, adopted := selectOwnedWindyAgent(agents, ownerID)
+	candidate, candidateCount := selectOwnedWindyAgent(agents, ownerID)
+	if candidateCount > 1 {
+		return db.Agent{}, false, errMultipleLegacyOnboardingAgents
+	}
+	adopted := candidateCount == 1
 
 	mine := candidate
 	if !adopted {
@@ -384,19 +484,19 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID pgtype.UUID, run
 	return mine, true, nil
 }
 
-func selectOwnedWindyAgent(agents []db.Agent, userID pgtype.UUID) (db.Agent, bool) {
+func selectOwnedWindyAgent(agents []db.Agent, userID pgtype.UUID) (db.Agent, int) {
 	var selected db.Agent
-	found := false
+	count := 0
 	for _, agent := range agents {
 		if !isOwnedWindyAgent(agent, userID) {
 			continue
 		}
-		if !found || preferWindyAgent(agent, selected) {
+		count++
+		if count == 1 {
 			selected = agent
-			found = true
 		}
 	}
-	return selected, found
+	return selected, count
 }
 
 func isOwnedWindyAgent(agent db.Agent, userID pgtype.UUID) bool {
@@ -413,27 +513,6 @@ func isWindyAgentName(name string) bool {
 	default:
 		return false
 	}
-}
-
-func preferWindyAgent(candidate, current db.Agent) bool {
-	if candidate.ArchivedAt.Valid != current.ArchivedAt.Valid {
-		return !candidate.ArchivedAt.Valid
-	}
-	if candidate.RuntimeID.Valid != current.RuntimeID.Valid {
-		return candidate.RuntimeID.Valid
-	}
-	candidateIsWendy := agentDisplayName(candidate) == windyAgentName
-	currentIsWendy := agentDisplayName(current) == windyAgentName
-	if candidateIsWendy != currentIsWendy {
-		return candidateIsWendy
-	}
-	if candidate.UpdatedAt.Valid && current.UpdatedAt.Valid && !candidate.UpdatedAt.Time.Equal(current.UpdatedAt.Time) {
-		return candidate.UpdatedAt.Time.After(current.UpdatedAt.Time)
-	}
-	if candidate.CreatedAt.Valid && current.CreatedAt.Valid && !candidate.CreatedAt.Time.Equal(current.CreatedAt.Time) {
-		return candidate.CreatedAt.Time.After(current.CreatedAt.Time)
-	}
-	return uuidToString(candidate.ID) < uuidToString(current.ID)
 }
 
 func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent) (db.Agent, error) {
@@ -525,6 +604,55 @@ func (h *Handler) ensureWindyDM(r *http.Request, workspaceID string, userID, win
 		return ch, true
 	}
 	return h.createDMChannel(r.Context(), nil, workspaceID, uuidToString(userID), canonical, []dmMember{{memberType: "user", memberID: userID}, {memberType: "agent", memberID: windyID}})
+}
+
+var onboardingWelcomeV1 = []string{
+	"Hi — I’m your Workspace Onboarding Agent. I can help turn the work you describe into a clear team of Agents.",
+	"Tell me what you’re working on. I’ll discuss the role with you and prepare a Hiring Proposal for an Owner or Admin to review.",
+}
+
+func (h *Handler) ensureOnboardingAgentGeneralAndWelcome(ctx context.Context, workspaceID, agentID pgtype.UUID) error {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := h.ensureOnboardingAgentGeneralAndWelcomeTx(ctx, tx, workspaceID, agentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (h *Handler) ensureOnboardingAgentGeneralAndWelcomeTx(ctx context.Context, tx pgx.Tx, workspaceID, agentID pgtype.UUID) error {
+	if err := ensureAgentGeneralMembership(ctx, tx, workspaceID, agentID); err != nil {
+		return err
+	}
+	var generalID pgtype.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM channel WHERE workspace_id = $1 AND system_key = 'general'`, workspaceID).Scan(&generalID); err != nil {
+		return err
+	}
+	for _, content := range onboardingWelcomeV1 {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+				SELECT 1 FROM channel_message
+				WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2
+				  AND source = 'multica' AND content = $3 AND deleted_at IS NULL
+			)`, generalID, agentID, content).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		// These server-owned templates contain no user-authored mention or
+		// channel-reference syntax. Keep their insertion on the transaction's
+		// connection: finalizeAgentChannelMessage queries through h.DB and can
+		// deadlock with concurrent setup transactions waiting on the workspace
+		// row lock when the connection pool is small.
+		if _, err := insertChannelMessageWithPartsExec(ctx, tx, generalID, workspaceID, "agent", agentID, windyAgentName, content, nil, "multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) GetAgentDraft(w http.ResponseWriter, r *http.Request) {

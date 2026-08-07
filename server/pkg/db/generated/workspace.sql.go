@@ -220,7 +220,8 @@ SELECT w.id, w.name, w.slug, w.description, w.settings,
        w.created_at, w.updated_at, w.context,
        w.issue_prefix, w.issue_counter, w.avatar_url,
        m.last_active_at,
-       w.default_self_play_env_id
+       w.default_self_play_env_id,
+       w.onboarding_agent_id
 FROM member m
 JOIN workspace w ON w.id = m.workspace_id
 WHERE m.user_id = $1
@@ -241,6 +242,7 @@ type ListWorkspacesRow struct {
 	AvatarUrl            pgtype.Text        `json:"avatar_url"`
 	LastActiveAt         pgtype.Timestamptz `json:"last_active_at"`
 	DefaultSelfPlayEnvID pgtype.UUID        `json:"default_self_play_env_id"`
+	OnboardingAgentID    pgtype.UUID        `json:"onboarding_agent_id"`
 }
 
 func (q *Queries) ListWorkspaces(ctx context.Context, userID pgtype.UUID) ([]ListWorkspacesRow, error) {
@@ -266,6 +268,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID pgtype.UUID) ([]Lis
 			&i.AvatarUrl,
 			&i.LastActiveAt,
 			&i.DefaultSelfPlayEnvID,
+			&i.OnboardingAgentID,
 		); err != nil {
 			return nil, err
 		}

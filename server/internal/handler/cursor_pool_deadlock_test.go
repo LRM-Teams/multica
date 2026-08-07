@@ -42,6 +42,7 @@ func singleConnHandler(t *testing.T, maxConns int32) *Handler {
 	h := *testHandler
 	h.DB = pool
 	h.Queries = db.New(pool)
+	h.TxStarter = pool
 	return &h
 }
 

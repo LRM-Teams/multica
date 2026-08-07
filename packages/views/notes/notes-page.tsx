@@ -502,49 +502,49 @@ function ShareDialogBody({
         {shareableMembers.length === 0 ? (
           <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">{t(($) => $.notes_page.no_other_members)}</div>
         ) : (
-          <>
-            <label className="flex cursor-pointer items-center gap-3 rounded-md border bg-muted/20 px-2 py-2 hover:bg-muted/60">
-              <Checkbox
-                checked={allShareableSelected}
-                onCheckedChange={(value) => {
-                  setSelected((current) => {
-                    const next = new Set(current);
-                    shareableMembers.forEach((member) => {
+          shareableMembers.map((member) => {
+            const checked = selected.has(member.user_id);
+            return (
+              <label key={member.user_id} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/60">
+                <Checkbox
+                  checked={checked}
+                  onCheckedChange={(value) => {
+                    setSelected((current) => {
+                      const next = new Set(current);
                       if (value) next.add(member.user_id);
                       else next.delete(member.user_id);
+                      return next;
                     });
-                    return next;
-                  });
-                }}
-              />
-              <span className="min-w-0 flex-1 text-sm font-medium">{t(($) => $.notes_page.select_all)}</span>
-            </label>
-            {shareableMembers.map((member) => {
-              const checked = selected.has(member.user_id);
-              return (
-                <label key={member.user_id} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/60">
-                  <Checkbox
-                    checked={checked}
-                    onCheckedChange={(value) => {
-                      setSelected((current) => {
-                        const next = new Set(current);
-                        if (value) next.add(member.user_id);
-                        else next.delete(member.user_id);
-                        return next;
-                      });
-                    }}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{member.display_name || member.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{member.email}</span>
-                  </span>
-                </label>
-              );
-            })}
-          </>
+                  }}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{member.display_name || member.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{member.email}</span>
+                </span>
+              </label>
+            );
+          })
         )}
       </div>
       <DialogFooter>
+        {shareableMembers.length > 0 && (
+          <label className="mr-auto flex cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-sm font-medium text-foreground hover:text-foreground/80">
+            <Checkbox
+              checked={allShareableSelected}
+              onCheckedChange={(value) => {
+                setSelected((current) => {
+                  const next = new Set(current);
+                  shareableMembers.forEach((member) => {
+                    if (value) next.add(member.user_id);
+                    else next.delete(member.user_id);
+                  });
+                  return next;
+                });
+              }}
+            />
+            <span>{t(($) => $.notes_page.select_all)}</span>
+          </label>
+        )}
         <Button variant="outline" onClick={() => onOpenChange(false)}>{t(($) => $.notes_page.cancel)}</Button>
         <Button onClick={save} disabled={updateShares.isPending}>{t(($) => $.notes_page.save)}</Button>
       </DialogFooter>

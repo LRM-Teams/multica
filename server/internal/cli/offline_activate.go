@@ -40,6 +40,12 @@ func (s *VersionStore) OfflineActivateStaged(
 	if err != nil {
 		return ActivationState{}, "", err
 	}
+	if state.ActiveVersion == staged.Version {
+		if _, err := s.verifyExisting(ctx, staged.Version, ""); err != nil {
+			return ActivationState{}, "", fmt.Errorf("verify committed active %s: %w", staged.Version, err)
+		}
+		return state, staged.BinaryPath, nil
+	}
 	attemptID = strings.TrimSpace(attemptID)
 	if attemptID == "" {
 		attemptID = uuid.NewString()

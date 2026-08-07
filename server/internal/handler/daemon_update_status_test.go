@@ -186,6 +186,50 @@ func TestNormalizeDaemonUpdateObservationRejectsUnknownErrorCode(t *testing.T) {
 	}
 }
 
+func TestDaemonUpdateObservationRegisterAcceptsCurrentDaemonOutcomes(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	workspaceID := parseUUID(testWorkspaceID)
+	for _, tc := range []struct {
+		name   string
+		adjust func(*protocol.DaemonUpdateObservation)
+	}{
+		{
+			name: "explicit only",
+			adjust: func(observation *protocol.DaemonUpdateObservation) {
+				observation.AutoUpdateEffectiveEnabled = false
+				observation.ConfigSource = "deprecated_noop"
+				observation.IneligibleReason = "explicit_only"
+				observation.Phase = "disabled"
+				observation.LastOutcome = "explicit_only"
+			},
+		},
+		{
+			name: "pinned",
+			adjust: func(observation *protocol.DaemonUpdateObservation) {
+				observation.LastOutcome = "pinned"
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemonID := "update-observation-current-outcome-" + uuid.NewString()
+			t.Cleanup(func() {
+				_ = testHandler.Queries.DeleteDaemonUpdateStatus(ctx, db.DeleteDaemonUpdateStatusParams{
+					WorkspaceID: workspaceID,
+					DaemonID:    daemonID,
+				})
+			})
+			observation := testDaemonUpdateObservation(uuid.NewString(), 1)
+			tc.adjust(&observation)
+			if err := testHandler.registerDaemonUpdateObservation(ctx, workspaceID, daemonID, &observation); err != nil {
+				t.Fatalf("register observation: %v", err)
+			}
+		})
+	}
+}
+
 func TestDeleteDaemonUpdateStatusIfOrphanPreservesSharedDaemonUntilLastRuntime(t *testing.T) {
 	ctx := context.Background()
 	tx, err := testPool.Begin(ctx)

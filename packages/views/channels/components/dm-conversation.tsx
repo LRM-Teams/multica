@@ -129,7 +129,10 @@ import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
-import { DmAgentWorkingCue } from "./dm-agent-working-cue";
+import {
+  ConversationActivityStrip,
+  type ConversationActivityAgent,
+} from "./conversation-activity-strip";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 
 /**
@@ -138,15 +141,9 @@ import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
  *    channel conversation stack (ChannelMessageBubble + ContentEditor composer
  *    + channel queries/mutations + channel:message WS).
  *
- * LRM-537: DM composer no longer renders ConversationActivityStrip /
- * ConversationAgentActivityLine (preparing / Thinking / Stop). Status
- * perception redesign is a separate issue.
- *
- * LRM-594 kept the heavy Working list / Stop chrome out of the 1:1 header.
- * LRM-909: Profile ACTIONS no longer exposes Stop either — stop lives on
- * the DM live cue when present. We still show a bubble-style short cue
- * (思考中 / Edit / Shell + breathe) so entering the DM is not silent
- * while the agent works — no path/command details, no Working list.
+ * DM composer renders the shared ConversationActivityStrip so active agents are
+ * visible below the transcript (typing / editing / searching) without bringing
+ * back the heavy Stop rail. Profile ACTIONS still owns explicit stop controls.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
@@ -332,20 +329,7 @@ function DmHeader({
   const [pairA, pairB] = dm.participants ?? [];
   const agentPair =
     dm.mode === "agent_pair" && pairA && pairB ? { a: pairA, b: pairB } : null;
-  // Ordinary agent DM: short bubble-style working cue (思考中 / Edit / Shell). A
-  // supervised agent_pair is NOT one working agent, so it never shows the
-  // single-agent cue — its header is the dual-avatar/pill supervision chrome
-  // instead. Human peers keep the static "Human" meta; Stop stays in
-  // AgentProfileActions.
-  const workingCue = isAgentPeer && !agentPair ? (
-    <DmAgentWorkingCue agentId={peerId} />
-  ) : undefined;
-  const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
-  // Mobile: put the cue under the name (meta line) — long agent names +
-  // back/avatar/actions leave too little room for same-row status.
-  // Desktop: Slack-style cue beside the name (status slot).
-  const headerStatus = isMobile ? undefined : workingCue;
-  const headerMeta = isMobile ? (workingCue ?? meta) : meta;
+  const headerMeta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
     [isMuted, t],
@@ -481,8 +465,6 @@ function DmHeader({
         )
       }
       meta={headerMeta}
-      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
-      status={headerStatus}
       badges={headerBadges}
       actions={
         <>
@@ -856,6 +838,23 @@ function DmChannelConversation({
   const readOnlyContent = supervisedReadOnly
     ? supervisedReadOnlyContent
     : archivedPeerReadOnlyContent;
+
+  const conversationWorkingAgents = useMemo<ConversationActivityAgent[]>(() => {
+    const seen = new Set<string>();
+    const out: ConversationActivityAgent[] = [];
+    const peers =
+      dm.mode === "agent_pair" && dm.participants?.length
+        ? dm.participants
+        : dm.peer.type === "agent" && !dm.peer.archived
+          ? [dm.peer]
+          : [];
+    for (const peer of peers) {
+      if (peer.type !== "agent" || seen.has(peer.id)) continue;
+      seen.add(peer.id);
+      out.push({ id: peer.id, displayName: peer.name });
+    }
+    return out;
+  }, [dm.mode, dm.participants, dm.peer]);
 
   const searchHitIds = useMemo(
     () =>
@@ -1700,6 +1699,7 @@ function DmChannelConversation({
       />
       {!readOnly ? dmSelectionMenu.menu : null}
       </div>
+      <ConversationActivityStrip workingAgents={conversationWorkingAgents} />
       <Composer
         surface="dm_channel"
         readOnly={readOnly}

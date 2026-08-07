@@ -241,6 +241,10 @@ import {
 } from "./conversation-surface";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import {
+  ConversationActivityStrip,
+  type ConversationActivityAgent,
+} from "./conversation-activity-strip";
+import {
   dmAgentBubbleActivity,
   useAgentBubbleActivityByAgent,
 } from "../../chat/lib/agent-bubble-unread";
@@ -328,7 +332,6 @@ export interface TypingActor {
   expiresAt: number;
 }
 
-const EMPTY_TYPING_ACTORS: TypingActor[] = [];
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 // #568 — below this, the two-pane desktop layout's conversation pane
@@ -478,57 +481,6 @@ function MobileSidebarTrigger() {
   const sidebar = useSidebarSafe();
   if (!sidebar) return null;
   return <SidebarTrigger className="mr-2 md:hidden" />;
-}
-
-export function ConversationActivityStrip({
-  typingActors = EMPTY_TYPING_ACTORS,
-}: {
-  typingActors?: TypingActor[];
-}) {
-  const { t } = useT("channels");
-  const typingNames = useMemo(
-    () => typingActors.flatMap((a) => {
-      const name = a.actorName.trim();
-      return name ? [name] : [];
-    }),
-    [typingActors],
-  );
-  // The composer strip is typing-only. Working/failed/no_reply state belongs to
-  // the inbox-backed header live cue so this component cannot fall back to the
-  // old task/composer-strip path.
-  const typingLabel =
-    typingNames.length === 0
-      ? null
-      : typingNames.length === 1
-        ? t(($) => $.typing.single, { name: typingNames[0]! })
-        : typingNames.length === 2
-          ? t(($) => $.typing.pair, { a: typingNames[0]!, b: typingNames[1]! })
-          : t(($) => $.typing.overflow, { a: typingNames[0]!, b: typingNames[1]!, count: typingNames.length });
-
-  if (!typingLabel) return null;
-
-  return (
-    <div
-      className="flex min-h-6 flex-col gap-1 px-5 pb-2 text-xs text-muted-foreground"
-      aria-live="polite"
-      data-testid="conversation-activity-strip"
-    >
-      <span className="flex min-w-0 items-center gap-1 truncate">
-        <span className="truncate">{typingLabel}</span>
-        <TypingDots />
-      </span>
-    </div>
-  );
-}
-
-function TypingDots() {
-  return (
-    <span className="flex shrink-0 items-end gap-0.5" aria-hidden="true">
-      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60 [animation-delay:-0.24s]" />
-      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60 [animation-delay:-0.12s]" />
-      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60" />
-    </span>
-  );
 }
 
 interface ChannelsPageProps {
@@ -1451,6 +1403,21 @@ export function ChannelsPage({
       ),
     [active?.id, typingActors],
   );
+  const activeWorkingAgents = useMemo<ConversationActivityAgent[]>(() => {
+    if (!active || active.kind !== "group") return [];
+    const seen = new Set<string>();
+    const out: ConversationActivityAgent[] = [];
+    for (const member of channelMembers) {
+      if (member.member_type !== "agent" || seen.has(member.member_id)) continue;
+      seen.add(member.member_id);
+      out.push({
+        id: member.member_id,
+        displayName: resolveActorDisplayName(member, member.name || member.member_id),
+      });
+    }
+    return out;
+  }, [active, channelMembers]);
+
   // Pinned conversations live in the unified PINNED section (Slack-style),
   // not floated to the top of Channels / Direct messages.
   //
@@ -4210,9 +4177,10 @@ export function ChannelsPage({
                 </ReadOnlyConversationBanner>
               ) : (
                 <>
-                  {/* LRM-447 — Header owns Stop. Composer strip keeps human
-                      typing only; preparing + Stop all rail is gone. */}
-                  <ConversationActivityStrip typingActors={activeTypingActors} />
+                  <ConversationActivityStrip
+                    typingActors={activeTypingActors}
+                    workingAgents={activeWorkingAgents}
+                  />
                   <Composer
                     surface="channel"
                     sendLabel={t(($) => $.composer.send)}

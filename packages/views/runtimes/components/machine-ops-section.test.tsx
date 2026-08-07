@@ -328,6 +328,38 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
       "Restarting to switch version…",
     );
   });
+
+  it("hides stale handoff chrome once the running version matches the target", () => {
+    const runtime = makeRuntime({
+      runtime_health: "ok",
+      machine_upgrade: {
+        id: "machine-upgrade-1",
+        daemon_id: "daemon-1",
+        request_id: "request-1",
+        requested_target: "v0.4.19",
+        resolved_target: "v0.4.19",
+        phase: "handoff",
+        created_at: "2026-08-07T00:00:00Z",
+        updated_at: "2026-08-07T00:00:01Z",
+      },
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.4.19"
+        daemonTargetVersion="v0.4.19"
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+
+    expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
+      "0.4.19",
+    );
+    expect(screen.queryByTestId("machine-basics-daemon-target")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("machine-daemon-upgrade-progress")).not.toBeInTheDocument();
+  });
 });
 
 describe("MachineDangerZone (LRM-1071 / v5)", () => {

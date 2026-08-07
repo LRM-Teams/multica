@@ -15,7 +15,7 @@ import type { MemberWithUser, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
 import { Input } from "@multica/ui/components/ui/input";
 import { Separator } from "@multica/ui/components/ui/separator";
 import { cn } from "@multica/ui/lib/utils";
@@ -196,6 +196,10 @@ function buildNoteTree(pages: NotePage[]): NoteTreeNode[] {
 function findNote(pages: NotePage[], id?: string): NotePage | null {
   if (!id) return null;
   return pages.find((page) => page.id === id) ?? null;
+}
+
+function memberLabel(member: MemberWithUser | undefined, fallback = "") {
+  return member?.display_name || member?.name || member?.email || fallback;
 }
 
 function NoteTreeRow({
@@ -477,12 +481,16 @@ function NoteEditor({
   selected,
   childPages,
   currentUserId,
+  ownerName,
+  shareNames,
   onOpenPage,
   onOpenShare,
 }: {
   selected: NotePage;
   childPages: NotePage[];
   currentUserId?: string;
+  ownerName: string;
+  shareNames: string[];
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
 }) {
@@ -541,7 +549,32 @@ function NoteEditor({
       <div className="mb-4 flex items-center gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
           {selected.owner_user_id === currentUserId ? <Lock className="size-3.5" /> : <Users className="size-3.5" />}
-          <span>{selected.owner_user_id === currentUserId ? t(($) => $.notes_page.visibility_private) : t(($) => $.notes_page.visibility_shared)}</span>
+          {selected.owner_user_id !== currentUserId ? (
+            <span>
+              <span className="font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2">{ownerName}</span>
+              <span>{t(($) => $.notes_page.visibility_shared_by_suffix)}</span>
+            </span>
+          ) : shareNames.length > 0 ? (
+            <span className="inline-flex min-w-0 items-center gap-1">
+              <span className="text-muted-foreground">{t(($) => $.notes_page.visibility_shared_to_prefix)}</span>
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.current_shares)} />} className="max-w-36 truncate font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground">
+                  {shareNames[0]}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-48">
+                  <DropdownMenuLabel>{t(($) => $.notes_page.current_shares)}</DropdownMenuLabel>
+                  <div className="space-y-1 px-1.5 pb-1 text-sm">
+                    {shareNames.map((name, index) => (
+                      <div key={`${name}:${index}`} className="truncate rounded px-1 py-0.5 text-muted-foreground">{name}</div>
+                    ))}
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <span className="text-muted-foreground/70">{t(($) => $.notes_page.visibility_shared_etc)}</span>
+            </span>
+          ) : (
+            <span>{t(($) => $.notes_page.visibility_private)}</span>
+          )}
         </div>
         <span className="text-xs text-muted-foreground">
           {saveState === "saving" || uploading ? t(($) => $.notes_page.autosave_saving) : saveState === "error" ? t(($) => $.notes_page.autosave_error) : dirty ? t(($) => $.notes_page.autosave_pending) : t(($) => $.notes_page.autosave_saved)}
@@ -625,6 +658,15 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         : [],
     [list.pages, selected],
   );
+  const membersByUserId = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members]);
+  const selectedShareNames = useMemo(
+    () => selected?.share_user_ids.flatMap((id) => {
+      const name = memberLabel(membersByUserId.get(id), id);
+      return name ? [name] : [];
+    }) ?? [],
+    [membersByUserId, selected?.share_user_ids],
+  );
+  const selectedOwnerName = selected ? memberLabel(membersByUserId.get(selected.owner_user_id), selected.owner_user_id) : "";
   const createPage = useCreateNotePage();
   const duplicatePage = useDuplicateNotePage();
   const deletePage = useDeleteNotePage();
@@ -830,6 +872,8 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               selected={selected}
               childPages={selectedChildPages}
               currentUserId={currentUserId}
+              ownerName={selectedOwnerName}
+              shareNames={selectedShareNames}
               onOpenPage={openPage}
               onOpenShare={() => setSharePage(selected)}
             />

@@ -58,10 +58,13 @@ func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task d
 		slog.Warn("load issue for Wendy task completion hook failed", "task_id", task.ID.String(), "issue_id", task.IssueID.String(), "error", err)
 		return
 	}
-	// A successful ordinary child task becomes reviewable. This is the light
-	// Issue-DAG completion boundary used by platform-level subagents. Managed
-	// Goal nodes are explicitly excluded inside UnlockIssueDependents.
-	if issue.Status != "done" && issue.Status != "cancelled" {
+	// Only explicitly decomposed children use the automatic review boundary.
+	// Unrelated user-created Issues retain their existing lifecycle semantics.
+	managed, managedErr := h.WorkGraph.IsDecomposedIssue(ctx, uuidToString(issue.WorkspaceID), uuidToString(issue.ID))
+	if managedErr != nil {
+		slog.Warn("inspect Issue-DAG ownership failed", "issue_id", issue.ID.String(), "error", managedErr)
+	}
+	if managed && issue.Status != "done" && issue.Status != "cancelled" {
 		if updated, updateErr := h.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
 			ID: issue.ID, WorkspaceID: issue.WorkspaceID, Status: "in_review",
 		}); updateErr == nil {

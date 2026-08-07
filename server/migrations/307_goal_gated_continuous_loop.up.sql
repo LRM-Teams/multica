@@ -85,7 +85,7 @@ CREATE TABLE issue_derived_agent_assignment (
   workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
   parent_issue_id UUID NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
   issue_id UUID NOT NULL UNIQUE REFERENCES issue(id) ON DELETE CASCADE,
-  source_agent_id UUID NOT NULL REFERENCES agent(id) ON DELETE RESTRICT,
+  source_agent_id UUID NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
   derived_agent_id UUID NOT NULL UNIQUE REFERENCES agent(id) ON DELETE CASCADE,
   memory_policy TEXT NOT NULL DEFAULT 'snapshot_readonly_source'
     CHECK (memory_policy IN ('snapshot_readonly_source')),
@@ -96,6 +96,19 @@ CREATE TABLE issue_derived_agent_assignment (
   archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Explicit ownership marker for ordinary Issue-DAG children. Runtime hooks
+-- must not apply decomposition semantics to unrelated user-created Issues.
+CREATE TABLE issue_decompose_child (
+  workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  parent_issue_id UUID NOT NULL REFERENCES issue(id) ON DELETE CASCADE,
+  issue_id UUID PRIMARY KEY REFERENCES issue(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, issue_id)
+);
+
+CREATE INDEX issue_decompose_child_parent_idx
+  ON issue_decompose_child(workspace_id, parent_issue_id);
 
 CREATE INDEX issue_derived_agent_assignment_source_idx
   ON issue_derived_agent_assignment(source_agent_id);

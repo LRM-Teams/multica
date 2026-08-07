@@ -69,11 +69,11 @@ func TestAssignmentBriefIncludesWorkDecompositionGate(t *testing.T) {
 	for _, want := range []string{
 		"Work Decomposition Gate",
 		"DIRECT",
-		"GRAPH",
-		"PROPOSE_GRAPH",
+		"ISSUE_DAG",
+		"GOAL_GRAPH",
 		"one bounded context",
-		"independently deliverable",
-		"Do not create graph nodes for a greeting, one tool call",
+		"multica issue decompose",
+		"A greeting, one tool call",
 		"must not also implement work already delegated",
 		"The server is authoritative",
 	} {

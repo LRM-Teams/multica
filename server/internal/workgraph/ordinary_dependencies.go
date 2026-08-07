@@ -36,8 +36,9 @@ func (s *Store) UnlockIssueDependents(ctx context.Context, workspaceID, complete
 			   OR (dependency.type='blocks' AND dependency.issue_id=$2)
 		), ready AS (
 			SELECT item.id
-			FROM candidate
-			JOIN issue item ON item.id=candidate.issue_id AND item.workspace_id=$1
+				FROM candidate
+				JOIN issue item ON item.id=candidate.issue_id AND item.workspace_id=$1
+				JOIN issue_decompose_child managed_child ON managed_child.workspace_id=$1 AND managed_child.issue_id=item.id
 			WHERE item.status='backlog'
 			  AND NOT EXISTS (SELECT 1 FROM work_graph_node managed WHERE managed.issue_id=item.id)
 			  AND NOT EXISTS (
@@ -101,6 +102,21 @@ func (s *Store) UnlockIssueDependents(ctx context.Context, workspaceID, complete
 		return nil, err
 	}
 	return ready, nil
+}
+
+// IsDecomposedIssue reports whether Issue-DAG runtime semantics own this Issue.
+func (s *Store) IsDecomposedIssue(ctx context.Context, workspaceID, issueID string) (bool, error) {
+	w, err := uuid.Parse(workspaceID)
+	if err != nil {
+		return false, ErrInvalidGraph
+	}
+	i, err := uuid.Parse(issueID)
+	if err != nil {
+		return false, ErrInvalidGraph
+	}
+	var managed bool
+	err = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM issue_decompose_child WHERE workspace_id=$1 AND issue_id=$2)`, w, i).Scan(&managed)
+	return managed, err
 }
 
 func (s *Store) DispatchReadyIssues(ctx context.Context, workspaceID string, issueIDs []string) {

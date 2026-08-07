@@ -168,6 +168,11 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 		}
 		agentID := sourceAgentID
 		if node.WorkerMode == WorkerModeDerivedAgent {
+			// A derived worker may only snapshot the acting Agent. Cross-Agent
+			// cloning would disclose another identity's private memory and config.
+			if sourceAgentID != actor {
+				return DecomposeResult{}, ErrGraphForbidden
+			}
 			agentID, err = cloneIssueWorker(ctx, tx, w, sourceAgentID, in.IdempotencyKey, node.TempID)
 			if err != nil {
 				return DecomposeResult{}, err
@@ -203,6 +208,9 @@ func (s *Store) DecomposeIssue(ctx context.Context, input DecomposeInput) (Decom
 			if _, err = tx.Exec(ctx, `INSERT INTO issue_derived_agent_assignment(workspace_id,parent_issue_id,issue_id,source_agent_id,derived_agent_id,clone_reason) VALUES($1,$2,$3,$4,$5,$6)`, w, parent, issueID, sourceAgentID, agentID, node.CloneReason); err != nil {
 				return DecomposeResult{}, err
 			}
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO issue_decompose_child(workspace_id,parent_issue_id,issue_id) VALUES($1,$2,$3)`, w, parent, issueID); err != nil {
+			return DecomposeResult{}, err
 		}
 		issueByTemp[node.TempID] = issueID
 		result.IssueIDs[node.TempID] = issueID.String()

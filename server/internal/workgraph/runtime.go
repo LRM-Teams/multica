@@ -531,6 +531,7 @@ func (s *Store) InvalidateFrom(ctx context.Context, workspaceID, graphID, nodeID
 		}
 		_, _ = s.pool.Exec(ctx, `UPDATE work_verification_attempt SET stale_at=now() WHERE stale_at IS NULL AND subject_artifact_revision_id IN (SELECT a.id FROM work_artifact_revision a JOIN work_graph_node n ON n.id=a.producer_node_id WHERE n.id=ANY($1::uuid[]))`, affected)
 	}
+	_ = s.RefreshDelivery(ctx, workspaceID, graphID)
 	_ = reason
 	return ids, nil
 }

@@ -49,9 +49,18 @@ func TestCreateGraphAtomicallyCreatesIssuesAndSchedulesOnlyRoots(t *testing.T) {
 	if err != nil || epoch.Number != 1 || epoch.Status != "running" {
 		t.Fatalf("start epoch=%#v err=%v", epoch, err)
 	}
+	if epoch.LeaseToken == "" || epoch.LeaseExpiresAt == nil {
+		t.Fatalf("start epoch omitted fencing lease: %#v", epoch)
+	}
+	if _, err = store.FinishEpoch(ctx, FinishEpochInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: result.Graph.ID, EpochID: epoch.ID, ActorAgentID: uuidToTestString(agentID),
+		Evaluation: []byte(`{"information_gain":0.5}`), Decision: "CONTINUE", LeaseToken: uuid.NewString(),
+	}); !errors.Is(err, ErrGraphConflict) {
+		t.Fatalf("stale epoch lease err=%v, want ErrGraphConflict", err)
+	}
 	finished, err := store.FinishEpoch(ctx, FinishEpochInput{
 		WorkspaceID: uuidToTestString(workspace), GraphID: result.Graph.ID, EpochID: epoch.ID, ActorAgentID: uuidToTestString(agentID),
-		Evaluation: []byte(`{"information_gain":0.5}`), Decision: "CONTINUE",
+		Evaluation: []byte(`{"information_gain":0.5}`), Decision: "CONTINUE", LeaseToken: epoch.LeaseToken,
 	})
 	if err != nil || finished.Status != "committed" {
 		t.Fatalf("finish epoch=%#v err=%v", finished, err)
@@ -228,6 +237,25 @@ func TestDecomposeIssueCreatesParallelRootsAndParkedJoin(t *testing.T) {
 	}
 	if dependencies != 2 {
 		t.Fatalf("dependencies=%d, want 2", dependencies)
+	}
+	var managedChildren int
+	if err = testPool.QueryRow(ctx, `SELECT count(*) FROM issue_decompose_child WHERE parent_issue_id=$1`, parent.ID).Scan(&managedChildren); err != nil || managedChildren != 3 {
+		t.Fatalf("managed children=%d err=%v, want 3", managedChildren, err)
+	}
+	foreignAgent := pgUUID(uuid.New())
+	if _, err = testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model,max_concurrent_tasks) VALUES($1,$2,$3,'Foreign','local','{}',$4,'composer-1.5',1)`, foreignAgent, workspace, "foreign-"+uuid.NewString(), runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.DecomposeIssue(ctx, DecomposeInput{
+		WorkspaceID: uuidToTestString(workspace), ParentIssueID: uuidToTestString(parent.ID), ActorAgentID: uuidToTestString(agentID),
+		IdempotencyKey: uuid.NewString(), Reason: "forbidden cross-agent snapshot",
+		Nodes: []IssuePlanNode{
+			{TempID: "foreign", Title: "Foreign", AssigneeID: uuidToTestString(foreignAgent), WorkerMode: WorkerModeDerivedAgent, CloneReason: "must not copy private memory"},
+			{TempID: "local", Title: "Local", AssigneeID: uuidToTestString(agentID)},
+		},
+	})
+	if !errors.Is(err, ErrGraphForbidden) {
+		t.Fatalf("cross-agent clone err=%v, want ErrGraphForbidden", err)
 	}
 	if _, err = testPool.Exec(ctx, `UPDATE issue SET status='done' WHERE id=$1::uuid`, result.IssueIDs["a"]); err != nil {
 		t.Fatal(err)

@@ -10,18 +10,20 @@ import (
 )
 
 type Epoch struct {
-	ID          string          `json:"id"`
-	GoalID      string          `json:"goal_id"`
-	GraphID     string          `json:"graph_id"`
-	Number      int64           `json:"epoch_number"`
-	Status      string          `json:"status"`
-	Contract    json.RawMessage `json:"contract"`
-	Budget      json.RawMessage `json:"budget"`
-	Evaluation  json.RawMessage `json:"evaluation"`
-	Decision    *string         `json:"decision,omitempty"`
-	StartedAt   *time.Time      `json:"started_at,omitempty"`
-	CommittedAt *time.Time      `json:"committed_at,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
+	ID             string          `json:"id"`
+	GoalID         string          `json:"goal_id"`
+	GraphID        string          `json:"graph_id"`
+	Number         int64           `json:"epoch_number"`
+	Status         string          `json:"status"`
+	LeaseToken     string          `json:"lease_token,omitempty"`
+	LeaseExpiresAt *time.Time      `json:"lease_expires_at,omitempty"`
+	Contract       json.RawMessage `json:"contract"`
+	Budget         json.RawMessage `json:"budget"`
+	Evaluation     json.RawMessage `json:"evaluation"`
+	Decision       *string         `json:"decision,omitempty"`
+	StartedAt      *time.Time      `json:"started_at,omitempty"`
+	CommittedAt    *time.Time      `json:"committed_at,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
 }
 
 type StartEpochInput struct {
@@ -39,6 +41,7 @@ type FinishEpochInput struct {
 	ActorAgentID string          `json:"-"`
 	Evaluation   json.RawMessage `json:"evaluation"`
 	Decision     string          `json:"decision"`
+	LeaseToken   string          `json:"lease_token"`
 }
 
 var epochDecisions = map[string]bool{
@@ -61,7 +64,7 @@ func validJSONObject(raw json.RawMessage) json.RawMessage {
 func scanEpoch(row interface{ Scan(...any) error }) (Epoch, error) {
 	var out Epoch
 	var contract, budget, evaluation []byte
-	err := row.Scan(&out.ID, &out.GoalID, &out.GraphID, &out.Number, &out.Status, &contract, &budget, &evaluation, &out.Decision, &out.StartedAt, &out.CommittedAt, &out.CreatedAt)
+	err := row.Scan(&out.ID, &out.GoalID, &out.GraphID, &out.Number, &out.Status, &contract, &budget, &evaluation, &out.Decision, &out.LeaseToken, &out.LeaseExpiresAt, &out.StartedAt, &out.CommittedAt, &out.CreatedAt)
 	out.Contract, out.Budget, out.Evaluation = contract, budget, evaluation
 	return out, err
 }
@@ -93,10 +96,14 @@ func (s *Store) StartEpoch(ctx context.Context, in StartEpochInput) (Epoch, erro
 		return Epoch{}, ErrInvalidGraph
 	}
 	var number int64
+	// Recover abandoned epochs before enforcing the one-live-epoch invariant.
+	if _, err = tx.Exec(ctx, `UPDATE goal_execution_epoch SET status='cancelled',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE workspace_id=$1 AND goal_id=$2 AND status IN('running','evaluating','waiting') AND lease_expires_at < now()`, w, goal); err != nil {
+		return Epoch{}, err
+	}
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(epoch_number),0)+1 FROM goal_execution_epoch WHERE workspace_id=$1 AND goal_id=$2`, w, goal).Scan(&number); err != nil {
 		return Epoch{}, err
 	}
-	out, err := scanEpoch(tx.QueryRow(ctx, `INSERT INTO goal_execution_epoch(workspace_id,goal_id,graph_id,epoch_number,status,contract,budget,lease_owner,lease_token,lease_expires_at,started_at) VALUES($1,$2,$3,$4,'running',$5,$6,$7,gen_random_uuid(),now()+interval '15 minutes',now()) RETURNING id::text,goal_id::text,graph_id::text,epoch_number,status,contract,budget,evaluation,decision,started_at,committed_at,created_at`, w, goal, g, number, contract, budget, actor))
+	out, err := scanEpoch(tx.QueryRow(ctx, `INSERT INTO goal_execution_epoch(workspace_id,goal_id,graph_id,epoch_number,status,contract,budget,lease_owner,lease_token,lease_expires_at,started_at) VALUES($1,$2,$3,$4,'running',$5,$6,$7,gen_random_uuid(),now()+interval '15 minutes',now()) RETURNING id::text,goal_id::text,graph_id::text,epoch_number,status,contract,budget,evaluation,decision,lease_token::text,lease_expires_at,started_at,committed_at,created_at`, w, goal, g, number, contract, budget, actor))
 	if err != nil {
 		return Epoch{}, err
 	}
@@ -123,6 +130,10 @@ func (s *Store) FinishEpoch(ctx context.Context, in FinishEpochInput) (Epoch, er
 	if err != nil {
 		return Epoch{}, ErrInvalidGraph
 	}
+	lease, err := uuid.Parse(in.LeaseToken)
+	if err != nil {
+		return Epoch{}, ErrInvalidGraph
+	}
 	in.Decision = strings.ToUpper(strings.TrimSpace(in.Decision))
 	evaluation := validJSONObject(in.Evaluation)
 	if !epochDecisions[in.Decision] || evaluation == nil {
@@ -135,7 +146,7 @@ func (s *Store) FinishEpoch(ctx context.Context, in FinishEpochInput) (Epoch, er
 	if strings.HasPrefix(in.Decision, "STOP_") {
 		status = "stopped"
 	}
-	out, err := scanEpoch(s.pool.QueryRow(ctx, `UPDATE goal_execution_epoch SET status=$5,evaluation=$6,decision=$7,committed_at=CASE WHEN $5 IN('committed','stopped') THEN now() ELSE committed_at END,lease_owner=CASE WHEN $5='waiting' THEN lease_owner ELSE NULL END,lease_token=CASE WHEN $5='waiting' THEN lease_token ELSE NULL END,lease_expires_at=CASE WHEN $5='waiting' THEN lease_expires_at ELSE NULL END,updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3 AND lease_owner=$4 AND status IN('running','evaluating','waiting') RETURNING id::text,goal_id::text,graph_id::text,epoch_number,status,contract,budget,evaluation,decision,started_at,committed_at,created_at`, w, g, e, actor, status, evaluation, in.Decision))
+	out, err := scanEpoch(s.pool.QueryRow(ctx, `UPDATE goal_execution_epoch SET status=$6,evaluation=$7,decision=$8,committed_at=CASE WHEN $6 IN('committed','stopped') THEN now() ELSE committed_at END,lease_owner=CASE WHEN $6='waiting' THEN lease_owner ELSE NULL END,lease_token=CASE WHEN $6='waiting' THEN lease_token ELSE NULL END,lease_expires_at=CASE WHEN $6='waiting' THEN now()+interval '15 minutes' ELSE NULL END,updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3 AND lease_owner=$4 AND lease_token=$5 AND lease_expires_at>now() AND status IN('running','evaluating','waiting') RETURNING id::text,goal_id::text,graph_id::text,epoch_number,status,contract,budget,evaluation,decision,COALESCE(lease_token::text,''),lease_expires_at,started_at,committed_at,created_at`, w, g, e, actor, lease, status, evaluation, in.Decision))
 	if err != nil {
 		return Epoch{}, ErrGraphConflict
 	}
@@ -151,7 +162,7 @@ func (s *Store) ListEpochs(ctx context.Context, workspaceID, graphID string) ([]
 	if err != nil {
 		return nil, ErrInvalidGraph
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id::text,goal_id::text,graph_id::text,epoch_number,status,contract,budget,evaluation,decision,started_at,committed_at,created_at FROM goal_execution_epoch WHERE workspace_id=$1 AND graph_id=$2 ORDER BY epoch_number`, w, g)
+	rows, err := s.pool.Query(ctx, `SELECT id::text,goal_id::text,graph_id::text,epoch_number,status,contract,budget,evaluation,decision,COALESCE(lease_token::text,''),lease_expires_at,started_at,committed_at,created_at FROM goal_execution_epoch WHERE workspace_id=$1 AND graph_id=$2 ORDER BY epoch_number`, w, g)
 	if err != nil {
 		return nil, err
 	}

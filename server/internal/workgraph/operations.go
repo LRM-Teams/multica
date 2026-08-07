@@ -318,12 +318,22 @@ func (s *Store) RefreshDelivery(ctx context.Context, workspaceID, graphID string
 		return ErrInvalidGraph
 	}
 	var deliverable bool
-	err = s.pool.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND effective_completion<>'satisfied')`, w, g).Scan(&deliverable)
+	err = s.pool.QueryRow(ctx, `SELECT NOT EXISTS(
+		SELECT 1 FROM work_graph_node node
+		JOIN work_graph graph ON graph.id=node.graph_id AND graph.workspace_id=node.workspace_id
+		WHERE node.workspace_id=$1 AND node.graph_id=$2
+		  AND node.based_on_graph_version=graph.current_version
+		  AND node.effective_completion<>'satisfied'
+	)`, w, g).Scan(&deliverable)
 	if err != nil {
 		return err
 	}
 	if deliverable {
 		_, err = s.pool.Exec(ctx, `UPDATE work_graph SET status='deliverable',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND status='active'`, w, g)
+	} else {
+		// A new artifact revision or explicit invalidation revokes delivery until
+		// the current graph version satisfies its completion gates again.
+		_, err = s.pool.Exec(ctx, `UPDATE work_graph SET status='active',updated_at=now() WHERE workspace_id=$1 AND id=$2 AND status='deliverable'`, w, g)
 	}
 	return err
 }

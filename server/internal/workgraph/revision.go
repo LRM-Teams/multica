@@ -83,7 +83,7 @@ func (s *Store) Revise(ctx context.Context, in ReviseInput) (Graph, error) {
 		nodeByTemp[spec.TempID] = nodeID
 		keep = append(keep, nodeID)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE work_graph_node SET execution_status='cancelled',validity_status='superseded',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND NOT(id=ANY($3::uuid[]))`, w, g, keep); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE work_graph_node SET execution_status='cancelled',validity_status='superseded',effective_completion='stale',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND NOT(id=ANY($3::uuid[]))`, w, g, keep); err != nil {
 		return Graph{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE work_graph_edge SET retired_version=$2 WHERE graph_id=$1 AND retired_version IS NULL`, g, next); err != nil {

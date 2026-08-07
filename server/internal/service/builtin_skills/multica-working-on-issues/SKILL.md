@@ -39,7 +39,7 @@ execution roots and can run in parallel up to its concurrency cap.
 
 Use `worker_mode: derived_agent` only when the node needs strong identity or
 memory isolation: independent candidate implementations, blind/adversarial
-review, replication, incompatible model/tool configuration, or experiments
+  review, replication, or experiments
 whose observations must not mutate the source Agent. A derived node requires a
 concrete `clone_reason`. It copies approved configuration and skills plus a
 point-in-time memory snapshot, inherits no credentials or sessions, writes no

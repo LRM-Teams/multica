@@ -10,7 +10,7 @@ at the bottom before relying on an exact line.
 
 | Behavior | Source |
 | --- | --- |
-| Assignment runs receive the `DIRECT / GRAPH / PROPOSE_GRAPH` decision boundary before substantive execution | `server/internal/daemon/execenv/runtime_config.go`, assignment-triggered branch and `Work Decomposition Gate` |
+| Assignment runs receive the `DIRECT / ISSUE_DAG / GOAL_GRAPH` decision boundary before substantive execution | `server/internal/daemon/execenv/runtime_config.go`, assignment-triggered branch and `Work Decomposition Gate` |
 | Runtime advertises the shipped atomic graph CLI but not an unavailable `issue verify` command | `server/internal/daemon/execenv/runtime_config_test.go`, `TestAssignmentBriefIncludesWorkDecompositionGate` |
 | Atomic graph CLI and stable idempotency key | `server/cmd/multica/cmd_issue_graph.go`; `server/internal/handler/agent_work_graph.go`; `server/internal/workgraph/runtime.go` |
 | Canonical DAG validation, ready calculation and downstream invalidation | `server/internal/workgraph/runtime.go`; `server/internal/workgraph/runtime_test.go`; `server/internal/workgraph/runtime_postgres_test.go` |

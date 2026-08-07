@@ -538,7 +538,7 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	if strings.TrimSpace(in.SessionID) == "" || strings.TrimSpace(in.Objective) == "" || !validCapability(in.Capability) || in.Priority < 0 || in.Priority > 1 {
 		return Task{}, RunEvent{}, fmt.Errorf("%w: invalid control task input", ErrInvalidTransition)
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpControlTaskCreate, pgx.TxOptions{})
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
@@ -603,7 +603,7 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 		ORDER BY t.created_at DESC LIMIT 1
 	`, in.SessionID, goalVersion, planVersion, in.Kind, in.Objective, questionArg)
 	if existing, scanErr := scanTask(row); scanErr == nil {
-		return existing, RunEvent{}, tx.Commit(ctx)
+		return existing, RunEvent{}, s.commitResearchTx(ctx, txOpControlTaskCreate, tx)
 	} else if !errors.Is(scanErr, pgx.ErrNoRows) {
 		return Task{}, RunEvent{}, scanErr
 	}
@@ -668,7 +668,7 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpControlTaskCreate, tx); err != nil {
 		return Task{}, RunEvent{}, err
 	}
 	task, err := s.GetTask(ctx, taskID, in.SessionID)

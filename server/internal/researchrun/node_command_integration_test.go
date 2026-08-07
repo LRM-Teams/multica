@@ -42,10 +42,16 @@ func TestNodeRetryClearsTerminalReasonWithoutViolatingTaskConstraint(t *testing.
 	}
 
 	requestID := uuid.NewString()
+	runBeforeCommand, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedStateVersion := runBeforeCommand.StateVersion
 	input := NodeCommandInput{
 		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID,
 		NodeID: "task:" + tasks[0].ID, Action: NodeActionRetry,
-		ClientRequestID: requestID, ActorType: "user", ActorID: fixture.userID,
+		ClientRequestID: requestID, ExpectedStateVersion: &expectedStateVersion,
+		ActorType: "user", ActorID: fixture.userID,
 		AnchorKind: "task", AnchorTaskID: tasks[0].ID,
 	}
 	outcome, err := store.NodeCommand(ctx, input)

@@ -69,3 +69,12 @@ func TestDecodeResearchNodeCommandRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("status=%d", recorder.Code)
 	}
 }
+
+func TestShouldEmitResearchNodeCommandSideEffectsOnlyForNewCommands(t *testing.T) {
+	if !shouldEmitResearchNodeCommandSideEffects(researchrun.NodeCommandOutcome{}) {
+		t.Fatal("new command must emit process-card and realtime side effects")
+	}
+	if shouldEmitResearchNodeCommandSideEffects(researchrun.NodeCommandOutcome{Replayed: true}) {
+		t.Fatal("idempotent replay must not duplicate process-card or realtime side effects")
+	}
+}

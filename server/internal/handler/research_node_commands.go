@@ -143,56 +143,62 @@ func (h *Handler) postResearchNodeCommand(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	actorUUID := pgtype.UUID{}
-	if parsed, ok := parseUUIDQuiet(actorID); ok {
-		actorUUID = parsed
+	if shouldEmitResearchNodeCommandSideEffects(outcome) {
+		actorUUID := pgtype.UUID{}
+		if parsed, ok := parseUUIDQuiet(actorID); ok {
+			actorUUID = parsed
+		}
+		h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, sessionID, actorType, actorID, researchProcessEvent{
+			Op:      "node_command_" + req.Action,
+			Title:   nodeCommandTitle(req.Action, outcome),
+			Body:    nodeCommandBody(req.Action, outcome),
+			ActorID: actorUUID,
+			Meta: map[string]any{
+				"command_id":         outcome.CommandID,
+				"action":             outcome.Action,
+				"client_request_id":  outcome.ClientRequestID,
+				"source_node_id":     nodeIDRaw,
+				"question_id":        optionalID(outcome.Question),
+				"task_id":            optionalTaskID(outcome.Task),
+				"parent_question_id": outcome.ParentLineage.ParentQuestionID,
+				"parent_task_id":     outcome.ParentLineage.ParentTaskID,
+				"queued":             outcome.Queued,
+				"replayed":           false,
+			},
+		})
+		h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, actorType, actorID, map[string]any{
+			"session_id":  uuidToString(sessionID),
+			"op":          "node_command",
+			"action":      outcome.Action,
+			"command_id":  outcome.CommandID,
+			"task_id":     optionalTaskID(outcome.Task),
+			"question_id": optionalID(outcome.Question),
+		})
 	}
-	h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, sessionID, actorType, actorID, researchProcessEvent{
-		Op:      "node_command_" + req.Action,
-		Title:   nodeCommandTitle(req.Action, outcome),
-		Body:    nodeCommandBody(req.Action, outcome),
-		ActorID: actorUUID,
-		Meta: map[string]any{
-			"command_id":         outcome.CommandID,
-			"action":             outcome.Action,
-			"client_request_id":  outcome.ClientRequestID,
-			"source_node_id":     nodeIDRaw,
-			"question_id":        optionalID(outcome.Question),
-			"task_id":            optionalTaskID(outcome.Task),
-			"parent_question_id": outcome.ParentLineage.ParentQuestionID,
-			"parent_task_id":     outcome.ParentLineage.ParentTaskID,
-			"queued":             outcome.Queued,
-			"replayed":           outcome.Replayed,
-		},
-	})
-	h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, actorType, actorID, map[string]any{
-		"session_id":  uuidToString(sessionID),
-		"op":          "node_command",
-		"action":      outcome.Action,
-		"command_id":  outcome.CommandID,
-		"task_id":     optionalTaskID(outcome.Task),
-		"question_id": optionalID(outcome.Question),
-	})
 
 	status := http.StatusOK
 	if !outcome.Replayed {
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, map[string]any{
-		"command_id":         outcome.CommandID,
-		"action":             outcome.Action,
-		"client_request_id":  outcome.ClientRequestID,
-		"replayed":           outcome.Replayed,
-		"state_version":      outcome.StateVersion,
-		"question":           outcome.Question,
-		"task":               outcome.Task,
-		"attempt":            outcome.Attempt,
-		"parent_lineage":     outcome.ParentLineage,
-		"retry_lineage":      outcome.RetryLineage,
-		"reassign":           outcome.Reassign,
-		"assigned":           outcome.Assigned,
-		"queued":             outcome.Queued,
+		"command_id":        outcome.CommandID,
+		"action":            outcome.Action,
+		"client_request_id": outcome.ClientRequestID,
+		"replayed":          outcome.Replayed,
+		"state_version":     outcome.StateVersion,
+		"question":          outcome.Question,
+		"task":              outcome.Task,
+		"attempt":           outcome.Attempt,
+		"parent_lineage":    outcome.ParentLineage,
+		"retry_lineage":     outcome.RetryLineage,
+		"reassign":          outcome.Reassign,
+		"assigned":          outcome.Assigned,
+		"queued":            outcome.Queued,
 	})
+}
+
+func shouldEmitResearchNodeCommandSideEffects(outcome researchrun.NodeCommandOutcome) bool {
+	return !outcome.Replayed
 }
 
 type researchNodeAnchor struct {

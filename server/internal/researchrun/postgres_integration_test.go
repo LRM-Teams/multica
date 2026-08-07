@@ -2680,6 +2680,11 @@ func TestStaleResultPreservesEvidenceWithoutAdvancingCurrentPlan(t *testing.T) {
 
 	evidence := upgradeResultToV5(authoritativeRecordEvidenceV4())
 	evidence.ClientRequestID = "stale-result-evidence"
+	evidence.ProposedTasks = []TaskProposal{{
+		ClientKey: "stale-follow-up", QuestionKey: "question-1", Kind: TaskKindDeepRead,
+		Objective: "Follow up the stale evidence", RequiredCapability: "reader",
+		ExpectedResult: "research_evidence_v5", Priority: 0.8,
+	}}
 	raw, err := json.Marshal(evidence)
 	if err != nil {
 		t.Fatal(err)
@@ -2707,23 +2712,24 @@ func TestStaleResultPreservesEvidenceWithoutAdvancingCurrentPlan(t *testing.T) {
 		t.Fatalf("stale result event payload=%+v", eventPayload)
 	}
 
-	var currentQuestions, currentTasks, oldClaims, reports, evaluations, informationGain int
+	var currentQuestions, currentTasks, oldClaims, oldQuestionMutations, reports, evaluations, informationGain int
 	if err = pool.QueryRow(ctx, `
 		SELECT
 		  (SELECT count(*) FROM research_question WHERE session_id=$1::uuid AND goal_version=2),
 		  (SELECT count(*) FROM research_task WHERE session_id=$1::uuid AND goal_version=2),
 		  (SELECT count(*) FROM research_claim WHERE session_id=$1::uuid AND goal_version=1),
+		  (SELECT count(*) FROM research_question WHERE session_id=$1::uuid AND goal_version=1 AND (status <> 'obsolete' OR answer_claim_id IS NOT NULL)),
 		  (SELECT count(*) FROM research_report WHERE session_id=$1::uuid),
 		  (SELECT count(*) FROM research_decision WHERE session_id=$1::uuid AND decision_kind IN ('quality_evaluation','citation_audit')),
 		  (SELECT count(*) FROM research_decision WHERE session_id=$1::uuid AND decision_kind='information_gain' AND inputs->>'attempt_id'=$2)
 	`, fixture.sessionID, attempt.ID).Scan(
-		&currentQuestions, &currentTasks, &oldClaims, &reports, &evaluations, &informationGain,
+		&currentQuestions, &currentTasks, &oldClaims, &oldQuestionMutations, &reports, &evaluations, &informationGain,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if currentQuestions != 1 || currentTasks != 0 || oldClaims != 1 || reports != 0 || evaluations != 0 || informationGain != 0 {
-		t.Fatalf("current questions=%d tasks=%d old claims=%d reports=%d evaluations=%d gain=%d",
-			currentQuestions, currentTasks, oldClaims, reports, evaluations, informationGain)
+	if currentQuestions != 1 || currentTasks != 0 || oldClaims != 1 || oldQuestionMutations != 0 || reports != 0 || evaluations != 0 || informationGain != 0 {
+		t.Fatalf("current questions=%d tasks=%d old claims=%d old question mutations=%d reports=%d evaluations=%d gain=%d",
+			currentQuestions, currentTasks, oldClaims, oldQuestionMutations, reports, evaluations, informationGain)
 	}
 	var attemptStatus, taskStatus string
 	if err = pool.QueryRow(ctx, `

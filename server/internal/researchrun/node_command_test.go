@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -116,6 +117,12 @@ func TestNodeCommandClientKeyBounded(t *testing.T) {
 	key := nodeCommandClientKey(string(make([]byte, 300)), "task")
 	if len(key) > maxClientKeyBytes {
 		t.Fatalf("key len %d > %d", len(key), maxClientKeyBytes)
+	}
+	prefix := strings.Repeat("x", 199)
+	left := nodeCommandClientKey(prefix+"a", "event")
+	right := nodeCommandClientKey(prefix+"b", "event")
+	if left == right {
+		t.Fatalf("distinct long request IDs collapsed to key %q", left)
 	}
 }
 

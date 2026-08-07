@@ -617,7 +617,7 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
-	cmd.Env = buildEnv(b.cfg.Env)
+	cmd.Env = buildPiEnv(b.cfg.Env)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		if mcpConfigPath != "" {

@@ -71,3 +71,8 @@ CREATE TABLE issue_decompose_request (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (workspace_id, actor_agent_id, idempotency_key)
 );
+
+-- Required both for FK enforcement performance and the recursive Agent
+-- hard-delete closure (actor_agent_id is not the leading PK column).
+CREATE INDEX issue_decompose_request_actor_agent_idx
+  ON issue_decompose_request(actor_agent_id);

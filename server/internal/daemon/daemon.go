@@ -4452,7 +4452,8 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						pinCancel()
 					}
 				case agent.MessageToolUse:
-					d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "running_command", "Running command")
+					toolDetailKind, toolNarrative := toolActivityFact(msg.Tool, msg.Input)
+					d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, toolDetailKind, toolNarrative)
 					n := toolCount.Add(1)
 					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))

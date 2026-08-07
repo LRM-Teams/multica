@@ -161,7 +161,11 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 	activityKind, detailKind, narrative := "", "", ""
 	switch message.Type {
 	case agent.MessageThinking:
-		activityKind, narrative = protocol.ActivityKindThinking, "Thinking"
+		// Thinking is a B-chain state (snapshot activity_kind), not an
+		// A-chain timeline event. An empty narrative keeps it from emitting
+		// an entry, so bursts of thinking never flood the activity timeline
+		// (raft-aligned; see workspace_runner_activity).
+		activityKind = protocol.ActivityKindThinking
 	case agent.MessageToolUse:
 		activityKind = protocol.ActivityKindWorking
 		detailKind, narrative = toolActivityFact(message.Tool, message.Input)
@@ -181,12 +185,16 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 	if workspaceID == "" {
 		return
 	}
-	entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-	if err != nil {
-		return
+	var entries []protocol.AgentActivityEntry
+	if narrative != "" {
+		entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
+		if err != nil {
+			return
+		}
+		entries = []protocol.AgentActivityEntry{entry}
 	}
 	producer := d.workspaceAgentActivityProducer(workspaceID)
-	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner resident runtime Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
 }

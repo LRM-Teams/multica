@@ -87,19 +87,23 @@ func recordTargetRepairTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (Ta
 		return TargetRepair{}, false, err
 	}
 
-	// The event dedup key is the repair key, so one decision projects exactly
-	// once no matter how often the same canonical failure recurs.
-	if _, err = appendEvent(ctx, tx, repair.WorkspaceID, repair.SessionID, "target_repair_decided",
-		"target-repair:"+repair.RepairKey, "system", "", map[string]any{
-			"repair_id": repair.ID, "repair_key": repair.RepairKey, "repair_kind": kind,
-			"task_id": repair.TaskID, "attempt_id": in.AttemptID,
-			"failure_class": class, "source_failure_reason": repair.SourceReason,
-			"failure_fingerprint": fingerprint, "goal_version": repair.GoalVersion,
-			"plan_version": repair.PlanVersion, "diagnostics": repair.Diagnostics,
-			"target_config_fingerprint": targetConfigFingerprint,
-			"allowed_repair_actions":    AllowedRepairActions(class),
-		}); err != nil {
-		return TargetRepair{}, false, err
+	// A repair decision projects exactly once. A later occurrence of the same
+	// canonical failure updates the durable observation counters above, but it
+	// must not replay target_repair_decided with occurrence-specific attempt or
+	// diagnostics fields under the decision's idempotency key.
+	if created {
+		if _, err = appendEvent(ctx, tx, repair.WorkspaceID, repair.SessionID, "target_repair_decided",
+			"target-repair:"+repair.RepairKey, "system", "", map[string]any{
+				"repair_id": repair.ID, "repair_key": repair.RepairKey, "repair_kind": kind,
+				"task_id": repair.TaskID, "attempt_id": in.AttemptID,
+				"failure_class": class, "source_failure_reason": repair.SourceReason,
+				"failure_fingerprint": fingerprint, "goal_version": repair.GoalVersion,
+				"plan_version": repair.PlanVersion, "diagnostics": repair.Diagnostics,
+				"target_config_fingerprint": targetConfigFingerprint,
+				"allowed_repair_actions":    AllowedRepairActions(class),
+			}); err != nil {
+			return TargetRepair{}, false, err
+		}
 	}
 	return repair, created, nil
 }

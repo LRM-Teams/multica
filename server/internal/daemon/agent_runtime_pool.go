@@ -24,6 +24,17 @@ type canonicalRuntimeMode string
 const (
 	canonicalRuntimeResident canonicalRuntimeMode = "resident"
 	canonicalRuntimeOneShot  canonicalRuntimeMode = "one_shot"
+
+	// canonicalIdleAcceptTimeout bounds how long a canonical Message handoff may
+	// wait for the resident runtime to accept an idle input batch. A busy or
+	// unresponsive runtime must never block the recovery/Flush path forever
+	// (Raft alignment: queue + content-free notice + agent pull, not a blocking
+	// hard inject). When the wait elapses or a native busy error is surfaced the
+	// handoff returns ErrCanonicalAgentRuntimeBusy so the coordinator schedules a
+	// pending notice and retries, keeping messages queued. Recoveries that hit a
+	// still-booting process get a generous window so they are not thrashingly
+	// disposed before the resident registers its control reader.
+	canonicalIdleAcceptTimeout = 20 * time.Second
 )
 
 // canonicalAgentRuntimeIdentity contains only process-stable configuration.
@@ -651,7 +662,18 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	invalidationGeneration := slot.invalidationGeneration
 	slot.mu.Unlock()
 
-	acceptance, err := input.AcceptMessageBatch(ctx, batch)
+	// Bound native idle acceptance so a busy or control-unresponsive resident
+	// runtime never blocks recovery/Flush forever. On timeout or a native busy
+	// signal we fall through to the busy path below (queue + pending notice + retry),
+	// while the slot's running/admission state is still released so a later retry can
+	// re-attempt. This is the Raft-aligned "no blocking hard inject" behavior.
+	acceptCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		acceptCtx, cancel = context.WithTimeout(ctx, canonicalIdleAcceptTimeout)
+		defer cancel()
+	}
+	acceptance, err := input.AcceptMessageBatch(acceptCtx, batch)
 	slot.mu.Lock()
 	if err != nil {
 		freed := false
@@ -666,6 +688,17 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 			}
 		}
 		slot.mu.Unlock()
+		if isResidentAcceptBusyErr(err) {
+			// Busy / unresponsive-to-idle is a queued-and-retry condition, not a
+			// hard failure: hand it back as ErrCanonicalAgentRuntimeBusy so the
+			// coordinator schedules a pending notice and keeps messages queued
+			// (Raft alignment), instead of surfacing a distinct error that the
+			// flush loop would treat as fatal.
+			if freed {
+				p.signalAgentProcessCapacityFreed()
+			}
+			return ErrCanonicalAgentRuntimeBusy
+		}
 		if freed {
 			p.signalAgentProcessCapacityFreed()
 		}
@@ -728,6 +761,27 @@ func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.M
 		}
 	}()
 	return done
+}
+
+// isResidentAcceptBusyErr reports whether an idle Message acceptance error
+// indicates the resident runtime is busy or unresponsive to idle input and
+// should therefore be treated as a queued-and-retry (ErrCanonicalAgentRuntimeBusy)
+// condition rather than a hard handoff failure. It covers the bounded wait
+// elapsing (context deadline) and a native busy/active-input signal. The
+// native-busy match is by sentinel text to avoid coupling the daemon pool to
+// provider-specific error types.
+func isResidentAcceptBusyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	// Native busy errors across resident providers share the sentinel "turn
+	// busy" (e.g. "claude stream-json turn busy", "claude ACP turn busy",
+	// "codex app-server turn busy", "cursor ACP turn busy", "grok ACP turn
+	// busy"), sometimes wrapped with an overlap/active-input description.
+	return strings.Contains(strings.ToLower(err.Error()), "turn busy")
 }
 
 func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot) error {

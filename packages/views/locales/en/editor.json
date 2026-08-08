@@ -90,6 +90,20 @@
     "link_copied": "Link copied",
     "copy_failed": "Failed to copy"
   },
+  "table_controls": {
+    "select_table": "Select table",
+    "add_row": "Add row",
+    "add_column": "Add column",
+    "delete_row": "Delete row",
+    "delete_column": "Delete column",
+    "delete_table": "Delete table",
+    "row_menu": "Row actions",
+    "column_menu": "Column actions",
+    "insert_row_above": "Insert above",
+    "insert_row_below": "Insert below",
+    "insert_column_left": "Insert left",
+    "insert_column_right": "Insert right"
+  },
   "mention": {
     "group_all": "All",
     "group_users": "Users",
@@ -114,6 +128,7 @@
     "commands": {
       "note": "Add a note — won't trigger any agents",
       "code": "Plain code block",
+      "table": "Table",
       "mermaid": "Mermaid diagram — renders as a chart",
       "python": "Python code block",
       "javascript": "JavaScript code block"

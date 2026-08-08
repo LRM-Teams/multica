@@ -43,6 +43,8 @@ import {
   createSlashCommandSuggestion,
   type SlashCommandItem,
   buildBuiltinCommandItems,
+  buildBlockCommandItems,
+  BLOCK_COMMANDS,
   BUILTIN_COMMANDS,
 } from "./slash-command-suggestion";
 
@@ -368,7 +370,36 @@ describe("buildBuiltinCommandItems", () => {
   });
 });
 
+describe("buildBlockCommandItems", () => {
+  it("returns code and table commands for an empty query", () => {
+    expect(buildBlockCommandItems("")).toEqual(BLOCK_COMMANDS);
+  });
+
+  it("filters block commands by label prefix", () => {
+    expect(buildBlockCommandItems("co").map((c) => c.id)).toEqual(["code"]);
+    expect(buildBlockCommandItems("ta").map((c) => c.id)).toEqual(["table"]);
+    expect(buildBlockCommandItems("able")).toEqual([]);
+  });
+});
+
 describe("SlashCommandList built-in command rendering", () => {
+  it("renders icons for block commands", () => {
+    const { container, getByText } = render(
+      <I18nWrapper>
+        <SlashCommandList
+          items={buildBlockCommandItems("")}
+          query=""
+          command={vi.fn()}
+          hideOnEmpty
+        />
+      </I18nWrapper>,
+    );
+
+    expect(getByText("/code")).toBeInTheDocument();
+    expect(getByText("/table")).toBeInTheDocument();
+    expect(container.querySelectorAll("svg")).toHaveLength(2);
+  });
+
   it("renders the localized description for a built-in command", () => {
     const { getByText } = render(
       <I18nWrapper>

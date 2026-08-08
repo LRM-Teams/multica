@@ -31,6 +31,38 @@ import TableRow from "@tiptap/extension-table-row";
 import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
 import { Table } from "@tiptap/extension-table";
+import { StableTableView } from "../stable-table-view";
+
+/** Resize floor (~1/3 of the previous 128px minimum). */
+const TABLE_CELL_MIN_WIDTH = 43;
+/** Default column width for newly inserted cells (previous default). */
+const TABLE_CELL_DEFAULT_WIDTH = 128;
+
+const TableCellWithDefaultWidth = TableCell.extend({
+  addAttributes() {
+    const parent = this.parent?.() as Record<string, Record<string, unknown>>;
+    return {
+      ...parent,
+      colwidth: {
+        ...parent.colwidth,
+        default: [TABLE_CELL_DEFAULT_WIDTH],
+      },
+    };
+  },
+});
+
+const TableHeaderWithDefaultWidth = TableHeader.extend({
+  addAttributes() {
+    const parent = this.parent?.() as Record<string, Record<string, unknown>>;
+    return {
+      ...parent,
+      colwidth: {
+        ...parent.colwidth,
+        default: [TABLE_CELL_DEFAULT_WIDTH],
+      },
+    };
+  },
+});
 import { TaskList } from "@tiptap/extension-list";
 import { Markdown } from "@tiptap/markdown";
 import { ReactNodeViewRenderer } from "@tiptap/react";
@@ -285,10 +317,20 @@ export function createEditorExtensions(
     // `overflow-x: auto`. Without it a wide table is a bare <table> that can't
     // shrink below min-content, so the horizontal scrollbar lands on the
     // page-level scroll container instead of the table itself.
-    Table.configure({ resizable: false, renderWrapper: true }),
+    // Min width is the resize floor; new cells default to 128px via colwidth
+    // so `/table` still inserts at the previous comfortable width.
+    Table.configure({
+      resizable: true,
+      renderWrapper: true,
+      allowTableNodeSelection: true,
+      cellMinWidth: TABLE_CELL_MIN_WIDTH,
+      // Keep live column widths while dragging; default TipTap TableView snaps
+      // them back to uncommitted attrs on any mid-drag view update.
+      View: StableTableView,
+    }),
     TableRow,
-    TableHeader,
-    TableCell,
+    TableHeaderWithDefaultWidth,
+    TableCellWithDefaultWidth,
     BlockMathExtension,
     InlineMathExtension,
     HighlightExtension,

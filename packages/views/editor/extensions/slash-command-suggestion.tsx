@@ -11,6 +11,7 @@ import {
 import type { QueryClient } from "@tanstack/react-query";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
+import { Code2, Table2 } from "lucide-react";
 import { useAuthStore } from "@multica/core/auth";
 import { useChatStore } from "@multica/core/chat";
 import { getCurrentWsId } from "@multica/core/platform";
@@ -25,7 +26,8 @@ import { createSuggestionPopupRender } from "./suggestion-popup";
 const MAX_ITEMS = 20;
 
 /** Known built-in command ids — the keys under editor `slash_command.commands`. */
-export type BuiltinCommandKey = "note" | "code";
+export type BuiltinCommandKey = "note" | "code" | "table";
+type SlashCommandIcon = "code" | "table";
 
 export interface SlashCommandItem {
   id: string;
@@ -38,6 +40,7 @@ export interface SlashCommandItem {
    * so the visible string stays localized (the typed `/label` does not).
    */
   descriptionKey?: BuiltinCommandKey;
+  icon?: SlashCommandIcon;
 }
 
 interface SlashCommandListProps {
@@ -56,6 +59,12 @@ interface SlashCommandListProps {
 
 export interface SlashCommandListRef {
   onKeyDown: (props: { event: KeyboardEvent }) => boolean;
+}
+
+function slashCommandIcon(item: SlashCommandItem) {
+  if (item.icon === "code") return <Code2 className="mt-0.5 size-4 text-muted-foreground" aria-hidden />;
+  if (item.icon === "table") return <Table2 className="mt-0.5 size-4 text-muted-foreground" aria-hidden />;
+  return null;
 }
 
 export const SlashCommandList = forwardRef<
@@ -122,11 +131,10 @@ export const SlashCommandList = forwardRef<
   // localized; skills carry a raw description string from their config.
   const describe = (item: SlashCommandItem): string | undefined => {
     if (item.descriptionKey === "note") return t(($) => $.slash_command.commands.note);
-    // Keep Notion-style block commands compact: `/code` is self-explanatory.
-    if (item.descriptionKey === "code") return undefined;
+    // Keep Notion-style block commands compact: `/code` and `/table` are self-explanatory.
+    if (item.descriptionKey === "code" || item.descriptionKey === "table") return undefined;
     return item.description;
   };
-
   return (
     <div className="rounded-md border bg-popover py-1 shadow-md w-72 max-h-[300px] overflow-y-auto">
       {items.map((item, index) => {
@@ -137,17 +145,20 @@ export const SlashCommandList = forwardRef<
             ref={(el) => {
               itemRefs.current[index] = el;
             }}
-            className={`flex w-full flex-col gap-0.5 px-3 py-1.5 text-left text-xs transition-colors ${
+            className={`flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
               selectedIndex === index ? "bg-accent" : "hover:bg-accent/50"
             }`}
             onClick={() => selectItem(index)}
           >
-            <span className="font-medium">/{item.label}</span>
-            {description && (
-              <span className="truncate text-muted-foreground">
-                {description}
-              </span>
-            )}
+            {slashCommandIcon(item)}
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="font-medium">/{item.label}</span>
+              {description && (
+                <span className="truncate text-muted-foreground">
+                  {description}
+                </span>
+              )}
+            </span>
           </button>
         );
       })}
@@ -254,11 +265,10 @@ export const BUILTIN_COMMANDS: SlashCommandItem[] = [
 ];
 
 // react-doctor-disable-next-line react-doctor/only-export-components -- suggestion factories consume this static command table and tests import it directly.
-export const BLOCK_COMMAND: SlashCommandItem = {
-  id: "code",
-  label: "code",
-  descriptionKey: "code",
-};
+export const BLOCK_COMMANDS: SlashCommandItem[] = [
+  { id: "code", label: "code", descriptionKey: "code", icon: "code" },
+  { id: "table", label: "table", descriptionKey: "table", icon: "table" },
+];
 
 // Match on the command label as a prefix only — the description is for display,
 // not search. With a single command this keeps the menu predictable (typing
@@ -271,7 +281,7 @@ export function buildBuiltinCommandItems(query: string): SlashCommandItem[] {
 // react-doctor-disable-next-line react-doctor/only-export-components -- pure command filtering helper used by the suggestion factory/tests.
 export function buildBlockCommandItems(query: string): SlashCommandItem[] {
   const q = query.toLowerCase();
-  return BLOCK_COMMAND.label.startsWith(q) ? [BLOCK_COMMAND] : [];
+  return BLOCK_COMMANDS.filter((command) => command.label.startsWith(q));
 }
 
 export function createBuiltinCommandSuggestion(): Omit<
@@ -322,14 +332,14 @@ export function createBlockCommandSuggestion(): Omit<
     char: "/",
     pluginKey,
     items: ({ query }) => buildBlockCommandItems(query),
-    command: ({ editor, range }) => {
+    command: ({ editor, range, props }) => {
+      const chain = editor.chain().focus().deleteRange(range);
+      if (props.id === "table") {
+        chain.insertTable({ rows: 3, cols: 3, withHeaderRow: false }).run();
+        return;
+      }
       const language = getLastInsertedCodeBlockLanguage();
-      editor
-        .chain()
-        .focus()
-        .deleteRange(range)
-        .setCodeBlock({ language })
-        .run();
+      chain.setCodeBlock({ language }).run();
     },
     render: createSuggestionPopupRender<SlashCommandItem, SlashCommandItem, SlashCommandListRef, SlashCommandListProps>({
       pluginKey,

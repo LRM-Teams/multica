@@ -51,6 +51,13 @@ func releaseManifestBaseURL() string {
 	return releaseManifestBaseURLWithOverride("")
 }
 
+// ReleaseManifestBaseURL is the exported form of releaseManifestBaseURL for the
+// daemon's auto-update detection loop (which lives in a different package). It
+// reads fresh on every call so an env override takes effect on the next check.
+func ReleaseManifestBaseURL() string {
+	return releaseManifestBaseURL()
+}
+
 // releaseManifestBaseURLWithOverride resolves the effective release feed base
 // URL with the full three-layer precedence (task #815 step 2):
 // serverDispatched (from the daemon's heartbeat ack) > ReleaseManifestBaseURLEnv
@@ -222,6 +229,12 @@ func normalizeReleaseTag(targetVersion string) string {
 		tag = "v" + tag
 	}
 	return tag
+}
+
+// NormalizeReleaseTag is the exported form of normalizeReleaseTag for the
+// daemon's auto-update detection loop.
+func NormalizeReleaseTag(targetVersion string) string {
+	return normalizeReleaseTag(targetVersion)
 }
 
 // platformKey is the Platforms map key the CI publish job uses for a given

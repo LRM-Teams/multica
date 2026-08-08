@@ -52,7 +52,8 @@ const (
 	DefaultRuntimeName              = "Local Agent"
 	DefaultWorkspaceSyncInterval    = 30 * time.Second
 	DefaultHealthPort               = 19514
-	DefaultAutoUpdateCheckInterval  = 6 * time.Hour // deprecated compatibility value; no daemon loop consumes it
+	DefaultAutoUpdateCheckInterval  = 5 * time.Minute // detection-only poll (Frank approved 08-07); consumed by autoUpdateLoop
+	DefaultAutoUpdateInitialDelay   = 2 * time.Minute // initial delay before first detection check
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
 	DefaultMemoryCurationRunTimeout = 10 * time.Minute
 	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
@@ -87,9 +88,10 @@ type Config struct {
 	// never from an environment variable or the unauthenticated health surface.
 	LocalControlToken             string
 	AgentWorkspaceQuotaBytes      int64         // per-agent cap on <workspace-id>/agents/<agent-id> total size, checked at turn-start; 0 = unlimited (default)
-	AutoUpdateEnabled             bool          // deprecated compatibility field; always false (Machine Upgrade is explicit-only)
-	AutoUpdateConfigSource        string        // always deprecated_noop; legacy flags/env remain parseable but cannot enable mutation
-	AutoUpdateCheckInterval       time.Duration // deprecated compatibility value; no loop consumes it
+	AutoUpdateEnabled             bool          // detection-only; never changes machine release state (Machine Upgrade stays explicit)
+	AutoUpdateConfigSource        string        // set to auto_detect when detection is active (was deprecated_noop)
+	AutoUpdateCheckInterval       time.Duration // detection poll interval (default DefaultAutoUpdateCheckInterval)
+	AutoUpdateInitialDelay        time.Duration // delay before the first detection check (default DefaultAutoUpdateInitialDelay)
 	PinnedVersion                 string        // when non-empty, the daemon stays on this version and never auto-upgrades (env: MULTICA_PINNED_VERSION)
 	UpdateObservationPath         string        // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
 	SharedSkillsDir               string        // optional global override; when empty each provider uses its own shared root
@@ -454,10 +456,12 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// not parse or schedule them. This makes an inherited malformed interval
 	// harmless instead of letting a retired background mechanism block startup.
 	_ = overrides.DisableAutoUpdate
-	_ = overrides.AutoUpdateCheckInterval
 	autoUpdateEnabled := false
-	autoUpdateConfigSource := "deprecated_noop"
-	autoUpdateInterval := time.Duration(0)
+	autoUpdateConfigSource := "auto_detect"
+	autoUpdateInterval := DefaultAutoUpdateCheckInterval
+	if overrides.AutoUpdateCheckInterval > 0 {
+		autoUpdateInterval = overrides.AutoUpdateCheckInterval
+	}
 
 	// Pinned version: when set, the daemon stays on this version and never
 	// auto-upgrades. The value must be a valid release tag (e.g. "0.3.92").

@@ -942,6 +942,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.residentCrashWatchLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
+	go d.autoUpdateLoop(ctx)
 
 	// Preflight succeeded and the background loops are up: the daemon has
 	// registered its runtimes and can now claim and run tasks. Flip /health
@@ -949,7 +950,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// readiness wait blocks on, so success is reported only after startup
 	// actually completed, not merely because the health port came up.
 	d.ready.Store(true)
-	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, token-renewal, shared-skills); machine upgrades are explicit-only; health now reporting ready")
+	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, token-renewal, shared-skills, auto-update-detection); machine upgrades are explicit-only; health now reporting ready")
 	err = d.pollLoop(ctx, taskWakeups)
 	d.logger.Debug("daemon main loop returning", "error", err)
 	return err

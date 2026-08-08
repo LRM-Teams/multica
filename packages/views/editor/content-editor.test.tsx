@@ -70,7 +70,10 @@ const onCreateFired = vi.hoisted(() => ({ value: false }));
 const editorOptions = vi.hoisted<{
   current: {
     onUpdate?: (args: { editor: unknown }) => void;
-    editorProps?: { handleKeyDown?: (view: any, event: KeyboardEvent) => boolean };
+    editorProps?: {
+      handleKeyDown?: (view: any, event: KeyboardEvent) => boolean;
+      attributes?: { class?: string };
+    };
   } | null;
 }>(() => ({ current: null }));
 
@@ -78,7 +81,10 @@ vi.mock("@tiptap/react", () => ({
   useEditor: (options: {
     onCreate?: (args: { editor: unknown }) => void;
     onUpdate?: (args: { editor: unknown }) => void;
-    editorProps?: { handleKeyDown?: (view: any, event: KeyboardEvent) => boolean };
+    editorProps?: {
+      handleKeyDown?: (view: any, event: KeyboardEvent) => boolean;
+      attributes?: { class?: string };
+    };
   }) => {
     editorOptions.current = options;
     if (!editorRef.current) {
@@ -154,6 +160,14 @@ describe("ContentEditor", () => {
     fireEvent.mouseDown(screen.getByTestId("prosemirror"));
 
     expect(mockFocus).not.toHaveBeenCalled();
+  });
+
+  it("marks the editor root when empty-line placeholders are enabled", () => {
+    render(<ContentEditor showEmptyLinePlaceholder />);
+
+    expect(editorOptions.current?.editorProps?.attributes?.class).toContain(
+      "show-empty-line-placeholder",
+    );
   });
 
   it("syncs editor content when defaultValue changes externally and editor is unfocused", () => {

@@ -1282,3 +1282,30 @@ func TestCanonicalAgentRuntimePoolIsActivatedForMessageCoordinator(t *testing.T)
 		t.Fatal("Message delivery must ensure its resident runtime before acceptance")
 	}
 }
+
+func TestIsResidentAcceptBusyErr(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil is not busy", err: nil, want: false},
+		{name: "deadline exceeded is busy", err: context.DeadlineExceeded, want: true},
+		{name: "context canceled is busy", err: context.Canceled, want: true},
+		{name: "claude resident turn busy", err: errors.New("claude stream-json turn busy: native turn is active"), want: true},
+		{name: "claude acp turn busy", err: errors.New("claude ACP turn busy: concurrent claude ACP turn"), want: true},
+		{name: "codex resident overlap", err: errors.New("codex app-server turn busy: canonical Message handoff overlaps an active turn"), want: true},
+		{name: "cursor acp turn busy", err: errors.New("cursor ACP turn busy: concurrent cursor ACP turn"), want: true},
+		{name: "grok acp turn busy", err: errors.New("grok ACP turn busy"), want: true},
+		{name: "pi rpc turn busy", err: errors.New("pi rpc turn busy"), want: true},
+		{name: "unrelated marshal error is not busy", err: errors.New("json: unsupported type"), want: false},
+		{name: "unrelated io error is not busy", err: errors.New("read: connection reset"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isResidentAcceptBusyErr(tc.err); got != tc.want {
+				t.Fatalf("isResidentAcceptBusyErr(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}

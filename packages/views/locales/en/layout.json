@@ -80,11 +80,11 @@
     "export_popup_blocked": "Could not open the print window. Please allow pop-ups and try again.",
     "ai_agent_action": "Configure AI agent",
     "ai_agent_title": "Configure AI agent",
-    "ai_agent_description": "Choose the workspace agent that will optimize selected text in your notes.",
+    "ai_agent_description": "Choose the workspace agent that edits note pages and optimizes selected text.",
     "ai_agent_empty": "There are no agents in this workspace yet.",
     "ai_agent_clear": "Clear agent",
     "ai_agent_saved": "AI agent configured",
-    "ai_agent_required": "Configure an AI agent before optimizing text.",
+    "ai_agent_required": "Configure an AI agent before using note AI.",
     "ai_optimize_chat_title": "Optimize note text: {{title}}",
     "ai_optimize_failed": "The agent could not optimize the text.",
     "ai_optimize_timeout": "Timed out waiting for the agent to optimize the text.",
@@ -128,7 +128,8 @@
     "visibility_shared_by_suffix": " shared this note with you",
     "content_placeholder": "Start writing...",
     "image_paste_failed": "Could not add image",
-    "uploading_image": "Uploading image..."
+    "uploading_image": "Uploading image...",
+    "ai_page_edit_chat_title": "Edit note with AI: {{title}}"
   },
   "sandboxes_page": {
     "title": "Sandboxes",

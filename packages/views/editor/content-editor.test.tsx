@@ -10,6 +10,8 @@ const editorState = vi.hoisted(() => ({
   isFocused: false,
   isDestroyed: false,
   markdown: "",
+  docContentSize: 0,
+  selection: { empty: true, from: 0, to: 0 } as any,
 }));
 
 // Records the attachments[] prop the provider received on its most recent
@@ -24,6 +26,10 @@ const uploadAndInsertFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({}),
+}));
+
+vi.mock("@tiptap/core", () => ({
+  posToDOMRect: () => new DOMRect(10, 20, 0, 0),
 }));
 
 vi.mock("./extensions", () => ({
@@ -61,14 +67,18 @@ vi.mock("./attachment-download-context", () => ({
 
 const editorRef = vi.hoisted<{ current: unknown }>(() => ({ current: null }));
 const onCreateFired = vi.hoisted(() => ({ value: false }));
-const editorOptions = vi.hoisted<{ current: { onUpdate?: (args: { editor: unknown }) => void } | null }>(
-  () => ({ current: null }),
-);
+const editorOptions = vi.hoisted<{
+  current: {
+    onUpdate?: (args: { editor: unknown }) => void;
+    editorProps?: { handleKeyDown?: (view: any, event: KeyboardEvent) => boolean };
+  } | null;
+}>(() => ({ current: null }));
 
 vi.mock("@tiptap/react", () => ({
   useEditor: (options: {
     onCreate?: (args: { editor: unknown }) => void;
     onUpdate?: (args: { editor: unknown }) => void;
+    editorProps?: { handleKeyDown?: (view: any, event: KeyboardEvent) => boolean };
   }) => {
     editorOptions.current = options;
     if (!editorRef.current) {
@@ -86,9 +96,15 @@ vi.mock("@tiptap/react", () => ({
           setTextSelection: mockSetTextSelection,
         },
         getMarkdown: () => editorState.markdown,
+        view: { dom: document.createElement("div") },
         state: {
-          doc: { content: { size: 0 } },
-          selection: { empty: true, from: 0, to: 0 },
+          doc: {
+            content: { get size() { return editorState.docContentSize; } },
+            textBetween: vi.fn(() => ""),
+          },
+          get selection() {
+            return editorState.selection;
+          },
         },
       };
     }
@@ -113,6 +129,8 @@ describe("ContentEditor", () => {
     editorState.isFocused = false;
     editorState.isDestroyed = false;
     editorState.markdown = "";
+    editorState.docContentSize = 0;
+    editorState.selection = { empty: true, from: 0, to: 0 };
     editorRef.current = null;
     editorOptions.current = null;
     onCreateFired.value = false;
@@ -233,6 +251,32 @@ describe("ContentEditor", () => {
     });
 
     expect(onUpdate).toHaveBeenCalledWith("draft before switching");
+  });
+
+  it("opens the empty-line AI prompt when Space is pressed in an empty paragraph", () => {
+    const onEditPageWithAI = vi.fn(async () => "AI result");
+    const preventDefault = vi.fn();
+    const emptyParagraph = {
+      depth: 1,
+      parent: { type: { name: "paragraph" }, content: { size: 0 } },
+      before: vi.fn(() => 4),
+      after: vi.fn(() => 6),
+    };
+    editorState.selection = { empty: true, from: 5, to: 5, $from: emptyParagraph };
+
+    render(<ContentEditor onEditPageWithAI={onEditPageWithAI} />);
+
+    let handled: boolean | undefined;
+    act(() => {
+      handled = editorOptions.current?.editorProps?.handleKeyDown?.(
+        { state: { selection: editorState.selection } },
+        { key: " ", preventDefault, metaKey: false, ctrlKey: false, altKey: false, isComposing: false } as unknown as KeyboardEvent,
+      );
+    });
+
+    expect(handled).toBe(true);
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("textarea")).toBeInTheDocument();
   });
 });
 
@@ -393,6 +437,8 @@ describe("ContentEditor — mediaMode external (chat tray)", () => {
     editorState.isFocused = false;
     editorState.isDestroyed = false;
     editorState.markdown = "";
+    editorState.docContentSize = 0;
+    editorState.selection = { empty: true, from: 0, to: 0 };
     editorRef.current = null;
     editorOptions.current = null;
     onCreateFired.value = false;

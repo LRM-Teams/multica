@@ -310,6 +310,26 @@ func (s *S3Storage) VerifyUpload(ctx context.Context, key string) (UploadedObjec
 		}
 		checksum = hex.EncodeToString(decoded)
 	}
+	// Aliyun OSS and generic S3-compatible endpoints do not implement the AWS
+	// S3 checksum model: HeadObject(ChecksumMode=Enabled) does not populate
+	// ChecksumSHA256 (OSS uses its own CRC64 instead), so it comes back empty
+	// and the agent-upload-session completion compare would produce a
+	// checksum_mismatch 409 for every upload. Recompute SHA-256 from the object
+	// bytes (same as LocalStorage) whenever the storage-authoritative checksum
+	// is unavailable; real AWS S3 still returns it from HeadObject and keeps
+	// this cheaper metadata-only path.
+	if checksum == "" {
+		reader, err := s.GetReader(ctx, key)
+		if err != nil {
+			return UploadedObject{}, fmt.Errorf("s3 VerifyUpload read: %w", err)
+		}
+		defer reader.Close()
+		hash := sha256.New()
+		if _, err := io.Copy(hash, reader); err != nil {
+			return UploadedObject{}, fmt.Errorf("s3 VerifyUpload checksum: %w", err)
+		}
+		checksum = hex.EncodeToString(hash.Sum(nil))
+	}
 	return UploadedObject{
 		URL:            s.uploadedURL(key),
 		SizeBytes:      aws.ToInt64(out.ContentLength),

@@ -2,7 +2,13 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -283,5 +289,125 @@ func TestS3StorageCdnDomainPrefersPublicBaseURL(t *testing.T) {
 
 	if got := s.CdnDomain(); got != "assets.example.com" {
 		t.Fatalf("CdnDomain() = %q, want %q", got, "assets.example.com")
+	}
+}
+
+// TestS3StorageVerifyUpload_RecomputesChecksumWhenAWSChecksumMissing guards the
+// OSS / S3-compatible fix: Aliyun OSS does not populate HeadObject
+// ChecksumSHA256 (it uses CRC64), so VerifyUpload must fall back to reading the
+// object bytes and recomputing sha256 (same as LocalStorage). A real AWS
+// backend keeps the metadata path (covers the non-empty checksum case).
+func TestS3StorageVerifyUpload_RecomputesChecksumWhenAWSChecksumMissing(t *testing.T) {
+	payload := []byte("hello oss upload content")
+	sum := sha256.Sum256(payload)
+	wantChecksum := hex.EncodeToString(sum[:])
+
+	var gotGet bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// GetObject: return the object body (used by the recompute fallback).
+			gotGet = true
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			_, _ = w.Write(payload)
+		default:
+			// HeadObject: metadata only, deliberately no x-amz-checksum-sha256
+			// header — simulates Aliyun OSS / a non-AWS S3-compatible endpoint.
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	store := &S3Storage{
+		client: s3.New(s3.Options{
+			Region:       "cn-hangzhou",
+			Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")),
+			BaseEndpoint: aws.String(srv.URL),
+			UsePathStyle: true,
+			HTTPClient:   srv.Client(),
+		}),
+		bucket:         "test-bucket",
+		region:         "cn-hangzhou",
+		endpointURL:    srv.URL, // non-AWS S3-compatible (OSS-like) endpoint
+		forcePathStyle: true,
+		publicBaseURL:  "https://cdn.example.com",
+	}
+
+	obj, err := store.VerifyUpload(context.Background(), "uploads/abc/file.txt")
+	if err != nil {
+		t.Fatalf("VerifyUpload: %v", err)
+	}
+	if obj.ChecksumSHA256 != wantChecksum {
+		t.Fatalf("ChecksumSHA256 = %q, want %q (recomputed from bytes)", obj.ChecksumSHA256, wantChecksum)
+	}
+	if obj.SizeBytes != int64(len(payload)) {
+		t.Fatalf("SizeBytes = %d, want %d", obj.SizeBytes, len(payload))
+	}
+	if obj.ContentType != "text/plain" {
+		t.Fatalf("ContentType = %q, want %q", obj.ContentType, "text/plain")
+	}
+	if !gotGet {
+		t.Fatal("expected GetObject (read-back) to be exercised for the OSS checksum fallback")
+	}
+}
+
+// TestS3StorageVerifyUpload_KeepsAWSChecksumWhenPresent guards that a real AWS S3
+// backend is not regressed: when HeadObject returns ChecksumSHA256, VerifyUpload
+// uses the storage-authoritative metadata checksum and does NOT fall back to a
+// read-back (GetObject) of the whole object.
+func TestS3StorageVerifyUpload_KeepsAWSChecksumWhenPresent(t *testing.T) {
+	payload := []byte("aws checksum payload")
+	sum := sha256.Sum256(payload)
+	wantChecksum := hex.EncodeToString(sum[:])
+	checksumHeader := base64.StdEncoding.EncodeToString(sum[:])
+
+	var gotGet bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// Should NOT be called on the AWS path — the metadata checksum wins.
+			gotGet = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			// HeadObject: AWS returns the SHA-256 checksum in x-amz-checksum-sha256.
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			w.Header().Set("x-amz-checksum-sha256", checksumHeader)
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	store := &S3Storage{
+		client: s3.New(s3.Options{
+			Region:       "us-east-1",
+			Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")),
+			BaseEndpoint: aws.String(srv.URL),
+			UsePathStyle: true,
+			HTTPClient:   srv.Client(),
+		}),
+		bucket:         "test-bucket",
+		region:         "us-east-1",
+		endpointURL:    "", // real AWS S3 (no custom endpoint)
+		forcePathStyle: true,
+		publicBaseURL:  "https://cdn.example.com",
+	}
+
+	obj, err := store.VerifyUpload(context.Background(), "uploads/abc/file.txt")
+	if err != nil {
+		t.Fatalf("VerifyUpload: %v", err)
+	}
+	if obj.ChecksumSHA256 != wantChecksum {
+		t.Fatalf("ChecksumSHA256 = %q, want %q (from HeadObject metadata)", obj.ChecksumSHA256, wantChecksum)
+	}
+	if gotGet {
+		t.Fatal("expected GetObject NOT to be called when HeadObject returns a checksum (AWS path)")
 	}
 }

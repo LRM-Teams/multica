@@ -2,8 +2,15 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -283,5 +290,94 @@ func TestS3StorageCdnDomainPrefersPublicBaseURL(t *testing.T) {
 
 	if got := s.CdnDomain(); got != "assets.example.com" {
 		t.Fatalf("CdnDomain() = %q, want %q", got, "assets.example.com")
+	}
+}
+
+// newMockS3Storage builds an S3Storage whose client talks to an in-process
+// S3-compatible mock that only implements HeadObject/GetObject. This lets
+// VerifyUpload's fast checksum path and its OSS fallback (body recompute)
+// path be exercised without a real bucket.
+func newMockS3Storage(t *testing.T, body []byte, headSHA256 string) (*S3Storage, *int32) {
+	t.Helper()
+	var getCalls int32
+	mux := http.NewServeMux()
+	// Path-style requests land on /<bucket>/<key>; this mock answers any
+	// HEAD with object headers and any GET with the object body.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+			w.Header().Set("Content-Type", "application/octet-stream")
+			if headSHA256 != "" {
+				w.Header().Set("x-amz-checksum-sha256", headSHA256)
+			}
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			atomic.AddInt32(&getCalls, 1)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(body)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	client := s3.New(s3.Options{
+		Region:       "us-east-1",
+		Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")),
+		BaseEndpoint: aws.String(ts.URL),
+		UsePathStyle: true,
+	})
+	return &S3Storage{
+		client:         client,
+		bucket:         "test-bucket",
+		region:         "us-east-1",
+		endpointURL:    ts.URL,
+		forcePathStyle: true,
+	}, &getCalls
+}
+
+func TestS3StorageVerifyUpload_FastPathWithReturnedChecksum(t *testing.T) {
+	// Real AWS S3: HeadObject returns the SHA-256 checksum, so VerifyUpload
+	// must use it directly and never read the object body.
+	body := []byte("hello s3 fast path")
+	sum := sha256.Sum256(body)
+	store, getCalls := newMockS3Storage(t, body, base64.StdEncoding.EncodeToString(sum[:]))
+
+	obj, err := store.VerifyUpload(context.Background(), "uploads/abc/file.txt")
+	if err != nil {
+		t.Fatalf("VerifyUpload: %v", err)
+	}
+	if got := obj.ChecksumSHA256; got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("ChecksumSHA256 = %q, want %q", got, hex.EncodeToString(sum[:]))
+	}
+	if obj.SizeBytes != int64(len(body)) {
+		t.Fatalf("SizeBytes = %d, want %d", obj.SizeBytes, len(body))
+	}
+	if atomic.LoadInt32(getCalls) != 0 {
+		t.Fatalf("fast path read object body %d times; want 0", atomic.LoadInt32(getCalls))
+	}
+}
+
+func TestS3StorageVerifyUpload_OSSFallbackRecomputesChecksum(t *testing.T) {
+	// Aliyun OSS: HeadObject returns NO SHA-256 checksum (OSS uses CRC64).
+	// VerifyUpload must fall back to reading the body and recomputing sha256.
+	body := []byte("hello oss fallback test")
+	store, getCalls := newMockS3Storage(t, body, "")
+
+	obj, err := store.VerifyUpload(context.Background(), "uploads/abc/file.txt")
+	if err != nil {
+		t.Fatalf("VerifyUpload: %v", err)
+	}
+	sum := sha256.Sum256(body)
+	if got := obj.ChecksumSHA256; got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("ChecksumSHA256 = %q, want %q", got, hex.EncodeToString(sum[:]))
+	}
+	if obj.SizeBytes != int64(len(body)) {
+		t.Fatalf("SizeBytes = %d, want %d", obj.SizeBytes, len(body))
+	}
+	if atomic.LoadInt32(getCalls) != 1 {
+		t.Fatalf("fallback read object body %d times; want 1", atomic.LoadInt32(getCalls))
 	}
 }

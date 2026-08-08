@@ -290,6 +290,15 @@ func (s *S3Storage) PresignUpload(ctx context.Context, key string, ttl time.Dura
 }
 
 // VerifyUpload obtains the storage-authoritative metadata after a direct PUT.
+//
+// Real AWS S3 persists the SHA-256 checksum and returns it through HeadObject
+// when ChecksumMode is enabled, so we can verify without reading the object
+// body. S3-compatible backends (notably Aliyun OSS) do not — OSS verifies with
+// CRC64 and does not persist/return the SHA-256 checksum — so HeadObject yields
+// an empty checksum and any app-level comparison would false-negative with
+// checksum_mismatch. For those backends we fall back to streaming the object
+// and recomputing the SHA-256 locally (same approach as LocalStorage), keeping
+// the application-level SHA-256 contract identical across storage backends.
 func (s *S3Storage) VerifyUpload(ctx context.Context, key string) (UploadedObject, error) {
 	if key == "" {
 		return UploadedObject{}, fmt.Errorf("s3 VerifyUpload: empty key")
@@ -302,20 +311,33 @@ func (s *S3Storage) VerifyUpload(ctx context.Context, key string) (UploadedObjec
 	if err != nil {
 		return UploadedObject{}, fmt.Errorf("s3 HeadObject: %w", err)
 	}
-	checksum := ""
+	object := UploadedObject{
+		URL:         s.uploadedURL(key),
+		SizeBytes:   aws.ToInt64(out.ContentLength),
+		ContentType: aws.ToString(out.ContentType),
+	}
 	if encoded := aws.ToString(out.ChecksumSHA256); encoded != "" {
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil || len(decoded) != sha256.Size {
 			return UploadedObject{}, fmt.Errorf("s3 HeadObject: invalid SHA-256 checksum")
 		}
-		checksum = hex.EncodeToString(decoded)
+		object.ChecksumSHA256 = hex.EncodeToString(decoded)
+		return object, nil
 	}
-	return UploadedObject{
-		URL:            s.uploadedURL(key),
-		SizeBytes:      aws.ToInt64(out.ContentLength),
-		ContentType:    aws.ToString(out.ContentType),
-		ChecksumSHA256: checksum,
-	}, nil
+	// HeadObject returned no SHA-256 (typical of Aliyun OSS / non-AWS
+	// backends). Stream the object and recompute the digest locally so the
+	// application checksum contract still holds.
+	reader, err := s.GetReader(ctx, key)
+	if err != nil {
+		return UploadedObject{}, fmt.Errorf("s3 VerifyUpload body: %w", err)
+	}
+	defer reader.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, reader); err != nil {
+		return UploadedObject{}, fmt.Errorf("s3 VerifyUpload checksum: %w", err)
+	}
+	object.ChecksumSHA256 = hex.EncodeToString(hash.Sum(nil))
+	return object, nil
 }
 
 // Delete removes an object from S3. Errors are logged but not fatal.

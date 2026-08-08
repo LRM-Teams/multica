@@ -44,6 +44,12 @@ type AgentTransportSendRequest struct {
 	SeenUpToSeq     int64           `json:"seen_up_to_seq,omitempty"`
 	ContextTarget   string          `json:"context_target,omitempty"`
 	BypassFreshness bool            `json:"bypass_freshness,omitempty"`
+	// ContinueAnyway lets an already-fresh agent explicitly say "I understand
+	// there are newer messages I haven't read; proceed and place mine per the
+	// proxy cursor anyway" instead of being soft-held. It does not skip the
+	// freshness computation (use BypassFreshness for that); it only overrides the
+	// held decision on a per-send basis, mirroring Raft's continueAnyway.
+	ContinueAnyway bool `json:"continue_anyway,omitempty"`
 }
 
 // AgentTransportTargetRequest is an internal Credential Proxy preflight. It
@@ -82,23 +88,24 @@ type AgentTransportFreshnessResolution struct {
 }
 
 type AgentTransportSendHeldResponse struct {
-	Action              string                               `json:"action"`
-	Target              string                               `json:"target"`
-	State               string                               `json:"state"`
-	Outcome             string                               `json:"outcome"`
-	Subtype             string                               `json:"subtype"`
-	Reason              string                               `json:"reason"`
-	Decision            string                               `json:"decision"`
-	ProducerFactID      string                               `json:"producerFactId"`
-	AvailableActions    []string                             `json:"availableActions"`
-	HeldMessages        []ChannelMessageResponse             `json:"heldMessages"`
-	NewMessageCount     int64                                `json:"newMessageCount"`
-	ShownMessageCount   int64                                `json:"shownMessageCount"`
-	OmittedMessageCount int64                                `json:"omittedMessageCount"`
-	SeenUpToSeq         int64                                `json:"seenUpToSeq"`
-	LatestSeq           int64                                `json:"latestSeq"`
-	TransportID         string                               `json:"transport_id"`
-	ContextWindow       AgentTransportFreshnessContextWindow `json:"contextWindow"`
+	Action                  string                               `json:"action"`
+	Target                  string                               `json:"target"`
+	State                   string                               `json:"state"`
+	Outcome                 string                               `json:"outcome"`
+	Subtype                 string                               `json:"subtype"`
+	Reason                  string                               `json:"reason"`
+	Decision                string                               `json:"decision"`
+	ProducerFactID          string                               `json:"producerFactId"`
+	AvailableActions        []string                             `json:"availableActions"`
+	ContinueAnywaySuggested bool                                 `json:"continueAnywaySuggested,omitempty"`
+	HeldMessages            []ChannelMessageResponse             `json:"heldMessages"`
+	NewMessageCount         int64                                `json:"newMessageCount"`
+	ShownMessageCount       int64                                `json:"shownMessageCount"`
+	OmittedMessageCount     int64                                `json:"omittedMessageCount"`
+	SeenUpToSeq             int64                                `json:"seenUpToSeq"`
+	LatestSeq               int64                                `json:"latestSeq"`
+	TransportID             string                               `json:"transport_id"`
+	ContextWindow           AgentTransportFreshnessContextWindow `json:"contextWindow"`
 }
 
 type AgentTransportReactRequest struct {
@@ -389,7 +396,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, nil)
+	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, req.ContinueAnyway, nil)
 	if err != nil {
 		var freshnessHold *agentTransportFreshnessHoldError
 		if errors.As(err, &freshnessHold) {
@@ -1234,7 +1241,7 @@ func (h *Handler) agentAgentDMChannelMatches(ctx context.Context, workspaceID, c
 // all other effects remain after the transaction commits.
 type agentTransportMessageAfterInsert func(context.Context, pgx.Tx, ChannelMessageResponse) error
 
-func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
+func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID, continueAnyway bool, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
 	input, err := h.finalizedAgentTransportInsertInput(ctx, source, target, content, parts, clientMessageID)
 	if err != nil {
 		return agentTransportMessageResult{}, err
@@ -1246,7 +1253,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 			return agentTransportMessageResult{}, err
 		}
 	}
-	result, err := h.insertAgentTransportMessage(ctx, source, target, input, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, afterInsert)
+	result, err := h.insertAgentTransportMessage(ctx, source, target, input, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, continueAnyway, afterInsert)
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
@@ -1324,7 +1331,7 @@ func (h *Handler) finalizedAgentTransportInsertInput(ctx context.Context, source
 	}, nil
 }
 
-func (h *Handler) insertAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, _ string, _ []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
+func (h *Handler) insertAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, _ string, _ []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, continueAnyway bool, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return agentTransportMessageResult{}, err
@@ -1379,7 +1386,7 @@ func (h *Handler) insertAgentTransportMessage(ctx context.Context, source agentT
 			_ = tx.Rollback(ctx)
 			return agentTransportMessageResult{}, err
 		}
-		if decision.Hold {
+		if decision.Hold && !continueAnyway {
 			if err := tx.Commit(ctx); err != nil {
 				return agentTransportMessageResult{}, err
 			}
@@ -2073,14 +2080,15 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		// A held draft is deliberately inert. Do not expose ready-to-execute
 		// resend commands here: tool runtimes can mistake them for follow-up work
 		// and publish a message that the freshness gate just withheld.
-		AvailableActions:    []string{"review_newer_messages"},
-		HeldMessages:        decision.Messages,
-		NewMessageCount:     decision.TotalNewer,
-		ShownMessageCount:   int64(len(decision.Messages)),
-		OmittedMessageCount: decision.Omitted,
-		SeenUpToSeq:         decision.SeenUpToSeq,
-		LatestSeq:           decision.LatestSeq,
-		TransportID:         transportID,
+		AvailableActions:        []string{"review_newer_messages", "resend_with_continue_anyway"},
+		ContinueAnywaySuggested: true,
+		HeldMessages:            decision.Messages,
+		NewMessageCount:         decision.TotalNewer,
+		ShownMessageCount:       int64(len(decision.Messages)),
+		OmittedMessageCount:     decision.Omitted,
+		SeenUpToSeq:             decision.SeenUpToSeq,
+		LatestSeq:               decision.LatestSeq,
+		TransportID:             transportID,
 		ContextWindow: AgentTransportFreshnessContextWindow{
 			OldestSeq:     firstChannelMessageSeqValue(decision.Messages),
 			NewestSeq:     maxChannelMessageSeq(decision.Messages),

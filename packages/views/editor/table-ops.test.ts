@@ -5,9 +5,11 @@ import { Table } from "@tiptap/extension-table";
 import TableRow from "@tiptap/extension-table-row";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
+import { NodeSelection } from "@tiptap/pm/state";
 import {
   deleteColumnAt,
   deleteRowAt,
+  deleteTableAt,
   findTablePos,
   insertColumnAt,
   insertRowAt,
@@ -83,5 +85,17 @@ describe("table-ops", () => {
 
     expect(deleteColumnAt(editor, tablePos, 1)).toBe(true);
     expect(tableSize(editor, tablePos)).toEqual({ rows: 2, cols: 2 });
+  });
+
+  it("deletes a NodeSelected table by position", () => {
+    editor = makeEditor();
+    const tablePos = findTablePos(editor.state.doc)!;
+    editor.view.dispatch(
+      editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, tablePos)),
+    );
+
+    expect(editor.commands.deleteTable()).toBe(false);
+    expect(deleteTableAt(editor, tablePos)).toBe(true);
+    expect(findTablePos(editor.state.doc)).toBeNull();
   });
 });

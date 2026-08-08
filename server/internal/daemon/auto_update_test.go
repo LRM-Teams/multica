@@ -2,9 +2,15 @@ package daemon
 
 import (
 	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // #2379 regression guard: the detection path (autoUpdateLoop/checkForNewerRelease)
@@ -56,3 +62,36 @@ func TestAutoUpdateLoopSkipsWhenIntervalDisabled(t *testing.T) {
 		t.Fatal("autoUpdateLoop scheduled a delay/ticker when interval is disabled")
 	}
 }
+
+// TestAutoUpdateDetectionRecordsNewerTarget covers the core detection semantic:
+// with a real updateObservation and a fake release feed advertising a newer
+// release, checkForNewerRelease must record that release as TargetVersion on the
+// observation (which the heartbeat then reports to the server -> frontend).
+func TestAutoUpdateDetectionRecordsNewerTarget(t *testing.T) {
+	// Fake release feed serving a newer release than the running CLI version.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"v9.9.10","tag":"v9.9.10","platforms":{}}`))
+	}))
+	defer srv.Close()
+	t.Setenv(cli.ReleaseManifestBaseURLEnv, srv.URL)
+
+	coordinator := newUpdateObservationCoordinator(Config{
+		ServerBaseURL: "https://api.multica.ai",
+		CLIVersion:    "v9.9.9",
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	d := &Daemon{
+		cfg:              Config{CLIVersion: "v9.9.9"},
+		updateObservation: coordinator,
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	d.checkForNewerRelease(context.Background())
+
+	obs := coordinator.Snapshot()
+	if obs.TargetVersion != "v9.9.10" {
+		t.Fatalf("TargetVersion = %q, want v9.9.10 (recorded from fake feed)", obs.TargetVersion)
+	}
+}
+

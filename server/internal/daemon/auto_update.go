@@ -132,6 +132,9 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 func fetchReleaseManifest(ctx context.Context) (*cli.ReleaseManifest, error) {
 	base := cli.ReleaseManifestBaseURL()
 	manifestURLs := []string{base + "/manifest.json", base + "/latest.json", base + "/release.json"}
+	// A dedicated client with a per-request timeout keeps a hung release-feed
+	// endpoint from stalling a detection tick indefinitely.
+	client := &http.Client{Timeout: 15 * time.Second}
 	var lastErr error
 	for _, u := range manifestURLs {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -139,7 +142,7 @@ func fetchReleaseManifest(ctx context.Context) (*cli.ReleaseManifest, error) {
 			lastErr = err
 			continue
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
 			continue

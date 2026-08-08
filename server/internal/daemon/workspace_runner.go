@@ -80,6 +80,9 @@ func (d *Daemon) workspaceAgentProcessManager(workspaceID string) *agentProcessM
 func (d *Daemon) workspaceAgentActivityProducer(workspaceID string) *agentActivityProducer {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.agentActivityProducers == nil {
+		d.agentActivityProducers = make(map[string]*agentActivityProducer)
+	}
 	if producer := d.agentActivityProducers[workspaceID]; producer != nil {
 		return producer
 	}

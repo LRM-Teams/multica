@@ -110,11 +110,21 @@ export function insertColumnAt(editor: Editor, tablePos: number, colIndex: numbe
   return true;
 }
 
+/** Delete the whole table at `tablePos` (works with NodeSelection on the table). */
+export function deleteTableAt(editor: Editor, tablePos: number): boolean {
+  const table = editor.state.doc.nodeAt(tablePos);
+  if (!table || table.type.name !== "table") return false;
+  const tr = editor.state.tr.delete(tablePos, tablePos + table.nodeSize);
+  editor.view.dispatch(tr.scrollIntoView());
+  editor.view.focus();
+  return true;
+}
+
 export function deleteRowAt(editor: Editor, tablePos: number, rowIndex: number): boolean {
   const ctx = getTableContext(editor, tablePos);
   if (!ctx) return false;
   if (ctx.map.height <= 1) {
-    return editor.chain().focus().deleteTable().run();
+    return deleteTableAt(editor, tablePos);
   }
   if (rowIndex < 0 || rowIndex >= ctx.map.height) return false;
   const tr = editor.state.tr;
@@ -135,7 +145,7 @@ export function deleteColumnAt(editor: Editor, tablePos: number, colIndex: numbe
   const ctx = getTableContext(editor, tablePos);
   if (!ctx) return false;
   if (ctx.map.width <= 1) {
-    return editor.chain().focus().deleteTable().run();
+    return deleteTableAt(editor, tablePos);
   }
   if (colIndex < 0 || colIndex >= ctx.map.width) return false;
   const tr = editor.state.tr;

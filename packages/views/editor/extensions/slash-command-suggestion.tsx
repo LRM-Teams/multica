@@ -152,7 +152,11 @@ export const SlashCommandList = forwardRef<
           >
             {slashCommandIcon(item)}
             <span className="flex min-w-0 flex-col gap-0.5">
-              <span className="font-medium">/{item.label}</span>
+              {/* Block commands already sit under a `/` trigger + icon; skip the
+                  redundant slash prefix (Notion-style: "code" / "table"). */}
+              <span className="font-medium">
+                {item.icon ? item.label : `/${item.label}`}
+              </span>
               {description && (
                 <span className="truncate text-muted-foreground">
                   {description}

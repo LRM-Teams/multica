@@ -33,6 +33,7 @@ import { useT } from "../i18n";
 import {
   deleteColumnAt,
   deleteRowAt,
+  deleteTableAt,
   insertColumnAt,
   insertRowAt,
   selectColumnAt,
@@ -388,9 +389,12 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
   const visibleBottom = activeTable.wrapperRect.top + activeTable.wrapperRect.height;
   const tableLeft = activeTable.rect.left;
   const tableTop = activeTable.rect.top;
+  const tableRight = activeTable.rect.left + activeTable.rect.width;
 
+  // Sit against the table's right edge (not the full-width wrapper). When the
+  // table overflows horizontally, clamp so the control stays in view.
   const addColumnStyle: CSSProperties = {
-    left: visibleRight + 2,
+    left: Math.min(tableRight + 2, Math.max(visibleLeft, visibleRight - 18)),
     top: tableTop,
     width: 18,
     height: Math.min(activeTable.rect.height, activeTable.wrapperRect.height),
@@ -496,7 +500,13 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
             title={t(($) => $.table_controls.delete_table)}
             aria-label={t(($) => $.table_controls.delete_table)}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => editor.chain().focus().deleteTable().run()}
+            onClick={() => {
+              // TipTap deleteTable() walks cell ancestors and fails when the
+              // table itself is NodeSelected — delete by position instead.
+              const tablePos = activeTable.pos;
+              setOpenMenu(null);
+              deleteTableAt(editor, tablePos);
+            }}
           >
             <Trash2 className="size-3.5" />
           </button>

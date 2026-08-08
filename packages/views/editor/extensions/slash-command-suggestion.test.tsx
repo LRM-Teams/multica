@@ -384,7 +384,7 @@ describe("buildBlockCommandItems", () => {
 
 describe("SlashCommandList built-in command rendering", () => {
   it("renders icons for block commands", () => {
-    const { container, getByText } = render(
+    const { container, getByText, queryByText } = render(
       <I18nWrapper>
         <SlashCommandList
           items={buildBlockCommandItems("")}
@@ -395,8 +395,10 @@ describe("SlashCommandList built-in command rendering", () => {
       </I18nWrapper>,
     );
 
-    expect(getByText("/code")).toBeInTheDocument();
-    expect(getByText("/table")).toBeInTheDocument();
+    expect(getByText("code")).toBeInTheDocument();
+    expect(getByText("table")).toBeInTheDocument();
+    expect(queryByText("/code")).not.toBeInTheDocument();
+    expect(queryByText("/table")).not.toBeInTheDocument();
     expect(container.querySelectorAll("svg")).toHaveLength(2);
   });
 

@@ -79,10 +79,13 @@ const COL_HANDLE_OUTSET = 14;
 
 function findActiveTable(editor: Editor): { node: ProseMirrorNode; pos: number; selected: boolean } | null {
   const { selection, doc } = editor.state;
+  if (!selection) return null;
   if (selection instanceof NodeSelection && selection.node.type.name === "table") {
     return { node: selection.node, pos: selection.from, selected: true };
   }
   const { $from } = selection;
+  // Partial editor mocks (and briefly-unready views) may omit ResolvedPos.
+  if (!$from) return null;
   for (let depth = $from.depth; depth > 0; depth -= 1) {
     const node = $from.node(depth);
     if (node.type.name === "table") return { node, pos: $from.before(depth), selected: false };
@@ -233,7 +236,10 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
   openMenuRef.current = openMenu;
 
   useEffect(() => {
+    if (editor.isDestroyed) return;
+
     const update = () => {
+      if (editor.isDestroyed) return;
       const root = rootRef.current;
       if (!root) return;
 

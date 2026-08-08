@@ -42,6 +42,10 @@ vi.mock("./bubble-menu", () => ({
   EditorBubbleMenu: () => null,
 }));
 
+vi.mock("./table-controls", () => ({
+  TableControls: () => null,
+}));
+
 vi.mock("./attachment-download-context", () => ({
   AttachmentDownloadProvider: ({
     attachments,

@@ -18,7 +18,6 @@ import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@multica/ui/components/ui/hover-card";
-import { Input } from "@multica/ui/components/ui/input";
 import { Separator } from "@multica/ui/components/ui/separator";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -782,6 +781,7 @@ function NoteEditor({
 }) {
   const { t } = useT("layout");
   const editorRef = useRef<ContentEditorRef | null>(null);
+  const titleTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const { mutateAsync: updateNotePage } = useUpdateNotePage();
   const { uploadWithToast, uploading } = useFileUpload(api, (error) => {
     showErrorToast(error.message || t(($) => $.notes_page.image_paste_failed));
@@ -799,6 +799,13 @@ function NoteEditor({
   }
   const dirty = draft.title !== draft.serverTitle || draft.content !== draft.serverContent;
   const [saveState, setSaveState] = useState<"saved" | "pending" | "saving" | "error">("saved");
+
+  useEffect(() => {
+    const textarea = titleTextareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [draft.title]);
 
   // react-doctor-disable-next-line react-doctor/no-cascading-set-state -- autosave status follows local draft dirtiness and async save lifecycle.
   useEffect(() => {
@@ -879,18 +886,21 @@ function NoteEditor({
           </Button>
         )}
       </div>
-      <Input
+      <textarea
+        ref={titleTextareaRef}
+        rows={1}
         value={draft.title}
-        onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+        onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value.replace(/\s*\r?\n\s*/g, " ") }))}
         onKeyDown={(event) => {
-          const input = event.currentTarget;
-          const caretAtEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
-          if (event.key === "Enter" && caretAtEnd) {
+          const textarea = event.currentTarget;
+          const caretAtEnd = textarea.selectionStart === textarea.value.length && textarea.selectionEnd === textarea.value.length;
+          if (event.key === "Enter") {
             event.preventDefault();
-            editorRef.current?.insertBlankLineAtStart();
+            if (caretAtEnd) editorRef.current?.insertBlankLineAtStart();
           }
         }}
-        className="h-auto border-0 px-0 py-1 text-3xl font-semibold leading-tight shadow-none focus-visible:ring-0 md:text-4xl"
+        className="h-auto w-full resize-none overflow-hidden border-0 bg-transparent px-0 py-1 text-3xl font-semibold leading-tight shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 md:text-4xl"
+        aria-label={t(($) => $.notes_page.rename_page)}
         placeholder="Untitled"
       />
       {childPages.length > 0 && (

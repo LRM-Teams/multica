@@ -4902,6 +4902,21 @@ func (h *Handler) dispatchChannelMessageToAgentsWithCursorPolicy(ctx context.Con
 	// #2539 wake restore is actually present in the deployed image.
 	slog.Debug("channel human wake dispatch restored", "channel", ch.ID, "replay", replayTrigger)
 
+	// LRM-1523 echo suppression: an agent-authored pure acknowledgement (收到 /
+	// 明白 / OK …) carries no new information or action. It must NOT wake any
+	// other agent — not even its @-targets — otherwise every polite "收到" reply
+	// re-triggers the acknowledged agent and feeds the confirmation echo chain.
+	// The message stays in the channel and is observed when any agent next runs;
+	// it just never produces a wake-required run on its own.
+	if !channelMessageIsHumanAuthored(trigger.Type) && !replayTrigger {
+		if pure, _ := channelMessageIsPureConfirmation(trigger); pure {
+			if h.Metrics != nil {
+				h.Metrics.RecordChannelAmbientGateDecision(channelAmbientGateActionRelevanceSkipped, channelAmbientSkipReasonNonAction)
+			}
+			return
+		}
+	}
+
 	dispatchWakeExcept := h.dispatchChannelMessageWakeExcept
 	if replayTrigger {
 		dispatchWakeExcept = h.dispatchTranscribedChannelMessageWakeExcept
@@ -4958,6 +4973,15 @@ func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelRespons
 
 func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
+
+	// LRM-1523 echo suppression mirrors the main-channel path: an agent-authored
+	// pure acknowledgement inside a thread must not re-wake its @-targets.
+	if !channelMessageIsHumanAuthored(trigger.Type) {
+		if pure, _ := channelMessageIsPureConfirmation(trigger); pure {
+			return
+		}
+	}
+
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
@@ -6217,6 +6241,13 @@ func channelMessageAmbientSkipReason(trigger ChannelMessageResponse) (bool, stri
 	}
 	if channelMessageHasOnlyNonTextNoiseParts(trigger.Parts) {
 		return true, channelAmbientGateReasonNonTextNoise
+	}
+	// LRM-1523: a pure confirmation / acknowledgement (收到 / 明白 / OK / …)
+	// carries no new information or action and must not be delivered as ambient
+	// context (nor wake anyone). Treat it as a non_action no-op with an
+	// observable silence reason.
+	if channelContentIsPureConfirmation(trigger.Content, trigger.Parts) {
+		return true, channelAmbientSkipReasonNonAction
 	}
 	if skip, reason := deterministicChannelAmbientRelevanceSkip(trigger.Content); skip {
 		return true, reason

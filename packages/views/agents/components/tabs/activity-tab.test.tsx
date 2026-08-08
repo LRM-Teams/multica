@@ -50,6 +50,35 @@ describe("ActivityTab", () => {
     expect(screen.getByText("sanitized body")).toBeInTheDocument();
   });
 
+  it("renders a server-projected soft-hold row (warning tone) with its reason subtext", () => {
+    // LRM soft-hold: when an agent send is freshness-held the backend projects
+    // a held row into Runner Activity. The frontend is presentation-safe: it
+    // must display the supplied tone/title/subtext as-is and never infer
+    // runtime state from the send response.
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Message held", tone: "warning", visibility: "visible" },
+        timeline: [{
+          id: "row-held",
+          occurred_at: "2026-08-08T04:00:00Z",
+          title: "Message held — review newer messages before sending",
+          subtext: "3 newer messages available — review then resend",
+          tone: "warning",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    expect(screen.getByText("Message held — review newer messages before sending")).toBeInTheDocument();
+    expect(screen.getByText("3 newer messages available — review then resend")).toHaveClass(
+      "block",
+      "break-words",
+    );
+  });
+
   it("does not invent a summary when the server withholds it", () => {
     runnerActivity.mockReturnValue({ data: { summary: null, timeline: [] }, isLoading: false, isError: false, refetch: vi.fn() });
     renderActivityTab();

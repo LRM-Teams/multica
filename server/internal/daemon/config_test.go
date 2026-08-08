@@ -261,7 +261,7 @@ func TestLoadConfig_AutoUpdateDefaultIsExplicitOnlyNoOp(t *testing.T) {
 	if cfg.AutoUpdateEnabled {
 		t.Fatal("AutoUpdateEnabled must be false: upgrades are explicit-only")
 	}
-	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+	if cfg.AutoUpdateConfigSource != "auto_detect" {
 		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
@@ -282,7 +282,7 @@ func TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost(t *testing
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true for self-host with explicit MULTICA_DAEMON_AUTO_UPDATE=false, want false")
 	}
-	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+	if cfg.AutoUpdateConfigSource != "auto_detect" {
 		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
@@ -304,7 +304,7 @@ func TestLoadConfig_AutoUpdateDefault_CloudIsAlsoNoOp(t *testing.T) {
 	if cfg.AutoUpdateEnabled {
 		t.Fatal("AutoUpdateEnabled must be false for Multica Cloud too")
 	}
-	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+	if cfg.AutoUpdateConfigSource != "auto_detect" {
 		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
@@ -324,7 +324,7 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOnForSelfHost(t *testing.T) {
 	if cfg.AutoUpdateEnabled {
 		t.Fatal("MULTICA_DAEMON_AUTO_UPDATE=true re-enabled a retired loop")
 	}
-	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+	if cfg.AutoUpdateConfigSource != "auto_detect" {
 		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
@@ -344,7 +344,7 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOffForCloud(t *testing.T) {
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true after explicit MULTICA_DAEMON_AUTO_UPDATE=false, want false")
 	}
-	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+	if cfg.AutoUpdateConfigSource != "auto_detect" {
 		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }
@@ -366,7 +366,7 @@ func TestLoadConfig_AutoUpdate_NoFlagWinsOverCloudDefault(t *testing.T) {
 	if cfg.AutoUpdateEnabled {
 		t.Fatalf("AutoUpdateEnabled = true with --no-auto-update set; flag must win")
 	}
-	if cfg.AutoUpdateConfigSource != "deprecated_noop" {
+	if cfg.AutoUpdateConfigSource != "auto_detect" {
 		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
 	}
 }

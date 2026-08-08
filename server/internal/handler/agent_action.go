@@ -124,7 +124,7 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 	actionPart := agentActionMessagePart(name, description, req.PreferredComputer)
 	result, err := h.createAgentTransportMessage(
 		r.Context(), source, target, buildAgentCreationProposalContent(name), []protocol.MessagePart{actionPart}, nil,
-		clientRequestID, 0, pgtype.UUID{},
+		clientRequestID, 0, pgtype.UUID{}, false,
 		func(ctx context.Context, tx pgx.Tx, message ChannelMessageResponse) error {
 			return seedAgentActionMessageTx(ctx, tx, origin.workspaceID, message.ID, origin.agentID, name, description, req.PreferredComputer)
 		},

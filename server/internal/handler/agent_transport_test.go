@@ -549,8 +549,11 @@ func TestAgentTransportHeldResponseMakesBoundedWindowEdgesExplicit(t *testing.T)
 		body.ContextWindow.NewerBoundary != "No newer." {
 		t.Fatalf("bounded context edges=%+v", body.ContextWindow)
 	}
-	if got := strings.Join(body.AvailableActions, ","); got != "review_newer_messages" {
+	if got := strings.Join(body.AvailableActions, ","); got != "review_newer_messages,resend_with_continue_anyway" {
 		t.Fatalf("bounded available actions=%q", got)
+	}
+	if !body.ContinueAnywaySuggested {
+		t.Fatalf("held response should suggest continue_anyway as an escape, continueAnywaySuggested=%v", body.ContinueAnywaySuggested)
 	}
 }
 
@@ -588,6 +591,71 @@ func TestAgentTransportFreshnessHoldSameRangeEmitsOneActivityUnderConcurrency(t 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("concurrent freshness hold: status=%d body=%s", rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// TestAgentTransportSoftHoldContinueAnyway verifies the soft-hold escape hatch:
+// a stale seen_up_to_seq normally yields a soft "held" response (200, state=held,
+// with continueAnywaySuggested + resend_with_continue_anyway), but the same send
+// with continue_anyway:true proceeds and inserts the message instead of being
+// held. This mirrors Raft's continueAnyway: the freshness hold stays for ordering,
+// but a busy agent is no longer hard-blocked and can place its message per the
+// proxy cursor.
+func TestAgentTransportSoftHoldContinueAnyway(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "continue-anyway seen "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "continue-anyway newer "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed newer message: %v", err)
+	}
+
+	// 1) Without continue_anyway: a stale cursor yields a soft held response.
+	held := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target": target, "content": "should be held", "client_message_id": "ca-held-" + uuid.NewString(), "seen_up_to_seq": seen.Seq,
+	})
+	if held.Code != http.StatusOK {
+		t.Fatalf("soft hold: status=%d body=%s", held.Code, held.Body.String())
+	}
+	var heldBody AgentTransportSendHeldResponse
+	if err := json.Unmarshal(held.Body.Bytes(), &heldBody); err != nil {
+		t.Fatalf("decode held response: %v", err)
+	}
+	if heldBody.State != "held" || heldBody.Subtype != "freshness" {
+		t.Fatalf("soft hold state=%q subtype=%q body=%s", heldBody.State, heldBody.Subtype, held.Body.String())
+	}
+	if !heldBody.ContinueAnywaySuggested {
+		t.Fatalf("soft hold should suggest continue_anyway, continueAnywaySuggested=%v", heldBody.ContinueAnywaySuggested)
+	}
+
+	// 2) With continue_anyway: same stale cursor proceeds and creates the message.
+	sent := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target": target, "content": "released by continue_anyway", "client_message_id": "ca-sent-" + uuid.NewString(), "seen_up_to_seq": seen.Seq, "continue_anyway": true,
+	})
+	if sent.Code != http.StatusCreated {
+		t.Fatalf("continue_anyway send: status=%d body=%s", sent.Code, sent.Body.String())
+	}
+	var sentBody AgentTransportSendResponse
+	if err := json.Unmarshal(sent.Body.Bytes(), &sentBody); err != nil {
+		t.Fatalf("decode sent response: %v", err)
+	}
+	if sentBody.Message.ID == "" || sentBody.Message.Seq <= seen.Seq {
+		t.Fatalf("continue_anyway message not inserted with advancing seq: id=%q seq=%d", sentBody.Message.ID, sentBody.Message.Seq)
+	}
+	var persisted int
+	if err := testPool.QueryRow(ctx, `SELECT COUNT(*) FROM channel_message WHERE id = $1 AND deleted_at IS NULL`, parseUUID(sentBody.Message.ID)).Scan(&persisted); err != nil {
+		t.Fatalf("verify persisted continue_anyway message: %v", err)
+	}
+	if persisted != 1 {
+		t.Fatalf("continue_anyway message persisted count=%d want 1", persisted)
 	}
 }
 

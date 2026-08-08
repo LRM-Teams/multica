@@ -35,6 +35,10 @@ function tableNode() {
   return node;
 }
 
+type ResizePluginState = NonNullable<
+  ReturnType<typeof columnResizingPluginKey.getState>
+>;
+
 describe("StableTableView", () => {
   it("keeps live <col> widths while a column resize drag is active", () => {
     const node = tableNode();
@@ -50,7 +54,7 @@ describe("StableTableView", () => {
     vi.spyOn(columnResizingPluginKey, "getState").mockReturnValue({
       activeHandle: 1,
       dragging: { startX: 0, startWidth: 128 },
-    });
+    } as unknown as ResizePluginState);
 
     expect(tableView.update(node)).toBe(true);
     expect(col!.style.width).toBe("220px");
@@ -72,7 +76,7 @@ describe("StableTableView", () => {
     vi.spyOn(columnResizingPluginKey, "getState").mockReturnValue({
       activeHandle: -1,
       dragging: false,
-    });
+    } as unknown as ResizePluginState);
 
     expect(tableView.update(node)).toBe(true);
     expect(col!.style.width).not.toBe("220px");

@@ -90,6 +90,20 @@
     "link_copied": "已复制链接",
     "copy_failed": "复制失败"
   },
+  "table_controls": {
+    "select_table": "选择表格",
+    "add_row": "添加行",
+    "add_column": "添加列",
+    "delete_row": "删除行",
+    "delete_column": "删除列",
+    "delete_table": "删除表格",
+    "row_menu": "行操作",
+    "column_menu": "列操作",
+    "insert_row_above": "在上方插入",
+    "insert_row_below": "在下方插入",
+    "insert_column_left": "在左侧插入",
+    "insert_column_right": "在右侧插入"
+  },
   "mention": {
     "group_all": "所有人",
     "group_users": "用户",
@@ -114,6 +128,7 @@
     "commands": {
       "note": "添加备注 — 不触发任何 Agent",
       "code": "普通代码块",
+      "table": "表格",
       "mermaid": "Mermaid 图表 — 自动渲染成图",
       "python": "Python 代码块",
       "javascript": "JavaScript 代码块"

@@ -75,6 +75,26 @@ function writeNoteAiAgent(workspaceId: string, agentId: string | null) {
   else window.localStorage.removeItem(key);
 }
 
+function noteExpansionKey(workspaceId: string) {
+  return `multica:note-expanded:${workspaceId}`;
+}
+
+function readNoteExpandedIds(workspaceId?: string) {
+  if (!workspaceId || typeof window === "undefined") return new Set<string>();
+  try {
+    const value = window.localStorage.getItem(noteExpansionKey(workspaceId));
+    const parsed = value ? JSON.parse(value) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function writeNoteExpandedIds(workspaceId: string | undefined, expanded: ReadonlySet<string>) {
+  if (!workspaceId || typeof window === "undefined") return;
+  window.localStorage.setItem(noteExpansionKey(workspaceId), JSON.stringify([...expanded]));
+}
+
 function buildNoteOptimizationPrompt(request: TextOptimizationRequest, noteTitle: string) {
   const instruction = request.instruction.trim();
   return `You are editing a selected excerpt inside a user's note.
@@ -353,6 +373,21 @@ function collectNoteAncestorIds(pages: NotePage[], id?: string) {
     current = byId.get(current.parent_id);
   }
   return expanded;
+}
+
+function collectNoteSubtreeIds(pages: NotePage[], rootId: string) {
+  const ids = new Set([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const page of pages) {
+      if (page.parent_id && ids.has(page.parent_id) && !ids.has(page.id)) {
+        ids.add(page.id);
+        changed = true;
+      }
+    }
+  }
+  return ids;
 }
 
 function memberLabel(member: MemberWithUser | undefined, fallback = "") {
@@ -951,7 +986,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const selectedId = pageId ?? selectedFromList?.id;
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
   const selected = detailPage?.id ? detailPage : selectedFromList;
-  const [noteExpansionOverrides, setNoteExpansionOverrides] = useState<NoteExpansionOverrides>(() => ({ selectionId: null, expanded: new Set(), collapsed: new Set() }));
+  const [noteExpansionOverrides, setNoteExpansionOverrides] = useState<NoteExpansionOverrides>(() => ({ selectionId: null, expanded: readNoteExpandedIds(wsId), collapsed: new Set() }));
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
   const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
   const sharedTree = useMemo(() => tree.filter((node) => node.owner_user_id !== currentUserId), [currentUserId, tree]);
@@ -994,6 +1029,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
   const { sharePage, exportOpen, aiAgentOpen, showTrash } = uiState;
   const { draggingId: draggingNoteId } = dragState;
+
+  useEffect(() => {
+    writeNoteExpandedIds(wsId, noteExpansionOverrides.expanded);
+  }, [noteExpansionOverrides.expanded, wsId]);
 
   useEffect(() => {
     if (!wsId || !selected?.id || showTrash) return;
@@ -1111,7 +1150,11 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   };
 
   const handleCreate = async (parentId?: string | null) => {
+    const expandedBeforeCreate = new Set(expandedNoteIds);
+    if (parentId) expandedBeforeCreate.add(parentId);
     try {
+      setNoteExpansionOverrides((current) => ({ ...current, expanded: expandedBeforeCreate }));
+      writeNoteExpandedIds(wsId, expandedBeforeCreate);
       const page = await createPage.mutateAsync({ parent_id: parentId ?? null, title: "Untitled" });
       setUiState((current) => ({ ...current, showTrash: false }));
       navigation.push(paths.noteDetail(page.id));
@@ -1141,9 +1184,17 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const handleDelete = async (page: NotePage) => {
     if (!page.can_manage_shares) return;
     if (!window.confirm(t(($) => $.notes_page.delete_confirm, { title: page.title }))) return;
+    const deletedIds = collectNoteSubtreeIds(list.pages, page.id);
+    const expandedAfterDelete = new Set([...expandedNoteIds].filter((id) => !deletedIds.has(id)));
     try {
+      setNoteExpansionOverrides((current) => ({
+        selectionId: selectedExpansionId,
+        expanded: expandedAfterDelete,
+        collapsed: new Set([...current.collapsed].filter((id) => !deletedIds.has(id))),
+      }));
+      writeNoteExpandedIds(wsId, expandedAfterDelete);
       await deletePage.mutateAsync(page.id);
-      if (selected?.id === page.id) navigation.push(paths.notes());
+      if (selected?.id && deletedIds.has(selected.id)) navigation.push(paths.notes());
       toast.success(t(($) => $.notes_page.moved_to_trash));
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.delete_failed));

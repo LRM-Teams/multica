@@ -97,6 +97,8 @@ interface ContentEditorProps {
   onOptimizeSelection?: (request: TextOptimizationRequest) => Promise<string>;
   /** Optional Notion-style empty-line AI action for editing the current page. */
   onEditPageWithAI?: PageEditAIAction;
+  /** Show the placeholder on the currently focused empty text block. */
+  showEmptyLinePlaceholder?: boolean;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
   submitOnEnter?: boolean;
   /**
@@ -214,6 +216,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       showBubbleMenu = true,
       onOptimizeSelection,
       onEditPageWithAI,
+      showEmptyLinePlaceholder = false,
       submitOnEnter = false,
       currentIssueId,
       disableMentions = false,
@@ -438,7 +441,11 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           },
         },
         attributes: {
-          class: cn("flex-1 rich-text-editor text-sm outline-none", className),
+          class: cn(
+            "flex-1 rich-text-editor text-sm outline-none",
+            showEmptyLinePlaceholder && "show-empty-line-placeholder",
+            className,
+          ),
         },
       },
     });

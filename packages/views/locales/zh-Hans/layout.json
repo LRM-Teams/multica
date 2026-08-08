@@ -126,7 +126,7 @@
     "visibility_shared_etc": "等",
     "visibility_shared_by": "{{name}}共享给你笔记",
     "visibility_shared_by_suffix": "共享给你笔记",
-    "content_placeholder": "开始写笔记...",
+    "content_placeholder": "按下空格问问AI或‘/’执行命令",
     "image_paste_failed": "无法添加图片",
     "uploading_image": "正在上传图片...",
     "ai_page_edit_chat_title": "AI 编辑笔记：{{title}}"

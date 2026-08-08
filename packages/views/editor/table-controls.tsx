@@ -210,18 +210,26 @@ function edgeAddClass() {
   );
 }
 
+type OverlayState = {
+  activeTable: ActiveTable | null;
+  columnResizing: boolean;
+};
+
 export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: RefObject<HTMLElement | null> }) {
   const { t } = useT("editor");
-  const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
+  const [overlay, setOverlay] = useState<OverlayState>({
+    activeTable: null,
+    columnResizing: false,
+  });
   const [drag, setDrag] = useState<DragState | null>(null);
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
-  const [columnResizing, setColumnResizing] = useState(false);
   const activeTableRef = useRef<ActiveTable | null>(null);
   const openMenuRef = useRef<OpenMenu | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const skipMenuOpenRef = useRef(false);
   const menuOpenAtDownRef = useRef(false);
 
+  const { activeTable, columnResizing } = overlay;
   openMenuRef.current = openMenu;
 
   useEffect(() => {
@@ -232,42 +240,45 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
       // Column-resize updates DOM widths on every mousemove. Remeasuring /
       // re-rendering our overlays mid-drag makes the dragged edge jump.
       const resizing = isColumnResizeDragging(editor);
-      setColumnResizing(resizing);
-      if (resizing) return;
+      let nextTable: ActiveTable | null | undefined;
+      if (resizing) {
+        nextTable = undefined; // keep previous activeTable
+      } else {
+        const tableInfo = findActiveTable(editor);
+        nextTable = tableInfo ? measureTable(editor, root, tableInfo) : null;
 
-      const tableInfo = findActiveTable(editor);
-      if (tableInfo) {
-        const next = measureTable(editor, root, tableInfo);
-        if (next) {
-          activeTableRef.current = next;
-          setActiveTable(next);
-          return;
-        }
-      }
-
-      // Keep the last table pinned while a handle menu is open or a drag is in
-      // progress. Otherwise blur-from-menu unmounts controls before the action runs.
-      const pinnedPos = openMenuRef.current?.tablePos ?? activeTableRef.current?.pos;
-      if ((openMenuRef.current || dragRef.current) && typeof pinnedPos === "number") {
-        const live = editor.state.doc.nodeAt(pinnedPos);
-        if (live?.type.name === "table") {
-          const next = measureTable(editor, root, {
-            node: live,
-            pos: pinnedPos,
-            selected: false,
-          });
-          if (next) {
-            activeTableRef.current = next;
-            setActiveTable(next);
-            return;
+        // Keep the last table pinned while a handle menu is open or a drag is in
+        // progress. Otherwise blur-from-menu unmounts controls before the action runs.
+        if (!nextTable) {
+          const pinnedPos = openMenuRef.current?.tablePos ?? activeTableRef.current?.pos;
+          if ((openMenuRef.current || dragRef.current) && typeof pinnedPos === "number") {
+            const live = editor.state.doc.nodeAt(pinnedPos);
+            if (live?.type.name === "table") {
+              nextTable = measureTable(editor, root, {
+                node: live,
+                pos: pinnedPos,
+                selected: false,
+              });
+            }
           }
         }
+
+        if (!nextTable && !openMenuRef.current && !dragRef.current) {
+          nextTable = null;
+        } else if (!nextTable) {
+          nextTable = undefined;
+        }
       }
 
-      if (!openMenuRef.current && !dragRef.current) {
-        activeTableRef.current = null;
-        setActiveTable(null);
-      }
+      setOverlay((prev) => {
+        const activeTable =
+          nextTable === undefined ? prev.activeTable : nextTable;
+        if (nextTable !== undefined) activeTableRef.current = nextTable;
+        if (prev.activeTable === activeTable && prev.columnResizing === resizing) {
+          return prev;
+        }
+        return { activeTable, columnResizing: resizing };
+      });
     };
     update();
     editor.on("selectionUpdate", update);
@@ -510,20 +521,21 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
         <Plus className="size-3.5" />
       </button>
 
-      {activeTable.colRects.map((rect, index) => {
+      {activeTable.colRects.map((rect, col) => {
         if (!colVisible(rect)) return null;
-        const menuOpen = openMenu?.type === "column" && openMenu.index === index;
+        const handleId = `${activeTable.pos}:col:${col}`;
+        const menuOpen = openMenu?.type === "column" && openMenu.index === col;
         const dropTarget =
           drag?.type === "column" &&
           drag.dragging &&
-          destinationFromGap(drag.from, drag.insertGap) === index;
+          destinationFromGap(drag.from, drag.insertGap) === col;
         const handleLeft = Math.max(rect.left, visibleLeft);
         const handleRight = Math.min(rect.left + rect.width, visibleRight);
         const zoneWidth = Math.max(20, handleRight - handleLeft);
         const menuTablePos = openMenu?.tablePos ?? activeTable.pos;
         return (
           <div
-            key={`col-${index}`}
+            key={handleId}
             className="pointer-events-none absolute"
             style={{
               left: handleLeft,
@@ -548,9 +560,9 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
                       (menuOpen || dropTarget) && "opacity-100",
                     )}
                     aria-label={t(($) => $.table_controls.column_menu)}
-                    onPointerDown={(event) => onHandlePointerDown(event, "column", index)}
+                    onPointerDown={(event) => onHandlePointerDown(event, "column", col)}
                     onPointerMove={onHandlePointerMove}
-                    onPointerUp={(event) => onHandlePointerUp(event, "column", index)}
+                    onPointerUp={(event) => onHandlePointerUp(event, "column", col)}
                     onClick={(event) => {
                       event.preventDefault();
                     }}
@@ -568,7 +580,7 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
                 <DropdownMenuItem
                   onPointerDown={(event) => {
                     event.preventDefault();
-                    runMenuAction(() => insertColumnAt(editor, menuTablePos, index));
+                    runMenuAction(() => insertColumnAt(editor, menuTablePos, col));
                   }}
                 >
                   <ArrowLeft className="size-4" />
@@ -577,7 +589,7 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
                 <DropdownMenuItem
                   onPointerDown={(event) => {
                     event.preventDefault();
-                    runMenuAction(() => insertColumnAt(editor, menuTablePos, index + 1));
+                    runMenuAction(() => insertColumnAt(editor, menuTablePos, col + 1));
                   }}
                 >
                   <ArrowRight className="size-4" />
@@ -588,7 +600,7 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
                   variant="destructive"
                   onPointerDown={(event) => {
                     event.preventDefault();
-                    runMenuAction(() => deleteColumnAt(editor, menuTablePos, index));
+                    runMenuAction(() => deleteColumnAt(editor, menuTablePos, col));
                   }}
                 >
                   <Trash2 className="size-4" />
@@ -600,16 +612,17 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
         );
       })}
 
-      {activeTable.rowRects.map((rect, index) => {
-        const menuOpen = openMenu?.type === "row" && openMenu.index === index;
+      {activeTable.rowRects.map((rect, row) => {
+        const handleId = `${activeTable.pos}:row:${row}`;
+        const menuOpen = openMenu?.type === "row" && openMenu.index === row;
         const dropTarget =
           drag?.type === "row" &&
           drag.dragging &&
-          destinationFromGap(drag.from, drag.insertGap) === index;
+          destinationFromGap(drag.from, drag.insertGap) === row;
         const menuTablePos = openMenu?.tablePos ?? activeTable.pos;
         return (
           <div
-            key={`row-${index}`}
+            key={handleId}
             className="pointer-events-none absolute"
             style={{
               // Sit just outside the cell grid — no table indentation required.
@@ -635,9 +648,9 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
                       (menuOpen || dropTarget) && "opacity-100",
                     )}
                     aria-label={t(($) => $.table_controls.row_menu)}
-                    onPointerDown={(event) => onHandlePointerDown(event, "row", index)}
+                    onPointerDown={(event) => onHandlePointerDown(event, "row", row)}
                     onPointerMove={onHandlePointerMove}
-                    onPointerUp={(event) => onHandlePointerUp(event, "row", index)}
+                    onPointerUp={(event) => onHandlePointerUp(event, "row", row)}
                     onClick={(event) => {
                       event.preventDefault();
                     }}
@@ -656,7 +669,7 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
                 <DropdownMenuItem
                   onPointerDown={(event) => {
                     event.preventDefault();
-                    runMenuAction(() => insertRowAt(editor, menuTablePos, index));
+                    runMenuAction(() => insertRowAt(editor, menuTablePos, row));
                   }}
                 >
                   <ArrowUp className="size-4" />
@@ -665,7 +678,7 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
                 <DropdownMenuItem
                   onPointerDown={(event) => {
                     event.preventDefault();
-                    runMenuAction(() => insertRowAt(editor, menuTablePos, index + 1));
+                    runMenuAction(() => insertRowAt(editor, menuTablePos, row + 1));
                   }}
                 >
                   <ArrowDown className="size-4" />
@@ -676,7 +689,7 @@ export function TableControls({ editor, rootRef }: { editor: Editor; rootRef: Re
                   variant="destructive"
                   onPointerDown={(event) => {
                     event.preventDefault();
-                    runMenuAction(() => deleteRowAt(editor, menuTablePos, index));
+                    runMenuAction(() => deleteRowAt(editor, menuTablePos, row));
                   }}
                 >
                   <Trash2 className="size-4" />

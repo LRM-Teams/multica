@@ -179,9 +179,21 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		if err != nil {
 			return messageDraft{}, http.StatusConflict, err
 		}
+		// A held normal send leaves an outstanding Draft for the target. When a
+		// re-driven normal send carries the same content (same intent), reuse its
+		// stable client_message_id instead of minting a fresh identity: the server
+		// (workspace,channel,author,client_message_id) dedup then recognizes the
+		// retry and stops the duplicate (regression seq86/87). Distinct content is
+		// a new intent, so it forwards to a fresh identity as before.
+		clientMessageID := uuid.NewString()
+		if existing, found, loadErr := proxy.LoadMessageDraft(request.AgentID, request.Target, now); loadErr == nil && found {
+			if reused, ok := reuseClientMessageIDForIntent(existing, request.Content); ok {
+				clientMessageID = reused
+			}
+		}
 		saved, err := proxy.SaveNormalMessageDraft(request.AgentID, messageDraft{
 			Target: request.Target, ContextTarget: contextTarget, Content: request.Content, AttachmentIDs: append([]string(nil), request.AttachmentIDs...),
-			ClientMessageID: uuid.NewString(), SeenUpToSeq: seenUpToSeq,
+			ClientMessageID: clientMessageID, SeenUpToSeq: seenUpToSeq,
 		}, now)
 		if err != nil {
 			return messageDraft{}, http.StatusConflict, fmt.Errorf("save local Draft before send: %w", err)
@@ -232,6 +244,19 @@ func (d *Daemon) agentCredentialClient(token string, request credentialProxyMess
 	client := cli.NewAPIClient(d.cfg.ServerBaseURL, request.WorkspaceID, token)
 	client.AgentID = request.AgentID
 	return client
+}
+
+// outstanding (non-expired, not-yet-cleared) local Draft when a normal send
+// is a re-drive of the SAME intent (identical content) to the same target.
+// Reusing the same identity lets the server's (workspace,channel,author,
+// client_message_id) dedup recognize a retry instead of minting a fresh UUID
+// that bypasses dedup and duplicates the message (regression seq86/87).
+// Distinct content is a new intent, so it is not reused.
+func reuseClientMessageIDForIntent(existing messageDraft, content string) (string, bool) {
+	if strings.TrimSpace(existing.Content) == strings.TrimSpace(content) {
+		return existing.ClientMessageID, true
+	}
+	return "", false
 }
 
 func localMessageSendHeldResponse(target string, freshness MessageSendFreshness, reason string) map[string]any {

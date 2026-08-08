@@ -83,6 +83,7 @@ import {
   serializeCodeFenceInfo,
 } from "./code-block-fence";
 import { PatchedListItem, PatchedTaskItem } from "./list-item";
+import { BlockIndentExtension } from "./block-indent";
 import { createMarkdownPasteExtension } from "./markdown-paste";
 import { createMarkdownCopyExtension } from "./markdown-copy";
 import { createSubmitExtension } from "./submit-shortcut";
@@ -199,6 +200,8 @@ export interface EditorExtensionsOptions {
   getMentionScopedAgents?: () => readonly MentionAgentCandidate[] | null | undefined;
   /** #35: channel membership ids for IN / NOT IN section headers (not a filter). */
   getMentionChannelMemberIds?: () => ReadonlySet<string> | null | undefined;
+  /** When true, attach PowerPoint-style Tab indentation for plain text blocks. */
+  enableBlockIndent?: boolean;
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
   /**
@@ -240,6 +243,7 @@ export function createEditorExtensions(
       listItem: false,
     }),
     PatchedListItem,
+    ...(options.enableBlockIndent ? [BlockIndentExtension] : []),
     // Checkbox task lists: `- [ ]` / `- [x]`. TaskList + TaskItem ship their own
     // markdown tokenizer / renderMarkdown, an input rule (typing `[] ` / `[x] `),
     // and a checkbox NodeView. The taskList tokenizer is consulted before

@@ -99,6 +99,8 @@ interface ContentEditorProps {
   onEditPageWithAI?: PageEditAIAction;
   /** Show the placeholder on the currently focused empty text block. */
   showEmptyLinePlaceholder?: boolean;
+  /** Enable PowerPoint-style Tab indentation for plain note lines. */
+  enableBlockIndent?: boolean;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
   submitOnEnter?: boolean;
   /**
@@ -217,6 +219,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onOptimizeSelection,
       onEditPageWithAI,
       showEmptyLinePlaceholder = false,
+      enableBlockIndent = false,
       submitOnEnter = false,
       currentIssueId,
       disableMentions = false,
@@ -387,6 +390,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           getMentionChannelMemberIds: () => mentionChannelMemberIdsRef.current,
           enableChannelReferences,
           enableSlashCommands,
+        enableBlockIndent,
         slashCommandMode,
       }),
       onUpdate: ({ editor: ed }) => {

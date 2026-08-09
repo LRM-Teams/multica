@@ -78,7 +78,7 @@ func (h *Handler) insertChannelMemberRoleChangedSystemEventExec(
 			Event:  channelMemberRoleChangedEvent,
 			Params: paramsJSON,
 		}},
-		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0,
+		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0, channelMessageKindHint{},
 	)
 	if err != nil {
 		return ChannelMessageResponse{}, fmt.Errorf("insert channel member role event: %w", err)
@@ -198,7 +198,7 @@ func (h *Handler) insertChannelMemberSystemEventExec(
 		ctx, exec, channelID, parseUUID(workspaceID),
 		"system", pgtype.UUID{}, "system", content,
 		[]protocol.MessagePart{{Type: protocol.MessagePartTypeSystemEvent, Event: event, EventParams: paramsJSON}},
-		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0,
+		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0, channelMessageKindHint{},
 	)
 	if err != nil {
 		return ChannelMessageResponse{}, fmt.Errorf("insert channel member system event: %w", err)

@@ -648,7 +648,7 @@ func (h *Handler) ensureOnboardingAgentGeneralAndWelcomeTx(ctx context.Context, 
 		// connection: finalizeAgentChannelMessage queries through h.DB and can
 		// deadlock with concurrent setup transactions waiting on the workspace
 		// row lock when the connection pool is small.
-		if _, err := insertChannelMessageWithPartsExec(ctx, tx, generalID, workspaceID, "agent", agentID, windyAgentName, content, nil, "multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0); err != nil {
+		if _, err := insertChannelMessageWithPartsExec(ctx, tx, generalID, workspaceID, "agent", agentID, windyAgentName, content, nil, "multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0, channelMessageKindHint{}); err != nil {
 			return err
 		}
 	}

@@ -161,4 +161,27 @@ func TestChannelMessageKindPersistence(t *testing.T) {
 	if contentKind != protocol.ChannelMessageKindContent {
 		t.Fatalf("content kind=%q want content", contentKind)
 	}
+
+	var lexiconSource string
+	if err := testPool.QueryRow(ctx, `SELECT kind_source FROM channel_message WHERE id = $1`, parseUUID(pure.ID)).Scan(&lexiconSource); err != nil {
+		t.Fatalf("read lexicon kind_source: %v", err)
+	}
+	if lexiconSource != protocol.ChannelMessageKindSourceLexicon {
+		t.Fatalf("lexicon kind_source=%q want lexicon", lexiconSource)
+	}
+
+	hinted, err := insertChannelMessageWithPartsExec(
+		ctx, testPool, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentA),
+		"Agent A", "收到", nil, "multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 2,
+		channelMessageKindHint{Kind: protocol.ChannelMessageKindConfirmation, Source: protocol.ChannelMessageKindSourceStructured},
+	)
+	if err != nil {
+		t.Fatalf("insert structured confirmation: %v", err)
+	}
+	if hinted.Message.Kind != protocol.ChannelMessageKindConfirmation || hinted.Message.KindSource != protocol.ChannelMessageKindSourceStructured {
+		t.Fatalf("structured insert = kind=%q source=%q", hinted.Message.Kind, hinted.Message.KindSource)
+	}
+	if !channelMessageIsConfirmationNoWake(hinted.Message) {
+		t.Fatal("structured confirmation must be no-wake")
+	}
 }

@@ -1941,6 +1941,7 @@ func insertReminderFiredReceiptExec(ctx context.Context, exec dbExecutor, ch Cha
 			EventParams: paramsJSON,
 		}},
 		"multica", &externalID, nil, pgtype.UUID{}, pgtype.UUID{}, nil, threadRootID, threadID, 0,
+		channelMessageKindHint{Kind: protocol.ChannelMessageKindSystemReminder, Source: protocol.ChannelMessageKindSourceSystem},
 	)
 	if err != nil {
 		return ChannelMessageResponse{}, fmt.Errorf("insert reminder fired receipt: %w", err)

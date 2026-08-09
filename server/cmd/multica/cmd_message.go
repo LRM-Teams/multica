@@ -45,6 +45,7 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().Bool("send-draft", false, "Send the current local Draft for this target")
 	cmd.Flags().Bool("anyway", false, "Send a saved Draft despite the freshness check")
+	cmd.Flags().String("kind", "", "Structured output kind (content|confirmation|status|handoff|delegation|review|deliverable)")
 	return cmd
 }
 
@@ -246,7 +247,7 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--anyway is only valid with --send-draft")
 	}
 	if sendDraft {
-		for _, name := range []string{"attachment-id"} {
+		for _, name := range []string{"attachment-id", "kind"} {
 			if cmd.Flags().Changed(name) {
 				return fmt.Errorf("--send-draft does not accept --%s; it reuses the saved payload", name)
 			}
@@ -283,6 +284,13 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		"target":         target,
 		"content":        content,
 		"attachment_ids": attachmentIDs,
+	}
+	if kind := strings.TrimSpace(flagString(cmd, "kind")); kind != "" {
+		normalized := protocol.NormalizeChannelMessageKind(kind)
+		if normalized == "" || normalized == protocol.ChannelMessageKindSystemReminder {
+			return fmt.Errorf("invalid --kind %q; use content|confirmation|status|handoff|delegation|review|deliverable", kind)
+		}
+		body["kind"] = normalized
 	}
 	// Turn-at-most-once batch identity: stamp the send with the turn's
 	// conversation + seq range so the daemon derives one stable client_message_id

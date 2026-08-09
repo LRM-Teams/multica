@@ -1852,7 +1852,7 @@ func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {
 	insertedReply, err := insertChannelMessageWithPartsExec(context.Background(), testPool,
 		parseUUID(fixture.channel.ID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID),
 		"Tester", "reply secret anchor", nil, "multica", nil, nil,
-		pgtype.UUID{}, pgtype.UUID{}, nil, parseUUID(root.ID), stringPtr("reminder-deleted-root"), 0)
+		pgtype.UUID{}, pgtype.UUID{}, nil, parseUUID(root.ID), stringPtr("reminder-deleted-root"), 0, channelMessageKindHint{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2045,7 +2045,7 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	insertedReply, err := insertChannelMessageWithPartsExec(context.Background(), testPool,
 		parseUUID(fixture.channel.ID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID),
 		"Tester", "thread anchor reply", nil, "multica", nil, nil,
-		pgtype.UUID{}, pgtype.UUID{}, nil, parseUUID(anchor.ID), stringPtr("reminder-test-thread"), 0)
+		pgtype.UUID{}, pgtype.UUID{}, nil, parseUUID(anchor.ID), stringPtr("reminder-test-thread"), 0, channelMessageKindHint{})
 	if err != nil {
 		t.Fatal(err)
 	}

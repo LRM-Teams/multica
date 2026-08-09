@@ -32,6 +32,8 @@ type credentialProxyMessageSendRequest struct {
 	ConversationID string   `json:"conversation_id,omitempty"`
 	SeqFrom        int64    `json:"seq_from,omitempty"`
 	SeqTo          int64    `json:"seq_to,omitempty"`
+	// Kind is the optional structured agent output kind (LRM-1529).
+	Kind string `json:"kind,omitempty"`
 }
 
 type credentialProxyMessageTargetResponse struct {
@@ -103,6 +105,11 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			"seen_up_to_seq":    draft.SeenUpToSeq,
 			"context_target":    draft.ContextTarget,
 			"bypass_freshness":  request.Anyway,
+		}
+		if kind := strings.TrimSpace(draft.Kind); kind != "" {
+			upstreamRequest["kind"] = kind
+		} else if kind := strings.TrimSpace(request.Kind); kind != "" {
+			upstreamRequest["kind"] = kind
 		}
 		client := d.agentCredentialClient(credential.Token, request)
 		ctx, cancel := cli.APIContext(r.Context())
@@ -213,6 +220,7 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		saved, err := proxy.SaveNormalMessageDraft(request.AgentID, messageDraft{
 			Target: request.Target, ContextTarget: contextTarget, Content: request.Content, AttachmentIDs: append([]string(nil), request.AttachmentIDs...),
 			ClientMessageID: clientMessageID, SeenUpToSeq: seenUpToSeq,
+			Kind: strings.TrimSpace(request.Kind),
 		}, now)
 		if err != nil {
 			return messageDraft{}, http.StatusConflict, fmt.Errorf("save local Draft before send: %w", err)

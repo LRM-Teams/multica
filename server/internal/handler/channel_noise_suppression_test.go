@@ -60,6 +60,65 @@ func TestChannelContentIsPureConfirmation(t *testing.T) {
 	}
 }
 
+func TestResolveChannelMessageKindPriority(t *testing.T) {
+	t.Parallel()
+	structured := resolveChannelMessageKind("agent", "收到", nil, channelMessageKindHint{
+		Kind:   protocol.ChannelMessageKindConfirmation,
+		Source: protocol.ChannelMessageKindSourceStructured,
+	})
+	if structured.Kind != protocol.ChannelMessageKindConfirmation || structured.Source != protocol.ChannelMessageKindSourceStructured {
+		t.Fatalf("structured = %+v", structured)
+	}
+
+	// Structured content must not be killed by the lexicon even when text looks like an ack.
+	content := resolveChannelMessageKind("agent", "收到", nil, channelMessageKindHint{
+		Kind:   protocol.ChannelMessageKindContent,
+		Source: protocol.ChannelMessageKindSourceStructured,
+	})
+	if content.Kind != protocol.ChannelMessageKindContent || content.Source != protocol.ChannelMessageKindSourceStructured {
+		t.Fatalf("structured content = %+v", content)
+	}
+
+	system := resolveChannelMessageKind("system", "Reminder fired: ping", []protocol.MessagePart{{
+		Type:  protocol.MessagePartTypeSystemEvent,
+		Event: "reminder_fired",
+	}}, channelMessageKindHint{})
+	if system.Kind != protocol.ChannelMessageKindSystemReminder || system.Source != protocol.ChannelMessageKindSourceSystem {
+		t.Fatalf("system reminder = %+v", system)
+	}
+
+	lexicon := resolveChannelMessageKind("agent", "收到", nil, channelMessageKindHint{})
+	if lexicon.Kind != protocol.ChannelMessageKindConfirmation || lexicon.Source != protocol.ChannelMessageKindSourceLexicon {
+		t.Fatalf("lexicon = %+v", lexicon)
+	}
+
+	def := resolveChannelMessageKind("agent", "接口已提 PR", nil, channelMessageKindHint{})
+	if def.Kind != protocol.ChannelMessageKindContent || def.Source != protocol.ChannelMessageKindSourceDefault {
+		t.Fatalf("default = %+v", def)
+	}
+
+	human := resolveChannelMessageKind("user", "收到", nil, channelMessageKindHint{})
+	if human.Kind != protocol.ChannelMessageKindContent || human.Source != protocol.ChannelMessageKindSourceDefault {
+		t.Fatalf("human = %+v", human)
+	}
+}
+
+func TestChannelMessageIsConfirmationNoWakeObserveOnlyKinds(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{
+		protocol.ChannelMessageKindConfirmation,
+		protocol.ChannelMessageKindStatus,
+		protocol.ChannelMessageKindSystemReminder,
+	} {
+		if !channelMessageIsConfirmationNoWake(ChannelMessageResponse{Kind: kind, Content: "anything actionable please wake"}) {
+			t.Fatalf("kind=%s should be observe-only", kind)
+		}
+	}
+	if channelMessageIsConfirmationNoWake(ChannelMessageResponse{Kind: protocol.ChannelMessageKindContent, Content: "收到，请继续推进 PR"}) {
+		t.Fatal("structured content must not fall back to lexicon no-wake")
+	}
+}
+
 func TestChannelMessageIsPureConfirmationMentionDetection(t *testing.T) {
 	trigger := ChannelMessageResponse{
 		Content: mentionContent("@AgentB", agentBID, "收到"),

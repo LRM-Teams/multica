@@ -198,7 +198,9 @@ type ChannelMessageResponse struct {
 	// Kind is the structured message classification (LRM-1523 L1). Empty means
 	// the row predates kind persistence; dispatch falls back to the runtime
 	// classifier in that case. populated value is one of protocol.ChannelMessageKind*.
-	Kind                string                 `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// KindSource records how Kind was derived (LRM-1529): structured|system|lexicon|default.
+	KindSource          string                 `json:"kind_source,omitempty"`
 	AuthorID            *string                `json:"author_id"`
 	AuthorName          string                 `json:"author_name"`
 	AuthorAvatarURL     *string                `json:"author_avatar_url"`
@@ -4841,7 +4843,7 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	inserted, err := insertChannelMessageWithPartsExec(
 		r.Context(), tx, parseUUID(ch.ID), parseUUID(workspaceID), "lark", pgtype.UUID{},
 		authorName, content, parts, "lark", external, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
-		pgtype.UUID{}, &threadID, 0,
+		pgtype.UUID{}, &threadID, 0, channelMessageKindHint{},
 	)
 	if err != nil {
 		if errorsIsNoRows(err) || isUniqueViolation(err) {
@@ -7112,6 +7114,8 @@ type channelMessageInsertInput struct {
 	ThreadID            *string
 	TriggerDepth        int
 	ClientMessageID     *string
+	// KindHint carries an optional structured/system kind into persistence (LRM-1529).
+	KindHint channelMessageKindHint
 }
 
 type channelMessageCreateResult struct {
@@ -7187,7 +7191,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	if err != nil {
 		return channelMessageCreateResult{}, err
 	}
-	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth)
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth, in.KindHint)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if in.ClientMessageID != nil && isUniqueViolation(err) {
@@ -7393,7 +7397,7 @@ func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, 
 		return ChannelMessageResponse{}, err
 	}
 	defer tx.Rollback(ctx)
-	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, nil, replyToMessageID, pgtype.UUID{}, nil, threadRootMessageID, threadID, triggerDepth)
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, nil, replyToMessageID, pgtype.UUID{}, nil, threadRootMessageID, threadID, triggerDepth, channelMessageKindHint{})
 	if err != nil {
 		return ChannelMessageResponse{}, err
 	}
@@ -7409,21 +7413,21 @@ type channelMessageInsertResult struct {
 }
 
 // insertChannelMessageWithPartsExec mutates only transactional state.
-func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (channelMessageInsertResult, error) {
-	// LRM-1523 L1: derive and persist the structured message kind so the dispatch
-	// path can enforce confirmation no-wake structurally (DB is the source of
-	// truth), not only via the runtime text classifier.
-	kind := channelMessageKindFor(authorType, content, parts)
+func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, kindHint channelMessageKindHint) (channelMessageInsertResult, error) {
+	// LRM-1523/1529: derive and persist kind + kind_source so dispatch can enforce
+	// observe-only no-wake structurally. Priority: structured → system → lexicon → default.
+	resolved := resolveChannelMessageKind(authorType, content, parts, kindHint)
 	row := exec.QueryRow(ctx, `
-			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, kind)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17)
+			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, kind, kind_source)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18)
 			RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
-		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth, kind)
+		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth, resolved.Kind, resolved.Source)
 	msg, err := scanChannelMessage(row)
 	if err != nil {
 		return channelMessageInsertResult{}, err
 	}
-	msg.Kind = kind
+	msg.Kind = resolved.Kind
+	msg.KindSource = resolved.Source
 	if err := incrementChannelMainUnreadCounters(ctx, exec, channelID, authorType, authorID, msg.Seq, threadRootMessageID); err != nil {
 		return channelMessageInsertResult{}, err
 	}

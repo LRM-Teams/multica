@@ -50,6 +50,12 @@ type AgentTransportSendRequest struct {
 	// freshness computation (use BypassFreshness for that); it only overrides the
 	// held decision on a per-send basis, mirroring Raft's continueAnyway.
 	ContinueAnyway bool `json:"continue_anyway,omitempty"`
+	// Kind is the structured agent output kind (LRM-1529). When set, it wins
+	// over the legacy confirmation lexicon and is persisted with kind_source=structured.
+	Kind string `json:"kind,omitempty"`
+	// OutputEnvelope is the optional full machine-readable agent output contract.
+	// When Kind is empty, Envelope.Kind is used.
+	OutputEnvelope *protocol.AgentOutputEnvelope `json:"output_envelope,omitempty"`
 }
 
 // AgentTransportTargetRequest is an internal Credential Proxy preflight. It
@@ -381,7 +387,11 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
 		return
 	}
-	_, err = h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID)
+	kindHint, ok := agentTransportKindHintFromRequest(w, req)
+	if !ok {
+		return
+	}
+	_, err = h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID, kindHint)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -396,7 +406,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, req.ContinueAnyway, nil)
+	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, req.ContinueAnyway, nil, kindHint)
 	if err != nil {
 		var freshnessHold *agentTransportFreshnessHoldError
 		if errors.As(err, &freshnessHold) {
@@ -1241,8 +1251,8 @@ func (h *Handler) agentAgentDMChannelMatches(ctx context.Context, workspaceID, c
 // all other effects remain after the transaction commits.
 type agentTransportMessageAfterInsert func(context.Context, pgx.Tx, ChannelMessageResponse) error
 
-func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID, continueAnyway bool, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
-	input, err := h.finalizedAgentTransportInsertInput(ctx, source, target, content, parts, clientMessageID)
+func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID, continueAnyway bool, afterInsert agentTransportMessageAfterInsert, kindHint channelMessageKindHint) (agentTransportMessageResult, error) {
+	input, err := h.finalizedAgentTransportInsertInput(ctx, source, target, content, parts, clientMessageID, kindHint)
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
@@ -1312,7 +1322,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 // finalizedAgentTransportInsertInput is the write boundary for every visible
 // agent-transport message. Drafts keep raw author intent; immediate sends rebuild destination-scoped reference anchors here immediately
 // before persistence.
-func (h *Handler) finalizedAgentTransportInsertInput(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, clientMessageID string) (channelMessageInsertInput, error) {
+func (h *Handler) finalizedAgentTransportInsertInput(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, clientMessageID string, kindHint channelMessageKindHint) (channelMessageInsertInput, error) {
 	content, parts, err := h.finalizeAgentChannelMessage(ctx, target.channel, content, parts)
 	if err != nil {
 		return channelMessageInsertInput{}, err
@@ -1328,7 +1338,27 @@ func (h *Handler) finalizedAgentTransportInsertInput(ctx context.Context, source
 		ThreadID:            target.threadID,
 		TriggerDepth:        target.triggerDepth,
 		ClientMessageID:     &clientMessageID,
+		KindHint:            kindHint,
 	}, nil
+}
+
+func agentTransportKindHintFromRequest(w http.ResponseWriter, req AgentTransportSendRequest) (channelMessageKindHint, bool) {
+	kind := strings.TrimSpace(req.Kind)
+	if kind == "" && req.OutputEnvelope != nil {
+		kind = strings.TrimSpace(req.OutputEnvelope.Kind)
+	}
+	if kind == "" {
+		return channelMessageKindHint{}, true
+	}
+	normalized := protocol.NormalizeChannelMessageKind(kind)
+	if normalized == "" || normalized == protocol.ChannelMessageKindSystemReminder {
+		writeError(w, http.StatusBadRequest, "invalid agent message kind")
+		return channelMessageKindHint{}, false
+	}
+	return channelMessageKindHint{
+		Kind:   normalized,
+		Source: protocol.ChannelMessageKindSourceStructured,
+	}, true
 }
 
 func (h *Handler) insertAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, _ string, _ []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, continueAnyway bool, afterInsert agentTransportMessageAfterInsert) (agentTransportMessageResult, error) {
@@ -1398,7 +1428,7 @@ func (h *Handler) insertAgentTransportMessage(ctx context.Context, source agentT
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
 	}
-	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, input.ChannelID, input.WorkspaceID, "agent", input.AuthorID, input.AuthorName, input.Content, input.Parts, "multica", nil, input.ClientMessageID, pgtype.UUID{}, pgtype.UUID{}, nil, input.ThreadRootMessageID, input.ThreadID, input.TriggerDepth)
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, input.ChannelID, input.WorkspaceID, "agent", input.AuthorID, input.AuthorName, input.Content, input.Parts, "multica", nil, input.ClientMessageID, pgtype.UUID{}, pgtype.UUID{}, nil, input.ThreadRootMessageID, input.ThreadID, input.TriggerDepth, input.KindHint)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if isUniqueViolation(err) {

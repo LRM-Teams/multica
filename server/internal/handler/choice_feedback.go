@@ -272,7 +272,7 @@ func (h *Handler) applyChannelChoiceSelection(
 	inserted, err := insertChannelMessageWithPartsExec(
 		ctx, tx, channelID, parseUUID(workspaceID), "user", parseUUID(userID),
 		authorName, replyContent, replyParts, "multica", nil, &clientMessageID,
-		messageID, pgtype.UUID{}, nil, pgtype.UUID{}, &threadID, 0,
+		messageID, pgtype.UUID{}, nil, pgtype.UUID{}, &threadID, 0, channelMessageKindHint{},
 	)
 	if err != nil {
 		return channelChoiceApplyResult{}, err

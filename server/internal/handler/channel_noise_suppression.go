@@ -2,20 +2,16 @@ package handler
 
 // channel_noise_suppression.go
 //
-// System-level no-op / echo suppression (LRM-1523). The goal is "回声归零":
-// a pure acknowledgement / greeting / status message (收到 / 明白 / OK /
-// 好的 / 已办理 / thanks …) that carries no new information, no @-activated
-// actionable directive and no concrete next action must not produce a
-// "wake-required" message that re-triggers another agent and feeds the
-// confirmation echo chain.
+// System-level no-op / echo suppression (LRM-1523 + LRM-1529). The goal is
+// "回声归零": a pure acknowledgement / greeting / status message that carries
+// no new information must not produce a wake that re-triggers another agent.
 //
-// The classifier is deliberately CONSERVATIVE (high precision): it only fires
-// when the substantive content, after stripping structured mentions and normal
-// conversational glue, matches a narrow confirmation lexicon. Any message that
-// contains recognisable new information, a question, an actionable directive,
-// or is long enough to plausibly carry content is NOT classified as pure
-// confirmation — so real task hand-off, decisions and work updates are never
-// swallowed.
+// LRM-1529 adds structured agent output kinds. Resolution order:
+//   1. agent structured kind
+//   2. system-internal kind
+//   3. legacy lexicon fallback
+//   4. default content
+// Each resolution is persisted as kind_source for observability.
 
 import (
 	"strings"
@@ -48,15 +44,22 @@ var confirmationLexicon = []string{
 	"👍",
 }
 
+// channelMessageKindHint carries an optional structured / system kind into the
+// insert path without forcing every caller to invent its own classifier.
+type channelMessageKindHint struct {
+	Kind   string
+	Source string // structured | system; empty means derive Source with Kind
+}
+
+// channelMessageKindResolution is the persisted (kind, kind_source) pair.
+type channelMessageKindResolution struct {
+	Kind   string
+	Source string
+}
+
 // channelMessageIsPureConfirmation classifies a channel message as a pure
 // acknowledgement with no new actionable content. When true, a directed wake
-// must not be produced for its @-targets (concept "confirmation 不唤醒任何
-// agent，连 @@ 目标也不唤醒"), because doing so would let an ack re-trigger the
-// acknowledged agent and start an echo chain.
-//
-// It returns (pure, hasAgentMention). hasAgentMention is reported separately so
-// callers can distinguish "standalone ack" from "ack directed at another agent"
-// without re-parsing mentions.
+// must not be produced for its @-targets.
 func channelMessageIsPureConfirmation(trigger ChannelMessageResponse) (pure bool, hasAgentMention bool) {
 	mentions := util.ParseMentionsFromContentAndParts(trigger.Content, trigger.Parts)
 	for _, m := range mentions {
@@ -68,28 +71,97 @@ func channelMessageIsPureConfirmation(trigger ChannelMessageResponse) (pure bool
 	return channelContentIsPureConfirmation(trigger.Content, trigger.Parts), hasAgentMention
 }
 
-// channelMessageKindFor derives the structured channel_message.kind for a new
-// message (LRM-1523 L1). An agent-authored pure acknowledgement (received /
-// understood / ok, no new info, no @-directive, no action) is classified
-// `confirmation`; everything else is ordinary `content`. This is what the
-// dispatch layer persists and can later enforce structurally. Non-agent
-// authors always remain `content` (human acknowledgements are real traffic).
+// channelMessageKindFor is the legacy helper kept for call sites that only need
+// the kind string. Prefer resolveChannelMessageKind when kind_source matters.
 func channelMessageKindFor(authorType, content string, parts []protocol.MessagePart) string {
-	if authorType == "agent" && channelContentIsPureConfirmation(content, parts) {
-		return protocol.ChannelMessageKindConfirmation
+	return resolveChannelMessageKind(authorType, content, parts, channelMessageKindHint{}).Kind
+}
+
+// resolveChannelMessageKind derives kind + kind_source (LRM-1529).
+func resolveChannelMessageKind(authorType, content string, parts []protocol.MessagePart, hint channelMessageKindHint) channelMessageKindResolution {
+	kind := protocol.NormalizeChannelMessageKind(hint.Kind)
+	source := strings.TrimSpace(strings.ToLower(hint.Source))
+
+	// 1. Explicit structured / system hint.
+	if kind != "" {
+		switch source {
+		case protocol.ChannelMessageKindSourceStructured:
+			if kind != protocol.ChannelMessageKindSystemReminder {
+				return channelMessageKindResolution{Kind: kind, Source: source}
+			}
+		case protocol.ChannelMessageKindSourceSystem:
+			return channelMessageKindResolution{Kind: kind, Source: source}
+		case "":
+			if kind == protocol.ChannelMessageKindSystemReminder {
+				return channelMessageKindResolution{
+					Kind:   kind,
+					Source: protocol.ChannelMessageKindSourceSystem,
+				}
+			}
+			if authorType == "agent" {
+				return channelMessageKindResolution{
+					Kind:   kind,
+					Source: protocol.ChannelMessageKindSourceStructured,
+				}
+			}
+		}
 	}
-	return protocol.ChannelMessageKindContent
+
+	// 2. System-internal classification.
+	if authorType == "system" {
+		if channelPartsHaveSystemReminder(parts) {
+			return channelMessageKindResolution{
+				Kind:   protocol.ChannelMessageKindSystemReminder,
+				Source: protocol.ChannelMessageKindSourceSystem,
+			}
+		}
+		return channelMessageKindResolution{
+			Kind:   protocol.ChannelMessageKindContent,
+			Source: protocol.ChannelMessageKindSourceDefault,
+		}
+	}
+
+	// 3. Legacy lexicon fallback (agent-authored pure ack only).
+	if authorType == "agent" && channelContentIsPureConfirmation(content, parts) {
+		return channelMessageKindResolution{
+			Kind:   protocol.ChannelMessageKindConfirmation,
+			Source: protocol.ChannelMessageKindSourceLexicon,
+		}
+	}
+
+	// 4. Default content.
+	return channelMessageKindResolution{
+		Kind:   protocol.ChannelMessageKindContent,
+		Source: protocol.ChannelMessageKindSourceDefault,
+	}
+}
+
+func channelPartsHaveSystemReminder(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeSystemEvent {
+			continue
+		}
+		event := strings.TrimSpace(strings.ToLower(part.Event))
+		if strings.Contains(event, "reminder") {
+			return true
+		}
+	}
+	return false
 }
 
 // channelMessageIsConfirmationNoWake reports whether a channel message must be
-// treated as a no-wake pure confirmation (LRM-1523 L1/L2). When the structured
-// kind is present (post-L1 insert) it is authoritative; legacy or reloaded rows
-// without a persisted kind fall back to the runtime text classifier.
+// treated as observe-only (no agent wake). Persisted observe-only kinds are
+// authoritative; legacy rows fall back to the runtime lexicon classifier.
 func channelMessageIsConfirmationNoWake(trigger ChannelMessageResponse) bool {
-	switch trigger.Kind {
-	case protocol.ChannelMessageKindConfirmation:
+	if protocol.ChannelMessageKindIsObserveOnly(trigger.Kind) {
 		return true
-	case protocol.ChannelMessageKindContent:
+	}
+	switch trigger.Kind {
+	case protocol.ChannelMessageKindContent,
+		protocol.ChannelMessageKindHandoff,
+		protocol.ChannelMessageKindDelegation,
+		protocol.ChannelMessageKindReview,
+		protocol.ChannelMessageKindDeliverable:
 		return false
 	}
 	pure, _ := channelMessageIsPureConfirmation(trigger)
@@ -97,42 +169,27 @@ func channelMessageIsConfirmationNoWake(trigger ChannelMessageResponse) bool {
 }
 
 // channelContentIsPureConfirmation decides whether the substantive text of a
-// message is nothing more than a confirmation. Structured mentions (the
-// [@A](mention://agent/..) markers) and the mention labels inside the visible
-// content are stripped before the confirmation check so that "收到 @A" is still
-// recognised as a pure ack to A.
+// message is nothing more than a confirmation.
 func channelContentIsPureConfirmation(content string, parts []protocol.MessagePart) bool {
 	body := stripMentionLabels(content, parts)
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return false
 	}
-	// A question or request marker signals new actionable content and forces
-	// the message out of the confirmation class.
 	if strings.ContainsAny(strings.ToLower(body), "?？") {
 		return false
 	}
 	return channelConfirmationSupportingContent(body)
 }
 
-// channelConfirmationSupportingContent reports whether body still contains
-// substantive content beyond a pure confirmation phrase.
 func channelConfirmationSupportingContent(body string) bool {
 	normalized := normalizeConfirmationBody(body)
 	if normalized == "" {
 		return false
 	}
-	// Require the whole (normalised) body to be a confirmation phrase; if any
-	// leftover non-glue token remains after the longest matching phrase, the
-	// message carries extra content and is not a pure confirmation.
 	return confirmationLexiconMatch(normalized)
 }
 
-// confirmationLexiconMatch reports whether the normalised body consists only of
-// confirmation phrases (and glue) from the lexicon. Matching is greedy and
-// picks the longest matching phrase at each position so that overlapping
-// lexemes (e.g. "ok" vs "okay", "好" vs "好的") are resolved in favour of the
-// longer form instead of leaving dangling leftovers.
 func confirmationLexiconMatch(normalized string) bool {
 	remainder := normalized
 	for remainder != "" {
@@ -158,22 +215,14 @@ func confirmationLexiconMatch(normalized string) bool {
 	return true
 }
 
-// normalizeConfirmationBody lowercases and trims the body so lexicon matching
-// tolerates capitalisation and surrounding glue while preserving internal
-// whitespace (so multi-word English phrases like "got it" still match).
 func normalizeConfirmationBody(body string) string {
 	return strings.ToLower(strings.TrimSpace(body))
 }
 
-// stripMentionLabels removes structured mention markers and their visible
-// labels from the content so an ack addressing "@A" still reads as an ack.
-// We strip the canonical [@Label](mention://type/id) markdown plus any leading
-// @Label so the remaining body is agent-mention-free for the pure-ack check.
 var channelMentionMarkerRe = util.MentionRe
 
 func stripMentionLabels(content string, _ []protocol.MessagePart) string {
 	out := content
-	// remove the markdown [@Label](mention://type/id) / [Label](mention://...) tokens
 	out = channelMentionMarkerRe.ReplaceAllString(out, "")
 	return strings.TrimSpace(out)
 }

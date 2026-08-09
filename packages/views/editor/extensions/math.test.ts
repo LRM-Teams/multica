@@ -67,10 +67,22 @@ describe("math extensions", () => {
         {
           type: "paragraph",
           content: [
-            { type: "inlineMath", attrs: { expression: "a+b" } },
+            { type: "inlineMath", attrs: { expression: "a+b", editOnCreate: true } },
           ],
         },
       ],
+    });
+  });
+
+  it("marks an empty-selection shortcut formula to open its editor immediately", () => {
+    editor = makeEditor({ type: "doc", content: [{ type: "paragraph" }] });
+    editor.commands.setTextSelection(1);
+
+    expect(inlineMathShortcut(editor)).toBe(true);
+
+    expect(editor.getJSON().content?.[0]?.content?.[0]).toEqual({
+      type: "inlineMath",
+      attrs: { expression: "x^2", editOnCreate: true },
     });
   });
 

@@ -72,7 +72,9 @@ function focusAfterNode({ editor, getPos, node }: Pick<NodeViewProps, "editor" |
 
 export function InlineMathView({ node, editor, getPos, updateAttributes }: NodeViewProps) {
   const expression = String(node.attrs.expression ?? "");
-  const [editing, setEditing] = useState(expression.trim() === "");
+  const [editing, setEditing] = useState(
+    expression.trim() === "" || node.attrs.editOnCreate === true,
+  );
   const inputRef = useRef<HTMLInputElement | null>(null);
   const html = useKatexHtml(expression, false);
 
@@ -202,6 +204,10 @@ export const InlineMathExtension = Node.create({
         default: "",
         rendered: false,
       },
+      editOnCreate: {
+        default: false,
+        rendered: false,
+      },
     };
   },
 
@@ -261,7 +267,10 @@ export const InlineMathExtension = Node.create({
         ({ commands }) =>
           commands.insertContent({
             type: this.name,
-            attrs: { expression: expression || DEFAULT_INLINE_EXPRESSION },
+            attrs: {
+              expression: expression || DEFAULT_INLINE_EXPRESSION,
+              editOnCreate: true,
+            },
           }),
     };
   },

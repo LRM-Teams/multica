@@ -260,3 +260,79 @@ func sequentialActivityFactIDs() func() string {
 		return id
 	}
 }
+
+// TestActivityProducerPublishHoldEntryForUnmanagedAgentPushesFragment covers the
+// core fix: a soft-held send is projected onto the Activity timeline even when
+// the Agent has no locally managed launch (Raft: ap undefined -> still report
+// the fact). The fragment must not register managed state or perturb client-seq
+// bookkeeping, and it is fail-soft when no transport is attached.
+func TestActivityProducerPublishHoldEntryForUnmanagedAgentPushesFragment(t *testing.T) {
+	now := time.Date(2026, time.August, 9, 1, 0, 0, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	// NOTE: no installActivityProducerAgent -> agent-a/launch-a is NOT managed.
+
+	entry, err := activitySystemEntry("Message held", "1 newer message available")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.PublishHoldEntry("agent-unmanaged", "daemon-1", []protocol.AgentActivityEntry{entry}); err != nil {
+		t.Fatalf("PublishHoldEntry(unmanaged): %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent = %d, want 1 unmanaged hold fragment", len(sent))
+	}
+	got := sent[0]
+	if got.Snapshot.AgentID != "agent-unmanaged" || got.Snapshot.LaunchID == "" || got.Snapshot.DaemonInstanceID != "daemon-1" {
+		t.Fatalf("unmanaged hold snapshot identity = %+v", got.Snapshot)
+	}
+	if got.Snapshot.ClientSequence != 1 || got.Snapshot.ProducerFactID == "" || got.Snapshot.ActivityKind != protocol.ActivityKindOnline {
+		t.Fatalf("unmanaged hold fragment must be a standalone Online seq=1 fact, got %+v", got.Snapshot)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Kind != "system" {
+		t.Fatalf("hold fragment entries = %+v", got.Entries)
+	}
+
+	// The fragment must not register managed state: the agent is still NOT
+	// managed afterwards, so the managed-only entry path still rejects it.
+	producerWithTransport := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	if err := producerWithTransport.PublishEntryForManagedAgent("agent-unmanaged", "daemon-1", []protocol.AgentActivityEntry{entry}); err == nil {
+		t.Fatal("expected managed-only entry path to still reject an unmanaged agent (fragment must not touch states map)")
+	}
+}
+
+// TestActivityProducerPublishHoldEntryForManagedAgentKeepsManagedStream ensures
+// the managed main path is untouched: when the Agent has a managed launch, a hold
+// entry reuses the managed identity and stays inside the managed client-sequence
+// stream instead of taking the standalone fragment branch.
+func TestActivityProducerPublishHoldEntryForManagedAgentKeepsManagedStream(t *testing.T) {
+	now := time.Date(2026, time.August, 9, 1, 0, 0, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer.newID = sequentialActivityFactIDs()
+	installActivityProducerAgent(t, producer)
+
+	if err := producer.Publish(activitySnapshot("daemon-1", "working", 1, "fact-1", now), nil); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := activitySystemEntry("Message held", "2 newer messages available")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.PublishHoldEntry("agent-a", "daemon-1", []protocol.AgentActivityEntry{entry}); err != nil {
+		t.Fatalf("PublishHoldEntry(managed): %v", err)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("sent = %d, want base snapshot + managed hold entry", len(sent))
+	}
+	got := sent[1]
+	if got.Snapshot.LaunchID != "launch-a" {
+		t.Fatalf("managed hold must reuse launch-a, got %+v", got.Snapshot)
+	}
+	if got.Snapshot.ClientSequence != 2 {
+		t.Fatalf("managed hold client sequence = %d, want 2 (advanced in managed stream)", got.Snapshot.ClientSequence)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Kind != "system" {
+		t.Fatalf("managed hold entries = %+v", got.Entries)
+	}
+}

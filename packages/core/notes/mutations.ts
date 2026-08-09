@@ -1,8 +1,44 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import type { CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, NotePage, NotePageListResponse, UpdateNotePageRequest, UpdateNotePageSharesRequest } from "../types";
 import { noteKeys } from "./queries";
+
+/**
+ * Monotonic per-note write epoch. Overlapping autosaves are common while typing;
+ * a slower older response must not overwrite a newer optimistic/server write in
+ * the React Query cache (that regression syncs into ContentEditor via
+ * defaultValue and looks like "typed characters vanished").
+ */
+const noteUpdateEpoch = new Map<string, number>();
+
+function nextNoteUpdateEpoch(id: string) {
+  const epoch = (noteUpdateEpoch.get(id) ?? 0) + 1;
+  noteUpdateEpoch.set(id, epoch);
+  return epoch;
+}
+
+function isCurrentNoteUpdateEpoch(id: string, epoch: number) {
+  return noteUpdateEpoch.get(id) === epoch;
+}
+
+function applyNotePageToCache(qc: QueryClient, wsId: string, page: NotePage) {
+  qc.setQueryData<NotePage>(noteKeys.detail(wsId, page.id), (old) => {
+    if (old && old.updated_at > page.updated_at) return old;
+    return page;
+  });
+  qc.setQueryData<NotePageListResponse>(noteKeys.list(wsId), (old) =>
+    old
+      ? {
+          pages: old.pages.map((p) => {
+            if (p.id !== page.id) return p;
+            if (p.updated_at > page.updated_at) return p;
+            return page;
+          }),
+        }
+      : old,
+  );
+}
 
 export function useCreateNotePage() {
   const qc = useQueryClient();
@@ -44,6 +80,7 @@ export function useUpdateNotePage() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateNotePageRequest }) => api.updateNotePage(id, data),
     onMutate: async ({ id, data }) => {
+      const epoch = nextNoteUpdateEpoch(id);
       await qc.cancelQueries({ queryKey: noteKeys.detail(wsId, id) });
       const prevDetail = qc.getQueryData<NotePage>(noteKeys.detail(wsId, id));
       const prevList = qc.getQueryData<NotePageListResponse>(noteKeys.list(wsId));
@@ -52,22 +89,23 @@ export function useUpdateNotePage() {
       qc.setQueryData<NotePageListResponse>(noteKeys.list(wsId), (old) =>
         old ? { pages: old.pages.map((p) => (p.id === id ? patch(p) : p)) } : old,
       );
-      return { prevDetail, prevList, id };
+      return { prevDetail, prevList, id, epoch };
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.prevDetail) qc.setQueryData(noteKeys.detail(wsId, ctx.id), ctx.prevDetail);
-      if (ctx?.prevList) qc.setQueryData(noteKeys.list(wsId), ctx.prevList);
+      // A newer in-flight/completed update owns the cache now — do not roll
+      // a superseded failure back over fresher keystrokes.
+      if (!ctx || !isCurrentNoteUpdateEpoch(ctx.id, ctx.epoch)) return;
+      if (ctx.prevDetail) qc.setQueryData(noteKeys.detail(wsId, ctx.id), ctx.prevDetail);
+      if (ctx.prevList) qc.setQueryData(noteKeys.list(wsId), ctx.prevList);
     },
-    onSuccess: (page) => {
-      qc.setQueryData(noteKeys.detail(wsId, page.id), page);
-      qc.setQueryData<NotePageListResponse>(noteKeys.list(wsId), (old) =>
-        old ? { pages: old.pages.map((p) => (p.id === page.id ? page : p)) } : old,
-      );
+    onSuccess: (page, _vars, ctx) => {
+      if (ctx && !isCurrentNoteUpdateEpoch(page.id, ctx.epoch)) return;
+      applyNotePageToCache(qc, wsId, page);
     },
-    onSettled: (_data, _err, vars) => {
-      qc.invalidateQueries({ queryKey: noteKeys.detail(wsId, vars.id) });
-      qc.invalidateQueries({ queryKey: noteKeys.list(wsId) });
-    },
+    // No onSettled invalidate: autosave is high-frequency, and a refetch that
+    // loses the server-side race with an overlapping write would push an older
+    // row back into the cache and wipe keystrokes via ContentEditor sync.
+    // onMutate/onSuccess already keep list+detail aligned for this client.
   });
 }
 

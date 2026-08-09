@@ -292,6 +292,40 @@ describe("ContentEditor", () => {
     expect(preventDefault).toHaveBeenCalledTimes(1);
     expect(document.querySelector("textarea")).toBeInTheDocument();
   });
+
+  it("dismisses the empty-line AI prompt on a second Space so a literal space can be inserted", () => {
+    const onEditPageWithAI = vi.fn(async () => "AI result");
+    const emptyParagraph = {
+      depth: 1,
+      parent: { type: { name: "paragraph" }, content: { size: 0 } },
+      before: vi.fn(() => 4),
+      after: vi.fn(() => 6),
+    };
+    editorState.selection = { empty: true, from: 5, to: 5, $from: emptyParagraph };
+
+    render(<ContentEditor onEditPageWithAI={onEditPageWithAI} />);
+
+    act(() => {
+      editorOptions.current?.editorProps?.handleKeyDown?.(
+        { state: { selection: editorState.selection } },
+        { key: " ", preventDefault: vi.fn(), metaKey: false, ctrlKey: false, altKey: false, isComposing: false } as unknown as KeyboardEvent,
+      );
+    });
+    expect(document.querySelector("textarea")).toBeInTheDocument();
+
+    const preventDefault = vi.fn();
+    let handled: boolean | undefined;
+    act(() => {
+      handled = editorOptions.current?.editorProps?.handleKeyDown?.(
+        { state: { selection: editorState.selection } },
+        { key: " ", preventDefault, metaKey: false, ctrlKey: false, altKey: false, isComposing: false } as unknown as KeyboardEvent,
+      );
+    });
+
+    expect(handled).toBe(false);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(document.querySelector("textarea")).not.toBeInTheDocument();
+  });
 });
 
 function makeAttachment(id: string, overrides: Partial<Attachment> = {}): Attachment {

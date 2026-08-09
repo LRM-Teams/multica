@@ -1719,6 +1719,79 @@ func TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot(t *testing.T) {
 	}
 }
 
+// TestReminderCadenceDailyFireQuotaCoalescesExcess covers the LRM-1523 L4
+// governor: a cadence/patrol reminder may post a visible receipt into its
+// anchor channel at most reminderDailyFireQuota times per (agent, channel,
+// UTC day). Firing past the quota coalesces the excess occurrence — the
+// occurrence still fires (terminal, NULL receipt) and the cadence advances,
+// but no fresh visible channel message and no agent re-wake are produced — so
+// a 15-minute patrol no longer spams the shared channel on every tick.
+func TestReminderCadenceDailyFireQuotaCoalescesExcess(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "every:15m", "")
+
+	// Fire more than the daily quota (3). The first reminderDailyFireQuota fires
+	// post a visible receipt + delivery; each later fire must coalesce.
+	const fires = reminderDailyFireQuota + 1
+	for i := 0; i < fires; i++ {
+		// Re-arm the reminder as due after each cadence advance so fireReminderAttempt
+		// (which re-reads the current version) will actually fire again.
+		if _, err := testPool.Exec(context.Background(), `UPDATE agent_reminder SET fire_at = now() - interval '5 seconds' WHERE id = $1`, reminderID); err != nil {
+			t.Fatalf("re-arm fire #%d: %v", i+1, err)
+		}
+		if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+			t.Fatalf("fire #%d: %v", i+1, err)
+		}
+	}
+
+	occurrences, receipts, deliveries, firedEvents := reminderFireCounts(t, reminderID)
+	if occurrences != fires {
+		t.Fatalf("occurrences=%d want %d", occurrences, fires)
+	}
+	if receipts != reminderDailyFireQuota {
+		t.Fatalf("visible receipts=%d want %d (in-quota fires only)", receipts, reminderDailyFireQuota)
+	}
+	if deliveries != reminderDailyFireQuota {
+		t.Fatalf("deliveries=%d want %d", deliveries, reminderDailyFireQuota)
+	}
+	if firedEvents != fires {
+		t.Fatalf("fired lifecycle events=%d want %d (quota fires + coalesced)", firedEvents, fires)
+	}
+
+	// The cadence reminder must remain scheduled (still advancing), never cancelled.
+	var status string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM agent_reminder WHERE id = $1`, reminderID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "scheduled" {
+		t.Fatalf("reminder status=%s want scheduled", status)
+	}
+
+	// Exactly one occurrence coalesced: fired with a NULL receipt.
+	var coalesced int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM agent_reminder_occurrence
+		WHERE reminder_id = $1 AND status = 'fired' AND receipt_message_id IS NULL`, reminderID).Scan(&coalesced); err != nil {
+		t.Fatal(err)
+	}
+	if coalesced != 1 {
+		t.Fatalf("coalesced occurrences=%d want 1", coalesced)
+	}
+
+	// A quota_coalesced lifecycle event documents the merge.
+	var reason string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT reason_code FROM agent_reminder_lifecycle_event
+		WHERE reminder_id = $1 AND reason_code = 'quota_coalesced'
+		ORDER BY id DESC LIMIT 1`, reminderID).Scan(&reason); err != nil {
+		t.Fatalf("quota_coalesced lifecycle event missing: %v", err)
+	}
+	if reason != "quota_coalesced" {
+		t.Fatalf("lifecycle reason=%q want quota_coalesced", reason)
+	}
+}
+
 func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)

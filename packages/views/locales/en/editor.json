@@ -129,6 +129,7 @@
       "note": "Add a note — won't trigger any agents",
       "code": "Plain code block",
       "table": "Table",
+      "formula": "Formula block",
       "mermaid": "Mermaid diagram — renders as a chart",
       "python": "Python code block",
       "javascript": "JavaScript code block"

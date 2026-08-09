@@ -130,6 +130,59 @@
   max-width: 100%;
 }
 
+.rich-text-editor .math-node.editing {
+  display: inline-flex;
+  min-width: min(18rem, 100%);
+}
+
+.rich-text-editor .math-node.block.editing {
+  display: block;
+  overflow: visible;
+}
+
+.rich-text-editor .math-node-input,
+.rich-text-editor .math-node-textarea {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  outline: none;
+}
+
+.rich-text-editor .math-node-input {
+  min-width: 10rem;
+  padding: 0.125rem 0.375rem;
+}
+
+.rich-text-editor .math-node-textarea {
+  min-height: 5rem;
+  resize: vertical;
+  padding: 0.5rem 0.625rem;
+}
+
+.rich-text-editor .math-node-input:focus,
+.rich-text-editor .math-node-textarea:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 20%, transparent);
+}
+
+.rich-text-editor .math-node-editor {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.rich-text-editor .math-node-preview {
+  overflow-x: auto;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+  padding: 0.75rem;
+  color: var(--muted-foreground);
+}
+
 /* Nested lists — bullet style progression and tighter spacing */
 .rich-text-editor ul ul {
   list-style-type: circle;

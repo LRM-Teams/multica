@@ -44,6 +44,7 @@ import {
   type SlashCommandItem,
   buildBuiltinCommandItems,
   buildBlockCommandItems,
+  createBlockCommandSuggestion,
   BLOCK_COMMANDS,
   BUILTIN_COMMANDS,
 } from "./slash-command-suggestion";
@@ -371,14 +372,36 @@ describe("buildBuiltinCommandItems", () => {
 });
 
 describe("buildBlockCommandItems", () => {
-  it("returns code and table commands for an empty query", () => {
+  it("returns code, table, and formula commands for an empty query", () => {
     expect(buildBlockCommandItems("")).toEqual(BLOCK_COMMANDS);
   });
 
   it("filters block commands by label prefix", () => {
     expect(buildBlockCommandItems("co").map((c) => c.id)).toEqual(["code"]);
     expect(buildBlockCommandItems("ta").map((c) => c.id)).toEqual(["table"]);
+    expect(buildBlockCommandItems("fo").map((c) => c.id)).toEqual(["formula"]);
     expect(buildBlockCommandItems("able")).toEqual([]);
+  });
+});
+
+describe("block slash command actions", () => {
+  it("inserts a formula block for the formula command", () => {
+    const setBlockMath = vi.fn(() => ({ run: vi.fn() }));
+    const chain = {
+      focus: vi.fn(() => chain),
+      deleteRange: vi.fn(() => chain),
+      setBlockMath,
+    };
+    const suggestion = createBlockCommandSuggestion();
+
+    suggestion.command?.({
+      editor: { chain: () => chain } as never,
+      range: { from: 1, to: 9 },
+      props: { id: "formula", label: "formula" },
+    });
+
+    expect(chain.deleteRange).toHaveBeenCalledWith({ from: 1, to: 9 });
+    expect(setBlockMath).toHaveBeenCalledWith("");
   });
 });
 
@@ -397,9 +420,11 @@ describe("SlashCommandList built-in command rendering", () => {
 
     expect(getByText("code")).toBeInTheDocument();
     expect(getByText("table")).toBeInTheDocument();
+    expect(getByText("formula")).toBeInTheDocument();
     expect(queryByText("/code")).not.toBeInTheDocument();
     expect(queryByText("/table")).not.toBeInTheDocument();
-    expect(container.querySelectorAll("svg")).toHaveLength(2);
+    expect(queryByText("/formula")).not.toBeInTheDocument();
+    expect(container.querySelectorAll("svg")).toHaveLength(3);
   });
 
   it("renders the localized description for a built-in command", () => {

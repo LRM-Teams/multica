@@ -299,6 +299,71 @@ func TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent(t *testing.T) {
 	}
 }
 
+// TestPrepareMessageSendDraftBatchDistinctContentMintsDistinctIDs exercises the
+// LRM-1530 boundary through the REAL draft path (not just the pure batch id
+// function): when the send carries a batch identity
+// (ConversationID/SeqFrom/SeqTo from a turn), two DISTINCT-content sends in the
+// SAME batch must derive DIFFERENT client_message_ids (one stable id per
+// message), so the server (channel,author,cmid) dedup does not 409-reject and
+// drop the 2nd+ distinct message. The same content re-driven in the same batch
+// (an accidental re-delivery/retry) must still reuse that one id so at-most-once
+// dedup per message is preserved.
+func TestPrepareMessageSendDraftBatchDistinctContentMintsDistinctIDs(t *testing.T) {
+	d, proxy := newDraftReuseTestDaemon(t)
+	now := time.Now()
+
+	base := credentialProxyMessageSendRequest{
+		AgentID:        "agent-1",
+		WorkspaceID:    "workspace-1",
+		Target:         "#test",
+		ConversationID: "conversation-A",
+		SeqFrom:        100,
+		SeqTo:          120,
+	}
+
+	// First distinct message in the batch.
+	reqA := base
+	reqA.Content = "content-A"
+	first, status, err := d.prepareMessageSendDraft(context.Background(), proxy, cachedAgentCredential{}, reqA, now)
+	if err != nil {
+		t.Fatalf("prepareMessageSendDraft batch msg A: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("prepareMessageSendDraft batch msg A status = %d", status)
+	}
+	if first.ClientMessageID == "" {
+		t.Fatal("batch send must derive a client_message_id")
+	}
+
+	// A second DISTINCT-content message in the SAME batch must get a DIFFERENT
+	// id — otherwise the server would 409-reject (and drop) it as a cmid conflict.
+	reqB := base
+	reqB.Content = "content-B"
+	second, status, err := d.prepareMessageSendDraft(context.Background(), proxy, cachedAgentCredential{}, reqB, now)
+	if err != nil {
+		t.Fatalf("prepareMessageSendDraft batch msg B: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("prepareMessageSendDraft batch msg B status = %d", status)
+	}
+	if second.ClientMessageID == first.ClientMessageID {
+		t.Fatalf("distinct-content messages in same batch must have distinct client_message_id, both %q", first.ClientMessageID)
+	}
+
+	// Re-driving the SAME content in the same batch reuses the one stable id
+	// (at-most-once per message is preserved for an accidental re-delivery).
+	retry, status, err := d.prepareMessageSendDraft(context.Background(), proxy, cachedAgentCredential{}, reqA, now)
+	if err != nil {
+		t.Fatalf("prepareMessageSendDraft batch msg A retry: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("prepareMessageSendDraft batch msg A retry status = %d", status)
+	}
+	if retry.ClientMessageID != first.ClientMessageID {
+		t.Fatalf("same-content retry in same batch must reuse id %q, got %q", first.ClientMessageID, retry.ClientMessageID)
+	}
+}
+
 // TestBatchClientMessageIDStableWithinBatch pinpoints Alice's boundary "稳定要
 // 批内稳定"：same conversation + same seq_from..seq_to（同一 turn 的同一批次）
 // 的所有 send/retry 必须复用同一个稳定 id，这样 server 才能按 client_message_id

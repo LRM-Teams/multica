@@ -9,6 +9,7 @@ export {
   type TitleEditorRef,
 } from "./title-editor";
 export type { TextOptimizationRequest } from "./bubble-menu";
+export type { PageEditAIRequest } from "./empty-line-ai-menu";
 export { ReadonlyContent } from "./readonly-content";
 export { useFileDropZone } from "./use-file-drop-zone";
 export { FileDropOverlay } from "./file-drop-overlay";

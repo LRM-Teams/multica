@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // credentialProxyMessageSendRequest is deliberately not the Server request
@@ -70,7 +71,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 		if !request.Anyway {
 			freshness, err := proxy.PreflightMessageSend(request.AgentID, draft.ContextTarget)
 			if err != nil {
-				d.observeMessageSendHold(request.AgentID, draft.Target, 0, "freshness_unknown")
+				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, 0, "freshness_unknown")
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, MessageSendFreshness{}, "freshness_unknown"))
 				return
 			}
@@ -79,7 +80,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 					http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 					return
 				}
-				d.observeMessageSendHold(request.AgentID, draft.Target, freshness.NewMessageCount, "local_pending")
+				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, freshness.NewMessageCount, "local_pending")
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, freshness, "newer_messages_available"))
 				return
 			}
@@ -123,7 +124,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 				return
 			}
 			count, _ := jsonInteger(response["newMessageCount"])
-			d.observeMessageSendHold(request.AgentID, draft.Target, count, "server_race")
+			d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, count, "server_race")
 		}
 		if !credentialProxyMessageOutputIsHeld(response) {
 			if err := proxy.ClearMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID); err != nil {
@@ -349,8 +350,39 @@ func (d *Daemon) observeOverlappingMessageSend(agentID, target string) func() {
 	}
 }
 
-func (d *Daemon) observeMessageSendHold(agentID, target string, newer int64, reason string) {
+func (d *Daemon) observeMessageSendHold(agentID, workspaceID, target string, newer int64, reason string) {
 	if d.logger != nil {
-		d.logger.Info("Credential Proxy message send held", "agent_id", agentID, "target", target, "new_message_count", newer, "reason", reason)
+		d.logger.Info("Credential Proxy message send held", "agent_id", agentID, "workspace_id", workspaceID, "target", target, "new_message_count", newer, "reason", reason)
 	}
+	// Project a Runner Activity entry so a soft-held send is visible on the
+	// agent's Activity timeline (a "system" entry renders as a warning row with
+	// title/subtext and body_kind:none). This is intentionally fail-soft and
+	// never influences the send outcome: activity publication is best-effort and
+	// best-effort deferred by the producer when the agent is not currently
+	// managed on this Runner.
+	entry, err := activitySystemEntry(messageSendHoldTitle(), messageSendHoldSubtext(newer))
+	if err != nil {
+		return
+	}
+	producer := d.workspaceAgentActivityProducer(workspaceID)
+	if err := producer.PublishEntryForManagedAgent(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+		d.logger.Debug("send-hold Runner Activity publish deferred", "error", err, "agent_id", agentID, "target", target)
+	}
+}
+
+// messageSendHoldTitle is the warning-row title surfaced on the Agent Activity
+// timeline when a message send is held pending review of newer messages. It is
+// the presentation contract consumed by the Activity tab (see Dax FE test).
+func messageSendHoldTitle() string {
+	return "Message held — review newer messages before sending"
+}
+
+// messageSendHoldSubtext builds the warning-row subtext from how many newer
+// messages are pending. It is deliberately text-only; the Activity projection
+// renders it as body_kind:none.
+func messageSendHoldSubtext(newer int64) string {
+	if newer > 0 {
+		return fmt.Sprintf("%d newer messages available — review then resend", newer)
+	}
+	return "Send held — review the channel before resending"
 }

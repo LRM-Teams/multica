@@ -22,7 +22,7 @@ import { Separator } from "@multica/ui/components/ui/separator";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { toast } from "sonner";
-import { ContentEditor, type ContentEditorRef, type TextOptimizationRequest } from "../editor";
+import { ContentEditor, type ContentEditorRef, type PageEditAIRequest, type TextOptimizationRequest } from "../editor";
 import { useNavigation } from "../navigation";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
@@ -124,6 +124,39 @@ ${request.contextAfter || "(none)"}
 User instruction:
 <instruction>
 ${instruction || "Optimize the selected excerpt."}
+</instruction>`;
+}
+
+function buildNotePageEditPrompt(request: PageEditAIRequest, noteTitle: string) {
+  const instruction = request.instruction.trim();
+  return `You are editing a user's Notion-style note page.
+The user pressed Space on an empty line and asked AI to edit the current page from that cursor position.
+Use the full page for context, preserve the user's language and tone, and keep useful Markdown formatting.
+If the request asks to add, continue, draft, brainstorm, or insert material, return only the Markdown that should be inserted at the cursor.
+If the request asks to rewrite, improve, reorganize, summarize, translate, or polish the whole page, return the complete revised page Markdown.
+Return ONLY Markdown content. Do not include explanations, labels, greetings, or wrapping code fences.
+
+Note title:
+${noteTitle || "Untitled"}
+
+Full current page Markdown:
+<page>
+${request.content || "(empty)"}
+</page>
+
+Cursor context before the empty line:
+<context_before>
+${request.contextBefore || "(none)"}
+</context_before>
+
+Cursor context after the empty line:
+<context_after>
+${request.contextAfter || "(none)"}
+</context_after>
+
+User instruction:
+<instruction>
+${instruction || "Improve or continue this page from the cursor."}
 </instruction>`;
 }
 
@@ -804,6 +837,7 @@ function NoteEditor({
   onOpenPage,
   onOpenShare,
   onOptimizeSelection,
+  onEditPageWithAI,
 }: {
   selected: NotePage;
   childPages: NotePage[];
@@ -813,6 +847,7 @@ function NoteEditor({
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
   onOptimizeSelection: (request: TextOptimizationRequest) => Promise<string>;
+  onEditPageWithAI: (request: PageEditAIRequest) => Promise<string>;
 }) {
   const { t } = useT("layout");
   const editorRef = useRef<ContentEditorRef | null>(null);
@@ -960,6 +995,7 @@ function NoteEditor({
         onUpdate={(content) => setDraft((current) => ({ ...current, content }))}
         onUploadFile={uploadWithToast}
         placeholder={t(($) => $.notes_page.content_placeholder)}
+        showEmptyLinePlaceholder
         className="mt-6 min-h-[55vh] px-0 pb-[45vh] pt-2"
         debounceMs={150}
         disableMentions
@@ -967,6 +1003,7 @@ function NoteEditor({
         slashCommandMode="block"
         showBubbleMenu
         onOptimizeSelection={onOptimizeSelection}
+        onEditPageWithAI={onEditPageWithAI}
       />
     </div>
   );
@@ -1106,8 +1143,8 @@ export function NotesPage({ pageId }: { pageId?: string }) {
     if (agentId) toast.success(t(($) => $.notes_page.ai_agent_saved));
   };
 
-  const optimizeSelectedNoteText = useCallback(
-    async (request: TextOptimizationRequest) => {
+  const runNoteAiEdit = useCallback(
+    async ({ title, prompt }: { title: string; prompt: string }) => {
       const agent = agents.find((item) => item.id === configuredAiAgentId);
       if (!agent) {
         setUiState((current) => ({ ...current, aiAgentOpen: true }));
@@ -1115,10 +1152,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       }
       const session = await api.createChatSession({
         agent_id: agent.id,
-        title: t(($) => $.notes_page.ai_optimize_chat_title, { title: selected?.title || t(($) => $.notes_page.title) }),
+        title,
       });
       try {
-        const sent = await api.sendChatMessage(session.id, buildNoteOptimizationPrompt(request, selected?.title || "Untitled"));
+        const sent = await api.sendChatMessage(session.id, prompt);
         const optimized = await waitForNoteOptimizationResult(session.id, sent.task_id, {
           failed: t(($) => $.notes_page.ai_optimize_failed),
           timeout: t(($) => $.notes_page.ai_optimize_timeout),
@@ -1130,7 +1167,25 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         throw error;
       }
     },
-    [agents, configuredAiAgentId, selected?.title, t],
+    [agents, configuredAiAgentId, t],
+  );
+
+  const optimizeSelectedNoteText = useCallback(
+    async (request: TextOptimizationRequest) =>
+      runNoteAiEdit({
+        title: t(($) => $.notes_page.ai_optimize_chat_title, { title: selected?.title || t(($) => $.notes_page.title) }),
+        prompt: buildNoteOptimizationPrompt(request, selected?.title || "Untitled"),
+      }),
+    [runNoteAiEdit, selected?.title, t],
+  );
+
+  const editNotePageWithAI = useCallback(
+    async (request: PageEditAIRequest) =>
+      runNoteAiEdit({
+        title: t(($) => $.notes_page.ai_page_edit_chat_title, { title: selected?.title || t(($) => $.notes_page.title) }),
+        prompt: buildNotePageEditPrompt(request, selected?.title || "Untitled"),
+      }),
+    [runNoteAiEdit, selected?.title, t],
   );
 
   const toggleNoteExpanded = (id: string) => {
@@ -1350,6 +1405,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               onOpenPage={openPage}
               onOpenShare={() => setUiState((current) => ({ ...current, sharePage: selected }))}
               onOptimizeSelection={optimizeSelectedNoteText}
+              onEditPageWithAI={editNotePageWithAI}
             />
           )}
         </main>

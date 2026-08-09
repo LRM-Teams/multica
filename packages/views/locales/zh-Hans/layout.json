@@ -80,11 +80,11 @@
     "export_popup_blocked": "无法打开打印窗口，请允许弹窗后重试。",
     "ai_agent_action": "配置智能体",
     "ai_agent_title": "配置智能体",
-    "ai_agent_description": "选择当前工作区中的一个智能体，用于优化笔记中选中的文字。",
+    "ai_agent_description": "选择当前工作区中的一个智能体，用于编辑笔记页面和优化选中文本。",
     "ai_agent_empty": "当前工作区还没有智能体。",
     "ai_agent_clear": "清除智能体",
     "ai_agent_saved": "已配置智能体",
-    "ai_agent_required": "请先配置智能体，再优化文本。",
+    "ai_agent_required": "请先配置智能体，再使用笔记 AI。",
     "ai_optimize_chat_title": "优化笔记文本：{{title}}",
     "ai_optimize_failed": "智能体未能优化文本。",
     "ai_optimize_timeout": "等待智能体优化文本超时。",
@@ -126,9 +126,10 @@
     "visibility_shared_etc": "等",
     "visibility_shared_by": "{{name}}共享给你笔记",
     "visibility_shared_by_suffix": "共享给你笔记",
-    "content_placeholder": "开始写笔记...",
+    "content_placeholder": "按下空格问问AI或‘/’执行命令",
     "image_paste_failed": "无法添加图片",
-    "uploading_image": "正在上传图片..."
+    "uploading_image": "正在上传图片...",
+    "ai_page_edit_chat_title": "AI 编辑笔记：{{title}}"
   },
   "sandboxes_page": {
     "title": "沙箱",

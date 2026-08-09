@@ -25,6 +25,14 @@
   height: 0;
 }
 
+.rich-text-editor.show-empty-line-placeholder .is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: color-mix(in srgb, var(--muted-foreground) 62%, transparent);
+  pointer-events: none;
+  height: 0;
+}
+
 /* Readonly mode overrides */
 .rich-text-editor.readonly.ProseMirror {
   caret-color: transparent;

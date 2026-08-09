@@ -39,12 +39,14 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { posToDOMRect } from "@tiptap/core";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { cn } from "@multica/ui/lib/utils";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceSlug } from "@multica/core/paths";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Attachment } from "@multica/core/types";
+import { isImeComposing } from "@multica/core/utils";
 import { Slice } from "@tiptap/pm/model";
 import {
   parseMarkdownChunked,
@@ -57,6 +59,7 @@ import { uploadAndInsertFile } from "./extensions/file-upload";
 import { preprocessMarkdown } from "./utils/preprocess";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { EditorBubbleMenu, type TextOptimizationRequest } from "./bubble-menu";
+import { EmptyLineAiMenu, type EmptyLineAiState, type PageEditAIAction } from "./empty-line-ai-menu";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
 import { TableControls } from "./table-controls";
 import { AttachmentDownloadProvider } from "./attachment-download-context";
@@ -92,6 +95,10 @@ interface ContentEditorProps {
   showBubbleMenu?: boolean;
   /** Optional AI rewrite action for the selected text plus nearby context. */
   onOptimizeSelection?: (request: TextOptimizationRequest) => Promise<string>;
+  /** Optional Notion-style empty-line AI action for editing the current page. */
+  onEditPageWithAI?: PageEditAIAction;
+  /** Show the placeholder on the currently focused empty text block. */
+  showEmptyLinePlaceholder?: boolean;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
   submitOnEnter?: boolean;
   /**
@@ -208,6 +215,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onUploadFile,
       showBubbleMenu = true,
       onOptimizeSelection,
+      onEditPageWithAI,
+      showEmptyLinePlaceholder = false,
       submitOnEnter = false,
       currentIssueId,
       disableMentions = false,
@@ -230,6 +239,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     const onUpdateRef = useRef(onUpdate);
     const onSubmitRef = useRef(onSubmit);
     const onBlurRef = useRef(onBlur);
+    const onEditPageWithAIRef = useRef<PageEditAIAction | undefined>(onEditPageWithAI);
     const onUploadFileRef = useRef<
       ((file: File) => Promise<UploadResult | null>) | undefined
     >(undefined);
@@ -310,6 +320,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     onUpdateRef.current = onUpdate;
     onSubmitRef.current = onSubmit;
     onBlurRef.current = onBlur;
+    onEditPageWithAIRef.current = onEditPageWithAI;
     onUploadFileRef.current = wrappedOnUploadFile;
     mediaModeRef.current = mediaMode;
     onExternalFilesRef.current = onExternalFiles;
@@ -319,6 +330,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     mentionChannelMemberIdsRef.current = mentionChannelMemberIds ?? null;
 
     const queryClient = useQueryClient();
+    const [emptyLineAiState, setEmptyLineAiState] = useState<EmptyLineAiState | null>(null);
 
     const initialContent = defaultValue
       ? preprocessMarkdown(defaultValue, { linkify: !plainUrls })
@@ -398,6 +410,21 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         onBlurRef.current?.();
       },
       editorProps: {
+        handleKeyDown(view, event) {
+          if (!onEditPageWithAIRef.current) return false;
+          if ((event.key !== " " && event.code !== "Space") || event.metaKey || event.ctrlKey || event.altKey) return false;
+          if (isImeComposing(event)) return false;
+          const { selection } = view.state;
+          if (!selection.empty) return false;
+          const $from = selection.$from;
+          if ($from.parent.type.name !== "paragraph" || $from.parent.content.size > 0 || $from.depth < 1) return false;
+          event.preventDefault();
+          const from = $from.before($from.depth);
+          const to = $from.after($from.depth);
+          const anchorRect = posToDOMRect(view, selection.from, selection.from);
+          setEmptyLineAiState({ status: "prompt", from, to, anchorRect, instruction: "" });
+          return true;
+        },
         handleDOMEvents: {
           click(_view, event) {
             const target = event.target as HTMLElement;
@@ -414,7 +441,11 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           },
         },
         attributes: {
-          class: cn("flex-1 rich-text-editor text-sm outline-none", className),
+          class: cn(
+            "flex-1 rich-text-editor text-sm outline-none",
+            showEmptyLinePlaceholder && "show-empty-line-placeholder",
+            className,
+          ),
         },
       },
     });
@@ -433,6 +464,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     useEffect(() => {
       if (!editor || editor.isDestroyed) return;
 
+      // react-doctor-disable-next-line react-doctor/no-derived-state -- Tiptap document sync crosses an imperative editor boundary; it is not React derived state.
       const current = stripBlobUrls(editor.getMarkdown()).trimEnd();
       // "Dirty" = user has local edits not yet flushed through the debounced
       // `onUpdate`. `lastEmittedRef` is advanced only after a debounce fire,
@@ -490,6 +522,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         to: Math.min(to, docSize),
       });
 
+      // react-doctor-disable-next-line react-doctor/no-derived-state -- lastEmittedRef tracks the imperative Tiptap document after setContent, not render-derived state.
       lastEmittedRef.current = stripBlobUrls(editor.getMarkdown()).trimEnd();
     }, [defaultValue, editor, plainUrls]);
 
@@ -595,6 +628,18 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           {showBubbleMenu && (
             <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} />
           )}
+          {emptyLineAiState && onEditPageWithAI && (
+            <EmptyLineAiMenu
+              editor={editor}
+              state={emptyLineAiState}
+              onChange={setEmptyLineAiState}
+              onEditPageWithAI={onEditPageWithAI}
+              onClose={() => {
+                setEmptyLineAiState(null);
+                editor.commands.focus();
+              }}
+            />
+          )}
           <LinkHoverCard {...hover} />
         </div>
       </AttachmentDownloadProvider>
@@ -603,3 +648,4 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
 );
 
 export { ContentEditor, type ContentEditorProps, type ContentEditorRef };
+export type { PageEditAIRequest } from "./empty-line-ai-menu";

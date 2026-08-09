@@ -35,13 +35,13 @@ import (
 // The comment is inserted directly via db.Queries (not through the
 // CreateComment HTTP handler) so it bypasses the generic on_comment trigger
 // path. When the parent has an agent assignee, the comment body embeds a
-// single `mention://agent/<id>` link. Historical assignee_type=squad is
-// read-only: no new `mention://squad` token and no squad-leader wake
-// (squad product retired). Member assignees are skipped entirely (no
-// comment). Notification + subscriber listeners skip system comments
-// wholesale, so smuggled mentions from the child title cannot light up
-// unrelated members. The parent agent trigger is fired explicitly by
-// dispatchParentAssigneeTrigger below.
+// display-only `@label` (no `mention://` URL). Historical assignee_type=squad
+// is read-only: no squad-leader wake (squad product retired). Member
+// assignees are skipped entirely (no comment). Notification + subscriber
+// listeners skip system comments wholesale, so smuggled mentions from the
+// child title cannot light up unrelated members. The parent agent trigger is
+// fired explicitly by dispatchParentAssigneeTrigger below — and only after
+// IssueStageBarrier closes for the child's stage.
 //
 // Errors are logged at warn level and swallowed: this is a best-effort
 // notification on the side of a successful status update; failing it must

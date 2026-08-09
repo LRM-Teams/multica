@@ -1377,6 +1377,7 @@ func TestBoundary_NecessaryPathTable_DocumentsDedicatedTargets(t *testing.T) {
 		{"message send/react/read/search", []string{"/api/agent/messages/"}},
 		{"thread unfollow", []string{"/api/agent/threads/unfollow"}},
 		{"reminder suite", []string{"/api/agent/reminders/"}},
+		{"migration lease reserve/release/list", []string{"/api/agent/migrations/"}},
 		{"channel list", []string{"/api/agent/channels"}},
 		{"channel members", []string{"/api/agent/channels/"}},
 		{"channel mute", []string{"/api/agent/channels/"}},

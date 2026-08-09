@@ -277,6 +277,25 @@ multica issue status <child-id> todo   # promote when the previous step is truly
 
 Creating every serial step as `todo` enqueues the whole chain at once.
 
+## Database migrations require a MigrationLease
+
+Never invent the next migration number by listing `server/migrations/` locally
+or by taking `max(N)+1` from your checkout. Open PRs routinely collide on the
+same number.
+
+Before adding `server/migrations/<N>_*.sql`:
+
+```bash
+multica migration reserve --number <N> --filename <N>_your_change.up.sql --issue-id <uuid>
+# or: multica migration reserve --filename <N>_your_change.up.sql
+multica migration list
+```
+
+If reserve returns conflict, pick another free number and reserve again. Release
+with `multica migration release --number <N>` when abandoning the change. CI
+also rejects new migrations that reuse a number already on `dev` or collide with
+another new migration on the same branch.
+
 ## Incorrect → correct
 
 PR title (link the issue):

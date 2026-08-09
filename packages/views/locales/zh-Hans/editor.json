@@ -161,9 +161,10 @@
     "rendering": "渲染中…"
   },
   "page_ai": {
-    "trigger_label": "Edit with AI",
-    "hint": "按 Enter 运行，Shift+Enter 换行。",
-    "instruction_placeholder": "让 AI 为当前页增加、改写、总结或优化内容...",
+    "trigger_label": "用 AI 编辑",
+    "hint": "Enter 发送 · Shift+Enter 换行 · Esc 关闭",
+    "instruction_placeholder": "用 AI 编辑",
+    "send": "发送",
     "run": "运行",
     "cancel": "取消",
     "result_title": "AI 草稿",

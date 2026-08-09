@@ -331,6 +331,8 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
 
     const queryClient = useQueryClient();
     const [emptyLineAiState, setEmptyLineAiState] = useState<EmptyLineAiState | null>(null);
+    const emptyLineAiStateRef = useRef<EmptyLineAiState | null>(null);
+    emptyLineAiStateRef.current = emptyLineAiState;
 
     const initialContent = defaultValue
       ? preprocessMarkdown(defaultValue, { linkify: !plainUrls })
@@ -414,6 +416,18 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           if (!onEditPageWithAIRef.current) return false;
           if ((event.key !== " " && event.code !== "Space") || event.metaKey || event.ctrlKey || event.altKey) return false;
           if (isImeComposing(event)) return false;
+
+          // Prompt already open: a second Space means "insert a real space",
+          // not reopen AI. Returning false lets ProseMirror insert it.
+          const open = emptyLineAiStateRef.current;
+          if (open) {
+            if (open.status === "prompt" && open.instruction.length === 0) {
+              setEmptyLineAiState(null);
+              return false;
+            }
+            return true;
+          }
+
           const { selection } = view.state;
           if (!selection.empty) return false;
           const $from = selection.$from;
@@ -422,7 +436,14 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           const from = $from.before($from.depth);
           const to = $from.after($from.depth);
           const anchorRect = posToDOMRect(view, selection.from, selection.from);
-          setEmptyLineAiState({ status: "prompt", from, to, anchorRect, instruction: "" });
+          setEmptyLineAiState({
+            status: "prompt",
+            from,
+            to,
+            caretPos: selection.from,
+            anchorRect,
+            instruction: "",
+          });
           return true;
         },
         handleDOMEvents: {

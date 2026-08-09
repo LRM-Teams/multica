@@ -162,8 +162,9 @@
   },
   "page_ai": {
     "trigger_label": "Edit with AI",
-    "hint": "Enter to run, Shift+Enter for a new line.",
-    "instruction_placeholder": "Ask AI to add, rewrite, summarize, or improve this page...",
+    "hint": "Enter to send · Shift+Enter for a new line · Esc to dismiss",
+    "instruction_placeholder": "Edit with AI",
+    "send": "Send",
     "run": "Run",
     "cancel": "Cancel",
     "result_title": "AI draft",

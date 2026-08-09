@@ -284,6 +284,23 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		"content":        content,
 		"attachment_ids": attachmentIDs,
 	}
+	// Turn-at-most-once batch identity: stamp the send with the turn's
+	// conversation + seq range so the daemon derives one stable client_message_id
+	// for the whole batch (server dedup) and never re-mints a second identity for
+	// the same exchange.
+	if conv := strings.TrimSpace(os.Getenv("MULTICA_TURN_CONVERSATION_ID")); conv != "" {
+		body["conversation_id"] = conv
+	}
+	if from := os.Getenv("MULTICA_TURN_SEQ_FROM"); from != "" {
+		if n, err := strconv.ParseInt(from, 10, 64); err == nil {
+			body["seq_from"] = n
+		}
+	}
+	if to := os.Getenv("MULTICA_TURN_SEQ_TO"); to != "" {
+		if n, err := strconv.ParseInt(to, 10, 64); err == nil {
+			body["seq_to"] = n
+		}
+	}
 	var out map[string]any
 	if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
 		return fmt.Errorf("send message: %w", err)

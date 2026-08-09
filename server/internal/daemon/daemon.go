@@ -2692,8 +2692,10 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 		event.Task.InboxEvent = &AgentInboxLease{
 			ID:             event.ID,
 			DeliveryID:     event.DeliveryID,
+			ConversationID: event.ConversationID,
 			LeaseToken:     event.LeaseToken,
 			LeaseExpiresAt: event.LeaseExpiresAt,
+			SeqFrom:        event.SeqFrom,
 			SeqTo:          event.SeqTo,
 			RequiresWake:   event.RequiresWake,
 			Reason:         event.Reason,
@@ -3651,6 +3653,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentEnv["MULTICA_AGENT_INBOX_EVENT_ID"] = task.InboxEvent.ID
 		agentEnv["MULTICA_AGENT_INBOX_DELIVERY_ID"] = task.InboxEvent.DeliveryID
 		agentEnv["MULTICA_AGENT_INBOX_LEASE_TOKEN"] = task.InboxEvent.LeaseToken
+		// Turn-at-most-once batch identity: the conversation + seq range carried by
+		// this turn's inbox event. Exposed so `multica message send` can stamp the
+		// send with a stable client_message_id for the whole batch (dedup), while a
+		// different batch/turn gets a different id.
+		if task.InboxEvent.ConversationID != "" {
+			agentEnv["MULTICA_TURN_CONVERSATION_ID"] = task.InboxEvent.ConversationID
+		}
+		if task.InboxEvent.SeqFrom > 0 {
+			agentEnv["MULTICA_TURN_SEQ_FROM"] = strconv.FormatInt(task.InboxEvent.SeqFrom, 10)
+		}
+		if task.InboxEvent.SeqTo > 0 {
+			agentEnv["MULTICA_TURN_SEQ_TO"] = strconv.FormatInt(task.InboxEvent.SeqTo, 10)
+		}
 	}
 	if transportAttemptPath != "" {
 		agentEnv[turntransport.AttemptPathEnv] = transportAttemptPath

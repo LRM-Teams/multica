@@ -2,11 +2,14 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,13 +22,16 @@ import (
 // shape.  In particular, Agent code cannot provide a client identity or a
 // seen cursor: both are machine-local Draft state.
 type credentialProxyMessageSendRequest struct {
-	AgentID       string   `json:"agent_id"`
-	WorkspaceID   string   `json:"workspace_id"`
-	Target        string   `json:"target"`
-	Content       string   `json:"content"`
-	AttachmentIDs []string `json:"attachment_ids"`
-	SendDraft     bool     `json:"send_draft,omitempty"`
-	Anyway        bool     `json:"anyway,omitempty"`
+	AgentID        string   `json:"agent_id"`
+	WorkspaceID    string   `json:"workspace_id"`
+	Target         string   `json:"target"`
+	Content        string   `json:"content"`
+	AttachmentIDs  []string `json:"attachment_ids"`
+	SendDraft      bool     `json:"send_draft,omitempty"`
+	Anyway         bool     `json:"anyway,omitempty"`
+	ConversationID string   `json:"conversation_id,omitempty"`
+	SeqFrom        int64    `json:"seq_from,omitempty"`
+	SeqTo          int64    `json:"seq_to,omitempty"`
 }
 
 type credentialProxyMessageTargetResponse struct {
@@ -186,10 +192,22 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		// (workspace,channel,author,client_message_id) dedup then recognizes the
 		// retry and stops the duplicate (regression seq86/87). Distinct content is
 		// a new intent, so it forwards to a fresh identity as before.
-		clientMessageID := uuid.NewString()
-		if existing, found, loadErr := proxy.LoadMessageDraft(request.AgentID, request.Target, now); loadErr == nil && found {
-			if reused, ok := reuseClientMessageIDForIntent(existing, request.Content); ok {
-				clientMessageID = reused
+		//
+		// Turn-at-most-once: when the agent is processing one exchange batch (a
+		// single conversation spanning seq_from..seq_to), every send/retry of that
+		// batch shares ONE stable client_message_id derived from the batch
+		// identity, so the server dedup collapses an accidental re-delivery (the
+		// "same message sent twice" regression). Different batches derive
+		// different ids, so genuinely distinct messages are never folded together.
+		clientMessageID := ""
+		if request.ConversationID != "" && request.SeqFrom > 0 && request.SeqTo >= request.SeqFrom {
+			clientMessageID = batchClientMessageID(request.ConversationID, request.SeqFrom, request.SeqTo)
+		} else {
+			clientMessageID = uuid.NewString()
+			if existing, found, loadErr := proxy.LoadMessageDraft(request.AgentID, request.Target, now); loadErr == nil && found {
+				if reused, ok := reuseClientMessageIDForIntent(existing, request.Content); ok {
+					clientMessageID = reused
+				}
 			}
 		}
 		saved, err := proxy.SaveNormalMessageDraft(request.AgentID, messageDraft{
@@ -258,6 +276,25 @@ func reuseClientMessageIDForIntent(existing messageDraft, content string) (strin
 		return existing.ClientMessageID, true
 	}
 	return "", false
+}
+
+// batchClientMessageID derives a stable, deterministic client_message_id for a
+// single exchange batch identified by (ConversationID, SeqFrom, SeqTo). Within
+// one turn a batch of messages spanning seq_from..seq_to shares this one
+// identity, so every send/retry of that batch hits the server's
+// (workspace,channel,author,client_message_id) dedup and collapses an accidental
+// re-delivery (	he "same message sent twice" regression). Different batches
+// (different conversation or seq range) yield a different id, so distinct
+// messages are never folded together. The 32-char form stays well under the
+// server's client_message_id length limit.
+func batchClientMessageID(conversationID string, seqFrom, seqTo int64) string {
+	h := sha256.New()
+	h.Write([]byte(conversationID))
+	h.Write([]byte{0})
+	h.Write(strconv.AppendInt(nil, seqFrom, 10))
+	h.Write([]byte{0})
+	h.Write(strconv.AppendInt(nil, seqTo, 10))
+	return "b" + hex.EncodeToString(h.Sum(nil))[:31]
 }
 
 func localMessageSendHeldResponse(target string, freshness MessageSendFreshness, reason string) map[string]any {

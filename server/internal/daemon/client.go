@@ -321,12 +321,14 @@ func (c *Client) tokenForRuntime(runtimeID string) string {
 }
 
 type AgentInboxEvent struct {
-	ID               string `json:"id"`
-	DeliveryID       string `json:"delivery_id"`
-	LeaseToken       string `json:"lease_token"`
-	LeaseExpiresAt   string `json:"lease_expires_at"`
-	SeqTo            int64  `json:"seq_to"`
-	Reason           string `json:"reason"`
+	ID             string `json:"id"`
+	DeliveryID     string `json:"delivery_id"`
+	ConversationID string `json:"conversation_id"`
+	LeaseToken     string `json:"lease_token"`
+	LeaseExpiresAt string `json:"lease_expires_at"`
+	SeqFrom        int64  `json:"seq_from"`
+	SeqTo          int64  `json:"seq_to"`
+	Reason         string `json:"reason"`
 	DeliveryMode     string `json:"delivery_mode"`
 	ResponseMode     string `json:"response_mode"`
 	ExecutionProfile string `json:"execution_profile"`

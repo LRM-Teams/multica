@@ -298,3 +298,50 @@ func TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent(t *testing.T) {
 		}
 	}
 }
+
+// TestBatchClientMessageIDStableWithinBatch pinpoints Alice's boundary "稳定要
+// 批内稳定"：same conversation + same seq_from..seq_to（同一 turn 的同一批次）
+// 的所有 send/retry 必须复用同一个稳定 id，这样 server 才能按 client_message_id
+// 幂等住「一条消息发两次」。
+func TestBatchClientMessageIDStableWithinBatch(t *testing.T) {
+	id1 := batchClientMessageID("conversation-A", 100, 120)
+	id2 := batchClientMessageID("conversation-A", 100, 120) // 同批重试/再次 send
+	if id1 == "" {
+		t.Fatal("batch client_message_id must be non-empty")
+	}
+	if id1 != id2 {
+		t.Fatalf("same batch must reuse one stable id, got %q vs %q", id1, id2)
+	}
+	// The 32-char form must stay well under the server length limit.
+	if len(id1) != 32 {
+		t.Fatalf("batch id length = %d, want 32", len(id1))
+	}
+}
+
+// TestBatchClientMessageIDDistinctAcrossBatches pinpoints the other half of
+// Alice's boundary "批间不同": a DIFFERENT seq range (a different turn/batch)
+// must get a DIFFERENT id, so two genuinely distinct messages are never folded
+// together (avoid turning "一条发两次" into dropping a real message).
+func TestBatchClientMessageIDDistinctAcrossBatches(t *testing.T) {
+	base := batchClientMessageID("conversation-A", 100, 120)
+	if id := batchClientMessageID("conversation-A", 100, 121); id == base {
+		t.Fatalf("different seq_to must yield a different id (got %q)", id)
+	}
+	if id := batchClientMessageID("conversation-A", 99, 120); id == base {
+		t.Fatalf("different seq_from must yield a different id (got %q)", id)
+	}
+	if id := batchClientMessageID("conversation-B", 100, 120); id == base {
+		t.Fatalf("different conversation must yield a different id (got %q)", id)
+	}
+}
+
+// TestBatchClientMessageIDIsPure verifies retry idempotence without any shared
+// state: calling repeatedly returns the same stable id (so a re-delivered batch
+// cannot mint a second identity that bypasses the server dedup).
+func TestBatchClientMessageIDIsPure(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		if got := batchClientMessageID("conv-X", 5, 9); got != batchClientMessageID("conv-X", 5, 9) {
+			t.Fatalf("batchId must be deterministic, got %q", got)
+		}
+	}
+}

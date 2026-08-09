@@ -557,6 +557,10 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "agent has no runtime")
 		return db.AgentInboxEvent{}, fmt.Errorf("agent has no runtime")
 	}
+	if err := s.ensureExecutorWorkOwnerLease(ctx, issue, issue.AssigneeID); err != nil {
+		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(issue.AssigneeID), "error", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("work owner lease: %w", err)
+	}
 	var taskContext []byte
 	if !triggerCommentID.Valid {
 		snapshot, err := s.buildIssueAssignmentSnapshot(ctx, issue)

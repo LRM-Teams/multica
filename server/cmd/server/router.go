@@ -1436,6 +1436,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/migrations/reserve", h.AgentMigrationLeaseReserve)
 			r.Post("/api/agent/migrations/release", h.AgentMigrationLeaseRelease)
 			r.Post("/api/agent/migrations/list", h.AgentMigrationLeaseList)
+			r.Post("/api/agent/work-leases/acquire", h.AgentWorkOwnerLeaseAcquire)
+			r.Post("/api/agent/work-leases/release", h.AgentWorkOwnerLeaseRelease)
+			r.Post("/api/agent/work-leases/list", h.AgentWorkOwnerLeaseList)
 
 			// Unified Messages read model. Group-channel and DM mutations/details
 			// intentionally remain on their domain-specific routes below.

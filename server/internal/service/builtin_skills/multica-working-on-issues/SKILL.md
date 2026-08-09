@@ -277,6 +277,21 @@ multica issue status <child-id> todo   # promote when the previous step is truly
 
 Creating every serial step as `todo` enqueues the whole chain at once.
 
+## WorkOwnerLease before code ownership work
+
+Before pushing a branch / opening a PR / editing migrations for an issue, hold
+an active executor `WorkOwnerLease`. Issue task enqueue auto-acquires one for
+the assignee. If another agent already owns the issue, do not invent a second
+canonical branch — wait, take over via an explicit handoff, or comment only.
+
+```bash
+multica work-lease acquire --issue-id <uuid> --role executor --canonical-branch agent/<you>/<issue>
+multica work-lease list --issue-id <uuid>
+```
+
+PR descriptions should mention the lease id / canonical branch. Reviewer leases
+may be multiple (`--role reviewer`) and must not change code.
+
 ## Database migrations require a MigrationLease
 
 Never invent the next migration number by listing `server/migrations/` locally

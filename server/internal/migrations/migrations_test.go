@@ -694,3 +694,42 @@ func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
 		t.Error("migration 307 down must drop the bindings table")
 	}
 }
+
+func TestMigration308ChannelAttentionRoundSchema(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "308_channel_attention_round.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 308 up: %v", err)
+	}
+	for _, required := range []string{
+		"CREATE TABLE channel_attention_round",
+		"CREATE TABLE channel_attention_participant",
+		"CREATE TABLE channel_attention_response_grant",
+		"idx_channel_attention_round_collecting_channel",
+		"SILENT", "ANSWER", "CONTRIBUTE", "COORDINATE",
+		"UNIQUE (round_id)",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Errorf("migration 308 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "308_channel_attention_round.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 308 down: %v", err)
+	}
+	for _, table := range []string{
+		"channel_attention_response_grant",
+		"channel_attention_participant",
+		"channel_attention_round",
+	} {
+		if !strings.Contains(string(down), "DROP TABLE IF EXISTS "+table) {
+			t.Errorf("migration 308 down missing DROP for %s", table)
+		}
+	}
+}

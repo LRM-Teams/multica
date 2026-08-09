@@ -64,10 +64,30 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 	if parent.Status == "done" || parent.Status == "cancelled" {
 		return
 	}
+	// Backlog parents are not active execution; stage completion must not wake them.
+	if parent.Status == "backlog" {
+		logIssueStageBarrierSkip(parent, issue, "parent_backlog")
+		return
+	}
 	// Human-assigned parents read their own timeline; an automated system
 	// comment is just noise and there is no agent task to trigger. Skip the
 	// whole notification (comment + mention + inbox row) — MUL-2538.
 	if parent.AssigneeType.Valid && parent.AssigneeType.String == "member" {
+		return
+	}
+
+	// IssueStageBarrier: wait until the current stage's children are all
+	// terminal, then notify the parent exactly once.
+	decision, err := h.evaluateIssueStageBarrier(ctx, parent, issue)
+	if err != nil {
+		slog.Warn("child done: stage barrier evaluation failed",
+			"error", err,
+			"child_id", uuidToString(issue.ID),
+			"parent_id", uuidToString(parent.ID))
+		return
+	}
+	if !decision.ShouldNotify {
+		logIssueStageBarrierSkip(parent, issue, "stage_open_or_already_closed")
 		return
 	}
 
@@ -76,14 +96,13 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 	childID := uuidToString(issue.ID)
 	title := sanitizeChildTitleForSystemComment(issue.Title)
 
-	// Build the parent-assignee mention prefix. Empty when the parent has no
-	// assignee or the assignee row is missing (deleted member, archived
-	// agent the workspace lost track of, etc.).
-	mentionPrefix := h.buildParentAssigneeMention(ctx, parent)
+	// Display-only @label (no mention:// URL). Real wake is explicit via
+	// dispatchParentAssigneeTrigger below.
+	mentionPrefix := h.buildParentAssigneeDisplayMention(ctx, parent)
 
 	content := fmt.Sprintf(
-		"%sSub-issue [%s](mention://issue/%s) — \"%s\" — is done. Before promoting any waiting `backlog` sub-issue, read each sibling's description and only promote items whose stated dependencies are already satisfied — do not rely on this parent's higher-level breakdown alone. If a sibling's description conflicts with that breakdown (e.g. it lists a prerequisite the parent treats as parallel), do NOT change its status — leave it `backlog` and post a comment to confirm first.",
-		mentionPrefix, identifier, childID, title,
+		"%sStage barrier closed (%s). Latest child [%s](mention://issue/%s) — \"%s\" — is done, and all children in this stage are terminal. Before promoting any waiting `backlog` sub-issue, read each sibling's description and only promote items whose stated dependencies are already satisfied — do not rely on this parent's higher-level breakdown alone. If a sibling's description conflicts with that breakdown (e.g. it lists a prerequisite the parent treats as parallel), do NOT change its status — leave it `backlog` and post a comment to confirm first.",
+		mentionPrefix, decision.StageKey, identifier, childID, title,
 	)
 
 	// author_type='system', author_id=zero UUID. The zero UUID is a valid 16

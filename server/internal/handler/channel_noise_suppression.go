@@ -68,6 +68,34 @@ func channelMessageIsPureConfirmation(trigger ChannelMessageResponse) (pure bool
 	return channelContentIsPureConfirmation(trigger.Content, trigger.Parts), hasAgentMention
 }
 
+// channelMessageKindFor derives the structured channel_message.kind for a new
+// message (LRM-1523 L1). An agent-authored pure acknowledgement (received /
+// understood / ok, no new info, no @-directive, no action) is classified
+// `confirmation`; everything else is ordinary `content`. This is what the
+// dispatch layer persists and can later enforce structurally. Non-agent
+// authors always remain `content` (human acknowledgements are real traffic).
+func channelMessageKindFor(authorType, content string, parts []protocol.MessagePart) string {
+	if authorType == "agent" && channelContentIsPureConfirmation(content, parts) {
+		return protocol.ChannelMessageKindConfirmation
+	}
+	return protocol.ChannelMessageKindContent
+}
+
+// channelMessageIsConfirmationNoWake reports whether a channel message must be
+// treated as a no-wake pure confirmation (LRM-1523 L1/L2). When the structured
+// kind is present (post-L1 insert) it is authoritative; legacy or reloaded rows
+// without a persisted kind fall back to the runtime text classifier.
+func channelMessageIsConfirmationNoWake(trigger ChannelMessageResponse) bool {
+	switch trigger.Kind {
+	case protocol.ChannelMessageKindConfirmation:
+		return true
+	case protocol.ChannelMessageKindContent:
+		return false
+	}
+	pure, _ := channelMessageIsPureConfirmation(trigger)
+	return pure
+}
+
 // channelContentIsPureConfirmation decides whether the substantive text of a
 // message is nothing more than a confirmation. Structured mentions (the
 // [@A](mention://agent/..) markers) and the mention labels inside the visible

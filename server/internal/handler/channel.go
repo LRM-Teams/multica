@@ -195,6 +195,10 @@ type ChannelMessageResponse struct {
 	WorkspaceID         string                 `json:"workspace_id"`
 	Seq                 int64                  `json:"seq"`
 	Type                string                 `json:"type"`
+	// Kind is the structured message classification (LRM-1523 L1). Empty means
+	// the row predates kind persistence; dispatch falls back to the runtime
+	// classifier in that case. populated value is one of protocol.ChannelMessageKind*.
+	Kind                string                 `json:"kind,omitempty"`
 	AuthorID            *string                `json:"author_id"`
 	AuthorName          string                 `json:"author_name"`
 	AuthorAvatarURL     *string                `json:"author_avatar_url"`
@@ -4909,7 +4913,7 @@ func (h *Handler) dispatchChannelMessageToAgentsWithCursorPolicy(ctx context.Con
 	// The message stays in the channel and is observed when any agent next runs;
 	// it just never produces a wake-required run on its own.
 	if !channelMessageIsHumanAuthored(trigger.Type) && !replayTrigger {
-		if pure, _ := channelMessageIsPureConfirmation(trigger); pure {
+		if channelMessageIsConfirmationNoWake(trigger) {
 			if h.Metrics != nil {
 				h.Metrics.RecordChannelAmbientGateDecision(channelAmbientGateActionRelevanceSkipped, channelAmbientSkipReasonNonAction)
 			}
@@ -4977,7 +4981,7 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 	// LRM-1523 echo suppression mirrors the main-channel path: an agent-authored
 	// pure acknowledgement inside a thread must not re-wake its @-targets.
 	if !channelMessageIsHumanAuthored(trigger.Type) {
-		if pure, _ := channelMessageIsPureConfirmation(trigger); pure {
+		if channelMessageIsConfirmationNoWake(trigger) {
 			return
 		}
 	}
@@ -7406,15 +7410,20 @@ type channelMessageInsertResult struct {
 
 // insertChannelMessageWithPartsExec mutates only transactional state.
 func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (channelMessageInsertResult, error) {
+	// LRM-1523 L1: derive and persist the structured message kind so the dispatch
+	// path can enforce confirmation no-wake structurally (DB is the source of
+	// truth), not only via the runtime text classifier.
+	kind := channelMessageKindFor(authorType, content, parts)
 	row := exec.QueryRow(ctx, `
-			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16)
+			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, kind)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17)
 			RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
-		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth)
+		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth, kind)
 	msg, err := scanChannelMessage(row)
 	if err != nil {
 		return channelMessageInsertResult{}, err
 	}
+	msg.Kind = kind
 	if err := incrementChannelMainUnreadCounters(ctx, exec, channelID, authorType, authorID, msg.Seq, threadRootMessageID); err != nil {
 		return channelMessageInsertResult{}, err
 	}

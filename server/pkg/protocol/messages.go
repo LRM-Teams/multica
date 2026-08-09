@@ -15,6 +15,20 @@ const (
 	MessagePartTypeVoice       = "voice"
 	MessagePartTypeChoice      = "choice"
 	MessagePartTypeChoiceReply = "choice_reply"
+	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
+	// L1). A pure confirmation carries no new information, no @-directive and no
+	// action, and must not wake any agent.
+	MessagePartTypeConfirmation = "confirmation"
+)
+
+// ChannelMessageKind classifies a channel_message row on top of its author and
+// content (LRM-1523 L1). kind = confirmation / status / system_reminder carry
+// no-wake (observe-only) semantics; everything else is ordinary content.
+const (
+	ChannelMessageKindContent        = "content"
+	ChannelMessageKindConfirmation   = "confirmation"
+	ChannelMessageKindStatus         = "status"
+	ChannelMessageKindSystemReminder = "system_reminder"
 )
 
 const (

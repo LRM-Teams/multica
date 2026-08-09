@@ -2665,43 +2665,120 @@ func (d *Daemon) runRuntimePoller(
 
 func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, error) {
 	for {
-		event, err := d.client.DrainAgentInbox(ctx, runtimeID)
+		batch, err := d.client.DrainAgentInbox(ctx, runtimeID)
 		if err != nil {
 			return nil, err
 		}
-		if event == nil {
+		if batch == nil || len(batch.Events) == 0 {
 			return nil, nil
 		}
-		if event.Task == nil {
-			lease := AgentInboxLease{
-				ID:             event.ID,
-				DeliveryID:     event.DeliveryID,
-				LeaseToken:     event.LeaseToken,
-				LeaseExpiresAt: event.LeaseExpiresAt,
-				SeqTo:          event.SeqTo,
-				RequiresWake:   event.RequiresWake,
-				Reason:         event.Reason,
-				RuntimeID:      runtimeID,
+
+		// Turn-fold: one conversation batch → at most one Task. Ack non-runnable
+		// events; fold remaining same-conversation leases onto the primary task.
+		var primary *AgentInboxEvent
+		var folded []*AgentInboxLease
+		for _, event := range batch.Events {
+			if event == nil {
+				continue
 			}
-			if err := d.client.AckAgentInboxEvent(ctx, lease); err != nil {
-				return nil, err
+			lease := agentInboxLeaseFromEvent(event, runtimeID)
+			if event.Task == nil {
+				if err := d.client.AckAgentInboxEvent(ctx, lease); err != nil {
+					// fail-soft: try to ack remaining leases before surfacing
+					d.ackFoldedInboxLeasesBestEffort(ctx, append(folded, remainingLeasesAfter(batch.Events, event, runtimeID)...))
+					return nil, err
+				}
+				d.logger.Debug("acked non-runnable inbox event", "runtime_id", runtimeID, "event", shortID(event.ID))
+				continue
 			}
-			d.logger.Debug("acked non-runnable inbox event", "runtime_id", runtimeID, "event", shortID(event.ID))
+			if primary == nil {
+				copy := *event
+				primary = &copy
+				continue
+			}
+			l := lease
+			folded = append(folded, &l)
+		}
+		if primary == nil {
+			// Entire batch was non-runnable; drain again for the next conversation.
 			continue
 		}
-		event.Task.InboxEvent = &AgentInboxLease{
-			ID:             event.ID,
-			DeliveryID:     event.DeliveryID,
-			ConversationID: event.ConversationID,
-			LeaseToken:     event.LeaseToken,
-			LeaseExpiresAt: event.LeaseExpiresAt,
-			SeqFrom:        event.SeqFrom,
-			SeqTo:          event.SeqTo,
-			RequiresWake:   event.RequiresWake,
-			Reason:         event.Reason,
-			RuntimeID:      runtimeID,
+
+		task := primary.Task
+		primaryLease := agentInboxLeaseFromEvent(primary, runtimeID)
+		// Merge seq range across the whole conversation batch so the agent sees
+		// the full exchange and batchClientMessageID is stable for this turn.
+		seqFrom, seqTo := primaryLease.SeqFrom, primaryLease.SeqTo
+		for _, f := range folded {
+			if f.SeqFrom > 0 && (seqFrom == 0 || f.SeqFrom < seqFrom) {
+				seqFrom = f.SeqFrom
+			}
+			if f.SeqTo > seqTo {
+				seqTo = f.SeqTo
+			}
 		}
-		return event.Task, nil
+		primaryLease.SeqFrom = seqFrom
+		primaryLease.SeqTo = seqTo
+		task.InboxEvent = &primaryLease
+		task.FoldedInboxEvents = folded
+		if len(folded) > 0 {
+			d.logger.Info("turn-fold: one exchange as one turn",
+				"runtime_id", runtimeID,
+				"conversation_id", primaryLease.ConversationID,
+				"primary_event", shortID(primaryLease.ID),
+				"folded_count", len(folded),
+				"seq_from", seqFrom,
+				"seq_to", seqTo,
+			)
+		}
+		return task, nil
+	}
+}
+
+func agentInboxLeaseFromEvent(event *AgentInboxEvent, runtimeID string) AgentInboxLease {
+	return AgentInboxLease{
+		ID:             event.ID,
+		DeliveryID:     event.DeliveryID,
+		ConversationID: event.ConversationID,
+		LeaseToken:     event.LeaseToken,
+		LeaseExpiresAt: event.LeaseExpiresAt,
+		SeqFrom:        event.SeqFrom,
+		SeqTo:          event.SeqTo,
+		RequiresWake:   event.RequiresWake,
+		Reason:         event.Reason,
+		RuntimeID:      runtimeID,
+	}
+}
+
+// remainingLeasesAfter builds leases for events after `after` in the batch
+// (used only on fail-soft cleanup when an early ack fails).
+func remainingLeasesAfter(events []*AgentInboxEvent, after *AgentInboxEvent, runtimeID string) []*AgentInboxLease {
+	var out []*AgentInboxLease
+	seen := false
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		if !seen {
+			if ev == after || (after != nil && ev.ID == after.ID) {
+				seen = true
+			}
+			continue
+		}
+		l := agentInboxLeaseFromEvent(ev, runtimeID)
+		out = append(out, &l)
+	}
+	return out
+}
+
+func (d *Daemon) ackFoldedInboxLeasesBestEffort(ctx context.Context, leases []*AgentInboxLease) {
+	for _, lease := range leases {
+		if lease == nil {
+			continue
+		}
+		if err := d.client.AckAgentInboxEvent(ctx, *lease); err != nil {
+			d.logger.Warn("fail-soft ack of folded inbox lease failed", "event", shortID(lease.ID), "error", err)
+		}
 	}
 }
 
@@ -2922,7 +2999,8 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if task.isInboxTask() {
 		executionCtx, executionCancel = context.WithCancel(ctx)
 		defer executionCancel()
-		inboxLeaseLost = d.watchInboxLease(executionCtx, *task.InboxEvent, d.cancelPollInterval, taskLog)
+		// Renew primary + all folded same-conversation leases for this turn.
+		inboxLeaseLost = d.watchInboxLeases(executionCtx, task.inboxLeases(), d.cancelPollInterval, taskLog)
 		select {
 		case <-inboxLeaseLost:
 			taskLog.Info("agent inbox lease lost before execution; discarding delivery")
@@ -3185,6 +3263,9 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 		}
 		_, err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		if err == nil {
+			// Primary completed with agent output; ack folded leases so none
+			// remain leased for reclaim (Alice boundary #1).
+			d.ackFoldedInboxLeases(ctx, task, taskLog)
 			if result.Status == "completed" {
 				d.reportAgentMemoryWrites(ctx, task)
 			}
@@ -3246,28 +3327,38 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 	}
 }
 
-// watchInboxLease renews an inbox delivery and closes the returned channel on
-// a permanent rejection. A permanent rejection means this executor no longer
-// owns the delivery, so the caller must cancel the provider immediately and
-// discard its result. Transient transport failures keep retrying: they do not
-// prove that ownership has changed.
+// watchInboxLease renews a single inbox delivery. Prefer watchInboxLeases when
+// the turn may carry folded same-conversation leases.
 func (d *Daemon) watchInboxLease(ctx context.Context, lease AgentInboxLease, interval time.Duration, taskLog *slog.Logger) <-chan struct{} {
+	return d.watchInboxLeases(ctx, []AgentInboxLease{lease}, interval, taskLog)
+}
+
+// watchInboxLeases renews every lease in the turn-fold batch and closes the
+// returned channel on the first permanent rejection. Holding all leases for the
+// turn's duration is intentional (not a park): they belong to one exchange.
+func (d *Daemon) watchInboxLeases(ctx context.Context, leases []AgentInboxLease, interval time.Duration, taskLog *slog.Logger) <-chan struct{} {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
 	lost := make(chan struct{})
+	if len(leases) == 0 {
+		close(lost)
+		return lost
+	}
 	renew := func() bool {
-		if err := d.client.RenewAgentInboxEvent(ctx, lease); err != nil {
-			if isTransientError(err) {
-				taskLog.Debug("agent inbox lease renew transient failure", "event", shortID(lease.ID), "error", err)
-				return true
-			} else {
+		for _, lease := range leases {
+			if err := d.client.RenewAgentInboxEvent(ctx, lease); err != nil {
+				if isTransientError(err) {
+					taskLog.Debug("agent inbox lease renew transient failure", "event", shortID(lease.ID), "error", err)
+					// keep trying other leases; transient does not prove loss
+					continue
+				}
 				taskLog.Warn("agent inbox lease renew rejected; cancelling stale executor", "event", shortID(lease.ID), "error", err)
 				close(lost)
 				return false
 			}
+			taskLog.Debug("agent inbox lease renewed", "event", shortID(lease.ID))
 		}
-		taskLog.Debug("agent inbox lease renewed", "event", shortID(lease.ID))
 		return true
 	}
 	if !renew() {
@@ -3314,10 +3405,54 @@ func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessi
 	if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
 		taskLog.Error("report failed inbox event failed", "error", err)
 	}
+	// Folded leases must not stay leased after primary failure (no orphan reclaim).
+	d.failFoldedInboxLeases(ctx, task, errMsg, sessionID, workDir, failureReason, reasonCode, taskLog)
+}
+
+func (d *Daemon) ackFoldedInboxLeases(ctx context.Context, task Task, taskLog *slog.Logger) {
+	for _, lease := range task.FoldedInboxEvents {
+		if lease == nil {
+			continue
+		}
+		if err := d.client.AckAgentInboxEvent(ctx, *lease); err != nil {
+			taskLog.Warn("ack folded inbox lease failed", "event", shortID(lease.ID), "error", err)
+		}
+	}
+}
+
+func (d *Daemon) failFoldedInboxLeases(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason, reasonCode string, taskLog *slog.Logger) {
+	for _, lease := range task.FoldedInboxEvents {
+		if lease == nil {
+			continue
+		}
+		if err := d.client.FailAgentInboxEvent(ctx, *lease, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
+			// Fallback: ack so the lease is not reclaimed into a second turn.
+			if ackErr := d.client.AckAgentInboxEvent(ctx, *lease); ackErr != nil {
+				taskLog.Error("fail/ack folded inbox lease failed", "event", shortID(lease.ID), "fail_error", err, "ack_error", ackErr)
+			} else {
+				taskLog.Warn("folded inbox lease acked after fail rejected", "event", shortID(lease.ID), "error", err)
+			}
+		}
+	}
 }
 
 func (t Task) isInboxTask() bool {
 	return t.InboxEvent != nil && t.InboxEvent.ID != ""
+}
+
+// inboxLeases returns primary + folded leases for renew/complete bookkeeping.
+func (t Task) inboxLeases() []AgentInboxLease {
+	if t.InboxEvent == nil {
+		return nil
+	}
+	out := make([]AgentInboxLease, 0, 1+len(t.FoldedInboxEvents))
+	out = append(out, *t.InboxEvent)
+	for _, f := range t.FoldedInboxEvents {
+		if f != nil {
+			out = append(out, *f)
+		}
+	}
+	return out
 }
 
 // providerNeedsInlineSystemPrompt is sourced from agent.Capabilities

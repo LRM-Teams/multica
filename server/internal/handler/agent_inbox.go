@@ -155,7 +155,9 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to materialize channel onboarding")
 		return
 	}
-	delivery, err := h.leaseAgentInboxEventForRuntime(r.Context(), runtime)
+	// Turn-fold: return all pending runnable events for ONE conversation so the
+	// daemon never parks a different-conversation lease (Alice boundary #1).
+	deliveries, err := h.leaseAgentInboxConversationBatchForRuntime(r.Context(), runtime, agentInboxConversationFoldMax)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeJSON(w, http.StatusOK, DrainAgentInboxResponse{Events: []AgentInboxEventResponse{}})
@@ -164,43 +166,67 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to drain agent inbox")
 		return
 	}
-	event, err := h.Queries.GetAgentInboxEvent(r.Context(), delivery.InboxEventID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load inbox event")
+	if len(deliveries) == 0 {
+		writeJSON(w, http.StatusOK, DrainAgentInboxResponse{Events: []AgentInboxEventResponse{}})
 		return
 	}
-	if event.WorkspaceID != runtime.WorkspaceID {
-		writeError(w, http.StatusNotFound, "not found")
+
+	respEvents := make([]AgentInboxEventResponse, 0, len(deliveries))
+	var lastSeenSeq int64
+	var invalidContextCount int
+	for _, delivery := range deliveries {
+		event, err := h.Queries.GetAgentInboxEvent(r.Context(), delivery.InboxEventID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load inbox event")
+			return
+		}
+		if event.WorkspaceID != runtime.WorkspaceID {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
+		if event.RequiresWake && respEvent.Task == nil {
+			_, _ = h.DB.Exec(r.Context(), `
+				UPDATE agent_event_delivery
+				SET status = 'failed',
+				    last_error = 'invalid inbox event execution context',
+				    updated_at = now()
+				WHERE id = $1
+				  AND status IN ('leased', 'processing')`, delivery.ID)
+			_, _ = h.DB.Exec(r.Context(), `
+				UPDATE agent_inbox_event
+				SET status = 'suppressed',
+				    terminal_outcome = 'cancelled',
+				    terminal_delivery_id = $2,
+				    terminal_at = now(),
+				    completed_at = COALESCE(completed_at, now()),
+				    last_error = 'invalid inbox event execution context',
+				    updated_at = now()
+				WHERE id = $1
+				  AND status = 'draining'`, event.ID, delivery.ID)
+			invalidContextCount++
+			continue
+		}
+		h.publishAgentInboxTaskLifecycle(protocol.EventTaskDispatch, event, runtime.ID, "running")
+		if event.SeqTo > lastSeenSeq {
+			lastSeenSeq = event.SeqTo
+		}
+		respEvents = append(respEvents, respEvent)
+	}
+	if len(respEvents) == 0 {
+		if invalidContextCount > 0 {
+			writeError(w, http.StatusInternalServerError, "inbox event has invalid execution context")
+			return
+		}
+		writeJSON(w, http.StatusOK, DrainAgentInboxResponse{Events: []AgentInboxEventResponse{}})
 		return
 	}
+	// Leased events are draining, so this counts other conversations (and any
+	// same-conversation events beyond the fold cap) still pending.
 	pending, _ := h.countReadyAgentInboxEventsForRuntime(r.Context(), runtime)
-	respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
-	if event.RequiresWake && respEvent.Task == nil {
-		_, _ = h.DB.Exec(r.Context(), `
-			UPDATE agent_event_delivery
-			SET status = 'failed',
-			    last_error = 'invalid inbox event execution context',
-			    updated_at = now()
-			WHERE id = $1
-			  AND status IN ('leased', 'processing')`, delivery.ID)
-		_, _ = h.DB.Exec(r.Context(), `
-			UPDATE agent_inbox_event
-			SET status = 'suppressed',
-			    terminal_outcome = 'cancelled',
-			    terminal_delivery_id = $2,
-			    terminal_at = now(),
-			    completed_at = COALESCE(completed_at, now()),
-			    last_error = 'invalid inbox event execution context',
-			    updated_at = now()
-			WHERE id = $1
-			  AND status = 'draining'`, event.ID, delivery.ID)
-		writeError(w, http.StatusInternalServerError, "inbox event has invalid execution context")
-		return
-	}
-	h.publishAgentInboxTaskLifecycle(protocol.EventTaskDispatch, event, runtime.ID, "running")
 	writeJSON(w, http.StatusOK, DrainAgentInboxResponse{
-		Events:      []AgentInboxEventResponse{respEvent},
-		LastSeenSeq: event.SeqTo,
+		Events:      respEvents,
+		LastSeenSeq: lastSeenSeq,
 		HasMore:     pending > 0,
 	})
 }

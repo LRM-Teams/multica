@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -208,7 +209,7 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		// different ids, so genuinely distinct messages are never folded together.
 		clientMessageID := ""
 		if request.ConversationID != "" && request.SeqFrom > 0 && request.SeqTo >= request.SeqFrom {
-			clientMessageID = batchClientMessageID(request.ConversationID, request.SeqFrom, request.SeqTo)
+			clientMessageID = batchClientMessageID(request.ConversationID, request.SeqFrom, request.SeqTo, request.Content, request.AttachmentIDs)
 		} else {
 			clientMessageID = uuid.NewString()
 			if existing, found, loadErr := proxy.LoadMessageDraft(request.AgentID, request.Target, now); loadErr == nil && found {
@@ -287,22 +288,43 @@ func reuseClientMessageIDForIntent(existing messageDraft, content string) (strin
 }
 
 // batchClientMessageID derives a stable, deterministic client_message_id for a
-// single exchange batch identified by (ConversationID, SeqFrom, SeqTo). Within
-// one turn a batch of messages spanning seq_from..seq_to shares this one
-// identity, so every send/retry of that batch hits the server's
-// (workspace,channel,author,client_message_id) dedup and collapses an accidental
-// re-delivery (	he "same message sent twice" regression). Different batches
-// (different conversation or seq range) yield a different id, so distinct
-// messages are never folded together. The 32-char form stays well under the
-// server's client_message_id length limit.
-func batchClientMessageID(conversationID string, seqFrom, seqTo int64) string {
+// single concrete message produced within one exchange batch. The batch is
+// identified by (ConversationID, SeqFrom, SeqTo); a message inside it is
+// distinguished by its payload (content + sorted attachment ids).
+//
+//   - Same batch + same content + same attachments (a retry/re-delivery of the
+//     SAME message) yields the SAME id, so the server's
+//     (workspace,channel,author,client_message_id) dedup collapses an accidental
+//     re-delivery (the "same message sent twice" regression).
+//   - Different content (or attachments) within the SAME batch yields a
+//     DIFFERENT id, so distinct messages a turn sends are NOT folded together;
+//     if they shared one id the server would 409-reject (and drop) the 2nd+
+//     distinct message as a client_message_id conflict (LRM-1530).
+//   - Different batches (different conversation or seq range) yield a different id.
+//
+// The 32-char form stays well under the server's client_message_id length limit.
+func batchClientMessageID(conversationID string, seqFrom, seqTo int64, content string, attachmentIDs []string) string {
 	h := sha256.New()
 	h.Write([]byte(conversationID))
 	h.Write([]byte{0})
 	h.Write(strconv.AppendInt(nil, seqFrom, 10))
 	h.Write([]byte{0})
 	h.Write(strconv.AppendInt(nil, seqTo, 10))
+	h.Write([]byte{0})
+	h.Write([]byte(content))
+	for _, id := range sortedCopy(attachmentIDs) {
+		h.Write([]byte{0})
+		h.Write([]byte(id))
+	}
 	return "b" + hex.EncodeToString(h.Sum(nil))[:31]
+}
+
+// sortedCopy returns a sorted copy of ids so the derived id is independent of
+// attachment ordering (same attachment set always yields the same identity).
+func sortedCopy(ids []string) []string {
+	out := append([]string(nil), ids...)
+	sort.Strings(out)
+	return out
 }
 
 func localMessageSendHeldResponse(target string, freshness MessageSendFreshness, reason string) map[string]any {

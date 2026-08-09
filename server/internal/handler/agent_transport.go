@@ -1968,6 +1968,35 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, source agent
 	return total, results, nil
 }
 
+// agentTransportNewerMessagesHold decides the L3 transport hold policy for the
+// bounded window of messages newer than the agent's cursor. It is deliberately
+// conservative: when the bounded window is exhausted (omitted > 0) or empty, or
+// any newer message carries new actionable content / a directive-mention, we
+// keep the hold. Only when we can positively establish that every fetched newer
+// message is a non-action pure confirmation (no new info, no directive) do we
+// release the hold: the agent's pending content causes no genuine ordering
+// conflict, so it is admitted directly (soft) instead of forcing a
+// hold -> continue_anyway round-trip on every polite ack.
+func agentTransportNewerMessagesHold(messages []ChannelMessageResponse, omitted int64) bool {
+	if omitted > 0 {
+		// Unseen tail may carry actionable content: cannot prove no conflict.
+		return true
+	}
+	if len(messages) == 0 {
+		// Nothing fetched to judge: keep the defensive hold.
+		return true
+	}
+	for _, msg := range messages {
+		pure, hasAgentMention := channelMessageIsPureConfirmation(msg)
+		// A pure confirmation directed at an agent is still an actionable
+		// directive the sender may not have seen — treat it as real conflict.
+		if !pure || hasAgentMention {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, seenUpToSeq int64) (agentTransportFreshnessDecision, error) {
 	if seenUpToSeq <= 0 {
 		return agentTransportFreshnessDecision{SeenUpToSeq: seenUpToSeq}, nil
@@ -1985,8 +2014,9 @@ func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, e
 	if omitted < 0 {
 		omitted = 0
 	}
+	hold := agentTransportNewerMessagesHold(messages, omitted)
 	return agentTransportFreshnessDecision{
-		Hold:        true,
+		Hold:        hold,
 		SeenUpToSeq: seenUpToSeq,
 		LatestSeq:   latestSeq,
 		TotalNewer:  totalNewer,

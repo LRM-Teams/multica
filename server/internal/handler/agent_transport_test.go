@@ -659,6 +659,119 @@ func TestAgentTransportSoftHoldContinueAnyway(t *testing.T) {
 	}
 }
 
+// TestAgentTransportNewerMessagesHold covers the LRM-1523 L3 soft-hold
+// refinement: an agent's pending content send is released directly (soft, no
+// continue_anyway round-trip) when every message newer than its cursor is a
+// non-action pure confirmation, because then there is no genuine ordering
+// conflict. A hold is preserved as soon as any newer message carries
+// actionable content, mentions another agent, or the tail is omitted (we cannot
+// prove the unseen part is noise).
+func TestAgentTransportNewerMessagesHold(t *testing.T) {
+	confirmation := func(content string) ChannelMessageResponse {
+		return ChannelMessageResponse{Content: content, Type: "agent"}
+	}
+	actionable := func(content string) ChannelMessageResponse {
+		return ChannelMessageResponse{Content: content}
+	}
+
+	cases := []struct {
+		name      string
+		messages  []ChannelMessageResponse
+		omitted   int64
+		wantHold  bool
+	}{
+		{
+			name:      "all pure confirmations release the hold",
+			messages:  []ChannelMessageResponse{confirmation("收到"), confirmation("明白了")},
+			wantHold:  false,
+		},
+		{
+			name:      "single pure confirmation releases the hold",
+			messages:  []ChannelMessageResponse{confirmation("好的")},
+			wantHold:  false,
+		},
+		{
+			name:      "actionable newer message keeps the hold",
+			messages:  []ChannelMessageResponse{confirmation("收到"), actionable("把接口改一下，然后提 PR")},
+			wantHold:  true,
+		},
+		{
+			name:      "pure confirmation mentioning an agent keeps the hold",
+			messages:  []ChannelMessageResponse{confirmation("收到"), confirmation("[@jhp](mention://agent/9f0169d5) 请处理")},
+			wantHold:  true,
+		},
+		{
+			name:      "omitted tail keeps the hold (cannot prove it is noise)",
+			messages:  []ChannelMessageResponse{confirmation("收到")},
+			omitted:   3,
+			wantHold:  true,
+		},
+		{
+			name:      "empty window keeps the hold (defensive default)",
+			messages:  nil,
+			wantHold:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hold := agentTransportNewerMessagesHold(tc.messages, tc.omitted)
+			if hold != tc.wantHold {
+				t.Fatalf("hold=%v want %v", hold, tc.wantHold)
+			}
+		})
+	}
+}
+
+// TestAgentTransportSoftReleaseOnPureConfirmationNewer verifies the LRM-1523
+// L3 refinement end-to-end: when everything newer than the agent's cursor is a
+// non-action pure confirmation (no new info, no mention), the agent's own
+// pending content send is admitted directly (201 Created) instead of being
+// soft-held and forcing a continue_anyway round-trip.
+func TestAgentTransportSoftReleaseOnPureConfirmationNewer(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "soft-release seen "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	// A pure-confirmation message authored by a DIFFERENT agent and newer than
+	// the cursor: it carries no new info and no @ so it must NOT force the
+	// sending agent's pending content to hold. (Same-agent author messages are
+	// excluded from the newer set by the freshness query.)
+	otherAgentID := uuid.NewString()
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(otherAgentID), "Agent2", "收到", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed pure-confirmation newer message: %v", err)
+	}
+
+	sent := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target": target, "content": "softly released content", "client_message_id": "soft-rel-" + uuid.NewString(), "seen_up_to_seq": seen.Seq,
+	})
+	if sent.Code != http.StatusCreated {
+		t.Fatalf("soft release: status=%d body=%s", sent.Code, sent.Body.String())
+	}
+	var sentBody AgentTransportSendResponse
+	if err := json.Unmarshal(sent.Body.Bytes(), &sentBody); err != nil {
+		t.Fatalf("decode sent response: %v", err)
+	}
+	if sentBody.Message.ID == "" || sentBody.Message.Seq <= seen.Seq {
+		t.Fatalf("soft-released message not inserted with advancing seq: id=%q seq=%d", sentBody.Message.ID, sentBody.Message.Seq)
+	}
+	var persisted int
+	if err := testPool.QueryRow(ctx, `SELECT COUNT(*) FROM channel_message WHERE id = $1 AND deleted_at IS NULL`, parseUUID(sentBody.Message.ID)).Scan(&persisted); err != nil {
+		t.Fatalf("verify persisted soft-released message: %v", err)
+	}
+	if persisted != 1 {
+		t.Fatalf("soft-released message persisted count=%d want 1", persisted)
+	}
+}
+
 func TestAgentTransportSendMessageRejectsAgentControlledPartsAndAttachmentOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

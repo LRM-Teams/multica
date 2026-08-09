@@ -163,6 +163,7 @@ var (
 		"gate_off":             "gate_off",
 		"gate_error":           "gate_error",
 		"non_text_noise":       "non_text_noise",
+		"non_action":           "non_action",
 		"agent_active_ambient": "agent_active_ambient",
 		"agent_window_cap":     "agent_window_cap",
 		"channel_window_cap":   "channel_window_cap",

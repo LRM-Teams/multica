@@ -172,17 +172,45 @@ func upsertChannelObserveInboxEventTx(ctx context.Context, tx pgx.Tx, workspaceI
 // even when no delivery is leased (poison-only / drained-to-empty / hit max),
 // so cleanup is durable across drain polls.
 
+// agentInboxConversationFoldMax caps same-conversation events leased in one
+// drain so a pathological backlog cannot monopolize one turn. Primary + extras.
+const agentInboxConversationFoldMax = 32
+
+// leaseAgentInboxEventForRuntime leases the next ready event for a runtime.
+// Kept as the single-event API used by unit tests and heal paths.
 func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db.AgentRuntime) (db.AgentEventDelivery, error) {
-	if h.TxStarter == nil {
-		return db.AgentEventDelivery{}, errors.New("transaction starter unavailable")
-	}
-	tx, err := h.TxStarter.Begin(ctx)
+	deliveries, err := h.leaseAgentInboxConversationBatchForRuntime(ctx, runtime, 1)
 	if err != nil {
 		return db.AgentEventDelivery{}, err
 	}
+	if len(deliveries) == 0 {
+		return db.AgentEventDelivery{}, pgx.ErrNoRows
+	}
+	return deliveries[0], nil
+}
+
+// leaseAgentInboxConversationBatchForRuntime leases the head ready event and,
+// when maxEvents > 1 and the head has a conversation_id, also leases other
+// pending/failed events for the same (agent, conversation) on this runtime.
+// All leases are created in one transaction so nothing is parked across turns
+// (Alice boundary: no lease-race from drain-ahead of a different conversation).
+func (h *Handler) leaseAgentInboxConversationBatchForRuntime(ctx context.Context, runtime db.AgentRuntime, maxEvents int) ([]db.AgentEventDelivery, error) {
+	if maxEvents <= 0 {
+		maxEvents = 1
+	}
+	if maxEvents > agentInboxConversationFoldMax {
+		maxEvents = agentInboxConversationFoldMax
+	}
+	if h.TxStarter == nil {
+		return nil, errors.New("transaction starter unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('channel_agent_inbox_runtime'), hashtext($1))`, uuidToString(runtime.ID)); err != nil {
-		return db.AgentEventDelivery{}, err
+		return nil, err
 	}
 
 	// Clear up to a few membership-poison / stale-runtime heads in one
@@ -249,9 +277,9 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			LIMIT 1`, runtime.ID).Scan(&eventID, &agentID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return db.AgentEventDelivery{}, commitNoDelivery()
+				return nil, commitNoDelivery()
 			}
-			return db.AgentEventDelivery{}, err
+			return nil, err
 		}
 
 		// #801 lock order (shared with remove):
@@ -262,10 +290,11 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 		// Taking advisory after FOR UPDATE event deadlocks with remove.
 		var eventChannelID pgtype.UUID
 		var eventWorkspaceID pgtype.UUID
+		var eventConversationID pgtype.UUID
 		if err := tx.QueryRow(ctx, `
-			SELECT workspace_id, channel_id FROM agent_inbox_event WHERE id = $1`, eventID).
-			Scan(&eventWorkspaceID, &eventChannelID); err != nil {
-			return db.AgentEventDelivery{}, err
+			SELECT workspace_id, channel_id, conversation_id FROM agent_inbox_event WHERE id = $1`, eventID).
+			Scan(&eventWorkspaceID, &eventChannelID, &eventConversationID); err != nil {
+			return nil, err
 		}
 		if eventChannelID.Valid {
 			if _, err := tx.Exec(ctx, `
@@ -273,7 +302,7 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 					hashtext('agent_channel_membership_revoke'),
 					hashtext($1 || ':' || $2)
 				)`, uuidToString(eventChannelID), uuidToString(agentID)); err != nil {
-				return db.AgentEventDelivery{}, err
+				return nil, err
 			}
 		}
 
@@ -287,14 +316,14 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			WHERE id = $1
 			FOR UPDATE`, agentID).Scan(&agentID, &agentRuntimeID, &agentArchivedAt, &providerBlockedUntil, &providerBlockDetail); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return db.AgentEventDelivery{}, commitNoDelivery()
+				return nil, commitNoDelivery()
 			}
-			return db.AgentEventDelivery{}, err
+			return nil, err
 		}
 		// Sticky provider-quota lock (task #92): skip without terminalizing —
 		// wakes stay pending until the lock clears (until elapses or detail cleared).
 		if taskfailure.ProviderLockActive(providerBlockDetail, providerBlockedUntil.Time, providerBlockedUntil.Valid, time.Now()) {
-			return db.AgentEventDelivery{}, commitNoDelivery()
+			return nil, commitNoDelivery()
 		}
 		err = tx.QueryRow(ctx, `
 			SELECT event.id
@@ -332,9 +361,9 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			FOR UPDATE OF event`, eventID, agentID, runtime.ID).Scan(&eventID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return db.AgentEventDelivery{}, commitNoDelivery()
+				return nil, commitNoDelivery()
 			}
-			return db.AgentEventDelivery{}, err
+			return nil, err
 		}
 
 		// Agent was reassigned (or archived) after the inbox event pinned this
@@ -347,26 +376,26 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			terminalized, termErr := terminalizeStaleAgentInboxEventTx(ctx, tx, eventID,
 				"agent is archived or has no runtime", "agent_unavailable")
 			if termErr != nil {
-				return db.AgentEventDelivery{}, termErr
+				return nil, termErr
 			}
 			if terminalized {
 				terminalizedCount++
 			}
 			if attempt == maxPoisonTerminalizations {
-				return db.AgentEventDelivery{}, commitNoDelivery()
+				return nil, commitNoDelivery()
 			}
 			continue
 		}
 		if agentRuntimeID != runtime.ID {
 			healed, healErr := reassignStaleRuntimeInboxEventTx(ctx, tx, eventID, agentRuntimeID)
 			if healErr != nil {
-				return db.AgentEventDelivery{}, healErr
+				return nil, healErr
 			}
 			if healed {
 				healedRuntimeIDs[uuidToString(agentRuntimeID)] = struct{}{}
 			}
 			if attempt == maxPoisonTerminalizations {
-				return db.AgentEventDelivery{}, commitNoDelivery()
+				return nil, commitNoDelivery()
 			}
 			continue
 		}
@@ -375,13 +404,13 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			if !agentHasDirectChannelMembership(ctx, tx, eventWorkspaceID, agentID, eventChannelID) {
 				terminalized, termErr := terminalizeUnauthorizedMembershipInboxEventTx(ctx, tx, eventID)
 				if termErr != nil {
-					return db.AgentEventDelivery{}, termErr
+					return nil, termErr
 				}
 				if terminalized {
 					terminalizedCount++
 				}
 				if attempt == maxPoisonTerminalizations {
-					return db.AgentEventDelivery{}, commitNoDelivery()
+					return nil, commitNoDelivery()
 				}
 				continue
 			}
@@ -402,9 +431,9 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			RETURNING id`, eventID).Scan(&eventID)
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
-				return db.AgentEventDelivery{}, err
+				return nil, err
 			}
-			return db.AgentEventDelivery{}, commitNoDelivery()
+			return nil, commitNoDelivery()
 		}
 
 		var delivery db.AgentEventDelivery
@@ -425,7 +454,7 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			&delivery.CreatedAt, &delivery.UpdatedAt,
 		)
 		if err != nil {
-			return db.AgentEventDelivery{}, err
+			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE channel_agent_onboarding onboarding
@@ -436,15 +465,143 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			WHERE event.id = $1
 			  AND event.channel_onboarding_id = onboarding.id
 			  AND onboarding.status = 'pending'`, eventID); err != nil {
-			return db.AgentEventDelivery{}, err
+			return nil, err
 		}
+
+		deliveries := []db.AgentEventDelivery{delivery}
+		// Turn-fold: same-conversation siblings join this one turn. They are
+		// leased in this same TX so no cross-conversation park/lease-race.
+		if maxEvents > 1 && eventConversationID.Valid {
+			siblings, sibErr := leaseSameConversationSiblingInboxEventsTx(
+				ctx, tx, runtime, agentID, eventConversationID, eventID, maxEvents-1,
+			)
+			if sibErr != nil {
+				return nil, sibErr
+			}
+			deliveries = append(deliveries, siblings...)
+		}
+
 		if err := tx.Commit(ctx); err != nil {
-			return db.AgentEventDelivery{}, err
+			return nil, err
 		}
 		h.notifyRuntimesAfterInboxHeal(healedRuntimeIDs)
-		return delivery, nil
+		return deliveries, nil
 	}
-	return db.AgentEventDelivery{}, commitNoDelivery()
+	return nil, commitNoDelivery()
+}
+
+// leaseSameConversationSiblingInboxEventsTx claims additional pending/failed
+// events for the same agent+conversation so one drain returns one conversation
+// batch. Skips the "no active delivery" gate (primary already holds a lease)
+// and does not cross conversation boundaries. Membership poisons are
+// terminalized in-place; other failures abort the batch TX.
+func leaseSameConversationSiblingInboxEventsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	runtime db.AgentRuntime,
+	agentID, conversationID, primaryEventID pgtype.UUID,
+	maxExtra int,
+) ([]db.AgentEventDelivery, error) {
+	if maxExtra <= 0 || !conversationID.Valid || !agentID.Valid || !primaryEventID.Valid {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT event.id, event.workspace_id, event.channel_id
+		FROM agent_inbox_event event
+		JOIN agent_session session ON session.id = event.agent_session_id
+		WHERE event.agent_id = $1
+		  AND event.conversation_id = $2
+		  AND event.id <> $3
+		  AND COALESCE(event.runtime_id, session.runtime_id) = $4
+		  AND session.status = 'active'
+		  AND event.status IN ('pending', 'failed')
+		ORDER BY event.priority DESC, event.requires_wake DESC, event.created_at, event.id
+		LIMIT $5
+		FOR UPDATE OF event SKIP LOCKED`,
+		agentID, conversationID, primaryEventID, runtime.ID, maxExtra,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type siblingCandidate struct {
+		id          pgtype.UUID
+		workspaceID pgtype.UUID
+		channelID   pgtype.UUID
+	}
+	var candidates []siblingCandidate
+	for rows.Next() {
+		var c siblingCandidate
+		if err := rows.Scan(&c.id, &c.workspaceID, &c.channelID); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var deliveries []db.AgentEventDelivery
+	for _, c := range candidates {
+		if c.channelID.Valid {
+			if !agentHasDirectChannelMembership(ctx, tx, c.workspaceID, agentID, c.channelID) {
+				if _, termErr := terminalizeUnauthorizedMembershipInboxEventTx(ctx, tx, c.id); termErr != nil {
+					return nil, termErr
+				}
+				continue
+			}
+		}
+		var claimedID pgtype.UUID
+		err := tx.QueryRow(ctx, `
+			UPDATE agent_inbox_event
+			SET status = 'draining',
+			    claimed_at = now(),
+			    dispatched_at = now(),
+			    updated_at = now()
+			WHERE id = $1
+			  AND status IN ('pending', 'failed')
+			RETURNING id`, c.id).Scan(&claimedID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		var delivery db.AgentEventDelivery
+		err = tx.QueryRow(ctx, `
+			INSERT INTO agent_event_delivery (
+			  workspace_id, agent_session_id, inbox_event_id, runtime_id, status
+			)
+			SELECT workspace_id, agent_session_id, id, $2, 'leased'
+			FROM agent_inbox_event
+			WHERE id = $1
+			  AND status = 'draining'
+			RETURNING id, workspace_id, agent_session_id, inbox_event_id, runtime_id,
+			          status, lease_token, leased_at, lease_expires_at, acked_at,
+			          last_error, created_at, updated_at`, claimedID, runtime.ID).Scan(
+			&delivery.ID, &delivery.WorkspaceID, &delivery.AgentSessionID, &delivery.InboxEventID,
+			&delivery.RuntimeID, &delivery.Status, &delivery.LeaseToken, &delivery.LeasedAt,
+			&delivery.LeaseExpiresAt, &delivery.AckedAt, &delivery.LastError,
+			&delivery.CreatedAt, &delivery.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE channel_agent_onboarding onboarding
+			SET status = 'claimed',
+			    claimed_at = COALESCE(onboarding.claimed_at, now()),
+			    updated_at = now()
+			FROM agent_inbox_event event
+			WHERE event.id = $1
+			  AND event.channel_onboarding_id = onboarding.id
+			  AND onboarding.status = 'pending'`, claimedID); err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, nil
 }
 
 // reassignStaleRuntimeInboxEventTx moves a still-claimable inbox event (and its

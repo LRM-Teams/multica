@@ -136,7 +136,14 @@ type Task struct {
 	// InboxEvent is present when this work item came from the raft-like
 	// agent inbox instead of legacy agent_inbox_event. Terminal callbacks must
 	// use the inbox lease endpoints and must not call task start/complete/fail.
+	// Primary lease of a conversation batch (agent output is reported on this
+	// one). Folded same-conversation leases ride FoldedInboxEvents.
 	InboxEvent *AgentInboxLease `json:"inbox_event,omitempty"`
+	// FoldedInboxEvents are additional same-conversation inbox leases that were
+	// drained with the primary for turn-fold (one exchange = one turn). They are
+	// renewed for the turn's duration and acked/failed with the primary — never
+	// parked across turns.
+	FoldedInboxEvents []*AgentInboxLease `json:"-"`
 }
 
 type TaskExecutionConfig struct {

@@ -130,14 +130,28 @@
   max-width: 100%;
 }
 
-.rich-text-editor .math-node.editing {
-  display: inline-flex;
-  min-width: min(18rem, 100%);
+.rich-text-editor .math-node.inline.editing {
+  position: relative;
+  overflow: visible;
 }
 
 .rich-text-editor .math-node.block.editing {
   display: block;
   overflow: visible;
+}
+
+.rich-text-editor .math-node-popover {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 30;
+  width: min(22rem, calc(100vw - 2rem));
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--popover);
+  padding: 0.25rem;
+  box-shadow:
+    0 8px 24px color-mix(in srgb, black 16%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 .rich-text-editor .math-node-input,

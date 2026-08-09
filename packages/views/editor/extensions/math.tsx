@@ -96,26 +96,29 @@ export function InlineMathView({ node, editor, getPos, updateAttributes }: NodeV
       contentEditable={false}
       onClick={() => setEditing(true)}
     >
-      {editing ? (
-        <input
-          ref={inputRef}
-          value={expression}
-          onChange={(event) => updateAttributes({ expression: event.target.value })}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === "Escape") {
-              event.preventDefault();
-              close();
-            }
-          }}
-          onBlur={() => setEditing(false)}
-          className="math-node-input"
-          placeholder="x^2"
-          aria-label="Edit inline formula"
-        />
-      ) : html ? (
+      {html ? (
         <span dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
         <span>{`$${expression || DEFAULT_INLINE_EXPRESSION}$`}</span>
+      )}
+      {editing && (
+        <span className="math-node-popover" onClick={(event) => event.stopPropagation()}>
+          <input
+            ref={inputRef}
+            value={expression}
+            onChange={(event) => updateAttributes({ expression: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === "Escape") {
+                event.preventDefault();
+                close();
+              }
+            }}
+            onBlur={() => setEditing(false)}
+            className="math-node-input"
+            placeholder="x^2"
+            aria-label="Edit inline formula"
+          />
+        </span>
       )}
     </NodeViewWrapper>
   );
@@ -148,7 +151,14 @@ export function BlockMathView({ node, editor, getPos, updateAttributes }: NodeVi
       onClick={() => setEditing(true)}
     >
       {editing ? (
-        <div className="math-node-editor">
+        <div className="math-node-editor" onClick={(event) => event.stopPropagation()}>
+          <div className="math-node-preview" aria-hidden="true">
+            {html ? (
+              <div dangerouslySetInnerHTML={{ __html: html }} />
+            ) : (
+              <span>{expression || DEFAULT_BLOCK_EXPRESSION}</span>
+            )}
+          </div>
           <textarea
             ref={textareaRef}
             value={expression}
@@ -168,13 +178,6 @@ export function BlockMathView({ node, editor, getPos, updateAttributes }: NodeVi
             placeholder="E = mc^2"
             aria-label="Edit block formula"
           />
-          <div className="math-node-preview" aria-hidden="true">
-            {html ? (
-              <div dangerouslySetInnerHTML={{ __html: html }} />
-            ) : (
-              <span>{expression || DEFAULT_BLOCK_EXPRESSION}</span>
-            )}
-          </div>
         </div>
       ) : html ? (
         <div dangerouslySetInnerHTML={{ __html: html }} />

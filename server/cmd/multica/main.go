@@ -57,6 +57,7 @@ func init() {
 	reminderCmd.GroupID = groupCore
 	actionCmd.GroupID = groupCore
 	migrationCmd.GroupID = groupCore
+	workLeaseCmd.GroupID = groupCore
 
 	// Runtime commands
 	computerCmd.GroupID = groupRuntime
@@ -98,6 +99,7 @@ func init() {
 	rootCmd.AddCommand(reminderCmd)
 	rootCmd.AddCommand(actionCmd)
 	rootCmd.AddCommand(migrationCmd)
+	rootCmd.AddCommand(workLeaseCmd)
 	rootCmd.AddCommand(stickerCmd)
 	rootCmd.AddCommand(sandboxdCmd)
 

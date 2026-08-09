@@ -177,6 +177,16 @@ An omitted project stays NULL. Source provenance remains in
 
 ## Verification command
 
+## WorkOwnerLease — one active executor per issue
+
+| Behavior | Source |
+| --- | --- |
+| Schema `work_owner_lease` + unique active executor | `server/migrations/311_work_owner_lease.up.sql` |
+| Auto-acquire on issue task enqueue | `server/internal/service/work_owner_lease.go`; `server/internal/service/task.go` `enqueueIssueTask` |
+| Agent acquire/release/list handlers | `server/internal/handler/work_owner_lease.go` |
+| Routes `/api/agent/work-leases/*` | `server/cmd/server/router.go` |
+| CLI `multica work-lease` | `server/cmd/multica/cmd_work_lease.go` |
+
 ## MigrationLease — reserve before adding SQL
 
 | Behavior | Source |

@@ -2692,8 +2692,10 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 		event.Task.InboxEvent = &AgentInboxLease{
 			ID:             event.ID,
 			DeliveryID:     event.DeliveryID,
+			ConversationID: event.ConversationID,
 			LeaseToken:     event.LeaseToken,
 			LeaseExpiresAt: event.LeaseExpiresAt,
+			SeqFrom:        event.SeqFrom,
 			SeqTo:          event.SeqTo,
 			RequiresWake:   event.RequiresWake,
 			Reason:         event.Reason,

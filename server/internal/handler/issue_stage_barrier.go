@@ -171,7 +171,15 @@ func (h *Handler) buildParentAssigneeDisplayMention(ctx context.Context, parent 
 	if !ok {
 		return ""
 	}
-	return fmt.Sprintf("@%s ", sanitizeMentionLabel(label))
+	return formatParentAssigneeDisplayMention(label)
+}
+
+func formatParentAssigneeDisplayMention(label string) string {
+	cleaned := sanitizeMentionLabel(label)
+	if cleaned == "" {
+		return ""
+	}
+	return fmt.Sprintf("@%s ", cleaned)
 }
 
 func logIssueStageBarrierSkip(parent, child db.Issue, reason string) {

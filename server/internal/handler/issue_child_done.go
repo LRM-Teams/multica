@@ -180,6 +180,9 @@ func (h *Handler) buildParentAssigneeMention(ctx context.Context, parent db.Issu
 // Returns ok=false when the assignee row cannot be loaded; the caller
 // should then omit the mention entirely rather than emit a broken link.
 func (h *Handler) resolveAssigneeMentionLabel(ctx context.Context, workspaceID pgtype.UUID, assigneeType string, assigneeID pgtype.UUID) (string, bool) {
+	if h == nil || h.Queries == nil {
+		return "", false
+	}
 	switch assigneeType {
 	case "agent":
 		agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{

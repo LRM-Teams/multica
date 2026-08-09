@@ -332,15 +332,16 @@ func (d *Daemon) observeMessageSendHold(agentID, workspaceID, target string, new
 	// Project a Runner Activity entry so a soft-held send is visible on the
 	// agent's Activity timeline (a "system" entry renders as a warning row with
 	// title/subtext and body_kind:none). This is intentionally fail-soft and
-	// never influences the send outcome: activity publication is best-effort and
-	// best-effort deferred by the producer when the agent is not currently
-	// managed on this Runner.
+	// never influences the send outcome. Unlike the managed-only publisher, the
+	// hold entry is projected for Agents that are NOT locally managed either
+	// (Raft: the daemon still reports the Activity fact with blank launch/client-
+	// seq bookkeeping); a missing transport just drops it best-effort.
 	entry, err := activitySystemEntry(messageSendHoldTitle(), messageSendHoldSubtext(newer))
 	if err != nil {
 		return
 	}
 	producer := d.workspaceAgentActivityProducer(workspaceID)
-	if err := producer.PublishEntryForManagedAgent(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+	if err := producer.PublishHoldEntry(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
 		d.logger.Debug("send-hold Runner Activity publish deferred", "error", err, "agent_id", agentID, "target", target)
 	}
 }

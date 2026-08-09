@@ -277,6 +277,65 @@ func (p *agentActivityProducer) PublishEntryForManagedAgent(agentID, daemonInsta
 	return p.publishLocked(snapshot, entries)
 }
 
+// PublishHoldEntry projects a soft-held send onto the Agent's Activity timeline
+// for BOTH managed and not-yet-managed Agents, aligning with Raft's semantics
+// that the daemon still reports an Activity fact even when the Agent has no
+// locally managed launch (the server reconciles a fragment whose launch/client-
+// seq bookkeeping is not tied to a managed client sequence). It is fail-soft:
+// a missing transport drops the fragment and never influences the send outcome.
+//
+// When the Agent has a managed launch the identity and ordering are inherited
+// from the managed snapshot, so the hold entry stays inside the managed
+// client-sequence stream (managed main path untouched). When the Agent is not
+// managed, a standalone fragment Snapshot is synthesized (fresh launch identity,
+// client-sequence=1, Online baseline) and pushed without touching the states map
+// or client-seq bookkeeping, so it cannot perturb a later managed launch.
+func (p *agentActivityProducer) PublishHoldEntry(agentID, daemonInstanceID string, entries []protocol.AgentActivityEntry) error {
+	if p == nil || agentID == "" || daemonInstanceID == "" {
+		return errors.New("Activity publisher Agent identity is required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, state := range p.states {
+		if key.agentID == agentID {
+			snapshot := state.snapshot
+			snapshot.AgentID = agentID
+			snapshot.LaunchID = key.launchID
+			snapshot.DaemonInstanceID = daemonInstanceID
+			if snapshot.ActivityKind == "" {
+				snapshot.ActivityKind = protocol.ActivityKindOnline
+				snapshot.DetailKind = "idle"
+			}
+			snapshot.ClientSequence = 0 // publishLocked assigns the next value
+			snapshot.ProducerFactID = ""
+			snapshot.ObservedAt = time.Time{}
+			snapshot.ProbeID = ""
+			return p.publishLocked(snapshot, entries)
+		}
+	}
+	if p.send == nil {
+		// No live transport: best-effort drop, matching the deferred behavior of
+		// the managed path when disconnected.
+		return nil
+	}
+	snapshot := protocol.AgentActivitySnapshot{
+		AgentID:          agentID,
+		LaunchID:         p.newID(),
+		DaemonInstanceID: daemonInstanceID,
+		ActivityKind:     protocol.ActivityKindOnline,
+		DetailKind:       "idle",
+		ClientSequence:   1,
+		ProducerFactID:   p.newID(),
+		ObservedAt:       p.now().UTC(),
+	}
+	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Entries: entries}
+	if err := payload.Validate(); err != nil {
+		return err
+	}
+	p.send(payload)
+	return nil
+}
+
 func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {
 	key := agentActivityProducerKey{agentID: snapshot.AgentID, launchID: snapshot.LaunchID}
 	state := p.states[key]

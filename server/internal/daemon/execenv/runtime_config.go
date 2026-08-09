@@ -229,6 +229,10 @@ func buildStartupKernelContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- Status: `multica issue status <id> <status>`; deliver a result with `multica issue comment add <id>` using stdin or a UTF-8 file, never shell-inline generated prose.\n")
 	b.WriteString("- Follow the current turn's claim, status, reply-parent, and closeout contract. Never self-approve `in_review -> done`.\n\n")
 
+	b.WriteString("## Output utility contract\n\n")
+	b.WriteString("This is the framework-level default for every run, whatever the transport (Message, Issue, task, reminder). Visible output is reserved for content that advances work: new information, a decision, a review result, an assigned/delivered deliverable, or a specific answer or request. Acknowledgements (收到 / 明白 / OK / 好的 / 已办理 / thanks…), greetings, thanks, status-that-changes-nothing, and pleasantries are NOT visible output — acknowledge with a reaction when one is available, otherwise finish without producing a visible reply. Never echo back a pure confirmation just because you were acknowledged, even in reply to a directed message; re-echoing feeds the confirmation loop. If you have nothing new to say, do not say it.")
+	b.WriteString("\n\n")
+
 	b.WriteString("## Progressive loading\n\n")
 	b.WriteString("Keep uncommon capabilities out of working context. For decomposition and Goal Graphs, load the `multica-working-on-issues` skill first; it distinguishes direct work, ordinary Issue DAGs, Goal-gated graphs, and isolated derived agents. For attachments, metadata, reminders, projects, workspace administration, or unfamiliar flags, load the matching skill or run `multica <command> --help` only when the task needs it.\n\n")
 

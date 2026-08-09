@@ -108,18 +108,21 @@
 .rich-text-editor .math-node {
   display: inline-flex;
   max-width: 100%;
+  overflow: visible;
   vertical-align: middle;
 }
 
 .rich-text-editor .math-node.inline {
   align-items: center;
+  line-height: normal;
+  padding-block: 0.125em;
 }
 
 .rich-text-editor .math-node.block {
   display: block;
   margin: 0.75rem 0;
   overflow-x: auto;
-  overflow-y: hidden;
+  padding-block: 0.125rem;
 }
 
 .rich-text-editor .math-node.block .katex-display {

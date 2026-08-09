@@ -129,6 +129,7 @@
       "note": "添加备注 — 不触发任何 Agent",
       "code": "普通代码块",
       "table": "表格",
+      "formula": "公式块",
       "mermaid": "Mermaid 图表 — 自动渲染成图",
       "python": "Python 代码块",
       "javascript": "JavaScript 代码块"

@@ -11,7 +11,7 @@ import {
 import type { QueryClient } from "@tanstack/react-query";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
-import { Code2, Table2 } from "lucide-react";
+import { Code2, Sigma, Table2 } from "lucide-react";
 import { useAuthStore } from "@multica/core/auth";
 import { useChatStore } from "@multica/core/chat";
 import { getCurrentWsId } from "@multica/core/platform";
@@ -26,8 +26,8 @@ import { createSuggestionPopupRender } from "./suggestion-popup";
 const MAX_ITEMS = 20;
 
 /** Known built-in command ids — the keys under editor `slash_command.commands`. */
-export type BuiltinCommandKey = "note" | "code" | "table";
-type SlashCommandIcon = "code" | "table";
+export type BuiltinCommandKey = "note" | "code" | "table" | "formula";
+type SlashCommandIcon = "code" | "table" | "formula";
 
 export interface SlashCommandItem {
   id: string;
@@ -64,6 +64,7 @@ export interface SlashCommandListRef {
 function slashCommandIcon(item: SlashCommandItem) {
   if (item.icon === "code") return <Code2 className="mt-0.5 size-4 text-muted-foreground" aria-hidden />;
   if (item.icon === "table") return <Table2 className="mt-0.5 size-4 text-muted-foreground" aria-hidden />;
+  if (item.icon === "formula") return <Sigma className="mt-0.5 size-4 text-muted-foreground" aria-hidden />;
   return null;
 }
 
@@ -131,8 +132,8 @@ export const SlashCommandList = forwardRef<
   // localized; skills carry a raw description string from their config.
   const describe = (item: SlashCommandItem): string | undefined => {
     if (item.descriptionKey === "note") return t(($) => $.slash_command.commands.note);
-    // Keep Notion-style block commands compact: `/code` and `/table` are self-explanatory.
-    if (item.descriptionKey === "code" || item.descriptionKey === "table") return undefined;
+    // Keep Notion-style block commands compact: `/code`, `/table`, and `/formula` are self-explanatory.
+    if (item.descriptionKey === "code" || item.descriptionKey === "table" || item.descriptionKey === "formula") return undefined;
     return item.description;
   };
   return (
@@ -272,6 +273,7 @@ export const BUILTIN_COMMANDS: SlashCommandItem[] = [
 export const BLOCK_COMMANDS: SlashCommandItem[] = [
   { id: "code", label: "code", descriptionKey: "code", icon: "code" },
   { id: "table", label: "table", descriptionKey: "table", icon: "table" },
+  { id: "formula", label: "formula", descriptionKey: "formula", icon: "formula" },
 ];
 
 // Match on the command label as a prefix only — the description is for display,
@@ -340,6 +342,10 @@ export function createBlockCommandSuggestion(): Omit<
       const chain = editor.chain().focus().deleteRange(range);
       if (props.id === "table") {
         chain.insertTable({ rows: 3, cols: 3, withHeaderRow: false }).run();
+        return;
+      }
+      if (props.id === "formula") {
+        chain.setBlockMath("").run();
         return;
       }
       const language = getLastInsertedCodeBlockLanguage();

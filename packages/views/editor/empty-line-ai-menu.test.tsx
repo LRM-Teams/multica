@@ -5,8 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { EmptyLineAiMenu, type EmptyLineAiState } from "./empty-line-ai-menu";
 
-const mockInsertContentAt = vi.fn(() => ({ run: vi.fn() }));
-const mockFocus = vi.fn(() => ({ insertContentAt: mockInsertContentAt }));
+const mockInsertContentAt = vi.fn((_pos: number, _content: string) => undefined);
 const mockRun = vi.fn();
 
 function makeEditor() {
@@ -80,7 +79,6 @@ vi.mock("../i18n", () => ({
 describe("EmptyLineAiMenu dismiss interactions", () => {
   beforeEach(() => {
     mockInsertContentAt.mockClear();
-    mockFocus.mockClear();
     mockRun.mockClear();
   });
 

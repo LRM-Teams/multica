@@ -181,17 +181,20 @@ function EmptyLineAiMenu({
     onChange({ ...state, status: "loading", instruction: request.instruction });
     try {
       const result = (await onEditPageWithAI(request)).trim();
-      if (closedRef.current) return;
-      if (!result) throw new Error(t(($) => $.page_ai.empty_result));
-      onChange({ ...state, status: "review", instruction: request.instruction, result });
+      // Ignore late results if the user already dismissed the prompt.
+      if (!closedRef.current) {
+        if (!result) throw new Error(t(($) => $.page_ai.empty_result));
+        onChange({ ...state, status: "review", instruction: request.instruction, result });
+      }
     } catch (error) {
-      if (closedRef.current) return;
-      onChange({ ...state, status: "prompt" });
-      showErrorToast(
-        error instanceof Error && error.message
-          ? error.message
-          : t(($) => $.page_ai.failed),
-      );
+      if (!closedRef.current) {
+        onChange({ ...state, status: "prompt" });
+        showErrorToast(
+          error instanceof Error && error.message
+            ? error.message
+            : t(($) => $.page_ai.failed),
+        );
+      }
     }
   }, [editor, onChange, onEditPageWithAI, state, t]);
 

@@ -862,10 +862,30 @@ function NoteEditor({
     serverTitle: selected.title,
     serverContent: selected.content,
   }));
+  // Keep latest draft in a ref so an in-flight autosave can chain a follow-up
+  // write with the freshest keystrokes without overlapping HTTP requests.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const saveInFlightRef = useRef(false);
+  const saveAgainRef = useRef(false);
   if (draft.serverTitle !== selected.title || draft.serverContent !== selected.content) {
-    const title = draft.title === draft.serverTitle ? selected.title : draft.title;
-    const content = draft.content === draft.serverContent ? selected.content : draft.content;
-    setDraft({ title, content, serverTitle: selected.title, serverContent: selected.content });
+    const titleClean = draft.title === draft.serverTitle;
+    const contentClean = draft.content === draft.serverContent;
+    const title = titleClean ? selected.title : draft.title;
+    const content = contentClean ? selected.content : draft.content;
+    // Only advance baselines for clean fields. Advancing a dirty field's
+    // baseline to a transient optimistic/cache value makes a later stale
+    // selected snapshot look "authoritative" and wipes local keystrokes.
+    const serverTitle = titleClean ? selected.title : draft.serverTitle;
+    const serverContent = contentClean ? selected.content : draft.serverContent;
+    if (
+      title !== draft.title ||
+      content !== draft.content ||
+      serverTitle !== draft.serverTitle ||
+      serverContent !== draft.serverContent
+    ) {
+      setDraft({ title, content, serverTitle, serverContent });
+    }
   }
   const dirty = draft.title !== draft.serverTitle || draft.content !== draft.serverContent;
   const [saveState, setSaveState] = useState<"saved" | "pending" | "saving" | "error">("saved");
@@ -888,18 +908,51 @@ function NoteEditor({
     setSaveState("pending");
     let active = true;
     const timeout = window.setTimeout(() => {
-      setSaveState("saving");
-      updateNotePage({ id: selected.id, data: { title: draft.title, content: draft.content } })
-        .then((page) => {
+      const persist = async () => {
+        if (!active) return;
+        if (saveInFlightRef.current) {
+          // A save is already on the wire — queue one more pass with whatever
+          // the draft holds when that request finishes (serialization).
+          saveAgainRef.current = true;
+          return;
+        }
+        saveInFlightRef.current = true;
+        setSaveState("saving");
+        const snapshot = draftRef.current;
+        try {
+          const page = await updateNotePage({
+            id: selected.id,
+            data: { title: snapshot.title, content: snapshot.content },
+          });
           if (!active) return;
-          setDraft((current) => ({ ...current, serverTitle: page.title, serverContent: page.content }));
+          setDraft((current) => {
+            // Only clear dirtiness for fields that still match what we saved.
+            // Keystrokes typed during the request stay dirty and retrigger save.
+            const serverTitle = current.title === snapshot.title ? page.title : current.serverTitle;
+            const serverContent = current.content === snapshot.content ? page.content : current.serverContent;
+            return { ...current, serverTitle, serverContent };
+          });
           setSaveState("saved");
-        })
-        .catch((error: unknown) => {
+        } catch (error: unknown) {
           if (!active) return;
           setSaveState("error");
           showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.note_save_failed));
-        });
+        } finally {
+          saveInFlightRef.current = false;
+          if (saveAgainRef.current) {
+            saveAgainRef.current = false;
+            // Effect was cleaned up (draft changed) — the new effect's timer will
+            // persist. Only chain here when this closure still owns autosave.
+            if (active) {
+              const latest = draftRef.current;
+              if (latest.title !== latest.serverTitle || latest.content !== latest.serverContent) {
+                void persist();
+              }
+            }
+          }
+        }
+      };
+      void persist();
     }, 900);
     return () => {
       active = false;
@@ -991,7 +1044,9 @@ function NoteEditor({
       )}
       <ContentEditor
         ref={editorRef}
-        defaultValue={selected.content}
+        // Bind to the local draft, not the React Query snapshot. Cache races
+        // from overlapping autosaves must not reset the editor via defaultValue.
+        defaultValue={draft.content}
         onUpdate={(content) => setDraft((current) => ({ ...current, content }))}
         onUploadFile={uploadWithToast}
         placeholder={t(($) => $.notes_page.content_placeholder)}

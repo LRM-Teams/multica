@@ -6,16 +6,96 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// TestMessageSendHoldPresentationContract pins the warning-row strings that the
-// frontend Activity tab renders for a soft-held send. These are the values the
-// FE test (dax/fe-soft-hold-activity) asserts against, so any change here must
-// be coordinated with the FE test copy.
+// TestReuseClientMessageIDForIntentSameContent covers the positive case of the
+// minimal fix: when a normal send re-drives the SAME intent (identical content)
+// for a target that still holds an outstanding (non-expired, not-yet-cleared)
+// local Draft, the client_message_id is reused instead of minting a fresh UUID
+// that would bypass the server's (workspace,channel,author,client_message_id)
+// dedup and duplicate the message (regression seq86/87).
+func TestReuseClientMessageIDForIntentSameContent(t *testing.T) {
+	existing := messageDraft{
+		Target:          "#test111222",
+		Content:         "阿泰：1",
+		ClientMessageID: "stable-key-0001",
+		SavedAt:         time.Date(2026, time.August, 8, 15, 30, 0, 0, time.UTC),
+	}
+	reused, ok := reuseClientMessageIDForIntent(existing, "阿泰：1")
+	if !ok {
+		t.Fatalf("expected same-content intent to reuse client_message_id, got reuse=false")
+	}
+	if reused != "stable-key-0001" {
+		t.Fatalf("reused client_message_id = %q, want %q", reused, "stable-key-0001")
+	}
+}
+
+// TestReuseClientMessageIDForIntentTrimsContent ensures content matching is
+// normalization-agnostic to surrounding whitespace, matching how the daemon
+// trims request content before saving a Draft.
+func TestReuseClientMessageIDForIntentTrimsContent(t *testing.T) {
+	existing := messageDraft{
+		Target:          "#test111222",
+		Content:         "阿泰：1",
+		ClientMessageID: "stable-key-0002",
+	}
+	reused, ok := reuseClientMessageIDForIntent(existing, "  阿泰：1  \n")
+	if !ok {
+		t.Fatalf("expected trimmed same-content to reuse client_message_id")
+	}
+	if reused != "stable-key-0002" {
+		t.Fatalf("reused client_message_id = %q, want %q", reused, "stable-key-0002")
+	}
+}
+
+// TestReuseClientMessageIDForIntentDistinctContent is the boundary (negative)
+// case: a genuinely different intent (different content) to the same target
+// must NOT reuse the outstanding Draft's identity — it is a new send and keeps
+// a fresh client_message_id. This pins down the fix coverage boundary so the
+// regression cannot "turn green" by over-collapsing distinct messages.
+func TestReuseClientMessageIDForIntentDistinctContent(t *testing.T) {
+	existing := messageDraft{
+		Target:          "#test111222",
+		Content:         "阿泰：1",
+		ClientMessageID: "stable-key-0003",
+	}
+	if _, ok := reuseClientMessageIDForIntent(existing, "阿泰：2"); ok {
+		t.Fatalf("expected distinct content NOT to reuse client_message_id")
+	}
+}
+
+// TestReuseClientMessageIDForIntentEmptyNew is the boundary (negative) case for
+// an empty incoming send: no content to match, so no reuse — a fresh identity
+// is minted (the request is invalid upstream anyway).
+func TestReuseClientMessageIDForIntentEmptyNew(t *testing.T) {
+	existing := messageDraft{
+		Target:          "#test111222",
+		Content:         "阿泰：1",
+		ClientMessageID: "stable-key-0004",
+	}
+	if _, ok := reuseClientMessageIDForIntent(existing, ""); ok {
+		t.Fatalf("expected empty content NOT to reuse client_message_id")
+	}
+}
+
+// TestReuseClientMessageIDForIntentSurroundingWhitespaceIsTrimmed guards that
+// the helper and the caller both normalize the same way, so a Draft saved with
+// a trailing newline still matches a retry that trims it.
+func TestReuseClientMessageIDForIntentSurroundingWhitespaceIsTrimmed(t *testing.T) {
+	existing := messageDraft{
+		Target:          "#test111222",
+		Content:         strings.TrimSpace("阿泰：1\n"),
+		ClientMessageID: "stable-key-0005",
+	}
+	if reused, ok := reuseClientMessageIDForIntent(existing, strings.TrimSpace("阿泰：1\n")); !ok || reused != "stable-key-0005" {
+		t.Fatalf("expected trimmed same content to reuse key, got ok=%v reused=%q", ok, reused)
+	}
+}
 func TestMessageSendHoldPresentationContract(t *testing.T) {
 	if got := messageSendHoldTitle(); got != "Message held — review newer messages before sending" {
 		t.Fatalf("messageSendHoldTitle=%q", got)
@@ -164,16 +244,20 @@ func TestPrepareMessageSendDraftSendDraftReusesClientMessageID(t *testing.T) {
 	}
 }
 
-// TestPrepareMessageSendDraftNewNormalSendMintsFreshKey documents the contrast:
-// a brand-new normal send (no held Draft being replayed) mints a fresh uuid. It
-// is specifically the send-draft replay path that must preserve identity — a
-// held re-send can never be mistaken for a genuinely new intent.
-func TestPrepareMessageSendDraftNewNormalSendMintsFreshKey(t *testing.T) {
+// TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent pins the LRM-1526
+// final behavior for normal sends, which supersedes the earlier send-draft-only
+// framing: a normal send to the same target keeps reusing the stable
+// client_message_id while it re-drives the same content (same intent), so the
+// server (workspace,channel,author,client_message_id) dedup collapses the
+// retry into one canonical Message (regression seq86/87). A DIFFERENT content
+// (different intent) is still a genuinely new send and mints a fresh key — it
+// must never collide with a prior intent.
+func TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent(t *testing.T) {
 	d, proxy := newDraftReuseTestDaemon(t)
 	now := time.Now()
 
-	// Seed a prior intent so we can assert a fresh normal send does not collide
-	// with any existing client_message_id.
+	// Seed a prior DISTINCT intent so we can assert a fresh normal send of other
+	// content does not collide with any existing client_message_id.
 	if _, err := proxy.SaveNormalMessageDraft("agent-1", messageDraft{
 		Target: "#test", ContextTarget: "channel:test", Content: "prior", ClientMessageID: "prior-intent-0001",
 	}, now); err != nil {
@@ -186,7 +270,21 @@ func TestPrepareMessageSendDraftNewNormalSendMintsFreshKey(t *testing.T) {
 		Target:      "#test",
 		Content:     "阿泰:2",
 	}
-	seen := map[string]bool{"prior-intent-0001": true}
+	// First normal send of this content mints a fresh identity (distinct from
+	// the seeded 'prior' draft — different content = new intent).
+	first, status, err := d.prepareMessageSendDraft(context.Background(), proxy, cachedAgentCredential{}, request, now)
+	if err != nil {
+		t.Fatalf("prepareMessageSendDraft normal send: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("prepareMessageSendDraft normal send status = %d", status)
+	}
+	if first.ClientMessageID == "" || first.ClientMessageID == "prior-intent-0001" {
+		t.Fatalf("fresh normal send must mint a distinct client_message_id, got %q", first.ClientMessageID)
+	}
+
+	// Re-driving the SAME content (same intent) reuses the stable key instead of
+	// minting another uuid — this is the seq86/87 dedup fix.
 	for i := 0; i < 3; i++ {
 		draft, status, err := d.prepareMessageSendDraft(context.Background(), proxy, cachedAgentCredential{}, request, now)
 		if err != nil {
@@ -195,12 +293,8 @@ func TestPrepareMessageSendDraftNewNormalSendMintsFreshKey(t *testing.T) {
 		if status != 200 {
 			t.Fatalf("prepareMessageSendDraft normal send %d status = %d", i, status)
 		}
-		if draft.ClientMessageID == "" {
-			t.Fatalf("normal send %d must mint a client_message_id", i)
+		if draft.ClientMessageID != first.ClientMessageID {
+			t.Fatalf("same-intent normal send %d reused client_message_id %q, want %q", i, draft.ClientMessageID, first.ClientMessageID)
 		}
-		if seen[draft.ClientMessageID] {
-			t.Fatalf("normal send %d reused an existing client_message_id %q", i, draft.ClientMessageID)
-		}
-		seen[draft.ClientMessageID] = true
 	}
 }

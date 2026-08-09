@@ -939,14 +939,16 @@ function NoteEditor({
           showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.note_save_failed));
         } finally {
           saveInFlightRef.current = false;
-          if (!saveAgainRef.current) return;
-          saveAgainRef.current = false;
-          // Effect was cleaned up (draft changed) — the new effect's timer will
-          // persist. Only chain here when this closure still owns autosave.
-          if (!active) return;
-          const latest = draftRef.current;
-          if (latest.title !== latest.serverTitle || latest.content !== latest.serverContent) {
-            void persist();
+          if (saveAgainRef.current) {
+            saveAgainRef.current = false;
+            // Effect was cleaned up (draft changed) — the new effect's timer will
+            // persist. Only chain here when this closure still owns autosave.
+            if (active) {
+              const latest = draftRef.current;
+              if (latest.title !== latest.serverTitle || latest.content !== latest.serverContent) {
+                void persist();
+              }
+            }
           }
         }
       };

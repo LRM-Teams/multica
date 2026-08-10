@@ -101,8 +101,10 @@ type acceptedRuntimeHandoff struct {
 	activityEmitted bool
 }
 
+type messageRecoveryStatus string
+
 type messageRecoveryState struct {
-	status        string
+	status        messageRecoveryStatus
 	agentID       string
 	recoveryID    string
 	snapshotID    string
@@ -111,14 +113,10 @@ type messageRecoveryState struct {
 }
 
 const (
-	messageFreshnessUnknown = "unknown"
-	// messageFreshnessReadyToHandoff means recovery has received its terminal
-	// snapshot page, but its recovered bodies have not yet crossed the runtime
-	// boundary and persisted Context Boundaries. It is intentionally not safe
-	// for callers to treat as fresh.
-	messageFreshnessReadyToHandoff = "ready_to_handoff"
-	messageFreshnessComplete       = "complete"
-	messageFreshnessFailed         = "failed"
+	messageRecoveryUnknown    messageRecoveryStatus = "unknown"
+	messageRecoveryRecovering messageRecoveryStatus = "recovering"
+	messageRecoveryReady      messageRecoveryStatus = "ready"
+	messageRecoveryFailed     messageRecoveryStatus = "failed"
 )
 
 func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
@@ -136,7 +134,7 @@ func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, acti
 		root: agentRoot, boundaries: boundaries,
 		pending:  make(map[string]map[int64]protocol.AgentMessageProjection),
 		accepted: make(map[string]struct{}), handoff: handoff, activity: activity,
-		recovery:        messageRecoveryState{status: messageFreshnessUnknown},
+		recovery:        messageRecoveryState{status: messageRecoveryUnknown},
 		boundaryHealthy: healthy,
 		noticeCoalesce:  pendingNoticeCoalesceWindow,
 		noticeRetry:     pendingNoticeRetryDelay,
@@ -177,7 +175,7 @@ func (c *MessageCoordinator) BeginRecovery(agentID string, limit int) protocol.A
 		limit = 100
 	}
 	recoveryID := uuid.NewString()
-	c.recovery = messageRecoveryState{status: messageFreshnessUnknown, agentID: agentID, recoveryID: recoveryID}
+	c.recovery = messageRecoveryState{status: messageRecoveryRecovering, agentID: agentID, recoveryID: recoveryID}
 	return protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: recoveryID, Boundaries: cloneBoundaries(c.boundaries), Limit: limit}
 }
 
@@ -197,7 +195,7 @@ func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	fail := func(err error) error {
-		c.recovery.status = messageFreshnessFailed
+		c.recovery.status = messageRecoveryFailed
 		return err
 	}
 	if page.AgentID == "" || page.AgentID != c.recovery.agentID {
@@ -207,6 +205,9 @@ func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) 
 		// A page from the previous websocket generation may arrive after a
 		// reconnect. Ignore it without poisoning the active recovery attempt.
 		return errors.New("recovery page id does not match active recovery")
+	}
+	if c.recovery.status == messageRecoveryFailed {
+		return errors.New("recovery attempt has failed; start a new recovery")
 	}
 	if page.SnapshotID == "" || page.HighWatermark == "" {
 		return fail(errors.New("recovery page missing snapshot fence"))
@@ -233,12 +234,14 @@ func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) 
 	}
 	c.recovery.nextCursor = page.NextCursor
 	if page.HasMore {
-		c.recovery.status = messageFreshnessUnknown
+		c.recovery.status = messageRecoveryRecovering
 	} else {
-		c.recovery.status = messageFreshnessReadyToHandoff
+		// The terminal snapshot fence establishes canonical freshness. Recovered
+		// bodies remain Pending until a separate runtime handoff, message check,
+		// or send freshness hold advances their Context Boundaries.
+		c.recovery.status = messageRecoveryReady
 		// A complete snapshot rebuilds conservative coverage even when the file
-		// was previously missing or malformed. Freshness itself remains blocked
-		// until Flush hands recovered bodies to the runtime and persists them.
+		// was previously missing or malformed.
 		c.boundaryHealthy = true
 	}
 	return nil
@@ -247,13 +250,13 @@ func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) 
 func (c *MessageCoordinator) FailRecovery() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.recovery.status = messageFreshnessFailed
+	c.recovery.status = messageRecoveryFailed
 }
 
 func (c *MessageCoordinator) FreshnessKnown() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.recovery.status == messageFreshnessComplete
+	return c.recovery.status == messageRecoveryReady
 }
 
 // ContextBoundary is the minimum Credential Proxy integration. Freshness-
@@ -261,7 +264,7 @@ func (c *MessageCoordinator) FreshnessKnown() bool {
 func (c *MessageCoordinator) ContextBoundary(target string) (int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.recovery.status != messageFreshnessComplete || !c.boundaryHealthy || len(c.pending[target]) > 0 {
+	if c.recovery.status != messageRecoveryReady || !c.boundaryHealthy || len(c.pending[target]) > 0 {
 		return 0, false
 	}
 	return c.boundaries[target], true
@@ -294,7 +297,7 @@ func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFre
 		return MessageSendFreshness{}, errors.New("Message coordinator is closed")
 	}
 	result := MessageSendFreshness{SeenUpToSeq: c.boundaries[target]}
-	if c.recovery.status != messageFreshnessComplete || !c.boundaryHealthy {
+	if c.recovery.status != messageRecoveryReady || !c.boundaryHealthy {
 		return result, errors.New("Message freshness is unknown")
 	}
 	bySequence := c.pending[target]
@@ -408,7 +411,7 @@ func (c *MessageCoordinator) Check(limit int) (MessageCheckResult, error) {
 	if c.closed {
 		return MessageCheckResult{}, errors.New("Message coordinator is closed")
 	}
-	if c.recovery.status != messageFreshnessComplete {
+	if c.recovery.status != messageRecoveryReady {
 		return MessageCheckResult{}, errors.New("Message freshness is unknown until recovery completes")
 	}
 	if c.handedOff != nil {
@@ -505,7 +508,7 @@ func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNo
 	if c.closed {
 		return false, errors.New("Message coordinator is closed")
 	}
-	if c.recovery.status != messageFreshnessComplete && c.recovery.status != messageFreshnessReadyToHandoff {
+	if c.recovery.status != messageRecoveryReady {
 		return false, errors.New("Message freshness is unknown until recovery completes")
 	}
 	handedOff := false
@@ -513,9 +516,6 @@ func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNo
 		if c.handedOff == nil {
 			batch := c.pendingBatchLocked()
 			if len(batch) == 0 {
-				if c.recovery.status == messageFreshnessReadyToHandoff {
-					c.recovery.status = messageFreshnessComplete
-				}
 				return handedOff, nil
 			}
 			if err := c.handoff(ctx, batch); err != nil {
@@ -556,9 +556,6 @@ func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNo
 			}
 		}
 		c.handedOff = nil
-		if c.recovery.status == messageFreshnessReadyToHandoff {
-			c.recovery.status = messageFreshnessComplete
-		}
 	}
 }
 

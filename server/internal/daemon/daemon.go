@@ -385,31 +385,27 @@ func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page pro
 	if coordinator == nil {
 		return fmt.Errorf("no Message coordinator for recovery agent %q", page.AgentID)
 	}
-	// Recovery bodies cross the same resident runtime boundary as live
-	// Deliveries. On daemon restart recovery can arrive before any live
-	// Delivery has created that runtime, so prepare it before merging a page
-	// that will need handoff.
-	if len(page.Messages) > 0 {
-		if err := d.ensureResidentMessageRuntime(ctx, page.AgentID, runtimeID); err != nil {
-			return fmt.Errorf("prepare resident Message runtime for recovery: %w", err)
-		}
-	}
 	if err := coordinator.MergeRecoveryPage(page); err != nil {
 		return err
 	}
 	if page.HasMore {
 		return send(coordinator.RecoveryRequest(page.AgentID, 100))
 	}
-	// Terminal page: hand recovered bodies to the resident runtime WITHOUT
-	// blocking the workspace runner read loop. A busy / idle-input-unsupported
-	// resident runtime (e.g. Pi mid-turn with ErrCanonicalAgentRuntimeBusy /
-	// resident idle-input overlap) must not stall recovery of this agent or of
-	// any other agent whose RecoveryPage arrives on the same connection. Flush
-	// is executed on a bounded-timeout background task; the coordinator's
-	// pending-notice retry path completes it if the runtime is transiently busy.
+	// A terminal page establishes canonical freshness when it is merged above.
+	// Runtime availability is a separate concern: recovered bodies remain
+	// Pending until this best-effort handoff, a later idle delivery, message
+	// check, or a send freshness hold consumes them. Runtime work stays off the
+	// workspace runner read loop and cannot roll recovery back from ready.
 	flushCtx, cancel := context.WithTimeout(context.Background(), recoveryFlushTimeout)
 	go func() {
 		defer cancel()
+		if err := d.ensureResidentMessageRuntime(flushCtx, page.AgentID, runtimeID); err != nil {
+			if d.logger != nil {
+				d.logger.Warn("workspace Runner Message recovery runtime unavailable",
+					"error", err, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
+			}
+			return
+		}
 		if err := coordinator.Flush(flushCtx); err != nil && d.logger != nil {
 			d.logger.Warn("workspace Runner Message recovery flush deferred",
 				"error", err, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)

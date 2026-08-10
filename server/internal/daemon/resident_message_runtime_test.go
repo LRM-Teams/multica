@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -121,7 +122,7 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	}
 }
 
-func TestMessageRecoveryCreatesResidentRuntimeBeforeHandoff(t *testing.T) {
+func TestMessageRecoveryMergesTerminalSnapshotBeforeCreatingResidentRuntime(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"
 		runtimeID   = "22222222-2222-2222-2222-222222222222"
@@ -146,8 +147,8 @@ func TestMessageRecoveryCreatesResidentRuntimeBeforeHandoff(t *testing.T) {
 	client := NewClient(upstream.URL)
 	client.SetToken("daemon-token")
 	done := make(chan error, 1)
-	done <- nil
-	close(done)
+	readyAtFactory := make(chan bool, 1)
+	var coordinator *MessageCoordinator
 	d := &Daemon{
 		cfg:    Config{WorkspacesRoot: t.TempDir(), Agents: map[string]AgentEntry{"codex": {Path: "/usr/bin/true"}}},
 		client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -155,6 +156,7 @@ func TestMessageRecoveryCreatesResidentRuntimeBeforeHandoff(t *testing.T) {
 		agentVersions:     make(map[string]string),
 		canonicalRuntimes: newCanonicalAgentRuntimePool(),
 		canonicalResidentFactoryOverride: func(agent.Config) (agent.Backend, func(), error) {
+			readyAtFactory <- coordinator.FreshnessKnown()
 			return &blockingResidentMessageRuntime{done: done}, func() {}, nil
 		},
 		messageCoordinators: make(map[string]*MessageCoordinator),
@@ -175,7 +177,54 @@ func TestMessageRecoveryCreatesResidentRuntimeBeforeHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recover resident Message: %v", err)
 	}
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("terminal snapshot was not ready when recovery handler returned")
+	}
+	select {
+	case ready := <-readyAtFactory:
+		if !ready {
+			t.Fatal("resident Runtime creation started before terminal snapshot merge")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery did not create the resident Runtime")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !d.canonicalRuntimes.hasResidentBackend(agentID, runtimeID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if !d.canonicalRuntimes.hasResidentBackend(agentID, runtimeID) {
 		t.Fatal("recovery did not create the resident runtime")
+	}
+	done <- nil
+	close(done)
+}
+
+func TestMessageRecoveryCompletesWithoutResidentRuntime(t *testing.T) {
+	const agentID = "33333333-3333-3333-3333-333333333333"
+	d := &Daemon{
+		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		messageCoordinators: make(map[string]*MessageCoordinator),
+		messageRuntimeIDs:   map[string]string{agentID: "missing-runtime"},
+	}
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return errors.New("resident Runtime is unavailable")
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	d.messageCoordinators[agentID] = coordinator
+	request := coordinator.BeginRecovery(agentID, 100)
+	err = d.handleMessageRecoveryPageWithSend(context.Background(), protocol.AgentRecoveryPage{
+		AgentID: agentID, RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "snapshot-1",
+		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:user-1", Seq: 1, Content: "hello"}},
+	}, func(protocol.AgentRecoveryRequest) error { return nil })
+	if err != nil {
+		t.Fatalf("terminal recovery without Runtime: %v", err)
+	}
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("missing resident Runtime prevented terminal recovery readiness")
+	}
+	if got := coordinator.Boundaries()["dm:user-1"]; got != 0 {
+		t.Fatalf("missing Runtime advanced Context Boundary to %d", got)
 	}
 }

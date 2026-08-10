@@ -121,7 +121,7 @@
 .rich-text-editor .math-node.block {
   display: block;
   margin: 0.75rem 0;
-  overflow-x: auto;
+  overflow: visible;
   padding-block: 0.125rem;
 }
 
@@ -193,7 +193,7 @@
 }
 
 .rich-text-editor .math-node-preview {
-  overflow-x: auto;
+  overflow: visible;
   border-radius: calc(var(--radius) - 2px);
   background: var(--muted);
   padding: 0.75rem;

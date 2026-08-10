@@ -257,7 +257,9 @@ describe("RuntimeConfigDialog — Computer → Runtime → Model → Reasoning",
     fireEvent.click(screen.getByTestId("agent-runtime-config-save"));
 
     expect(onSave).toHaveBeenCalled();
-    const patch = onSave.mock.calls[0][0] as Record<string, unknown>;
+    const firstCall = onSave.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const patch = firstCall![0] as Record<string, unknown>;
     expect(patch.runtime_id).toBe("rt-2");
     expect(patch.model).toBe("claude-sonnet-5");
   });

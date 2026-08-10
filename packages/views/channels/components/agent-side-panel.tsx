@@ -474,10 +474,6 @@ function AgentProfileTabContent({
             <span className="truncate" title={formatDate(agent.created_at)}>
               {formatDate(agent.created_at)}
             </span>
-            <span className="pt-0.5 text-muted-foreground">
-              {t(($) => $.inspector.prop_computer)}
-            </span>
-            <ComputerInfoRow runtime={selectedRuntime} />
             <span className="text-muted-foreground">{t(($) => $.side_panel.owner_label)}</span>
             <span className="truncate" title={ownerName(agent, members)}>
               {ownerName(agent, members)}

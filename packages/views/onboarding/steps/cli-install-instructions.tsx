@@ -75,9 +75,12 @@ function Step({ n, label, cmd }: { n: number; label: string; cmd: string }) {
 export function CliInstallInstructions({
   mode: controlledMode,
   onModeChange,
+  workspaceSlug,
 }: {
   mode?: DaemonSetupMode;
   onModeChange?: (mode: DaemonSetupMode) => void;
+  /** Prefer the real Workspace slug so `multica setup /<slug>` is copy-ready. */
+  workspaceSlug?: string;
 } = {}) {
   const { t } = useT("onboarding");
   const [uncontrolledMode, setUncontrolledMode] = useState<DaemonSetupMode>(() =>
@@ -90,7 +93,7 @@ export function CliInstallInstructions({
     }
     onModeChange?.(nextMode);
   };
-  const { installCmd, setupCmd } = daemonSetupCommands(mode);
+  const { installCmd, setupCmd } = daemonSetupCommands(mode, workspaceSlug);
   return (
     <Card className="w-full">
       <CardContent className="space-y-4 pt-4">

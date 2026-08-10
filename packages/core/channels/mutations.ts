@@ -32,7 +32,6 @@ function viewerAuthorFields() {
   return {
     authorId: user?.id ?? "",
     authorName: user?.display_name || user?.name || "You",
-    authorAvatarUrl: user?.avatar_url ?? null,
   };
 }
 
@@ -198,7 +197,6 @@ export function useSendChannelMessage() {
         parts: vars.parts,
         authorId: author.authorId,
         authorName: author.authorName,
-        authorAvatarUrl: author.authorAvatarUrl,
         quoteMessageId: vars.quoteMessageId,
         siblings,
         status: "pending",
@@ -308,7 +306,6 @@ export function useSendChannelThreadMessage() {
         parts: vars.parts,
         authorId: author.authorId,
         authorName: author.authorName,
-        authorAvatarUrl: author.authorAvatarUrl,
         quoteMessageId: vars.quoteMessageId,
         threadRootMessageId: vars.messageId,
         siblings,

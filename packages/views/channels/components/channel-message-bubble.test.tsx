@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentFleetRank, ChannelMessage } from "@multica/core/types";
 import type { HonorSnapshot } from "@multica/core/types/honor";
 import { stickerCatalogKeys } from "@multica/core/stickers";
-import { __resetAuthorAvatarOkCacheForTests } from "./author-avatar-cache";
+import { __resetIdentityAvatarOkCacheForTests } from "../../common/identity-avatar-cache";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 
 vi.mock("./thread-reply-preview", () => ({
@@ -154,9 +154,8 @@ vi.mock("../../navigation/app-link", () => ({
   ),
 }));
 
-// The bubble may fall back to the members/agents directory (profile-card source)
-// when the message payload omits author_avatar_url (LRM-218). Stub the hook so
-// layout tests don't need a QueryClient/workspace; override per-case when needed.
+// The bubble resolves current appearance from the members/agents directory.
+// Stub the hook so layout tests don't need a QueryClient/workspace.
 const getActorAvatarUrlMock = vi.fn(
   (_type: string, _id: string): string | null => null,
 );
@@ -259,9 +258,8 @@ vi.mock("../../common/agent-panel-context", () => ({
   useOpenAgentPanel: () => null,
 }));
 
-// The bubble reads the author avatar straight from the payload (#453/#574) via
-// resolvePublicFileUrl, which needs api.getBaseUrl(); stub it to pass the raw
-// value through so tests don't touch the api base-url machinery.
+// ActorAvatar resolves Profile URLs through resolvePublicFileUrl. Stub it to
+// pass raw values through so tests don't touch API base-url machinery.
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
@@ -560,7 +558,7 @@ describe("ChannelMessageBubble", () => {
     getAgentFleetRankMock.mockReturnValue(undefined);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
-    __resetAuthorAvatarOkCacheForTests();
+    __resetIdentityAvatarOkCacheForTests();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
@@ -1010,10 +1008,7 @@ describe("ChannelMessageBubble", () => {
     );
 
     fireEvent.click(screen.getAllByText("Research Agent")[0]!);
-    expect(onOpenAgent).toHaveBeenCalledWith("agent-1", {
-      display_name: "Research Agent",
-      avatar_url: null,
-    });
+    expect(onOpenAgent).toHaveBeenCalledWith("agent-1");
   });
 
   it("opens the member Profile dock when a human author's avatar/name is clicked (LRM-619 parity)", () => {
@@ -1030,18 +1025,22 @@ describe("ChannelMessageBubble", () => {
     expect(onOpenMember).toHaveBeenCalledWith("user-9");
   });
 
-  it("uses the message avatar as a fallback while the identity directory is unavailable", () => {
+  it("does not treat a legacy message avatar as profile state", () => {
+    const legacyMessage = {
+      ...makeMessage(),
+      author_avatar_url: "/uploads/agent-avatar.png",
+    } as unknown as ChannelMessage;
     render(
       <ChannelMessageBubble
-        message={makeMessage({ author_avatar_url: "/uploads/agent-avatar.png" })}
+        message={legacyMessage}
         currentUserId="user-1"
       />,
     );
-    const img = screen.getByRole("img", { name: /Research Agent/i });
-    expect(img).toHaveAttribute("src", "/uploads/agent-avatar.png");
+    expect(screen.queryByRole("img", { name: /Research Agent/i })).not.toBeInTheDocument();
+    expect(screen.getByText("R")).toBeInTheDocument();
   });
 
-  it("renders the current directory avatar over a stale historical message hint", () => {
+  it("renders the current directory avatar even when a legacy payload contains a stale URL", () => {
     getActorAvatarUrlMock.mockImplementation((type, id) =>
       type === "agent" && id === "agent-1"
         ? "https://cdn.leagent.me/workspaces/ws-1/current.png"
@@ -1049,9 +1048,10 @@ describe("ChannelMessageBubble", () => {
     );
     render(
       <ChannelMessageBubble
-        message={makeMessage({
+        message={{
+          ...makeMessage(),
           author_avatar_url: "https://cdn.leagent.me/workspaces/ws-1/old.png",
-        })}
+        } as unknown as ChannelMessage}
         currentUserId="user-1"
       />,
     );
@@ -1062,39 +1062,7 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
-  it("LRM-202: reuses a prior same-author avatar when a later message omits author_avatar_url", () => {
-    const { rerender } = render(
-      <ChannelMessageBubble
-        message={makeMessage({
-          id: "msg-1",
-          author_avatar_url: "/uploads/agent-avatar.png",
-          content: "first",
-        })}
-        currentUserId="user-1"
-      />,
-    );
-    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
-      "src",
-      "/uploads/agent-avatar.png",
-    );
-
-    rerender(
-      <ChannelMessageBubble
-        message={makeMessage({
-          id: "msg-2",
-          author_avatar_url: null,
-          content: "second",
-        })}
-        currentUserId="user-1"
-      />,
-    );
-    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
-      "src",
-      "/uploads/agent-avatar.png",
-    );
-  });
-
-  it("LRM-218: falls back to actor-directory avatar when payload omits URL", () => {
+  it("LRM-218: resolves the actor-directory avatar", () => {
     getActorAvatarUrlMock.mockImplementation((type, id) =>
       type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
     );
@@ -1102,8 +1070,7 @@ describe("ChannelMessageBubble", () => {
       <ChannelMessageBubble
         message={makeMessage({
           author_id: "agent-1",
-          author_avatar_url: null,
-          content: "no payload avatar",
+          content: "directory avatar",
         })}
         currentUserId="user-1"
       />,
@@ -1123,7 +1090,6 @@ describe("ChannelMessageBubble", () => {
         message={makeMessage({
           id: "msg-1",
           author_id: "agent-1",
-          author_avatar_url: null,
           content: "first",
         })}
         currentUserId="user-1"
@@ -1140,7 +1106,6 @@ describe("ChannelMessageBubble", () => {
         message={makeMessage({
           id: "msg-2",
           author_id: "agent-1",
-          author_avatar_url: null,
           content: "second",
         })}
         currentUserId="user-1"

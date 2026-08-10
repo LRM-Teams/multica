@@ -2256,7 +2256,7 @@ func TestSendChannelMessagePublishesOnlyChannelMemberRecipients(t *testing.T) {
 	}
 }
 
-func TestChannelPayloadsIncludeAgentAvatarURL(t *testing.T) {
+func TestChannelMessageOmitsAvatarWhileMemberProfileIncludesIt(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2291,8 +2291,16 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if listed == nil {
 		t.Fatalf("agent message %q not listed in %+v", content, messages)
 	}
-	if listed.AuthorAvatarURL == nil || *listed.AuthorAvatarURL != avatarURL {
-		t.Fatalf("message author_avatar_url = %v, want %q", listed.AuthorAvatarURL, avatarURL)
+	listedJSON, err := json.Marshal(listed)
+	if err != nil {
+		t.Fatalf("encode listed message: %v", err)
+	}
+	var listedPayload map[string]any
+	if err := json.Unmarshal(listedJSON, &listedPayload); err != nil {
+		t.Fatalf("decode listed message payload: %v", err)
+	}
+	if _, exists := listedPayload["author_avatar_url"]; exists {
+		t.Fatalf("message payload must not own author_avatar_url: %s", listedJSON)
 	}
 
 	req := newRequestAs(viewerID, http.MethodGet, "/api/channels/"+channelID+"/members", nil)

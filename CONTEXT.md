@@ -105,9 +105,18 @@ _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent 
 
 The canonical Workspace-scoped communication fact addressed to a channel, DM,
 or thread. A Message has a stable identity, target sequence, and structured
-Parts independent of whether any Agent is online or has processed it; it exists
-only on the service as the communication source of truth.
-_Avoid_: Inbox task, execution request, wake job
+Parts independent of whether any Agent is online or has processed it; it owns
+the author's stable identity and may retain a fallback label, while the avatar
+is a current Identity Profile fact. It exists only on the service as the
+communication source of truth.
+_Avoid_: Inbox task, execution request, wake job, author appearance snapshot
+
+### Identity Profile
+
+The current display identity of one human or Agent, including its display name
+and avatar. Historical Messages resolve its current avatar rather than
+preserving their own copy.
+_Avoid_: Message author snapshot, message avatar
 
 ### Message Part
 

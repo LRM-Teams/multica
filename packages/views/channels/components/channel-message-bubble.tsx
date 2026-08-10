@@ -566,10 +566,9 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         ? "user"
         : null;
   const profileActorId = profileActorType ? message.author_id : null;
-  // LRM-224 / LRM-223 option B: identity-first Avatar. Message `author_avatar_url`
-  // only seeds the sticky cache (via avatarUrlHint); null must not clear a known
-  // face. Chat `user` → directory `member`. Agent status dots are in-scope for
-  // bubbles per the frozen long-term design (supersedes #477 for this epic).
+  // LRM-224 / LRM-223 option B: identity-first Avatar. Appearance belongs to
+  // the live User/Agent Profile, never to the Message read model. Chat `user`
+  // maps to directory `member`. Agent status dots are in-scope for bubbles.
   const identityActorType =
     message.type === "agent"
       ? "agent"
@@ -592,7 +591,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         size={28}
         className="select-none"
         name={displayName}
-        avatarUrlHint={message.author_avatar_url}
         showStatusDot={isAgent || message.type === "user"}
         showXpBurst={isAgent}
         fleetRank={authorFleet?.fleet_rank}
@@ -680,10 +678,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   };
   const handleOpenAgent = () => {
     if (isAgent && message.author_id) {
-      onOpenAgent?.(message.author_id, {
-        display_name: message.author_name,
-        avatar_url: message.author_avatar_url ?? null,
-      });
+      onOpenAgent?.(message.author_id);
     }
   };
   const handleOpenAgentCapture = isAgent && onOpenAgent ? handleOpenAgent : undefined;

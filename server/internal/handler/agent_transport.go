@@ -1269,7 +1269,6 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 	}
 	{
 		msgs := []ChannelMessageResponse{result.Message}
-		h.attachChannelMessageAuthorAvatars(ctx, uuidToString(source.origin.workspaceID), msgs)
 		h.attachChannelMessageAttachments(ctx, uuidToString(source.origin.workspaceID), msgs)
 		result.Message = msgs[0]
 	}
@@ -1828,7 +1827,6 @@ func (h *Handler) readAgentTransportMessageRows(ctx context.Context, target agen
 }
 
 func (h *Handler) decorateAgentTransportMessages(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
-	h.attachChannelMessageAuthorAvatars(ctx, workspaceID, messages)
 	h.attachChannelMessageAttachments(ctx, workspaceID, messages)
 	h.attachChannelMessageReactions(ctx, workspaceID, messages)
 	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
@@ -1958,11 +1956,8 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, source agent
 	args = append(args, options.Limit, options.Offset)
 	rows, err := h.DB.Query(ctx, `
 		SELECT m.id, m.channel_id, m.thread_root_message_id, m.author_type, m.author_id, m.author_name,
-		       CASE WHEN m.author_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
 		       m.content, m.created_at
 		FROM channel_message m
-		LEFT JOIN "user" u ON m.author_type = 'user' AND u.id = m.author_id
-		LEFT JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id AND a.workspace_id = m.workspace_id
 		WHERE `+whereSQL+`
 		ORDER BY `+order+`
 		LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
@@ -1974,9 +1969,8 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, source agent
 	for rows.Next() {
 		var id, channelID, rootID, authorID pgtype.UUID
 		var authorType, authorName, content string
-		var avatarURL pgtype.Text
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &channelID, &rootID, &authorType, &authorID, &authorName, &avatarURL, &content, &createdAt); err != nil {
+		if err := rows.Scan(&id, &channelID, &rootID, &authorType, &authorID, &authorName, &content, &createdAt); err != nil {
 			return 0, nil, err
 		}
 		results = append(results, ChannelMessageSearchResult{
@@ -1987,7 +1981,6 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, source agent
 			Type:                authorType,
 			AuthorID:            uuidToPtr(authorID),
 			AuthorName:          authorName,
-			AuthorAvatarURL:     textToPtr(avatarURL),
 			Content:             content,
 			CreatedAt:           timestampToString(createdAt),
 		})

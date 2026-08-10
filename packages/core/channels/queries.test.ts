@@ -19,12 +19,11 @@ import {
   channelKeys,
   channelMessagesFirstItemIndex,
   channelMessagesPageOptions,
-  enrichChannelMessagesPreservingAvatars,
   findChannelMessageMatchIndex,
   flattenChannelMessagePages,
+  normalizeChannelMessages,
   patchChannelMessageReactionInCache,
   upsertChannelMessageInCache,
-  withPreservedAuthorAvatar,
 } from "./queries";
 
 function page(ids: string[], extra: Partial<ChannelMessagesPage> = {}): ChannelMessagesPage {
@@ -103,70 +102,7 @@ describe("flatten + firstItemIndex", () => {
   });
 });
 
-describe("withPreservedAuthorAvatar (LRM-202 / LRM-218)", () => {
-  const base = {
-    id: "m2",
-    channel_id: "c1",
-    workspace_id: "w1",
-    type: "agent" as const,
-    author_id: "agent-1",
-    author_name: "前端工程师",
-    content: "hi",
-    created_at: "2026-07-21T10:00:00Z",
-  };
-
-  it("keeps an incoming author_avatar_url", () => {
-    const incoming = { ...base, author_avatar_url: "/uploads/new.png" } as ChannelMessage;
-    const existing = { ...base, id: "m2", author_avatar_url: "/uploads/old.png" } as ChannelMessage;
-    expect(withPreservedAuthorAvatar(incoming, existing, [existing]).author_avatar_url).toBe(
-      "/uploads/new.png",
-    );
-  });
-
-  it("preserves the cached row avatar when the WS payload omits it", () => {
-    const incoming = { ...base, author_avatar_url: null } as ChannelMessage;
-    const existing = { ...base, author_avatar_url: "/uploads/agent.png" } as ChannelMessage;
-    expect(withPreservedAuthorAvatar(incoming, existing, [existing]).author_avatar_url).toBe(
-      "/uploads/agent.png",
-    );
-  });
-
-  it("backfills from an earlier same-author bubble so consecutive messages stay consistent", () => {
-    const prior = {
-      ...base,
-      id: "m1",
-      author_avatar_url: "/uploads/agent.png",
-    } as ChannelMessage;
-    const incoming = { ...base, id: "m2", author_avatar_url: null } as ChannelMessage;
-    expect(withPreservedAuthorAvatar(incoming, undefined, [prior]).author_avatar_url).toBe(
-      "/uploads/agent.png",
-    );
-  });
-
-  it("LRM-855: OSS incoming replaces cached /uploads/", () => {
-    const incoming = {
-      ...base,
-      author_avatar_url: "https://cdn.example.com/avatars/agent.png",
-    } as ChannelMessage;
-    const existing = { ...base, author_avatar_url: "/uploads/stale.png" } as ChannelMessage;
-    expect(withPreservedAuthorAvatar(incoming, existing, [existing]).author_avatar_url).toBe(
-      "https://cdn.example.com/avatars/agent.png",
-    );
-  });
-
-  it("LRM-855: stale /uploads/ incoming does not clobber cached OSS", () => {
-    const incoming = { ...base, author_avatar_url: "/uploads/stale.png" } as ChannelMessage;
-    const existing = {
-      ...base,
-      author_avatar_url: "https://cdn.example.com/avatars/agent.png",
-    } as ChannelMessage;
-    expect(withPreservedAuthorAvatar(incoming, existing, [existing]).author_avatar_url).toBe(
-      "https://cdn.example.com/avatars/agent.png",
-    );
-  });
-});
-
-describe("enrichChannelMessagesPreservingAvatars (LRM-218)", () => {
+describe("normalizeChannelMessages", () => {
   const base = {
     channel_id: "c1",
     workspace_id: "w1",
@@ -176,43 +112,27 @@ describe("enrichChannelMessagesPreservingAvatars (LRM-218)", () => {
     content: "hi",
     created_at: "2026-07-21T10:00:00Z",
   };
-
-  it("backfills avatars across a refetched list when later rows omit the URL", () => {
-    const enriched = enrichChannelMessagesPreservingAvatars([
-      { ...base, id: "m1", author_avatar_url: "/uploads/agent.png" } as ChannelMessage,
-      { ...base, id: "m2", author_avatar_url: null } as ChannelMessage,
-      { ...base, id: "m3", author_avatar_url: null } as ChannelMessage,
-    ]);
-    expect(enriched.map((m) => m.author_avatar_url)).toEqual([
-      "/uploads/agent.png",
-      "/uploads/agent.png",
-      "/uploads/agent.png",
-    ]);
-  });
 
   it("skips sparse undefined holes without throwing", () => {
-    const enriched = enrichChannelMessagesPreservingAvatars([
+    const normalized = normalizeChannelMessages([
       undefined as unknown as ChannelMessage,
-      { ...base, id: "m1", author_avatar_url: "/uploads/agent.png" } as ChannelMessage,
+      { ...base, id: "m1" } as ChannelMessage,
       null as unknown as ChannelMessage,
     ]);
-    expect(enriched).toHaveLength(1);
-    expect(enriched[0]?.author_avatar_url).toBe("/uploads/agent.png");
+    expect(normalized).toHaveLength(1);
   });
 
   it("keeps soft-deleted tombstones in the read model", () => {
-    const enriched = enrichChannelMessagesPreservingAvatars([
+    const normalized = normalizeChannelMessages([
       {
         ...base,
         id: "m1",
-        author_avatar_url: "/uploads/agent.png",
         deleted_at: "2026-07-22T04:00:00Z",
         content: "",
       } as ChannelMessage,
     ]);
-    expect(enriched).toHaveLength(1);
-    expect(enriched[0]?.deleted_at).toBe("2026-07-22T04:00:00Z");
-    expect(enriched[0]?.author_avatar_url).toBe("/uploads/agent.png");
+    expect(normalized).toHaveLength(1);
+    expect(normalized[0]?.deleted_at).toBe("2026-07-22T04:00:00Z");
   });
 });
 
@@ -221,12 +141,10 @@ describe("findChannelMessageMatchIndex (optimistic ACK)", () => {
     const optimistic = {
       id: "client-1",
       client_message_id: "client-1",
-      author_avatar_url: "/uploads/me.png",
     } as ChannelMessage;
     const ack = {
       id: "server-1",
       client_message_id: "client-1",
-      author_avatar_url: null,
     } as ChannelMessage;
     expect(findChannelMessageMatchIndex([optimistic], ack)).toBe(0);
   });
@@ -327,6 +245,62 @@ describe("patchChannelMessageReactionInCache (#689 perf audit)", () => {
 });
 
 describe("upsertChannelMessageInCache (LRM-271/273 ACK)", () => {
+  it("drops the legacy wire avatar before a WS message enters the cache", () => {
+    const incoming = {
+      id: "server-avatar",
+      channel_id: "c1",
+      workspace_id: "w1",
+      seq: 9,
+      type: "agent",
+      author_id: "agent-1",
+      author_name: "Ronan",
+      author_avatar_url: "/legacy/ws.png",
+      reply_to: {
+        id: "reply-1",
+        type: "agent",
+        author_id: "agent-1",
+        author_name: "Ronan",
+        author_avatar_url: "/legacy/reply.png",
+        content: "reply",
+        created_at: "2026-07-21T09:59:00Z",
+      },
+      quote: {
+        messageId: "quote-1",
+        status: "active",
+        snapshot: {
+          type: "agent",
+          authorId: "agent-1",
+          authorName: "Ronan",
+          authorAvatarUrl: "/legacy/quote.png",
+          content: "quote",
+          createdAt: "2026-07-21T09:58:00Z",
+        },
+      },
+      content: "hello",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: null,
+      created_at: "2026-07-21T10:00:00Z",
+    } as unknown as ChannelMessage;
+    const qc = new QueryClient();
+    qc.setQueryData(channelKeys.messagesPage("c1"), {
+      pages: [{ messages: [], limit: 50, has_more: false }],
+      pageParams: [null],
+    });
+
+    upsertChannelMessageInCache(qc, incoming);
+
+    const cached = qc.getQueryData<{
+      pages: Array<{ messages: Array<Record<string, unknown>> }>;
+    }>(channelKeys.messagesPage("c1"));
+    const message = cached?.pages[0]?.messages[0];
+    expect(message).not.toHaveProperty("author_avatar_url");
+    expect(message?.reply_to).not.toHaveProperty("author_avatar_url");
+    expect((message?.quote as { snapshot: Record<string, unknown> }).snapshot).not.toHaveProperty(
+      "authorAvatarUrl",
+    );
+  });
+
   it("strips leaked local_send_status and preserves client_message_id for stable list keys", () => {
     const qc = new QueryClient();
     const optimistic = {

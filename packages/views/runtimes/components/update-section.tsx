@@ -43,11 +43,11 @@ import { isNewerCliVersion } from "@multica/core/runtimes";
 const MANUAL_UPDATE_COMMANDS = [
   {
     key: "mac_linux",
-    command: `${MULTICA_INSTALL_COMMAND} && multica daemon restart`,
+    command: `${MULTICA_INSTALL_COMMAND} && multica computer restart`,
   },
   {
     key: "windows",
-    command: `${MULTICA_POWERSHELL_INSTALL_COMMAND}; multica daemon restart`,
+    command: `${MULTICA_POWERSHELL_INSTALL_COMMAND}; multica computer restart`,
   },
 ] as const;
 

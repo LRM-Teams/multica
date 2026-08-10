@@ -53,3 +53,10 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
     queryFn: () => api.listRuntimes({ workspace_id: wsId, owner }),
   });
 }
+
+export function computerListOptions(wsId: string) {
+  return queryOptions({
+    queryKey: [...runtimeKeys.all(wsId), "computers"] as const,
+    queryFn: () => api.listComputers(wsId),
+  });
+}

@@ -16,15 +16,15 @@ import (
 // two control surfaces stay on one port during the transition.
 const DefaultHealthPort = 19514
 
-// RootDir returns the machine-wide Computer state directory for the given
-// profile. Empty profile → ~/.multica/, named profile →
-// ~/.multica/profiles/<name>/.
-func RootDir(profile string) string {
-	dir, err := cli.ProfileDir(profile)
+// RootDir returns the one machine-wide Computer control-state directory.
+// The profile argument is intentionally ignored while hidden legacy daemon
+// adapters still pass it: profiles must never select a second resident.
+func RootDir(_ string) string {
+	dir, err := cli.ProfileDir("")
 	if err != nil {
 		return ""
 	}
-	return dir
+	return filepath.Join(dir, "computer")
 }
 
 // PIDPath returns the resident process PID file path for the given profile.
@@ -37,17 +37,8 @@ func LogPath(profile string) string {
 	return filepath.Join(RootDir(profile), "daemon.log")
 }
 
-// HealthPort returns the loopback health-check port for the given profile.
-// The default profile uses the standard port (19514); named profiles get a
-// deterministic offset derived from the profile name.
-func HealthPort(profile string) int {
-	if profile == "" {
-		return DefaultHealthPort
-	}
-	// Simple hash: sum of bytes mod 1000, offset from base+1.
-	var h int
-	for _, b := range []byte(profile) {
-		h += int(b)
-	}
-	return DefaultHealthPort + 1 + (h % 1000)
+// HealthPort returns the one loopback control port for the machine-wide
+// Computer. The profile argument is ignored for compatibility.
+func HealthPort(_ string) int {
+	return DefaultHealthPort
 }

@@ -13,10 +13,21 @@ const defaultCLIConfigPath = ".multica/config.json"
 
 // CLIConfig holds persistent CLI settings.
 type CLIConfig struct {
-	ServerURL   string `json:"server_url,omitempty"`
-	AppURL      string `json:"app_url,omitempty"`
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Token       string `json:"token,omitempty"`
+	// Environment and the four fields below are the effective, active
+	// environment projection consumed by existing CLI and resident callers.
+	// SaveCLIConfig writes that projection back into Environments[Environment]
+	// rather than persisting a second flat copy.
+	Environment string `json:"-"`
+	ServerURL   string `json:"-"`
+	AppURL      string `json:"-"`
+	WorkspaceID string `json:"-"`
+	Token       string `json:"-"`
+
+	// Environments keeps independently authenticated production and test
+	// sessions. Exactly one is projected into the effective fields above. The
+	// resident still owns Workspace execution credentials in bindings.json;
+	// this map is only human/CLI configuration and login state.
+	Environments map[string]ServiceEnvironmentConfig `json:"-"`
 
 	// Proxy contains machine-local daemon egress overrides. Environment
 	// variables remain authoritative; these values are translated into the
@@ -30,6 +41,34 @@ type CLIConfig struct {
 	// machine). Empty / absent means "discover from PATH and use vendor
 	// defaults" — the historical behavior. See issue #3875.
 	Backends *BackendOverrides `json:"backends,omitempty"`
+}
+
+// ServiceEnvironmentConfig is the saved CLI/session configuration for one
+// service environment. The environment name itself is the map key.
+type ServiceEnvironmentConfig struct {
+	ServerURL   string `json:"server_url"`
+	AppURL      string `json:"app_url"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Token       string `json:"token,omitempty"`
+}
+
+// cliConfigFile is the versioned-on-write config document. Legacy flat fields
+// are read for migration only; new writes use active_environment plus
+// environments so switching does not destroy the inactive environment's
+// session. release_channel is intentionally legacy-read-only: package source
+// is fixed by environment and is never a user-configurable axis.
+type cliConfigFile struct {
+	ActiveEnvironment string                              `json:"active_environment,omitempty"`
+	Environments      map[string]ServiceEnvironmentConfig `json:"environments,omitempty"`
+	Proxy             *ProxyConfig                        `json:"proxy,omitempty"`
+	Backends          *BackendOverrides                   `json:"backends,omitempty"`
+
+	LegacyEnvironment    string `json:"environment,omitempty"`
+	LegacyReleaseChannel string `json:"release_channel,omitempty"`
+	LegacyServerURL      string `json:"server_url,omitempty"`
+	LegacyAppURL         string `json:"app_url,omitempty"`
+	LegacyWorkspaceID    string `json:"workspace_id,omitempty"`
+	LegacyToken          string `json:"token,omitempty"`
 }
 
 // ProxyConfig configures standard outbound HTTP(S) proxy behavior for the
@@ -136,11 +175,11 @@ func LoadCLIConfigForProfile(profile string) (CLIConfig, error) {
 		}
 		return CLIConfig{}, fmt.Errorf("read CLI config: %w", err)
 	}
-	var cfg CLIConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	var stored cliConfigFile
+	if err := json.Unmarshal(data, &stored); err != nil {
 		return CLIConfig{}, fmt.Errorf("parse CLI config: %w", err)
 	}
-	return cfg, nil
+	return projectCLIConfig(stored), nil
 }
 
 // SaveCLIConfig writes the CLI config to disk atomically (default profile).
@@ -158,7 +197,8 @@ func SaveCLIConfigForProfile(cfg CLIConfig, profile string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create CLI config directory: %w", err)
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	stored := persistCLIConfig(cfg)
+	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode CLI config: %w", err)
 	}
@@ -187,4 +227,176 @@ func SaveCLIConfigForProfile(cfg CLIConfig, profile string) error {
 		return fmt.Errorf("rename config file: %w", err)
 	}
 	return nil
+}
+
+func projectCLIConfig(stored cliConfigFile) CLIConfig {
+	cfg := CLIConfig{
+		Proxy:        stored.Proxy,
+		Backends:     stored.Backends,
+		Environments: cloneServiceEnvironments(stored.Environments),
+	}
+	if len(stored.Environments) > 0 {
+		environment := strings.ToLower(strings.TrimSpace(stored.ActiveEnvironment))
+		if environment == "" {
+			environment = string(ServiceEnvironmentProduction)
+		}
+		cfg.Environment = environment
+		cfg.applyEnvironment(stored.Environments[environment])
+		return cfg
+	}
+
+	// Flat config migration. Preserve custom/self-host configurations as flat
+	// effective values; only the two Cloud environments enter the new map.
+	cfg.Environment = strings.ToLower(strings.TrimSpace(stored.LegacyEnvironment))
+	cfg.ServerURL = stored.LegacyServerURL
+	cfg.AppURL = stored.LegacyAppURL
+	cfg.WorkspaceID = stored.LegacyWorkspaceID
+	cfg.Token = stored.LegacyToken
+	if environment, ok := cloudEnvironmentForLegacyConfig(cfg); ok {
+		cfg.Environment = string(environment)
+		cfg.Environments = map[string]ServiceEnvironmentConfig{
+			cfg.Environment: cfg.effectiveEnvironment(),
+		}
+	}
+	return cfg
+}
+
+func persistCLIConfig(cfg CLIConfig) cliConfigFile {
+	stored := cliConfigFile{Proxy: cfg.Proxy, Backends: cfg.Backends}
+	environment, ok := normalizeCloudEnvironment(cfg.Environment)
+	if !ok {
+		if inferred, inferredOK := cloudEnvironmentForLegacyConfig(cfg); inferredOK {
+			environment, ok = inferred, true
+		}
+	}
+	if !ok {
+		// Retired named-profile/self-host callers retain their flat shape. The
+		// machine-wide Cloud Computer never reaches this branch.
+		stored.LegacyEnvironment = cfg.Environment
+		stored.LegacyServerURL = cfg.ServerURL
+		stored.LegacyAppURL = cfg.AppURL
+		stored.LegacyWorkspaceID = cfg.WorkspaceID
+		stored.LegacyToken = cfg.Token
+		return stored
+	}
+
+	stored.ActiveEnvironment = string(environment)
+	stored.Environments = cloneServiceEnvironments(cfg.Environments)
+	if stored.Environments == nil {
+		stored.Environments = make(map[string]ServiceEnvironmentConfig, 2)
+	}
+	stored.Environments[string(environment)] = cfg.effectiveEnvironment()
+	return stored
+}
+
+func (cfg *CLIConfig) applyEnvironment(environment ServiceEnvironmentConfig) {
+	cfg.ServerURL = environment.ServerURL
+	cfg.AppURL = environment.AppURL
+	cfg.WorkspaceID = environment.WorkspaceID
+	cfg.Token = environment.Token
+}
+
+func (cfg CLIConfig) effectiveEnvironment() ServiceEnvironmentConfig {
+	return ServiceEnvironmentConfig{
+		ServerURL:   cfg.ServerURL,
+		AppURL:      cfg.AppURL,
+		WorkspaceID: cfg.WorkspaceID,
+		Token:       cfg.Token,
+	}
+}
+
+func cloneServiceEnvironments(in map[string]ServiceEnvironmentConfig) map[string]ServiceEnvironmentConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]ServiceEnvironmentConfig, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func normalizeCloudEnvironment(raw string) (ServiceEnvironment, bool) {
+	environment := ServiceEnvironment(strings.ToLower(strings.TrimSpace(raw)))
+	switch environment {
+	case ServiceEnvironmentProduction, ServiceEnvironmentTest:
+		return environment, true
+	default:
+		return "", false
+	}
+}
+
+func cloudEnvironmentForLegacyConfig(cfg CLIConfig) (ServiceEnvironment, bool) {
+	if environment, ok := normalizeCloudEnvironment(cfg.Environment); ok {
+		return environment, true
+	}
+	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
+	if serverURL == "" || CanonicalizeOfficialCloudAPIURL(serverURL) == OfficialCloudAPIURL {
+		return ServiceEnvironmentProduction, true
+	}
+	return "", false
+}
+
+// PutServiceEnvironment creates or repairs one saved Cloud environment and
+// makes it the effective projection. Existing session/workspace fields for
+// that environment are preserved unless the origin changed.
+func (cfg *CLIConfig) PutServiceEnvironment(target ServiceTarget) {
+	if cfg.Environments == nil {
+		cfg.Environments = make(map[string]ServiceEnvironmentConfig, 2)
+	}
+	cfg.storeEffectiveEnvironment()
+	key := string(target.Environment)
+	next := cfg.Environments[key]
+	if strings.TrimRight(next.ServerURL, "/") != target.Origin || strings.TrimRight(next.AppURL, "/") != target.AppOrigin {
+		next.WorkspaceID = ""
+		next.Token = ""
+	}
+	next.ServerURL = target.Origin
+	next.AppURL = target.AppOrigin
+	cfg.Environments[key] = next
+	cfg.Environment = key
+	cfg.applyEnvironment(next)
+}
+
+// ActivateServiceEnvironment selects an already-configured environment in
+// memory. Callers must use the Computer switch flow before saving this change
+// while a resident is live; this helper deliberately performs no process I/O.
+func (cfg *CLIConfig) ActivateServiceEnvironment(environment ServiceEnvironment) error {
+	environment, ok := normalizeCloudEnvironment(string(environment))
+	if !ok {
+		return fmt.Errorf("unsupported environment %q: use production or test", environment)
+	}
+	key := string(environment)
+	next, exists := cfg.Environments[key]
+	if !exists || strings.TrimSpace(next.ServerURL) == "" {
+		return fmt.Errorf("%s environment is not configured; run `multica setup --environment %s /<workspace>` first", key, key)
+	}
+	cfg.storeEffectiveEnvironment()
+	cfg.Environment = key
+	cfg.applyEnvironment(next)
+	return nil
+}
+
+func (cfg *CLIConfig) storeEffectiveEnvironment() {
+	current, ok := normalizeCloudEnvironment(cfg.Environment)
+	if !ok || cfg.Environments == nil {
+		return
+	}
+	key := string(current)
+	if _, exists := cfg.Environments[key]; !exists {
+		return
+	}
+	cfg.Environments[key] = cfg.effectiveEnvironment()
+}
+
+// ConfiguredServiceEnvironments returns the saved Cloud environments in
+// stable production/test order without exposing tokens.
+func (cfg CLIConfig) ConfiguredServiceEnvironments() []ServiceEnvironment {
+	out := make([]ServiceEnvironment, 0, 2)
+	for _, environment := range []ServiceEnvironment{ServiceEnvironmentProduction, ServiceEnvironmentTest} {
+		if saved, ok := cfg.Environments[string(environment)]; ok && strings.TrimSpace(saved.ServerURL) != "" {
+			out = append(out, environment)
+		}
+	}
+	return out
 }

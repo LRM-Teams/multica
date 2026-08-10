@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
 )
 
@@ -29,14 +30,22 @@ const (
 
 // LegacyEvidence is what is known about a candidate legacy identity.
 type LegacyEvidence struct {
+	// Source is a safe profile label/path used only in diagnostics.
+	Source string
 	// OriginHost is the server origin the legacy profile pointed at.
 	OriginHost string
 	// SignedInUser is present when the current user is provable.
 	SignedInUser string
 	// WorkspaceID is the immutable workspace the profile was bound to.
-	WorkspaceID string
+	WorkspaceID   string
+	WorkspaceSlug string
 	// ComputerIDCandidates are the legacy computer ids found (per-profile).
 	ComputerIDCandidates []string
+	// Verified flags mean the adapter proved these facts against the
+	// canonical service. Locally stored strings alone are not proof.
+	UserVerified      bool
+	WorkspaceVerified bool
+	ComputerVerified  bool
 	// HasHostnameEvidence / HasDisplayEvidence describe, but are never proof.
 	HasHostnameEvidence bool
 	HasDisplayEvidence  bool
@@ -51,7 +60,10 @@ func EvaluateAdoption(e LegacyEvidence) (AdoptionVerdict, error) {
 	if !isCanonicalOrigin(e.OriginHost) {
 		return AdoptRejected, fmt.Errorf("origin %q is not canonical and is excluded from Cloud adoption", e.OriginHost)
 	}
-	if e.SignedInUser == "" || e.WorkspaceID == "" {
+	if e.SignedInUser == "" || !e.UserVerified || !e.WorkspaceVerified || !e.ComputerVerified {
+		return AdoptNeedsExplicitChoice, nil
+	}
+	if _, err := uuid.Parse(strings.TrimSpace(e.WorkspaceID)); err != nil {
 		return AdoptNeedsExplicitChoice, nil
 	}
 	// Hostname/display-name are never identity proof — there must be a real
@@ -63,6 +75,9 @@ func EvaluateAdoption(e LegacyEvidence) (AdoptionVerdict, error) {
 	}
 	if len(ids) > 1 {
 		// Conflicting candidates → require an explicit adopt or fresh-create choice.
+		return AdoptNeedsExplicitChoice, nil
+	}
+	if _, err := uuid.Parse(strings.TrimSpace(ids[0])); err != nil {
 		return AdoptNeedsExplicitChoice, nil
 	}
 	return AdoptAuto, nil

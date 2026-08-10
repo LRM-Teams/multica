@@ -15,20 +15,20 @@ const detachedSuccessorReadyTimeout = 45 * time.Second
 
 var spawnDetachedDaemonBinary = startDetachedDaemonBinary
 
-// startDetachedDaemonBinary launches the committed target as the next daemon
-// generation only after this profile's loopback control port is no longer
+// startDetachedDaemonBinary launches the committed target as the next Computer
+// generation only after the machine-wide loopback control port is no longer
 // live. It inherits neither a supervisor marker nor the incumbent process
 // group, so a failed target cannot keep the old process alive as a hidden
 // second owner. The successor must independently bind the port and complete
 // normal Machine Upgrade registration/convergence.
-func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string) error {
+func startDetachedDaemonBinary(binaryPath, _ string, expectedVersion string) error {
 	if binaryPath == "" {
 		return fmt.Errorf("detached successor binary is required")
 	}
 	deadline := time.Now().Add(detachedSuccessorPortReleaseTimeout)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		live := computer.Alive(computer.ProbeHealth(ctx, computer.HealthPort(profile)))
+		live := computer.Alive(computer.ProbeHealth(ctx, computer.HealthPort("")))
 		cancel()
 		if !live {
 			break
@@ -39,15 +39,16 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string) erro
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	logFile, err := os.OpenFile(computer.LogPath(profile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(computer.LogPath(""), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open daemon log: %w", err)
 	}
 	defer logFile.Close()
-	args := []string{"daemon", "start", "--foreground"}
-	if profile != "" {
-		args = append(args, "--profile", profile)
+	generation, err := computer.NewGenerationStore(computer.RootDir("")).Next()
+	if err != nil {
+		return fmt.Errorf("allocate successor Computer generation: %w", err)
 	}
+	args := computer.ResidentArgs(computer.StartOptions{Generation: generation})
 	child := exec.Command(binaryPath, args...)
 	child.Stdout = logFile
 	child.Stderr = logFile
@@ -71,7 +72,7 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string) erro
 	readyDeadline := time.Now().Add(detachedSuccessorReadyTimeout)
 	for time.Now().Before(readyDeadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
+		health := computer.ProbeHealth(ctx, computer.HealthPort(""))
 		cancel()
 		if health["status"] == "running" {
 			actual, _ := health["cli_version"].(string)

@@ -7,47 +7,47 @@ import { Callout } from "fumadocs-ui/components/callout";
 
 按症状查问题。每条问题都给**症状 / 可能原因 / 怎么查 / 怎么修**四段。如果你的情况不在下面，到 [GitHub](https://github.com/LRM-Teams/multica/issues) 提 issue。
 
-## 守护进程连不上服务器
+## Computer 连不上当前环境
 
-**症状**：[`multica daemon`](/cli) 的 `status` 命令显示 `offline` 或 `connection refused`；服务器日志里没有 `/api/daemon/register` 或 `/api/daemon/heartbeat` 的请求。守护进程机制详见 [守护进程与运行时](/daemon-runtimes)。
+**症状**：`multica computer status` 显示 `connected: false`，或日志出现 `connection refused`。
 
 **可能原因**：
 
-1. **`MULTICA_SERVER_URL` 指错地址** —— 默认是 `ws://localhost:8080/ws`，self-host 要改成你自己的 server 地址
-2. **网络 / 防火墙阻挡** —— daemon 和 server 不在同一网络，或出站被 block
+1. **选错服务环境** —— 正式固定 `leagent.me`；测试必须显式配置腾讯云 origin
+2. **网络 / 防火墙阻挡** —— Computer 和 server 不在同一网络，或出站被 block
 3. **Token 过期或无效** —— 你从来没跑过 `multica login`，或 PAT 被撤销
 4. **服务器拒绝注册** —— 你登录的账号不在目标工作区（register 返 403）
-5. **DNS 解析失败** —— hostname 在 daemon 机器上解不出来
+5. **DNS 解析失败** —— hostname 在 Computer 所在机器上解不出来
 
 **怎么查**：
 
 ```bash
-multica daemon logs --lines 100    # 看 daemon 侧错误
-echo $MULTICA_SERVER_URL          # 确认地址配对
+multica computer status --output json     # 确认 environment + service_origin
+multica computer logs --lines 100         # 看 resident 侧错误
 curl -i http://<server-host>:8080/health   # 直接戳 server
 curl -i http://<server-host>:8080/readyz  # 连同 DB + migration readiness 一起检查
 cat ~/.multica/config.json        # 看 api_token 是否存在
 multica workspace list            # 确认你是目标工作区成员
 ```
 
-**怎么修**：按上面原因对症处理。最常见的两个是**改 `MULTICA_SERVER_URL` 重启 daemon**（`multica daemon restart`）和**重新登录**（`multica logout && multica login`）。
+**怎么修**：正式环境重新执行 `multica setup /<workspace>`；腾讯测试环境执行 `multica setup --environment test --test-url <origin> /<workspace>`。登录失效时先 `multica auth logout`，再 setup。
 
 ## 任务一直卡在 queued
 
-**症状**：把 issue 分给 agent 后，issue 状态立刻变 `in_progress`，但过了很久页面没有 agent 执行的迹象；`multica daemon status` 显示 daemon `online`。
+**症状**：把 issue 分给 agent 后，issue 状态立刻变 `in_progress`，但过了很久页面没有 agent 执行的迹象；`multica computer status` 显示 resident 已连接。
 
 **可能原因**（按触发概率排）：
 
 1. **智能体并发上限已满** —— 该 agent 的 `max_concurrent_tasks`（默认 6）已经被其他正在跑的任务占满
 2. **同一 issue 上有另一个同 agent 的任务还没结束** —— 同 agent × 同 issue 强制串行（防止重复执行）
 3. **智能体已经被 archive** —— 被归档后新任务仍能入队，但无法被 claim，会卡到 5 分钟超时（code-issue G-01）
-4. **Daemon 没在当前工作区注册该 runtime** —— 重启 daemon 或在 UI 重新选一次 runtime
-5. **守护进程失联** —— 最近 45 秒没心跳。`daemon status` 看起来 `online` 也可能是刚失联
+4. **Computer 没为当前 Workspace connection 注册该 runtime** —— 重启 Computer 或在 UI 重新选一次 runtime
+5. **Computer 失联** —— 最近 45 秒没 resident 心跳。`multica computer status` 会把本地进程和服务端连接状态分开显示
 
 **怎么查**：
 
 ```bash
-multica daemon status --output json       # runtime 列表 + last_seen_at
+multica computer status --output json      # 环境 + 工作区连接
 multica agent list                         # 查 agent 的 archived 状态
 multica issue show <issue-id>             # 看 task 历史
 ```
@@ -59,7 +59,7 @@ multica issue show <issue-id>             # 看 task 历史
 - 并发打满 → 等现有任务跑完，或 `multica agent update <id> --max-concurrent-tasks 10` 提升上限
 - 同 issue 串行 → 等前一个任务结束，或改分给不同 agent
 - Agent 被 archive → `multica agent restore <id>`
-- Runtime 未注册 → `multica daemon restart`，daemon 会重新注册
+- Runtime 未注册 → `multica computer restart`，resident 会重新注册
 
 ## WebSocket 连不上
 
@@ -252,12 +252,12 @@ ERROR: refusing to drop legacy daily rollups:
 
 ## 端口冲突
 
-**症状**：`multica server` 或 `multica daemon start` 启动失败，报 `address already in use`。
+**症状**：`multica server` 或 `multica computer start` 启动失败，报 `address already in use`。
 
 **可能原因**：
 
 1. **Server 端口被占用**（默认 `8080`）
-2. **Daemon health 端口被占用**（默认 `19514`，每个 profile 偏移一个 hash 值）
+2. **Computer health 端口被占用**（全机唯一端口 `19514`）
 3. **Web dev server 端口冲突**（`3000` / `5173`）
 4. **端口权限不足**（绑 `< 1024` 的 privileged port 需要 sudo）
 
@@ -277,16 +277,16 @@ netstat -ano | findstr :8080    # Windows
 
 | 组件 | 位置 | 命令 |
 |---|---|---|
-| **守护进程** | `~/.multica/daemon.log`（后台模式）或前台 stdout | `multica daemon logs -f --lines 100` |
+| **Computer** | `~/.multica/computer/daemon.log`（后台模式）或前台 stdout | `multica computer logs -f --lines 100` |
 | **服务器（Docker）** | container stdout | `docker logs -f <container>` |
 | **服务器（systemd）** | journal | `journalctl -u multica-server -f` |
 | **前端（dev）** | `pnpm dev` 所在终端 | 直接看 |
 | **前端（browser）** | DevTools → Console | 按 `F12` |
 
-需要更详细的 daemon 日志，把它从后台挪到前台跑：`multica daemon stop && multica daemon start --foreground`。
+需要更详细的 resident 日志，把它从后台挪到前台跑：`multica computer stop && multica computer start --foreground`。
 
 ## CLI / daemon 卡在旧版本、页面也不提示升级
 
 常见原因：Machine Upgrade 已改为仅显式触发、老二进制编译进了错误的 release feed、或版本不是三段 `x.y.z`。
 
-**处理**：不要等旧进程自己升。按 [CLI Installation](/docs/cli/installation) 的旧版本处理章节用 OSS `install.sh` / `latest.json` **带外装包**，再 `multica daemon install-service`（或 `daemon restart`）。
+**处理**：不要等旧进程自己升。按 [CLI Installation](/docs/cli/installation) 的旧版本处理章节用 OSS `install.sh` / 所选通道 manifest **带外装包**，再 `multica computer restart`。

@@ -325,7 +325,7 @@
     "retrying": "Retrying…",
     "retry_again": "Retry again",
     "retry_failed_title": "Retry did not recover",
-    "retry_failed_hint": "Confirm the daemon/runtime is online, or ask Ronaldo to reassign.",
+    "retry_failed_hint": "Confirm the Computer/runtime is online, or ask Ronaldo to reassign.",
     "reasons": {
       "fleet_member_not_found": "Not a research fleet member",
       "fleet_member_pending_review": "Member pending review",

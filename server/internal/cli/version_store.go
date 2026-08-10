@@ -24,6 +24,8 @@ const (
 	activationStateName       = "activation.json"
 	activationLockName        = "activation.lock"
 	machineMutationLockName   = "machine-upgrade.lock"
+	launcherStateName         = "launcher.json"
+	launcherLockName          = "launcher.lock"
 )
 
 var ErrActivationConflict = errors.New("activation generation conflict")
@@ -77,6 +79,11 @@ type versionMetadata struct {
 	SchemaVersion int    `json:"schema_version"`
 	Version       string `json:"version"`
 	BinarySHA256  string `json:"binary_sha256"`
+}
+
+type launcherState struct {
+	SchemaVersion int    `json:"schema_version"`
+	Path          string `json:"path"`
 }
 
 func NewVersionStore(root, goos string, verifier BinaryVerifier) (*VersionStore, error) {
@@ -177,6 +184,116 @@ func (s *VersionStore) ActiveBinaryPath() (path string, ok bool, err error) {
 		return "", false, statErr
 	}
 	return staged.BinaryPath, true, nil
+}
+
+// RememberLauncherPath stores the stable user-facing executable used to enter
+// the VersionStore. Version-specific binaries are explicitly rejected: they
+// are disposable implementation files and must never become lifecycle state.
+func (s *VersionStore) RememberLauncherPath(path string) error {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "." || path == "" || !filepath.IsAbs(path) {
+		return fmt.Errorf("stable launcher path must be absolute")
+	}
+	if insidePath(s.VersionsRoot(), path) {
+		return fmt.Errorf("stable launcher path must not be inside the version store")
+	}
+	if err := s.validateLauncherFile(path); err != nil {
+		return err
+	}
+	lockFile, err := os.OpenFile(filepath.Join(s.root, launcherLockName), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open launcher lock: %w", err)
+	}
+	defer lockFile.Close()
+	if err := lockExclusiveContext(context.Background(), lockFile); err != nil {
+		return fmt.Errorf("lock launcher state: %w", err)
+	}
+	defer unlockExclusive(lockFile)
+	if current, ok, err := s.LauncherPath(); err != nil {
+		return err
+	} else if ok {
+		if current != path {
+			return fmt.Errorf("stable launcher is already %s; refusing to replace it with %s", current, path)
+		}
+		return nil
+	}
+	data, err := json.MarshalIndent(launcherState{SchemaVersion: 1, Path: path}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	temp, err := os.CreateTemp(s.root, ".launcher-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create launcher state: %w", err)
+	}
+	tempPath := temp.Name()
+	cleanup := true
+	defer func() {
+		_ = temp.Close()
+		if cleanup {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := temp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := replaceFileAtomic(tempPath, filepath.Join(s.root, launcherStateName)); err != nil {
+		return fmt.Errorf("replace launcher state: %w", err)
+	}
+	cleanup = false
+	return syncDirPath(s.root)
+}
+
+func (s *VersionStore) validateLauncherFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat stable launcher: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("stable launcher must be a regular file")
+	}
+	if s.goos != "windows" && info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("stable launcher is not executable")
+	}
+	return nil
+}
+
+// LauncherPath returns the stable executable entrypoint. It fails closed when
+// the state points into versions/ or the launcher has been removed.
+func (s *VersionStore) LauncherPath() (string, bool, error) {
+	data, err := os.ReadFile(filepath.Join(s.root, launcherStateName))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	var state launcherState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return "", false, fmt.Errorf("decode launcher state: %w", err)
+	}
+	state.Path = filepath.Clean(strings.TrimSpace(state.Path))
+	if state.SchemaVersion != 1 || !filepath.IsAbs(state.Path) || insidePath(s.VersionsRoot(), state.Path) {
+		return "", false, fmt.Errorf("invalid stable launcher state")
+	}
+	if err := s.validateLauncherFile(state.Path); err != nil {
+		return "", false, err
+	}
+	return state.Path, true, nil
+}
+
+func insidePath(root, candidate string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // OpenVersionStore opens (or creates) the default user VersionStore root used by

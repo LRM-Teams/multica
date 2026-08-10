@@ -22,7 +22,7 @@ func TestPrintDaemonStatusIncludesCLIVersion(t *testing.T) {
 	printDaemonStatusReport(&out, "Daemon", health)
 
 	got := out.String()
-	if !strings.Contains(got, "Version:     v9.9.9\n") {
+	if !strings.Contains(got, "Version:") || !strings.Contains(got, "v9.9.9\n") {
 		t.Fatalf("daemon status output = %q, want CLI version line", got)
 	}
 }
@@ -56,6 +56,46 @@ func TestPrintDaemonStatusOmitsVersionWhenMissing(t *testing.T) {
 				t.Fatalf("daemon status output = %q, want no Version line", out.String())
 			}
 		})
+	}
+}
+
+func TestPrintComputerStatusShowsConfiguredResidentDriftAndConnections(t *testing.T) {
+	t.Parallel()
+	health := map[string]any{
+		"status":                   "running",
+		"pid":                      float64(1234),
+		"uptime":                   "2m",
+		"session_present":          true,
+		"environment":              "test",
+		"resident_environment":     "production",
+		"service_origin":           "https://test.leagent.me",
+		"resident_service_origin":  "https://api.leagent.me",
+		"package_source":           "preview",
+		"resident_package_source":  "stable",
+		"configuration_drift":      true,
+		"connected":                true,
+		"workspace_connections": []map[string]any{
+			{"environment": "test", "workspace_id": "ws-1", "workspace_slug": "team"},
+			{"environment": "production", "workspace_id": "ws-2", "workspace_slug": "other"},
+		},
+	}
+	var out bytes.Buffer
+	printDaemonStatusReport(&out, "Computer", health)
+	got := out.String()
+	for _, want := range []string{
+		"Configured environment:", "test",
+		"Resident environment:", "production",
+		"Configured origin:", "https://test.leagent.me",
+		"Resident origin:", "https://api.leagent.me",
+		"Configured package:", "preview",
+		"Resident package:", "stable",
+		"Configuration drift:", "true",
+		"Workspace connections:", "2",
+		"test / team (ws-1)", "production / other (ws-2)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Computer status output = %q, missing %q", got, want)
+		}
 	}
 }
 

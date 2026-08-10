@@ -642,7 +642,7 @@
     "full_reset_confirm_placeholder": "输入 {{handle}}",
     "disabled_reason": {
       "agent_active": "等当前任务完成后再试。",
-      "unsupported_runtime_capability": "需要 daemon v0.3.95 或更新版本。",
+      "unsupported_runtime_capability": "需要 Computer v0.3.95 或更新版本。",
       "no_runtime": "该智能体未绑定运行时。",
       "offline": "运行时离线。",
       "no_permission": "你没有重启该智能体的权限。",
@@ -736,8 +736,8 @@
   "task_failure": {
     "agent_error": "智能体执行出错",
     "timeout": "task 超时",
-    "runtime_offline": "守护进程离线",
-    "runtime_recovery": "守护进程已重启",
+    "runtime_offline": "Computer 离线",
+    "runtime_recovery": "Computer 已重启",
     "manual": "用户取消"
   },
   "fleet": {

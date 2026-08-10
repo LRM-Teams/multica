@@ -18,7 +18,7 @@ import (
 )
 
 var setupCmd = &cobra.Command{
-	Use:   "setup [/workspace]",
+	Use:   "setup /<workspace>",
 	Short: "Connect this Computer to Multica Cloud (leagent.me)",
 	Long: `Connects this machine to Multica Cloud (leagent.me), authenticates, and
 starts the machine-wide resident Computer as a detached process that survives
@@ -28,7 +28,7 @@ terminal close. It does not install an OS service or a profile-scoped daemon.`,
 }
 
 var setupCloudCmd = &cobra.Command{
-	Use:   "cloud [/workspace]",
+	Use:   "cloud /<workspace>",
 	Short: "Configure the CLI for Multica Cloud (leagent.me)",
 	Long: `Explicitly configures the CLI to connect to Multica Cloud (leagent.me).
 
@@ -62,6 +62,10 @@ Examples:
 }
 
 func init() {
+	for _, command := range []*cobra.Command{setupCmd, setupCloudCmd} {
+		command.Flags().String("environment", string(cli.ServiceEnvironmentProduction), "Service environment: production or test")
+		command.Flags().String("test-url", "", "Tencent test environment origin, for example https://test.leagent.me or http://203.0.113.8:8080")
+	}
 	setupCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 	setupCloudCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
@@ -74,10 +78,16 @@ func init() {
 	setupSelfHostCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 
 	setupCmd.AddCommand(setupCloudCmd)
+	// Keep the old spelling parseable for one compatibility cycle without
+	// turning setup help back into a subcommand-oriented surface. The public
+	// contract is `multica setup /<workspace>`.
+	setupCloudCmd.Hidden = true
 	// #2496: self-host is no longer a supported setup surface; the retired
 	// command is unregistered + hidden (its helpers/tests remain for the
 	// bounded legacy-migration path).
 	setupSelfHostCmd.Hidden = true
+	_ = setupCmd.Flags().MarkHidden("workspace")
+	_ = setupCloudCmd.Flags().MarkHidden("workspace")
 }
 
 // printConfigLocation prints the config file path and profile name.
@@ -149,65 +159,72 @@ func requireWorkspacePath(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-// configureWorkspaceDaemonProfile gives each cloud workspace its own daemon
-// service and state directory. An explicit profile remains an advanced override.
-func configureWorkspaceDaemonProfile(cmd *cobra.Command, args []string) (string, error) {
-	if profile := resolveProfile(cmd); profile != "" {
-		return profile, nil
-	}
-	profile := "workspace-" + strings.TrimPrefix(args[0], "/")
-	if err := cmd.Flags().Set("profile", profile); err != nil {
-		return "", fmt.Errorf("set workspace daemon profile: %w", err)
-	}
-	return profile, nil
-}
-
 func runSetupCloud(cmd *cobra.Command, args []string) error {
+	if err := rejectRetiredComputerFlags(cmd); err != nil {
+		return err
+	}
+	// Capture legacy config before canonical setup may update the default
+	// Workspace/session fields. The snapshot is used only for verified,
+	// fail-closed migration and is never printed.
+	legacyEvidence := captureLegacyComputerEvidence()
+	// Setup is a machine-wide Computer operation. Ignore the inherited legacy
+	// --profile flag throughout login, workspace resolution, and persistence.
+	previousComputerMode := computerMode
+	computerMode = true
+	defer func() { computerMode = previousComputerMode }()
+
 	if err := applyWorkspacePositional(cmd, args); err != nil {
 		return err
 	}
-	profile, err := configureWorkspaceDaemonProfile(cmd, args)
+	environment, _ := cmd.Flags().GetString("environment")
+	testURL, _ := cmd.Flags().GetString("test-url")
+	target, err := cli.NewServiceTarget(environment, testURL)
 	if err != nil {
 		return err
 	}
 
-	ok, err := confirmOverwrite(profile)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil
-	}
-
-	cfg := cloudCLIConfig()
-	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
+	// Create or repair the selected environment without erasing the inactive
+	// environment's session. PutServiceEnvironment projects only the target
+	// session into the effective fields consumed by login/setup callers.
+	cfg, _ := cli.LoadCLIConfigForProfile("")
+	cfg.PutServiceEnvironment(target)
+	if err := cli.SaveCLIConfigForProfile(cfg, ""); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Configured for Multica Cloud (%s).\n", cli.OfficialCloudAppURL)
+	packageSource := "stable"
+	if target.Environment == cli.ServiceEnvironmentTest {
+		packageSource = "preview"
+	}
+	fmt.Fprintf(os.Stderr, "Configured %s environment (%s packages).\n", target.Environment, packageSource)
 	fmt.Fprintf(os.Stderr, "  server_url: %s\n", cfg.ServerURL)
 	fmt.Fprintf(os.Stderr, "  app_url:    %s\n", cfg.AppURL)
-	printConfigLocation(profile)
+	printConfigLocation("")
 
 	// Authenticate.
 	fmt.Fprintln(os.Stderr, "")
 	if err := runLogin(cmd, args); err != nil {
 		return err
 	}
+	if target.Environment == cli.ServiceEnvironmentProduction {
+		if err := adoptVerifiedLegacyComputer(cmd, legacyEvidence); err != nil {
+			return fmt.Errorf("Setup incomplete (legacy Computer migration: %w)", err)
+		}
+	}
 
 	if err := startDaemonAfterSetup(cmd); err != nil {
 		return err
 	}
-	fmt.Fprintln(os.Stderr, "\n✓ Setup complete! Your machine is now connected to Multica (daemon supervised).")
+	fmt.Fprintln(os.Stderr, "\n✓ Setup complete! This Computer is connected to the Workspace.")
 
 	return nil
 }
 
 func cloudCLIConfig() cli.CLIConfig {
-	return cli.CLIConfig{
-		ServerURL: cli.OfficialCloudAPIURL,
-		AppURL:    cli.OfficialCloudAppURL,
-	}
+	cfg := cli.CLIConfig{}
+	target, _ := cli.NewServiceTarget(string(cli.ServiceEnvironmentProduction), "")
+	cfg.PutServiceEnvironment(target)
+	return cfg
 }
 
 func runSetupSelfHost(cmd *cobra.Command, args []string) error {
@@ -292,33 +309,78 @@ func runSetupSelfHost(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// startDaemonAfterSetup installs the per-user OS service so setup always ends
-// with a supervised daemon (launchd / systemd --user / Windows Scheduled Task).
-// Bare `multica daemon start` remains for development/emergency only and is
-// not treated as a completed machine setup — unsupervised processes stay
-// stopped after an auto-update self-stop (see daemon update logs).
 // startResidentAfterSetup launches the machine-wide detached resident after a
 // successful setup. It is a package var so tests can substitute a fake and
 // assert the resident-start contract without spawning a real OS process.
 var startResidentAfterSetup = startResidentAfterSetupReal
+var establishWorkspaceBindingAfterSetup = establishWorkspaceBinding
+var waitForWorkspaceBindingAcceptanceAfterSetup = waitForWorkspaceBindingAcceptance
 
 func startResidentAfterSetupReal(cmd *cobra.Command) error {
-	_, err := (&computer.Lifecycle{Profile: ""}).StartBackground([]string{"daemon", "start", "--foreground"})
-	return err
+	lc := &computer.Lifecycle{}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	health := lc.Health(ctx)
+	if computer.Alive(health) {
+		cfg, err := cli.LoadCLIConfigForProfile("")
+		if err != nil {
+			return fmt.Errorf("read current environment: %w", err)
+		}
+		matches, err := residentMatchesSetupTarget(health, cfg)
+		if err != nil {
+			return err
+		}
+		if matches {
+			return nil
+		}
+		restarted, err := lc.Restart(computer.StartOptions{})
+		if err != nil {
+			return err
+		}
+		if !restarted.Start.Started {
+			return fmt.Errorf("resident did not become ready after environment switch (last status: %s)", restarted.Start.LastStatus)
+		}
+		return nil
+	}
+	result, err := lc.StartBackground(computer.StartOptions{})
+	if err != nil {
+		return err
+	}
+	if !result.Started {
+		return fmt.Errorf("resident did not become ready (last status: %s)", result.LastStatus)
+	}
+	return nil
+}
+
+func residentMatchesSetupTarget(health map[string]any, cfg cli.CLIConfig) (bool, error) {
+	target, err := cli.ResolveServiceTarget(cfg)
+	if err != nil {
+		return false, err
+	}
+	channel, err := cli.ResolveReleaseChannel(cfg)
+	if err != nil {
+		return false, err
+	}
+	return normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) &&
+		fmt.Sprint(health["environment"]) == string(target.Environment) &&
+		fmt.Sprint(health["release_channel"]) == string(channel), nil
 }
 
 func startDaemonAfterSetup(cmd *cobra.Command) error {
 	// Establish the Workspace Binding (#2489). A failure here must not read as
 	// a successful setup.
-	if err := establishWorkspaceBinding(cmd); err != nil {
-		return fmt.Errorf("Setup incomplete (%w): the Computer identity is registered but this Workspace Binding could not be established; re-run `multica setup /<ws>` to repair", err)
+	if err := establishWorkspaceBindingAfterSetup(cmd); err != nil {
+		return fmt.Errorf("Setup incomplete (%w): the Computer identity is registered but this Workspace connection could not be established; re-run `multica setup /<ws>` to repair", err)
 	}
 
 	// #2487/#2496: the Computer runs as one machine-wide detached resident that
 	// survives terminal close; setup does NOT install an OS supervisor
 	// (LaunchAgent/systemd/Scheduled Task).
 	fmt.Fprintln(os.Stderr, "\nStarting the resident Computer...")
-	return startResidentAfterSetup(cmd)
+	if err := startResidentAfterSetup(cmd); err != nil {
+		return fmt.Errorf("Setup incomplete (start resident: %w)", err)
+	}
+	return waitForWorkspaceBindingAcceptanceAfterSetup(cmd)
 }
 
 // establishWorkspaceBinding records the selected Workspace as a Binding for
@@ -327,8 +389,7 @@ func startDaemonAfterSetup(cmd *cobra.Command) error {
 // projection reflects a connected Machine. Returns an error (Setup
 // incomplete) so a partial setup never reads as successful.
 func establishWorkspaceBinding(cmd *cobra.Command) error {
-	profile := resolveProfile(cmd)
-	cfg, err := cli.LoadCLIConfigForProfile(profile)
+	cfg, err := cli.LoadCLIConfigForProfile("")
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
@@ -336,29 +397,106 @@ func establishWorkspaceBinding(cmd *cobra.Command) error {
 		return nil // no workspace selected; nothing to bind yet
 	}
 
-	identity, err := (&computer.Lifecycle{Profile: ""}).Identity()
+	identity, err := (&computer.Lifecycle{}).Identity()
 	if err != nil {
 		return fmt.Errorf("resolve computer identity: %w", err)
 	}
-	store := computer.NewBindingsStore(computer.RootDir(""))
-	if err := store.AddOrRepair(computer.WorkspaceBinding{
-		WorkspaceID: cfg.WorkspaceID,
-		ComputerID:  identity,
-		Active:      true,
-	}); err != nil {
-		return fmt.Errorf("persist binding: %w", err)
+	if cfg.ServerURL == "" || cfg.Token == "" {
+		return fmt.Errorf("machine-wide Cloud session is missing")
 	}
 
-	// Best-effort server registration; local persistence is the durable record.
-	if cfg.ServerURL != "" {
-		client := cli.NewAPIClient(cfg.ServerURL, "", cfg.Token)
-		ctx, cancel := cli.APIContext(context.Background())
-		defer cancel()
-		_ = client.PostJSON(ctx, "/api/daemons/"+identity+"/bindings", map[string]any{
-			"workspace_id": cfg.WorkspaceID,
-		}, nil)
+	workspaceSlug, _ := cmd.Flags().GetString("workspace")
+	return establishWorkspaceConnection(cfg, identity, cfg.WorkspaceID, strings.TrimPrefix(workspaceSlug, "/"))
+}
+
+func establishWorkspaceConnection(cfg cli.CLIConfig, identity, workspaceID, workspaceSlug string) error {
+	target, err := cli.ResolveServiceTarget(cfg)
+	if err != nil {
+		return fmt.Errorf("resolve service environment: %w", err)
+	}
+	client := cli.NewAPIClient(cfg.ServerURL, "", cfg.Token)
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var accepted struct {
+		OK                  bool   `json:"ok"`
+		WorkspaceID         string `json:"workspace_id"`
+		Credential          string `json:"credential"`
+		CredentialExpiresAt string `json:"credential_expires_at"`
+	}
+	if err := client.PostJSON(ctx, "/api/computers/"+identity+"/workspace-connections", map[string]any{
+		"workspace_id": workspaceID,
+	}, &accepted); err != nil {
+		return fmt.Errorf("register Workspace connection: %w", err)
+	}
+	if !accepted.OK || accepted.WorkspaceID != workspaceID || accepted.Credential == "" {
+		return fmt.Errorf("server did not accept the selected Workspace connection")
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, accepted.CredentialExpiresAt)
+	if err != nil {
+		return fmt.Errorf("parse Workspace connection credential expiry: %w", err)
+	}
+	store := computer.NewBindingsStore(computer.RootDir(""))
+	if err := store.AddOrRepair(computer.WorkspaceBinding{
+		Environment:         string(target.Environment),
+		Origin:              target.Origin,
+		WorkspaceID:         workspaceID,
+		WorkspaceSlug:       workspaceSlug,
+		ComputerID:          identity,
+		Credential:          accepted.Credential,
+		CredentialExpiresAt: expiresAt,
+		AcceptedAt:          time.Now().UTC(),
+		Active:              true,
+	}); err != nil {
+		return fmt.Errorf("persist accepted Workspace connection: %w", err)
 	}
 	return nil
+}
+
+var bindingAcceptanceTimeout = 50 * time.Second
+
+func waitForWorkspaceBindingAcceptance(cmd *cobra.Command) error {
+	cfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil || cfg.WorkspaceID == "" {
+		return fmt.Errorf("Setup incomplete (selected Workspace is missing)")
+	}
+	deadline := time.Now().Add(bindingAcceptanceTimeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		health := computer.ProbeHealth(ctx, computer.HealthPort(""))
+		cancel()
+		if healthProvesSetupAcceptance(health, cfg, cfg.WorkspaceID) {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("Setup incomplete (timed out waiting for the authenticated Computer and selected Workspace connection); existing session, Workspace connections, and Agent data were preserved")
+}
+
+func healthProvesSetupAcceptance(health map[string]any, cfg cli.CLIConfig, workspaceID string) bool {
+	target, err := cli.ResolveServiceTarget(cfg)
+	if err != nil {
+		return false
+	}
+	connected, _ := health["connected"].(bool)
+	return health["status"] == "running" &&
+		connected &&
+		normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) &&
+		fmt.Sprint(health["environment"]) == string(target.Environment) &&
+		healthContainsWorkspace(health, workspaceID)
+}
+
+func healthContainsWorkspace(health map[string]any, workspaceID string) bool {
+	workspaces, ok := health["workspaces"].([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range workspaces {
+		workspace, ok := raw.(map[string]any)
+		if ok && fmt.Sprint(workspace["id"]) == workspaceID {
+			return true
+		}
+	}
+	return false
 }
 
 // persistSelfHostConfigIfReachable probes serverURL and, only when it answers,

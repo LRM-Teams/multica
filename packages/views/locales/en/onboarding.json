@@ -128,14 +128,14 @@
       "windows-powershell": "Use this in PowerShell on Windows."
     },
     "step1_label": "Install the Multica CLI",
-    "step2_label": "Start the daemon",
-    "step2_hint": "Opens a browser to sign in, then starts the daemon.",
+    "step2_label": "Connect this Computer",
+    "step2_hint": "Opens a browser to sign in, connects this Workspace, then starts the Computer resident.",
     "trouble_summary": "Having trouble?",
     "trouble_intro": "If step 1's download fails, or step 2 doesn't connect, try:",
     "trouble_retry": "Retry — a flaky connection can interrupt either command.",
     "trouble_check_network": "Check that this machine can reach the internet, and that no firewall or proxy is blocking outbound HTTPS.",
     "trouble_check_daemon_prefix": "Once the CLI is installed, ",
-    "trouble_check_daemon_suffix": " show what the daemon is doing."
+    "trouble_check_daemon_suffix": " show what the Computer resident is doing."
   },
   "cloud_waitlist": {
     "intro_main": "Cloud runtimes aren't live yet. Leave your email and we'll reach out when they are.",

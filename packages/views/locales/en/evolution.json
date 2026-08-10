@@ -158,7 +158,7 @@
   "selfReviewChildRuns": "Self-review child runs",
   "noSelfReviewChildRuns": "No self-review child runs were recorded for this parent run.",
   "perAgentResults": "Per-agent results",
-  "noPerAgentDetails": "No per-agent details were reported by this daemon.",
+  "noPerAgentDetails": "No per-Agent details were reported by this Computer.",
   "artifacts": "Artifacts",
   "evolutionOutputTrend": "Evolution output trend",
   "evolutionOutputTrendHint": "Daily self-review memory/skill candidates, shared evolution promotions, and team_knowledge items from curator runs.",

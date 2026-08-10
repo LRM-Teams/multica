@@ -32,6 +32,7 @@ var configSetCmd = &cobra.Command{
 func init() {
 	configCmd.AddCommand(configShowCmd)
 	configCmd.AddCommand(configSetCmd)
+	configCmd.AddCommand(configUseCmd)
 }
 
 func runConfigShow(cmd *cobra.Command, _ []string) error {
@@ -49,6 +50,24 @@ func runConfigShow(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintf(os.Stdout, "server_url:   %s\n", valueOrDefault(cfg.ServerURL, "(not set)"))
 	fmt.Fprintf(os.Stdout, "app_url:      %s\n", valueOrDefault(cfg.AppURL, "(not set)"))
 	fmt.Fprintf(os.Stdout, "workspace_id: %s\n", valueOrDefault(cfg.WorkspaceID, "(not set)"))
+	if cfg.Environment != "" {
+		fmt.Fprintf(os.Stdout, "active_environment: %s\n", cfg.Environment)
+		fmt.Fprintf(os.Stdout, "package_source:     %s\n", packageSourceName(cli.ReleaseChannelForEnvironment(cli.ServiceEnvironment(cfg.Environment))))
+		for _, environment := range cfg.ConfiguredServiceEnvironments() {
+			saved := cfg.Environments[string(environment)]
+			marker := "saved"
+			if cfg.Environment == string(environment) {
+				marker = "active"
+			}
+			fmt.Fprintf(os.Stdout, "%s: %s, %s packages, login %s, origin %s\n",
+				environment,
+				marker,
+				packageSourceName(cli.ReleaseChannelForEnvironment(environment)),
+				secretPresence(saved.Token),
+				saved.ServerURL,
+			)
+		}
+	}
 	if cfg.Proxy == nil {
 		fmt.Fprintln(os.Stdout, "proxy.http:   (not set)")
 		fmt.Fprintln(os.Stdout, "proxy.https:  (not set)")
@@ -70,16 +89,11 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// `multica setup` / `multica setup self-host` already do server_url +
-	// app_url + login + daemon start in one step (including device-code
-	// sign-in, which works without a browser on this machine — see
-	// ConnectRemoteDialog's troubleshooting copy). Warn, don't block: this
-	// command is also how self-host operators repoint an already-configured
-	// install, which must keep working. The signal for "someone is hand-
-	// rolling first-time setup instead of using it" is server_url going
-	// from unset to set — that's the exact step `multica setup` replaces.
+	// A machine-wide Computer selects its service through `multica setup`.
+	// Keep this lower-level setting for server administration and older clients,
+	// but do not advertise the retired profile/self-host Computer lifecycle.
 	if key == "server_url" && cfg.ServerURL == "" && value != "" {
-		fmt.Fprintln(os.Stderr, "Note: `multica setup` (or `multica setup self-host --server-url ... --app-url ...`) configures this, signs you in, and starts the daemon in one step. Continuing with `config set` still works, but skips that.")
+		fmt.Fprintln(os.Stderr, "Note: the supported Computer flow is `multica setup /<workspace>` for production, or `multica setup --environment test --test-url <origin> /<workspace>` for test. `config set server_url` does not create a Workspace connection or start the Computer.")
 	}
 
 	switch key {

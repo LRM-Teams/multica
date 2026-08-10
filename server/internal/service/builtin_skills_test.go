@@ -470,7 +470,7 @@ func TestRuntimesSkillCoversClaimChain(t *testing.T) {
 
 	mustContain := []string{
 		"agent_inbox_event",
-		"daemon drains and leases the canonical inbox event",
+		"Computer resident drains and leases the canonical inbox event",
 		"multica runtime list --output json",
 		"Agent's durable workspace",
 		"references/runtimes-source-map.md",

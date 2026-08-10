@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // Lifecycle is the single owner of the local Computer's resident process and
@@ -21,8 +23,6 @@ import (
 // let them exercise lifecycle decisions without reaching into real processes
 // or ports.
 type Lifecycle struct {
-	// Profile is the selected workspace profile ("" = default, machine-wide).
-	Profile string
 	// Probe reports resident health; defaults to ProbeHealth.
 	Probe HealthProbe
 	// Sleep blocks between readiness polls; defaults to time.Sleep.
@@ -81,9 +81,9 @@ func (l *Lifecycle) view() *startView {
 		stderr = os.Stderr
 	}
 	return &startView{
-		health:   HealthPort(l.Profile),
-		logPath:  LogPath(l.Profile),
-		pidPath:  PIDPath(l.Profile),
+		health:   HealthPort(""),
+		logPath:  LogPath(""),
+		pidPath:  PIDPath(""),
 		probe:    probe,
 		sleep:    sleep,
 		stderr:   stderr,
@@ -104,6 +104,51 @@ type StartResult struct {
 	LogPath    string
 	Started    bool // reached health status "running"
 	LastStatus string
+}
+
+// StartOptions is configuration, not process wiring. Lifecycle owns the
+// actual compatibility command used for the resident child so Cobra/Desktop
+// adapters cannot accidentally create a profile-specific or second resident.
+type StartOptions struct {
+	Generation                     int64
+	DaemonID                       string
+	DeviceName                     string
+	RuntimeName                    string
+	PollInterval                   time.Duration
+	HeartbeatInterval              time.Duration
+	AgentTimeout                   time.Duration
+	AgentTimeoutSet                bool
+	CodexSemanticInactivityTimeout time.Duration
+}
+
+// ResidentArgs is the one internal process contract for the detached
+// Computer. `daemon start --foreground` remains only an implementation
+// compatibility boundary for this release; callers never assemble it.
+func ResidentArgs(options StartOptions) []string {
+	args := []string{"daemon", "start", "--foreground"}
+	appendString := func(name, value string) {
+		if strings.TrimSpace(value) != "" {
+			args = append(args, name, value)
+		}
+	}
+	appendDuration := func(name string, value time.Duration) {
+		if value > 0 {
+			args = append(args, name, value.String())
+		}
+	}
+	appendString("--daemon-id", options.DaemonID)
+	appendString("--device-name", options.DeviceName)
+	appendString("--runtime-name", options.RuntimeName)
+	if options.Generation > 0 {
+		args = append(args, "--computer-generation", strconv.FormatInt(options.Generation, 10))
+	}
+	appendDuration("--poll-interval", options.PollInterval)
+	appendDuration("--heartbeat-interval", options.HeartbeatInterval)
+	if options.AgentTimeoutSet {
+		args = append(args, "--agent-timeout", options.AgentTimeout.String())
+	}
+	appendDuration("--codex-semantic-inactivity-timeout", options.CodexSemanticInactivityTimeout)
+	return args
 }
 
 // startResidentProcess spawns the resident binary (exe) with args, redirecting
@@ -153,8 +198,23 @@ func (p *execProc) Release() error {
 // the adapter to render user-facing output. It implies an already-running
 // guard: if a resident is already live on the port it returns a typed error
 // the adapter can surface.
-func (l *Lifecycle) StartBackground(args []string) (StartResult, error) {
+func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	v := l.view()
+	startCtx, startCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	startLease, err := acquireStartLease(startCtx, RootDir(""))
+	startCancel()
+	if err != nil {
+		return StartResult{}, fmt.Errorf("another Computer start is already in progress: %w", err)
+	}
+	defer startLease.Close()
+
+	if options.Generation == 0 {
+		generation, err := NewGenerationStore(RootDir("")).Next()
+		if err != nil {
+			return StartResult{}, fmt.Errorf("allocate Computer generation: %w", err)
+		}
+		options.Generation = generation
+	}
 
 	// Already-running guard.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -181,7 +241,7 @@ func (l *Lifecycle) StartBackground(args []string) (StartResult, error) {
 		return StartResult{}, fmt.Errorf("open log file %s: %w", logPath, err)
 	}
 
-	child, err := spawnResident(exePath, args, logFile)
+	child, err := spawnResident(exePath, ResidentArgs(options), logFile)
 	logFile.Close()
 	if err != nil {
 		return StartResult{}, err
@@ -274,15 +334,12 @@ func (l *Lifecycle) Stop() StopResult {
 	return res
 }
 
-// Identity resolves the stable local Computer identity for the profile. The
+// Identity resolves the stable machine-wide Computer identity. The
 // adapter calls through this one interface rather than reaching into daemon
 // internals; the identity persistence seam itself is owned by this module.
 func (l *Lifecycle) Identity() (string, error) {
-	// The machine-wide identity lives at the default (machine) root, shared
-	// by every profile. legacyProfile is used only to promote one matching
-	// per-profile daemon.id once.
 	store := NewIdentityStore(RootDir(""))
-	return store.MustID(l.Profile)
+	return store.MustID("")
 }
 
 // Status probes the resident and returns its health map (formatted by the
@@ -293,12 +350,98 @@ func (l *Lifecycle) Status() map[string]any {
 	v := l.view()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	health := v.probe(ctx, v.health)
+	raw := v.probe(ctx, v.health)
+	health := map[string]any{
+		"status":           "stopped",
+		"connected":        false,
+		"canonical_origin": CanonicalCloudOrigin,
+		"health_port":      v.health,
+		"log_path":         v.logPath,
+		"pid_path":         v.pidPath,
+	}
+	for _, key := range []string{"status", "pid", "uptime", "cli_version", "connected", "server_url", "environment"} {
+		if value, ok := raw[key]; ok {
+			health[key] = value
+		}
+	}
+	if value, ok := raw["server_url"]; ok {
+		health["resident_service_origin"] = value
+	}
+	if value, ok := raw["environment"]; ok {
+		health["resident_environment"] = value
+	}
+	if value, ok := raw["release_channel"]; ok {
+		health["resident_package_source"] = packageSourceForReleaseChannel(fmt.Sprint(value))
+	}
 	store := NewIdentityStore(RootDir(""))
-	for k, val := range store.Peek(l.Profile) {
+	for k, val := range store.Peek("") {
 		health[k] = val
 	}
+	connections, err := NewBindingsStore(RootDir("")).AllActive()
+	if err == nil {
+		safe := make([]map[string]any, 0, len(connections))
+		for _, connection := range connections {
+			safe = append(safe, map[string]any{
+				"environment":    connection.Environment,
+				"origin":         connection.Origin,
+				"workspace_id":   connection.WorkspaceID,
+				"workspace_slug": connection.WorkspaceSlug,
+				"active":         true,
+			})
+		}
+		health["workspace_connections"] = safe
+	}
+	if session, ok := readSessionProjection(); ok {
+		health["session_present"] = session.TokenPresent
+		health["service_origin"] = session.Origin
+		health["environment"] = session.Environment
+		health["package_source"] = packageSourceForReleaseChannel(session.ReleaseChannel)
+		if Alive(raw) {
+			health["configuration_drift"] = strings.TrimRight(fmt.Sprint(raw["server_url"]), "/") != strings.TrimRight(session.Origin, "/") ||
+				fmt.Sprint(raw["environment"]) != session.Environment ||
+				fmt.Sprint(raw["release_channel"]) != session.ReleaseChannel
+		}
+	} else {
+		health["session_present"] = false
+	}
 	return health
+}
+
+func packageSourceForReleaseChannel(channel string) string {
+	if strings.EqualFold(strings.TrimSpace(channel), string(cli.ReleaseChannelAlpha)) {
+		return "preview"
+	}
+	return "stable"
+}
+
+type sessionProjection struct {
+	TokenPresent   bool
+	Origin         string
+	Environment    string
+	ReleaseChannel string
+}
+
+// readSessionProjection deliberately parses only presence + origin. It never
+// returns or logs the token bytes and keeps status inside the Computer module.
+func readSessionProjection() (sessionProjection, bool) {
+	cfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return sessionProjection{}, false
+	}
+	target, err := cli.ResolveServiceTarget(cfg)
+	if err != nil {
+		return sessionProjection{}, false
+	}
+	channel, err := cli.ResolveReleaseChannel(cfg)
+	if err != nil {
+		return sessionProjection{}, false
+	}
+	return sessionProjection{
+		TokenPresent:   strings.TrimSpace(cfg.Token) != "",
+		Origin:         target.Origin,
+		Environment:    string(target.Environment),
+		ReleaseChannel: string(channel),
+	}, true
 }
 
 // Logs tails the resident log file.
@@ -307,7 +450,17 @@ func (l *Lifecycle) Logs(lines int, follow bool) error {
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		return fmt.Errorf("no log file found at %s\nThe daemon may not have been started in background mode", logPath)
 	}
-	return TailLog(logPath, lines, follow)
+	return streamLog(logPath, lines, follow, "")
+}
+
+// LogsForWorkspace scopes the resident service log to records that explicitly
+// carry one immutable Workspace id. It never switches the running Binding set.
+func (l *Lifecycle) LogsForWorkspace(lines int, follow bool, workspaceID string) error {
+	logPath := l.view().logPath
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		return fmt.Errorf("no log file found at %s\nThe Computer may not have been started in background mode", logPath)
+	}
+	return streamLog(logPath, lines, follow, workspaceID)
 }
 
 // PublishPID writes the current process's PID to the resident PID file and

@@ -13,14 +13,14 @@ import (
 
 // SuccessorAttestation is what a candidate successor reports before a release.
 type SuccessorAttestation struct {
-	Version      string
-	ComputerID   string
-	Generation   int64
-	BindingSet   []WorkspaceBinding
-	ExpectedGen  int64
-	ExpectedVer  string
-	ExpectedID   string
-	ExpectedSet  map[string]bool // immutable workspace_ids the incumbent manages
+	Version     string
+	ComputerID  string
+	Generation  int64
+	BindingSet  []WorkspaceBinding
+	ExpectedGen int64
+	ExpectedVer string
+	ExpectedID  string
+	ExpectedSet map[string]bool // immutable workspace_ids the incumbent manages
 }
 
 // ErrStaleGeneration / ErrFenceDenied classify a rejected handoff.
@@ -45,7 +45,7 @@ func ReleaseIncumbent(a SuccessorAttestation) error {
 		return fmt.Errorf("%w: %v — successor is a stale resident on generation %d (expected >= %d); it must not refresh connectivity or accept work", ErrStaleGeneration, ErrStaleGeneration, a.Generation, a.ExpectedGen)
 	}
 	if !bindingSetComplete(a.BindingSet, a.ExpectedSet) {
-		return fmt.Errorf("%w: successor is missing a managed Binding and must not be released", ErrFenceDenied)
+		return fmt.Errorf("%w: successor is missing a managed Workspace connection and must not be released", ErrFenceDenied)
 	}
 	return nil
 }

@@ -715,14 +715,20 @@ func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
 		t.Fatalf("read migration 307 up: %v", err)
 	}
 	// Forward contract: keyed by immutable workspace_id, never by slug; idempotent;
-	// credential stored as a hash only; revocable via active/revoked_at.
+	// credential stored as a hash only; revocable via active/revoked_at; one
+	// machine-wide Computer identity cannot be claimed by multiple users.
 	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS computer_identity_owner",
+		"daemon_id          TEXT        PRIMARY KEY",
 		"CREATE TABLE IF NOT EXISTS computer_workspace_bindings",
 		"daemon_id          TEXT",
 		"workspace_id       UUID",
 		"execution_token_hash TEXT",
 		"revoked_at         TIMESTAMPTZ",
 		"PRIMARY KEY (daemon_id, workspace_id)",
+		"computer identity has bindings owned by multiple users",
+		"o.user_id <> b.user_id",
+		"computer identity owner conflicts with workspace connection owner",
 	} {
 		if !strings.Contains(string(up), required) {
 			t.Errorf("migration 307 up missing %q", required)
@@ -734,6 +740,42 @@ func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
 	}
 	if !strings.Contains(string(down), "DROP TABLE IF EXISTS computer_workspace_bindings") {
 		t.Error("migration 307 down must drop the bindings table")
+	}
+	if !strings.Contains(string(down), "DROP TABLE IF EXISTS computer_identity_owner") {
+		t.Error("migration 307 down must drop the Computer owner table")
+	}
+}
+
+func TestMigration314ComputerGenerationFenceAndWorkspaceAttestation(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "314_computer_generation_fence.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"CREATE TABLE computer_generation",
+		"generation  BIGINT",
+		"ADD COLUMN computer_generation BIGINT",
+		"accepted_workspace_ids UUID[]",
+		"attested_workspace_ids UUID[]",
+		"deployment/apply notes",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Errorf("migration 314 up missing %q", required)
+		}
+	}
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "314_computer_generation_fence.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"DROP TABLE IF EXISTS computer_generation", "DROP COLUMN IF EXISTS computer_generation", "DROP COLUMN IF EXISTS accepted_workspace_ids"} {
+		if !strings.Contains(string(down), required) {
+			t.Errorf("migration 314 down missing %q", required)
+		}
 	}
 }
 

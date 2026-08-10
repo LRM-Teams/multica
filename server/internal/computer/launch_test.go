@@ -27,7 +27,7 @@ func TestLaunchBinaryNoActiveVersionFallsBackToExecutable(t *testing.T) {
 	}
 }
 
-func TestLaunchBinaryPrefersVersionStoreActive(t *testing.T) {
+func TestLaunchBinaryKeepsStableLauncherWhenVersionStoreIsActive(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -45,12 +45,22 @@ func TestLaunchBinaryPrefersVersionStoreActive(t *testing.T) {
 	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.88"); err != nil {
 		t.Fatalf("CompareAndSwapActivation: %v", err)
 	}
+	launcher := filepath.Join(home, ".local", "bin", "multica")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("stable-launcher"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RememberLauncherPath(launcher); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := LaunchBinary()
 	if err != nil {
 		t.Fatalf("LaunchBinary: %v", err)
 	}
-	if got != staged.BinaryPath {
-		t.Fatalf("LaunchBinary = %q, want staged Active path %q", got, staged.BinaryPath)
+	if got != launcher {
+		t.Fatalf("LaunchBinary = %q, want stable launcher %q (active was %q)", got, launcher, staged.BinaryPath)
 	}
 }

@@ -175,7 +175,7 @@ func TestBuildSuperviseConfigDefaultProfile(t *testing.T) {
 		t.Fatalf("buildSuperviseConfig: %v", err)
 	}
 
-	wantDir := filepath.Join(home, ".multica")
+	wantDir := filepath.Join(home, ".multica", "computer")
 	if cfg.LockPath != filepath.Join(wantDir, "supervisor.lock") {
 		t.Errorf("LockPath = %q, want under %q", cfg.LockPath, wantDir)
 	}
@@ -220,7 +220,7 @@ func TestBuildSuperviseConfigDefaultProfile(t *testing.T) {
 // a real executable satisfying cli.VerifyStagedBinaryVersion's `--version`
 // check just to exercise a thin wrapper around already-tested logic.
 
-func TestBuildSuperviseConfigNamedProfileIsIsolatedFromDefault(t *testing.T) {
+func TestBuildSuperviseConfigNamedProfileUsesMachineWideRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -233,10 +233,10 @@ func TestBuildSuperviseConfigNamedProfileIsIsolatedFromDefault(t *testing.T) {
 		t.Fatalf("buildSuperviseConfig(staging): %v", err)
 	}
 
-	if defaultCfg.LockPath == stagingCfg.LockPath {
-		t.Fatalf("default and named-profile supervisor lock paths must differ, both = %q", defaultCfg.LockPath)
+	if defaultCfg.LockPath != stagingCfg.LockPath {
+		t.Fatalf("legacy profile must not create a second supervisor: default=%q staging=%q", defaultCfg.LockPath, stagingCfg.LockPath)
 	}
-	wantStagingDir := filepath.Join(home, ".multica", "profiles", "staging")
+	wantStagingDir := filepath.Join(home, ".multica", "computer")
 	if stagingCfg.LockPath != filepath.Join(wantStagingDir, "supervisor.lock") {
 		t.Errorf("staging LockPath = %q, want under %q", stagingCfg.LockPath, wantStagingDir)
 	}

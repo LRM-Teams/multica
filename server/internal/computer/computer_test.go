@@ -2,6 +2,7 @@ package computer
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,7 +40,7 @@ func TestAlive(t *testing.T) {
 
 func TestRemovePIDIfMatchesNeverDeletesSuccessorPID(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	lc := &Lifecycle{Profile: "upgrade"}
+	lc := &Lifecycle{}
 
 	path := PIDPath("upgrade")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -60,7 +61,7 @@ func TestRemovePIDIfMatchesNeverDeletesSuccessorPID(t *testing.T) {
 
 func TestPublishPIDWritesCurrentPIDAndCleanupRespectsMatches(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	lc := &Lifecycle{Profile: "merge"}
+	lc := &Lifecycle{}
 
 	cleanup, err := lc.PublishPID()
 	if err != nil {
@@ -87,7 +88,7 @@ func TestPublishPIDWritesCurrentPIDAndCleanupRespectsMatches(t *testing.T) {
 // --- status through the Lifecycle with a replaceable probe ---
 
 func TestStatusReportsStoppedWhenNoResident(t *testing.T) {
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 	lc.Probe = func(context.Context, int) map[string]any {
 		return map[string]any{"status": "stopped"}
 	}
@@ -98,7 +99,7 @@ func TestStatusReportsStoppedWhenNoResident(t *testing.T) {
 }
 
 func TestStatusReportsRunning(t *testing.T) {
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 	lc.Probe = func(context.Context, int) map[string]any {
 		return map[string]any{"status": "running", "pid": float64(1234)}
 	}
@@ -108,10 +109,76 @@ func TestStatusReportsRunning(t *testing.T) {
 	}
 }
 
+func TestStatusIsRedactedReadOnlyComputerProjection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := RootDir("")
+	if err := NewBindingsStore(root).AddOrRepair(WorkspaceBinding{
+		WorkspaceID: "workspace-1", WorkspaceSlug: "team", ComputerID: "computer-1",
+		Credential: "workspace-secret", Active: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".multica", "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"server_url":"https://leagent.me","token":"user-secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{Probe: func(context.Context, int) map[string]any {
+		return map[string]any{
+			"status": "running", "connected": true, "pid": float64(42),
+			"server_url": "https://api.leagent.me", "environment": "production", "release_channel": "latest",
+			"agents": []any{"must-not-leak"}, "workspaces": []any{"must-not-drive-status"},
+		}
+	}}
+	status := lc.Status()
+	if status["session_present"] != true || status["service_origin"] != CanonicalCloudOrigin {
+		t.Fatalf("session projection = %+v", status)
+	}
+	if status["configuration_drift"] != false || status["resident_environment"] != "production" || status["resident_package_source"] != "stable" {
+		t.Fatalf("resident projection = %+v", status)
+	}
+	if _, leaked := status["agents"]; leaked {
+		t.Fatalf("Computer status leaked aggregate Agent state: %+v", status)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"user-secret", "workspace-secret", "must-not-leak"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("Computer status leaked %q: %s", secret, encoded)
+		}
+	}
+	if got := status["workspace_connections"].([]map[string]any); len(got) != 1 || got[0]["workspace_id"] != "workspace-1" {
+		t.Fatalf("safe Workspace connection projection = %+v", got)
+	}
+}
+
+func TestStatusReportsResidentConfigurationDrift(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".multica"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".multica", "config.json"), []byte(`{"environment":"test","release_channel":"alpha","server_url":"https://test.leagent.me","app_url":"https://test.leagent.me"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{Probe: func(context.Context, int) map[string]any {
+		return map[string]any{
+			"status": "running", "server_url": "https://api.leagent.me",
+			"environment": "production", "release_channel": "latest",
+		}
+	}}
+	status := lc.Status()
+	if status["configuration_drift"] != true || status["environment"] != "test" || status["resident_environment"] != "production" {
+		t.Fatalf("status did not expose config/resident drift: %+v", status)
+	}
+}
+
 // --- stop through the Lifecycle ---
 
 func TestStopWhenNotRunning(t *testing.T) {
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 	lc.Probe = func(context.Context, int) map[string]any {
 		return map[string]any{"status": "stopped"}
 	}
@@ -123,7 +190,7 @@ func TestStopWhenNotRunning(t *testing.T) {
 
 func TestStopGracefullyThenConfirmsStopped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 
 	if err := os.MkdirAll(filepath.Dir(PIDPath("")), 0o755); err != nil {
 		t.Fatal(err)
@@ -183,7 +250,7 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 		_, _ = child.Process.Wait()
 	}()
 
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 	var calls atomic.Int32
 	lc.Probe = func(_ context.Context, _ int) map[string]any {
 		if calls.Add(1) == 1 {
@@ -208,11 +275,11 @@ func TestStopFallsBackToKillWhenShutdownFails(t *testing.T) {
 // --- start background already-running guard ---
 
 func TestStartBackgroundRefusesWhenAlreadyRunning(t *testing.T) {
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 	lc.Probe = func(_ context.Context, _ int) map[string]any {
 		return map[string]any{"status": "running", "pid": float64(4321)}
 	}
-	_, err := lc.StartBackground([]string{"daemon", "start", "--foreground"})
+	_, err := lc.StartBackground(StartOptions{})
 	if err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatalf("StartBackground = %v, want already-running error", err)
 	}
@@ -247,7 +314,7 @@ func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 
 	// Probe: first call (already-running guard) reports stopped; readiness
 	// polls report running.
@@ -265,7 +332,7 @@ func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	})
 	defer restore()
 
-	res, err := lc.StartBackground([]string{"daemon", "start", "--foreground"})
+	res, err := lc.StartBackground(StartOptions{})
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
@@ -282,5 +349,27 @@ func TestStartBackgroundLaunchesWritesPIDAndConfirmsReady(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != "7777" {
 		t.Fatalf("pid file = %q, want 7777", data)
+	}
+}
+
+func TestResidentArgsOwnedByComputerAndNeverSelectProfileOrOrigin(t *testing.T) {
+	args := ResidentArgs(StartOptions{
+		DaemonID: "computer-1", DeviceName: "Laptop", RuntimeName: "Local",
+		PollInterval: time.Second, HeartbeatInterval: 2 * time.Second,
+		AgentTimeoutSet: true, AgentTimeout: 0,
+	})
+	joined := strings.Join(args, " ")
+	if !strings.HasPrefix(joined, "daemon start --foreground") {
+		t.Fatalf("resident compatibility contract = %q", joined)
+	}
+	for _, forbidden := range []string{"--profile", "--server-url", "supervise", "install-service"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("resident args expose retired process selection %q: %s", forbidden, joined)
+		}
+	}
+	for _, required := range []string{"--daemon-id computer-1", "--device-name Laptop", "--agent-timeout 0s"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("resident args %q missing %q", joined, required)
+		}
 	}
 }

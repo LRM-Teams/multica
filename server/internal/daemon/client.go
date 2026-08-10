@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -147,9 +148,10 @@ type Client struct {
 
 	// Identity headers sent on every request as X-Client-*. Populated by
 	// SetIdentity(); empty values are simply omitted.
-	platform string
-	version  string
-	os       string
+	platform           string
+	version            string
+	os                 string
+	computerGeneration int64
 }
 
 // NewClient creates a new daemon API client.
@@ -185,6 +187,10 @@ func (c *Client) SetVersion(v string) {
 	c.version = v
 }
 
+func (c *Client) SetComputerGeneration(generation int64) {
+	c.computerGeneration = generation
+}
+
 // setIdentityHeaders attaches X-Client-Platform/Version/OS to req when set.
 func (c *Client) setIdentityHeaders(req *http.Request) {
 	if c.platform != "" {
@@ -195,6 +201,9 @@ func (c *Client) setIdentityHeaders(req *http.Request) {
 	}
 	if c.os != "" {
 		req.Header.Set("X-Client-OS", c.os)
+	}
+	if c.computerGeneration > 0 {
+		req.Header.Set("X-Computer-Generation", strconv.FormatInt(c.computerGeneration, 10))
 	}
 }
 
@@ -321,14 +330,14 @@ func (c *Client) tokenForRuntime(runtimeID string) string {
 }
 
 type AgentInboxEvent struct {
-	ID             string `json:"id"`
-	DeliveryID     string `json:"delivery_id"`
-	ConversationID string `json:"conversation_id"`
-	LeaseToken     string `json:"lease_token"`
-	LeaseExpiresAt string `json:"lease_expires_at"`
-	SeqFrom        int64  `json:"seq_from"`
-	SeqTo          int64  `json:"seq_to"`
-	Reason         string `json:"reason"`
+	ID               string `json:"id"`
+	DeliveryID       string `json:"delivery_id"`
+	ConversationID   string `json:"conversation_id"`
+	LeaseToken       string `json:"lease_token"`
+	LeaseExpiresAt   string `json:"lease_expires_at"`
+	SeqFrom          int64  `json:"seq_from"`
+	SeqTo            int64  `json:"seq_to"`
+	Reason           string `json:"reason"`
 	DeliveryMode     string `json:"delivery_mode"`
 	ResponseMode     string `json:"response_mode"`
 	ExecutionProfile string `json:"execution_profile"`
@@ -637,12 +646,19 @@ func (c *Client) SendHeartbeat(
 // MachineUpgradeReceipt is the immutable server acceptance snapshot needed by
 // the daemon before any local release mutation.
 type MachineUpgradeReceipt struct {
-	ID                 string   `json:"id"`
-	RequestedTarget    string   `json:"requested_target"`
-	ResolvedTarget     *string  `json:"resolved_target,omitempty"`
-	Phase              string   `json:"phase"`
-	AcceptedGeneration *string  `json:"accepted_generation,omitempty"`
-	AcceptedRuntimeIDs []string `json:"accepted_runtime_ids,omitempty"`
+	ID                   string   `json:"id"`
+	RequestedTarget      string   `json:"requested_target"`
+	ResolvedTarget       *string  `json:"resolved_target,omitempty"`
+	Phase                string   `json:"phase"`
+	AcceptedGeneration   *string  `json:"accepted_generation,omitempty"`
+	AcceptedRuntimeIDs   []string `json:"accepted_runtime_ids,omitempty"`
+	AcceptedWorkspaceIDs []string `json:"accepted_workspace_ids,omitempty"`
+}
+
+func (c *Client) AttestComputerUpgrade(ctx context.Context, daemonID, upgradeID, generationID, cliVersion string, workspaceIDs []string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/attest", upgradeID), map[string]any{
+		"daemon_id": daemonID, "generation_id": generationID, "cli_version": cliVersion, "workspace_ids": workspaceIDs,
+	}, nil)
 }
 
 // MachineUpgradeControlOperation is the minimal canonical operation receipt
@@ -665,6 +681,12 @@ func (c *Client) CreateMachineUpgrade(ctx context.Context, workspaceID, daemonID
 		return nil, err
 	}
 	return &operation, nil
+}
+
+func (c *Client) ComputerHeartbeat(ctx context.Context, workspaceID, daemonID string, generation int64) error {
+	return c.postJSONWithToken(ctx, "/api/daemon/computer/heartbeat", map[string]any{
+		"workspace_id": workspaceID, "daemon_id": daemonID, "generation": generation,
+	}, nil, c.tokenForWorkspace(workspaceID))
 }
 
 // AcceptMachineUpgrade records that this daemon process accepted the claimed

@@ -7,47 +7,47 @@ import { Callout } from "fumadocs-ui/components/callout";
 
 Look up issues by symptom. Each entry gives you **symptom / likely causes / how to diagnose / how to fix**. If your situation isn't listed, open an issue on [GitHub](https://github.com/LRM-Teams/multica/issues).
 
-## Daemon can't connect to the server
+## Computer can't connect to the selected environment
 
-**Symptom**: [`multica daemon`](/cli)'s `status` command shows `offline` or `connection refused`; the server logs show no `/api/daemon/register` or `/api/daemon/heartbeat` requests. For how the daemon mechanism works, see [Daemon and runtimes](/daemon-runtimes).
+**Symptom**: `multica computer status` shows `connected: false` or the logs show `connection refused`.
 
 **Likely causes**:
 
-1. **`MULTICA_SERVER_URL` points at the wrong address** — default is `ws://localhost:8080/ws`; self-host must change it to your server address
-2. **Network / firewall blocking** — the daemon and server aren't on the same network, or outbound traffic is blocked
+1. **The selected service environment is wrong** — production is fixed to `leagent.me`; test must carry an explicit Tencent origin
+2. **Network / firewall blocking** — the Computer and server aren't on the same network, or outbound traffic is blocked
 3. **Token expired or invalid** — you never ran `multica login`, or the PAT was revoked
 4. **Server rejected registration** — the account you signed in with isn't in the target workspace (register returns 403)
-5. **DNS resolution failure** — the hostname doesn't resolve on the daemon machine
+5. **DNS resolution failure** — the hostname doesn't resolve on the Computer's machine
 
 **How to diagnose**:
 
 ```bash
-multica daemon logs --lines 100    # look for daemon-side errors
-echo $MULTICA_SERVER_URL          # confirm the address is set
+multica computer status --output json     # confirm environment + service_origin
+multica computer logs --lines 100         # look for resident-side errors
 curl -i http://<server-host>:8080/health   # hit the server directly
 curl -i http://<server-host>:8080/readyz  # include DB + migration readiness
 cat ~/.multica/config.json        # verify api_token exists
 multica workspace list            # confirm you're a member of the target workspace
 ```
 
-**How to fix**: address each cause above. The two most common fixes are **changing `MULTICA_SERVER_URL` and restarting the daemon** (`multica daemon restart`) and **signing in again** (`multica logout && multica login`).
+**How to fix**: re-run `multica setup /<workspace>` for production, or `multica setup --environment test --test-url <origin> /<workspace>` for Tencent test. To refresh an expired session, run `multica auth logout` and setup again.
 
 ## Tasks stuck in `queued`
 
-**Symptom**: after assigning an issue to an agent, the issue status flips to `in_progress` immediately, but a long time passes with no sign of agent execution on the page; `multica daemon status` shows the daemon `online`.
+**Symptom**: after assigning an issue to an agent, the issue status flips to `in_progress` immediately, but a long time passes with no sign of agent execution; `multica computer status` shows the resident connected.
 
 **Likely causes** (ordered by frequency):
 
 1. **Agent concurrency limit reached** — this agent's `max_concurrent_tasks` (default 6) is fully occupied by other running tasks
 2. **Another task from the same agent is still running on the same issue** — same agent × same issue is forced to run sequentially (prevents duplicate execution)
 3. **Agent has been archived** — after archival, new tasks still enqueue but can't be claimed, and they time out after 5 minutes (code-issue G-01)
-4. **Daemon hasn't registered this runtime in the current workspace** — restart the daemon or reselect the runtime in the UI
-5. **Daemon disconnected** — no heartbeat in the last 45 seconds. `daemon status` reporting `online` may reflect a very recent disconnect
+4. **Computer hasn't registered this runtime for the current Workspace connection** — restart the Computer or reselect the runtime in the UI
+5. **Computer disconnected** — no resident heartbeat in the last 45 seconds. `multica computer status` separates the local process from service connectivity
 
 **How to diagnose**:
 
 ```bash
-multica daemon status --output json       # runtime list + last_seen_at
+multica computer status --output json      # environment + Workspace connections
 multica agent list                         # check agent archived state
 multica issue show <issue-id>             # inspect task history
 ```
@@ -59,7 +59,7 @@ On the server side (self-host), grep for `"no_tasks"` / `"no_capacity"` to see t
 - Concurrency full → wait for running tasks to finish, or `multica agent update <id> --max-concurrent-tasks 10` to raise the ceiling
 - Same-issue serialization → wait for the previous task to finish, or reassign to a different agent
 - Agent archived → `multica agent restore <id>`
-- Runtime not registered → `multica daemon restart`, and the daemon will re-register
+- Runtime not registered → `multica computer restart`, and the resident will re-register
 
 ## WebSocket can't connect
 
@@ -253,12 +253,12 @@ Since MUL-2957 the migrate command runs an idempotent monthly-slice backfill (un
 
 ## Port conflicts
 
-**Symptom**: `multica server` or `multica daemon start` fails with `address already in use`.
+**Symptom**: `multica server` or `multica computer start` fails with `address already in use`.
 
 **Likely causes**:
 
 1. **Server port taken** (default `8080`)
-2. **Daemon health port taken** (default `19514`, offset by a hash per profile)
+2. **Computer health port taken** (the one machine-wide port is `19514`)
 3. **Web dev server port conflict** (`3000` / `5173`)
 4. **Insufficient privileges for the port** (binding a privileged port `< 1024` requires sudo)
 
@@ -278,10 +278,10 @@ netstat -ano | findstr :8080    # Windows
 
 | Component | Location | Command |
 |---|---|---|
-| **Daemon** | `~/.multica/daemon.log` (background mode) or foreground stdout | `multica daemon logs -f --lines 100` |
+| **Computer** | `~/.multica/computer/daemon.log` (background mode) or foreground stdout | `multica computer logs -f --lines 100` |
 | **Server (Docker)** | Container stdout | `docker logs -f <container>` |
 | **Server (systemd)** | journal | `journalctl -u multica-server -f` |
 | **Frontend (dev)** | Terminal running `pnpm dev` | Read directly |
 | **Frontend (browser)** | DevTools → Console | Press `F12` |
 
-For more detailed daemon logs, move it from background to foreground: `multica daemon stop && multica daemon start --foreground`.
+For more detailed resident logs, move it from background to foreground: `multica computer stop && multica computer start --foreground`.

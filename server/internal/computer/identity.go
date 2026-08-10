@@ -1,6 +1,7 @@
 package computer
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,8 +37,8 @@ const (
 
 // IdentityResult is the outcome of resolving the machine identity.
 type IdentityResult struct {
-	ID    string
-	Kind  IdentityKind
+	ID   string
+	Kind IdentityKind
 	// LegacyCandidates lists preserved per-profile identity files found, for
 	// a later explicit adoption (they are never auto-merged ambiguously).
 	LegacyCandidates []string
@@ -58,11 +59,11 @@ func NewIdentityStore(root string) *IdentityStore {
 func (s *IdentityStore) path() string { return filepath.Join(s.root, daemonIDFile) }
 
 // Load resolves the machine identity, minting once only when there is no
-// existing evidence. It never silently discards corrupt or ambiguous evidence —
-// such cases surface as IdentityAmbiguous so adoption is explicit (#2486, #2492).
-// The legacyProfile argument is used only to promote a single matching
-// pre-machine-aware per-profile daemon.id once, preserving the old identity.
-func (s *IdentityStore) Load(legacyProfile string) IdentityResult {
+// existing evidence. Legacy profile evidence is never adopted here: an
+// apparently unambiguous UUID is still not proof of canonical origin, signed-in
+// user, immutable Workspace identity, and server-side Computer ownership. A
+// verified migration orchestrator must call Adopt explicitly (#2486, #2492).
+func (s *IdentityStore) Load(_ string) IdentityResult {
 	// Bounded retry so concurrent first-starts converge on one id: transient
 	// lock contention on a genuinely fresh machine must not resolve to a
 	// spurious "ambiguous" result.
@@ -70,15 +71,6 @@ func (s *IdentityStore) Load(legacyProfile string) IdentityResult {
 		if id, ok := s.read(); ok {
 			return IdentityResult{ID: id, Kind: IdentityStable}
 		}
-
-		// One-time promotion: a single matching per-profile daemon.id is reused
-		// in place so the old identity is preserved (no fresh mint + merge).
-		if legacyProfile != "" {
-			if id, ok := s.promoteLegacy(legacyProfile); ok {
-				return IdentityResult{ID: id, Kind: IdentityStable}
-			}
-		}
-
 		if !s.isFresh() {
 			break // existing-but-invalid or conflicting legacy evidence
 		}
@@ -95,7 +87,7 @@ func (s *IdentityStore) Load(legacyProfile string) IdentityResult {
 
 	// Existing-but-invalid, or conflicting legacy evidence: do not silently
 	// mint a duplicate. Preserve candidates for explicit adoption.
-	return IdentityResult{Kind: IdentityAmbiguous, LegacyCandidates: s.legacyCandidates(legacyProfile)}
+	return IdentityResult{Kind: IdentityAmbiguous, LegacyCandidates: s.LegacyCandidates()}
 }
 
 // MustID returns the stable id, minting when absent, and panics on ambiguous
@@ -111,21 +103,7 @@ func (s *IdentityStore) MustID(legacyProfile string) (string, error) {
 
 // Status reports the machine identity and whether local identity evidence is
 // stable, without mutating any state (read-only projection).
-func (s *IdentityStore) Status(legacyProfile string) map[string]any {
-	res := s.Load(legacyProfile)
-	out := map[string]any{"identity_state": "unknown"}
-	switch res.Kind {
-	case IdentityStable, IdentityMinted:
-		out["computer_id"] = res.ID
-		out["identity_state"] = "stable"
-	case IdentityAmbiguous:
-		out["identity_state"] = "ambiguous"
-		if res.LegacyCandidates != nil {
-			out["legacy_identity_candidates"] = res.LegacyCandidates
-		}
-	}
-	return out
-}
+func (s *IdentityStore) Status(legacyProfile string) map[string]any { return s.Peek(legacyProfile) }
 
 // Peek reports the identity and identity-evidence state WITHOUT minting or
 // writing anything — a strictly read-only projection used by status so that
@@ -138,7 +116,7 @@ func (s *IdentityStore) Peek(legacyProfile string) map[string]any {
 		out["identity_state"] = "stable"
 		return out
 	}
-	cands := s.legacyCandidates("")
+	cands := s.LegacyCandidates()
 	if len(cands) > 0 {
 		out["identity_state"] = "ambiguous"
 		out["legacy_identity_candidates"] = cands
@@ -172,7 +150,7 @@ func (s *IdentityStore) isFresh() bool {
 	if _, err := os.Stat(s.path()); err == nil {
 		return false
 	}
-	return len(s.legacyCandidates("")) == 0
+	return len(s.LegacyCandidates()) == 0
 }
 
 // mintWithLock creates the identity under an exclusive lock so concurrent
@@ -182,24 +160,19 @@ func (s *IdentityStore) mintWithLock() (string, bool) {
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return "", false
 	}
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		if os.IsExist(err) {
-			// Another process is minting; wait briefly then hand back whatever
-			// it wrote.
-			for i := 0; i < 50; i++ {
-				if id, ok := s.read(); ok {
-					return id, true
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
-			return "", false
-		}
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := lockComputerFile(ctx, lock); err != nil {
+		_ = lock.Close()
 		return "", false
 	}
 	defer func() {
+		unlockComputerFile(lock)
 		_ = lock.Close()
-		_ = os.Remove(lockPath)
 	}()
 
 	// Re-check under the lock: another winner may have just written while we
@@ -246,38 +219,23 @@ func (s *IdentityStore) write(id string) error {
 	return nil
 }
 
-// promoteLegacy copies a single valid per-profile daemon.id into the canonical
-// machine-wide location, returning it. Returns ("", false) when there is
-// nothing valid to promote (empty profile, missing/corrupt source, I/O failure).
-func (s *IdentityStore) promoteLegacy(legacyProfile string) (string, bool) {
-	if legacyProfile == "" {
-		return "", false
-	}
-	src := filepath.Join(s.root, "profiles", legacyProfile, daemonIDFile)
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return "", false
-	}
-	id := strings.TrimSpace(string(data))
-	if _, err := uuid.Parse(id); err != nil {
-		return "", false
-	}
-	if err := s.write(id); err != nil {
-		return "", false
-	}
-	return id, true
-}
-
-// legacyCandidates returns the preserved per-profile daemon.id values that
+// LegacyCandidates returns the preserved default/profile daemon.id values that
 // could be adopted. It never writes or promotes — strictly read-only so it is
 // safe to call from read-only status projections.
-func (s *IdentityStore) legacyCandidates(legacyProfile string) []string {
-	profilesDir := filepath.Join(s.root, "profiles")
+func (s *IdentityStore) LegacyCandidates() []string {
+	var ids []string
+	if data, err := os.ReadFile(filepath.Join(s.legacyBase(), daemonIDFile)); err == nil {
+		id := strings.TrimSpace(string(data))
+		if _, err := uuid.Parse(id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+
+	profilesDir := filepath.Join(s.legacyBase(), "profiles")
 	entries, err := os.ReadDir(profilesDir)
 	if err != nil {
-		return nil
+		return uniqueStrings(ids)
 	}
-	var ids []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -292,5 +250,99 @@ func (s *IdentityStore) legacyCandidates(legacyProfile string) []string {
 		}
 		ids = append(ids, id)
 	}
-	return ids
+	return uniqueStrings(ids)
+}
+
+// Adopt persists candidate as the one machine-wide Computer identity. The
+// candidate must be present in preserved legacy evidence; callers that perform
+// automatic adoption are responsible for proving origin, user, Workspace, and
+// server-side Computer ownership before calling this method. Existing evidence
+// is never deleted.
+func (s *IdentityStore) Adopt(candidate string) (IdentityResult, error) {
+	candidate = strings.TrimSpace(candidate)
+	if _, err := uuid.Parse(candidate); err != nil {
+		return IdentityResult{}, fmt.Errorf("invalid Computer identity: %w", err)
+	}
+	if current, ok := s.read(); ok {
+		if current == candidate {
+			return IdentityResult{ID: current, Kind: IdentityStable}, nil
+		}
+		return IdentityResult{}, fmt.Errorf("Computer identity is already %s; refusing to replace it", current)
+	}
+	found := false
+	for _, legacy := range s.LegacyCandidates() {
+		if legacy == candidate {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return IdentityResult{}, fmt.Errorf("Computer identity %s is not present in preserved legacy evidence", candidate)
+	}
+	if err := s.preserveCanonicalEvidence(); err != nil {
+		return IdentityResult{}, err
+	}
+	if err := s.write(candidate); err != nil {
+		return IdentityResult{}, fmt.Errorf("adopt Computer identity: %w", err)
+	}
+	return IdentityResult{ID: candidate, Kind: IdentityStable, LegacyCandidates: s.LegacyCandidates()}, nil
+}
+
+// CreateFresh explicitly creates a new Computer identity despite preserved
+// legacy candidates. It is intentionally separate from Load so ambiguity can
+// never be resolved as a side effect of setup/status. Corrupt canonical bytes
+// are copied aside before the new identity is written.
+func (s *IdentityStore) CreateFresh() (IdentityResult, error) {
+	if current, ok := s.read(); ok {
+		return IdentityResult{ID: current, Kind: IdentityStable}, nil
+	}
+	if err := s.preserveCanonicalEvidence(); err != nil {
+		return IdentityResult{}, err
+	}
+	id := uuid.NewString()
+	if err := s.write(id); err != nil {
+		return IdentityResult{}, fmt.Errorf("create fresh Computer identity: %w", err)
+	}
+	return IdentityResult{ID: id, Kind: IdentityMinted, LegacyCandidates: s.LegacyCandidates()}, nil
+}
+
+func (s *IdentityStore) preserveCanonicalEvidence() error {
+	data, err := os.ReadFile(s.path())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read existing Computer identity evidence: %w", err)
+	}
+	if _, ok := s.read(); ok {
+		return nil
+	}
+	backup := s.path() + ".legacy-evidence"
+	if _, err := os.Stat(backup); err == nil {
+		return nil
+	}
+	if err := os.WriteFile(backup, data, 0o600); err != nil {
+		return fmt.Errorf("preserve existing Computer identity evidence: %w", err)
+	}
+	return nil
+}
+
+func (s *IdentityStore) legacyBase() string {
+	if filepath.Base(filepath.Clean(s.root)) == "computer" {
+		return filepath.Dir(filepath.Clean(s.root))
+	}
+	return s.root
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

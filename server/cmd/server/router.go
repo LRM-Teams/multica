@@ -563,6 +563,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/deregister", h.DaemonDeregister)
 		r.Post("/starting", h.DaemonMarkStarting)
 		r.Post("/heartbeat", h.DaemonHeartbeat)
+		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
+		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
 		r.Get("/ws", h.DaemonWebSocket)
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
@@ -1178,6 +1180,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			})
 
 			// Runtimes
+			r.Get("/api/computers", h.ListComputers)
 			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
 				// Computer / host one-click delete (LRM-438). Must be
@@ -1226,10 +1229,17 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
-			// Workspace Execution Bindings for one Computer (machine-wide
-			// identity = daemon_id). Establishment is idempotent (#2489/#2490);
-			// removal revokes one Binding and never touches local Agent data
-			// (#2493).
+			// Public Computer Workspace-connection lifecycle. Establishment is
+			// idempotent (#2489/#2490); removal revokes exactly one connection
+			// and never touches local Agent data (#2493).
+			r.Route("/api/computers/{daemonId}/workspace-connections", func(r chi.Router) {
+				r.Post("/", h.CreateComputerWorkspaceBinding)
+				r.Delete("/{workspaceId}", h.RevokeComputerWorkspaceBinding)
+			})
+
+			// Compatibility path for clients shipped before the public Computer
+			// terminology. `binding` remains an internal protocol/database word;
+			// all new callers use /api/computers/.../workspace-connections.
 			r.Route("/api/daemons/{daemonId}/bindings", func(r chi.Router) {
 				r.Post("/", h.CreateComputerWorkspaceBinding)
 				r.Delete("/{workspaceId}", h.RevokeComputerWorkspaceBinding)

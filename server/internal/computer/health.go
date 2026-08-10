@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -35,6 +37,38 @@ func ProbeHealth(ctx context.Context, port int) map[string]any {
 		return map[string]any{"status": "stopped"}
 	}
 	return result
+}
+
+// RequestEnvironmentSwitch asks the live resident to stop taking new work
+// and waits until work admitted before that barrier finishes naturally.
+func RequestEnvironmentSwitch(ctx context.Context, port int, controlToken string) error {
+	return requestEnvironmentSwitchControl(ctx, port, controlToken, "prepare")
+}
+
+// ReleaseEnvironmentSwitch reopens claims when the caller cannot commit the
+// prepared switch. A successful switch shuts the resident down instead.
+func ReleaseEnvironmentSwitch(ctx context.Context, port int, controlToken string) error {
+	return requestEnvironmentSwitchControl(ctx, port, controlToken, "release")
+}
+
+func requestEnvironmentSwitchControl(ctx context.Context, port int, controlToken, action string) error {
+	url := fmt.Sprintf("http://127.0.0.1:%d/environment-switch/%s", port, action)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Multica-Control-Token", strings.TrimSpace(controlToken))
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("environment switch control returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
+	}
+	return nil
 }
 
 // Alive reports whether a health response indicates a live resident process

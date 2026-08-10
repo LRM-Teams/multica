@@ -1,21 +1,22 @@
 ---
-title: Daemon and runtimes
+title: Computer and runtimes
 description: Agents don't run on Multica's servers — they run on your own machines.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 import { Mermaid } from "@/components/mermaid";
 
-In Multica, [agents](/agents) do **not** run on our servers — they run on your own machines, driven by a small program called the **daemon** that invokes the [AI coding tools](/providers) installed locally. The Multica server only coordinates: it stores [issues](/issues), queues [tasks](/tasks), and dispatches them to the right **runtime** (runtime = daemon × one AI coding tool).
+In Multica, [agents](/agents) do **not** run on our servers — they run on your own machine, driven by one machine-wide **Computer resident** that invokes the [AI coding tools](/providers) installed locally. The Multica server coordinates issues, tasks, and **runtimes** (runtime = one Workspace connection × one local AI coding tool).
 
-This structure is the biggest difference between Multica and Linear / Jira: **your API keys, toolchain, and code directories stay on your machine** — the Multica server never sees any of them. That means "my agent isn't working" is almost always a local problem — the daemon isn't running, an AI tool isn't installed, a key has expired. Check locally first; see [Troubleshooting](/troubleshooting) for a guide.
+This structure is the biggest difference between Multica and Linear / Jira: **your API keys, toolchain, and code directories stay on your machine** — the Multica server never sees any of them. That means "my agent isn't working" is almost always a local problem — the Computer isn't running, an AI tool isn't installed, or a key has expired. Check locally first; see [Troubleshooting](/troubleshooting) for a guide.
 
-## Starting the daemon
+## Starting the Computer
 
-The daemon is part of the Multica CLI. Once you've installed the [Multica CLI](/cli), run on your own machine:
+The Computer is part of the Multica CLI. First connect a Workspace, then control the same resident from any terminal:
 
 ```bash
-multica daemon start
+multica setup /my-workspace
+multica computer start
 ```
 
 On startup it does four things:
@@ -29,23 +30,24 @@ Common commands:
 
 | Command | Purpose |
 |---|---|
-| `multica daemon start` | Start (background by default; add `--foreground` to run in the foreground) |
-| `multica daemon stop` | Stop |
-| `multica daemon restart` | Restart |
-| `multica daemon status` | Show status |
-| `multica daemon logs` | Show logs (add `-f` to follow) |
+| `multica computer start [/<workspace>]` | Start the one detached resident |
+| `multica computer stop` | Stop it gracefully |
+| `multica computer restart [/<workspace>]` | Restart the same resident |
+| `multica computer status` | Show environment, fixed package source, identity, and connections |
+| `multica computer logs [/<workspace>]` | Show logs (add `-f` to follow) |
+| `multica computer doctor [/<workspace>]` | Diagnose local state without changing it |
 
 Full CLI reference in [CLI commands](/cli).
 
-**The desktop app ships with a daemon.** If you use the [desktop app](/desktop-app), you don't need to run `multica daemon start` manually — it launches the daemon automatically on startup. See the [Desktop app](/desktop-app) page for which option fits your workflow.
+`multica daemon ...` is a hidden compatibility alias. New setup and operations use `multica computer ...`.
 
 ## Why one machine has multiple runtimes
 
-A runtime is not a server and not a container — it's the combination of "**daemon × one AI coding tool**". For example: you start the daemon on a MacBook with both Claude Code and Codex installed, and you're a member of two workspaces. Multica then registers 4 runtimes:
+A runtime is not a server and not a container — it is the combination of "**one explicit Workspace connection × one AI coding tool**". For example, your Computer connects a MacBook to two Workspaces and finds Claude Code plus Codex. Multica then registers 4 runtimes:
 
 <Mermaid chart={`
 graph TD
-    D["Your daemon<br/>MacBook"]
+    D["Your Computer<br/>MacBook"]
     D --> R1["Runtime<br/>Workspace A × Claude Code"]
     D --> R2["Runtime<br/>Workspace A × Codex"]
     D --> R3["Runtime<br/>Workspace B × Claude Code"]
@@ -54,12 +56,12 @@ graph TD
 
 Key points:
 
-- **One daemon can map to multiple runtimes** — one per combination of installed tool and workspace you belong to
-- **The same daemon, workspace, and tool produces exactly one runtime** — restarting the daemon never creates duplicate records
+- **One Computer can map to multiple runtimes** — one per combination of installed tool and explicitly connected Workspace
+- **The same Computer, environment, Workspace, and tool produces exactly one runtime** — restarting never creates duplicate records
 - The **Runtimes** page in the Multica UI lists these rows
 
 <Callout type="info">
-**Cloud runtimes are coming**, currently in a waitlist phase. Once available, you'll be able to execute agent tasks directly on Multica Cloud without running a local daemon. Sign up with your email on the [download page](https://multica.ai/download) to get notified.
+**Cloud runtimes are coming**, currently in a waitlist phase. Once available, you'll be able to execute agent tasks directly on Multica Cloud without running a local Computer. Sign up with your email on the [download page](https://multica.ai/download) to get notified.
 </Callout>
 
 ## When a runtime is marked offline
@@ -68,11 +70,11 @@ Multica uses heartbeats to decide whether a runtime is online. Three key numbers
 
 | Event | Threshold |
 |---|---|
-| Daemon heartbeat frequency | Every **15 seconds** |
+| Computer heartbeat frequency | Every **15 seconds** |
 | Marked as missing | No heartbeat for **45 seconds** (3 missed beats) |
 | Auto-deleted | Missing with no associated agents for over **7 days** |
 
-Missing is not permanent — as soon as the daemon sends another heartbeat it returns to online, and the runtime record is preserved. Restarting the daemon does not lose runtimes.
+Missing is not permanent — as soon as the Computer sends another heartbeat it returns to online, and the runtime record is preserved. Restarting the Computer does not lose runtimes.
 
 <Callout type="warning">
 **Tasks running on a missing runtime are marked as failed** (failure reason `runtime_offline`). For retryable sources (issues, chat), Multica automatically requeues them. See [Tasks → Which failures retry automatically](/tasks#which-failures-retry-automatically-which-dont).
@@ -82,16 +84,16 @@ Missing is not permanent — as soon as the daemon sends another heartbeat it re
 
 Multica enforces concurrency limits at two layers:
 
-- **Daemon layer**: **20 concurrent tasks** by default (tunable via env var `MULTICA_DAEMON_MAX_CONCURRENT_TASKS`)
+- **Computer resident layer**: **20 concurrent tasks** by default (tunable via the internal env var `MULTICA_DAEMON_MAX_CONCURRENT_TASKS`)
 - **Agent layer**: **6 concurrent tasks per agent** by default (configured per-agent)
 
-The tighter of the two wins. If your daemon is already running 20 tasks, new tasks wait even if an agent still has headroom.
+The tighter of the two wins. If your Computer is already running 20 tasks, new tasks wait even if an agent still has headroom.
 
 If you see tasks stuck in `queued` without moving to `dispatched`, one of these two limits is usually saturated.
 
-## What happens to in-flight tasks after a daemon crash
+## What happens to in-flight tasks after a Computer crash
 
-When the daemon crashes or is force-killed, the tasks it had picked up are left in `dispatched` or `running`. On the next start, the daemon tells the server: "these tasks are no longer mine, please mark them failed." The server flips them to `failed` with reason `runtime_recovery` — for retryable sources, the tasks are automatically requeued.
+When the Computer resident crashes or is force-killed, its tasks are left in `dispatched` or `running`. On the next start, the Computer tells the server that those tasks no longer have a live owner. The server flips them to `failed` with reason `runtime_recovery`; retryable sources are automatically requeued.
 
 Even if this step fails due to a network issue, there's a server-side scan **every 30 seconds** as a backstop: any runtime without a heartbeat for over 45 seconds is marked missing, and its tasks are reclaimed along with it.
 
@@ -99,13 +101,13 @@ Even if this step fails due to a network issue, there's a server-side scan **eve
 
 When you hit a "my agent isn't working" problem, run this three-step checklist first:
 
-1. Run `multica daemon status` — confirm the daemon is running and online
-2. Run `multica daemon logs -f` — check for errors
+1. Run `multica computer status` — confirm the resident is running in the expected environment
+2. Run `multica computer logs -f` — check for errors
 3. Open the **Runtimes** page in the Multica UI — confirm your runtime shows "online"
 
 More scenarios in [Troubleshooting](/troubleshooting).
 
 ## Next
 
-- [Tasks](/tasks) — the full lifecycle of a task once the daemon picks it up
+- [Tasks](/tasks) — the full lifecycle of a task once the Computer picks it up
 - [Providers Matrix](/providers) — capability differences across the 12 AI coding tools

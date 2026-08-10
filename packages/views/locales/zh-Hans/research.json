@@ -325,7 +325,7 @@
     "retrying": "重试中…",
     "retry_again": "再次重试",
     "retry_failed_title": "重试未恢复",
-    "retry_failed_hint": "请确认 daemon/runtime 在线，或让罗纳尔多改派给其他活跃成员。",
+    "retry_failed_hint": "请确认 Computer/runtime 在线，或让罗纳尔多改派给其他活跃成员。",
     "reasons": {
       "fleet_member_not_found": "目标不是调研团成员",
       "fleet_member_pending_review": "成员尚在审核中",

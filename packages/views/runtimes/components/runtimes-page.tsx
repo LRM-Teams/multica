@@ -23,7 +23,11 @@ import {
   useWorkspacePresenceMap,
 } from "@multica/core/agents";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
-import { runtimeListOptions, runtimeKeys } from "@multica/core/runtimes/queries";
+import {
+  computerListOptions,
+  runtimeListOptions,
+  runtimeKeys,
+} from "@multica/core/runtimes/queries";
 import {
   RUNTIME_ATTENTION_RUNTIME_QUERY,
   runtimeHasHealthAttention,
@@ -205,6 +209,7 @@ export function RuntimesPage({
   const { data: runtimes = [], isLoading: fetching } = useQuery(
     runtimeListOptions(wsId),
   );
+  const { data: computerConnections = [] } = useQuery(computerListOptions(wsId));
   const { data: sandboxInstances = [] } = useQuery(sandboxListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
@@ -233,6 +238,7 @@ export function RuntimesPage({
             currentUserId,
             workloadByRuntimeId: workloadIndex,
             ensureLocalMachine: hasLocalMachine,
+            connections: computerConnections,
           }),
           sandboxInstances,
         ),
@@ -240,6 +246,7 @@ export function RuntimesPage({
       ),
     [
       runtimes,
+      computerConnections,
       sandboxInstances,
       now,
       localDaemonId,

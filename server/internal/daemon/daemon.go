@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/computer"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/secretscoped"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
@@ -157,7 +159,7 @@ type Daemon struct {
 	rootCtx       context.Context    // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
 	restartBinary string             // non-empty after a successful update; path to the new binary
 	updating      atomic.Bool        // prevents concurrent update attempts
-	activeTasks atomic.Int64 // number of tasks currently in handleTask; exposed via /health
+	activeTasks   atomic.Int64       // number of tasks currently in handleTask; exposed via /health
 	// machineUpgradeTaskCancels contains only task contexts created by this
 	// daemon. A Machine Upgrade may ask those managed turns to stop; it must
 	// never infer ownership of, or signal, an arbitrary local process.
@@ -165,6 +167,7 @@ type Daemon struct {
 	machineUpgradeTaskCancels map[int64]context.CancelFunc
 	taskSlotCounter           atomic.Int64                  // ever-increasing task sequence number exposed as MULTICA_TASK_SLOT (informational only, tasks are not capacity-limited — see nextTaskSlot)
 	ready                     atomic.Bool                   // false until preflight completes; gates /health status (starting -> running)
+	serverConnected           atomic.Bool                   // last authenticated Computer-level server round-trip succeeded
 	updateObservation         *updateObservationCoordinator // daemon-resolved auto/server update truth shared by every transport
 	// machineUpgradeGeneration is a fresh process identity. The server records
 	// it when this daemon accepts a machine operation and accepts convergence
@@ -201,6 +204,10 @@ type Daemon struct {
 	claimMu        sync.Mutex
 	pauseClaims    bool // when true, runRuntimePoller skips ClaimTask
 	claimsInFlight int  // pollers that have decided to claim but haven't yet handed the task off to handleTask
+	// environmentSwitchPrepared records ownership of pauseClaims by the local
+	// config-switch control flow. It prevents a release request from clearing
+	// a barrier held by an unrelated Machine Upgrade.
+	environmentSwitchPrepared atomic.Bool
 
 	// agentWakeSlots is a daemon-side fail-safe for the server's authoritative
 	// one-active-wake-per-agent rule. Every chat, DM, issue, autopilot, Radar,
@@ -407,6 +414,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	// Tag every daemon HTTP request with the daemon's CLI version so the
 	// server can split logs/metrics by client version (parallel to the CLI).
 	client.SetVersion(cfg.CLIVersion)
+	client.SetComputerGeneration(cfg.ComputerGeneration)
 	d := &Daemon{
 		cfg:                       cfg,
 		client:                    client,
@@ -879,6 +887,21 @@ func (d *Daemon) clearWSHeartbeatAcks() {
 
 // Run starts the daemon: resolves auth, registers runtimes, then polls for tasks.
 func (d *Daemon) Run(ctx context.Context) error {
+	// New Computer residents hold one machine-wide advisory lease for their
+	// complete lifetime. The control port remains a second observable gate,
+	// while the lease closes concurrent-start/PID races before network setup.
+	var residentLease *computer.FileLease
+	if strings.TrimSpace(d.cfg.BindingsRoot) != "" {
+		leaseCtx, leaseCancel := context.WithTimeout(ctx, 2*time.Second)
+		lease, err := computer.AcquireResidentLease(leaseCtx, d.cfg.BindingsRoot)
+		leaseCancel()
+		if err != nil {
+			return fmt.Errorf("another Computer resident owns this machine: %w", err)
+		}
+		residentLease = lease
+		defer residentLease.Close()
+	}
+
 	// Wrap context so handleUpdate can cancel the daemon for restart.
 	ctx, cancel := context.WithCancel(ctx)
 	d.cancelFunc = cancel
@@ -1182,6 +1205,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"pinned_version":                      d.cfg.PinnedVersion,
 		"machine_upgrade_generation":          d.machineUpgradeGenerationID(),
 		"machine_upgrade_rollback_generation": d.machineUpgradeRollbackGenerationID(),
+		"computer_generation":                 d.cfg.ComputerGeneration,
 	}
 	if d.updateObservation != nil {
 		if snapshot := d.updateObservation.PublishedSnapshot(); snapshot != nil {
@@ -1200,11 +1224,10 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	resp, err := d.client.RegisterForWorkspace(ctx, workspaceID, req)
 	if err != nil {
 		if includeCredentialTransport && isInvalidDaemonTokenError(err) {
-			d.clearDaemonTokensForWorkspace(workspaceID)
-			includeCredentialTransport = false
-			req["capabilities"] = daemonRegistrationCapabilities(false)
-			d.logger.Warn("workspace daemon token rejected during register; retrying with bootstrap token", "workspace_id", workspaceID, "error", err)
-			resp, err = d.client.RegisterForWorkspace(ctx, workspaceID, req)
+			// An explicit Binding credential that the server revoked must fail
+			// closed. Falling back to the user's broad session token here would
+			// silently recreate execution authority after a Web removal.
+			return nil, fmt.Errorf("Workspace Binding credential rejected; run `multica setup /<workspace-slug>` to repair: %w", err)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("register runtimes: %w", err)
@@ -1340,8 +1363,9 @@ func (d *Daemon) workspaceSyncLoop(ctx context.Context) {
 	}
 }
 
-// syncWorkspacesFromAPI fetches the user's workspace membership, then registers
-// and refreshes only the workspace selected by `multica setup /<slug>`.
+// syncWorkspacesFromAPI intersects current membership with the explicit local
+// Computer Binding set. Membership discovery is never authorization to create
+// or run an unbound Workspace.
 func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 	d.reloading.Lock()
 	defer d.reloading.Unlock()
@@ -1351,26 +1375,56 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 
 	workspaces, err := d.client.ListWorkspaces(apiCtx)
 	if err != nil {
+		d.serverConnected.Store(false)
 		return fmt.Errorf("list workspaces: %w", err)
 	}
-	if len(workspaces) == 0 {
+	d.serverConnected.Store(true)
+	// Preserve the legacy zero-membership startup behavior for narrowly
+	// constructed internal/test daemons that do not opt into the machine-wide
+	// Binding store. A real Computer always sets BindingsRoot and therefore
+	// still requires at least one explicit Workspace connection.
+	if len(workspaces) == 0 && strings.TrimSpace(d.cfg.BindingsRoot) == "" && strings.TrimSpace(d.cfg.WorkspaceID) == "" {
 		return nil
 	}
-	selectedID := strings.TrimSpace(d.cfg.WorkspaceID)
-	if selectedID == "" {
-		return fmt.Errorf("workspace is required; run `multica setup /<workspace-slug>`")
+	bindings, err := d.configuredWorkspaceBindings()
+	if err != nil {
+		return err
 	}
-	d.logger.Debug("workspace sync: fetched workspaces", "count", len(workspaces), "selected_workspace_id", selectedID)
+	selectedID := strings.TrimSpace(d.cfg.WorkspaceID)
+	d.logger.Debug("workspace sync: fetched workspaces", "count", len(workspaces), "bindings", len(bindings), "selected_workspace_id", selectedID)
 
-	apiIDs := make(map[string]string, len(workspaces)) // id -> name
+	apiIDs := make(map[string]string, len(bindings)) // id -> name
 	for _, ws := range workspaces {
-		if ws.ID == selectedID {
+		if binding, ok := bindings[ws.ID]; ok {
 			apiIDs[ws.ID] = ws.Name
-			break
+			if binding.Credential != "" && binding.CredentialExpiresAt.After(time.Now()) {
+				d.client.SetWorkspaceDaemonToken(ws.ID, binding.Credential, binding.CredentialExpiresAt)
+			}
 		}
 	}
-	if len(apiIDs) == 0 {
-		return fmt.Errorf("selected workspace %q not found among your workspaces; run `multica setup /<workspace-slug>`", selectedID)
+	for id := range apiIDs {
+		if err := d.client.ComputerHeartbeat(apiCtx, id, d.cfg.DaemonID, d.cfg.ComputerGeneration); err != nil {
+			d.logger.Warn("Workspace Computer heartbeat rejected", "workspace_id", id, "error", err)
+			delete(apiIDs, id)
+		}
+	}
+	// Work out the eventual machine-wide error, but reconcile revoked/missing
+	// memberships first. A selected Workspace is only a caller readiness scope;
+	// it is never an exclusive resident profile and its failure must not prevent
+	// healthy sibling connections from being restored.
+	var eligibilityErr error
+	if selectedID != "" {
+		if _, ok := bindings[selectedID]; !ok {
+			d.logger.Warn("selected Workspace has no active Computer connection", "workspace_id", selectedID)
+		} else if _, ok := apiIDs[selectedID]; !ok {
+			d.logger.Warn("selected Workspace is unavailable; continuing healthy sibling connections", "workspace_id", selectedID)
+		}
+	}
+	if len(apiIDs) == 0 && len(bindings) > 0 {
+		eligibilityErr = fmt.Errorf("none of the configured Workspace connections are available to the signed-in user")
+	}
+	if len(bindings) == 0 {
+		eligibilityErr = fmt.Errorf("Computer has no active Workspace connections; run `multica setup /<workspace-slug>`")
 	}
 
 	d.mu.Lock()
@@ -1382,8 +1436,41 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 
 	var registered int
 	var removed int
+	// Stop every currently tracked Workspace that is no longer in the
+	// intersection before attempting new registration. Siblings that remain in
+	// apiIDs are untouched.
+	for id := range currentIDs {
+		if _, ok := apiIDs[id]; ok {
+			continue
+		}
+		d.mu.Lock()
+		if ws, exists := d.workspaces[id]; exists {
+			for _, rid := range ws.runtimeIDs {
+				delete(d.runtimeIndex, rid)
+				d.client.ClearRuntimeDaemonToken(rid)
+			}
+		}
+		delete(d.workspaces, id)
+		d.client.ClearWorkspaceDaemonToken(id)
+		d.mu.Unlock()
+		d.logger.Info("stopped watching Workspace", "workspace_id", id)
+		removed++
+	}
+	if removed > 0 {
+		if d.reminderCache != nil {
+			d.reminderCache.suspend()
+		}
+		d.notifyRuntimeSetChanged()
+	}
+	if eligibilityErr != nil {
+		return eligibilityErr
+	}
+
 	for id, name := range apiIDs {
 		if currentIDs[id] {
+			if len(d.cfg.Agents) == 0 {
+				continue // a zero-Agent Binding is connected and needs no runtime recovery
+			}
 			if d.client.WorkspaceDaemonTokenNeedsRefresh(id, time.Now()) {
 				d.logger.Info("workspace daemon token needs refresh; re-registering", "workspace_id", id, "name", name)
 				if err := d.reregisterWorkspaceAfterRuntimeGone(ctx, id); err != nil {
@@ -1404,6 +1491,14 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 				d.logger.Warn("retry register failed", "workspace_id", id, "error", err)
 				continue
 			}
+			registered++
+			continue
+		}
+		if len(d.cfg.Agents) == 0 {
+			d.mu.Lock()
+			d.workspaces[id] = newWorkspaceState(id, nil)
+			d.mu.Unlock()
+			d.logger.Info("watching zero-Agent workspace", "workspace_id", id, "name", name)
 			registered++
 			continue
 		}
@@ -1438,37 +1533,56 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 		registered++
 	}
 
-	// Remove workspaces the user no longer belongs to.
-	for id := range currentIDs {
-		if _, ok := apiIDs[id]; !ok {
-			d.mu.Lock()
-			if ws, exists := d.workspaces[id]; exists {
-				for _, rid := range ws.runtimeIDs {
-					delete(d.runtimeIndex, rid)
-					d.client.ClearRuntimeDaemonToken(rid)
-				}
-			}
-			delete(d.workspaces, id)
-			d.client.ClearWorkspaceDaemonToken(id)
-			d.mu.Unlock()
-			d.logger.Info("stopped watching workspace", "workspace_id", id)
-			removed++
-		}
-	}
 	if registered > 0 || removed > 0 {
-		if removed > 0 && d.reminderCache != nil {
-			d.reminderCache.suspend()
-		}
 		d.notifyRuntimeSetChanged()
 	}
 
-	if len(d.allRuntimeIDs()) == 0 && registered == 0 {
-		return fmt.Errorf("failed to register runtimes for selected workspace %q", selectedID)
+	// A connected Workspace with zero configured Agents is a valid Computer
+	// connection and deliberately has no runtime IDs to register.
+	if len(d.cfg.Agents) > 0 && len(d.allRuntimeIDs()) == 0 && registered == 0 {
+		return fmt.Errorf("failed to register runtimes for configured Workspace connections")
+	}
+	managedWorkspaceIDs := make([]string, 0, len(apiIDs))
+	d.mu.Lock()
+	for workspaceID := range d.workspaces {
+		managedWorkspaceIDs = append(managedWorkspaceIDs, workspaceID)
+	}
+	d.mu.Unlock()
+	sort.Strings(managedWorkspaceIDs)
+	if err := d.attestComputerMachineUpgrade(ctx, managedWorkspaceIDs); err != nil {
+		return fmt.Errorf("Computer upgrade successor attestation: %w", err)
 	}
 	if registered > 0 || removed > 0 {
 		d.logger.Debug("workspace sync done", "registered", registered, "removed", removed, "tracked", len(apiIDs))
 	}
 	return nil
+}
+
+func (d *Daemon) configuredWorkspaceBindings() (map[string]computer.WorkspaceBinding, error) {
+	// Explicitly constructed tests and legacy internal callers may omit the
+	// store seam; retain their one-workspace behavior without letting the public
+	// Computer create profile-selected state.
+	if strings.TrimSpace(d.cfg.BindingsRoot) == "" {
+		workspaceID := strings.TrimSpace(d.cfg.WorkspaceID)
+		if workspaceID == "" {
+			return nil, fmt.Errorf("workspace is required")
+		}
+		return map[string]computer.WorkspaceBinding{
+			workspaceID: {WorkspaceID: workspaceID, ComputerID: d.cfg.DaemonID, Active: true},
+		}, nil
+	}
+	all, err := computer.NewBindingsStore(d.cfg.BindingsRoot).AllActiveForEnvironment(d.cfg.Environment)
+	if err != nil {
+		return nil, fmt.Errorf("load Computer Bindings: %w", err)
+	}
+	out := make(map[string]computer.WorkspaceBinding, len(all))
+	for _, binding := range all {
+		if strings.TrimSpace(binding.WorkspaceID) == "" || binding.ComputerID != d.cfg.DaemonID {
+			continue
+		}
+		out[binding.WorkspaceID] = binding
+	}
+	return out, nil
 }
 
 // heartbeatLoop supervises per-runtime HTTP heartbeat goroutines. Each runtime
@@ -2378,6 +2492,28 @@ func (d *Daemon) setClaimBarrier() {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	d.pauseClaims = true
+}
+
+// trySetEnvironmentSwitchBarrier acquires the claim barrier only when no
+// other handoff currently owns it. The environment-switch handler keeps this
+// barrier held across config persistence and process shutdown.
+func (d *Daemon) trySetEnvironmentSwitchBarrier() bool {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	if d.pauseClaims {
+		return false
+	}
+	d.pauseClaims = true
+	d.environmentSwitchPrepared.Store(true)
+	return true
+}
+
+func (d *Daemon) releaseEnvironmentSwitchBarrier() bool {
+	if !d.environmentSwitchPrepared.CompareAndSwap(true, false) {
+		return false
+	}
+	d.releaseClaimBarrier()
+	return true
 }
 
 // claimBarrierDrained reports whether the stop-claim barrier is held and all

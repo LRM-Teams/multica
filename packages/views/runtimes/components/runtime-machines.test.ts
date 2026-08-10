@@ -53,6 +53,32 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 }
 
 describe("runtime machine grouping", () => {
+  it("shows a connected Computer even when the Workspace has zero Agent runtimes", () => {
+    const machines = buildRuntimeMachines([], {
+      now: NOW,
+      currentUserId: "user-1",
+      connections: [
+        {
+          daemon_id: "computer-zero-agent",
+          owner_id: "user-1",
+          connected: true,
+          last_seen_at: new Date(NOW - 5_000).toISOString(),
+        },
+      ],
+    });
+
+    expect(machines).toHaveLength(1);
+    expect(machines[0]).toMatchObject({
+      daemonId: "computer-zero-agent",
+      health: "online",
+      onlineCount: 1,
+      issueCount: 0,
+      runtimes: [],
+      ownerUserId: "user-1",
+    });
+    expect(isMineMachine(machines[0]!, "user-1")).toBe(true);
+  });
+
   it("prefers display_name over hostname for machine title", () => {
     const machines = buildRuntimeMachines(
       [

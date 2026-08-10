@@ -66,6 +66,22 @@ func TestMachineUpgradeJournalRestoresHandoffGeneration(t *testing.T) {
 	}
 }
 
+func TestCurrentMachineUpgradeJournalAllowsCleanMachine(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	d := &Daemon{}
+	journal, err := d.currentMachineUpgradeJournal()
+	if err != nil {
+		t.Fatalf("clean machine without journal directory: %v", err)
+	}
+	if journal != nil {
+		t.Fatalf("clean machine journal = %+v, want nil", journal)
+	}
+}
+
 func TestMachineUpgradeCandidateReadyIsDurableAndIdempotent(t *testing.T) {
 	root := t.TempDir()
 	previousRoot := versionStoreRootFn
@@ -89,14 +105,32 @@ func TestMachineUpgradeCandidateReadyIsDurableAndIdempotent(t *testing.T) {
 }
 
 func TestResolveMachineUpgradeLatestAtDelivery(t *testing.T) {
-	previous := fetchLatestMachineUpgradeRelease
-	fetchLatestMachineUpgradeRelease = func() (*cli.ReleaseManifest, error) {
+	previous := fetchMachineUpgradeRelease
+	fetchMachineUpgradeRelease = func(channel cli.ReleaseChannel, override string) (*cli.ReleaseManifest, error) {
+		if channel != cli.ReleaseChannelLatest || override != "" {
+			t.Fatalf("channel=%s override=%q", channel, override)
+		}
 		return &cli.ReleaseManifest{TagName: "v10.0.0"}, nil
 	}
-	t.Cleanup(func() { fetchLatestMachineUpgradeRelease = previous })
+	t.Cleanup(func() { fetchMachineUpgradeRelease = previous })
 	resolved, err := resolveMachineUpgradeTarget("latest")
 	if err != nil || resolved != "v10.0.0" {
 		t.Fatalf("latest resolution = %q, %v", resolved, err)
+	}
+}
+
+func TestResolveMachineUpgradeUsesConfiguredAlphaChannel(t *testing.T) {
+	previous := fetchMachineUpgradeRelease
+	fetchMachineUpgradeRelease = func(channel cli.ReleaseChannel, override string) (*cli.ReleaseManifest, error) {
+		if channel != cli.ReleaseChannelAlpha || override != "https://feed.example/computer" {
+			t.Fatalf("channel=%s override=%q", channel, override)
+		}
+		return &cli.ReleaseManifest{TagName: "v10.1.0-alpha.4"}, nil
+	}
+	t.Cleanup(func() { fetchMachineUpgradeRelease = previous })
+	resolved, err := resolveMachineUpgradeTargetForChannel("latest", "alpha", "https://feed.example/computer")
+	if err != nil || resolved != "v10.1.0-alpha.4" {
+		t.Fatalf("alpha resolution = %q, %v", resolved, err)
 	}
 }
 

@@ -1,11 +1,19 @@
 # Multica installer for Windows — one command to get started.
 #
-# Install CLI (default): connects to multica.ai
+# Install CLI (default):
 #   irm https://cdn.leagent.me/computer/install.ps1 | iex
+# Install current prerelease:
+#   & ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version alpha
+# Install one exact immutable release:
+#   & ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version v0.5.0-alpha.3
 #
 # Self-host: starts a local Multica server + installs CLI + configures
 #   $env:MULTICA_MODE="local"; irm https://cdn.leagent.me/computer/install.ps1 | iex
-#
+
+
+param(
+    [string]$Version = ""
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -19,8 +27,19 @@ $RepoWebUrl    = "https://github.com/LRM-Teams/multica"
 # API/asset host always 404s. See server/internal/cli/update.go
 # ReleaseManifestBaseURL.
 #
-# # Primary feed: filed custom domain. OSS via MULTICA_RELEASE_MANIFEST_BASE_URL.
+# Primary feed: fixed custom domain. Override only for controlled mirrors/tests.
 $ReleaseManifestBaseUrl = if ($env:MULTICA_RELEASE_MANIFEST_BASE_URL) { $env:MULTICA_RELEASE_MANIFEST_BASE_URL } else { "https://cdn.leagent.me/computer" }
+$ReleaseSelector = if ($Version) { $Version.Trim() } elseif ($env:MULTICA_VERSION) { $env:MULTICA_VERSION.Trim() } else { "latest" }
+$ReleaseVersion = ""
+if ($ReleaseSelector -in @("latest", "alpha")) {
+    $ReleaseManifestPath = if ($ReleaseSelector -eq "latest") { "manifest.json" } else { "alpha.json" }
+} elseif ($ReleaseSelector -match '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$') {
+    $ReleaseVersion = $ReleaseSelector
+    $ReleaseManifestPath = "$($ReleaseVersion.Substring(1))/manifest.json"
+} else {
+    Write-Host "[ERROR] Invalid -Version '$ReleaseSelector'; use latest, alpha, or vX.Y.Z[-(alpha|beta|rc).N]." -ForegroundColor Red
+    exit 1
+}
 $InstallScriptUrl = "$ReleaseManifestBaseUrl/install.ps1"
 $DefaultInstallDir = Join-Path $env:USERPROFILE ".multica\server"
 $InstallDir    = if ($env:MULTICA_INSTALL_DIR) { $env:MULTICA_INSTALL_DIR } else { $DefaultInstallDir }
@@ -92,8 +111,19 @@ function Get-SelfHostFrontendPort {
 }
 
 function Get-ReleaseManifest {
-    try {
-        return Invoke-RestMethod -Uri "$ReleaseManifestBaseUrl/latest.json" -ErrorAction Stop
+	try {
+		$manifest = Invoke-RestMethod -Uri "$ReleaseManifestBaseUrl/$ReleaseManifestPath" -ErrorAction Stop
+		$tag = "$($manifest.tag)"
+        if ($ReleaseSelector -eq "latest" -and $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            Write-Fail "The latest manifest must point to a stable vX.Y.Z release, got '$tag'."
+        }
+        if ($ReleaseSelector -eq "alpha" -and $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$') {
+            Write-Fail "The alpha channel manifest must point to an alpha.N, beta.N, or rc.N release, got '$tag'."
+        }
+		if ($ReleaseVersion -and $tag -ne $ReleaseVersion) {
+			Write-Fail "Pinned manifest tag $tag does not match requested $ReleaseVersion."
+		}
+		return $manifest
     } catch {
         return $null
     }
@@ -269,7 +299,7 @@ function Install-CliBinary {
     $arch = Get-WindowsCliArch
 
     if (-not $Manifest -or -not $Manifest.tag) {
-        Write-Fail "Could not fetch the release manifest from $ReleaseManifestBaseUrl/latest.json. Check your network connection."
+		Write-Fail "Could not fetch the release manifest from $ReleaseManifestBaseUrl/$ReleaseManifestPath. Check your network connection."
     }
     $latest = $Manifest.tag
     $platformKey = "windows-$arch"
@@ -321,11 +351,17 @@ function Install-CliBinary {
         Write-Fail "multica.exe not found in downloaded archive."
     }
 
-    Copy-Item $exeSrc (Join-Path $binDir "multica.exe") -Force
+    $launcher = Join-Path $binDir "multica.exe"
+    $binaryHash = (Get-FileHash -Path $exeSrc -Algorithm SHA256).Hash.ToLower()
+    & $exeSrc installer-activate --version $latest --sha256 $binaryHash --launcher $launcher
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item $tmpDir -Recurse -Force
+        Write-Fail "The downloaded release could not be activated through VersionStore; the existing launcher was preserved or rolled back."
+    }
     Remove-Item $tmpDir -Recurse -Force
 
     Add-ToUserPath $binDir
-    Write-Ok "Multica CLI installed to $binDir\multica.exe"
+    Write-Ok "Multica CLI installed through VersionStore at $binDir\multica.exe"
 }
 
 function Add-ToUserPath {
@@ -349,7 +385,7 @@ function Install-Cli {
     if (Test-CommandExists "multica") {
         $currentVer = Get-InstalledCliVersion
         if (-not $manifest -or -not $manifest.tag) {
-            Write-Fail "Could not determine latest release from $ReleaseManifestBaseUrl/latest.json. Refusing to assume the installed CLI is current."
+			Write-Fail "Could not determine the selected release from $ReleaseManifestBaseUrl/$ReleaseManifestPath. Refusing to assume the installed CLI is current."
         }
         $latestVer = $manifest.tag
 
@@ -496,10 +532,10 @@ function Start-DefaultInstall {
     Write-Host "  [OK] Multica CLI is ready!" -ForegroundColor Green
     Write-Host "  ============================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  Next: configure your environment"
+    Write-Host "  Next: connect this Computer to Multica Cloud"
     Write-Host ""
-    Write-Host "     multica setup               " -NoNewline; Write-Host "# Connect to Multica Cloud (multica.ai)" -ForegroundColor DarkGray
-    Write-Host "     multica setup self-host      " -NoNewline; Write-Host "# Connect to a self-hosted server" -ForegroundColor DarkGray
+    Write-Host "     multica setup /<workspace>   " -NoNewline; Write-Host "# Connect one Workspace (leagent.me)" -ForegroundColor DarkGray
+    Write-Host "     multica computer status      " -NoNewline; Write-Host "# Show identity + connections" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  Self-hosting? Install the server first:"
     Write-Host "     `$env:MULTICA_MODE=`"with-server`"; irm $InstallScriptUrl | iex"
@@ -530,9 +566,8 @@ function Start-LocalInstall {
     Write-Host "  Backend:   http://localhost:$backendPort"
     Write-Host "  Server at: $InstallDir"
     Write-Host ""
-    Write-Host "  Next: configure your CLI to connect"
-    Write-Host ""
-    Write-Host "     multica setup self-host  " -NoNewline; Write-Host "# Configure + authenticate + start daemon" -ForegroundColor DarkGray
+    Write-Host "  Next: this self-hosted server is running. The supported"
+    Write-Host "  Computer connection flow authenticates through Multica Cloud."
     Write-Host ""
     Write-Host "  Login: configure RESEND_API_KEY in .env for email codes,"
     Write-Host "  or read the generated code from backend logs when Resend is unset."
@@ -564,8 +599,8 @@ function Start-Stop {
 
     if (Test-CommandExists "multica") {
         try {
-            multica daemon stop 2>$null
-            Write-Ok "Daemon stopped"
+            multica computer stop 2>$null
+            Write-Ok "Computer stopped"
         } catch {}
     }
 

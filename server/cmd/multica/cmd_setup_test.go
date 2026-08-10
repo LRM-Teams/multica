@@ -15,15 +15,23 @@ import (
 )
 
 // TestEstablishWorkspaceBindingPersistsLocalBinding verifies #2489's local
-// Binding record is written machine-wide, keyed by the immutable workspace_id,
-// without any network dependency (server registration is best-effort).
+// Binding record is written machine-wide only after the server accepts it and
+// returns the scoped execution credential.
 func TestEstablishWorkspaceBindingPersistsLocalBinding(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path == "" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"workspace_id":"ws-123","credential":"binding-token","credential_expires_at":"2030-01-02T03:04:05Z"}`))
+	}))
+	defer server.Close()
 	if err := os.MkdirAll(filepath.Join(home, ".multica"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".multica", "config.json"), []byte(`{"workspace_id":"ws-123","token":"x"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".multica", "config.json"), []byte(`{"environment":"test","server_url":"`+server.URL+`","app_url":"`+server.URL+`","workspace_id":"ws-123","token":"x"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -31,7 +39,7 @@ func TestEstablishWorkspaceBindingPersistsLocalBinding(t *testing.T) {
 		t.Fatalf("establishWorkspaceBinding: %v", err)
 	}
 
-	bs := computer.NewBindingsStore(filepath.Join(home, ".multica"))
+	bs := computer.NewBindingsStore(filepath.Join(home, ".multica", "computer"))
 	all, err := bs.All()
 	if err != nil {
 		t.Fatalf("load bindings: %v", err)
@@ -49,11 +57,91 @@ func TestEstablishWorkspaceBindingPersistsLocalBinding(t *testing.T) {
 
 func TestCloudCLIConfigUsesLeAgentOrigins(t *testing.T) {
 	cfg := cloudCLIConfig()
+	if cfg.Environment != "production" {
+		t.Fatalf("environment = %q, want production", cfg.Environment)
+	}
+	if channel, err := cli.ResolveReleaseChannel(cfg); err != nil || channel != cli.ReleaseChannelLatest {
+		t.Fatalf("derived package source = %q, %v; want latest", channel, err)
+	}
 	if cfg.ServerURL != "https://api.leagent.me" {
 		t.Fatalf("server_url = %q, want https://api.leagent.me", cfg.ServerURL)
 	}
 	if cfg.AppURL != "https://www.leagent.me" {
 		t.Fatalf("app_url = %q, want https://www.leagent.me", cfg.AppURL)
+	}
+}
+
+func TestSetupEnvironmentFlagsExposeOnlyProductionOrExplicitTestOrigin(t *testing.T) {
+	for _, command := range []*cobra.Command{setupCmd, setupCloudCmd} {
+		if command.Flags().Lookup("environment") == nil || command.Flags().Lookup("test-url") == nil {
+			t.Fatalf("%s must expose --environment and --test-url", command.Use)
+		}
+		if command.Flags().Lookup("channel") != nil {
+			t.Fatalf("%s must not expose an independently selectable release channel", command.Use)
+		}
+	}
+}
+
+func TestResidentMatchesSetupTargetRequiresEnvironmentOriginAndChannel(t *testing.T) {
+	cfg := cli.CLIConfig{
+		Environment: "test",
+		ServerURL:   "https://test.leagent.me", AppURL: "https://test.leagent.me",
+	}
+	matching := map[string]any{
+		"server_url": "https://test.leagent.me", "environment": "test", "release_channel": "alpha",
+	}
+	got, err := residentMatchesSetupTarget(matching, cfg)
+	if err != nil || !got {
+		t.Fatalf("matching resident: got=%v err=%v", got, err)
+	}
+	for key, value := range map[string]any{
+		"server_url": "https://other.example", "environment": "production", "release_channel": "latest",
+	} {
+		drifted := map[string]any{
+			"server_url": "https://test.leagent.me", "environment": "test", "release_channel": "alpha",
+		}
+		drifted[key] = value
+		if got, err := residentMatchesSetupTarget(drifted, cfg); err != nil || got {
+			t.Fatalf("%s drift: got=%v err=%v", key, got, err)
+		}
+	}
+}
+
+func TestSetupAcceptanceRequiresAuthenticatedConnectionNotJustLocalWorkspaceState(t *testing.T) {
+	cfg := cli.CLIConfig{
+		Environment: "test",
+		ServerURL:   "https://test.leagent.me",
+		AppURL:      "https://test.leagent.me",
+	}
+	health := map[string]any{
+		"status":      "running",
+		"connected":   true,
+		"server_url":  "https://test.leagent.me",
+		"environment": "test",
+		"workspaces": []any{
+			map[string]any{"id": "ws-123", "runtimes": []any{}},
+		},
+	}
+	if !healthProvesSetupAcceptance(health, cfg, "ws-123") {
+		t.Fatal("authenticated zero-Agent Workspace connection should complete setup")
+	}
+
+	disconnected := map[string]any{}
+	for key, value := range health {
+		disconnected[key] = value
+	}
+	disconnected["connected"] = false
+	if healthProvesSetupAcceptance(disconnected, cfg, "ws-123") {
+		t.Fatal("local Workspace state without a live authenticated Computer connection must not complete setup")
+	}
+
+	wrongEnvironment := map[string]any{}
+	for key, value := range health {
+		wrongEnvironment[key] = value
+	}
+	wrongEnvironment["environment"] = "production"
+	if healthProvesSetupAcceptance(wrongEnvironment, cfg, "ws-123") {
+		t.Fatal("a resident from another environment must not complete setup")
 	}
 }
 
@@ -274,11 +362,18 @@ func TestServerHostIsLocal(t *testing.T) {
 // #2487/#2496: setup starts the machine-wide detached resident and does NOT
 // install an OS supervisor service (LaunchAgent / systemd / Scheduled Task).
 func TestStartDaemonAfterSetupStartsDetachedResidentWithoutService(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // establishWorkspaceBinding needs HOME (no-op without a workspace)
 	var called bool
+	prevEstablish := establishWorkspaceBindingAfterSetup
 	prev := startResidentAfterSetup
+	prevWait := waitForWorkspaceBindingAcceptanceAfterSetup
+	establishWorkspaceBindingAfterSetup = func(*cobra.Command) error { return nil }
 	startResidentAfterSetup = func(*cobra.Command) error { called = true; return nil }
-	t.Cleanup(func() { startResidentAfterSetup = prev })
+	waitForWorkspaceBindingAcceptanceAfterSetup = func(*cobra.Command) error { return nil }
+	t.Cleanup(func() {
+		establishWorkspaceBindingAfterSetup = prevEstablish
+		startResidentAfterSetup = prev
+		waitForWorkspaceBindingAcceptanceAfterSetup = prevWait
+	})
 
 	if err := startDaemonAfterSetup(&cobra.Command{}); err != nil {
 		t.Fatalf("startDaemonAfterSetup: %v", err)
@@ -289,9 +384,14 @@ func TestStartDaemonAfterSetupStartsDetachedResidentWithoutService(t *testing.T)
 }
 
 func TestStartDaemonAfterSetupPropagatesResidentFailure(t *testing.T) {
+	prevEstablish := establishWorkspaceBindingAfterSetup
 	prev := startResidentAfterSetup
+	establishWorkspaceBindingAfterSetup = func(*cobra.Command) error { return nil }
 	startResidentAfterSetup = func(*cobra.Command) error { return errors.New("spawn failed") }
-	t.Cleanup(func() { startResidentAfterSetup = prev })
+	t.Cleanup(func() {
+		establishWorkspaceBindingAfterSetup = prevEstablish
+		startResidentAfterSetup = prev
+	})
 	if err := startDaemonAfterSetup(&cobra.Command{}); err == nil {
 		t.Fatal("resident-start failure must surface as a setup error")
 	}

@@ -39,10 +39,10 @@ fi
 PLATFORM="${OS}-${ARCH}"
 
 # Fetch the release manifest
-curl -fsSL https://cdn.leagent.me/computer/latest.json -o /tmp/latest.json
-LATEST=$(jq -r '.tag' /tmp/latest.json)
-URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/latest.json)
-SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/latest.json)
+curl -fsSL https://cdn.leagent.me/computer/manifest.json -o /tmp/multica-manifest.json
+LATEST=$(jq -r '.tag' /tmp/multica-manifest.json)
+URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/multica-manifest.json)
+SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/multica-manifest.json)
 
 # Download, verify, and extract
 curl -sL "$URL" -o /tmp/multica.tar.gz
@@ -56,7 +56,7 @@ mkdir -p "$HOME/.local/bin"
 mv /tmp/multica "$HOME/.local/bin/multica"
 chmod +x "$HOME/.local/bin/multica"
 export PATH="$HOME/.local/bin:$PATH"
-rm /tmp/multica.tar.gz /tmp/latest.json
+rm /tmp/multica.tar.gz /tmp/multica-manifest.json
 ```
 
 `$HOME/.local/bin/multica` is the only supported macOS/Linux install target.
@@ -64,21 +64,17 @@ If an older installation resolves from another path, install the user-owned
 binary first, put `$HOME/.local/bin` first on `PATH`, then have the machine
 owner remove the old binary through the normal software-management process.
 
-If a daemon is already running from the old path, it keeps that executable.
-Wait until no agent task is running on the affected profile, then adopt the
-canonical binary and verify the daemon-reported version:
+If a Computer is already running from the old path, it keeps that executable.
+Wait until no agent task is running, then adopt the canonical binary and verify
+the resident-reported version:
 
 ```bash
-"$HOME/.local/bin/multica" daemon restart
-"$HOME/.local/bin/multica" daemon status
+"$HOME/.local/bin/multica" computer restart
+"$HOME/.local/bin/multica" computer status
 "$HOME/.local/bin/multica" version
-
-# Named profile:
-"$HOME/.local/bin/multica" --profile staging daemon restart
-"$HOME/.local/bin/multica" --profile staging daemon status
 ```
 
-Adoption is complete when `daemon status` reports the same `Version` as the
+Adoption is complete when `computer status` reports the same `Version` as the
 canonical `multica version`.
 
 ### Update
@@ -103,7 +99,7 @@ Machine Upgrade is explicit-only. Older daemons (for example **0.3.64–0.3.x** 
 
 Do not wait for a background update. Use an **out-of-band** install from the public CDN release feed, then restart the daemon. Once it reconnects with a current daemon, use an explicit Machine Upgrade request for future upgrades.
 
-首次从不支持 Machine Upgrade capability 的**未受 supervision** daemon 升级时，旧进程不具备 successor handoff 代码；完成带外安装后可能仍需一次显式 `multica daemon restart`。在 capability-bearing successor 完整重新注册前，界面不会把这次 bootstrap 描述为已收敛完成。
+首次从不支持 Machine Upgrade capability 的旧 resident 升级时，旧进程不具备 successor handoff 代码；完成带外安装后可能仍需一次显式 `multica computer restart`。在 capability-bearing successor 完整重新注册前，界面不会把这次 bootstrap 描述为已收敛完成。
 
 ### Runbook (macOS/Linux)
 
@@ -114,15 +110,13 @@ curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 # 2) Confirm the new binary
 export PATH="$HOME/.local/bin:$PATH"
 hash -r
-multica version   # expect 0.4.x (or whatever latest.json reports)
+multica version   # expect 0.4.x (or whatever manifest.json reports)
 
-# 3) Adopt it for the running daemon (wait until no agent tasks if possible)
-multica daemon install-service   # preferred: user service + supervise (all platforms)
-# or, if you already manage the process yourself:
-# multica daemon restart
+# 3) Adopt it for the machine-wide Computer (wait until no agent tasks)
+multica computer restart
 
 # 4) Confirm the daemon reports the same version
-multica daemon status
+multica computer status
 ```
 
 `MULTICA_DAEMON_AUTO_UPDATE`, `MULTICA_DAEMON_AUTO_UPDATE_INTERVAL`, `--no-auto-update`, and `--auto-update-interval` remain accepted temporarily for compatibility, but are no-ops. They cannot enable background release checks or mutation. `MULTICA_RELEASE_MANIFEST_BASE_URL` is still a release-source override used by explicit upgrade flows.
@@ -131,25 +125,23 @@ multica daemon status
 export MULTICA_RELEASE_MANIFEST_BASE_URL="https://cdn.leagent.me/computer"
 ```
 
-Windows: download the `windows-amd64` zip from `latest.json` under the same CDN base URL, replace `multica.exe`, then `multica daemon install-service` (or restart the existing service).
+Windows: download the `windows-amd64` zip from the selected channel manifest under the same CDN base URL, replace `multica.exe`, then run `multica computer restart`.
 
 Do **not** change `server_url` to `https://…` until TLS to that host works from the machine (see ops notes for temporary `http://IP:port` configs).
 
 ## Quick Start
 
 ```bash
-# One command: configure, authenticate, and start the daemon
-multica setup
+# One command: configure, authenticate, and start the Computer
+multica setup /my-workspace
 ```
 
-This configures the CLI for Multica Cloud, opens your browser for login, discovers your workspaces, and starts the agent daemon.
-
-For self-hosted servers, use `multica setup self-host` instead. See [Self-Hosting](/getting-started/self-hosting) for details.
+This selects fixed production, opens your browser for login, connects exactly one Workspace, and starts the machine-wide resident. For Tencent test use `--environment test --test-url <origin>`.
 
 ## Verify
 
 ```bash
-multica daemon status
+multica computer status
 ```
 
 Confirm:
@@ -167,8 +159,8 @@ If the agents list is empty, install at least one supported AI agent CLI:
 - Kimi (`kimi`)
 - Kiro CLI (`kiro-cli`)
 
-Then restart the daemon:
+Then restart the Computer:
 
 ```bash
-multica daemon stop && multica daemon start
+multica computer restart
 ```

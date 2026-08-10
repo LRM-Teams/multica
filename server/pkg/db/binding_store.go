@@ -51,14 +51,21 @@ func scanBinding(row interface{ Scan(...any) error }) (computer.WorkspaceBinding
 		return computer.WorkspaceBinding{}, err
 	}
 	b.Active = active
+	b.UserID = userID
 	if created != nil {
 		b.AcceptedAt = *created
 	}
 	return b, nil
 }
 
-func (s *bindingStore) All() ([]computer.WorkspaceBinding, error) {
-	rows, err := s.db.Query(context.Background(), "SELECT "+bindingCols+" FROM computer_workspace_bindings ORDER BY workspace_id")
+func (s *bindingStore) ListScoped(computerID, userID string) ([]computer.WorkspaceBinding, error) {
+	query := "SELECT " + bindingCols + " FROM computer_workspace_bindings WHERE daemon_id=$1 ORDER BY workspace_id"
+	args := []any{computerID}
+	if userID != "" {
+		query = "SELECT " + bindingCols + " FROM computer_workspace_bindings WHERE daemon_id=$1 AND user_id=$2 ORDER BY workspace_id"
+		args = append(args, userID)
+	}
+	rows, err := s.db.Query(context.Background(), query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -74,34 +81,53 @@ func (s *bindingStore) All() ([]computer.WorkspaceBinding, error) {
 	return out, rows.Err()
 }
 
-func (s *bindingStore) Get(workspaceID string) (computer.WorkspaceBinding, bool, error) {
-	row := s.db.QueryRow(context.Background(),
-		"SELECT "+bindingCols+" FROM computer_workspace_bindings WHERE daemon_id=$1 AND workspace_id=$2",
-		"", workspaceID)
-	b, err := scanBinding(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return computer.WorkspaceBinding{}, false, nil
-		}
-		return computer.WorkspaceBinding{}, false, err
-	}
-	return b, true, nil
-}
-
-func (s *bindingStore) AddOrRepair(b computer.WorkspaceBinding) error {
-	_, err := s.db.Exec(context.Background(), `
+func (s *bindingStore) UpsertScoped(req computer.BindingRequest, b computer.WorkspaceBinding) error {
+	var accepted bool
+	err := s.db.QueryRow(context.Background(), `
+WITH owner AS (
+    INSERT INTO computer_identity_owner (daemon_id, user_id)
+    VALUES ($1, $3)
+    ON CONFLICT (daemon_id)
+    DO UPDATE SET user_id = computer_identity_owner.user_id
+    WHERE computer_identity_owner.user_id = EXCLUDED.user_id
+    RETURNING daemon_id
+)
 INSERT INTO computer_workspace_bindings (daemon_id, workspace_id, user_id, execution_token_hash, active, revoked_at)
-VALUES ($1, $2, $3, $4, TRUE, NULL)
+SELECT $1, $2, $3, $4, TRUE, NULL
+  FROM owner
 ON CONFLICT (daemon_id, workspace_id)
 DO UPDATE SET user_id = EXCLUDED.user_id, execution_token_hash = EXCLUDED.execution_token_hash,
-              active = TRUE, revoked_at = NULL, created_at = computer_workspace_bindings.created_at`,
-		b.ComputerID, b.WorkspaceID, "", hashCredential(b.Credential))
+              active = TRUE, revoked_at = NULL, created_at = computer_workspace_bindings.created_at
+WHERE computer_workspace_bindings.user_id = EXCLUDED.user_id
+RETURNING TRUE`, req.TargetComputerID, req.TargetWorkspaceID, req.ActorUserID, hashCredential(b.Credential)).Scan(&accepted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return computer.ErrBindingUnauthorized
+	}
 	return err
 }
 
-func (s *bindingStore) Remove(workspaceID string) error {
-	_, err := s.db.Exec(context.Background(),
-		"UPDATE computer_workspace_bindings SET active = FALSE, revoked_at = now() WHERE workspace_id = $1",
-		workspaceID)
-	return err
+func (s *bindingStore) RevokeScoped(req computer.BindingRequest) ([]string, error) {
+	var revoked bool
+	var tokenHashes []string
+	err := s.db.QueryRow(context.Background(), `
+WITH revoked AS (
+    UPDATE computer_workspace_bindings
+       SET active = FALSE, revoked_at = now()
+     WHERE daemon_id = $1 AND workspace_id = $2 AND user_id = $3 AND active = TRUE
+ RETURNING daemon_id, workspace_id
+), deleted_tokens AS (
+    DELETE FROM daemon_token t
+     USING revoked r
+     WHERE t.daemon_id = r.daemon_id AND t.workspace_id = r.workspace_id
+ RETURNING t.token_hash
+)
+SELECT EXISTS (SELECT 1 FROM revoked),
+	   COALESCE((SELECT array_agg(token_hash) FROM deleted_tokens), ARRAY[]::text[])`, req.TargetComputerID, req.TargetWorkspaceID, req.BindingOwnerUserID).Scan(&revoked, &tokenHashes)
+	if err != nil {
+		return nil, err
+	}
+	if !revoked {
+		return nil, computer.ErrBindingUnauthorized
+	}
+	return tokenHashes, nil
 }

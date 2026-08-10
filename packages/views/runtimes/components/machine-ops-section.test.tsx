@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { ReactElement } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentRuntime } from "@multica/core/types";
@@ -34,6 +34,11 @@ vi.mock("@multica/core/api", () => ({
     getMachineUpgrade: vi.fn(),
     initiateRestart: vi.fn(),
     getRestart: vi.fn(),
+    removeComputerWorkspaceBinding: vi.fn().mockResolvedValue({
+      ok: true,
+      workspace_id: "ws-1",
+      kept_local_data: true,
+    }),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -266,7 +271,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     );
     expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
     expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
-	    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Waiting for daemon to accept update…");
+    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Waiting for the Computer to accept the update…");
   });
 
   it("keeps rollback recovery active until every sibling has attested", () => {
@@ -369,6 +374,38 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
     expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
       /Delete computer/i,
     );
+  });
+
+  it("offers one-Workspace removal separately from permanent Computer delete", () => {
+    wrap(<MachineDangerZone machine={makeMachine()} />);
+
+    expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
+      /Remove Workspace connection/i,
+    );
+    expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
+      /Delete computer/i,
+    );
+    fireEvent.click(screen.getByTestId("machine-remove-binding"));
+    expect(
+      screen.getByText(/other Workspace connections keep running/i),
+    ).toBeInTheDocument();
+  });
+
+  it("can remove an owned Workspace connection with zero Agent runtimes", () => {
+    wrap(
+      <MachineDangerZone
+        machine={makeMachine({
+          daemonId: "computer-zero-agents",
+          runtimes: [],
+          ownerUserId: "user-mine",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
+      /Remove Workspace connection/i,
+    );
+    expect(screen.getByTestId("machine-danger-delete")).toBeDisabled();
   });
 
   it("shows delete for pending cloud computers owned by the caller", () => {

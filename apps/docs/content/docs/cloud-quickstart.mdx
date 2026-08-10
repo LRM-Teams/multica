@@ -5,13 +5,13 @@ description: From sign-up to assigning your first task to an agent in 5 minutes.
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-This page walks you end-to-end through Multica Cloud — **sign up → install the [CLI](/cli) → start the [daemon](/daemon-runtimes) → create an [agent](/agents) → assign your first [task](/tasks)**. Takes about 5 minutes.
+This page walks you end-to-end through Multica Cloud — **sign up → install the [CLI](/cli) → connect a Workspace and start the [Computer](/daemon-runtimes) → create an [agent](/agents) → assign your first [task](/tasks)**. Takes about 5 minutes.
 
-One prerequisite: you already have at least one [AI coding tool](/providers) installed locally ([Antigravity](/providers#antigravity), [Claude Code](/providers#claude-code), [Codex](/providers#codex), [Cursor](/providers#cursor), [Copilot](/providers#copilot), [Gemini](/providers#gemini), [Hermes](/providers#hermes), [Kimi](/providers#kimi), [Kiro CLI](/providers#kiro-cli), [OpenCode](/providers#opencode), [OpenClaw](/providers#openclaw), or [Pi](/providers#pi)). The daemon auto-detects them on startup and refuses to start if none are present.
+One prerequisite: you already have at least one [AI coding tool](/providers) installed locally ([Antigravity](/providers#antigravity), [Claude Code](/providers#claude-code), [Codex](/providers#codex), [Cursor](/providers#cursor), [Copilot](/providers#copilot), [Gemini](/providers#gemini), [Hermes](/providers#hermes), [Kimi](/providers#kimi), [Kiro CLI](/providers#kiro-cli), [OpenCode](/providers#opencode), [OpenClaw](/providers#openclaw), or [Pi](/providers#pi)). The Computer detects them and reports one runtime per `(Workspace connection × tool)`.
 
 ## 1. Create an account
 
-Sign up at [multica.ai](https://multica.ai). You can log in with email (6-digit verification code) or Google.
+Sign up at [www.leagent.me](https://www.leagent.me). You can log in with email (6-digit verification code) or Google.
 
 After sign-up you're automatically placed in a default workspace (generated from your account name). You can rename it later, or create new workspaces.
 
@@ -35,38 +35,39 @@ Verify the install:
 multica version
 ```
 
-## 3. Log in + start the daemon
+## 3. Connect a Workspace + start the Computer
 
-A single command handles login and starts the daemon:
+A single command handles login, adds one Workspace connection, and starts the Computer:
 
 ```bash
-multica setup
+multica setup /my-workspace
 ```
 
-`multica setup` will:
+Replace `my-workspace` with the Workspace slug from its URL. `multica setup` will:
 
-1. Configure the CLI to connect to Multica Cloud
+1. Select the fixed production service: app `https://www.leagent.me`, API/auth/WebSocket `https://api.leagent.me`
 2. Open your browser for login (same email verification code / Google OAuth as the web)
 3. Store the generated PAT in `~/.multica/config.json`
-4. **Start the daemon automatically** — it begins polling for tasks every 3 seconds and sending heartbeats every 15 seconds
+4. Add this Workspace connection without removing existing connections
+5. **Start the machine-wide Computer automatically**
 
 <Callout type="info">
-**Using the desktop app?** The desktop app **starts the daemon automatically** on launch — no need to run `multica setup` by hand. See [Desktop app](/desktop-app).
+For the Tencent test stage, use `multica setup --environment test --test-url https://test.leagent.me /my-workspace`. An explicit `http://IP:port` also works before DNS/TLS is ready. This changes the current service environment; it does not create a second Computer. After both environments are set up, use `multica config use test|production`; production always uses stable packages and test always uses preview packages, while both saved sessions and Workspace connections remain available.
 </Callout>
 
-Verify the daemon is running:
+Verify the Computer is running:
 
 ```bash
-multica daemon status
+multica computer status
 ```
 
-`online` means it has registered with the server.
+`connected: true` means the resident has registered with the selected environment.
 
 ## 4. Verify the runtime is online
 
-In the web UI, go to **Settings → Runtimes**. The daemon you just started should appear as one or more active runtimes — one per AI coding tool installed locally.
+In the web UI, go to **Settings → Runtimes**. The Computer should report one active runtime per `(Workspace connection × installed tool)`.
 
-If it shows as offline, don't panic — see [Troubleshooting → Daemon can't connect to the server](/troubleshooting#daemon-cant-connect-to-the-server).
+If it shows as offline, see [Troubleshooting → Computer can't connect to the selected environment](/troubleshooting#computer-cant-connect-to-the-selected-environment).
 
 ## 5. Create an agent
 
@@ -95,7 +96,7 @@ multica issue assign MUL-1 --to my-agent-name
 
 `--to` takes the **name** of an agent or member. A substring match works — if the agent is called `my-code-reviewer`, `reviewer` resolves to it. If your workspace has overlapping names, pass `--to-id <uuid>` instead (mutually exclusive with `--to`); look up the UUID via `multica agent list --output json` or `multica workspace member list --output json`.
 
-**What happens next from the daemon**:
+**What happens next on the Computer**:
 
 1. It picks up the task within 3 seconds (status goes from `queued` to `dispatched`)
 2. It invokes the matching AI coding tool to start work (status becomes `running`)
@@ -106,8 +107,8 @@ The web UI updates in **real time** (via WebSocket) — no refresh needed.
 
 ## Next steps
 
-- [Daemon and runtimes](/daemon-runtimes) — how the daemon operates and what runtimes mean
+- [Computer and runtimes](/daemon-runtimes) — how the Computer resident operates and what runtimes mean
 - [Tasks](/tasks) — task lifecycle and retry rules
 - [AI coding tools compared](/providers) — capability differences across the 12 tools
-- [Desktop app](/desktop-app) — if you'd rather not run the daemon yourself
+- [Desktop app](/desktop-app) — legacy and outside Computer v1
 - [Self-host quickstart](/self-host-quickstart) — run your own backend

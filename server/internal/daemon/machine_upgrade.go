@@ -15,7 +15,7 @@ import (
 
 const machineUpgradeGracefulDrain = 10 * time.Second
 
-var fetchLatestMachineUpgradeRelease = cli.FetchLatestRelease
+var fetchMachineUpgradeRelease = cli.FetchReleaseForChannelWithOverride
 
 // machineUpgradeJournal is the daemon-local recovery record written before a
 // release mutation. Its generation is deliberately independent of the server
@@ -29,6 +29,7 @@ type machineUpgradeJournal struct {
 	IncumbentGeneration uint64   `json:"incumbent_generation"`
 	RollbackGeneration  string   `json:"rollback_generation,omitempty"`
 	RuntimeIDs          []string `json:"runtime_ids"`
+	WorkspaceIDs        []string `json:"workspace_ids"`
 	Phase               string   `json:"phase"`
 	UpdatedAt           string   `json:"updated_at"`
 }
@@ -101,7 +102,7 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 	d.machineUpgradeID = upgrade.ID
 	d.machineUpgradeRuntimeID = runtimeID
 	d.mu.Unlock()
-	targetVersion, err := resolveMachineUpgradeTarget(upgrade.TargetVersion)
+	targetVersion, err := resolveMachineUpgradeTargetForChannel(upgrade.TargetVersion, d.cfg.ReleaseChannel, d.releaseManifestBaseURLOverride())
 	if err != nil {
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "target_resolution_failed", err)
 		return
@@ -236,6 +237,10 @@ func (d *Daemon) MarkMachineUpgradeRollbackPending() error {
 }
 
 func resolveMachineUpgradeTarget(requested string) (string, error) {
+	return resolveMachineUpgradeTargetForChannel(requested, string(cli.ReleaseChannelLatest), "")
+}
+
+func resolveMachineUpgradeTargetForChannel(requested, rawChannel, serverDispatched string) (string, error) {
 	requested = strings.TrimSpace(requested)
 	if requested != "latest" {
 		if requested == "" {
@@ -243,7 +248,11 @@ func resolveMachineUpgradeTarget(requested string) (string, error) {
 		}
 		return requested, nil
 	}
-	release, err := fetchLatestMachineUpgradeRelease()
+	channel, err := cli.NormalizeReleaseChannel(rawChannel)
+	if err != nil {
+		return "", err
+	}
+	release, err := fetchMachineUpgradeRelease(channel, serverDispatched)
 	if err != nil {
 		return "", fmt.Errorf("resolve latest machine upgrade target: %w", err)
 	}
@@ -365,6 +374,50 @@ func (d *Daemon) reregisterMachineUpgrade(ctx context.Context, runtimeID, upgrad
 	}
 }
 
+func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs []string) error {
+	journal, err := d.currentMachineUpgradeJournal()
+	if err != nil || journal == nil {
+		return err
+	}
+	// candidate_ready means this exact successor already completed the remote
+	// attestation. Workspace sync is periodic, so treating it as pending would
+	// turn every later sync into a duplicate completion request.
+	if journal.Phase == "candidate_ready" {
+		return nil
+	}
+	if journal.Phase != "handoff" {
+		return nil
+	}
+	if !daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion) || journal.Generation != d.machineUpgradeGenerationID() {
+		return nil
+	}
+	if len(journal.WorkspaceIDs) > 0 && !sameStringSet(journal.WorkspaceIDs, workspaceIDs) {
+		return fmt.Errorf("successor Workspace connection set does not match accepted complete set")
+	}
+	if err := d.client.AttestComputerUpgrade(ctx, d.cfg.DaemonID, journal.ID, journal.Generation, d.cfg.CLIVersion, workspaceIDs); err != nil {
+		return err
+	}
+	journal.Phase = "candidate_ready"
+	return d.writeMachineUpgradeJournal(journal)
+}
+
+func sameStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]int, len(left))
+	for _, value := range left {
+		seen[value]++
+	}
+	for _, value := range right {
+		if seen[value] == 0 {
+			return false
+		}
+		seen[value]--
+	}
+	return true
+}
+
 func (d *Daemon) failMachineUpgrade(ctx context.Context, runtimeID, upgradeID, code string, cause error) {
 	d.logger.Error("machine upgrade failed", "runtime_id", runtimeID, "upgrade_id", upgradeID, "code", code, "error", cause)
 	event := machineUpgradeEvent{
@@ -416,7 +469,7 @@ func (d *Daemon) createMachineUpgradeJournal(receipt *MachineUpgradeReceipt, sou
 			}
 		}
 	}
-	journal := &machineUpgradeJournal{ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target, IncumbentGeneration: incumbent, RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), Phase: "accepted"}
+	journal := &machineUpgradeJournal{ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target, IncumbentGeneration: incumbent, RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...), Phase: "accepted"}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		return nil, err
 	}
@@ -474,6 +527,12 @@ func (d *Daemon) currentMachineUpgradeJournal() (*machineUpgradeJournal, error) 
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		// A clean machine has no upgrade journal directory until its first
+		// Machine Upgrade. That means there is nothing to attest, not that
+		// ordinary Workspace synchronization failed.
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var newest *machineUpgradeJournal

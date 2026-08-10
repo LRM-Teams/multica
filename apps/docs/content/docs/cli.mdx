@@ -5,7 +5,7 @@ description: One-page overview of every top-level Multica CLI command. For full 
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-The Multica CLI mirrors almost everything the Web UI can do (create [issues](/issues), assign [agents](/agents), start the [daemon](/daemon-runtimes), and more). This page lists every top-level command with a one-line description. For the full set of flags and examples, run `multica <command> --help`.
+The Multica CLI mirrors almost everything the Web UI can do (create [issues](/issues), assign [agents](/agents), start the machine-wide [Computer](/daemon-runtimes), and more). This page lists every top-level command with a one-line description. For the full set of flags and examples, run `multica <command> --help`.
 
 ## Getting authenticated
 
@@ -30,8 +30,8 @@ For the difference between token types, see [Authentication and tokens](/auth-to
 | `multica login` | Log in and save a PAT |
 | `multica auth status` | Show current login status, user, and workspace |
 | `multica auth logout` | Clear the local PAT |
-| `multica setup cloud` | One-shot setup for Multica Cloud (login + install daemon) |
-| `multica setup self-host` | One-shot setup for a self-hosted backend |
+| `multica setup /<workspace>` | Connect the machine-wide Computer to one production Workspace |
+| `multica setup --environment test --test-url <origin> /<workspace>` | Select the Tencent test environment and connect one Workspace |
 
 ## Workspaces and members
 
@@ -100,16 +100,17 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 
 
 
-## Daemon and runtimes
+## Computer and runtimes
 
 | Command | Purpose |
 |---|---|
-| `multica daemon start` | Start the daemon (background by default; add `--foreground` to run in the foreground) |
-| `multica daemon stop` | Stop the daemon |
-| `multica daemon restart` | Restart the daemon |
-| `multica daemon status` | Check whether the daemon is online and its concurrency |
-| `multica daemon logs` | View daemon logs |
-| `multica computer upgrade [--target-version <version>]` | Upgrade this computer's daemon |
+| `multica computer start [/<workspace>]` | Start the one machine-wide resident |
+| `multica computer stop` | Stop the resident gracefully |
+| `multica computer restart [/<workspace>]` | Restart the same resident |
+| `multica computer status` | Show redacted identity, environment, fixed package source, and Workspace connections |
+| `multica computer logs [/<workspace>]` | View resident logs, optionally scoped to one Workspace |
+| `multica computer doctor [/<workspace>]` | Diagnose local Computer state without changing it |
+| `multica computer upgrade [--target-version <version>]` | Upgrade from the current environment's package source, or to an exact recovery version |
 | `multica runtime list` | List runtimes in the current workspace |
 | `multica runtime usage` | Show resource usage |
 | `multica runtime activity` | Recent activity log |
@@ -118,9 +119,10 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 
 | Command | Purpose |
 |---|---|
-| `multica config` | View or edit local CLI configuration |
+| `multica config show` | Show the active environment and redacted saved environment sessions |
+| `multica config use <production\|test>` | Safely switch environment and its matching stable/preview package |
 | `multica version` | Print the CLI version |
-| `multica update` | Upgrade the CLI to the latest release |
+| `multica update` | Upgrade from the current environment's fixed package source |
 | `multica attachment view --id <id> --output <path>` | Download attachment bytes to a local file path |
 | `multica attachment upload --path <file> [--target '#channel']` | Upload a file; use returned id with `--attachment-id` |
 
@@ -138,5 +140,5 @@ v2 will ship a dedicated detailed reference page for each command.
 ## Next steps
 
 - [Authentication and tokens](/auth-tokens) — PAT vs. JWT vs. daemon token
-- [Daemon and runtimes](/daemon-runtimes) — how the `daemon` commands work under the hood
+- [Computer and runtimes](/daemon-runtimes) — how the machine-wide resident and runtimes work
 - [Creating and configuring agents](/agents-create) — all options for `multica agent create`

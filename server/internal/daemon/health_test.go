@@ -220,6 +220,53 @@ func TestShutdownHandlerRejectsNonPost(t *testing.T) {
 	}
 }
 
+func TestEnvironmentSwitchPrepareWaitsForActiveWorkAndReleaseReopensClaims(t *testing.T) {
+	d := &Daemon{cfg: Config{LocalControlToken: "owner-secret"}}
+	d.activeTasks.Store(1)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/environment-switch/prepare", nil)
+	req.Header.Set("X-Multica-Control-Token", "owner-secret")
+	done := make(chan struct{})
+	go func() {
+		d.localEnvironmentSwitchPrepareHandler().ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("prepare returned before active work drained")
+	default:
+	}
+	d.activeTasks.Store(0)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("prepare did not complete after active work drained")
+	}
+	if rec.Code != http.StatusOK || !d.claimBarrierDrained() || !d.environmentSwitchPrepared.Load() {
+		t.Fatalf("prepare = status %d body %q barrier=%v owned=%v", rec.Code, rec.Body.String(), d.claimBarrierDrained(), d.environmentSwitchPrepared.Load())
+	}
+
+	releaseRec := httptest.NewRecorder()
+	releaseReq := httptest.NewRequest(http.MethodPost, "/environment-switch/release", nil)
+	releaseReq.Header.Set("X-Multica-Control-Token", "owner-secret")
+	d.localEnvironmentSwitchReleaseHandler().ServeHTTP(releaseRec, releaseReq)
+	if releaseRec.Code != http.StatusOK || d.pauseClaims || d.environmentSwitchPrepared.Load() {
+		t.Fatalf("release = status %d body %q pause=%v owned=%v", releaseRec.Code, releaseRec.Body.String(), d.pauseClaims, d.environmentSwitchPrepared.Load())
+	}
+}
+
+func TestEnvironmentSwitchPrepareRequiresOwnerControlToken(t *testing.T) {
+	d := &Daemon{cfg: Config{LocalControlToken: "owner-secret"}}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/environment-switch/prepare", nil)
+	d.localEnvironmentSwitchPrepareHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || d.pauseClaims || d.environmentSwitchPrepared.Load() {
+		t.Fatalf("unauthorized prepare = status %d pause=%v owned=%v", rec.Code, d.pauseClaims, d.environmentSwitchPrepared.Load())
+	}
+}
+
 func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t *testing.T) {
 	root := t.TempDir()
 	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {

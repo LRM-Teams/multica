@@ -8,7 +8,7 @@ import (
 func TestValidateCreateRequiresAllIds(t *testing.T) {
 	cases := []BindingRequest{
 		{},
-		{ActorUserID: "u" },
+		{ActorUserID: "u"},
 		{ActorUserID: "u", TargetComputerID: "c"},
 		{ActorUserID: "u", TargetWorkspaceID: "ws"},
 		{TargetComputerID: "c", TargetWorkspaceID: "ws"},
@@ -27,7 +27,7 @@ func TestValidateCreateFreshAndRepair(t *testing.T) {
 		t.Fatalf("fresh create = kind %v, err %v; want Create", kind, err)
 	}
 
-	existing := []WorkspaceBinding{{WorkspaceID: "ws", Active: true}}
+	existing := []WorkspaceBinding{{WorkspaceID: "ws", ComputerID: "c", UserID: "u", Active: true}}
 	if kind, err := ValidateCreate(req, existing); err != nil || kind != ValidationKindRepair {
 		t.Fatalf("repeat create = kind %v, err %v; want Repair (idempotent)", kind, err)
 	}
@@ -35,7 +35,7 @@ func TestValidateCreateFreshAndRepair(t *testing.T) {
 
 func TestValidateCreateRevokedIsCreateNotRepair(t *testing.T) {
 	req := BindingRequest{ActorUserID: "u", TargetComputerID: "c", TargetWorkspaceID: "ws"}
-	existing := []WorkspaceBinding{{WorkspaceID: "ws", Active: false}}
+	existing := []WorkspaceBinding{{WorkspaceID: "ws", ComputerID: "c", UserID: "u", Active: false}}
 	if kind, err := ValidateCreate(req, existing); err != nil || kind != ValidationKindCreate {
 		t.Fatalf("revoked binding = kind %v, err %v; want Create (no quiet repair)", kind, err)
 	}
@@ -60,7 +60,7 @@ func TestValidateRemoveFailsClosed(t *testing.T) {
 
 func TestValidateRemoveAllowsExistingOwnBinding(t *testing.T) {
 	req := BindingRequest{ActorUserID: "u", TargetComputerID: "c", TargetWorkspaceID: "ws"}
-	existing := []WorkspaceBinding{{WorkspaceID: "ws", Active: true}}
+	existing := []WorkspaceBinding{{WorkspaceID: "ws", ComputerID: "c", UserID: "u", Active: true}}
 	if err := ValidateRemove(req, existing); err != nil {
 		t.Fatalf("removing an existing binding should succeed, got %v", err)
 	}

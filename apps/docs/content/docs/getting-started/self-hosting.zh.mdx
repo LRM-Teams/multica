@@ -13,7 +13,7 @@ Multica has three components:
 | **Frontend** | Web application | Next.js 16 |
 | **Database** | Primary data store | PostgreSQL 17 with pgvector |
 
-Each user who wants to run AI agents locally also installs the **`multica` CLI** and runs the **agent daemon** on their own machine.
+Each user who wants to run AI agents locally also installs the **`multica` CLI** and runs one machine-wide **Computer resident** on their own machine.
 
 ## Prerequisites
 
@@ -27,8 +27,8 @@ Two commands to set up everything:
 # Install CLI + provision self-host server
 curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 
-# Configure CLI, authenticate, and start the daemon
-multica setup self-host
+# After creating a Workspace in the Web app, connect through one same-origin endpoint
+multica setup --environment test --test-url https://multica.example.com /<workspace-slug>
 ```
 
 This installs the CLI, checks out the latest self-host assets, pulls the official Multica images from GHCR, and configures everything for localhost. Then open http://localhost:3000 and pick a login method: configure `RESEND_API_KEY` in `.env` for email-based codes (recommended), or leave Resend unset and copy the generated code from backend logs. See [Step 2 — Log In](#step-2--log-in) for details.
@@ -80,9 +80,9 @@ Changes to `ALLOW_SIGNUP` and `GOOGLE_CLIENT_ID` also take effect after restarti
 **Warning:** do **not** set `MULTICA_DEV_VERIFICATION_CODE` on a publicly reachable instance — anyone who knows an email address can then log in with that fixed code.
 </Callout>
 
-### Step 3 — Install CLI & Start Daemon
+### Step 3 — Install CLI & Start the Computer
 
-The daemon runs on your local machine (not inside Docker). It detects installed AI agent CLIs, registers them with the server, and executes tasks.
+The resident runs on your local machine (not inside Docker). It detects installed AI agent CLIs, registers them with the server, and executes tasks.
 
 ### a) Install the CLI and an AI agent
 
@@ -98,32 +98,30 @@ You also need at least one AI agent CLI:
 - OpenClaw (`openclaw` on PATH)
 - Hermes (`hermes` on PATH)
 
-### b) One-command setup
+### b) Connect one Workspace
 
 ```bash
-multica setup self-host
+multica setup --environment test --test-url https://multica.example.com /<workspace-slug>
 ```
 
 This automatically:
-1. Configures the CLI to connect to `localhost`
+1. Selects the explicit test service origin
 2. Opens your browser for authentication
-3. Discovers your workspaces
-4. Starts the daemon in the background
+3. Resolves exactly the requested Workspace
+4. Adds one Workspace connection and starts the machine-wide resident detached
 
-For on-premise deployments with custom domains:
+The test URL must be the final same-origin HTTP(S) endpoint serving the app,
+API, and WebSocket. It may be a Tencent Cloud IP/port or a domain such as
+`https://test.leagent.me`; it cannot be a production leagent.me host.
 
-```bash
-multica setup self-host --server-url https://api.example.com --app-url https://app.example.com
-```
-
-Verify the daemon is running:
+Verify the Computer is running:
 
 ```bash
-multica daemon status
+multica computer status
 ```
 
 <Callout>
-Alternatively, configure step by step: `multica config set server_url http://localhost:8080 && multica config set app_url http://localhost:3000 && multica login && multica daemon start`
+The retired `multica setup self-host`, profile selector, and custom `config set server_url` lifecycle do not create a supported Computer. Put a reverse proxy in front of split frontend/backend ports and pass its one final origin with `--environment test --test-url`.
 </Callout>
 
 ### Step 4 — Verify & Start Using
@@ -188,8 +186,8 @@ Full reference (audit table semantics, advisory lock 4246, the standalone backfi
 # Stop Docker Compose services
 make selfhost-stop
 
-# Stop the local daemon
-multica daemon stop
+# Stop the local Computer resident
+multica computer stop
 ```
 
 ## Switching to Multica Cloud
@@ -197,10 +195,12 @@ multica daemon stop
 If you've been self-hosting and want to switch your CLI to [Multica Cloud](https://multica.ai):
 
 ```bash
-multica setup
+multica setup /<workspace-slug>
 ```
 
-This reconfigures the CLI for multica.ai, re-authenticates, and restarts the daemon. You will be prompted before overwriting the existing configuration.
+This switches the selected service to production, clears the test session/current
+selection, re-authenticates, and converges the same resident. Stored test
+connections, Computer Identity, and Agent Roots remain on disk.
 
 <Callout>
 Your local Docker services are unaffected. Stop them separately if you no longer need them.

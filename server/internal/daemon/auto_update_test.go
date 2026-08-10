@@ -82,9 +82,9 @@ func TestAutoUpdateDetectionRecordsNewerTarget(t *testing.T) {
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	d := &Daemon{
-		cfg:              Config{CLIVersion: "v9.9.9"},
+		cfg:               Config{CLIVersion: "v9.9.9"},
 		updateObservation: coordinator,
-		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
 	d.checkForNewerRelease(context.Background())
@@ -95,3 +95,29 @@ func TestAutoUpdateDetectionRecordsNewerTarget(t *testing.T) {
 	}
 }
 
+func TestAutoUpdateDetectionReadsOnlyAlphaPointer(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/alpha.json" {
+			http.Error(w, "wrong channel", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"version":"v10.0.0-alpha.2","tag":"v10.0.0-alpha.2","platforms":{}}`))
+	}))
+	defer srv.Close()
+	t.Setenv(cli.ReleaseManifestBaseURLEnv, srv.URL)
+	coordinator := newUpdateObservationCoordinator(Config{CLIVersion: "v10.0.0-alpha.1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := &Daemon{
+		cfg:               Config{CLIVersion: "v10.0.0-alpha.1", ReleaseChannel: "alpha"},
+		updateObservation: coordinator,
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	d.checkForNewerRelease(context.Background())
+	if got := coordinator.Snapshot().TargetVersion; got != "v10.0.0-alpha.2" {
+		t.Fatalf("TargetVersion = %q", got)
+	}
+	if len(paths) != 1 || paths[0] != "/alpha.json" {
+		t.Fatalf("paths = %v", paths)
+	}
+}

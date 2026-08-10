@@ -126,8 +126,9 @@ func TestIdentityAmbiguousLegacyCandidates(t *testing.T) {
 	}
 }
 
-// single legacy candidate matching the profile is promoted (old identity kept).
-func TestIdentityPromotesSingleLegacyProfile(t *testing.T) {
+// A single legacy UUID is still only evidence: Load must not adopt it without
+// the migration layer proving origin, user, Workspace, and server ownership.
+func TestIdentitySingleLegacyCandidateRequiresExplicitAdoption(t *testing.T) {
 	store, _ := newTestStore(t)
 	legacyID := uuid.NewString()
 	dir := filepath.Join(store.root, "profiles", "space-a")
@@ -139,11 +140,50 @@ func TestIdentityPromotesSingleLegacyProfile(t *testing.T) {
 	}
 
 	res := store.Load("space-a")
-	if res.Kind != IdentityStable && res.Kind != IdentityMinted {
-		t.Fatalf("promote load kind = %v", res.Kind)
+	if res.Kind != IdentityAmbiguous || res.ID != "" {
+		t.Fatalf("legacy load = %+v, want explicit-adoption ambiguity", res)
 	}
-	if res.ID != legacyID {
-		t.Fatalf("promoted id = %q, want legacy %q", res.ID, legacyID)
+	if _, err := os.Stat(store.path()); !os.IsNotExist(err) {
+		t.Fatalf("Load adopted legacy identity as a side effect: %v", err)
+	}
+
+	adopted, err := store.Adopt(legacyID)
+	if err != nil {
+		t.Fatalf("explicit Adopt: %v", err)
+	}
+	if adopted.ID != legacyID || adopted.Kind != IdentityStable {
+		t.Fatalf("adopted = %+v, want stable legacy identity", adopted)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, daemonIDFile)); err != nil || string(data) != legacyID+"\n" {
+		t.Fatalf("legacy evidence was changed: %q, %v", data, err)
+	}
+}
+
+func TestIdentityAdoptRejectsUnknownCandidate(t *testing.T) {
+	store, _ := newTestStore(t)
+	if _, err := store.Adopt(uuid.NewString()); err == nil {
+		t.Fatal("Adopt accepted an identity absent from preserved evidence")
+	}
+	if _, err := os.Stat(store.path()); !os.IsNotExist(err) {
+		t.Fatalf("failed adoption changed canonical state: %v", err)
+	}
+}
+
+func TestIdentityExplicitFreshPreservesCorruptEvidence(t *testing.T) {
+	store, _ := newTestStore(t)
+	if err := os.WriteFile(store.path(), []byte("broken-evidence\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.CreateFresh()
+	if err != nil {
+		t.Fatalf("CreateFresh: %v", err)
+	}
+	if created.Kind != IdentityMinted || created.ID == "" {
+		t.Fatalf("CreateFresh = %+v", created)
+	}
+	data, err := os.ReadFile(store.path() + ".legacy-evidence")
+	if err != nil || string(data) != "broken-evidence\n" {
+		t.Fatalf("corrupt evidence was not preserved: %q, %v", data, err)
 	}
 }
 
@@ -168,6 +208,17 @@ func TestIdentityConcurrentMintConverges(t *testing.T) {
 	}
 	if len(seen) != 1 {
 		t.Fatalf("concurrent mint produced %d distinct identities: %v", len(seen), ids)
+	}
+}
+
+func TestIdentityMintIgnoresStaleUnlockedLockFile(t *testing.T) {
+	store, _ := newTestStore(t)
+	if err := os.WriteFile(filepath.Join(store.root, identityLockFile), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := store.Load("")
+	if result.Kind != IdentityMinted || result.ID == "" {
+		t.Fatalf("Load with stale lock file = %+v", result)
 	}
 }
 

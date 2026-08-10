@@ -16,6 +16,19 @@ export function useDeleteRuntime(wsId: string) {
   });
 }
 
+export function useRemoveComputerWorkspaceBinding(wsId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (daemonId: string) =>
+      api.removeComputerWorkspaceBinding(daemonId, wsId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
+    },
+  });
+}
+
 // Computer / host one-click delete (LRM-438). Prefer this over looping
 // useDeleteRuntime — per-row DELETE is explicitly not the product path.
 export function useDeleteRuntimesByDaemon(wsId: string) {

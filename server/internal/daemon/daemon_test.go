@@ -75,7 +75,7 @@ func TestTransportAttemptWasRecorded(t *testing.T) {
 	}
 }
 
-func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T) {
+func TestDaemonRegister_RevokedWorkspaceBindingDoesNotFallbackToSession(t *testing.T) {
 	oldDetect := detectAgentVersion
 	oldCheck := checkAgentMinVersion
 	detectAgentVersion = func(context.Context, string) (string, error) { return "9.9.9", nil }
@@ -85,7 +85,6 @@ func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T
 		checkAgentMinVersion = oldCheck
 	})
 
-	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/daemon/starting" {
@@ -119,40 +118,6 @@ func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T
 			}
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"invalid daemon token"}`))
-		case 2:
-			if got := r.Header.Get("Authorization"); got != "Bearer mul-profile" {
-				t.Fatalf("call 2 Authorization = %q, want bootstrap profile token", got)
-			}
-			if containsString(req.Capabilities, protocol.DaemonCapabilityAgentCredentialTransport) {
-				t.Fatalf("call 2 must clear stale credential capability after token rejection: %#v", req.Capabilities)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"runtimes": []map[string]string{{
-					"id":           "rt-new",
-					"workspace_id": "ws-1",
-					"provider":     "pi",
-				}},
-				"daemon_token":            "mdt-new",
-				"daemon_token_expires_at": expiresAt,
-			})
-		case 3:
-			if got := r.Header.Get("Authorization"); got != "Bearer mdt-new" {
-				t.Fatalf("call 3 Authorization = %q, want refreshed daemon token", got)
-			}
-			if !containsString(req.Capabilities, protocol.DaemonCapabilityAgentCredentialTransport) {
-				t.Fatalf("call 3 should re-advertise credential transport with fresh token: %#v", req.Capabilities)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"runtimes": []map[string]string{{
-					"id":           "rt-new",
-					"workspace_id": "ws-1",
-					"provider":     "pi",
-				}},
-				"daemon_token":            "mdt-newer",
-				"daemon_token_expires_at": expiresAt,
-			})
 		default:
 			t.Fatalf("unexpected register call %d", call)
 		}
@@ -182,17 +147,14 @@ func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T
 		},
 	}
 
-	if _, err := d.registerRuntimesForWorkspace(context.Background(), "ws-1"); err != nil {
-		t.Fatalf("registerRuntimesForWorkspace: %v", err)
+	if _, err := d.registerRuntimesForWorkspace(context.Background(), "ws-1"); err == nil {
+		t.Fatal("revoked Binding credential must fail closed")
 	}
-	if got := calls.Load(); got != 3 {
-		t.Fatalf("register calls = %d, want 3", got)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("register calls = %d, want 1 (no broad-session fallback)", got)
 	}
-	if got := c.tokenForRuntime("old-rt"); got != "mul-profile" {
-		t.Fatalf("old runtime token = %q, want bootstrap after stale clear", got)
-	}
-	if got := c.tokenForRuntime("rt-new"); got != "mdt-newer" {
-		t.Fatalf("new runtime token = %q, want refreshed daemon token", got)
+	if got := c.tokenForRuntime("old-rt"); got != "mdt-old" {
+		t.Fatalf("old runtime token = %q, want rejected credential retained until explicit setup repair", got)
 	}
 }
 

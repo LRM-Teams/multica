@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -56,6 +55,10 @@ func releaseManifestBaseURL() string {
 // reads fresh on every call so an env override takes effect on the next check.
 func ReleaseManifestBaseURL() string {
 	return releaseManifestBaseURL()
+}
+
+func ReleaseManifestBaseURLWithOverride(serverDispatched string) string {
+	return releaseManifestBaseURLWithOverride(serverDispatched)
 }
 
 // releaseManifestBaseURLWithOverride resolves the effective release feed base
@@ -125,89 +128,6 @@ type ReleaseManifest struct {
 type ReleaseAsset struct {
 	URL    string `json:"url"`
 	SHA256 string `json:"sha256"`
-}
-
-// IsReleaseVersion reports whether v looks like a tagged release version
-// (e.g. "0.1.13", "v0.1.13") rather than a dev build (e.g. an empty version
-// or a `git describe`–style "v0.2.15-235-gdaf0e935"). The auto-update poller
-// uses this to skip self-update for source builds, where downgrading to a
-// public release would clobber unreleased changes.
-func IsReleaseVersion(v string) bool {
-	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
-	if s == "" {
-		return false
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, p := range parts {
-		if p == "" {
-			return false
-		}
-		for _, r := range p {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// IsNewerVersion reports whether latest is strictly newer than current. Both
-// arguments may carry an optional "v" prefix; non-numeric tails are ignored
-// (a 4th component, pre-release tag, etc.). Returns false if either side
-// cannot be parsed — the caller treats that as "stay on current".
-func IsNewerVersion(latest, current string) bool {
-	l, ok := parseReleaseVersion(latest)
-	if !ok {
-		return false
-	}
-	c, ok := parseReleaseVersion(current)
-	if !ok {
-		return false
-	}
-	for i := 0; i < 3; i++ {
-		if l[i] != c[i] {
-			return l[i] > c[i]
-		}
-	}
-	return false
-}
-
-// parseReleaseVersion extracts the three numeric components of v. Returns
-// (parts, true) on success; (_, false) when v is missing, malformed, or
-// carries any non-numeric tail (a dev-describe suffix, a 4th component, a
-// pre-release tag, etc.). The strict shape is intentional: this is the only
-// parser used by IsNewerVersion, and the autoUpdateLoop must never silently
-// downgrade a developer build to a public release just because the
-// dev-describe patch happened to look numeric after trimming.
-func parseReleaseVersion(v string) ([3]int, bool) {
-	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
-	if s == "" {
-		return [3]int{}, false
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
-		return [3]int{}, false
-	}
-	var out [3]int
-	for i, p := range parts {
-		if p == "" {
-			return [3]int{}, false
-		}
-		for _, r := range p {
-			if r < '0' || r > '9' {
-				return [3]int{}, false
-			}
-		}
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			return [3]int{}, false
-		}
-		out[i] = n
-	}
-	return out, true
 }
 
 func normalizeReleaseTag(targetVersion string) string {
@@ -334,11 +254,53 @@ func FetchLatestRelease() (*ReleaseManifest, error) {
 // migration. The server-dispatched top layer of the base-URL precedence is
 // applied to both attempts.
 func FetchLatestReleaseWithOverride(serverDispatched string) (*ReleaseManifest, error) {
+	return FetchReleaseForChannelWithOverride(ReleaseChannelLatest, serverDispatched)
+}
+
+// FetchReleaseForChannelWithOverride reads the one mutable manifest pointer
+// for a release channel. Alpha deliberately has no fallback to latest: a
+// missing alpha publication is an error, never permission to cross channels.
+func FetchReleaseForChannelWithOverride(channel ReleaseChannel, serverDispatched string) (*ReleaseManifest, error) {
+	channel, err := NormalizeReleaseChannel(string(channel))
+	if err != nil {
+		return nil, err
+	}
 	baseURL := strings.TrimRight(releaseManifestBaseURLWithOverride(serverDispatched), "/")
-	return fetchManifestWithNotFoundFallback(
-		baseURL+"/manifest.json",
-		baseURL+"/latest.json",
-	)
+	var manifest *ReleaseManifest
+	if channel == ReleaseChannelAlpha {
+		manifest, err = fetchManifest(baseURL + "/alpha.json")
+	} else {
+		manifest, err = fetchManifestWithNotFoundFallback(baseURL+"/manifest.json", baseURL+"/latest.json")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := validateChannelManifest(channel, manifest); err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
+
+func validateChannelManifest(channel ReleaseChannel, manifest *ReleaseManifest) error {
+	if manifest == nil {
+		return fmt.Errorf("%s release manifest is empty", channel)
+	}
+	tag := strings.TrimSpace(manifest.TagName)
+	version := strings.TrimSpace(manifest.Version)
+	if tag == "" || version == "" || normalizeReleaseTag(version) != normalizeReleaseTag(tag) {
+		return fmt.Errorf("%s release manifest has inconsistent tag/version", channel)
+	}
+	switch channel {
+	case ReleaseChannelLatest:
+		if !IsStableReleaseVersion(tag) {
+			return fmt.Errorf("latest release manifest must point to a stable vX.Y.Z version, got %q", tag)
+		}
+	case ReleaseChannelAlpha:
+		if !IsPrereleaseVersion(tag) {
+			return fmt.Errorf("alpha release manifest must point to an alpha.N, beta.N, or rc.N version, got %q", tag)
+		}
+	}
+	return nil
 }
 
 // knownBrewPrefixes lists the install roots Homebrew uses on each platform.

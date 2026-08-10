@@ -93,9 +93,8 @@ var daemonServiceStatusCmd = &cobra.Command{
 }
 
 func init() {
-	daemonCmd.AddCommand(daemonInstallServiceCmd)
-	daemonCmd.AddCommand(daemonUninstallServiceCmd)
-	daemonCmd.AddCommand(daemonServiceStatusCmd)
+	// OS-service commands are intentionally not registered. The Computer is a
+	// detached resident and does not promise login/reboot autostart (#2496).
 }
 
 // buildSuperviseServiceArgs builds the argv the OS service manager should

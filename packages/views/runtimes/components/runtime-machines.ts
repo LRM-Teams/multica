@@ -6,7 +6,11 @@ import {
   type RuntimeHealthPresentation,
 } from "@multica/core/runtimes";
 import { sandboxDisplayName } from "@multica/core/sandboxes/utils";
-import type { AgentRuntime, SandboxInstance } from "@multica/core/types";
+import type {
+  AgentRuntime,
+  ComputerConnection,
+  SandboxInstance,
+} from "@multica/core/types";
 import { formatDeviceInfo } from "../utils";
 
 export type RuntimeMachineSection = "local" | "remote" | "cloud";
@@ -80,6 +84,8 @@ interface RuntimeMachineOptions {
    * Desktop sets this; web omits it.
    */
   ensureLocalMachine?: boolean;
+  /** Explicit Workspace connections; may exist before any Agent runtime. */
+  connections?: ComputerConnection[];
 }
 
 interface RuntimeMachineDraft {
@@ -87,6 +93,7 @@ interface RuntimeMachineDraft {
   daemonId: string | null;
   mode: AgentRuntime["runtime_mode"];
   runtimes: AgentRuntime[];
+  connection?: ComputerConnection;
 }
 
 const HEALTH_SEVERITY: Record<RuntimeHealth, number> = {
@@ -131,10 +138,8 @@ export function headerRuntimeHealthBadge(
   return runtimeHealth;
 }
 
-// A machine belongs to "mine" if the current user owns any runtime on it —
-// a machine's runtimes normally share one owner, so this is unambiguous in
-// practice. No dedicated query: reuses the owner_id the runtime list query
-// already returns.
+// A machine belongs to "mine" when the explicit Workspace connection or any
+// compatibility runtime row belongs to the current user.
 export function isMineMachine(
   machine: RuntimeMachine,
   currentUserId: string | null,
@@ -143,7 +148,10 @@ export function isMineMachine(
   if (machine.pendingCloud) {
     return machine.ownerUserId === currentUserId;
   }
-  return machine.runtimes.some((r) => r.owner_id === currentUserId);
+  return (
+    machine.ownerUserId === currentUserId ||
+    machine.runtimes.some((r) => r.owner_id === currentUserId)
+  );
 }
 
 /**
@@ -187,6 +195,20 @@ export function buildRuntimeMachines(
         runtimes: [],
       } satisfies RuntimeMachineDraft);
     draft.runtimes.push(runtime);
+    drafts.set(id, draft);
+  }
+
+  for (const connection of options.connections ?? []) {
+    const id = `local:${connection.daemon_id}`;
+    const draft =
+      drafts.get(id) ??
+      ({
+        id,
+        daemonId: connection.daemon_id,
+        mode: "local",
+        runtimes: [],
+      } satisfies RuntimeMachineDraft);
+    draft.connection = connection;
     drafts.set(id, draft);
   }
 
@@ -496,21 +518,29 @@ function finalizeRuntimeMachine(
   const ownsLocalRuntime =
     !!options.currentUserId &&
     runtimes.some((r) => r.owner_id === options.currentUserId);
+  const ownsConnection =
+    !!options.currentUserId && draft.connection?.owner_id === options.currentUserId;
   const matchesLocalName = (value: string | null | undefined): boolean =>
     !!value && value.toLowerCase() === options.localMachineName?.toLowerCase();
   const isCurrent =
     (!!options.localDaemonId &&
       draft.daemonId === options.localDaemonId &&
-      (!options.currentUserId || ownsLocalRuntime)) ||
+      (!options.currentUserId || ownsLocalRuntime || ownsConnection)) ||
     (draft.mode === "local" &&
       !!options.localMachineName &&
       ownsLocalRuntime &&
       (matchesLocalName(draft.daemonId) ||
         runtimes.some((r) => matchesLocalName(runtimeDeviceName(r)))));
-  const title = machineTitle(runtimes, {
+  const runtimeTitle = machineTitle(runtimes, {
     isCurrent,
     localMachineName: options.localMachineName,
   });
+  const title =
+    runtimes.length === 0 && draft.daemonId
+      ? isCurrent && options.localMachineName
+        ? options.localMachineName
+        : `Computer ${shortDaemonId(draft.daemonId)}`
+      : runtimeTitle;
   const deviceInfo = first ? formatDeviceInfo(first.device_info ?? null) : null;
   const deviceName = machineDeviceName(runtimes);
   const subtitle = machineSubtitle({
@@ -526,9 +556,19 @@ function finalizeRuntimeMachine(
   // Code Agents rows answer "is this provider alive". Machine title-row
   // connectivity (`health` / `lastSeenAt`) uses the daemon's own heartbeat
   // when the server provides it (task #58 / #1696).
-  const onlineCount = healthByRuntime.filter((h) => h === "online").length;
-  const issueCount = runtimes.length - onlineCount;
-  const health = deriveMachineConnectivityHealth(runtimes, healthByRuntime);
+  const health = draft.connection
+    ? draft.connection.connected
+      ? "online"
+      : "offline"
+    : deriveMachineConnectivityHealth(runtimes, healthByRuntime);
+  const onlineCount =
+    runtimes.length === 0
+      ? health === "online"
+        ? 1
+        : 0
+      : healthByRuntime.filter((entry) => entry === "online").length;
+  const issueCount =
+    runtimes.length === 0 ? (health === "online" ? 0 : 1) : runtimes.length - onlineCount;
   const updateIssueRuntime =
     runtimes.find(
       (runtime) => runtime.runtime_health === "failed" && runtime.update_error,
@@ -566,7 +606,8 @@ function finalizeRuntimeMachine(
     runningCount: workload.runningCount,
     queuedCount: workload.queuedCount,
     providerNames,
-    lastSeenAt: latestMachineLastSeenAt(runtimes),
+    lastSeenAt: draft.connection?.last_seen_at ?? latestMachineLastSeenAt(runtimes),
+    ownerUserId: draft.connection?.owner_id ?? null,
   };
 }
 

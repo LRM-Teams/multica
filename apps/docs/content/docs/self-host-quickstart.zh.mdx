@@ -144,26 +144,28 @@ RESEND_FROM_EMAIL=noreply@yourdomain.com
 
 ### 5a. 同一台机器
 
-CLI 和 server 在同一台机器上时，默认参数就够用：
+默认 Compose 把前端和后端暴露在两个本地端口，所以任何一个端口单独拿来
+都不是 Computer v1 的完整服务 origin。先用本地反向代理把两者收到同一个
+origin（5b 的路由在 localhost 也适用），再把 Computer 显式连接为测试环境：
 
 ```bash
-multica setup self-host
+multica setup --environment test --test-url http://localhost:8081 /<workspace-slug>
 ```
 
-会自动连 `http://localhost:8080`（backend）+ `http://localhost:3000`（frontend），引导你在浏览器里登录、把 PAT 存到本地、**自动启动守护进程**。
+这里假设代理监听 `http://localhost:8081`，把 `/api/*` 和 `/ws` 转给后端
+8080，其它请求转给前端 3000。setup 保存 PAT、添加一个工作区连接并启动
+resident。
 
 ### 5b. 跨机访问：用反向代理把服务挡在前面
 
 因为 compose 默认只监听 `127.0.0.1`，从别的机器跑的 daemon 是连不上 `http://<server-ip>:8080` 的——这也是有意为之，否则服务密钥会直接暴露在公网。正确做法是在 server 上跑一个反向代理（Caddy / nginx / Cloudflare Tunnel），由它终结 TLS，再反代到 `127.0.0.1:8080`（backend）和 `127.0.0.1:3000`（frontend）。然后把 CLI 指到公开的 HTTPS 域名：
 
 ```bash
-multica setup self-host \
-  --server-url https://<你的域名> \
-  --app-url https://<你的域名>
+multica setup --environment test --test-url https://<你的域名> /<workspace-slug>
 ```
 
 <Callout type="info">
-更习惯用环境变量？省略对应 flag 时，`setup self-host` 会读取 `MULTICA_SERVER_URL` 和 `MULTICA_APP_URL`（同时设置时 flag 优先）。`MULTICA_SERVER_URL` 也接受[环境变量](/environment-variables)里那种 `ws://…/ws` 的 daemon 写法，并自动归一化为 HTTP 地址。
+这里显式使用 `test`：production 永远不能从 `leagent.me` 重定向，废弃的 profile/self-host setup 也不能创建第二个 resident。
 </Callout>
 
 最小可用的 Caddyfile，单域名同时挂前后端（带 WebSocket 转发，daemon 和网页端都依赖）：
@@ -255,9 +257,7 @@ curl -H "Host: api.multica.dev.lan" http://<ingress-ip>/healthz
 然后浏览器打开 `http://multica.dev.lan`，回到上面的 [第 4 步——首次登录](#4-首次登录--创建工作区) 继续。命令行连到你的 Ingress 主机：
 
 ```bash
-multica setup self-host \
-  --server-url http://api.multica.dev.lan \
-  --app-url http://multica.dev.lan
+multica setup --environment test --test-url http://api.multica.dev.lan /<workspace-slug>
 ```
 
 只想拉最新镜像、不动 chart：`kubectl -n multica rollout restart deploy/multica-backend deploy/multica-frontend`。要锁到某个 Multica 版本，就在 values 文件里设 `images.backend.tag` / `images.frontend.tag`，再 `helm upgrade`。`helm -n multica uninstall multica` 只删工作负载，PVC 和 Secret 都保留；`kubectl delete namespace multica` 才会全清。

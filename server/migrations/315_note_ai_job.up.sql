@@ -17,3 +17,6 @@ CREATE INDEX note_ai_job_workspace_creator_idx
 
 CREATE INDEX note_ai_job_chat_session_idx
     ON note_ai_job(chat_session_id);
+
+CREATE INDEX idx_note_ai_job_agent
+    ON note_ai_job(agent_id);

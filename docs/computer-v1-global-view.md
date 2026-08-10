@@ -263,7 +263,7 @@ flowchart LR
   D --> T --> Q --> M --> P
 ```
 
-`dev` push 自动构建带不可变 commit tag 的后端/Web 镜像并部署腾讯 Test；Test Web 同时锁定已经发布的精确 preview Computer tag。客户端 prerelease 由显式版本 tag 发布，不是每次 `dev` push 都自动增加 `alpha.N`。验收通过的代码进入 `main` 后，Production 流水线从这个明确的 main commit 构建自己的不可变镜像，正式 Computer 包则使用稳定 tag 发布。两条轨道都记录源 commit、镜像 tag、客户端版本与校验和。
+`dev` push 自动构建带不可变 commit + Computer version tag 的后端/Web 镜像并部署腾讯 Test，例如 `sha-ef0f011-computer-0.4.24-alpha.4`；因此同一个源码 commit 后来改用新的 preview 包时会得到新镜像 tag，不会覆盖旧字节。客户端 prerelease 由显式版本 tag 发布，不是每次 `dev` push 都自动增加 `alpha.N`。验收通过的代码进入 `main` 后，Production 流水线从这个明确的 main commit 构建自己的不可变镜像，正式 Computer 包则使用稳定 tag 发布。两条轨道都记录源 commit、镜像 tag、客户端版本与校验和。
 
 GitHub runner 标签和部署边界也是分开的：`[self-hosted, aliyun]` 只接 Production，`[self-hosted, s89, test]` 只接 Test；`test` Environment 只允许 `dev` 部署。s89 使用独立目录、Compose project、数据库和数据盘，不能复用 Production 的运行时 credential。
 

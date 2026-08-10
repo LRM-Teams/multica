@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Existing immutable image tag to redeploy, e.g. sha-abc1234. Empty builds current dev."
+        description: "Existing immutable image tag to redeploy, e.g. sha-abc1234-computer-0.4.24-alpha.4. Empty builds current dev."
         required: false
         default: ""
 
@@ -95,18 +95,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Compute immutable test image refs
-        id: prep
-        run: |
-          set -euo pipefail
-          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
-          sha="$(git rev-parse --short=7 HEAD)"
-          {
-            echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
-            echo "web_image=ghcr.io/${owner_lc}/multica-web"
-            echo "tag=sha-${sha}"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Resolve the Computer version pinned by test
         id: computer_release
         env:
@@ -123,6 +111,20 @@ jobs:
           fi
           echo "version=$tag" >> "$GITHUB_OUTPUT"
           echo "Test web will recommend exact Computer release ${tag}"
+
+      - name: Compute immutable test image refs
+        id: prep
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          sha="$(git rev-parse --short=7 HEAD)"
+          computer_version="${{ steps.computer_release.outputs.version }}"
+          computer_version="${computer_version#v}"
+          {
+            echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
+            echo "web_image=ghcr.io/${owner_lc}/multica-web"
+            echo "tag=sha-${sha}-computer-${computer_version}"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
 

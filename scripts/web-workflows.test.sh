@@ -79,12 +79,19 @@ for required in \
   '"${COMPUTER_FEED_URL}/metainfo.json"' \
   '--retry-all-errors --connect-timeout 10 --max-time 30' \
   "jq -er '.environments.test.tag'" \
+  'computer_version="${{ steps.computer_release.outputs.version }}"' \
+  'tag=sha-${sha}-computer-${computer_version}' \
   'NEXT_PUBLIC_COMPUTER_VERSION=${{ steps.computer_release.outputs.version }}'; do
   if ! grep -Fq -- "$required" <<<"$deploy_test_workflow"; then
     echo "Test deployment is missing exact Computer release pinning: $required"
     exit 1
   fi
 done
+
+if grep -Fq -- 'echo "tag=sha-${sha}"' <<<"$deploy_test_workflow"; then
+  echo "Test image tags must include the exact Computer version as well as the source SHA"
+  exit 1
+fi
 
 if grep -Fq -- 'compose run --rm --no-deps --pull always' <<<"$deploy_test_workflow"; then
   echo "Test migration must not use docker compose run --pull; s89 Compose does not support that flag"

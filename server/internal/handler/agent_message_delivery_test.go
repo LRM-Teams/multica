@@ -395,12 +395,15 @@ func TestCanonicalMessageDeliveryPreservesChannelMentionAndThreadRecipients(t *t
 
 	root, got := deliver("normal channel message", nil, nil)
 	assertRecipients("normal channel", got, firstAgentID, secondAgentID)
+	// Human @mention: target + unmuted bystanders share channel context
+	// (replaces dual-write ambient wake after #2295).
 	_, got = deliver("@second only", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: secondAgentID, Label: "@second"}}, nil)
-	assertRecipients("mention", got, secondAgentID)
+	assertRecipients("mention", got, firstAgentID, secondAgentID)
 
 	testHandler.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(firstAgentID))
 	_, got = deliver("thread participant follow-up", nil, &root.ID)
 	assertRecipients("thread participant", got, firstAgentID)
+	// Human thread @mention: explicit target + unmuted thread followers.
 	_, got = deliver("@second thread", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: secondAgentID, Label: "@second"}}, &root.ID)
-	assertRecipients("thread mention", got, secondAgentID)
+	assertRecipients("thread mention", got, firstAgentID, secondAgentID)
 }

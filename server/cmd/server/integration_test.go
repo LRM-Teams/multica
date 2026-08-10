@@ -119,8 +119,10 @@ func ensureServerAgentInboxFixtureDefaults(ctx context.Context, pool *pgxpool.Po
 		    NEW.agent_session_id := ensure_agent_wake_session(NEW.agent_id);
 		  END IF;
 		  IF NEW.reason IS NULL THEN
+		    -- Standalone bubble/notes chat uses chat_session; 'dm' is residual
+		    -- channel dual-write and would be suppressed on inbox drain (#2295).
 		    NEW.reason := CASE
-		      WHEN NEW.chat_session_id IS NOT NULL THEN 'dm'
+		      WHEN NEW.chat_session_id IS NOT NULL THEN 'chat_session'
 		      WHEN NEW.autopilot_run_id IS NOT NULL THEN 'autopilot'
 		      ELSE 'issue'
 		    END;

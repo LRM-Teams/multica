@@ -12,7 +12,7 @@
 
 import type { MotionProfile } from "./transition-queue";
 
-/** The 10 projection transition kinds (spec §5.1). */
+/** The 10 projection transition kinds (spec §5.1) plus 3 D5 lifecycle kinds (LRM-1537 §2). */
 export type SemanticTransitionKind =
   | "branch_spawned"
   | "task_dispatched"
@@ -23,7 +23,11 @@ export type SemanticTransitionKind =
   | "deliberation_progressed"
   | "lead_escalated"
   | "team_membership_changed"
-  | "report_revised";
+  | "report_revised"
+  // D5 lifecycle events missing from the 10-kind map (LRM-1537 §1/§2):
+  | "node_retired" // ⑤ 废弃: tombstone, kept clickable, never disappears
+  | "task_restarted" // ⑥ 重启: short restart-relation emphasis, old node kept
+  | "goal_modified"; // ⑦ 目标修改: impact-ordered highlight set
 
 /** Unified display verb (spec §2.2). */
 export type DisplayVerb =
@@ -34,7 +38,11 @@ export type DisplayVerb =
   | "stale"
   | "revise"
   | "reappear"
-  | "camera";
+  | "camera"
+  // D5 lifecycle verbs (LRM-1537 §2):
+  | "retire"
+  | "restart"
+  | "regoal";
 
 /**
  * The four semantic super-categories plus the special reconnect/camera classes.
@@ -65,6 +73,10 @@ export type StaticMarker =
   | "accepted-check"
   | "exec-badge"
   | "membership"
+  // D5 static end-state markers (LRM-1537 §2, Rule ②):
+  | "tombstone" // 废弃: grey-out + strikethrough + clickable history
+  | "restart-relation" // 重启: relation briefly emphasized then weakened, old kept
+  | "regoal-highlight" // 目标修改: impact-ordered highlight set
   | "none";
 
 export type SemanticDisplaySpec = {
@@ -143,6 +155,25 @@ export const SEMANTIC_TRANSITION_KIND_MAP: Record<
     verb: "revise",
     marker: "revise-pulse",
     labeled: "report",
+  },
+  // D5 lifecycle kinds (LRM-1537 §2, Rule ①) — static end markers must persist.
+  node_retired: {
+    group: "stale",
+    verb: "retire",
+    marker: "tombstone",
+    labeled: "node",
+  },
+  task_restarted: {
+    group: "appear",
+    verb: "restart",
+    marker: "restart-relation",
+    labeled: "task",
+  },
+  goal_modified: {
+    group: "advance",
+    verb: "regoal",
+    marker: "regoal-highlight",
+    labeled: "goal",
   },
 };
 

@@ -353,6 +353,7 @@ function EmptyLineAiMenu({
                 after={reviewResult.markdown}
                 beforeLabel={t(($) => $.page_ai.current_fragment)}
                 afterLabel={t(($) => $.page_ai.replacement_fragment)}
+                emptyLabel={t(($) => $.page_ai.no_diff)}
               />
             </div>
           ) : reviewResult.action === "replace_page" ? (
@@ -362,6 +363,7 @@ function EmptyLineAiMenu({
                 after={reviewResult.markdown}
                 beforeLabel={t(($) => $.page_ai.current_page)}
                 afterLabel={t(($) => $.page_ai.proposed_page)}
+                emptyLabel={t(($) => $.page_ai.no_diff)}
               />
             </div>
           ) : (

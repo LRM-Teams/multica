@@ -692,6 +692,7 @@ function TextOptimizationReview({
           after={result.markdown}
           beforeLabel={t(($) => $.bubble_menu.optimize.current_fragment)}
           afterLabel={t(($) => $.bubble_menu.optimize.replacement_fragment)}
+          emptyLabel={t(($) => $.bubble_menu.optimize.no_diff)}
           className="max-h-56"
         />
       ) : result.action === "replace_page" ? (
@@ -700,6 +701,7 @@ function TextOptimizationReview({
           after={result.markdown}
           beforeLabel={t(($) => $.bubble_menu.optimize.current_page)}
           afterLabel={t(($) => $.bubble_menu.optimize.proposed_page)}
+          emptyLabel={t(($) => $.bubble_menu.optimize.no_diff)}
           className="max-h-56"
         />
       ) : (

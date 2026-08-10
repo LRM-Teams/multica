@@ -24,6 +24,7 @@ describe("NoteAIDiffPreview", () => {
         after={"new line\nshared"}
         beforeLabel="Current"
         afterLabel="AI proposal"
+        emptyLabel="No line changes."
       />,
     );
 

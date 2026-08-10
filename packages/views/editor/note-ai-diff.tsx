@@ -16,12 +16,14 @@ export function NoteAIDiffPreview({
   after,
   beforeLabel,
   afterLabel,
+  emptyLabel,
   className,
 }: {
   before: string;
   after: string;
   beforeLabel: string;
   afterLabel: string;
+  emptyLabel: string;
   className?: string;
 }) {
   const lines = buildNoteAILineDiff(before, after);
@@ -50,7 +52,7 @@ export function NoteAIDiffPreview({
             <span className="whitespace-pre-wrap break-words">{line.text || " "}</span>
           </div>
         )) : (
-          <div className="px-3 py-4 text-sm text-muted-foreground">No line changes.</div>
+          <div className="px-3 py-4 text-sm text-muted-foreground">{emptyLabel}</div>
         )}
       </div>
     </div>

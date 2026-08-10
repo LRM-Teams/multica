@@ -68,10 +68,23 @@ export const runnerActivityKeys = {
     [...runnerActivityKeys.root(wsId), agentId] as const,
 };
 
+export const runnerActivitySummaryKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "runner-activity-summaries"] as const,
+};
+
 export function runnerActivityOptions(wsId: string, agentId: string) {
   return queryOptions({
     queryKey: runnerActivityKeys.all(wsId, agentId),
     queryFn: () => api.getRunnerActivity(agentId),
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+}
+
+export function runnerActivitySummaryOptions(wsId: string) {
+  return queryOptions({
+    queryKey: runnerActivitySummaryKeys.all(wsId),
+    queryFn: () => api.getRunnerActivitySummaries(),
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
   });

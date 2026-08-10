@@ -1093,6 +1093,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Agents
 			r.Route("/api/agents", func(r chi.Router) {
 				r.Get("/", h.ListAgents)
+				r.Get("/runner-activity-summaries", h.ListRunnerActivitySummaries)
 				r.Get("/fleet-rankings", h.GetAgentFleetRankings)
 				r.Get("/fleet-rank/rules", h.GetAgentFleetRankRules)
 				r.Get("/honor/rules", h.GetAgentHonorRules)

@@ -78,6 +78,7 @@ vi.mock("@multica/core/agents", () => ({
     capacity: 1,
   }),
   useRunnerActivity: () => ({ data: undefined }),
+  useRunnerActivitySummary: () => ({ data: undefined }),
 }));
 
 vi.mock("@multica/core/hooks", () => ({

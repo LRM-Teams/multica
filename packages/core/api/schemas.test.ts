@@ -38,6 +38,8 @@ import {
   VoiceTranscriptResponseSchema,
   EMPTY_VOICE_TRANSCRIPT_RESPONSE,
   RunnerActivityResponseSchema,
+  RunnerActivitySummariesResponseSchema,
+  EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
 
@@ -92,6 +94,30 @@ describe("RunnerActivityResponseSchema", () => {
     });
     expect(parsed.summary?.label).toBe("Future state");
     expect(parsed.timeline[0]).toMatchObject({ title: "Future row", body_kind: "future-body" });
+  });
+});
+
+describe("RunnerActivitySummariesResponseSchema", () => {
+  it("parses the sparse Workspace projection and fails closed on malformed items", () => {
+    expect(RunnerActivitySummariesResponseSchema.parse({})).toEqual({ items: [] });
+    expect(RunnerActivitySummariesResponseSchema.parse({
+      items: [{
+        agent_id: "agent-1",
+        summary: { label: "Online", tone: "success", visibility: "visible" },
+      }],
+    })).toEqual({
+      items: [{
+        agent_id: "agent-1",
+        summary: { label: "Online", tone: "success", visibility: "visible" },
+      }],
+    });
+
+    expect(parseWithFallback(
+      { items: [{ agent_id: 42, summary: null }] },
+      RunnerActivitySummariesResponseSchema,
+      EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
+      { endpoint: "GET /api/agents/runner-activity-summaries" },
+    )).toEqual({ items: [] });
   });
 });
 

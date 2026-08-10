@@ -21,7 +21,7 @@ import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
 import {
   agentHonorOptions,
   memberProfileOptions,
-  useRunnerActivity,
+  useRunnerActivitySummary,
 } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import type { MemberProfile } from "@multica/core/types";
@@ -482,17 +482,14 @@ function ProfileSection({
   );
 }
 
-// Agent "Recent activity" is the SAME shared ActivityTimeline the Activity tab
-// renders, in compact mode (#383): last N narrative rows, dense, single-line
-// subtext, no expand. It consumes the live #302 ActivityEvent stream (one shared
-// read-model) instead of the legacy server-projected `recent_activity` labels,
-// so this hover surface stays in lockstep with the tab/header and there is a
-// single Activity renderer — no second local presentation to drift.
+// The popover is a compact surface: it consumes the shared Workspace summary
+// projection and never mounts the per-Agent Timeline query. The Activity tab is
+// the only full-history consumer.
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function AgentRecentActivity({ agentId }: { agentId: string }) {
   const { t } = useT("channels");
   const workspaceId = useWorkspaceId();
-  const { data, isLoading } = useRunnerActivity(workspaceId, agentId);
+  const { data, isLoading } = useRunnerActivitySummary(workspaceId, agentId);
   if (isLoading && !data) {
     return (
       <div className="rounded-md bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground">
@@ -500,17 +497,11 @@ function AgentRecentActivity({ agentId }: { agentId: string }) {
       </div>
     );
   }
-  if (!data?.timeline.length) {
+  if (!data || data.visibility !== "visible") {
     return <p className="text-xs text-muted-foreground">{t(($) => $.profile_popover.no_recent_activity)}</p>;
   }
   return (
-    <ul className="space-y-1.5">
-      {data.timeline.slice(0, 3).map((row) => (
-        <li key={row.id} className="truncate text-xs text-muted-foreground">
-          {row.title}{row.subtext ? ` · ${row.subtext}` : ""}
-        </li>
-      ))}
-    </ul>
+    <p className="truncate text-xs text-muted-foreground">{data.label}</p>
   );
 }
 

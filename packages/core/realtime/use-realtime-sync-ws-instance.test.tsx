@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
 import { channelKeys } from "../channels/queries";
-import { runnerActivityKeys } from "../agents/queries";
+import { runnerActivityKeys, runnerActivitySummaryKeys } from "../agents/queries";
 import { researchKeys } from "../research/queries";
 import { voiceCallKeys } from "../voice-calls/queries";
 import type {
@@ -112,10 +112,10 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (15 workspace-scoped + 6 per-issue prefixes + 1 channel-issues prefix
-    // (#562) + 1 session-scoped chat predicate + 1 workspaceKeys.list() = 24
+    // (16 workspace-scoped + 6 per-issue prefixes + 1 channel-issues prefix
+    // (#562) + 1 session-scoped chat predicate + 1 workspaceKeys.list() = 25
     // calls; squads key removed in LRM-582; autopilot key removed in LRM-1050)
-    expect(invalidateSpy).toHaveBeenCalledTimes(24);
+    expect(invalidateSpy).toHaveBeenCalledTimes(25);
 
     // Assert the KEY, not just the count (Ronan): the reconnect resync must
     // invalidate the channel Tasks board prefix (#562) so tasks changed while
@@ -126,6 +126,7 @@ describe("useRealtimeSync — ws instance change", () => {
       (call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey,
     );
     expect(invalidatedKeys).toContainEqual(channelKeys.issuesRoot());
+    expect(invalidatedKeys).toContainEqual(runnerActivitySummaryKeys.all("ws-1"));
     expect(invalidatedKeys).toContainEqual(runnerActivityKeys.root("ws-1"));
   });
 

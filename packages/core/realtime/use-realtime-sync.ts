@@ -21,6 +21,7 @@ import {
   agentRunCountsKeys,
   agentTasksKeys,
   runnerActivityKeys,
+  runnerActivitySummaryKeys,
 } from "../agents/queries";
 import { patchAgentTaskSnapshotStatus } from "../agents/task-snapshot-updaters";
 import { applyRunnerActivityRealtime } from "../agents/runner-activity-updaters";
@@ -467,6 +468,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentActivityKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: runnerActivitySummaryKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: runnerActivityKeys.root(wsId) });
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });

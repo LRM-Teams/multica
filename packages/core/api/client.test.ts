@@ -6,6 +6,22 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("loads one Workspace Runner Activity summary projection and fails closed on drift", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [{ agent_id: 42, summary: null }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getRunnerActivitySummaries()).resolves.toEqual({ items: [] });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/agents/runner-activity-summaries",
+    );
+  });
+
   it("requests presence for the exact session and safely falls back on malformed data", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ session_id: "session-1", presence: null }), {

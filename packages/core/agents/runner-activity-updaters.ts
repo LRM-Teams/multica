@@ -2,7 +2,8 @@ import type { QueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { RunnerActivityResponseSchema } from "../api/schemas";
 import { createLogger } from "../logger";
-import { runnerActivityKeys } from "./queries";
+import type { RunnerActivitySummariesResponse } from "../types";
+import { runnerActivityKeys, runnerActivitySummaryKeys } from "./queries";
 
 const logger = createLogger("runner-activity.ws");
 
@@ -30,5 +31,32 @@ export function applyRunnerActivityRealtime(
   queryClient.setQueryData(
     runnerActivityKeys.all(wsId, parsed.data.agent_id),
     parsed.data.activity,
+  );
+  queryClient.setQueryData<RunnerActivitySummariesResponse | undefined>(
+    runnerActivitySummaryKeys.all(wsId),
+    (current) => {
+      if (!current) return current;
+
+      const nextSummary = parsed.data.activity.summary;
+      const existingIndex = current.items.findIndex(
+        (item) => item.agent_id === parsed.data.agent_id,
+      );
+      if (!nextSummary) {
+        if (existingIndex < 0) return current;
+        return {
+          items: current.items.filter((item) => item.agent_id !== parsed.data.agent_id),
+        };
+      }
+
+      const nextItem = { agent_id: parsed.data.agent_id, summary: nextSummary };
+      if (existingIndex < 0) {
+        return { items: [...current.items, nextItem] };
+      }
+      return {
+        items: current.items.map((item, index) =>
+          index === existingIndex ? nextItem : item,
+        ),
+      };
+    },
   );
 }

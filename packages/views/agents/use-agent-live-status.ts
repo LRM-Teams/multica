@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useAgentPresenceDetail, useRunnerActivity } from "@multica/core/agents";
+import { useAgentPresenceDetail, useRunnerActivitySummary } from "@multica/core/agents";
 import { useT } from "../i18n/use-t";
 import { resolveAgentLiveStatus, type AgentLiveStatusView } from "./resolve-agent-live-status";
 
@@ -44,11 +44,10 @@ export function useAgentActivityProjection(
   wsId: string | undefined,
   agentId: string | undefined,
 ): AgentLiveStatusView | null {
-  const { data } = useRunnerActivity(wsId, agentId);
+  const { data: summary } = useRunnerActivitySummary(wsId, agentId);
 
   return useMemo(
     () => {
-      const summary = data?.summary;
       if (!summary || summary.visibility !== "visible") return null;
       return {
         label: summary.label,
@@ -56,6 +55,6 @@ export function useAgentActivityProjection(
         dotClass: RUNNER_TONE_DOT_CLASS[summary.tone] ?? "bg-muted-foreground",
       };
     },
-    [data],
+    [summary],
   );
 }

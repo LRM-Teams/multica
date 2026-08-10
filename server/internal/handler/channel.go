@@ -5265,7 +5265,7 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 			}
 		}
 		chatSessionID = session.ID
-	} else if reason == "dm" && strings.Contains(prompt, "Live voice call delivery:") {
+	} else if reason == protocol.AgentInboxReasonVoiceCall && strings.Contains(prompt, "Live voice call delivery:") {
 		voiceSession, ensureErr := h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
 		if ensureErr != nil {
 			return channelAgentPromptTxResult{}, fmt.Errorf("ensure voice-call chat session: %w", ensureErr)

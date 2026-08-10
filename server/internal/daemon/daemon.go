@@ -2687,11 +2687,9 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 				continue
 			}
 			lease := agentInboxLeaseFromEvent(event, runtimeID)
-			// #2295: residual task-shaped chat wakes must not execute. Ordinary
-			// channel/DM traffic is MessageCoordinator-only; product-task
-			// inbox (issue, training, research, collaboration, onboarding)
-			// still runs through this drain path.
-			if event.Task == nil || isLegacyChatInboxReason(event.Reason, event.Task) {
+			// Residual dual-write channel chat reasons must not execute.
+			// Standalone bubble (chat_session) and product tasks still run.
+			if event.Task == nil || protocol.IsResidualChannelChatInboxReason(event.Reason) {
 				if err := d.client.AckAgentInboxEvent(ctx, lease); err != nil {
 					// fail-soft: try to ack remaining leases before surfacing
 					d.ackFoldedInboxLeasesBestEffort(ctx, append(folded, remainingLeasesAfter(batch.Events, event, runtimeID)...))
@@ -2700,7 +2698,7 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 				if event.Task == nil {
 					d.logger.Debug("acked non-runnable inbox event", "runtime_id", runtimeID, "event", shortID(event.ID))
 				} else {
-					d.logger.Info("acked residual legacy chat inbox event without execution",
+					d.logger.Info("acked residual channel chat inbox event without execution",
 						"runtime_id", runtimeID,
 						"event", shortID(event.ID),
 						"reason", event.Reason,
@@ -2764,31 +2762,6 @@ func agentInboxLeaseFromEvent(event *AgentInboxEvent, runtimeID string) AgentInb
 		RequiresWake:   event.RequiresWake,
 		Reason:         event.Reason,
 		RuntimeID:      runtimeID,
-	}
-}
-
-// isLegacyChatInboxReason identifies residual task-shaped channel/DM chat
-// wakes that the MessageCoordinator owns after the #2295 hard-cut.
-// Standalone FAB/bubble chat_session tasks (reason=dm, no channel_id) are a
-// retained product surface and continue to execute through agent_inbox.
-// Channel-scoped chat reasons never do.
-func isLegacyChatInboxReason(reason string, task *Task) bool {
-	switch strings.TrimSpace(reason) {
-	case "channel_message", "thread_reply", "ambient", "mention":
-		return true
-	case "dm":
-		// Channel/DM agent members use reason=dm with a channel-scoped task.
-		// Standalone FAB/bubble chat is intentionally kept on the inbox path
-		// (ChatSessionID present, no channel_id).
-		if task == nil {
-			return true
-		}
-		if strings.TrimSpace(task.ChannelID) != "" {
-			return true
-		}
-		return false
-	default:
-		return false
 	}
 }
 

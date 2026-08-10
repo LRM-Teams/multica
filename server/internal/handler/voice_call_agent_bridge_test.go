@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestVoiceCallAgentBridgePersistsAndDispatchesOneIdempotentDMTurn(t *testing.T) {
@@ -55,7 +56,7 @@ func TestVoiceCallAgentBridgePersistsAndDispatchesOneIdempotentDMTurn(t *testing
 	if first.Message.Content != "帮我检查项目当前的测试失败。" {
 		t.Fatalf("message content = %q", first.Message.Content)
 	}
-	if first.Event.Reason != "dm" ||
+	if first.Event.Reason != protocol.AgentInboxReasonVoiceCall ||
 		uuidToString(first.Event.SourceMessageID) != first.Message.ID ||
 		uuidToString(first.Event.AgentID) != agentID {
 		t.Fatalf("inbox event = %#v", first.Event)
@@ -112,9 +113,10 @@ func TestVoiceCallAgentBridgePersistsAndDispatchesOneIdempotentDMTurn(t *testing
 		FROM agent_inbox_event
 		WHERE source_message_id = $1
 		  AND agent_id = $2
-		  AND reason = 'dm'`,
+		  AND reason = $3`,
 		first.Message.ID,
 		agentID,
+		protocol.AgentInboxReasonVoiceCall,
 	).Scan(&eventCount); err != nil {
 		t.Fatalf("count persisted voice call inbox events: %v", err)
 	}

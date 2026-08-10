@@ -139,21 +139,11 @@ type CompleteAgentInboxEventRequest struct {
 	TaskCompleteRequest
 }
 
-// isLegacyChatInboxEvent identifies residual task-shaped channel/DM chat
-// wakes that the MessageCoordinator owns after the #2295 hard-cut.
-// Standalone FAB/bubble chat_session tasks (reason=dm, no channel_id) are a
-// retained product surface and continue to drain/execute through agent_inbox.
-func isLegacyChatInboxEvent(event db.AgentInboxEvent) bool {
-	switch strings.TrimSpace(event.Reason) {
-	case "channel_message", "thread_reply", "ambient", "mention":
-		return true
-	case "dm":
-		// Only channel-scoped DM agent wakes are cut over. Standalone bubble
-		// chat keeps reason=dm without channel_id.
-		return event.ChannelID.Valid
-	default:
-		return false
-	}
+// isResidualChannelChatInboxEvent is true for leftover dual-write channel
+// chat wakes. Standalone bubble uses protocol.AgentInboxReasonChatSession and
+// is never residual channel chat.
+func isResidualChannelChatInboxEvent(event db.AgentInboxEvent) bool {
+	return protocol.IsResidualChannelChatInboxReason(strings.TrimSpace(event.Reason))
 }
 
 func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Request) {
@@ -201,15 +191,13 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusNotFound, "not found")
 			return
 		}
-		// #2295/#2296: residual task-shaped channel/DM chat wakes must not
-		// execute. Ordinary channel chat is MessageCoordinator-only. Product
-		// tasks and retained standalone FAB/bubble chat_session (dm without
-		// channel_id) still drain normally.
-		if isLegacyChatInboxEvent(event) {
+		// Residual dual-write channel chat reasons only. Bubble chat_session
+		// and other product reasons execute normally.
+		if isResidualChannelChatInboxEvent(event) {
 			_, _ = h.DB.Exec(r.Context(), `
 				UPDATE agent_event_delivery
 				SET status = 'failed',
-				    last_error = 'legacy chat inbox path removed; use canonical Message delivery',
+				    last_error = 'residual channel chat inbox path removed; use canonical Message delivery',
 				    updated_at = now()
 				WHERE id = $1
 				  AND status IN ('leased', 'processing')`, delivery.ID)
@@ -220,11 +208,11 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 				    terminal_delivery_id = $2,
 				    terminal_at = now(),
 				    completed_at = COALESCE(completed_at, now()),
-				    last_error = 'legacy chat inbox path removed; use canonical Message delivery',
+				    last_error = 'residual channel chat inbox path removed; use canonical Message delivery',
 				    updated_at = now()
 				WHERE id = $1
 				  AND status = 'draining'`, event.ID, delivery.ID)
-			slog.Info("suppressed residual legacy chat inbox event on drain",
+			slog.Info("suppressed residual channel chat inbox event on drain",
 				"runtime_id", runtimeID,
 				"event_id", uuidToString(event.ID),
 				"reason", event.Reason,

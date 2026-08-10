@@ -181,7 +181,7 @@ func (bridge *VoiceCallAgentBridge) dispatch(
 		message,
 		insertInput.AuthorID,
 		prompt,
-		"dm",
+		protocol.AgentInboxReasonVoiceCall,
 		channelDirectedWakePriority,
 	)
 	if err != nil {
@@ -246,11 +246,11 @@ func (bridge *VoiceCallAgentBridge) dispatch(
 		channel,
 		agent,
 		message,
-		"dm",
+		protocol.AgentInboxReasonVoiceCall,
 		promptResult,
 	)
 	if bridge.handler.Metrics != nil {
-		bridge.handler.Metrics.RecordChannelFullExecutionWake("dm")
+		bridge.handler.Metrics.RecordChannelFullExecutionWake(protocol.AgentInboxReasonVoiceCall)
 	}
 
 	return voiceCallAgentDispatchResult{
@@ -354,12 +354,13 @@ func (bridge *VoiceCallAgentBridge) loadExistingDispatch(
 		WHERE workspace_id = $1
 		  AND channel_id = $2
 		  AND source_message_id = $3
-		  AND reason = 'dm'
+		  AND reason = $4
 		ORDER BY created_at ASC
 		LIMIT 1`,
 		insertInput.WorkspaceID,
 		insertInput.ChannelID,
 		parseUUID(messageResult.Message.ID),
+		protocol.AgentInboxReasonVoiceCall,
 	).Scan(&eventID)
 	if err != nil {
 		return voiceCallAgentDispatchResult{}, fmt.Errorf(

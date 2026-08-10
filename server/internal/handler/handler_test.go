@@ -145,7 +145,8 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 		    'collaboration_turn', 'collaboration_manager_fallback',
 		    'channel_onboarding', 'issue', 'quick_create', 'autopilot',
 		    'agent_radar', 'training', 'environment_dispatch',
-		    'memory_curation', 'reminder', 'channel_role_changed'
+		    'memory_curation', 'reminder', 'channel_role_changed',
+		    'chat_session', 'voice_call', 'issue_thread_backflow'
 		  ));
 
 		CREATE OR REPLACE FUNCTION test_agent_inbox_fixture_defaults()
@@ -169,10 +170,11 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 		    'collaboration_turn', 'collaboration_manager_fallback',
 		    'channel_onboarding', 'issue', 'quick_create', 'autopilot',
 		    'agent_radar', 'training', 'environment_dispatch',
-		    'memory_curation', 'reminder', 'channel_role_changed'
+		    'memory_curation', 'reminder', 'channel_role_changed',
+		    'chat_session', 'voice_call', 'issue_thread_backflow'
 		  ) THEN
 		    NEW.reason := CASE
-		      WHEN NEW.chat_session_id IS NOT NULL THEN 'dm'
+		      WHEN NEW.chat_session_id IS NOT NULL THEN 'chat_session'
 		      WHEN NEW.autopilot_run_id IS NOT NULL THEN 'autopilot'
 		      WHEN NEW.context->>'type' = 'quick_create' THEN 'quick_create'
 		      WHEN NEW.context->>'type' = 'agent_radar' THEN 'agent_radar'

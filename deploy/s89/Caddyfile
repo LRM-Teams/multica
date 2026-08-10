@@ -13,7 +13,7 @@
 # Let's Encrypt IP certificates use the short-lived profile and renew
 # automatically. HTTP-01 is selected explicitly because it is supported for
 # public IPv4 addresses and does not compete with the HTTPS listener.
-82.157.184.89 {
+{$MULTICA_TEST_HOST:82.157.184.89} {
 	tls {
 		issuer acme {
 			profile shortlived
@@ -29,7 +29,7 @@
 # so old :8090 bookmarks cannot remain on a UI with unusable Secure cookies.
 :8090 {
 	@browser_navigation header Accept *text/html*
-	redir @browser_navigation https://82.157.184.89{uri} 308
+	redir @browser_navigation https://{$MULTICA_TEST_HOST:82.157.184.89}{uri} 308
 
 	import multica_app
 }

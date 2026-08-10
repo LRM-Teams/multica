@@ -1,8 +1,11 @@
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 
+export type ServiceEnvironment = "production" | "test";
+
 interface ConfigState {
   cdnDomain: string;
+  environment: ServiceEnvironment;
   allowSignup: boolean;
   googleClientId: string;
   daemonServerUrl: string;
@@ -19,6 +22,7 @@ interface ConfigState {
     workspaceCreationDisabled?: boolean;
   }) => void;
   setDaemonConfig: (config: {
+    environment?: ServiceEnvironment;
     daemonServerUrl?: string;
     daemonAppUrl?: string;
   }) => void;
@@ -27,6 +31,7 @@ interface ConfigState {
 
 export const configStore = createStore<ConfigState>((set) => ({
   cdnDomain: "",
+  environment: "production",
   allowSignup: true,
   googleClientId: "",
   daemonServerUrl: "",
@@ -36,8 +41,11 @@ export const configStore = createStore<ConfigState>((set) => ({
   setCdnDomain: (domain) => set({ cdnDomain: domain }),
   setAuthConfig: ({ allowSignup, googleClientId = "", workspaceCreationDisabled = false }) =>
     set({ allowSignup, googleClientId, workspaceCreationDisabled }),
-  setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
-    set({ daemonServerUrl, daemonAppUrl }),
+  setDaemonConfig: ({
+    environment = "production",
+    daemonServerUrl = "",
+    daemonAppUrl = "",
+  }) => set({ environment, daemonServerUrl, daemonAppUrl }),
   setAgentProfileConfig: ({ devAccessEnabled = false }) =>
     set({ agentProfileDevAccessEnabled: devAccessEnabled }),
 }));

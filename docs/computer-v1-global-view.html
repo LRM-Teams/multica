@@ -308,7 +308,7 @@
       </table>
       <p class="callout success" style="margin-top:16px"><strong>最重要的规则：</strong>用户只选环境。没有单独的 <code>release_channel</code> 配置，也没有 <code>computer channel</code> 命令。切到 Test 就一起换 preview 包；切回 Production 就一起换 stable 包。</p>
       <div class="grid grid-2" style="margin-top:16px">
-        <article class="card"><h3>第一次接环境：setup</h3><p>Production 固定官方域名。Test 必须给完整 HTTP(S) origin；裸 IP、路径、账号密码、query 都会被拒绝。</p><pre><code>multica setup /my-workspace
+        <article class="card"><h3>第一次接环境：setup</h3><p>直接跟着当前环境的 Computer 页面即可：服务端通过 <code>/api/config.environment</code> 明确告诉页面自己是 production 还是 test，页面不靠域名或 IP 猜。Production 固定官方域名；Test 命令自动带完整 HTTP(S) origin。</p><pre><code>multica setup /my-workspace
 
 multica setup --environment test \
   --test-url https://test.leagent.me \
@@ -443,7 +443,7 @@ curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.
       </div>
       <div class="grid grid-2" style="margin-top:16px">
         <article class="card"><h3>目标契约</h3><p><code>dev</code> 自动部署腾讯测试服务并发布 preview 客户端；验收后，<code>main</code>/生产批准提升已验证的服务 digest，并发布 stable 客户端。两条制品链都必须记录 commit、版本、校验和。</p></article>
-        <article class="card"><h3>当前事实</h3><p>仓库目前只有 <code>aliyun-dev</code> Environment 和 Aliyun self-hosted runner，没有腾讯 runner，也没有独立的 test / production 受保护 Environment。</p><p class="muted">因此 #2497 不能靠改 YAML 假装完成；必须有真实基础设施、服务健康和 CDN/部署证据。</p></article>
+        <article class="card"><h3>当前事实</h3><p>GitHub 已有互斥的在线 runner：<code>aliyun-144</code> 只接 production，<code>s89-test</code> 只接 test；<code>test</code> Environment 只允许 <code>dev</code> 部署。</p><p class="muted">s89 的独立目录、数据库边界和 1 TB 数据盘已配置。#2497 还差 workflow 合并后的真实部署、生产快照恢复、健康检查与 served commit 证据。</p></article>
       </div>
     </section>
 
@@ -453,7 +453,7 @@ curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.
 multica setup /workspace-a
 
 # 连接腾讯测试 Workspace
-multica setup --environment test --test-url https://test.leagent.me /workspace-a
+multica setup --environment test --test-url https://82.157.184.89 /workspace-a
 
 # 两边都 setup 过以后，随时安全切换
 multica config use test
@@ -473,6 +473,7 @@ multica computer start
 multica computer restart
 multica computer logs</code></pre>
       <p class="muted">产品文案统一说 Computer / Workspace connection。<code>daemon</code> 和 <code>binding</code> 只保留在内部兼容 API、数据库或代码标识里。</p>
+      <p class="callout warning"><strong>当前 test 登录：</strong>已有用户使用固定验证码 <code>888888</code>；自由注册关闭。以后切到 <code>test.leagent.me</code> 时，只改部署 origin 和 OAuth 回调，不改 Computer 的环境模型。</p>
     </section>
 
     <section id="status">
@@ -482,7 +483,7 @@ multica computer logs</code></pre>
         <div class="issue"><strong>#2486–#2494</strong><span class="state ready">实现待合并</span><span>身份、单 resident、多 Workspace connection、环境、setup 验收、迁移、移除与升级安全已实现并通过全量门禁。</span></div>
         <div class="issue"><strong>#2495</strong><span class="state no">不做</span><span>Desktop 明确不在范围内，已按 NOT_PLANNED 关闭。</span></div>
         <div class="issue"><strong>#2496</strong><span class="state ready">实现待合并</span><span>安装器、发布 selector、VersionStore 激活、稳定/预发布清单契约和兼容别名已实现。</span></div>
-        <div class="issue"><strong>#2497</strong><span class="state pending">基础设施待完成</span><span>腾讯测试 runner、受保护环境、真实部署与 CDN/served evidence 尚缺，不能现在关闭。</span></div>
+        <div class="issue"><strong>#2497</strong><span class="state ready">交付中</span><span>腾讯 runner、test Environment、独立数据盘/数据库边界已完成；正在恢复生产快照，之后还需真实部署、健康检查与 served commit 证据。</span></div>
         <div class="issue"><strong>#2484</strong><span class="state pending">父单等待</span><span>等实现 PR 合并并完成 #2497 的真实交付证据后，才能最终关闭。</span></div>
       </div>
     </section>

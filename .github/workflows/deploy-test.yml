@@ -1,0 +1,295 @@
+name: Deploy Test
+
+# Continuous test deployment: dev -> Tencent Cloud s89. Production has a
+# separate main -> Aliyun lane in deploy.yml. The two environments use separate
+# runners, Compose projects, databases, origins, and deployment concurrency.
+
+on:
+  push:
+    branches: [dev]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "**/*.md"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing immutable image tag to redeploy, e.g. sha-abc1234. Empty builds current dev."
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-test-s89
+  cancel-in-progress: false
+
+env:
+  MULTICA_TEST_HOST: ${{ vars.MULTICA_TEST_HOST || '82.157.184.89' }}
+  MULTICA_APP_URL: ${{ vars.MULTICA_TEST_APP_URL || 'https://82.157.184.89' }}
+  MULTICA_API_URL: ${{ vars.MULTICA_TEST_API_URL || 'https://82.157.184.89' }}
+  MULTICA_WS_URL: ${{ vars.MULTICA_TEST_WS_URL || 'wss://82.157.184.89/ws' }}
+  MULTICA_CORS_ALLOWED_ORIGINS: ${{ vars.MULTICA_TEST_CORS_ALLOWED_ORIGINS || 'https://82.157.184.89' }}
+
+jobs:
+  prepare:
+    if: >-
+      github.repository_owner == 'LRM-Teams' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stage immutable test deploy bundle
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-test-deploy-bundle"
+          install -d "${bundle}/deploy/s89"
+          install -m 0644 docker-compose.selfhost.yml "${bundle}/docker-compose.selfhost.yml"
+          install -m 0644 docker-compose.s89.yml "${bundle}/docker-compose.s89.yml"
+          install -m 0644 deploy/s89/Caddyfile "${bundle}/deploy/s89/Caddyfile"
+
+      - name: Validate test deploy bundle
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-test-deploy-bundle"
+          MULTICA_TEST_HOST="${MULTICA_TEST_HOST}" docker run --rm \
+            -e MULTICA_TEST_HOST \
+            -v "${bundle}/deploy/s89/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker compose \
+            --project-name multica-test \
+            --project-directory "$bundle" \
+            --env-file .env.example \
+            -f "${bundle}/docker-compose.selfhost.yml" \
+            -f "${bundle}/docker-compose.s89.yml" \
+            config -q
+
+      - name: Upload test deploy bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-deploy-bundle-${{ github.sha }}
+          path: ${{ runner.temp }}/multica-test-deploy-bundle
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    if: >-
+      github.repository_owner == 'LRM-Teams' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/dev' &&
+        github.event.inputs.image_tag == ''))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.prep.outputs.tag }}
+      backend_image: ${{ steps.prep.outputs.backend_image }}
+      web_image: ${{ steps.prep.outputs.web_image }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compute immutable test image refs
+        id: prep
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          sha="$(git rev-parse --short=7 HEAD)"
+          {
+            echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
+            echo "web_image=ghcr.io/${owner_lc}/multica-web"
+            echo "tag=sha-${sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.prep.outputs.backend_image }}:${{ steps.prep.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.prep.outputs.tag }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-test-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-test-amd64,mode=max
+
+      - name: Build and push test web
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.web
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.prep.outputs.web_image }}:${{ steps.prep.outputs.tag }}
+          build-args: |
+            REMOTE_API_URL=http://backend:8080
+            NEXT_PUBLIC_APP_URL=${{ env.MULTICA_APP_URL }}
+            NEXT_PUBLIC_API_URL=${{ env.MULTICA_API_URL }}
+            NEXT_PUBLIC_WS_URL=${{ env.MULTICA_WS_URL }}
+            NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
+          cache-from: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-test-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-test-amd64,mode=max
+
+  deploy:
+    needs: [prepare, build]
+    environment:
+      name: test
+      url: ${{ env.MULTICA_APP_URL }}
+    if: >-
+      always() &&
+      github.repository_owner == 'LRM-Teams' &&
+      needs.prepare.result == 'success' &&
+      (needs.build.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/dev' &&
+        github.event.inputs.image_tag != ''))
+    runs-on: [self-hosted, s89, test]
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      packages: read
+    env:
+      DEPLOY_DIR: /data/multica-test
+      IMAGE_TAG: >-
+        ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')
+            && github.event.inputs.image_tag
+            || needs.build.outputs.tag }}
+    steps:
+      - name: Verify test runner boundary
+        run: |
+          set -euo pipefail
+          [ "$(id -un)" = gha ]
+          [ "$(hostname)" = VM-0-12-tencentos ]
+          [ -r "${DEPLOY_DIR}/.env" ]
+          docker info >/dev/null
+          [ "$(findmnt -n -o TARGET -T "${DEPLOY_DIR}")" = /data ]
+          case "$(docker info --format '{{.DockerRootDir}}')" in
+            /data/*) ;;
+            *) echo "::error::s89 Docker root is not on the data disk"; exit 1 ;;
+          esac
+
+      - name: Download immutable test deploy bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: test-deploy-bundle-${{ github.sha }}
+          path: ${{ runner.temp }}/multica-test-deploy-bundle
+
+      - name: Log in to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Validate host and migrate test database
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-test-deploy-bundle"
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          export MULTICA_TEST_HOST MULTICA_APP_URL MULTICA_API_URL MULTICA_CORS_ALLOWED_ORIGINS
+          compose() {
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica-test \
+              --project-directory "${DEPLOY_DIR}" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${bundle}/docker-compose.selfhost.yml" \
+              -f "${bundle}/docker-compose.s89.yml" "$@"
+          }
+          install -m 0644 "${bundle}/deploy/s89/Caddyfile" "${DEPLOY_DIR}/Caddyfile.next"
+          mv -f "${DEPLOY_DIR}/Caddyfile.next" "${DEPLOY_DIR}/Caddyfile"
+          compose config -q
+          compose up -d postgres
+          for i in $(seq 1 30); do
+            postgres_id="$(compose ps -q postgres)"
+            [ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$postgres_id" 2>/dev/null || true)" = healthy ] && break
+            [ "$i" -lt 30 ] || { echo "::error::test PostgreSQL did not become healthy"; exit 1; }
+            sleep 2
+          done
+          compose run --rm --no-deps --pull always --entrypoint ./migrate backend up
+
+      - name: Roll test application
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-test-deploy-bundle"
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          export MULTICA_TEST_HOST MULTICA_APP_URL MULTICA_API_URL MULTICA_CORS_ALLOWED_ORIGINS
+          compose() {
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica-test \
+              --project-directory "${DEPLOY_DIR}" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${bundle}/docker-compose.selfhost.yml" \
+              -f "${bundle}/docker-compose.s89.yml" "$@"
+          }
+          compose pull frontend backend
+          compose up -d frontend
+          compose up -d backend
+          compose up -d --no-deps --force-recreate caddy
+
+      - name: Verify exact test images and served health
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-test-deploy-bundle"
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          export MULTICA_TEST_HOST MULTICA_APP_URL MULTICA_API_URL MULTICA_CORS_ALLOWED_ORIGINS
+          compose() {
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica-test \
+              --project-directory "${DEPLOY_DIR}" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${bundle}/docker-compose.selfhost.yml" \
+              -f "${bundle}/docker-compose.s89.yml" "$@"
+          }
+          for service in backend frontend; do
+            id="$(compose ps -q "$service")"
+            case "$service" in
+              backend) expected="ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" ;;
+              frontend) expected="ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}" ;;
+            esac
+            [ "$(docker inspect --format '{{.Config.Image}}' "$id")" = "$expected" ] || {
+              echo "::error::${service} is not running ${expected}"
+              exit 1
+            }
+          done
+          for i in $(seq 1 45); do
+            if curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null 2>&1 &&
+              curl --resolve "${MULTICA_TEST_HOST}:443:127.0.0.1" -fsS --max-time 5 "${MULTICA_APP_URL}/healthz" >/dev/null 2>&1 &&
+              curl --resolve "${MULTICA_TEST_HOST}:443:127.0.0.1" -fsS --max-time 5 "${MULTICA_API_URL}/health" >/dev/null 2>&1; then
+              echo "Tencent test environment healthy: tag=${IMAGE_TAG} origin=${MULTICA_APP_URL}"
+              exit 0
+            fi
+            echo "waiting for Tencent test served health... (${i}/45)"
+            sleep 2
+          done
+          compose ps
+          docker logs --tail 100 multica-test-caddy || true
+          echo "::error::Tencent test environment did not become healthy"
+          exit 1

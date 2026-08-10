@@ -58,6 +58,7 @@ export function AuthInitializer({
           workspaceCreationDisabled: cfg.workspace_creation_disabled === true,
         });
         configStore.getState().setDaemonConfig({
+          environment: cfg.environment,
           daemonServerUrl: cfg.daemon_server_url,
           daemonAppUrl: cfg.daemon_app_url,
         });

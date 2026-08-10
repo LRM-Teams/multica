@@ -12,6 +12,7 @@ done
 
 release_workflow="$(<.github/workflows/release.yml)"
 deploy_workflow="$(<.github/workflows/deploy.yml)"
+deploy_test_workflow="$(<.github/workflows/deploy-test.yml)"
 if grep -Fq -- 'Publish Agent avatar presets to OSS' <<<"$deploy_workflow"; then
   echo "One-time Agent avatar publication must not gate every application deployment"
   exit 1
@@ -37,7 +38,7 @@ if ! grep -Fq -- 'goreleaser/goreleaser-action' <<<"$release_workflow"; then
   exit 1
 fi
 
-for workflow in "$deploy_workflow" "$release_workflow"; do
+for workflow in "$deploy_workflow" "$deploy_test_workflow" "$release_workflow"; do
   for required_public_setting in \
     'NEXT_PUBLIC_APP_URL=${{ env.MULTICA_APP_URL }}' \
     'NEXT_PUBLIC_API_URL=${{ env.MULTICA_API_URL }}' \
@@ -48,6 +49,40 @@ for workflow in "$deploy_workflow" "$release_workflow"; do
     fi
   done
 done
+
+for required in \
+  'branches: [main]' \
+  "github.ref == 'refs/heads/main'" \
+  'runs-on: [self-hosted, aliyun]' \
+  'url: https://www.leagent.me'; do
+  if ! grep -Fq -- "$required" <<<"$deploy_workflow"; then
+    echo "Production deployment contract is missing: $required"
+    exit 1
+  fi
+done
+
+for required in \
+  'branches: [dev]' \
+  "github.ref == 'refs/heads/dev'" \
+  'runs-on: [self-hosted, s89, test]' \
+  'name: test' \
+  'MULTICA_TEST_HOST' \
+  'url: ${{ env.MULTICA_APP_URL }}'; do
+  if ! grep -Fq -- "$required" <<<"$deploy_test_workflow"; then
+    echo "Test deployment contract is missing: $required"
+    exit 1
+  fi
+done
+
+if grep -Fq -- 'branches: [dev]' <<<"$deploy_workflow"; then
+  echo "Production deployment must not consume dev pushes"
+  exit 1
+fi
+
+if grep -Fq -- 'branches: [main]' <<<"$deploy_test_workflow"; then
+  echo "Test deployment must not consume main pushes"
+  exit 1
+fi
 
 for required in \
   'publish-downloads-feed:' \
@@ -107,7 +142,7 @@ if grep -Fq -- 'multica-releases' docker-compose.aliyun.yml; then
   exit 1
 fi
 
-if grep -Fq -- 'Ensure release feed directory' .github/workflows/deploy.yml; then
+if grep -Fq -- 'Ensure release feed directory' .github/workflows/deploy.yml .github/workflows/deploy-test.yml; then
   echo "Deploy workflow must not prepare the removed local release feed"
   exit 1
 fi

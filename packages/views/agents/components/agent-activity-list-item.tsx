@@ -2,7 +2,7 @@
 
 import { ChevronRight } from "lucide-react";
 import type { AgentPresenceDetail } from "@multica/core/agents";
-import { useAgentPresenceDetail, useRunnerActivity } from "@multica/core/agents";
+import { useAgentPresenceDetail, useRunnerActivitySummary } from "@multica/core/agents";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -37,8 +37,7 @@ export function AgentActivityStatus({
   testId?: string;
 }) {
   const workspaceId = useCurrentWorkspace()?.id;
-  const { data } = useRunnerActivity(workspaceId, agentId);
-  const summary = data?.summary;
+  const { data: summary } = useRunnerActivitySummary(workspaceId, agentId);
   const presenceDetail = useAgentPresenceDetail(workspaceId, agentId);
   const presence = useAgentLiveStatus(workspaceId, agentId);
   const isOnline =

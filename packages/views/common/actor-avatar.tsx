@@ -13,7 +13,7 @@ import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-nam
 import { useMemberOnline } from "@multica/core/workspace/use-member-presence";
 import {
   useAgentPresenceDetail,
-  useRunnerActivity,
+  useRunnerActivitySummary,
 } from "@multica/core/agents";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
@@ -396,7 +396,7 @@ export function AgentPresenceOverlay({
 export function AgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
   const ws = useCurrentWorkspace();
   const detail = useAgentPresenceDetail(ws?.id, agentId);
-  const { data: runnerActivity } = useRunnerActivity(ws?.id, agentId);
+  const { data: runnerActivity } = useRunnerActivitySummary(ws?.id, agentId);
   if (detail === "loading") return null;
   const live = toLiveAvailability(detail.availability);
   if (!live) return null;
@@ -410,7 +410,7 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
   // Task row. Task workload remains a fallback for non-chat work.
   const isWorking =
     live === "online" &&
-    (["warning", "info", "active"].includes(runnerActivity?.summary?.tone ?? "") ||
+    (["warning", "info", "active"].includes(runnerActivity?.tone ?? "") ||
       detail.workload === "working");
   const dotClass = isWorking ? "bg-warning" : availabilityDotClass;
   // aria/title: Online / Offline only — never "Working" / "Unstable" as a

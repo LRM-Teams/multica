@@ -116,6 +116,7 @@ const presenceDetailMock = vi.fn(() => ({
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => presenceDetailMock(),
   useRunnerActivity: () => ({ data: undefined }),
+  useRunnerActivitySummary: () => ({ data: undefined }),
 }));
 
 vi.mock("@multica/core/paths", () => ({

@@ -19,7 +19,7 @@ const mockLiveStatus = vi.hoisted(
 
 const mockActivity = vi.hoisted(() => ({
   current: {
-    data: { summary: null, timeline: [] as Array<{ id: string; title: string; subtext?: string }> } as { summary: null; timeline: Array<{ id: string; title: string; subtext?: string }> } | undefined,
+    data: null as { label: string; tone: string; visibility: string } | null | undefined,
     isLoading: false,
   },
 }));
@@ -34,7 +34,10 @@ vi.mock("@multica/core/api", () => ({
 
 vi.mock("@multica/core/agents", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/agents")>()),
-  useRunnerActivity: () => mockActivity.current,
+  useRunnerActivitySummary: () => mockActivity.current,
+  useRunnerActivity: () => {
+    throw new Error("profile popover must not mount the per-Agent Timeline query");
+  },
 }));
 
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({
@@ -153,7 +156,7 @@ function live(
 beforeEach(() => {
   cleanup();
   mockLiveStatus.current = live("Idle");
-  mockActivity.current = { data: { summary: null, timeline: [] }, isLoading: false };
+  mockActivity.current = { data: null, isLoading: false };
   mockHonorApi.getAgentHonor.mockReset();
   mockHonorApi.getUserHonor.mockReset();
   mockHonorApi.getAgentHonor.mockImplementation(
@@ -165,18 +168,18 @@ beforeEach(() => {
 });
 
 describe("ActorProfileContentLoaded", () => {
-  it("renders recent Runner-projected Activity for agents", () => {
+  it("renders the current Runner-projected Activity summary for agents", () => {
     mockActivity.current = {
-      data: { summary: null, timeline: [{ id: "row-1", title: "Thinking...", subtext: "Safe detail" }] },
+      data: { label: "Thinking...", tone: "info", visibility: "visible" },
       isLoading: false,
     };
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
-    expect(screen.getByText("Thinking... · Safe detail")).toBeInTheDocument();
+    expect(screen.getByText("Thinking...")).toBeInTheDocument();
   });
 
-  it("shows a loading hint before the first activity paint (no timeline flash)", () => {
+  it("shows a loading hint before the first Activity summary paint", () => {
     mockActivity.current = { data: undefined, isLoading: true };
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
@@ -218,7 +221,10 @@ describe("ActorProfileContentLoaded", () => {
     // explicit "Channel-only" label (LRM-238: no silent omission).
     const profile = makeProfile();
     profile.profile_access = "identity_only";
-    mockActivity.current = { data: { summary: null, timeline: [{ id: "row-1", title: "Thinking..." }] }, isLoading: false };
+    mockActivity.current = {
+      data: { label: "Thinking...", tone: "info", visibility: "visible" },
+      isLoading: false,
+    };
 
     render(<ActorProfileContentLoaded profile={profile} />);
 

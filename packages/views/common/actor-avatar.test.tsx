@@ -22,14 +22,17 @@ const presenceDetailMock = vi.fn((): PresenceDetail => ({
 }));
 
 const runnerActivityMock = vi.fn((): {
-  data: { summary: { label: string; tone: string; visibility: string }; timeline: never[] };
+  data: { label: string; tone: string; visibility: string };
 } => ({
-  data: { summary: { label: "Online", tone: "success", visibility: "visible" }, timeline: [] },
+  data: { label: "Online", tone: "success", visibility: "visible" },
 }));
 
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => presenceDetailMock(),
-  useRunnerActivity: () => runnerActivityMock(),
+  useRunnerActivitySummary: () => runnerActivityMock(),
+  useRunnerActivity: () => {
+    throw new Error("avatar status must not mount the per-Agent Timeline query");
+  },
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -224,7 +227,7 @@ describe("AgentStatusDot", () => {
       capacity: 1,
     });
     runnerActivityMock.mockReturnValue({
-      data: { summary: { label: "Online", tone: "success", visibility: "visible" }, timeline: [] },
+      data: { label: "Online", tone: "success", visibility: "visible" },
     });
   });
 
@@ -285,7 +288,7 @@ describe("AgentStatusDot", () => {
       capacity: 1,
     });
     runnerActivityMock.mockReturnValue({
-      data: { summary: { label: "Running command...", tone: "warning", visibility: "visible" }, timeline: [] },
+      data: { label: "Running command...", tone: "warning", visibility: "visible" },
     });
     const { container, rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container.querySelector(".animate-ping")).not.toBeNull();

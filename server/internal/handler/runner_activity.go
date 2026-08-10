@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -545,12 +546,20 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	if summary.Tone == "error" {
 		for _, row := range response.Timeline {
 			if row.Title == "Error" && row.Subtext != "" {
-				summary.Label = "Error: " + truncateRunnerActivitySummary(row.Subtext, 240)
+				summary = runnerActivitySummaryWithError(summary, row.Subtext)
 				break
 			}
 		}
 	}
 	return response, nil
+}
+
+func runnerActivitySummaryWithError(summary activityprojection.Summary, errorText string) activityprojection.Summary {
+	errorText = strings.TrimSpace(errorText)
+	if summary.Tone == "error" && errorText != "" {
+		summary.Label = "Error: " + truncateRunnerActivitySummary(errorText, 240)
+	}
+	return summary
 }
 
 func truncateRunnerActivitySummary(value string, maxRunes int) string {

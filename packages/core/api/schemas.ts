@@ -1956,6 +1956,17 @@ export const RunnerActivityResponseSchema = z.object({
 
 export const EMPTY_RUNNER_ACTIVITY_RESPONSE = { summary: null, timeline: [] };
 
+const RunnerActivitySummaryItemSchema = z.object({
+  agent_id: z.string().min(1),
+  summary: RunnerActivitySummarySchema,
+}).loose();
+
+export const RunnerActivitySummariesResponseSchema = z.object({
+  items: z.array(RunnerActivitySummaryItemSchema).default([]),
+}).loose();
+
+export const EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE = { items: [] };
+
 const AgentFileNodeSchema = z.object({
   path: z.string(),
   is_dir: z.boolean().default(false),

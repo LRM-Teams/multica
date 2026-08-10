@@ -18,7 +18,10 @@ vi.mock("@multica/core/agents", () => ({
     queuedCount: 0,
     capacity: 1,
   }),
-  useRunnerActivity: () => ({ data: { summary: state.summary, timeline: [] } }),
+  useRunnerActivitySummary: () => ({ data: state.summary }),
+  useRunnerActivity: () => {
+    throw new Error("list Activity must not mount the per-Agent Timeline query");
+  },
 }));
 
 vi.mock("@multica/core/paths", () => ({

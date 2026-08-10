@@ -299,6 +299,15 @@ export interface RunnerActivityResponse {
   timeline: RunnerActivityTimelineRow[];
 }
 
+export interface RunnerActivitySummaryItem {
+  agent_id: string;
+  summary: RunnerActivitySummary;
+}
+
+export interface RunnerActivitySummariesResponse {
+  items: RunnerActivitySummaryItem[];
+}
+
 export interface RunnerActivityRealtimePayload {
   agent_id: string;
   activity: RunnerActivityResponse;

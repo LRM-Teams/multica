@@ -122,6 +122,7 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
 vi.mock("@multica/core/agents", () => ({
   useAgentPresenceDetail: () => "loading",
   useRunnerActivity: () => ({ data: undefined }),
+  useRunnerActivitySummary: () => ({ data: undefined }),
 }));
 
 // LRM-364: bubble reaction hover resolves names via member-profile queries.

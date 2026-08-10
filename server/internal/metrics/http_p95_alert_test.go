@@ -35,6 +35,13 @@ func TestHistogramQuantileP95(t *testing.T) {
 	}
 }
 
+func TestRunnerActivitySummaryRouteIsPriority(t *testing.T) {
+	const route = "/api/agents/runner-activity-summaries"
+	if !priorityRouteSet()[route] {
+		t.Fatalf("%s must be monitored as an Activity hot path", route)
+	}
+}
+
 func TestHTTPRequestSLOAlerterFiresOnSustainedBreach(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	httpM := NewHTTPMetrics()
@@ -133,13 +140,16 @@ func TestHTTPMiddlewareRecordsPriorityRoutes(t *testing.T) {
 	registry := NewRegistry(RegistryOptions{Version: "t", Commit: "c"})
 	r := chi.NewRouter()
 	r.Use(registry.HTTP.Middleware)
+	r.Get("/api/agents/runner-activity-summaries", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	r.Get("/api/agents/{id}/runner-activity", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	r.Get("/api/agent-task-snapshot", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	for _, path := range []string{"/api/agents/abc/runner-activity", "/api/agent-task-snapshot"} {
+	for _, path := range []string{"/api/agents/runner-activity-summaries", "/api/agents/abc/runner-activity", "/api/agent-task-snapshot"} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != 200 {
@@ -150,6 +160,7 @@ func TestHTTPMiddlewareRecordsPriorityRoutes(t *testing.T) {
 	NewHandler(registry.Gatherer).ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := metricsRec.Body.String()
 	for _, want := range []string{
+		`route="/api/agents/runner-activity-summaries"`,
 		`route="/api/agents/{id}/runner-activity"`,
 		`route="/api/agent-task-snapshot"`,
 	} {

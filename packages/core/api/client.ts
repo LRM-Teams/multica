@@ -63,6 +63,7 @@ import type {
   UpdateAgentFileContentResponse,
   AgentTask,
   RunnerActivityResponse,
+  RunnerActivitySummariesResponse,
   AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
@@ -302,6 +303,8 @@ import {
   AgentHealthResponseSchema,
   RunnerActivityResponseSchema,
   EMPTY_RUNNER_ACTIVITY_RESPONSE,
+  RunnerActivitySummariesResponseSchema,
+  EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
   ChannelMessagesPageSchema,
@@ -1424,6 +1427,16 @@ export class ApiClient {
     return parseWithFallback(raw, RunnerActivityResponseSchema, EMPTY_RUNNER_ACTIVITY_RESPONSE, {
       endpoint: "GET /api/agents/:id/runner-activity",
     });
+  }
+
+  async getRunnerActivitySummaries(): Promise<RunnerActivitySummariesResponse> {
+    const raw = await this.fetch<unknown>("/api/agents/runner-activity-summaries");
+    return parseWithFallback(
+      raw,
+      RunnerActivitySummariesResponseSchema,
+      EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
+      { endpoint: "GET /api/agents/runner-activity-summaries" },
+    );
   }
 
   /**

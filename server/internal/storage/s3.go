@@ -360,13 +360,23 @@ func (s *S3Storage) DeleteKeys(ctx context.Context, keys []string) {
 }
 
 func (s *S3Storage) Upload(ctx context.Context, key string, data []byte, contentType string, filename string) (string, error) {
+	return s.upload(ctx, key, data, contentType, filename, "max-age=432000,public")
+}
+
+// UploadImmutable publishes a content-versioned static asset. Callers must use
+// a new object key when bytes change; the long cache lifetime is intentional.
+func (s *S3Storage) UploadImmutable(ctx context.Context, key string, data []byte, contentType string, filename string) (string, error) {
+	return s.upload(ctx, key, data, contentType, filename, "public,max-age=31536000,immutable")
+}
+
+func (s *S3Storage) upload(ctx context.Context, key string, data []byte, contentType string, filename string, cacheControl string) (string, error) {
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:             aws.String(s.bucket),
 		Key:                aws.String(key),
 		Body:               bytes.NewReader(data),
 		ContentType:        aws.String(contentType),
 		ContentDisposition: aws.String(ContentDisposition(contentType, filename)),
-		CacheControl:       aws.String("max-age=432000,public"),
+		CacheControl:       aws.String(cacheControl),
 		StorageClass:       s.storageClass(),
 	})
 	if err != nil {

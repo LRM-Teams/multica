@@ -98,7 +98,7 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, optional `display_name`,
 | `display_name` | `agent.display_name` | optional at create; update rejects empty | listings, runtime payload labels |
 | `description` | `agent.description` | 400 if > 255 code points | catalog/listing only — NOT the runtime prompt |
 | `instructions` | `agent.instructions` | none | daemon → provider at claim time |
-| `avatar_selection` | server-derived `avatar_url` / `avatar_source` / optional attachment | omit create → assigned preset; omit update → no change; picked/uploaded verified | durable member identity |
+| `avatar_selection` | server-derived `avatar_url` / `avatar_source` / optional attachment | omit create → assigned immutable OSS preset; omit update → no change; picked catalog URL/uploaded attachment verified | durable member identity |
 | `runtime_id` | `agent.runtime_id` | required (400) + must resolve in workspace | selects runtime/provider |
 | `model` | `agent.model` (nullable) | none beyond runtime support | daemon reads; empty = runtime default |
 | `thinking_level` | `agent.thinking_level` (nullable) | provider-level enum; unknown → 400 | daemon; empty = runtime default |
@@ -112,7 +112,10 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, optional `display_name`,
 Defaults when omitted: `display_name` from legacy `name` seed, `runtime_config`
 → `{}`, `custom_env` → `{}`, `custom_args` → `[]`, `visibility` → `private`,
 `max_concurrent_tasks` → `6`; omitted `avatar_selection` gets one concrete
-preset with `avatar_source=assigned`. Raw `avatar_url` is rejected.
+preset with `avatar_source=assigned`. Presets are absolute, immutable CDN URLs
+backed by OSS; older `/agent-avatars/human-XX.jpg` selections are normalized to
+the same visual asset in the retained v1 catalog at the write boundary. Raw
+`avatar_url` is rejected.
 
 `thinking_level` is validated only at the provider level: unrecognized literal
 → 400; a value valid for the provider but unsupported for the chosen model is

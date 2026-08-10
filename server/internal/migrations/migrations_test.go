@@ -702,7 +702,7 @@ func TestMigration313ChannelAttentionRoundSchema(t *testing.T) {
 	}
 	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
 
-	up, err := os.ReadFile(filepath.Join(migrationsDir, "313_channel_attention_round.up.sql"))
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "314_channel_attention_round.up.sql"))
 	if err != nil {
 		t.Fatalf("read migration 313 up: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestMigration313ChannelAttentionRoundSchema(t *testing.T) {
 		}
 	}
 
-	down, err := os.ReadFile(filepath.Join(migrationsDir, "313_channel_attention_round.down.sql"))
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "314_channel_attention_round.down.sql"))
 	if err != nil {
 		t.Fatalf("read migration 313 down: %v", err)
 	}

@@ -11,7 +11,7 @@ import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
 import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions, workspaceListOptions } from "@multica/core/workspace/queries";
 import type { Agent, MemberWithUser, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
@@ -26,6 +26,7 @@ import { ContentEditor, type ContentEditorRef, type PageEditAIRequest, type Text
 import { useNavigation } from "../navigation";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
+import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
 type NoteDropPosition = "before" | "after" | "inside";
@@ -423,10 +424,6 @@ function collectNoteSubtreeIds(pages: NotePage[], rootId: string) {
   return ids;
 }
 
-function memberLabel(member: MemberWithUser | undefined, fallback = "") {
-  return member?.display_name || member?.name || member?.email || fallback;
-}
-
 function NoteTreeRow({
   node,
   depth,
@@ -615,10 +612,12 @@ function NoteTreeRow({
 function ShareDialogBody({
   page,
   members,
+  workspaceName,
   onOpenChange,
 }: {
   page: NotePage;
   members: MemberWithUser[];
+  workspaceName: string;
   onOpenChange: (open: boolean) => void;
 }) {
   const { t } = useT("layout");
@@ -649,6 +648,10 @@ function ShareDialogBody({
         ) : (
           shareableMembers.map((member) => {
             const checked = selected.has(member.user_id);
+            const displayName = memberLabel(member);
+            const label = workspaceName
+              ? t(($) => $.notes_page.share_member_workspace_label, { name: displayName, workspace: workspaceName })
+              : displayName;
             return (
               <label key={member.user_id} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/60">
                 <Checkbox
@@ -663,7 +666,7 @@ function ShareDialogBody({
                   }}
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{member.display_name || member.name}</span>
+                  <span className="block truncate text-sm font-medium">{label}</span>
                   <span className="block truncate text-xs text-muted-foreground">{member.email}</span>
                 </span>
               </label>
@@ -700,17 +703,19 @@ function ShareDialogBody({
 function ShareDialog({
   page,
   members,
+  workspaceName,
   open,
   onOpenChange,
 }: {
   page: NotePage | null;
   members: MemberWithUser[];
+  workspaceName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {page ? <ShareDialogBody key={page.id} page={page} members={members} onOpenChange={onOpenChange} /> : null}
+      {page ? <ShareDialogBody key={page.id} page={page} members={members} workspaceName={workspaceName} onOpenChange={onOpenChange} /> : null}
     </Dialog>
   );
 }
@@ -1074,10 +1079,12 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const { data: trash = { pages: [] } } = useQuery(noteTrashOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: workspaces = [] } = useQuery(workspaceListOptions());
   const selectedFromList = findNote(list.pages, pageId);
   const selectedId = pageId ?? selectedFromList?.id;
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
   const selected = detailPage?.id ? detailPage : selectedFromList;
+  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, showTrash: false }));
   const [noteExpansionOverrides, setNoteExpansionOverrides] = useState<NoteExpansionOverrides>(() => ({ selectionId: null, expanded: readNoteExpandedIds(wsId), collapsed: new Set() }));
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
   const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
@@ -1100,22 +1107,32 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         : [],
     [list.pages, selected],
   );
-  const membersByUserId = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members]);
+  const selectedWorkspaceId = selected?.workspace_id || wsId;
+  const shareWorkspaceId = uiState.sharePage?.workspace_id || selectedWorkspaceId;
+  const { data: selectedWorkspaceMembers = [] } = useQuery(memberListOptions(selectedWorkspaceId));
+  const { data: shareWorkspaceMembers = [] } = useQuery(memberListOptions(shareWorkspaceId));
+  const currentMembersByUserId = useMemo(() => new Map(members.map((member) => [member.user_id, member])), [members]);
+  const selectedMembersByUserId = useMemo(() => new Map(selectedWorkspaceMembers.map((member) => [member.user_id, member])), [selectedWorkspaceMembers]);
+  const workspacesById = useMemo(() => new Map(workspaces.map((workspace) => [workspace.id, workspace])), [workspaces]);
+  const selectedWorkspaceName = selected ? workspaceLabel(workspacesById.get(selected.workspace_id)) : "";
+  const shareWorkspaceName = workspaceLabel(workspacesById.get(shareWorkspaceId));
   const selectedShareNames = useMemo(
-    () => selected?.share_user_ids.flatMap((id) => {
-      const name = memberLabel(membersByUserId.get(id), id);
-      return name ? [name] : [];
-    }) ?? [],
-    [membersByUserId, selected?.share_user_ids],
+    () => selected ? buildNoteShareNames({
+      shareUserIds: selected.share_user_ids,
+      membersByUserId: selectedMembersByUserId,
+      workspaceName: selectedWorkspaceName,
+      unknownMemberLabel: t(($) => $.notes_page.share_member_unknown),
+      formatName: (name, workspace) => t(($) => $.notes_page.share_member_workspace_label, { name, workspace }),
+    }) : [],
+    [selected, selectedMembersByUserId, selectedWorkspaceName, t],
   );
-  const selectedOwnerName = selected ? memberLabel(membersByUserId.get(selected.owner_user_id), selected.owner_user_id) : "";
+  const selectedOwnerName = selected ? memberLabel(currentMembersByUserId.get(selected.owner_user_id) ?? selectedMembersByUserId.get(selected.owner_user_id), selected.owner_user_id) : "";
   const createPage = useCreateNotePage();
   const duplicatePage = useDuplicateNotePage();
   const movePage = useMoveNotePage();
   const deletePage = useDeleteNotePage();
   const permanentlyDeletePage = usePermanentlyDeleteNotePage();
   const restorePage = useRestoreNotePage();
-  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, showTrash: false }));
   const [dragState, setDragState] = useState<NoteDragState>({ draggingId: null, dropTarget: null });
   const [aiAgentConfig, setAiAgentConfig] = useState<NoteAiAgentConfig>(() => ({ workspaceId: null, agentId: null }));
   const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
@@ -1465,7 +1482,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
           )}
         </main>
       </div>
-      <ShareDialog page={sharePage} members={members} open={!!sharePage} onOpenChange={(open) => {
+      <ShareDialog page={sharePage} members={shareWorkspaceMembers} workspaceName={shareWorkspaceName} open={!!sharePage} onOpenChange={(open) => {
         if (!open) setUiState((current) => ({ ...current, sharePage: null }));
       }} />
       <NoteAiAgentDialog agents={agents} selectedAgentId={configuredAiAgentId} open={aiAgentOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, aiAgentOpen: open }))} onSelect={saveConfiguredAiAgent} />

@@ -265,6 +265,7 @@ require_config "$s89_config" 'published: "443"'
 require_config "$s89_config" 'published: "8090"'
 
 s89_caddyfile="$(<deploy/s89/Caddyfile)"
+require_config "$s89_caddyfile" 'default_sni {$MULTICA_TEST_HOST:82.157.184.89}'
 require_config "$s89_caddyfile" 'profile shortlived'
 require_config "$s89_caddyfile" 'disable_tlsalpn_challenge'
 require_config "$s89_caddyfile" '@browser_navigation header Accept *text/html*'

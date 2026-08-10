@@ -1,3 +1,10 @@
+{
+	# HTTPS clients connecting to a literal IP do not send SNI. Select the
+	# test site's certificate explicitly so direct-IP setup and health checks
+	# complete the TLS handshake.
+	default_sni {$MULTICA_TEST_HOST:82.157.184.89}
+}
+
 (multica_app) {
 	@multica_ws path /ws /ws/* /api/daemon/ws /api/sandbox/node/ws
 	reverse_proxy @multica_ws backend:8080 {

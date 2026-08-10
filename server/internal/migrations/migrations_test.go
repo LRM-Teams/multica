@@ -716,7 +716,7 @@ func TestMigration313ChannelAttentionRoundSchema(t *testing.T) {
 		"UNIQUE (round_id)",
 	} {
 		if !strings.Contains(string(up), required) {
-			t.Errorf("migration 308 up missing %q", required)
+			t.Errorf("migration 313 up missing %q", required)
 		}
 	}
 
@@ -730,7 +730,7 @@ func TestMigration313ChannelAttentionRoundSchema(t *testing.T) {
 		"channel_attention_round",
 	} {
 		if !strings.Contains(string(down), "DROP TABLE IF EXISTS "+table) {
-			t.Errorf("migration 308 down missing DROP for %s", table)
+			t.Errorf("migration 313 down missing DROP for %s", table)
 		}
 	}
 }

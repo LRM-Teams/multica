@@ -103,10 +103,15 @@ func TestReleaseManifestBaseURLWithOverridePrecedence(t *testing.T) {
 func TestFetchLatestReleaseWithOverrideUsesServerDispatchedBaseURL(t *testing.T) {
 	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/manifest.json" {
+		if r.URL.Path != "/metainfo.json" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(want)
+		_ = json.NewEncoder(w).Encode(ReleaseMetainfo{
+			SchemaVersion: 1,
+			Environments: map[string]ReleaseManifest{
+				"production": want,
+			},
+		})
 	}))
 	defer server.Close()
 
@@ -151,94 +156,6 @@ func TestFetchReleaseByTagWithOverrideUsesServerDispatchedBaseURL(t *testing.T) 
 	}
 }
 
-func TestFetchLatestReleaseFallsBackToLegacyPathOnNotFound(t *testing.T) {
-	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
-	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		switch r.URL.Path {
-		case "/manifest.json":
-			w.WriteHeader(http.StatusNotFound)
-		case "/latest.json":
-			_ = json.NewEncoder(w).Encode(want)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	got, err := FetchLatestReleaseWithOverride(server.URL)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.TagName != want.TagName {
-		t.Fatalf("got %+v, want %+v", got, want)
-	}
-	if strings.Join(paths, ",") != "/manifest.json,/latest.json" {
-		t.Fatalf("request paths = %v, want new path followed by legacy path", paths)
-	}
-}
-
-func TestFetchReleaseByTagFallsBackToLegacyPathOnNotFound(t *testing.T) {
-	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
-	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		switch r.URL.Path {
-		case "/0.3.83/manifest.json":
-			w.WriteHeader(http.StatusNotFound)
-		case "/v0.3.83/release.json":
-			_ = json.NewEncoder(w).Encode(want)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	got, err := fetchReleaseByTagWithOverride("0.3.83", server.URL)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.TagName != want.TagName {
-		t.Fatalf("got %+v, want %+v", got, want)
-	}
-	if strings.Join(paths, ",") != "/0.3.83/manifest.json,/v0.3.83/release.json" {
-		t.Fatalf("request paths = %v, want new path followed by legacy path", paths)
-	}
-}
-
-func TestManifestCompatibilityFallbackFailsClosed(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		statusCode int
-		body       string
-	}{
-		{name: "server error", statusCode: http.StatusInternalServerError},
-		{name: "malformed canonical manifest", statusCode: http.StatusOK, body: "not-json"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fallbackRequested := false
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/latest.json" {
-					fallbackRequested = true
-					_ = json.NewEncoder(w).Encode(ReleaseManifest{TagName: "v0.3.82", Version: "0.3.82"})
-					return
-				}
-				w.WriteHeader(tc.statusCode)
-				_, _ = w.Write([]byte(tc.body))
-			}))
-			defer server.Close()
-
-			if _, err := FetchLatestReleaseWithOverride(server.URL); err == nil {
-				t.Fatal("expected canonical manifest failure, got nil")
-			}
-			if fallbackRequested {
-				t.Fatal("legacy path must not hide a broken canonical manifest")
-			}
-		})
-	}
-}
-
 func TestFetchManifestParsesPublishedShape(t *testing.T) {
 	want := ReleaseManifest{
 		TagName: "v0.3.81",
@@ -248,14 +165,14 @@ func TestFetchManifestParsesPublishedShape(t *testing.T) {
 		},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/latest.json" {
+		if r.URL.Path != "/0.3.81/manifest.json" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(want)
 	}))
 	defer server.Close()
 
-	got, err := fetchManifest(server.URL + "/latest.json")
+	got, err := fetchManifest(server.URL + "/0.3.81/manifest.json")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -273,7 +190,7 @@ func TestFetchManifestFailsClosedOnNon200(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if _, err := fetchManifest(server.URL + "/latest.json"); err == nil {
+	if _, err := fetchManifest(server.URL + "/0.3.81/manifest.json"); err == nil {
 		t.Fatal("expected error on 404, got nil")
 	}
 }

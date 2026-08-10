@@ -40,19 +40,22 @@ Run:
 curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
-The default version selector is `latest`. Use the same `--version` option for
-the current prerelease or an exact immutable release:
+The default version selector is `latest` (the production recommendation). Use
+the same `--version` option for the release recommended by test or an exact
+immutable release:
 
 ```bash
-curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version test
 curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version vX.Y.Z-alpha.N
 ```
 
-`alpha` follows the movable prerelease manifest. An exact tag reads that
-version's immutable manifest and fails if the manifest tag differs. Automation
-may set `MULTICA_VERSION` to the same values instead of passing the option.
-The default `latest` selector reads the canonical root `manifest.json`;
-`latest.json` exists only for older clients during migration.
+`latest` and `test` select `production` and `test` from the single mutable
+`metainfo.json`. An exact tag reads that version's immutable manifest and fails if the
+manifest tag differs. Automation may set `MULTICA_VERSION` to the same values
+instead of passing the option. Test web deployments show an exact version in
+their copy-ready command so the Computer package is locked to that deployment.
+There are no root channel files. A missing or malformed `metainfo.json` is a
+release-feed failure; clients do not fall back to another mutable pointer.
 
 The installer activates the verified binary through the same VersionStore as
 `multica computer upgrade`: the public launcher path stays stable, immutable
@@ -83,8 +86,9 @@ if [ "$ARCH" = "x86_64" ]; then
 fi
 PLATFORM="${OS}-${ARCH}"
 
-# Fetch the release manifest
-curl -fsSL https://cdn.leagent.me/computer/manifest.json -o /tmp/multica-manifest.json
+# Fetch production from the canonical environment metainfo
+curl -fsSL https://cdn.leagent.me/computer/metainfo.json -o /tmp/multica-metainfo.json
+jq '.environments.production' /tmp/multica-metainfo.json >/tmp/multica-manifest.json
 LATEST=$(jq -r '.tag' /tmp/multica-manifest.json)
 URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/multica-manifest.json)
 SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/multica-manifest.json)
@@ -104,7 +108,7 @@ BINARY_SHA256=$(shasum -a 256 /tmp/multica 2>/dev/null | awk '{print $1}' || sha
   --version "$LATEST" \
   --sha256 "$BINARY_SHA256" \
   --launcher "$HOME/.local/bin/multica"
-rm /tmp/multica /tmp/multica.tar.gz /tmp/multica-manifest.json
+rm /tmp/multica /tmp/multica.tar.gz /tmp/multica-manifest.json /tmp/multica-metainfo.json
 ```
 
 Make the user-owned directory available in the current shell:
@@ -191,11 +195,11 @@ This downloads the latest Windows binary from the release feed, verifies and
 activates it through VersionStore at `%USERPROFILE%\.multica\bin\`, and adds
 that stable launcher to your user PATH.
 
-Use the same `-Version` parameter for the current prerelease or an exact
-immutable release:
+Use the same `-Version` parameter for the release recommended by test or an
+exact immutable release:
 
 ```powershell
-& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version alpha
+& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version test
 & ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version vX.Y.Z-alpha.N
 ```
 

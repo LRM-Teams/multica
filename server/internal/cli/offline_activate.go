@@ -29,6 +29,15 @@ func (s *VersionStore) OfflineActivateStaged(
 	candidateTag string,
 	attemptID string,
 ) (ActivationState, string, error) {
+	return s.offlineActivateStaged(ctx, candidateTag, attemptID, false)
+}
+
+func (s *VersionStore) offlineActivateStaged(
+	ctx context.Context,
+	candidateTag string,
+	attemptID string,
+	allowUnusablePrevious bool,
+) (ActivationState, string, error) {
 	if s == nil {
 		return ActivationState{}, "", fmt.Errorf("version store is required")
 	}
@@ -80,7 +89,12 @@ func (s *VersionStore) OfflineActivateStaged(
 		return ActivationState{}, "", err
 	}
 
-	next, err := s.CompareAndSwapActivation(ctx, state.Generation, staged.Version)
+	next, err := s.compareAndSwapActivation(
+		ctx,
+		state.Generation,
+		staged.Version,
+		allowUnusablePrevious,
+	)
 	if err != nil {
 		abort("activation_cas_failed")
 		return ActivationState{}, "", fmt.Errorf("CAS Active: %w", err)
@@ -117,6 +131,12 @@ func (s *VersionStore) RollbackToPreviousActive(ctx context.Context, attemptID s
 	}
 	if strings.TrimSpace(state.PreviousVersion) == "" {
 		return ActivationState{}, "", errors.New("previous Active version is unavailable for rollback")
+	}
+	if state.PreviousVersionUnusable {
+		return ActivationState{}, "", fmt.Errorf(
+			"previous Active version %s is unusable and cannot be rolled back",
+			state.PreviousVersion,
+		)
 	}
 	return s.OfflineActivateStaged(ctx, state.PreviousVersion, attemptID)
 }

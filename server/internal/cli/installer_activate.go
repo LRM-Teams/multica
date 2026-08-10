@@ -105,7 +105,11 @@ func (s *VersionStore) InstallLauncherRelease(
 	state := before
 	activated := before.ActiveVersion != tag
 	if activated {
-		state, _, err = s.OfflineActivateStaged(ctx, tag, "")
+		// A verified explicit install is also the recovery path when a locally
+		// modified current Active can no longer be retained as a safe rollback.
+		// Ordinary daemon/config upgrades remain fail-closed through the public
+		// OfflineActivateStaged path.
+		state, _, err = s.offlineActivateStaged(ctx, tag, "", true)
 		if err != nil {
 			return LauncherInstallResult{}, fmt.Errorf("activate installer release: %w", err)
 		}

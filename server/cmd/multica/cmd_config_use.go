@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"strings"
@@ -23,16 +24,13 @@ type packageActivation struct {
 
 // environmentSwitcher is the one orchestration boundary for changing a live
 // Computer's service environment. Cobra only selects the target; this module
-// owns package staging, the no-new-claims barrier, config commit, restart,
-// acceptance, and rollback.
+// owns package staging, explicit interruption confirmation, config commit,
+// restart, acceptance, and rollback.
 type environmentSwitcher struct {
 	loadConfig      func() (cli.CLIConfig, error)
 	saveConfig      func(cli.CLIConfig) error
 	activeBindings  func(string) ([]computer.WorkspaceBinding, error)
 	health          func(context.Context) map[string]any
-	controlToken    func() (string, error)
-	prepare         func(context.Context, string) error
-	release         func(context.Context, string) error
 	withPackageLock func(context.Context, func() error) error
 	stagePackage    func(context.Context, cli.ReleaseChannel) (string, error)
 	activatePackage func(context.Context, string) (packageActivation, error)
@@ -49,6 +47,7 @@ type environmentSwitchResult struct {
 	BinaryPath    string
 	Restarted     bool
 	AlreadyActive bool
+	Aborted       bool
 }
 
 func newEnvironmentSwitcher() (*environmentSwitcher, error) {
@@ -65,13 +64,6 @@ func newEnvironmentSwitcher() (*environmentSwitcher, error) {
 		},
 		health: func(ctx context.Context) map[string]any {
 			return lifecycle.Health(ctx)
-		},
-		controlToken: func() (string, error) { return readMachineUpgradeControlToken("") },
-		prepare: func(ctx context.Context, token string) error {
-			return computer.RequestEnvironmentSwitch(ctx, computer.HealthPort(""), token)
-		},
-		release: func(ctx context.Context, token string) error {
-			return computer.ReleaseEnvironmentSwitch(ctx, computer.HealthPort(""), token)
 		},
 		withPackageLock: store.WithMachineMutationLock,
 		stagePackage: func(ctx context.Context, channel cli.ReleaseChannel) (string, error) {
@@ -130,7 +122,7 @@ func newEnvironmentSwitcher() (*environmentSwitcher, error) {
 	}, nil
 }
 
-func (s *environmentSwitcher) Switch(ctx context.Context, environment cli.ServiceEnvironment) (environmentSwitchResult, error) {
+func (s *environmentSwitcher) Switch(ctx context.Context, environment cli.ServiceEnvironment, confirmInterrupt func(int64) (bool, error)) (environmentSwitchResult, error) {
 	current, err := s.loadConfig()
 	if err != nil {
 		return environmentSwitchResult{}, err
@@ -160,14 +152,36 @@ func (s *environmentSwitcher) Switch(ctx context.Context, environment cli.Servic
 		}, nil
 	}
 
+	channel := cli.ReleaseChannelForEnvironment(environment)
+	var targetVersion string
+	err = s.withPackageLock(ctx, func() error {
+		var stageErr error
+		targetVersion, stageErr = s.stagePackage(ctx, channel)
+		return stageErr
+	})
+	if err != nil {
+		return environmentSwitchResult{}, err
+	}
+
 	healthCtx, healthCancel := context.WithTimeout(ctx, 2*time.Second)
 	health := s.health(healthCtx)
 	healthCancel()
 	wasRunning := computer.Alive(health)
-	channel := cli.ReleaseChannelForEnvironment(environment)
+	if wasRunning {
+		if confirmInterrupt == nil {
+			return environmentSwitchResult{}, fmt.Errorf("environment switch confirmation is required while Computer is running")
+		}
+		activeTaskCount, _ := health["active_task_count"].(float64)
+		confirmed, confirmErr := confirmInterrupt(int64(activeTaskCount))
+		if confirmErr != nil {
+			return environmentSwitchResult{}, confirmErr
+		}
+		if !confirmed {
+			return environmentSwitchResult{Environment: environment, PackageSource: packageSourceName(channel), Aborted: true}, nil
+		}
+	}
+
 	var activation packageActivation
-	var controlToken string
-	prepared := false
 	rollbackCommitted := func(why error) error {
 		var rollbackErrors []string
 		if activation.Changed {
@@ -180,14 +194,6 @@ func (s *environmentSwitcher) Switch(ctx context.Context, environment cli.Servic
 		if err := s.saveConfig(previous); err != nil {
 			rollbackErrors = append(rollbackErrors, "config: "+err.Error())
 		}
-		if prepared {
-			releaseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := s.release(releaseCtx, controlToken); err != nil {
-				rollbackErrors = append(rollbackErrors, "claim barrier: "+err.Error())
-			}
-			cancel()
-			prepared = false
-		}
 		if len(rollbackErrors) > 0 {
 			return fmt.Errorf("%w; rollback incomplete: %s", why, strings.Join(rollbackErrors, "; "))
 		}
@@ -195,23 +201,10 @@ func (s *environmentSwitcher) Switch(ctx context.Context, environment cli.Servic
 	}
 
 	err = s.withPackageLock(ctx, func() error {
-		targetVersion, err := s.stagePackage(ctx, channel)
-		if err != nil {
-			return err
-		}
-		if wasRunning {
-			controlToken, err = s.controlToken()
-			if err != nil {
-				return fmt.Errorf("read Computer owner credential: %w", err)
-			}
-			if err := s.prepare(ctx, controlToken); err != nil {
-				return fmt.Errorf("wait for the running Computer to become idle: %w", err)
-			}
-			prepared = true
-		}
-		activation, err = s.activatePackage(ctx, targetVersion)
-		if err != nil {
-			return rollbackCommitted(fmt.Errorf("activate %s package: %w", packageSourceName(channel), err))
+		var activateErr error
+		activation, activateErr = s.activatePackage(ctx, targetVersion)
+		if activateErr != nil {
+			return rollbackCommitted(fmt.Errorf("activate %s package: %w", packageSourceName(channel), activateErr))
 		}
 		if err := s.saveConfig(next); err != nil {
 			return rollbackCommitted(fmt.Errorf("save %s environment: %w", environment, err))
@@ -225,9 +218,6 @@ func (s *environmentSwitcher) Switch(ctx context.Context, environment cli.Servic
 				}
 				return rollbackCommitted(stopErr)
 			}
-			// The owner process is gone; its in-memory claim barrier no longer
-			// exists and must not be "released" over a reused local port.
-			prepared = false
 		}
 		return nil
 	})
@@ -331,9 +321,30 @@ func runConfigUse(cmd *cobra.Command, args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), environmentSwitchTimeout)
 	defer cancel()
-	result, err := switcher.Switch(ctx, environment)
+	skipConfirmation, err := cmd.Flags().GetBool("yes")
 	if err != nil {
 		return err
+	}
+	confirm := func(activeTaskCount int64) (bool, error) {
+		if skipConfirmation {
+			return true, nil
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "Computer is running. Switching environments restarts it immediately and may interrupt current work.")
+		fmt.Fprintf(cmd.ErrOrStderr(), "Active tasks reported: %d. Continue? [y/N] ", activeTaskCount)
+		answer, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		if readErr != nil && strings.TrimSpace(answer) == "" {
+			return false, fmt.Errorf("read environment switch confirmation: %w", readErr)
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		return answer == "y" || answer == "yes", nil
+	}
+	result, err := switcher.Switch(ctx, environment, confirm)
+	if err != nil {
+		return err
+	}
+	if result.Aborted {
+		fmt.Fprintln(cmd.OutOrStdout(), "Environment switch aborted.")
+		return nil
 	}
 	if result.AlreadyActive {
 		fmt.Fprintf(cmd.OutOrStdout(), "%s is already active (%s packages).\n", result.Environment, result.PackageSource)
@@ -352,4 +363,8 @@ var configUseCmd = &cobra.Command{
 	Short: "Switch the Computer environment and its matching package source",
 	Args:  exactArgs(1),
 	RunE:  runConfigUse,
+}
+
+func init() {
+	configUseCmd.Flags().BoolP("yes", "y", false, "Switch without the confirmation prompt")
 }

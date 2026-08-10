@@ -94,9 +94,9 @@ jobs:
   # URL, or Caddy/local-disk copy: upload, cache refresh, and consumer-visible
   # verification are one release gate.
   #
-  # Archives are stored once under computer/{version}/. The small manifest is
-  # also written to the previous latest.json and {tag}/release.json names so
-  # already-installed daemons can cross the naming migration.
+  # Archives are stored once under computer/{version}/. Environment selection
+  # has exactly one mutable source of truth, computer/metainfo.json; every
+  # release has exactly one immutable computer/{version}/manifest.json.
   #
   # RELEASES_OSS_* belongs to a dedicated RAM identity. Its policy must allow
   # writes only below oss://leagent/computer/ and CDN RefreshObjectCaches for
@@ -107,6 +107,9 @@ jobs:
     if: github.repository == 'LRM-Teams/multica'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: computer-release-feed
+      cancel-in-progress: false
     permissions:
       contents: read
     env:
@@ -177,16 +180,89 @@ jobs:
             >"${RUNNER_TEMP}/manifest.json"
           cat "${RUNNER_TEMP}/manifest.json"
 
+      - name: Build canonical environment metainfo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          current="${RUNNER_TEMP}/current-metainfo.json"
+          status="$(curl --retry 4 --retry-all-errors --connect-timeout 10 --max-time 30 \
+            -sS -o "$current" -w '%{http_code}' "${PUBLIC_BASE_URL}/metainfo.json" || true)"
+          if [ "$status" = "200" ]; then
+            jq -e '
+              .schema_version == 1 and
+              (.environments.production | type == "object") and
+              (.environments.test | type == "object")
+            ' "$current" >/dev/null
+          elif [ "$status" = "404" ]; then
+            # One-time/bootstrap recovery: derive the opposite environment
+            # from the newest published GitHub release, then read only that
+            # release's canonical immutable manifest. No channel-file alias is
+            # created or consumed.
+            releases="$(gh api --paginate --slurp "repos/${{ github.repository }}/releases?per_page=100")"
+            if [ "$IS_STABLE" = "true" ]; then
+              other_tag="$(jq -r --arg current "$TAG_NAME" '
+                [.[][] | select(
+                  .draft == false and
+                  .tag_name != $current and
+                  (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-(alpha|beta|rc)\\.[0-9]+$"))
+                )][0].tag_name // empty
+              ' <<<"$releases")"
+              other_environment="test"
+            else
+              other_tag="$(jq -r '
+                [.[][] | select(
+                  .draft == false and
+                  (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                )][0].tag_name // empty
+              ' <<<"$releases")"
+              other_environment="production"
+            fi
+            [[ "$other_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]
+            other_manifest="${RUNNER_TEMP}/bootstrap-${other_environment}.json"
+            curl --retry 4 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -fsSL "${PUBLIC_BASE_URL}/${other_tag#v}/manifest.json" -o "$other_manifest"
+            jq -n \
+              --arg environment "$other_environment" \
+              --slurpfile other "$other_manifest" \
+              --slurpfile current "${RUNNER_TEMP}/manifest.json" \
+              '{schema_version: 1, environments: {}} |
+              .environments[$environment] = $other[0] |
+              .environments[(if $environment == "production" then "test" else "production" end)] = $current[0]' \
+              >"$current"
+          else
+            echo "::error title=Could not read canonical Computer metainfo::HTTP ${status}"
+            exit 1
+          fi
+
+          environment="test"
+          if [ "$IS_STABLE" = "true" ]; then
+            environment="production"
+          fi
+          jq \
+            --arg environment "$environment" \
+            --slurpfile manifest "${RUNNER_TEMP}/manifest.json" \
+            '.schema_version = 1 | .environments[$environment] = $manifest[0]' \
+            "$current" >"${RUNNER_TEMP}/metainfo.json"
+
+          production_tag="$(jq -r '.environments.production.tag // empty' "${RUNNER_TEMP}/metainfo.json")"
+          test_tag="$(jq -r '.environments.test.tag // empty' "${RUNNER_TEMP}/metainfo.json")"
+          [[ "$production_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$test_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]
+          jq -e '
+            .environments.production.tag == ("v" + .environments.production.version) and
+            .environments.test.tag == ("v" + .environments.test.version)
+          ' "${RUNNER_TEMP}/metainfo.json" >/dev/null
+          cat "${RUNNER_TEMP}/metainfo.json"
+
       - name: Publish immutable per-version objects
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
           canonical_prefix="${RELEASE_PREFIX}/${version}"
-          legacy_prefix="${RELEASE_PREFIX}/${TAG_NAME}"
           shopt -s nullglob
           immutable_keys=(
             "${canonical_prefix}/manifest.json"
-            "${legacy_prefix}/release.json"
             "${canonical_prefix}/checksums.txt"
           )
           for f in "${RUNNER_TEMP}/release-assets"/multica-cli-*.tar.gz "${RUNNER_TEMP}/release-assets"/multica-cli-*.zip; do
@@ -208,13 +284,30 @@ jobs:
           aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
             --cache-control "public,max-age=31536000,immutable" \
             "${RUNNER_TEMP}/release-assets/checksums.txt" "s3://${OSS_BUCKET}/${canonical_prefix}/checksums.txt"
-          for destination in "${canonical_prefix}/manifest.json" "${legacy_prefix}/release.json"; do
-            aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
-              --cache-control "public,max-age=31536000,immutable" \
-              "${RUNNER_TEMP}/manifest.json" "s3://${OSS_BUCKET}/${destination}"
-          done
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+            --cache-control "public,max-age=31536000,immutable" \
+            "${RUNNER_TEMP}/manifest.json" "s3://${OSS_BUCKET}/${canonical_prefix}/manifest.json"
           echo "Published canonical release objects: s3://${OSS_BUCKET}/${canonical_prefix}/"
-          echo "Published legacy manifest alias: s3://${OSS_BUCKET}/${legacy_prefix}/release.json"
+
+      - name: Publish canonical environment metainfo
+        run: |
+          set -euo pipefail
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+            --cache-control "no-cache,max-age=0,must-revalidate" \
+            "${RUNNER_TEMP}/metainfo.json" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/metainfo.json"
+          echo "Published ${TAG_NAME} through the canonical environment metainfo"
+
+      - name: Remove retired release metadata aliases
+        run: |
+          set -euo pipefail
+          for name in manifest.json latest.json alpha.json; do
+            aws s3 rm --endpoint-url "$OSS_ENDPOINT_URL" \
+              "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/${name}"
+          done
+          aws s3 rm --endpoint-url "$OSS_ENDPOINT_URL" \
+            "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/" --recursive \
+            --exclude "*" --include "v*/release.json"
+          echo "Removed root channel files and tagged release.json aliases"
 
       - name: Publish install scripts + docs (stable path, not per-version)
         run: |
@@ -224,26 +317,6 @@ jobs:
               --cache-control "no-cache,max-age=0,must-revalidate" \
               "$file" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/$(basename "$file")"
           done
-
-      - name: Promote release manifest
-        if: env.IS_STABLE == 'true'
-        run: |
-          set -euo pipefail
-          for name in manifest.json latest.json; do
-            aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
-              --cache-control "no-cache,max-age=0,must-revalidate" \
-              "${RUNNER_TEMP}/manifest.json" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/${name}"
-          done
-          echo "Promoted ${TAG_NAME} to the canonical and legacy release manifests"
-
-      - name: Promote alpha release manifest
-        if: env.IS_STABLE != 'true'
-        run: |
-          set -euo pipefail
-          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
-            --cache-control "no-cache,max-age=0,must-revalidate" \
-            "${RUNNER_TEMP}/manifest.json" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/alpha.json"
-          echo "Promoted ${TAG_NAME} to the alpha release channel"
 
       - name: Install pinned Aliyun CLI
         run: |
@@ -272,18 +345,15 @@ jobs:
             --access-key-id "$CDN_ACCESS_KEY_ID" \
             --access-key-secret "$CDN_ACCESS_KEY_SECRET"
           version="${TAG_NAME#v}"
-          printf -v object_paths '%s\n%s\n%s\n%s\n%s' \
+          printf -v object_paths '%s\n%s\n%s\n%s\n%s\n%s\n%s' \
             "${PUBLIC_BASE_URL}/install.sh" \
             "${PUBLIC_BASE_URL}/install.ps1" \
             "${PUBLIC_BASE_URL}/CLI_INSTALL.md" \
             "${PUBLIC_BASE_URL}/${version}/manifest.json" \
-            "${PUBLIC_BASE_URL}/${TAG_NAME}/release.json"
-          if [ "$IS_STABLE" = "true" ]; then
-            object_paths+=$'\n'"${PUBLIC_BASE_URL}/manifest.json"
-            object_paths+=$'\n'"${PUBLIC_BASE_URL}/latest.json"
-          else
-            object_paths+=$'\n'"${PUBLIC_BASE_URL}/alpha.json"
-          fi
+            "${PUBLIC_BASE_URL}/metainfo.json" \
+            "${PUBLIC_BASE_URL}/manifest.json" \
+            "${PUBLIC_BASE_URL}/latest.json"
+          object_paths+=$'\n'"${PUBLIC_BASE_URL}/alpha.json"
           aliyun --config-path "$config" \
             cdn RefreshObjectCaches \
             --ObjectType File \
@@ -311,22 +381,30 @@ jobs:
             echo "::error title=CDN object does not match uploaded content::${label} (${url})"
             exit 1
           }
+          verify_absent() {
+            local url="$1" label="$2"
+            local status attempt
+            for attempt in $(seq 1 12); do
+              status="$(curl -sS -o /dev/null -w '%{http_code}' "$url" || true)"
+              if [ "$status" = "404" ]; then
+                return 0
+              fi
+              echo "Waiting for CDN removal: ${label} (${attempt}/12, HTTP ${status})"
+              sleep 5
+            done
+            echo "::error title=Retired CDN object is still served::${label} (${url})"
+            exit 1
+          }
           version="${TAG_NAME#v}"
           verify_matches "${PUBLIC_BASE_URL}/${version}/checksums.txt" \
             "${RUNNER_TEMP}/release-assets/checksums.txt" "checksums.txt"
           verify_matches "${PUBLIC_BASE_URL}/${version}/manifest.json" \
             "${RUNNER_TEMP}/manifest.json" "canonical version manifest"
-          verify_matches "${PUBLIC_BASE_URL}/${TAG_NAME}/release.json" \
-            "${RUNNER_TEMP}/manifest.json" "legacy version manifest"
-          if [ "$IS_STABLE" = "true" ]; then
-            verify_matches "${PUBLIC_BASE_URL}/manifest.json" \
-              "${RUNNER_TEMP}/manifest.json" "canonical promoted manifest"
-            verify_matches "${PUBLIC_BASE_URL}/latest.json" \
-              "${RUNNER_TEMP}/manifest.json" "legacy promoted manifest"
-          else
-            verify_matches "${PUBLIC_BASE_URL}/alpha.json" \
-              "${RUNNER_TEMP}/manifest.json" "alpha promoted manifest"
-          fi
+          verify_matches "${PUBLIC_BASE_URL}/metainfo.json" \
+            "${RUNNER_TEMP}/metainfo.json" "canonical environment metainfo"
+          for name in manifest.json latest.json alpha.json; do
+            verify_absent "${PUBLIC_BASE_URL}/${name}" "retired ${name}"
+          done
           echo "Verified: public CDN bytes match the canonical release feed."
 
   # The web-only release policy publishes Linux amd64 images only. The served

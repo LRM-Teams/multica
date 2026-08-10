@@ -112,20 +112,23 @@ describe("UpdateSection up-to-date state (2026-08-01)", () => {
 });
 
 describe("UpdateSection manual commands", () => {
-  it("keeps a test Computer on the alpha release channel", () => {
-    configStore.getState().setDaemonConfig({ environment: "test" });
+  it("keeps a test Computer on the deployment-pinned exact release", () => {
+    configStore.getState().setDaemonConfig({
+      environment: "test",
+      computerVersion: "v0.4.24-alpha.2",
+    });
     renderSection();
 
     fireEvent.click(screen.getByRole("button", { name: "Manual commands" }));
 
     expect(
       screen.getByText(
-        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha && multica computer restart",
+        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.4.24-alpha.2 && multica computer restart",
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version alpha; multica computer restart",
+        "& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version v0.4.24-alpha.2; multica computer restart",
       ),
     ).toBeInTheDocument();
   });

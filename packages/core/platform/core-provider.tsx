@@ -29,6 +29,7 @@ function initCore(
   apiBaseUrl: string,
   appUrl: string,
   environment: ServiceEnvironment,
+  computerVersion: string,
   storage: StorageAdapter,
   onLogin?: () => void,
   onLogout?: () => void,
@@ -39,6 +40,7 @@ function initCore(
 
   configStore.setState({
     environment,
+    computerVersion: computerVersion.trim(),
     ...(appUrl.trim()
       ? { daemonAppUrl: appUrl.trim().replace(/\/+$/, "") }
       : {}),
@@ -78,6 +80,7 @@ export function CoreProvider({
   apiBaseUrl = "",
   appUrl = "",
   environment = "production",
+  computerVersion = "",
   wsUrl = "ws://localhost:8080/ws",
   storage = defaultStorage,
   cookieAuth,
@@ -96,6 +99,7 @@ export function CoreProvider({
         apiBaseUrl,
         appUrl,
         environment,
+        computerVersion,
         storage,
         onLogin,
         onLogout,
@@ -106,6 +110,7 @@ export function CoreProvider({
       apiBaseUrl,
       appUrl,
       environment,
+      computerVersion,
       storage,
       onLogin,
       onLogout,

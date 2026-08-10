@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,15 +108,22 @@ func IsBrewUpdateConfigured() bool {
 	return pkg != "" && !IsLegacyBrewPackage(pkg)
 }
 
-// ReleaseManifest is the schema used by both generations of the release feed.
-// The canonical paths are /manifest.json and /{version}/manifest.json. During
-// the staged migration, clients fall back on 404 to the existing /latest.json
-// and /{tag}/release.json paths. Platform keys are "<goos>-<goarch>", matching
-// runtime.GOOS/GOARCH.
+// ReleaseManifest describes one immutable Computer release. Exact-version
+// manifests live at /{version}/manifest.json. Mutable environment selection is
+// owned exclusively by /metainfo.json. Platform keys are "<goos>-<goarch>",
+// matching runtime.GOOS/GOARCH.
 type ReleaseManifest struct {
 	TagName   string                  `json:"tag"`
 	Version   string                  `json:"version"`
 	Platforms map[string]ReleaseAsset `json:"platforms"`
+}
+
+// ReleaseMetainfo is the single mutable Computer release pointer. Production
+// and test intentionally share this document so a consumer cannot accidentally
+// combine independent channel files from different publication generations.
+type ReleaseMetainfo struct {
+	SchemaVersion int                        `json:"schema_version"`
+	Environments  map[string]ReleaseManifest `json:"environments"`
 }
 
 // ReleaseAsset is one platform's archive: a direct URL plus the SHA-256 the
@@ -178,8 +184,6 @@ func verifyAssetSHA256(data []byte, expectedHex, assetName string) error {
 	return nil
 }
 
-var errReleaseManifestNotFound = errors.New("release manifest not found")
-
 // fetchManifest GETs and JSON-decodes a ReleaseManifest from url.
 func fetchManifest(url string) (*ReleaseManifest, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -196,7 +200,7 @@ func fetchManifest(url string) (*ReleaseManifest, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("%w: %s", errReleaseManifestNotFound, url)
+		return nil, fmt.Errorf("release manifest not found: %s", url)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("release manifest request returned %d", resp.StatusCode)
@@ -209,33 +213,44 @@ func fetchManifest(url string) (*ReleaseManifest, error) {
 	return &manifest, nil
 }
 
-// fetchManifestWithNotFoundFallback reads the new path first and falls back
-// only when it is explicitly absent. Network failures, server errors, and
-// malformed manifests fail closed so a broken canonical feed cannot be hidden
-// by a stale compatibility copy.
-func fetchManifestWithNotFoundFallback(primaryURL, fallbackURL string) (*ReleaseManifest, error) {
-	manifest, err := fetchManifest(primaryURL)
-	if err == nil {
-		return manifest, nil
-	}
-	if !errors.Is(err, errReleaseManifestNotFound) {
+func fetchReleaseMetainfo(url string) (*ReleaseMetainfo, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
 		return nil, err
 	}
-	return fetchManifest(fallbackURL)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("release metainfo not found: %s", url)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("release metainfo request returned %d", resp.StatusCode)
+	}
+
+	var metainfo ReleaseMetainfo
+	if err := json.NewDecoder(resp.Body).Decode(&metainfo); err != nil {
+		return nil, err
+	}
+	if metainfo.SchemaVersion != 1 {
+		return nil, fmt.Errorf("unsupported release metainfo schema_version %d", metainfo.SchemaVersion)
+	}
+	return &metainfo, nil
 }
 
-// fetchReleaseByTagWithOverride prefers the canonical immutable manifest and
-// falls back to the existing tagged release path while deployed daemons move
-// through the naming migration. The same server-dispatched base URL is used
-// for both attempts.
+// fetchReleaseByTagWithOverride reads the immutable manifest for one exact
+// version. The same server-dispatched base URL is used for every exact fetch.
 func fetchReleaseByTagWithOverride(tag, serverDispatched string) (*ReleaseManifest, error) {
 	baseURL := strings.TrimRight(releaseManifestBaseURLWithOverride(serverDispatched), "/")
 	tag = normalizeReleaseTag(tag)
 	version := strings.TrimPrefix(tag, "v")
-	return fetchManifestWithNotFoundFallback(
-		baseURL+"/"+version+"/manifest.json",
-		baseURL+"/"+tag+"/release.json",
-	)
+	return fetchManifest(baseURL + "/" + version + "/manifest.json")
 }
 
 // FetchReleaseByTagWithOverride is the exported form of
@@ -249,32 +264,35 @@ func FetchLatestRelease() (*ReleaseManifest, error) {
 	return FetchLatestReleaseWithOverride("")
 }
 
-// FetchLatestReleaseWithOverride prefers the canonical root manifest and
-// falls back to latest.json while deployed daemons move through the naming
-// migration. The server-dispatched top layer of the base-URL precedence is
-// applied to both attempts.
+// FetchLatestReleaseWithOverride selects production from metainfo.json. The
+// server-dispatched top layer of the base-URL precedence is applied to it.
 func FetchLatestReleaseWithOverride(serverDispatched string) (*ReleaseManifest, error) {
 	return FetchReleaseForChannelWithOverride(ReleaseChannelLatest, serverDispatched)
 }
 
-// FetchReleaseForChannelWithOverride reads the one mutable manifest pointer
-// for a release channel. Alpha deliberately has no fallback to latest: a
-// missing alpha publication is an error, never permission to cross channels.
+// FetchReleaseForChannelWithOverride selects one environment from the single
+// mutable metainfo document. There is no channel-file fallback: a missing or
+// malformed source of truth is a release-feed failure, not permission to read
+// stale metadata.
 func FetchReleaseForChannelWithOverride(channel ReleaseChannel, serverDispatched string) (*ReleaseManifest, error) {
 	channel, err := NormalizeReleaseChannel(string(channel))
 	if err != nil {
 		return nil, err
 	}
 	baseURL := strings.TrimRight(releaseManifestBaseURLWithOverride(serverDispatched), "/")
-	var manifest *ReleaseManifest
-	if channel == ReleaseChannelAlpha {
-		manifest, err = fetchManifest(baseURL + "/alpha.json")
-	} else {
-		manifest, err = fetchManifestWithNotFoundFallback(baseURL+"/manifest.json", baseURL+"/latest.json")
-	}
+	metainfo, err := fetchReleaseMetainfo(baseURL + "/metainfo.json")
 	if err != nil {
 		return nil, err
 	}
+	environment := "production"
+	if channel == ReleaseChannelAlpha {
+		environment = "test"
+	}
+	selected, ok := metainfo.Environments[environment]
+	if !ok {
+		return nil, fmt.Errorf("release metainfo is missing %s environment", environment)
+	}
+	manifest := &selected
 	if err := validateChannelManifest(channel, manifest); err != nil {
 		return nil, err
 	}

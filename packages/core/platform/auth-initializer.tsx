@@ -62,6 +62,9 @@ export function AuthInitializer({
           daemonServerUrl: cfg.daemon_server_url,
           daemonAppUrl:
             cfg.daemon_app_url || configStore.getState().daemonAppUrl,
+          // The server owns connection origins; the deployed Web image owns
+          // the exact Computer package it recommends for those origins.
+          computerVersion: configStore.getState().computerVersion,
         });
         configStore.getState().setAgentProfileConfig({
           devAccessEnabled: cfg.dev_agent_profile_access_enabled === true,

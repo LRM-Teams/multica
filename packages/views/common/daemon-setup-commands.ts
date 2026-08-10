@@ -19,6 +19,7 @@ export interface DaemonSetupTarget {
   environment?: ServiceEnvironment;
   serverUrl?: string;
   appUrl?: string;
+  computerVersion?: string;
 }
 
 export function defaultDaemonSetupMode(): DaemonSetupMode {
@@ -43,7 +44,11 @@ export function daemonSetupCommands(
   target: DaemonSetupTarget = {},
 ): DaemonSetupCommands {
   const isTest = target.environment === "test";
-  const installCmd = multicaInstallCommand(mode, target.environment);
+  const installCmd = multicaInstallCommand(
+    mode,
+    target.environment,
+    target.computerVersion,
+  );
 
   const workspace = `/${workspaceSlug || "<workspace-slug>"}`;
   const setupCmd =

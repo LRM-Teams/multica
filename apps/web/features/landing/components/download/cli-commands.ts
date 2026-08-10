@@ -7,14 +7,16 @@ export function landingCLICommands({
   environment,
   appUrl,
   apiUrl,
+  computerVersion = "",
   mode = "unix",
 }: {
   environment: "production" | "test";
   appUrl: string;
   apiUrl: string;
+  computerVersion?: string;
   mode?: MulticaInstallMode;
 }) {
-  const installCmd = multicaInstallCommand(mode, environment);
+  const installCmd = multicaInstallCommand(mode, environment, computerVersion);
   const workspace = "/<workspace-slug>";
   const setupCmd =
     environment === "test"

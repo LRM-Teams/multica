@@ -10,6 +10,7 @@ interface ConfigState {
   googleClientId: string;
   daemonServerUrl: string;
   daemonAppUrl: string;
+  computerVersion: string;
   agentProfileDevAccessEnabled: boolean;
   // Self-host gate (#3433): when true, every "Create workspace" affordance
   // must be hidden. Defaults to false so unknown / older servers behave like
@@ -25,6 +26,7 @@ interface ConfigState {
     environment?: ServiceEnvironment;
     daemonServerUrl?: string;
     daemonAppUrl?: string;
+    computerVersion?: string;
   }) => void;
   setAgentProfileConfig: (config: { devAccessEnabled?: boolean }) => void;
 }
@@ -36,6 +38,7 @@ export const configStore = createStore<ConfigState>((set) => ({
   googleClientId: "",
   daemonServerUrl: "",
   daemonAppUrl: "",
+  computerVersion: "",
   agentProfileDevAccessEnabled: false,
   workspaceCreationDisabled: false,
   setCdnDomain: (domain) => set({ cdnDomain: domain }),
@@ -45,7 +48,8 @@ export const configStore = createStore<ConfigState>((set) => ({
     environment = "production",
     daemonServerUrl = "",
     daemonAppUrl = "",
-  }) => set({ environment, daemonServerUrl, daemonAppUrl }),
+    computerVersion = "",
+  }) => set({ environment, daemonServerUrl, daemonAppUrl, computerVersion }),
   setAgentProfileConfig: ({ devAccessEnabled = false }) =>
     set({ agentProfileDevAccessEnabled: devAccessEnabled }),
 }));

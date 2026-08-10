@@ -12,6 +12,7 @@ const { installCmd: INSTALL_CMD, setupCmd: SETUP_CMD } = landingCLICommands({
   environment: ENVIRONMENT,
   appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
   apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "",
+  computerVersion: process.env.NEXT_PUBLIC_COMPUTER_VERSION ?? "",
 });
 
 /**

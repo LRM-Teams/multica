@@ -469,14 +469,15 @@ function ManualUpdateDialog({
 }) {
   const { t } = useT("runtimes");
   const environment = useConfigStore((state) => state.environment);
+  const computerVersion = useConfigStore((state) => state.computerVersion);
   const commands = [
     {
       key: "mac_linux",
-      command: `${multicaInstallCommand("unix", environment)} && multica computer restart`,
+      command: `${multicaInstallCommand("unix", environment, computerVersion)} && multica computer restart`,
     },
     {
       key: "windows",
-      command: `${multicaInstallCommand("windows-powershell", environment)}; multica computer restart`,
+      command: `${multicaInstallCommand("windows-powershell", environment, computerVersion)}; multica computer restart`,
     },
   ] as const;
 

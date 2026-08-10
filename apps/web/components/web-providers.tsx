@@ -46,6 +46,8 @@ const WEB_VERSION =
   process.env.NEXT_PUBLIC_APP_VERSION || packageJson.version || "dev";
 const WEB_ENVIRONMENT =
   process.env.NEXT_PUBLIC_ENVIRONMENT === "test" ? "test" : "production";
+const WEB_COMPUTER_VERSION =
+  process.env.NEXT_PUBLIC_COMPUTER_VERSION?.trim() ?? "";
 
 export function WebProviders({
   children,
@@ -69,6 +71,7 @@ export function WebProviders({
       apiBaseUrl={process.env.NEXT_PUBLIC_API_URL}
       appUrl={process.env.NEXT_PUBLIC_APP_URL}
       environment={WEB_ENVIRONMENT}
+      computerVersion={WEB_COMPUTER_VERSION}
       wsUrl={deriveWsUrl()}
       cookieAuth={cookieAuth}
       onLogin={setLoggedInCookie}

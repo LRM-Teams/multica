@@ -7,13 +7,13 @@ import (
 )
 
 func TestReleaseChannelFetchDoesNotCrossPointers(t *testing.T) {
+	metainfoRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/alpha.json":
-			_, _ = w.Write([]byte(`{"tag":"v0.4.0-alpha.7","version":"0.4.0-alpha.7","platforms":{}}`))
-		case "/manifest.json":
-			_, _ = w.Write([]byte(`{"tag":"v0.3.9","version":"0.3.9","platforms":{}}`))
+		case "/metainfo.json":
+			metainfoRequests++
+			_, _ = w.Write([]byte(`{"schema_version":1,"environments":{"production":{"tag":"v0.3.9","version":"0.3.9","platforms":{}},"test":{"tag":"v0.4.0-alpha.7","version":"0.4.0-alpha.7","platforms":{}}}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -28,12 +28,15 @@ func TestReleaseChannelFetchDoesNotCrossPointers(t *testing.T) {
 	if err != nil || latest.TagName != "v0.3.9" {
 		t.Fatalf("latest = %+v err=%v", latest, err)
 	}
+	if metainfoRequests != 2 {
+		t.Fatalf("metainfo requests = %d, want 2", metainfoRequests)
+	}
 }
 
 func TestMissingAlphaDoesNotFallBackToLatest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/manifest.json" {
-			_, _ = w.Write([]byte(`{"tag":"v9.9.9","version":"9.9.9","platforms":{}}`))
+		if r.URL.Path == "/metainfo.json" {
+			_, _ = w.Write([]byte(`{"schema_version":1,"environments":{"production":{"tag":"v9.9.9","version":"9.9.9","platforms":{}}}}`))
 			return
 		}
 		http.NotFound(w, r)
@@ -44,23 +47,39 @@ func TestMissingAlphaDoesNotFallBackToLatest(t *testing.T) {
 	}
 }
 
+func TestMissingMetainfoFailsWithoutChannelFallback(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	if _, err := FetchReleaseForChannelWithOverride(ReleaseChannelAlpha, server.URL); err == nil {
+		t.Fatal("missing metainfo must fail")
+	}
+	if len(paths) != 1 || paths[0] != "/metainfo.json" {
+		t.Fatalf("request paths = %v, want only metainfo", paths)
+	}
+}
+
 func TestReleaseChannelRejectsCrossChannelOrInconsistentManifest(t *testing.T) {
 	tests := []struct {
 		name, channelPath, body string
 		channel                 ReleaseChannel
 	}{
-		{"stable in alpha", "/alpha.json", `{"tag":"v1.2.3","version":"1.2.3","platforms":{}}`, ReleaseChannelAlpha},
-		{"prerelease in latest", "/manifest.json", `{"tag":"v1.2.3-alpha.1","version":"1.2.3-alpha.1","platforms":{}}`, ReleaseChannelLatest},
-		{"tag version mismatch", "/alpha.json", `{"tag":"v1.2.3-alpha.2","version":"1.2.3-alpha.1","platforms":{}}`, ReleaseChannelAlpha},
+		{"stable in test", "test", `{"tag":"v1.2.3","version":"1.2.3","platforms":{}}`, ReleaseChannelAlpha},
+		{"prerelease in production", "production", `{"tag":"v1.2.3-alpha.1","version":"1.2.3-alpha.1","platforms":{}}`, ReleaseChannelLatest},
+		{"tag version mismatch", "test", `{"tag":"v1.2.3-alpha.2","version":"1.2.3-alpha.1","platforms":{}}`, ReleaseChannelAlpha},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != tt.channelPath {
+				if r.URL.Path != "/metainfo.json" {
 					http.NotFound(w, r)
 					return
 				}
-				_, _ = w.Write([]byte(tt.body))
+				_, _ = w.Write([]byte(`{"schema_version":1,"environments":{"` + tt.channelPath + `":` + tt.body + `}}`))
 			}))
 			defer server.Close()
 			if _, err := FetchReleaseForChannelWithOverride(tt.channel, server.URL); err == nil {

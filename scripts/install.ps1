@@ -2,8 +2,8 @@
 #
 # Install CLI (default):
 #   irm https://cdn.leagent.me/computer/install.ps1 | iex
-# Install current prerelease:
-#   & ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version alpha
+# Install the release recommended by the test environment:
+#   & ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version test
 # Install one exact immutable release:
 #   & ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version v0.5.0-alpha.3
 #
@@ -31,13 +31,15 @@ $RepoWebUrl    = "https://github.com/LRM-Teams/multica"
 $ReleaseManifestBaseUrl = if ($env:MULTICA_RELEASE_MANIFEST_BASE_URL) { $env:MULTICA_RELEASE_MANIFEST_BASE_URL } else { "https://cdn.leagent.me/computer" }
 $ReleaseSelector = if ($Version) { $Version.Trim() } elseif ($env:MULTICA_VERSION) { $env:MULTICA_VERSION.Trim() } else { "latest" }
 $ReleaseVersion = ""
-if ($ReleaseSelector -in @("latest", "alpha")) {
-    $ReleaseManifestPath = if ($ReleaseSelector -eq "latest") { "manifest.json" } else { "alpha.json" }
+if ($ReleaseSelector -in @("latest", "test")) {
+    $ReleaseEnvironment = if ($ReleaseSelector -eq "latest") { "production" } else { "test" }
+    $ReleaseManifestPath = "metainfo.json"
 } elseif ($ReleaseSelector -match '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$') {
     $ReleaseVersion = $ReleaseSelector
+    $ReleaseEnvironment = ""
     $ReleaseManifestPath = "$($ReleaseVersion.Substring(1))/manifest.json"
 } else {
-    Write-Host "[ERROR] Invalid -Version '$ReleaseSelector'; use latest, alpha, or vX.Y.Z[-(alpha|beta|rc).N]." -ForegroundColor Red
+    Write-Host "[ERROR] Invalid -Version '$ReleaseSelector'; use latest, test, or vX.Y.Z[-(alpha|beta|rc).N]." -ForegroundColor Red
     exit 1
 }
 $InstallScriptUrl = "$ReleaseManifestBaseUrl/install.ps1"
@@ -112,13 +114,20 @@ function Get-SelfHostFrontendPort {
 
 function Get-ReleaseManifest {
 	try {
-		$manifest = Invoke-RestMethod -Uri "$ReleaseManifestBaseUrl/$ReleaseManifestPath" -ErrorAction Stop
+		$document = Invoke-RestMethod -Uri "$ReleaseManifestBaseUrl/$ReleaseManifestPath" -ErrorAction Stop
+		if ($ReleaseEnvironment -and $document.schema_version -ne 1) {
+			Write-Fail "Unsupported release metainfo schema_version $($document.schema_version)."
+		}
+		$manifest = if ($ReleaseEnvironment) { $document.environments.$ReleaseEnvironment } else { $document }
+		if (-not $manifest) {
+			Write-Fail "Release metainfo is missing the $ReleaseEnvironment environment."
+		}
 		$tag = "$($manifest.tag)"
         if ($ReleaseSelector -eq "latest" -and $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
             Write-Fail "The latest manifest must point to a stable vX.Y.Z release, got '$tag'."
         }
-        if ($ReleaseSelector -eq "alpha" -and $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$') {
-            Write-Fail "The alpha channel manifest must point to an alpha.N, beta.N, or rc.N release, got '$tag'."
+        if ($ReleaseSelector -eq "test" -and $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$') {
+            Write-Fail "The test environment must point to an alpha.N, beta.N, or rc.N release, got '$tag'."
         }
 		if ($ReleaseVersion -and $tag -ne $ReleaseVersion) {
 			Write-Fail "Pinned manifest tag $tag does not match requested $ReleaseVersion."

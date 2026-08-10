@@ -57,13 +57,18 @@ STUB
 
   local platform
   platform="$(_test_platform_key)"
-  cat >"$tmp/latest.json" <<JSON
+  cat >"$tmp/production-manifest.json" <<JSON
 {"tag":"v0.3.2","version":"0.3.2","platforms":{"${platform}":{"url":"https://cdn.leagent.me/computer/v0.3.2/multica-cli-0.3.2-${platform}.tar.gz","sha256":"${sha256}"}}}
 JSON
-  cat >"$tmp/alpha.json" <<JSON
+  cat >"$tmp/test-manifest.json" <<JSON
 {"tag":"v0.4.0-alpha.7","version":"0.4.0-alpha.7","platforms":{"${platform}":{"url":"https://cdn.leagent.me/computer/0.4.0-alpha.7/multica-cli-0.4.0-alpha.7-${platform}.tar.gz","sha256":"${sha256}"}}}
 JSON
-  cp "$tmp/alpha.json" "$tmp/exact.json"
+  printf '{"schema_version":1,"environments":{"production":' >"$tmp/metainfo.json"
+  tr -d '\n' <"$tmp/production-manifest.json" >>"$tmp/metainfo.json"
+  printf ',"test":' >>"$tmp/metainfo.json"
+  tr -d '\n' <"$tmp/test-manifest.json" >>"$tmp/metainfo.json"
+  printf '}}\n' >>"$tmp/metainfo.json"
+  cp "$tmp/test-manifest.json" "$tmp/exact.json"
 
   # install.sh's manifest parsing needs jq or python3 on PATH. Stage the
   # host's real one into stub-bin so the sandboxed PATH below finds it
@@ -92,9 +97,7 @@ fi
 
 manifest_source=""
 case "$*" in
-  *"/computer/manifest.json"*) manifest_source="$MULTICA_TEST_LATEST_MANIFEST" ;;
-  *"/latest.json"*) manifest_source="$MULTICA_TEST_LATEST_MANIFEST" ;;
-  *"/alpha.json"*) manifest_source="$MULTICA_TEST_ALPHA_MANIFEST" ;;
+  *"/computer/metainfo.json"*) manifest_source="$MULTICA_TEST_METAINFO" ;;
   *"/0.4.0-alpha.7/manifest.json"*) manifest_source="$MULTICA_TEST_EXACT_MANIFEST" ;;
 esac
 
@@ -153,8 +156,9 @@ _run_installer() {
     PATH="$path" \
     MULTICA_BIN_DIR="$tmp/must-not-be-used" \
     MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
-    MULTICA_TEST_LATEST_MANIFEST="$tmp/latest.json" \
-    MULTICA_TEST_ALPHA_MANIFEST="$tmp/alpha.json" \
+    MULTICA_TEST_PRODUCTION_MANIFEST="$tmp/production-manifest.json" \
+    MULTICA_TEST_METAINFO="$tmp/metainfo.json" \
+    MULTICA_TEST_TEST_MANIFEST="$tmp/test-manifest.json" \
     MULTICA_TEST_EXACT_MANIFEST="$tmp/exact.json" \
     MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
     MULTICA_TEST_ACTIVATE_LOG="$tmp/activate.log" \
@@ -206,8 +210,9 @@ _run_installer_expect_failure() {
     SHELL=/bin/bash \
     PATH="$tmp/stub-bin:/usr/bin:/bin" \
     MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
-    MULTICA_TEST_LATEST_MANIFEST="$tmp/latest.json" \
-    MULTICA_TEST_ALPHA_MANIFEST="$tmp/alpha.json" \
+    MULTICA_TEST_PRODUCTION_MANIFEST="$tmp/production-manifest.json" \
+    MULTICA_TEST_METAINFO="$tmp/metainfo.json" \
+    MULTICA_TEST_TEST_MANIFEST="$tmp/test-manifest.json" \
     MULTICA_TEST_EXACT_MANIFEST="$tmp/exact.json" \
     MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
     MULTICA_TEST_ACTIVATE_LOG="$tmp/activate.log" \
@@ -278,21 +283,21 @@ test_same_version_legacy_path_is_migrated_to_user_local() {
   fi
 }
 
-test_version_selector_installs_alpha_pointer() {
+test_version_selector_installs_test_environment() {
   local tmp
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
 
   _setup_sandbox "$tmp"
-  _run_installer "$tmp" /bin/zsh "" alpha
+  _run_installer "$tmp" /bin/zsh "" test
 
-  if ! grep -qF "https://cdn.leagent.me/computer/alpha.json" "$tmp/curl.log"; then
-    echo "--version alpha must read only the alpha pointer" >&2
+  if ! grep -qF "https://cdn.leagent.me/computer/metainfo.json" "$tmp/curl.log"; then
+    echo "--version test must read canonical environment metainfo" >&2
     cat "$tmp/curl.log" >&2
     return 1
   fi
   if grep -qF "/latest.json" "$tmp/curl.log"; then
-    echo "alpha selection must never fall back to latest" >&2
+    echo "test selection must never fall back to legacy latest" >&2
     cat "$tmp/curl.log" >&2
     return 1
   fi
@@ -306,8 +311,8 @@ test_default_uses_canonical_manifest_not_legacy_latest_file() {
   _setup_sandbox "$tmp"
   _run_installer "$tmp" /bin/zsh
 
-  if ! grep -qF "https://cdn.leagent.me/computer/manifest.json" "$tmp/curl.log"; then
-    echo "the default installer must read the canonical root manifest" >&2
+  if ! grep -qF "https://cdn.leagent.me/computer/metainfo.json" "$tmp/curl.log"; then
+    echo "the default installer must read canonical environment metainfo" >&2
     cat "$tmp/curl.log" >&2
     return 1
   fi
@@ -349,8 +354,9 @@ test_invalid_version_selector_fails_before_network() {
     SHELL=/bin/bash \
     PATH="$tmp/stub-bin:/usr/bin:/bin" \
     MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
-    MULTICA_TEST_LATEST_MANIFEST="$tmp/latest.json" \
-    MULTICA_TEST_ALPHA_MANIFEST="$tmp/alpha.json" \
+    MULTICA_TEST_PRODUCTION_MANIFEST="$tmp/production-manifest.json" \
+    MULTICA_TEST_METAINFO="$tmp/metainfo.json" \
+    MULTICA_TEST_TEST_MANIFEST="$tmp/test-manifest.json" \
     MULTICA_TEST_EXACT_MANIFEST="$tmp/exact.json" \
     MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
     bash "$ROOT_DIR/scripts/install.sh" --version nightly >"$tmp/install.out" 2>"$tmp/install.err"
@@ -373,12 +379,45 @@ test_invalid_version_selector_fails_before_network() {
   fi
 }
 
+test_alpha_selector_is_not_retained() {
+  local tmp help_output
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  _run_installer_expect_failure "$tmp" alpha
+  if ! grep -qF "Invalid --version 'alpha'" "$tmp/install.err"; then
+    echo "alpha must not remain as a hidden test compatibility selector" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
+  if [[ -s "$tmp/curl.log" ]]; then
+    echo "the removed alpha selector must fail before any network request" >&2
+    cat "$tmp/curl.log" >&2
+    return 1
+  fi
+
+  help_output="$(bash "$ROOT_DIR/scripts/install.sh" --help)"
+  if ! grep -qF "Select latest (default), test, or an exact release tag" <<<"$help_output"; then
+    echo "installer help must describe the test selector" >&2
+    printf '%s\n' "$help_output" >&2
+    return 1
+  fi
+  if grep -qF "Select latest (default), alpha" <<<"$help_output"; then
+    echo "installer help must not advertise the removed alpha selector" >&2
+    printf '%s\n' "$help_output" >&2
+    return 1
+  fi
+}
+
 test_manifest_pointer_cannot_cross_release_channels() {
   local tmp
 
   tmp="$(mktemp -d)"
   _setup_sandbox "$tmp"
-  cp "$tmp/alpha.json" "$tmp/latest.json"
+  jq '.environments.production = .environments.test' \
+    "$tmp/metainfo.json" >"$tmp/metainfo.invalid.json"
+  mv "$tmp/metainfo.invalid.json" "$tmp/metainfo.json"
   _run_installer_expect_failure "$tmp"
   if ! grep -qF "latest manifest must point to a stable" "$tmp/install.err"; then
     echo "expected latest-to-prerelease rejection" >&2
@@ -389,10 +428,12 @@ test_manifest_pointer_cannot_cross_release_channels() {
 
   tmp="$(mktemp -d)"
   _setup_sandbox "$tmp"
-  cp "$tmp/latest.json" "$tmp/alpha.json"
-  _run_installer_expect_failure "$tmp" alpha
-  if ! grep -qF "alpha channel manifest must point to" "$tmp/install.err"; then
-    echo "expected alpha-to-stable rejection" >&2
+  jq '.environments.test = .environments.production' \
+    "$tmp/metainfo.json" >"$tmp/metainfo.invalid.json"
+  mv "$tmp/metainfo.invalid.json" "$tmp/metainfo.json"
+  _run_installer_expect_failure "$tmp" test
+  if ! grep -qF "test environment must point to" "$tmp/install.err"; then
+    echo "expected test-to-stable rejection" >&2
     cat "$tmp/install.err" >&2
     return 1
   fi
@@ -408,6 +449,23 @@ test_manifest_pointer_cannot_cross_release_channels() {
     return 1
   fi
   rm -rf "$tmp"
+}
+
+test_unsupported_metainfo_schema_fails_closed() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  jq '.schema_version = 2' "$tmp/metainfo.json" >"$tmp/metainfo.unsupported.json"
+  mv "$tmp/metainfo.unsupported.json" "$tmp/metainfo.json"
+  _run_installer_expect_failure "$tmp"
+
+  if ! grep -qF "Could not resolve the selected release" "$tmp/install.err"; then
+    echo "unsupported metainfo schema must fail before installation" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
 }
 
 test_fish_path_config_is_idempotent() {
@@ -551,15 +609,18 @@ test_checksum_mismatch_refuses_install() {
   # Corrupt the manifest's advertised checksum so it no longer matches the
   # archive the stub curl serves — this must fail closed, not install an
   # unverified binary.
-  sed -i.bak 's/"sha256":"[^"]*"/"sha256":"0000000000000000000000000000000000000000000000000000000000000000"/' "$tmp/latest.json"
+  jq '.environments.production.platforms[] .sha256 = "0000000000000000000000000000000000000000000000000000000000000000"' \
+    "$tmp/metainfo.json" >"$tmp/metainfo.corrupt.json"
+  mv "$tmp/metainfo.corrupt.json" "$tmp/metainfo.json"
 
   set +e
   HOME="$tmp/home" \
     SHELL=/bin/bash \
     PATH="$tmp/stub-bin:/usr/bin:/bin" \
     MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
-    MULTICA_TEST_LATEST_MANIFEST="$tmp/latest.json" \
-    MULTICA_TEST_ALPHA_MANIFEST="$tmp/alpha.json" \
+    MULTICA_TEST_PRODUCTION_MANIFEST="$tmp/production-manifest.json" \
+    MULTICA_TEST_METAINFO="$tmp/metainfo.json" \
+    MULTICA_TEST_TEST_MANIFEST="$tmp/test-manifest.json" \
     MULTICA_TEST_EXACT_MANIFEST="$tmp/exact.json" \
     MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
     bash "$ROOT_DIR/scripts/install.sh" >"$tmp/install.out" 2>"$tmp/install.err"
@@ -598,15 +659,22 @@ test_powershell_installer_uses_same_version_store_bridge() {
     echo "PowerShell installer still overwrites the launcher outside VersionStore" >&2
     return 1
   fi
+  if grep -Fq -- '@("latest", "test", "alpha")' <<<"$script" ||
+    grep -Fq -- '@("test", "alpha")' <<<"$script"; then
+    echo "PowerShell installer must not retain the alpha compatibility selector" >&2
+    return 1
+  fi
 }
 
 test_default_installs_only_to_user_local_without_sudo
 test_default_uses_canonical_manifest_not_legacy_latest_file
 test_same_version_legacy_path_is_migrated_to_user_local
-test_version_selector_installs_alpha_pointer
+test_version_selector_installs_test_environment
 test_version_selector_installs_exact_immutable_release
 test_invalid_version_selector_fails_before_network
+test_alpha_selector_is_not_retained
 test_manifest_pointer_cannot_cross_release_channels
+test_unsupported_metainfo_schema_fails_closed
 test_fish_path_config_is_idempotent
 test_bash_login_and_non_login_shells_resolve_canonical_path
 test_managed_block_moves_after_legacy_shadow_and_stays_idempotent

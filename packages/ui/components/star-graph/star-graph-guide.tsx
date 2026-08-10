@@ -18,32 +18,9 @@
 
 import { cn } from "@multica/ui/lib/utils";
 
-export interface StarGraphGuideStep {
-  /** Stable step key. */
-  key: string;
-  /** Short heading. */
-  title: string;
-  /** Plain-language body. */
-  body: string;
-}
-
-export const STAR_GRAPH_GUIDE_STEPS: readonly StarGraphGuideStep[] = [
-  {
-    key: "levels",
-    title: "成果等级",
-    body: "大圆是已融合的成果，小圆点是在工作的 Agent。",
-  },
-  {
-    key: "agent",
-    title: "S 级 Agent",
-    body: "小点是正在运行的 Agent：会显示工作、等待、受阻或已完成状态。",
-  },
-  {
-    key: "lines",
-    title: "连线与聚类",
-    body: "实线表示支持或分解，虚线表示挑战或新方向；虚线圈代表真实成员的聚类边界。",
-  },
-];
+import {
+  STAR_GRAPH_GUIDE_STEPS,
+} from "./guide-steps";
 
 export interface StarGraphGuideProps {
   /** Controlled 0-based step index. */
@@ -85,11 +62,9 @@ export function StarGraphGuide({
   };
 
   return (
-    <div
+    <section
       data-testid="star-graph-guide"
-      role="dialog"
       aria-label="星图引导"
-      aria-modal="false"
       className={cn("sg-guide", className)}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -134,6 +109,6 @@ export function StarGraphGuide({
           {isLast ? "完成" : "下一步"}
         </button>
       </div>
-    </div>
+    </section>
   );
 }

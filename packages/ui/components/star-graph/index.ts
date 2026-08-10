@@ -12,6 +12,8 @@ import "./styles.css";
 
 export * from "./tier";
 export * from "./state";
+export * from "./guide-steps";
+export * from "./relations";
 export * from "./star-graph-node";
 export * from "./star-graph-map-key";
 export * from "./star-graph-guide";

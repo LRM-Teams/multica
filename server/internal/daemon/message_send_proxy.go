@@ -2,15 +2,11 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -22,17 +18,17 @@ import (
 // credentialProxyMessageSendRequest is deliberately not the Server request
 // shape.  In particular, Agent code cannot provide a client identity or a
 // seen cursor: both are machine-local Draft state.
+//
+// Raft-aligned: chat send identity is an independent uuid (or draft reuse for
+// the same intent). There is no turn-coordinate batch client_message_id.
 type credentialProxyMessageSendRequest struct {
-	AgentID        string   `json:"agent_id"`
-	WorkspaceID    string   `json:"workspace_id"`
-	Target         string   `json:"target"`
-	Content        string   `json:"content"`
-	AttachmentIDs  []string `json:"attachment_ids"`
-	SendDraft      bool     `json:"send_draft,omitempty"`
-	Anyway         bool     `json:"anyway,omitempty"`
-	ConversationID string   `json:"conversation_id,omitempty"`
-	SeqFrom        int64    `json:"seq_from,omitempty"`
-	SeqTo          int64    `json:"seq_to,omitempty"`
+	AgentID       string   `json:"agent_id"`
+	WorkspaceID   string   `json:"workspace_id"`
+	Target        string   `json:"target"`
+	Content       string   `json:"content"`
+	AttachmentIDs []string `json:"attachment_ids"`
+	SendDraft     bool     `json:"send_draft,omitempty"`
+	Anyway        bool     `json:"anyway,omitempty"`
 	// Kind is the optional structured agent output kind (LRM-1529).
 	Kind string `json:"kind,omitempty"`
 }
@@ -194,34 +190,14 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		if err != nil {
 			return messageDraft{}, http.StatusConflict, err
 		}
-		// A held normal send leaves an outstanding Draft for the target. When a
-		// re-driven normal send carries the same content (same intent), reuse its
-		// stable client_message_id instead of minting a fresh identity: the server
-		// (workspace,channel,author,client_message_id) dedup then recognizes the
-		// retry and stops the duplicate (regression seq86/87). Distinct content is
-		// a new intent, so it forwards to a fresh identity as before.
-		//
-		// Turn-at-most-once: when the agent is processing one exchange batch (a
-		// single conversation spanning seq_from..seq_to), every send/retry of that
-		// batch shares ONE stable client_message_id derived from the batch
-		// identity, so the server dedup collapses an accidental re-delivery (the
-		// "same message sent twice" regression). Different batches derive
-		// different ids, so genuinely distinct messages are never folded together.
-		//
-		// Fill missing turn identity from the daemon's in-flight inbox lease when
-		// the CLI omitted MULTICA_TURN_* (mixed batch/uuid was the v0.4.24 gap).
-		// Only when an inbox turn is active — draft/--send-draft/proactive non-turn
-		// sends keep the legacy UUID path (Alice fail-closed scoping).
-		_ = d.fillTurnIdentityFromActiveInboxTurn(&request)
-		clientMessageID := ""
-		if request.ConversationID != "" && request.SeqFrom > 0 && request.SeqTo >= request.SeqFrom {
-			clientMessageID = batchClientMessageID(request.ConversationID, request.SeqFrom, request.SeqTo, request.Content, request.AttachmentIDs)
-		} else {
-			clientMessageID = uuid.NewString()
-			if existing, found, loadErr := proxy.LoadMessageDraft(request.AgentID, request.Target, now); loadErr == nil && found {
-				if reused, ok := reuseClientMessageIDForIntent(existing, request.Content); ok {
-					clientMessageID = reused
-				}
+		// Raft-aligned send identity: mint an independent uuid per intent, or
+		// reuse the outstanding Draft's client_message_id when a normal send
+		// re-drives the same content for the same target (seq86/87). There is no
+		// turn-coordinate batch client_message_id.
+		clientMessageID := uuid.NewString()
+		if existing, found, loadErr := proxy.LoadMessageDraft(request.AgentID, request.Target, now); loadErr == nil && found {
+			if reused, ok := reuseClientMessageIDForIntent(existing, request.Content); ok {
+				clientMessageID = reused
 			}
 		}
 		saved, err := proxy.SaveNormalMessageDraft(request.AgentID, messageDraft{
@@ -280,57 +256,14 @@ func (d *Daemon) agentCredentialClient(token string, request credentialProxyMess
 	return client
 }
 
-// outstanding (non-expired, not-yet-cleared) local Draft when a normal send
-// is a re-drive of the SAME intent (identical content) to the same target.
-// Reusing the same identity lets the server's (workspace,channel,author,
-// client_message_id) dedup recognize a retry instead of minting a fresh UUID
-// that bypasses dedup and duplicates the message (regression seq86/87).
-// Distinct content is a new intent, so it is not reused.
+// reuseClientMessageIDForIntent reuses an outstanding (non-expired) local Draft
+// client_message_id when a normal send re-drives the SAME intent (identical
+// content) to the same target. Distinct content is a new intent.
 func reuseClientMessageIDForIntent(existing messageDraft, content string) (string, bool) {
 	if strings.TrimSpace(existing.Content) == strings.TrimSpace(content) {
 		return existing.ClientMessageID, true
 	}
 	return "", false
-}
-
-// batchClientMessageID derives a stable, deterministic client_message_id for a
-// single concrete message produced within one exchange batch. The batch is
-// identified by (ConversationID, SeqFrom, SeqTo); a message inside it is
-// distinguished by its payload (content + sorted attachment ids).
-//
-//   - Same batch + same content + same attachments (a retry/re-delivery of the
-//     SAME message) yields the SAME id, so the server's
-//     (workspace,channel,author,client_message_id) dedup collapses an accidental
-//     re-delivery (the "same message sent twice" regression).
-//   - Different content (or attachments) within the SAME batch yields a
-//     DIFFERENT id, so distinct messages a turn sends are NOT folded together;
-//     if they shared one id the server would 409-reject (and drop) the 2nd+
-//     distinct message as a client_message_id conflict (LRM-1530).
-//   - Different batches (different conversation or seq range) yield a different id.
-//
-// The 32-char form stays well under the server's client_message_id length limit.
-func batchClientMessageID(conversationID string, seqFrom, seqTo int64, content string, attachmentIDs []string) string {
-	h := sha256.New()
-	h.Write([]byte(conversationID))
-	h.Write([]byte{0})
-	h.Write(strconv.AppendInt(nil, seqFrom, 10))
-	h.Write([]byte{0})
-	h.Write(strconv.AppendInt(nil, seqTo, 10))
-	h.Write([]byte{0})
-	h.Write([]byte(content))
-	for _, id := range sortedCopy(attachmentIDs) {
-		h.Write([]byte{0})
-		h.Write([]byte(id))
-	}
-	return "b" + hex.EncodeToString(h.Sum(nil))[:31]
-}
-
-// sortedCopy returns a sorted copy of ids so the derived id is independent of
-// attachment ordering (same attachment set always yields the same identity).
-func sortedCopy(ids []string) []string {
-	out := append([]string(nil), ids...)
-	sort.Strings(out)
-	return out
 }
 
 func localMessageSendHeldResponse(target string, freshness MessageSendFreshness, reason string) map[string]any {

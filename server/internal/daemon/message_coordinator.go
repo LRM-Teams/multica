@@ -387,12 +387,17 @@ func (c *MessageCoordinator) Flush(ctx context.Context) error {
 	return err
 }
 
-// FlushOnTurnCompletion advances a queued batch immediately after the prior
-// resident turn ends. The boolean reports whether a new concrete batch crossed
-// the runtime boundary, allowing Activity to remain Working without an
-// intermediate Idle transition.
-func (c *MessageCoordinator) FlushOnTurnCompletion(ctx context.Context) (bool, error) {
-	return c.flushWithResult(ctx, false)
+// NotifyPendingAfterTurn schedules a content-free Notice when Pending remains
+// after a resident turn ends. Raft-aligned: do not auto body-handoff the next
+// batch solely because Pending exists. Body handoff stays on idle Accept→Flush
+// (workspace runner) and recovery Flush; the agent may also `message check`.
+func (c *MessageCoordinator) NotifyPendingAfterTurn() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.pendingCountLocked() == 0 {
+		return
+	}
+	c.schedulePendingNoticeLocked(c.noticeCoalesce)
 }
 
 // Check non-blockingly moves one bounded Pending window into the current
@@ -579,14 +584,9 @@ func (c *MessageCoordinator) runPendingNoticeAttempt() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), pendingNoticeWriteTimeout)
 	defer cancel()
-	err := c.flush(ctx, false)
-	if err == nil {
-		return
-	}
-	if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
-		err = c.deliverPendingNotice(ctx)
-	}
-	if err != nil {
+	// Raft-aligned: Notice path is content-free only. Do not body-handoff from
+	// the notice timer (that recreated automatic second turns after busy).
+	if err := c.deliverPendingNotice(ctx); err != nil {
 		c.mu.Lock()
 		c.schedulePendingNoticeLocked(c.noticeRetry)
 		c.mu.Unlock()

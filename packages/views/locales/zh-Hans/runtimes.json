@@ -196,14 +196,14 @@
       "description_cloud": "从工作区永久删除此云端电脑、其容器及其全部 Runtime。"
     },
     "remove_binding": {
-      "button": "移除当前 Workspace 连接…",
-      "title": "移除这条 Workspace 连接？",
-      "description": "只移除“{{name}}”与当前 Workspace 的连接；其他 Workspace 连接会继续运行，本地 Agent 数据也会保留，之后仍可重新连接。",
+      "button": "从当前工作区移除…",
+      "title": "将这台电脑移出当前工作区？",
+      "description": "这台电脑将停止为当前工作区运行 Agent。本地 Agent 数据会保留在电脑上，其他工作区不受影响，之后可以重新添加。",
       "cancel": "取消",
-      "confirm": "移除连接",
+      "confirm": "从工作区移除",
       "removing": "正在移除…",
-      "success": "Workspace 连接已移除；其他连接和本地 Agent 数据均已保留。",
-      "invalid_response": "服务端没有确认这条 Workspace 连接已被安全移除。"
+      "success": "已从当前工作区移除这台电脑。本地 Agent 数据和其他工作区均未受影响。",
+      "invalid_response": "服务端未确认这台电脑已从当前工作区安全移除。"
     },
     "agents_select": "选择",
     "agents_create": "创建",

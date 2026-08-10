@@ -376,19 +376,20 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
     );
   });
 
-  it("offers one-Workspace removal separately from permanent Computer delete", () => {
+  it("offers workspace removal without exposing the internal connection term", () => {
     wrap(<MachineDangerZone machine={makeMachine()} />);
 
     expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
-      /Remove Workspace connection/i,
+      /Remove from this workspace/i,
     );
     expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
       /Delete computer/i,
     );
     fireEvent.click(screen.getByTestId("machine-remove-binding"));
     expect(
-      screen.getByText(/other Workspace connections keep running/i),
+      screen.getByText(/other workspaces will keep running/i),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/connection/i)).not.toBeInTheDocument();
   });
 
   it("can remove an owned Workspace connection with zero Agent runtimes", () => {
@@ -403,7 +404,7 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
     );
 
     expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
-      /Remove Workspace connection/i,
+      /Remove from this workspace/i,
     );
     expect(screen.getByTestId("machine-danger-delete")).toBeDisabled();
   });

@@ -199,14 +199,14 @@
       "description_cloud": "Permanently delete this cloud computer, its container, and its runtimes from the workspace."
     },
     "remove_binding": {
-      "button": "Remove Workspace connection…",
-      "title": "Remove this Workspace connection?",
-      "description": "This removes only \"{{name}}\"'s connection to the current Workspace. Its other Workspace connections keep running, and local Agent data stays on the Computer for reconnection later.",
+      "button": "Remove from this workspace…",
+      "title": "Remove this computer from this workspace?",
+      "description": "This computer will stop running Agents for the current workspace. Local Agent data will stay on the computer, and its other workspaces will keep running. You can add it back later.",
       "cancel": "Cancel",
-      "confirm": "Remove connection",
+      "confirm": "Remove from workspace",
       "removing": "Removing…",
-      "success": "Workspace connection removed. Sibling connections and local Agent data were preserved.",
-      "invalid_response": "The server did not confirm that the Workspace connection was safely removed."
+      "success": "This computer was removed from the workspace. Local Agent data and other workspaces were not affected.",
+      "invalid_response": "The server did not confirm that this computer was safely removed from the workspace."
     },
     "agents_select": "Select",
     "agents_create": "Create",

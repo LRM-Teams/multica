@@ -90,7 +90,7 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(agentID string) error {
 }
 
 func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
-	return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, func() {
+	err := d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, func() {
 		d.emitMessageLifecycleActivity(agentID, runtimeID, protocol.ActivityKindWorking, "starting", "Starting")
 	}, func() {
 		d.emitMessageReceivedActivity(agentID, runtimeID, messages)
@@ -111,6 +111,14 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
 		})
 	})
+	if err != nil && !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		// Setup and native-acceptance failures happen before a completion
+		// receipt exists, so the onComplete path above cannot publish them.
+		// Project the failure explicitly instead of leaving it only in daemon
+		// logs while the user waits for an Agent response that cannot arrive.
+		d.emitMessageTurnCompletionActivity(agentID, runtimeID, err)
+	}
+	return err
 }
 
 func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID, activityKind, detailKind, narrative string) {

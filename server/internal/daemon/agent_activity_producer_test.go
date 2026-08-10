@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,6 +189,43 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	}
 	if errorBody.Text != "sensitive provider text" || errorBody.ActivityKind != protocol.ActivityKindError || errorBody.DetailKind != "runtime_error" {
 		t.Fatalf("runtime error Activity = %+v, want provider reason", errorBody)
+	}
+}
+
+func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T) {
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	installActivityProducerAgent(t, producer)
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	d.agentActivityProducers["workspace-1"] = producer
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.canonicalRuntimes.slots["agent-a\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode:    canonicalRuntimeResident,
+		backend: failingResidentMessageRuntime{},
+	}
+
+	err := d.handoffIdleMessageBatch(context.Background(), "agent-a", "runtime-1", []protocol.AgentMessageProjection{{
+		ID: "message-1", Target: "dm:agent-a", Seq: 1, Content: "hello",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "runtime Message handoff unavailable") {
+		t.Fatalf("handoff error = %v, want provider acceptance failure", err)
+	}
+	if len(activities) != 1 {
+		t.Fatalf("activities = %d, want one visible Error", len(activities))
+	}
+	got := activities[0]
+	if got.Snapshot.ActivityKind != protocol.ActivityKindError || got.Snapshot.DetailKind != "runtime_error" || len(got.Entries) != 1 {
+		t.Fatalf("failure Activity = %+v", got)
+	}
+	var body protocol.AgentActivityNarrativeBody
+	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Text != "runtime Message handoff unavailable (simulated crash window)" {
+		t.Fatalf("failure narrative = %q", body.Text)
 	}
 }
 

@@ -58,6 +58,12 @@ export interface MarkdownProps extends MarkdownBaseProps {
    * When provided, replaces the default link renderer for citation anchors.
    */
   renderCitation?: (props: { citationId: string; label: string }) => React.ReactNode;
+  /**
+   * LRM-1386 — rendering variant for body @mentions. Default `soft-bg` keeps
+   * the Slack-style pill token everywhere (issue comments, Activity, …). Chat
+   * message surfaces pass `plain` to render @mentions as non-pill inline text.
+   */
+  mentionVariant?: import("./mention-token").MentionTokenVariant;
 }
 
 /**
@@ -99,11 +105,13 @@ export function ActorMention({
   id,
   label,
   highlightQuery,
+  variant = "soft-bg",
 }: {
   type: string;
   id: string;
   label?: string;
   highlightQuery?: string;
+  variant?: import("./mention-token").MentionTokenVariant;
 }): React.JSX.Element {
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
   // #349/#447 / LRM-893: rendered @agent → agent side panel; @member → member
@@ -126,6 +134,7 @@ export function ActorMention({
         unresolved
           ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
           : undefined,
+        variant,
       )}
       data-mention-kind={kind}
       data-mention-type={type}
@@ -175,6 +184,7 @@ function defaultRenderMention(
   },
   highlightQuery?: string,
   sourceMessageId?: string,
+  variant: import("./mention-token").MentionTokenVariant = "soft-bg",
 ): React.ReactNode {
   if (type === "issue") {
     // Link text is the author's label (e.g. `[LRM-487](mention://issue/<uuid>)`).
@@ -199,6 +209,7 @@ function defaultRenderMention(
       id={id}
       label={label}
       highlightQuery={highlightQuery}
+      variant={variant}
     />
   );
 }
@@ -291,15 +302,15 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
   // the current workspace's prefix so it can't false-positive on tokens like
   // "UTF-8". Empty/absent prefix disables it.
   const issueRefPrefix = useCurrentWorkspace()?.issue_prefix || undefined;
-  const { attachments, highlightQuery, enableStickerShortcodes = true, sourceMessageId, renderCitation, ...rest } = props;
+  const { attachments, highlightQuery, enableStickerShortcodes = true, sourceMessageId, renderCitation, mentionVariant = "soft-bg", ...rest } = props;
   const renderAppImage = React.useCallback(
     (image: { src: string; alt: string }) => renderImage(image, enableStickerShortcodes),
     [enableStickerShortcodes],
   );
   const renderMention = React.useCallback(
     (mention: { type: string; id: string; label?: string }) =>
-      defaultRenderMention(mention, highlightQuery, sourceMessageId),
-    [highlightQuery, sourceMessageId],
+      defaultRenderMention(mention, highlightQuery, sourceMessageId, mentionVariant),
+    [highlightQuery, sourceMessageId, mentionVariant],
   );
   return (
     <AttachmentDownloadProvider attachments={attachments}>

@@ -315,6 +315,9 @@ export function ChatInput({
             debounceMs={100}
             mentionMode={contextItems ? "context" : "default"}
             mentionContextItems={contextItems}
+            // LRM-1386 — chat composer @mentions render as non-pill inline text,
+            // matching the read-side chat bubble (no capsule pill shell).
+            mentionVariant="plain"
             enableSlashCommands
             // Chat is short-form — the floating formatting toolbar is
             // more distraction than feature here.

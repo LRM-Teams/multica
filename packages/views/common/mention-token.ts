@@ -18,6 +18,17 @@ import { cn } from "@multica/ui/lib/utils";
 export type MentionTokenKind = "default" | "all" | "self";
 
 /**
+ * Rendering variant for body @mentions.
+ * - `soft-bg` (default): Slack-style soft-background token (pill look: rest
+ *   fill + thin padding + small radius).
+ * - `plain`: chat composer / chat message bubble non-pill inline text. Brand
+ *   ink with no capsule body — no background fill, no padding, no rounded
+ *   shell (LRM-1386). Keeps bold weight + brand hue so it still reads as an
+ *   addressable @mention, but drops the pill container.
+ */
+export type MentionTokenVariant = "soft-bg" | "plain";
+
+/**
  * Resolve the visual kind for a mention:// token.
  * - `all` → same token as default (broadcast uses weight+fill already shared)
  * - member id matching the viewer → self emphasis (yellow token + row wash)
@@ -42,8 +53,22 @@ export function resolveMentionTokenKind(
 export function mentionTokenClassName(
   kind: MentionTokenKind = "default",
   className?: string,
+  variant: MentionTokenVariant = "soft-bg",
 ): string {
   const isSelf = kind === "self";
+  if (variant === "plain") {
+    // LRM-1386 — chat composer / chat message bubble non-pill inline text.
+    // Brand ink, no capsule body (no fill, padding or rounded shell); keep
+    // bold + focus ring so it still reads as an addressable @mention without
+    // the pill container. Hover/focus only adds a soft wash for affordance.
+    return cn(
+      "mention not-prose inline font-bold box-decoration-clone",
+      "transition-colors duration-100",
+      "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30",
+      "text-brand hover:text-brand hover:bg-brand/[0.06] focus-visible:bg-brand/[0.08]",
+      className,
+    );
+  }
   return cn(
     "mention not-prose inline rounded-sm px-0.5",
     "font-bold box-decoration-clone",

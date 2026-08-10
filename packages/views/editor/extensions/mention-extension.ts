@@ -1,11 +1,32 @@
 import Mention from "@tiptap/extension-mention";
 import { mergeAttributes } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
+import * as React from "react";
+import type { MentionTokenVariant } from "../../common/mention-token";
+import type { MentionOptions, MentionNodeAttrs } from "@tiptap/extension-mention";
 import { MentionView } from "./mention-view";
 
-export const BaseMentionExtension = Mention.extend({
+type BaseMentionOptions = MentionOptions<any, MentionNodeAttrs> & {
+  /** LRM-1386 — `plain` renders non-pill inline @mentions (chat composer). */
+  mentionVariant: MentionTokenVariant;
+};
+
+export const BaseMentionExtension = Mention.extend<BaseMentionOptions>({
+  addOptions() {
+    return {
+      ...this.parent?.(),
+      // LRM-1386 — chat composer passes `plain` (non-pill inline @mention);
+      // issue/comment editors keep the default `soft-bg` pill.
+      mentionVariant: "soft-bg" as MentionTokenVariant,
+      // tiptap's MentionOptions types HTMLAttributes as required, but the
+      // parent spread yields it optional — force the asserted full option set.
+    } as BaseMentionOptions;
+  },
   addNodeView() {
-    return ReactNodeViewRenderer(MentionView);
+    const variant: MentionTokenVariant = this.options.mentionVariant;
+    return ReactNodeViewRenderer((props) =>
+      React.createElement(MentionView, { ...props, mentionVariant: variant }),
+    );
   },
   renderHTML({ node, HTMLAttributes }) {
     const type = node.attrs.type ?? "member";

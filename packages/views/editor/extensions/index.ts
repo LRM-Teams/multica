@@ -188,6 +188,10 @@ export interface EditorExtensionsOptions {
   disableMentions?: boolean;
   /** Override @ behavior for chat context suggestions. */
   mentionMode?: "default" | "context";
+  /** LRM-1386 — rendering variant for @mentions inside the editor. Chat
+   *  composer passes `plain` (non-pill inline text, no capsule shell); issue/
+   *  comment editors keep the default `soft-bg` pill. */
+  mentionVariant?: import("../../common/mention-token").MentionTokenVariant;
   getMentionContextItems?: () => MentionItem[];
   /** When it returns a set, the @ picker restricts member/agent candidates to
    *  those actor ids (e.g. a channel's members). */
@@ -342,6 +346,7 @@ export function createEditorExtensions(
     FileCardExtension,
     BaseMentionExtension.configure({
       HTMLAttributes: { class: "mention" },
+      mentionVariant: options.mentionVariant ?? "soft-bg",
       ...(options.disableMentions
         ? { suggestion: { allow: () => false } }
         : options.queryClient

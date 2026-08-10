@@ -118,6 +118,12 @@ interface ContentEditorProps {
   /** Chat can surface current/recent issue/project suggestions. Other editors use default mention behavior. */
   mentionMode?: "default" | "context";
   mentionContextItems?: MentionItem[];
+  /**
+   * LRM-1386 — mention rendering variant in this editable surface. Chat
+   * composer passes `plain` (non-pill inline @mention); default `soft-bg` keeps
+   * the pill in issue/comment/description editors.
+   */
+  mentionVariant?: import("../common/mention-token").MentionTokenVariant;
   /** Enable a channel reference `#` inline picker. */
   enableChannelReferences?: boolean;
   /** Restrict the @ picker's member/agent candidates to these actor ids
@@ -222,6 +228,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       disableMentions = false,
       mentionMode = "default",
       mentionContextItems,
+      mentionVariant = "soft-bg",
       enableChannelReferences = false,
       mentionAllowedActorIds,
       scopedMentionAgents,
@@ -382,8 +389,9 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         onExternalFilesRef,
         submitOnEnter,
         disableMentions,
-          mentionMode,
-          getMentionContextItems: () => mentionContextItemsRef.current,
+        mentionMode,
+        mentionVariant,
+        getMentionContextItems: () => mentionContextItemsRef.current,
           getMentionAllowedActorIds: () => mentionAllowedActorIdsRef.current,
           getMentionScopedAgents: () => scopedMentionAgentsRef.current,
           getMentionChannelMemberIds: () => mentionChannelMemberIdsRef.current,

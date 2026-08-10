@@ -117,7 +117,7 @@ function MessageBodyInner({
           {compactBody ? (
             <span>{compactBody}</span>
           ) : (
-            <MemoizedMarkdown attachments={attachments} enableStickerShortcodes={false}>
+            <MemoizedMarkdown attachments={attachments} enableStickerShortcodes={false} mentionVariant="plain">
               {content}
             </MemoizedMarkdown>
           )}
@@ -166,6 +166,7 @@ function MessageBodyInner({
                 parts={presentedParts}
                 highlightQuery={highlightQuery}
                 sourceMessageId={sourceMessageId}
+                mentionVariant="plain"
               />
             ) : null}
             {stickerChoiceAndCardParts.length > 0 && (
@@ -190,6 +191,7 @@ function MessageBodyInner({
         highlightQuery={highlightQuery}
         enableStickerShortcodes={false}
         sourceMessageId={sourceMessageId}
+        mentionVariant="plain"
       >
         {content}
       </MemoizedMarkdown>
@@ -216,6 +218,7 @@ function MessageBodyInner({
           highlightQuery={highlightQuery}
           enableStickerShortcodes={false}
           sourceMessageId={sourceMessageId}
+          mentionVariant="plain"
         >
           {content}
         </MemoizedMarkdown>

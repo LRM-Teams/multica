@@ -21,6 +21,8 @@ import (
 
 var lumberjackBackupPattern = regexp.MustCompile(`^(.+)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}\.log(?:\.gz)?$`)
 
+const compressionSettleTimeout = 5 * time.Second
+
 type segment struct {
 	path      string
 	stream    string
@@ -210,10 +212,22 @@ func (s *Store) observeCleanupFailure(loggers []*Logger, err error, now time.Tim
 }
 
 func (s *Store) cleanupBudgets(now time.Time, loggers []*Logger) error {
+	settleDeadline := time.Now().Add(compressionSettleTimeout)
+
+cleanupLoop:
 	for {
 		segments, err := discoverSegments(s.root)
 		if err != nil {
 			return err
+		}
+		if hasCompressionInProgress(segments) {
+			if time.Now().Before(settleDeadline) {
+				timer := time.NewTimer(10 * time.Millisecond)
+				<-timer.C
+				continue cleanupLoop
+			}
+			s.requestCleanup()
+			return fmt.Errorf("diagnostic compression did not settle before quota enforcement")
 		}
 		for _, item := range segments {
 			if item.closed && item.evictable && now.Sub(item.modTime.UTC()) > s.limits.Retention {
@@ -243,11 +257,14 @@ func (s *Store) cleanupBudgets(now time.Time, loggers []*Logger) error {
 		if overBudgetStream(segments, s.limits.StreamBytes) == "" && totalSegmentBytes(segments) <= s.limits.GlobalBytes {
 			return nil
 		}
-		for _, item := range segments {
-			if item.closed && !item.evictable {
-				s.requestCleanup()
-				return nil
+		if hasCompressionInProgress(segments) {
+			if time.Now().Before(settleDeadline) {
+				timer := time.NewTimer(10 * time.Millisecond)
+				<-timer.C
+				continue cleanupLoop
 			}
+			s.requestCleanup()
+			return fmt.Errorf("diagnostic compression did not settle before quota enforcement")
 		}
 
 		activeByPath := make(map[string]*Logger, len(loggers))
@@ -272,6 +289,15 @@ func (s *Store) cleanupBudgets(now time.Time, loggers []*Logger) error {
 			return fmt.Errorf("diagnostic active segments exceed storage budget")
 		}
 	}
+}
+
+func hasCompressionInProgress(segments []segment) bool {
+	for _, item := range segments {
+		if item.closed && !item.evictable {
+			return true
+		}
+	}
+	return false
 }
 
 func overBudgetStream(segments []segment, limit int64) string {

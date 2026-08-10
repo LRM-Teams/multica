@@ -1,5 +1,9 @@
 import { cn } from "@multica/ui/lib/utils";
-import { honorAssetURL } from "../../honor/honor-assets";
+import {
+  honorAssetFallbackURL,
+  honorAssetURL,
+  recoverHonorAsset,
+} from "../../honor/honor-assets";
 
 export const MAX_AGENT_HONOR_LEVEL = 30;
 
@@ -9,10 +13,16 @@ export function normalizeAgentHonorLevel(level: number): number {
 }
 
 export function agentHonorLevelIconURL(level: number): string {
+  return honorAssetURL(agentHonorLevelIconPath(level));
+}
+
+export function agentHonorLevelIconFallbackURL(level: number): string {
+  return honorAssetFallbackURL(agentHonorLevelIconPath(level));
+}
+
+function agentHonorLevelIconPath(level: number): string {
   const normalizedLevel = normalizeAgentHonorLevel(level);
-  return honorAssetURL(
-    `agents/agent-honor-level-${String(normalizedLevel).padStart(2, "0")}.webp`,
-  );
+  return `agents/agent-honor-level-${String(normalizedLevel).padStart(2, "0")}.webp`;
 }
 
 export function AgentHonorLevelIcon({
@@ -39,6 +49,12 @@ export function AgentHonorLevelIcon({
       fetchPriority={priority ? "high" : "auto"}
       decoding="async"
       draggable={false}
+      onError={(event) =>
+        recoverHonorAsset(
+          event.currentTarget,
+          agentHonorLevelIconPath(normalizedLevel),
+        )
+      }
       className={cn("shrink-0 object-contain", className)}
       data-agent-honor-level={normalizedLevel}
     />

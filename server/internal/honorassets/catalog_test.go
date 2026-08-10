@@ -2,6 +2,8 @@ package honorassets
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -17,12 +19,20 @@ func TestAssetsMatchPublishedCatalog(t *testing.T) {
 	}
 
 	byKey := make(map[string]Asset, len(assets))
+	fallbackRoot := filepath.Join("..", "..", "..", "apps", "web", "public")
 	for _, asset := range assets {
 		if asset.ContentType != "image/webp" {
 			t.Fatalf("asset %s content type = %q", asset.Key, asset.ContentType)
 		}
 		if len(asset.Data) < 12 || !bytes.Equal(asset.Data[:4], []byte("RIFF")) || !bytes.Equal(asset.Data[8:12], []byte("WEBP")) {
 			t.Fatalf("asset %s is not WebP", asset.Key)
+		}
+		fallback, err := os.ReadFile(filepath.Join(fallbackRoot, filepath.FromSlash(asset.Key)))
+		if err != nil {
+			t.Fatalf("read web fallback for %s: %v", asset.Key, err)
+		}
+		if !bytes.Equal(fallback, asset.Data) {
+			t.Fatalf("web fallback for %s differs from embedded OSS source", asset.Key)
 		}
 		byKey[asset.Key] = asset
 	}

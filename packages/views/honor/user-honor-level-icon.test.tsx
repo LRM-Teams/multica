@@ -1,9 +1,10 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
   MAX_USER_HONOR_LEVEL,
   UserHonorLevelIcon,
   normalizeUserHonorLevel,
+  userHonorLevelIconFallbackURL,
   userHonorLevelIconURL,
 } from "./user-honor-level-icon";
 
@@ -39,5 +40,8 @@ describe("UserHonorLevelIcon", () => {
     expect(icon).toHaveAttribute("width", "256");
     expect(icon).toHaveAttribute("height", "256");
     expect(icon).toHaveAttribute("data-user-honor-level", "42");
+
+    fireEvent.error(icon!);
+    expect(icon).toHaveAttribute("src", userHonorLevelIconFallbackURL(42));
   });
 });

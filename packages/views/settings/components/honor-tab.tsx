@@ -40,7 +40,10 @@ import {
   honorLevelProgress,
   isRareHonorBadge,
 } from "../../honor/honor-progress";
-import { HONOR_HERO_IMAGE_URL } from "../../honor/honor-assets";
+import {
+  HONOR_HERO_IMAGE_URL,
+  recoverHonorAsset,
+} from "../../honor/honor-assets";
 import { useHonorBadgeCopy } from "../../honor/use-honor-badge-copy";
 import { useT } from "../../i18n";
 
@@ -276,6 +279,9 @@ export function HonorTab() {
           src={HONOR_HERO_IMAGE_URL}
           alt=""
           aria-hidden="true"
+          onError={(event) =>
+            recoverHonorAsset(event.currentTarget, "honor-center-orbit.webp")
+          }
           className="absolute inset-0 size-full object-cover object-center opacity-85"
         />
         <div

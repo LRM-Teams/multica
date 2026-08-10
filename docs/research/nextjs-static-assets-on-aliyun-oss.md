@@ -17,7 +17,7 @@ Do not treat “all static files” as one Next.js switch:
 | `next/image` optimized response | `https://www.leagent.me/_next/image?...` by default | Not a build artifact and not uploadable; it is generated at runtime | Keep on Next.js unless replacing it with a custom image loader/service |
 | Application HTML, RSC/navigation responses, API, WebSocket | Main application/API origins | Do not upload to OSS | Keep behind Caddy/Next.js/backend |
 | Agent preset avatars | Existing faces under `.../agent-avatars/v1/human-01.jpg`; new pool under `.../v2/agent-01.png` | Upload once under versioned, independently managed prefixes; immutable one-year cache | Retain the old Web copies for legacy clients; do not couple persisted DB URLs to a Next build ID |
-| Honor raster catalog | `https://cdn.leagent.me/honor-assets/v1/{users,agents}/...` and `.../honor-center-orbit.webp` | Published from the backend image before rollout; immutable one-year cache | Do not bundle copies into the Web build; the versioned catalog is the source of truth |
+| Honor raster catalog | `https://cdn.leagent.me/honor-assets/v1/{users,agents}/...` and `.../honor-center-orbit.webp` | Published from the backend image before rollout; immutable one-year cache | Keep byte-identical files under `public/honor-assets/v1` only as an error fallback for self-host/test/CDN failure; normal requests use OSS |
 
 ## What Next.js officially does
 
@@ -39,11 +39,14 @@ Selected public assets can be moved, but their references must change explicitly
 
 The honor system is an explicit versioned-product-catalog exception. Its 80
 user-level images, 30 Agent-level images, and honor-center background live in
-`server/internal/honorassets/assets`, are embedded only in the deployment
-publisher, and are addressed through `honor-assets/v1`. Changing any bytes at
-an existing public path requires a new catalog version; the one-time deploy
-publisher must upload and byte-verify every object before the frontend is
-restarted, then can be retired after the catalog is verified in OSS.
+`server/internal/honorassets/assets`, are embedded in the deployment publisher,
+and are addressed through `honor-assets/v1`. A byte-identical copy under
+`apps/web/public/honor-assets/v1` prevents a test/self-host deployment or a CDN
+outage from rendering broken badges; the browser switches to it only after the
+CDN request fails. Changing any bytes at an existing public path requires a new
+catalog version; the one-time deploy publisher must upload and byte-verify every
+object before the production frontend is restarted, then can be retired after
+the catalog is verified in OSS.
 
 ### `next/image`
 

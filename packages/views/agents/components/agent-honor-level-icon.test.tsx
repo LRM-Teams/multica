@@ -1,8 +1,9 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
   AgentHonorLevelIcon,
   MAX_AGENT_HONOR_LEVEL,
+  agentHonorLevelIconFallbackURL,
   agentHonorLevelIconURL,
   normalizeAgentHonorLevel,
 } from "./agent-honor-level-icon";
@@ -33,5 +34,8 @@ describe("AgentHonorLevelIcon", () => {
     expect(icon).toHaveAttribute("width", "256");
     expect(icon).toHaveAttribute("height", "256");
     expect(icon).toHaveAttribute("data-agent-honor-level", "12");
+
+    fireEvent.error(icon!);
+    expect(icon).toHaveAttribute("src", agentHonorLevelIconFallbackURL(12));
   });
 });

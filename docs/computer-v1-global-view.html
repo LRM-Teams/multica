@@ -308,7 +308,7 @@
       </table>
       <p class="callout success" style="margin-top:16px"><strong>最重要的规则：</strong>用户只选环境。没有单独的 <code>release_channel</code> 配置，也没有 <code>computer channel</code> 命令。切到 Test 就一起换 preview 包；切回 Production 就一起换 stable 包。</p>
       <div class="grid grid-2" style="margin-top:16px">
-        <article class="card"><h3>第一次接环境：setup</h3><p>Production 固定官方域名。Test 必须给完整 HTTP(S) origin；裸 IP、路径、账号密码、query 都会被拒绝。</p><pre><code>multica setup /my-workspace
+        <article class="card"><h3>第一次接环境：setup</h3><p>直接跟着当前环境的 Computer 页面即可：服务端通过 <code>/api/config.environment</code> 明确告诉页面自己是 production 还是 test，页面不靠域名或 IP 猜。Production 固定官方域名；Test 命令自动带完整 HTTP(S) origin。</p><pre><code>multica setup /my-workspace
 
 multica setup --environment test \
   --test-url https://test.leagent.me \

@@ -223,6 +223,7 @@ export const EMPTY_CHANNEL_GOAL_SUBGOAL_LIST = { subgoals: [] };
 
 export interface AppConfigResponse {
   cdn_domain: string;
+  environment: "production" | "test";
   allow_signup: boolean;
   google_client_id?: string;
   posthog_key?: string;
@@ -591,8 +592,14 @@ const BooleanWithDefaultSchema = (fallback: boolean) =>
     z.boolean().default(fallback),
   );
 
+const ServiceEnvironmentSchema = z.preprocess(
+  (value) => (value === "production" || value === "test" ? value : undefined),
+  z.enum(["production", "test"]).default("production"),
+);
+
 export const AppConfigSchema = z.object({
   cdn_domain: z.string().default(""),
+  environment: ServiceEnvironmentSchema,
   allow_signup: BooleanWithDefaultSchema(true),
   google_client_id: OptionalStringSchema,
   posthog_key: OptionalStringSchema,
@@ -606,6 +613,7 @@ export const AppConfigSchema = z.object({
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {
   cdn_domain: "",
+  environment: "production",
   allow_signup: true,
   google_client_id: "",
   daemon_server_url: "",

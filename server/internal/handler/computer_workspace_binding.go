@@ -52,6 +52,10 @@ func (h *Handler) CreateComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if err := lockDaemonRegistration(r.Context(), tx, req.WorkspaceID, daemonID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to lock the Computer connection"})
+		return
+	}
 	txHandler := *h
 	txHandler.Queries = h.Queries.WithTx(tx)
 	txHandler.DB = tx
@@ -73,6 +77,16 @@ func (h *Handler) CreateComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 			message = "Workspace connection is not authorized for this Computer"
 		}
 		writeJSON(w, status, map[string]any{"error": message})
+		return
+	}
+	// A deliberate setup after Computer deletion is a new connection. Clear
+	// the durable registration fence in the same transaction as the fresh
+	// binding so a still-running daemon cannot race the user's decision, while
+	// the newly issued credential can register after commit.
+	if _, err := tx.Exec(r.Context(), `
+DELETE FROM daemon_registration_tombstone
+ WHERE workspace_id = $1 AND daemon_id = LOWER($2)`, workspaceUUID, daemonID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to reopen the Computer connection"})
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {

@@ -94,6 +94,43 @@ func TestComputerWorkspaceBinding_OneOwnerCanConnectMultipleWorkspaces(t *testin
 	}
 }
 
+func TestComputerWorkspaceBinding_ExplicitReconnectClearsDeletionFence(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	computerID := "binding-reconnect-" + uuid.NewString()
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE daemon_id=$1`, computerID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO daemon_registration_tombstone (workspace_id, daemon_id, removed_by)
+		VALUES ($1, lower($2), $3)
+	`, testWorkspaceID, computerID, testUserID); err != nil {
+		t.Fatalf("insert deletion fence: %v", err)
+	}
+
+	w := createComputerWorkspaceBindingForTest(t, testUserID, computerID, testWorkspaceID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("reconnect Computer: got %d: %s", w.Code, w.Body.String())
+	}
+
+	var tombstones int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM daemon_registration_tombstone
+		WHERE workspace_id=$1 AND daemon_id=lower($2)
+	`, testWorkspaceID, computerID).Scan(&tombstones); err != nil {
+		t.Fatal(err)
+	}
+	if tombstones != 0 {
+		t.Fatalf("deletion fences after explicit reconnect = %d, want 0", tombstones)
+	}
+}
+
 func TestComputerWorkspaceBinding_RejectsCrossUserComputerTakeover(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

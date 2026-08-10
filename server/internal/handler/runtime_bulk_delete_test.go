@@ -265,6 +265,18 @@ func TestDeleteRuntimesByDaemon_DeletesOnlineComputer(t *testing.T) {
 	}
 	ctx := context.Background()
 	daemonID := "bulk-online-" + uuid.NewString()
+	siblingWorkspaceID := createBindingTestWorkspace(t, testUserID, "owner")
+	if w := createComputerWorkspaceBindingForTest(t, testUserID, daemonID, testWorkspaceID); w.Code != http.StatusOK {
+		t.Fatalf("establish Computer connection: got %d: %s", w.Code, w.Body.String())
+	}
+	if w := createComputerWorkspaceBindingForTest(t, testUserID, daemonID, siblingWorkspaceID); w.Code != http.StatusOK {
+		t.Fatalf("establish sibling Computer connection: got %d: %s", w.Code, w.Body.String())
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+	})
 
 	onlineID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "online")
 	offlineID := createBulkDaemonRuntime(t, ctx, daemonID, "codex", "offline")
@@ -280,6 +292,47 @@ func TestDeleteRuntimesByDaemon_DeletesOnlineComputer(t *testing.T) {
 	assertRuntimeGone(t, ctx, onlineID)
 	assertRuntimeGone(t, ctx, offlineID)
 	assertDaemonTombstoned(t, ctx, daemonID)
+	assertComputerWorkspaceBindingActive(t, ctx, daemonID, false)
+	var siblingActive bool
+	var siblingTokens int
+	if err := testPool.QueryRow(ctx, `
+		SELECT b.active,
+		       (SELECT count(*) FROM daemon_token t WHERE t.workspace_id=b.workspace_id AND t.daemon_id=b.daemon_id)
+		FROM computer_workspace_bindings b
+		WHERE b.daemon_id=$1 AND b.workspace_id=$2
+	`, daemonID, siblingWorkspaceID).Scan(&siblingActive, &siblingTokens); err != nil {
+		t.Fatalf("read sibling Computer connection: %v", err)
+	}
+	if !siblingActive || siblingTokens == 0 {
+		t.Fatalf("sibling connection active/tokens = %v/%d, want true/non-zero", siblingActive, siblingTokens)
+	}
+}
+
+func TestDeleteRuntimesByDaemon_DeletesBindingOnlyComputer(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "bulk-binding-only-" + uuid.NewString()
+	if w := createComputerWorkspaceBindingForTest(t, testUserID, daemonID, testWorkspaceID); w.Code != http.StatusOK {
+		t.Fatalf("establish Computer connection: got %d: %s", w.Code, w.Body.String())
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest("DELETE", "/api/runtimes/by-daemon/"+daemonID+"?runtime_mode=local", nil)
+	req = withURLParam(req, "daemonId", daemonID)
+	testHandler.DeleteRuntimesByDaemon(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertComputerWorkspaceBindingActive(t, ctx, daemonID, false)
+	assertDaemonTombstoned(t, ctx, daemonID)
 }
 
 func TestDeleteRuntimesByDaemon_BlocksUntilExactAgentPlanIsRemoved(t *testing.T) {
@@ -288,6 +341,14 @@ func TestDeleteRuntimesByDaemon_BlocksUntilExactAgentPlanIsRemoved(t *testing.T)
 	}
 	ctx := context.Background()
 	daemonID := "bulk-agents-" + uuid.NewString()
+	if w := createComputerWorkspaceBindingForTest(t, testUserID, daemonID, testWorkspaceID); w.Code != http.StatusOK {
+		t.Fatalf("establish Computer connection: got %d: %s", w.Code, w.Body.String())
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+	})
 
 	rtID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
 	agentID := createCascadeFixtureAgent(t, ctx, rtID, "Bulk Block Agent")
@@ -314,6 +375,7 @@ func TestDeleteRuntimesByDaemon_BlocksUntilExactAgentPlanIsRemoved(t *testing.T)
 		t.Fatalf("expected active agent %s, got %+v", agentID, body.ActiveAgents)
 	}
 	assertRuntimeExists(t, ctx, rtID)
+	assertComputerWorkspaceBindingActive(t, ctx, daemonID, true)
 
 	stalePlan := httptest.NewRecorder()
 	stalePlanReq := newRequest("POST", "/api/runtimes/by-daemon/"+daemonID+"/remove-agents", map[string]any{
@@ -1053,5 +1115,19 @@ func assertDaemonTombstoned(t *testing.T, ctx context.Context, daemonID string) 
 	}
 	if n != 1 {
 		t.Fatalf("expected daemon %s tombstoned, count=%d", daemonID, n)
+	}
+}
+
+func assertComputerWorkspaceBindingActive(t *testing.T, ctx context.Context, daemonID string, want bool) {
+	t.Helper()
+	var active bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT active FROM computer_workspace_bindings
+		WHERE daemon_id = $1 AND workspace_id = $2
+	`, daemonID, testWorkspaceID).Scan(&active); err != nil {
+		t.Fatalf("read Computer Workspace binding: %v", err)
+	}
+	if active != want {
+		t.Fatalf("Computer Workspace binding active = %v, want %v", active, want)
 	}
 }

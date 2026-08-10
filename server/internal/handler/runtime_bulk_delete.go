@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -11,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/computer"
+	storedb "github.com/multica-ai/multica/server/pkg/db"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -160,15 +163,18 @@ func (h *Handler) RemoveAgentsByDaemon(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DeleteRuntimesByDaemon permanently removes a Computer / host from one
-// workspace. Local computers receive a durable registration tombstone before
-// their runtime rows disappear, so a still-running daemon cannot recreate the
-// machine through its next register heartbeat.
+// DeleteRuntimesByDaemon permanently removes a Computer from one Workspace.
+// It deletes that Workspace's runtime projection and revokes the matching
+// Computer Binding in one transaction. Sibling Workspace Bindings and local
+// files are outside this operation. Local computers receive a durable
+// registration tombstone before their runtime rows disappear, so a
+// still-running daemon cannot recreate the machine through its next heartbeat.
 //
 // Active agents are a hard precondition: the endpoint returns their current
-// list and makes no change. Once the computer is empty, tombstone registration,
-// revoke daemon tokens, cancel stale runtime work, and delete all provider
-// runtimes atomically.
+// list and makes no change. Once the computer is empty, Binding revocation,
+// tombstone registration, token revocation, stale-work cancellation, and
+// provider-runtime deletion happen atomically. A Binding-only Computer with no
+// runtime rows follows the same operation and disappears without a ghost row.
 //
 // Route: DELETE /api/runtimes/by-daemon/{daemonId}?runtime_mode=
 func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request) {
@@ -211,8 +217,21 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to list runtimes for daemon")
 		return
 	}
-	if len(runtimes) == 0 {
-		writeError(w, http.StatusNotFound, "no runtimes found for daemon")
+	bindingService := &computer.BindingService{Store: storedb.NewBindingStore(tx)}
+	bindings, err := bindingService.All(daemonID, "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read Computer connection")
+		return
+	}
+	hasWorkspaceBinding := false
+	for _, binding := range bindings {
+		if binding.WorkspaceID == workspaceID && binding.Active {
+			hasWorkspaceBinding = true
+			break
+		}
+	}
+	if len(runtimes) == 0 && !hasWorkspaceBinding {
+		writeError(w, http.StatusNotFound, "computer not found")
 		return
 	}
 
@@ -235,10 +254,13 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	currentActive, err := qtx.ListActiveAgentsByRuntimesForUpdate(r.Context(), runtimeIDs)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to enumerate active agents")
-		return
+	var currentActive []db.Agent
+	if len(runtimeIDs) > 0 {
+		currentActive, err = qtx.ListActiveAgentsByRuntimesForUpdate(r.Context(), runtimeIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to enumerate active agents")
+			return
+		}
 	}
 	if len(currentActive) > 0 {
 		body := runtimeHasActiveAgentsResponse(currentActive)
@@ -249,8 +271,29 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	bindingTokenHashes := make([]string, 0)
+	if hasWorkspaceBinding {
+		bindingTokenHashes, err = bindingService.Revoke(
+			computer.BindingRequest{
+				ActorUserID:             requestUserID(r),
+				ActorCanManageWorkspace: roleAllowed(member.Role, "owner", "admin"),
+				TargetComputerID:        daemonID,
+				TargetWorkspaceID:       workspaceID,
+			},
+			workspaceID,
+		)
+		if err != nil {
+			if errors.Is(err, computer.ErrBindingUnauthorized) {
+				writeError(w, http.StatusForbidden, "Computer is not owned by the current user")
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to revoke Computer connection")
+			}
+			return
+		}
+	}
+
 	normalizedDaemonID := strings.ToLower(daemonID)
-	shouldTombstone := runtimeMode == "local"
+	shouldTombstone := runtimeMode == "local" || (len(runtimes) == 0 && hasWorkspaceBinding)
 	if runtimeMode == "" {
 		for _, rt := range runtimes {
 			if rt.RuntimeMode == "local" {
@@ -278,6 +321,7 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to revoke computer credentials")
 		return
 	}
+	revokedTokenHashes = append(revokedTokenHashes, bindingTokenHashes...)
 
 	archivedAgentIDs := make([]pgtype.UUID, 0)
 	for _, runtimeID := range runtimeIDs {

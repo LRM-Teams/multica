@@ -1183,9 +1183,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/computers", h.ListComputers)
 			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
-				// Computer / host one-click delete (LRM-438). Must be
+				// Workspace-scoped Computer one-click delete (LRM-438). Must be
 				// registered before /{runtimeId} so "by-daemon" is not
-				// captured as a runtime UUID.
+				// captured as a runtime UUID. This also revokes the matching
+				// Computer Workspace Binding; local files and sibling Bindings
+				// remain outside the operation.
 				r.Delete("/by-daemon/{daemonId}", h.DeleteRuntimesByDaemon)
 				r.Post("/by-daemon/{daemonId}/remove-agents", h.RemoveAgentsByDaemon)
 				r.Route("/{runtimeId}", func(r chi.Router) {

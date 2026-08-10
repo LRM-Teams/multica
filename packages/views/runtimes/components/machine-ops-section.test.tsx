@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { ReactElement } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentRuntime } from "@multica/core/types";
@@ -34,11 +34,6 @@ vi.mock("@multica/core/api", () => ({
     getMachineUpgrade: vi.fn(),
     initiateRestart: vi.fn(),
     getRestart: vi.fn(),
-    removeComputerWorkspaceBinding: vi.fn().mockResolvedValue({
-      ok: true,
-      workspace_id: "ws-1",
-      kept_local_data: true,
-    }),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -376,23 +371,21 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
     );
   });
 
-  it("offers workspace removal without exposing the internal connection term", () => {
+  it("offers one Computer deletion action with accurate local-data copy", () => {
     wrap(<MachineDangerZone machine={makeMachine()} />);
 
-    expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
-      /Remove from this workspace/i,
-    );
     expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
       /Delete computer/i,
     );
-    fireEvent.click(screen.getByTestId("machine-remove-binding"));
     expect(
-      screen.getByText(/other workspaces will keep running/i),
+      screen.queryByTestId("machine-remove-binding"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Local files and other workspaces are not affected/i),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/connection/i)).not.toBeInTheDocument();
   });
 
-  it("can remove an owned Workspace connection with zero Agent runtimes", () => {
+  it("can delete an owned Computer connection with zero Agent runtimes", () => {
     wrap(
       <MachineDangerZone
         machine={makeMachine({
@@ -403,10 +396,10 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
       />,
     );
 
-    expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
-      /Remove from this workspace/i,
-    );
-    expect(screen.getByTestId("machine-danger-delete")).toBeDisabled();
+    expect(
+      screen.queryByTestId("machine-remove-binding"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("machine-danger-delete")).not.toBeDisabled();
   });
 
   it("shows delete for pending cloud computers owned by the caller", () => {

@@ -378,12 +378,12 @@ multica config show</code></pre></article>
     </section>
 
     <section id="removal">
-      <div class="section-head"><span class="section-no">06 / 移除</span><h2>“移除 Connection”和“删除 Computer”必须是两个按钮</h2></div>
+      <div class="section-head"><span class="section-no">06 / 移除</span><h2>一个 Delete Computer 动作，完整删除当前 Workspace 挂载</h2></div>
       <div class="grid grid-2">
-        <article class="card"><h3>Remove Workspace connection</h3><p>只撤销一个 Workspace 的执行凭证、服务端授权和本地连接记录。即使这个 Workspace 当前没有 runtime，也必须能撤销。</p><p class="muted">兄弟 Workspace connection 不变；这是日常操作。</p></article>
-        <article class="card"><h3>Delete Computer permanently</h3><p>是机器级危险操作。不能拿它代替“离开一个 Workspace”，UI 必须和前者分开表达。</p><p class="muted">这是不可逆意图；应要求明确确认。</p></article>
+        <article class="card"><h3>Delete Computer</h3><p>先要求移除全部 Agent，再在一个事务里删除当前 Workspace 的 runtime 投影和已归档 Agent 服务端数据，同时撤销这条 Workspace connection、凭证并写入注册 tombstone。即使当前没有 runtime，也能删除，不留下空 Computer。</p><p class="muted">本机 Agent Root、工作目录、resident 和兄弟 Workspace connection 不受影响。</p></article>
+        <article class="card"><h3>Explicit setup after deletion</h3><p>仍在运行的 resident 不能靠 heartbeat 自动注册回来；用户以后显式执行 setup 时，服务端清除 tombstone 并建立一条新 connection。</p><p class="muted">这是重新接入；已经删除的服务端历史不会恢复。</p></article>
       </div>
-      <p class="callout danger" style="margin-top:16px"><strong>最容易犯的错：</strong>看到某个 Workspace 不用了，就把整台 Computer 删除。V1 的语义是先移除那一条 Workspace connection。</p>
+      <p class="callout danger" style="margin-top:16px"><strong>语义边界：</strong>Delete Computer 删除的是当前 Workspace 里的机器挂载，不是物理电脑或磁盘文件。删除本机 Agent workspace 目录是另一个显式操作。</p>
     </section>
 
     <section id="release">

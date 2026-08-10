@@ -116,15 +116,15 @@
     "back_to_list": "Back to all machines",
     "delete_computer": {
       "button": "Delete computer",
-      "toast_deleted": "Permanently deleted \"{{name}}\".",
+      "toast_deleted": "Permanently removed \"{{name}}\" from this workspace.",
       "toast_deleted_cloud": "Deleted cloud computer \"{{name}}\" and its container.",
       "operation_failed": {
         "title": "Operation failed. Nothing was changed.",
         "description": "\"{{name}}\" was not deleted and its agents are unchanged. Try again later."
       },
       "confirm": {
-        "title": "Permanently delete this computer?",
-        "description": "This cannot be undone. \"{{name}}\", all archived agents on it ({{count}} total), and their history and messages will be permanently deleted. This computer will no longer be able to connect to Multica.",
+        "title": "Delete this computer from this workspace?",
+        "description": "Deleted server data cannot be recovered. \"{{name}}\", its runtimes, and all archived agents on it ({{count}} total), including their server history and messages, will be permanently deleted from this workspace. Files on the computer and its other workspaces are not affected. You can connect the computer again later as a new connection.",
         "description_cloud": "This cannot be undone. \"{{name}}\" and its cloud container will be permanently deleted, along with archived agents on it ({{count}} total) and their history.",
         "type_to_confirm": "Type the computer name \"{{name}}\" to confirm.",
         "cancel": "Cancel",
@@ -195,18 +195,8 @@
     },
     "danger_zone": {
       "title": "Danger Zone",
-      "description": "Permanently delete this computer and its runtimes from the workspace.",
+      "description": "Permanently remove this computer and its runtimes from the current workspace. Local files and other workspaces are not affected. All agents must be removed first.",
       "description_cloud": "Permanently delete this cloud computer, its container, and its runtimes from the workspace."
-    },
-    "remove_binding": {
-      "button": "Remove from this workspace…",
-      "title": "Remove this computer from this workspace?",
-      "description": "This computer will stop running Agents for the current workspace. Local Agent data will stay on the computer, and its other workspaces will keep running. You can add it back later.",
-      "cancel": "Cancel",
-      "confirm": "Remove from workspace",
-      "removing": "Removing…",
-      "success": "This computer was removed from the workspace. Local Agent data and other workspaces were not affected.",
-      "invalid_response": "The server did not confirm that this computer was safely removed from the workspace."
     },
     "agents_select": "Select",
     "agents_create": "Create",

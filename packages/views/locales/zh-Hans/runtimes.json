@@ -112,16 +112,16 @@
     "no_runtimes_hint": "这台机器上还没有运行时。",
     "back_to_list": "返回机器列表",
     "delete_computer": {
-      "button": "永久删除此电脑",
-      "toast_deleted": "已永久删除「{{name}}」。",
+      "button": "删除电脑",
+      "toast_deleted": "已将「{{name}}」从当前工作区永久移除。",
       "toast_deleted_cloud": "已删除云端电脑「{{name}}」及其容器。",
       "operation_failed": {
         "title": "操作失败，没有任何改动。",
         "description": "「{{name}}」未被删除，agent 保持原样。请稍后重试。"
       },
       "confirm": {
-        "title": "永久删除此电脑？",
-        "description": "此操作不可撤销。「{{name}}」、以及它上面已归档的全部 agent（共 {{count}} 个）及其历史和消息将被永久删除、无法恢复，之后无法再连接到 Multica。",
+        "title": "从当前工作区删除这台电脑？",
+        "description": "已删除的服务端数据无法恢复。「{{name}}」、其运行时、以及上面已归档的全部 agent（共 {{count}} 个）及其服务端历史和消息，将从当前工作区永久删除。本机文件和其他工作区不受影响；以后可将这台电脑作为新连接重新接入。",
         "description_cloud": "此操作不可撤销。「{{name}}」及其云端容器将被永久删除，其上已归档 agent（共 {{count}} 个）与历史也会一并清除。",
         "type_to_confirm": "请输入电脑名「{{name}}」以确认。",
         "cancel": "取消",
@@ -192,18 +192,8 @@
     },
     "danger_zone": {
       "title": "危险区",
-      "description": "从工作区永久删除此电脑及其全部 Runtime。",
+      "description": "从当前工作区永久移除这台电脑及其运行时。本机文件和其他工作区不受影响；须先移除全部 agent。",
       "description_cloud": "从工作区永久删除此云端电脑、其容器及其全部 Runtime。"
-    },
-    "remove_binding": {
-      "button": "从当前工作区移除…",
-      "title": "将这台电脑移出当前工作区？",
-      "description": "这台电脑将停止为当前工作区运行 Agent。本地 Agent 数据会保留在电脑上，其他工作区不受影响，之后可以重新添加。",
-      "cancel": "取消",
-      "confirm": "从工作区移除",
-      "removing": "正在移除…",
-      "success": "已从当前工作区移除这台电脑。本地 Agent 数据和其他工作区均未受影响。",
-      "invalid_response": "服务端未确认这台电脑已从当前工作区安全移除。"
     },
     "agents_select": "选择",
     "agents_create": "创建",

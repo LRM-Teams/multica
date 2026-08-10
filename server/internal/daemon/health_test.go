@@ -484,7 +484,7 @@ func TestCredentialProxyMessageSendKeepsDraftWhenUpstreamOutcomeIsUnknown(t *tes
 		t.Fatalf("message send status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
-	if err != nil || !found || draft.ClientMessageID == "" || draft.Content != "hello" {
+	if err != nil || !found || draft.IdempotencyKey == "" || draft.Content != "hello" {
 		t.Fatalf("Draft after unknown outcome = %+v found=%v err=%v", draft, found, err)
 	}
 }
@@ -537,7 +537,7 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 4 {
 		t.Fatalf("held boundary=%d known=%v, want 4 true", boundary, known)
 	}
-	if draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now()); err != nil || !found || draft.SeenUpToSeq != 4 {
+	if draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now()); err != nil || !found || draft.SeenUpToSeq != 4 || draft.HoldCount != 1 {
 		t.Fatalf("held Draft=%+v found=%v err=%v", draft, found, err)
 	}
 }
@@ -586,7 +586,7 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 		t.Fatalf("held boundary=%d known=%v, want 5 true", boundary, known)
 	}
 	draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
-	if err != nil || !found || draft.SeenUpToSeq != 5 {
+	if err != nil || !found || draft.SeenUpToSeq != 5 || draft.HoldCount != 1 {
 		t.Fatalf("server-held Draft=%+v found=%v err=%v", draft, found, err)
 	}
 	var response map[string]any
@@ -624,8 +624,8 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 	defer upstream.Close()
 
 	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
-	if _, err := d.CredentialProxy().SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
-		Target: "#one", ContextTarget: "channel:one", Content: "saved reply", ClientMessageID: "stable-id", SeenUpToSeq: 2,
+	if _, err := d.CredentialProxy().SaveNormalMessageDraft("workspace-1", "agent-1", MessageDraft{
+		Target: "#one", ContextTarget: "channel:one", Content: "saved reply", IdempotencyKey: "stable-id", SeenUpToSeq: 2,
 	}, time.Now()); err != nil {
 		t.Fatalf("save Draft: %v", err)
 	}

@@ -76,17 +76,21 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 		if !request.Anyway {
 			freshness, err := proxy.PreflightMessageSend(request.AgentID, draft.ContextTarget)
 			if err != nil {
-				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "held", "freshness_unknown")
+				if _, holdErr := proxy.RecordMessageDraftHold(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, draft.ContextTarget, draft.SeenUpToSeq, time.Now()); holdErr != nil {
+					http.Error(w, "refresh held local Draft: "+holdErr.Error(), http.StatusConflict)
+					return
+				}
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, nil, "response_send", "held", "freshness_unknown")
 				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, 0, "freshness_unknown")
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, MessageSendFreshness{}, "freshness_unknown"))
 				return
 			}
 			if freshness.Held {
-				if _, err := proxy.RefreshMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.ClientMessageID, draft.ContextTarget, freshness.LatestSeq, time.Now()); err != nil {
+				if _, err := proxy.RecordMessageDraftHold(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, draft.ContextTarget, freshness.LatestSeq, time.Now()); err != nil {
 					http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 					return
 				}
-				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "held", "local_pending")
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, nil, "response_send", "held", "local_pending")
 				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, freshness.NewMessageCount, "local_pending")
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, freshness, "newer_messages_available"))
 				return
@@ -100,7 +104,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			"target":            draft.Target,
 			"content":           draft.Content,
 			"attachment_ids":    draft.AttachmentIDs,
-			"client_message_id": draft.ClientMessageID,
+			"client_message_id": draft.IdempotencyKey,
 			"seen_up_to_seq":    draft.SeenUpToSeq,
 			"context_target":    draft.ContextTarget,
 			"bypass_freshness":  request.Anyway,
@@ -118,7 +122,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			// The outcome is unknown whenever a send request did not return a
 			// successful response.  Keep the identity-bearing Draft for an
 			// explicit safe replay instead of trying again in the background.
-			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "failed", "service_send_failed")
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, nil, "response_send", "failed", "service_send_failed")
 			http.Error(w, "send message through Credential Proxy: "+err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -132,24 +136,24 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 				http.Error(w, "persist held message Context Boundary: "+err.Error(), http.StatusConflict)
 				return
 			}
-			if _, err := proxy.RefreshMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.ClientMessageID, draft.ContextTarget, latestSeq, time.Now()); err != nil {
+			if _, err := proxy.RecordMessageDraftHold(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, draft.ContextTarget, latestSeq, time.Now()); err != nil {
 				http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 				return
 			}
 			count, _ := jsonInteger(response["newMessageCount"])
-			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_send", "held", "server_race")
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_send", "held", "server_race")
 			d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, count, "server_race")
 		}
 		if !credentialProxyMessageOutputIsHeld(response) {
-			if err := proxy.ClearMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.ClientMessageID); err != nil {
+			if err := proxy.ClearMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey); err != nil {
 				// A canonical Message may already exist, so do not claim an unknown
 				// send.  The stable server identity makes a later explicit replay
 				// safe if the local cleanup needs manual recovery.
-				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_accepted", "degraded", "draft_cleanup_failed")
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_accepted", "degraded", "draft_cleanup_failed")
 				http.Error(w, "clear sent local Draft: "+err.Error(), http.StatusConflict)
 				return
 			}
-			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_accepted", "accepted", "")
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_accepted", "accepted", "")
 		}
 		sanitizeCredentialProxyMessageSendResponse(response)
 		writeCredentialProxyMessageJSON(w, response)
@@ -175,26 +179,26 @@ func (request *credentialProxyMessageSendRequest) validate() error {
 	return nil
 }
 
-func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialProxy, credential cachedAgentCredential, request credentialProxyMessageSendRequest, now time.Time) (messageDraft, int, error) {
-	var draft messageDraft
+func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialProxy, credential cachedAgentCredential, request credentialProxyMessageSendRequest, now time.Time) (MessageDraft, int, error) {
+	var draft MessageDraft
 	var err error
 	if request.SendDraft {
 		loaded, found, err := proxy.LoadMessageDraft(request.WorkspaceID, request.AgentID, request.Target, now)
 		if err != nil {
-			return messageDraft{}, http.StatusConflict, fmt.Errorf("load saved Draft: %w", err)
+			return MessageDraft{}, http.StatusConflict, fmt.Errorf("load saved Draft: %w", err)
 		}
 		if !found {
-			return messageDraft{}, http.StatusNotFound, errors.New("saved Draft not found or expired")
+			return MessageDraft{}, http.StatusNotFound, errors.New("saved Draft not found or expired")
 		}
 		draft = loaded
 	} else {
 		contextTarget, status, err := d.resolveMessageSendTarget(ctx, credential.Token, request, request.Target)
 		if err != nil {
-			return messageDraft{}, status, err
+			return MessageDraft{}, status, err
 		}
 		seenUpToSeq, err := proxy.MessageSendBoundarySnapshot(request.AgentID, contextTarget)
 		if err != nil {
-			return messageDraft{}, http.StatusConflict, err
+			return MessageDraft{}, http.StatusConflict, err
 		}
 		// Raft-aligned send identity: mint an independent uuid per intent, or
 		// reuse the outstanding Draft's client_message_id when a normal send
@@ -206,13 +210,13 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 				clientMessageID = reused
 			}
 		}
-		saved, err := proxy.SaveNormalMessageDraft(request.WorkspaceID, request.AgentID, messageDraft{
+		saved, err := proxy.SaveNormalMessageDraft(request.WorkspaceID, request.AgentID, MessageDraft{
 			Target: request.Target, ContextTarget: contextTarget, Content: request.Content, AttachmentIDs: append([]string(nil), request.AttachmentIDs...),
-			ClientMessageID: clientMessageID, SeenUpToSeq: seenUpToSeq,
+			IdempotencyKey: clientMessageID, SeenUpToSeq: seenUpToSeq,
 			Kind: strings.TrimSpace(request.Kind),
 		}, now)
 		if err != nil {
-			return messageDraft{}, http.StatusConflict, fmt.Errorf("save local Draft before send: %w", err)
+			return MessageDraft{}, http.StatusConflict, fmt.Errorf("save local Draft before send: %w", err)
 		}
 		draft = saved
 	}
@@ -227,16 +231,16 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		var status int
 		contextTarget, status, err = d.resolveMessageSendTarget(ctx, credential.Token, request, draft.Target)
 		if err != nil {
-			return messageDraft{}, status, err
+			return MessageDraft{}, status, err
 		}
 	}
 	seenUpToSeq, err := proxy.MessageSendBoundarySnapshot(request.AgentID, contextTarget)
 	if err != nil {
-		return messageDraft{}, http.StatusConflict, err
+		return MessageDraft{}, http.StatusConflict, err
 	}
-	draft, err = proxy.RefreshMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.ClientMessageID, contextTarget, seenUpToSeq, time.Now())
+	draft, err = proxy.UpdateMessageDraftBoundary(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, contextTarget, seenUpToSeq, time.Now())
 	if err != nil {
-		return messageDraft{}, http.StatusConflict, fmt.Errorf("persist send freshness preflight: %w", err)
+		return MessageDraft{}, http.StatusConflict, fmt.Errorf("persist send freshness preflight: %w", err)
 	}
 	return draft, http.StatusOK, nil
 }
@@ -265,9 +269,9 @@ func (d *Daemon) agentCredentialClient(token string, request credentialProxyMess
 // reuseClientMessageIDForIntent reuses an outstanding (non-expired) local Draft
 // client_message_id when a normal send re-drives the SAME intent (identical
 // content) to the same target. Distinct content is a new intent.
-func reuseClientMessageIDForIntent(existing messageDraft, content string) (string, bool) {
+func reuseClientMessageIDForIntent(existing MessageDraft, content string) (string, bool) {
 	if strings.TrimSpace(existing.Content) == strings.TrimSpace(content) {
-		return existing.ClientMessageID, true
+		return existing.IdempotencyKey, true
 	}
 	return "", false
 }

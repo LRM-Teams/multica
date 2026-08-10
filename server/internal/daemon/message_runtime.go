@@ -490,53 +490,55 @@ func (p *CredentialProxy) messageDraftStore() (*MessageDraftStore, error) {
 	return p.daemon.messageDraftStore, nil
 }
 
-func (p *CredentialProxy) SaveNormalMessageDraft(workspaceID, agentID string, draft messageDraft, now time.Time) (messageDraft, error) {
+func (p *CredentialProxy) SaveNormalMessageDraft(workspaceID, agentID string, draft MessageDraft, now time.Time) (MessageDraft, error) {
 	store, err := p.messageDraftStore()
 	if err != nil {
-		return messageDraft{}, err
+		return MessageDraft{}, err
 	}
 	key := DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(draft.Target)}
-	saved, err := store.saveAt(key, storedMessageDraft(draft), now)
+	saved, err := store.saveAt(key, draft, now)
 	if err != nil {
-		return messageDraft{}, err
+		return MessageDraft{}, err
 	}
-	return legacyMessageDraft(saved), nil
+	return saved, nil
 }
 
-func (p *CredentialProxy) LoadMessageDraft(workspaceID, agentID, target string, now time.Time) (messageDraft, bool, error) {
+func (p *CredentialProxy) LoadMessageDraft(workspaceID, agentID, target string, now time.Time) (MessageDraft, bool, error) {
 	store, err := p.messageDraftStore()
 	if err != nil {
-		return messageDraft{}, false, err
+		return MessageDraft{}, false, err
 	}
 	draft, found, err := store.Load(DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(target)}, now)
 	if err != nil || !found {
-		return messageDraft{}, found, err
+		return MessageDraft{}, found, err
 	}
-	return legacyMessageDraft(draft), true, nil
+	return draft, true, nil
 }
 
-func (p *CredentialProxy) RefreshMessageDraft(workspaceID, agentID, target, clientMessageID, contextTarget string, seenUpToSeq int64, now time.Time) (messageDraft, error) {
+func (p *CredentialProxy) UpdateMessageDraftBoundary(workspaceID, agentID, target, idempotencyKey, contextTarget string, seenUpToSeq int64, now time.Time) (MessageDraft, error) {
 	store, err := p.messageDraftStore()
 	if err != nil {
-		return messageDraft{}, err
+		return MessageDraft{}, err
 	}
 	key := DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(target)}
-	draft, err := store.update(key, now, func(draft *MessageDraft) error {
-		if draft.IdempotencyKey != strings.TrimSpace(clientMessageID) {
-			return errors.New("Draft identity does not match")
-		}
-		if canonical := strings.TrimSpace(contextTarget); canonical != "" {
-			draft.ContextTarget = canonical
-		}
-		if seenUpToSeq >= 0 {
-			draft.SeenUpToSeq = seenUpToSeq
-		}
-		return nil
-	})
+	draft, err := store.updateBoundaryAt(key, idempotencyKey, contextTarget, seenUpToSeq, now)
 	if err != nil {
-		return messageDraft{}, err
+		return MessageDraft{}, err
 	}
-	return legacyMessageDraft(draft), nil
+	return draft, nil
+}
+
+func (p *CredentialProxy) RecordMessageDraftHold(workspaceID, agentID, target, idempotencyKey, contextTarget string, seenUpToSeq int64, now time.Time) (MessageDraft, error) {
+	store, err := p.messageDraftStore()
+	if err != nil {
+		return MessageDraft{}, err
+	}
+	key := DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(target)}
+	draft, err := store.recordHoldAt(key, idempotencyKey, contextTarget, seenUpToSeq, now)
+	if err != nil {
+		return MessageDraft{}, err
+	}
+	return draft, nil
 }
 
 func (p *CredentialProxy) ClearMessageDraft(workspaceID, agentID, target, clientMessageID string) error {

@@ -157,6 +157,33 @@ func (s *MessageDraftStore) Load(key DraftKey, now time.Time) (MessageDraft, boo
 	return cloneMessageDraft(draft), true, nil
 }
 
+// UpdateBoundary records the current canonical Message target and local
+// coverage without extending Draft expiry. Only a normal save or an actual
+// freshness hold keeps an unsent Draft alive.
+func (s *MessageDraftStore) UpdateBoundary(key DraftKey, idempotencyKey, contextTarget string, seenUpToSeq int64) (MessageDraft, error) {
+	if s == nil || s.now == nil {
+		return MessageDraft{}, errors.New("Message Draft store is unavailable")
+	}
+	return s.updateBoundaryAt(key, idempotencyKey, contextTarget, seenUpToSeq, s.now())
+}
+
+func (s *MessageDraftStore) updateBoundaryAt(key DraftKey, idempotencyKey, contextTarget string, seenUpToSeq int64, now time.Time) (MessageDraft, error) {
+	return s.updateAt(key, idempotencyKey, contextTarget, seenUpToSeq, now, false)
+}
+
+// RecordHold preserves the Draft identity and authored payload while recording
+// one freshness hold. A hold extends the ten-minute explicit replay window.
+func (s *MessageDraftStore) RecordHold(key DraftKey, idempotencyKey, contextTarget string, seenUpToSeq int64) (MessageDraft, error) {
+	if s == nil || s.now == nil {
+		return MessageDraft{}, errors.New("Message Draft store is unavailable")
+	}
+	return s.recordHoldAt(key, idempotencyKey, contextTarget, seenUpToSeq, s.now())
+}
+
+func (s *MessageDraftStore) recordHoldAt(key DraftKey, idempotencyKey, contextTarget string, seenUpToSeq int64, now time.Time) (MessageDraft, error) {
+	return s.updateAt(key, idempotencyKey, contextTarget, seenUpToSeq, now, true)
+}
+
 func (s *MessageDraftStore) Clear(key DraftKey, idempotencyKey string) error {
 	key, path, err := s.path(key)
 	if err != nil {
@@ -182,10 +209,14 @@ func (s *MessageDraftStore) Clear(key DraftKey, idempotencyKey string) error {
 	return nil
 }
 
-func (s *MessageDraftStore) update(key DraftKey, now time.Time, update func(*MessageDraft) error) (MessageDraft, error) {
+func (s *MessageDraftStore) updateAt(key DraftKey, idempotencyKey, contextTarget string, seenUpToSeq int64, now time.Time, held bool) (MessageDraft, error) {
 	key, path, err := s.path(key)
 	if err != nil {
 		return MessageDraft{}, err
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return MessageDraft{}, errors.New("Draft internal identity is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -203,10 +234,19 @@ func (s *MessageDraftStore) update(key DraftKey, now time.Time, update func(*Mes
 		}
 		return MessageDraft{}, errors.New("saved Draft not found")
 	}
-	if err := update(&draft); err != nil {
-		return MessageDraft{}, err
+	if draft.IdempotencyKey != idempotencyKey {
+		return MessageDraft{}, errors.New("Draft identity does not match")
 	}
-	draft.SavedAt = now.UTC()
+	if canonical := strings.TrimSpace(contextTarget); canonical != "" {
+		draft.ContextTarget = canonical
+	}
+	if seenUpToSeq >= 0 {
+		draft.SeenUpToSeq = seenUpToSeq
+	}
+	if held {
+		draft.HoldCount++
+		draft.SavedAt = now.UTC()
+	}
 	draft.AttachmentIDs = append([]string(nil), draft.AttachmentIDs...)
 	state.Drafts[key.Target] = draft
 	if err := s.writeState(path, state); err != nil {

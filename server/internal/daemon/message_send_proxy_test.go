@@ -20,11 +20,11 @@ import (
 // that would bypass the server's (workspace,channel,author,client_message_id)
 // dedup and duplicate the message (regression seq86/87).
 func TestReuseClientMessageIDForIntentSameContent(t *testing.T) {
-	existing := messageDraft{
-		Target:          "#test111222",
-		Content:         "阿泰：1",
-		ClientMessageID: "stable-key-0001",
-		SavedAt:         time.Date(2026, time.August, 8, 15, 30, 0, 0, time.UTC),
+	existing := MessageDraft{
+		Target:         "#test111222",
+		Content:        "阿泰：1",
+		IdempotencyKey: "stable-key-0001",
+		SavedAt:        time.Date(2026, time.August, 8, 15, 30, 0, 0, time.UTC),
 	}
 	reused, ok := reuseClientMessageIDForIntent(existing, "阿泰：1")
 	if !ok {
@@ -39,10 +39,10 @@ func TestReuseClientMessageIDForIntentSameContent(t *testing.T) {
 // normalization-agnostic to surrounding whitespace, matching how the daemon
 // trims request content before saving a Draft.
 func TestReuseClientMessageIDForIntentTrimsContent(t *testing.T) {
-	existing := messageDraft{
-		Target:          "#test111222",
-		Content:         "阿泰：1",
-		ClientMessageID: "stable-key-0002",
+	existing := MessageDraft{
+		Target:         "#test111222",
+		Content:        "阿泰：1",
+		IdempotencyKey: "stable-key-0002",
 	}
 	reused, ok := reuseClientMessageIDForIntent(existing, "  阿泰：1  \n")
 	if !ok {
@@ -59,10 +59,10 @@ func TestReuseClientMessageIDForIntentTrimsContent(t *testing.T) {
 // a fresh client_message_id. This pins down the fix coverage boundary so the
 // regression cannot "turn green" by over-collapsing distinct messages.
 func TestReuseClientMessageIDForIntentDistinctContent(t *testing.T) {
-	existing := messageDraft{
-		Target:          "#test111222",
-		Content:         "阿泰：1",
-		ClientMessageID: "stable-key-0003",
+	existing := MessageDraft{
+		Target:         "#test111222",
+		Content:        "阿泰：1",
+		IdempotencyKey: "stable-key-0003",
 	}
 	if _, ok := reuseClientMessageIDForIntent(existing, "阿泰：2"); ok {
 		t.Fatalf("expected distinct content NOT to reuse client_message_id")
@@ -73,10 +73,10 @@ func TestReuseClientMessageIDForIntentDistinctContent(t *testing.T) {
 // an empty incoming send: no content to match, so no reuse — a fresh identity
 // is minted (the request is invalid upstream anyway).
 func TestReuseClientMessageIDForIntentEmptyNew(t *testing.T) {
-	existing := messageDraft{
-		Target:          "#test111222",
-		Content:         "阿泰：1",
-		ClientMessageID: "stable-key-0004",
+	existing := MessageDraft{
+		Target:         "#test111222",
+		Content:        "阿泰：1",
+		IdempotencyKey: "stable-key-0004",
 	}
 	if _, ok := reuseClientMessageIDForIntent(existing, ""); ok {
 		t.Fatalf("expected empty content NOT to reuse client_message_id")
@@ -87,10 +87,10 @@ func TestReuseClientMessageIDForIntentEmptyNew(t *testing.T) {
 // the helper and the caller both normalize the same way, so a Draft saved with
 // a trailing newline still matches a retry that trims it.
 func TestReuseClientMessageIDForIntentSurroundingWhitespaceIsTrimmed(t *testing.T) {
-	existing := messageDraft{
-		Target:          "#test111222",
-		Content:         strings.TrimSpace("阿泰：1\n"),
-		ClientMessageID: "stable-key-0005",
+	existing := MessageDraft{
+		Target:         "#test111222",
+		Content:        strings.TrimSpace("阿泰：1\n"),
+		IdempotencyKey: "stable-key-0005",
 	}
 	if reused, ok := reuseClientMessageIDForIntent(existing, strings.TrimSpace("阿泰：1\n")); !ok || reused != "stable-key-0005" {
 		t.Fatalf("expected trimmed same content to reuse key, got ok=%v reused=%q", ok, reused)
@@ -203,8 +203,8 @@ func TestCredentialProxyDraftStoreDoesNotRequireMessageCoordinator(t *testing.T)
 	proxy := d.CredentialProxy()
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 
-	saved, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
-		Target: "#test", Content: "hello", ClientMessageID: "stable-intent-1",
+	saved, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", MessageDraft{
+		Target: "#test", Content: "hello", IdempotencyKey: "stable-intent-1",
 	}, now)
 	if err != nil {
 		t.Fatalf("SaveNormalMessageDraft: %v", err)
@@ -213,19 +213,19 @@ func TestCredentialProxyDraftStoreDoesNotRequireMessageCoordinator(t *testing.T)
 	if err != nil || !found {
 		t.Fatalf("LoadMessageDraft: found=%v err=%v", found, err)
 	}
-	if loaded.ClientMessageID != saved.ClientMessageID || loaded.Content != saved.Content {
+	if loaded.IdempotencyKey != saved.IdempotencyKey || loaded.Content != saved.Content {
 		t.Fatalf("loaded Draft = %+v, want %+v", loaded, saved)
 	}
-	if _, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
-		Target: "#test", Content: "replacement", ClientMessageID: "stable-intent-2",
+	if _, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", MessageDraft{
+		Target: "#test", Content: "replacement", IdempotencyKey: "stable-intent-2",
 	}, now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("replace Draft: %v", err)
 	}
-	if err := proxy.ClearMessageDraft("workspace-1", "agent-1", "#test", saved.ClientMessageID); err != nil {
+	if err := proxy.ClearMessageDraft("workspace-1", "agent-1", "#test", saved.IdempotencyKey); err != nil {
 		t.Fatalf("stale ClearMessageDraft: %v", err)
 	}
 	current, found, err := proxy.LoadMessageDraft("workspace-1", "agent-1", "#test", now.Add(3*time.Minute))
-	if err != nil || !found || current.ClientMessageID != "stable-intent-2" {
+	if err != nil || !found || current.IdempotencyKey != "stable-intent-2" {
 		t.Fatalf("replacement after stale clear = %+v found=%v err=%v", current, found, err)
 	}
 }
@@ -244,16 +244,16 @@ func TestPrepareMessageSendDraftSendDraftReusesClientMessageID(t *testing.T) {
 	// First delivery of this intent is a normal send that gets held as a local
 	// Draft (the freshness / local_hold path) carrying its identity-bearing
 	// client_message_id.
-	original, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
-		Target:          "#test",
-		ContextTarget:   "channel:test",
-		Content:         "阿泰:1",
-		ClientMessageID: "stable-intent-0001",
+	original, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", MessageDraft{
+		Target:         "#test",
+		ContextTarget:  "channel:test",
+		Content:        "阿泰:1",
+		IdempotencyKey: "stable-intent-0001",
 	}, now)
 	if err != nil {
 		t.Fatalf("SaveNormalMessageDraft: %v", err)
 	}
-	if original.ClientMessageID == "" {
+	if original.IdempotencyKey == "" {
 		t.Fatal("saved Draft must carry a client_message_id")
 	}
 
@@ -274,8 +274,8 @@ func TestPrepareMessageSendDraftSendDraftReusesClientMessageID(t *testing.T) {
 		if status != 200 {
 			t.Fatalf("prepareMessageSendDraft send-draft turn %d status = %d", turn, status)
 		}
-		if draft.ClientMessageID != original.ClientMessageID {
-			t.Fatalf("send-draft turn %d client_message_id = %q, want reused %q", turn, draft.ClientMessageID, original.ClientMessageID)
+		if draft.IdempotencyKey != original.IdempotencyKey {
+			t.Fatalf("send-draft turn %d client_message_id = %q, want reused %q", turn, draft.IdempotencyKey, original.IdempotencyKey)
 		}
 		if draft.Content != original.Content {
 			t.Fatalf("send-draft turn %d content = %q, want %q (payload must not be mutated)", turn, draft.Content, original.Content)
@@ -297,8 +297,8 @@ func TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent(t *testing.T) {
 
 	// Seed a prior DISTINCT intent so we can assert a fresh normal send of other
 	// content does not collide with any existing client_message_id.
-	if _, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
-		Target: "#test", ContextTarget: "channel:test", Content: "prior", ClientMessageID: "prior-intent-0001",
+	if _, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", MessageDraft{
+		Target: "#test", ContextTarget: "channel:test", Content: "prior", IdempotencyKey: "prior-intent-0001",
 	}, now); err != nil {
 		t.Fatalf("SaveNormalMessageDraft: %v", err)
 	}
@@ -318,8 +318,8 @@ func TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("prepareMessageSendDraft normal send status = %d", status)
 	}
-	if first.ClientMessageID == "" || first.ClientMessageID == "prior-intent-0001" {
-		t.Fatalf("fresh normal send must mint a distinct client_message_id, got %q", first.ClientMessageID)
+	if first.IdempotencyKey == "" || first.IdempotencyKey == "prior-intent-0001" {
+		t.Fatalf("fresh normal send must mint a distinct client_message_id, got %q", first.IdempotencyKey)
 	}
 
 	// Re-driving the SAME content (same intent) reuses the stable key instead of
@@ -332,8 +332,8 @@ func TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent(t *testing.T) {
 		if status != 200 {
 			t.Fatalf("prepareMessageSendDraft normal send %d status = %d", i, status)
 		}
-		if draft.ClientMessageID != first.ClientMessageID {
-			t.Fatalf("same-intent normal send %d reused client_message_id %q, want %q", i, draft.ClientMessageID, first.ClientMessageID)
+		if draft.IdempotencyKey != first.IdempotencyKey {
+			t.Fatalf("same-intent normal send %d reused client_message_id %q, want %q", i, draft.IdempotencyKey, first.IdempotencyKey)
 		}
 	}
 }
@@ -354,11 +354,11 @@ func TestPrepareMessageSendDraftNeverUsesBatchFormClientMessageID(t *testing.T) 
 	if status != 200 {
 		t.Fatalf("status = %d", status)
 	}
-	if draft.ClientMessageID == "" {
+	if draft.IdempotencyKey == "" {
 		t.Fatal("expected a client_message_id")
 	}
 	// Former batch ids were "b" + 31 hex chars (len 32). UUIDs use hyphens.
-	if len(draft.ClientMessageID) == 32 && draft.ClientMessageID[0] == 'b' {
-		t.Fatalf("must not mint batch-form client_message_id, got %q", draft.ClientMessageID)
+	if len(draft.IdempotencyKey) == 32 && draft.IdempotencyKey[0] == 'b' {
+		t.Fatalf("must not mint batch-form client_message_id, got %q", draft.IdempotencyKey)
 	}
 }

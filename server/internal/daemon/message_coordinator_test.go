@@ -1408,31 +1408,17 @@ func TestMessageCoordinatorPreflightHoldsCompletePendingRangeWithNewestThree(t *
 	}
 }
 
-func TestMessageDraftExpiresAndSuccessfulClearDoesNotDeleteReplacement(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
+func TestMessageCoordinatorExposesNoDraftStateOrMethods(t *testing.T) {
+	typeOf := reflect.TypeOf(MessageCoordinator{})
+	for index := 0; index < typeOf.NumField(); index++ {
+		if strings.Contains(strings.ToLower(typeOf.Field(index).Name), "draft") {
+			t.Fatalf("MessageCoordinator still owns Draft field %s", typeOf.Field(index).Name)
+		}
 	}
-	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
-	first, err := coordinator.SaveNormalMessageDraft(messageDraft{Target: "#one", Content: "first", ClientMessageID: "first-id"}, now)
-	if err != nil {
-		t.Fatalf("SaveNormalMessageDraft: %v", err)
-	}
-	if first.SavedAt != now {
-		t.Fatalf("saved at = %s, want %s", first.SavedAt, now)
-	}
-	if _, err := coordinator.SaveNormalMessageDraft(messageDraft{Target: "#one", Content: "second", ClientMessageID: "second-id"}, now.Add(time.Minute)); err != nil {
-		t.Fatalf("replace local Draft: %v", err)
-	}
-	if err := coordinator.ClearMessageDraft("#one", "first-id"); err != nil {
-		t.Fatalf("clear older Draft: %v", err)
-	}
-	if draft, found, err := coordinator.LoadMessageDraft("#one", now.Add(2*time.Minute)); err != nil || !found || draft.ClientMessageID != "second-id" {
-		t.Fatalf("replacement Draft = %+v found=%v err=%v", draft, found, err)
-	}
-	if _, found, err := coordinator.LoadMessageDraft("#one", now.Add(11*time.Minute)); err != nil || found {
-		t.Fatalf("expired Draft found=%v err=%v", found, err)
+	pointerType := reflect.TypeOf((*MessageCoordinator)(nil))
+	for index := 0; index < pointerType.NumMethod(); index++ {
+		if strings.Contains(strings.ToLower(pointerType.Method(index).Name), "draft") {
+			t.Fatalf("MessageCoordinator still exposes Draft method %s", pointerType.Method(index).Name)
+		}
 	}
 }

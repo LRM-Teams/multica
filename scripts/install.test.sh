@@ -380,7 +380,7 @@ test_invalid_version_selector_fails_before_network() {
 }
 
 test_alpha_selector_is_not_retained() {
-  local tmp
+  local tmp help_output
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
 
@@ -394,6 +394,18 @@ test_alpha_selector_is_not_retained() {
   if [[ -s "$tmp/curl.log" ]]; then
     echo "the removed alpha selector must fail before any network request" >&2
     cat "$tmp/curl.log" >&2
+    return 1
+  fi
+
+  help_output="$(bash "$ROOT_DIR/scripts/install.sh" --help)"
+  if ! grep -qF "Select latest (default), test, or an exact release tag" <<<"$help_output"; then
+    echo "installer help must describe the test selector" >&2
+    printf '%s\n' "$help_output" >&2
+    return 1
+  fi
+  if grep -qF "Select latest (default), alpha" <<<"$help_output"; then
+    echo "installer help must not advertise the removed alpha selector" >&2
+    printf '%s\n' "$help_output" >&2
     return 1
   fi
 }
@@ -647,7 +659,8 @@ test_powershell_installer_uses_same_version_store_bridge() {
     echo "PowerShell installer still overwrites the launcher outside VersionStore" >&2
     return 1
   fi
-  if grep -Fq -- '@("latest", "test", "alpha")' <<<"$script"; then
+  if grep -Fq -- '@("latest", "test", "alpha")' <<<"$script" ||
+    grep -Fq -- '@("test", "alpha")' <<<"$script"; then
     echo "PowerShell installer must not retain the alpha compatibility selector" >&2
     return 1
   fi

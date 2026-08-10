@@ -203,7 +203,7 @@ validate_selected_manifest_tag() {
       [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
         fail "The latest manifest must point to a stable vX.Y.Z release, got '$tag'."
       ;;
-    test|alpha)
+    test)
       [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]] ||
         fail "The test environment must point to an alpha.N, beta.N, or rc.N release, got '$tag'."
       ;;
@@ -747,7 +747,7 @@ main() {
       --local)       mode="with-server" ;;  # backwards compat alias
       --stop)        mode="stop" ;;
       --version)
-        [ $# -ge 2 ] || fail "--version requires latest, alpha, or an exact vX.Y.Z[-(alpha|beta|rc).N] value."
+        [ $# -ge 2 ] || fail "--version requires latest, test, or an exact vX.Y.Z[-(alpha|beta|rc).N] value."
         RELEASE_SELECTOR="$2"
         shift
         ;;
@@ -756,7 +756,7 @@ main() {
         echo "Usage: install.sh [--version VERSION] [--with-server | --stop]"
         echo ""
         echo "  (default)       Install / upgrade the Multica CLI"
-        echo "  --version       Select latest (default), alpha, or an exact release tag"
+        echo "  --version       Select latest (default), test, or an exact release tag"
         echo "  --with-server   Install CLI + provision a self-host server (Docker)"
         echo "  --stop          Stop a self-hosted installation"
         echo ""

@@ -126,7 +126,7 @@ function Get-ReleaseManifest {
         if ($ReleaseSelector -eq "latest" -and $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
             Write-Fail "The latest manifest must point to a stable vX.Y.Z release, got '$tag'."
         }
-        if ($ReleaseSelector -in @("test", "alpha") -and $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$') {
+        if ($ReleaseSelector -eq "test" -and $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$') {
             Write-Fail "The test environment must point to an alpha.N, beta.N, or rc.N release, got '$tag'."
         }
 		if ($ReleaseVersion -and $tag -ne $ReleaseVersion) {

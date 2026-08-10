@@ -45,7 +45,7 @@ import { cn } from "@multica/ui/lib/utils";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceSlug } from "@multica/core/paths";
 import { useQueryClient } from "@tanstack/react-query";
-import type { Attachment } from "@multica/core/types";
+import type { Attachment, NoteAIEditResult } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
 import { Slice } from "@tiptap/pm/model";
 import {
@@ -94,9 +94,11 @@ interface ContentEditorProps {
   /** Show the floating formatting toolbar on text selection. Defaults true. */
   showBubbleMenu?: boolean;
   /** Optional AI rewrite action for the selected text plus nearby context. */
-  onOptimizeSelection?: (request: TextOptimizationRequest) => Promise<string>;
+  onOptimizeSelection?: (request: TextOptimizationRequest, options?: { signal?: AbortSignal }) => Promise<NoteAIEditResult>;
   /** Optional Notion-style empty-line AI action for editing the current page. */
   onEditPageWithAI?: PageEditAIAction;
+  /** Applies an AI-suggested title only after the user confirms an edit. */
+  onApplyAITitle?: (title: string) => void;
   /** Show the placeholder on the currently focused empty text block. */
   showEmptyLinePlaceholder?: boolean;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
@@ -222,6 +224,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       showBubbleMenu = true,
       onOptimizeSelection,
       onEditPageWithAI,
+      onApplyAITitle,
       showEmptyLinePlaceholder = false,
       submitOnEnter = false,
       currentIssueId,
@@ -655,7 +658,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           <EditorContent className="flex flex-1 flex-col" editor={editor} />
           <TableControls editor={editor} rootRef={wrapperRef} />
           {showBubbleMenu && (
-            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} />
+            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} onApplyTitle={onApplyAITitle} />
           )}
           {emptyLineAiState && onEditPageWithAI && (
             <EmptyLineAiMenu
@@ -663,6 +666,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
               state={emptyLineAiState}
               onChange={setEmptyLineAiState}
               onEditPageWithAI={onEditPageWithAI}
+              onApplyTitle={onApplyAITitle}
               onClose={() => {
                 setEmptyLineAiState(null);
                 editor.commands.focus();

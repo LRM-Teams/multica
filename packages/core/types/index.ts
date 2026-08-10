@@ -1,5 +1,5 @@
 export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, IssueReviewStats, IssueSourceMessageRef, IssueSourceRefs, IssueSourceChannelRef, ProjectChannel } from "./issue";
-export type { NotePage, NotePageListResponse, CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, UpdateNotePageRequest, UpdateNotePageSharesRequest } from "./note";
+export type { NotePage, NotePageListResponse, CreateNotePageRequest, DuplicateNotePageRequest, MoveNotePageRequest, UpdateNotePageRequest, UpdateNotePageSharesRequest, NoteAIJobStatus, NoteAIEditAction, NoteAIEditResult, CreateNoteAIJobRequest, NoteAIJob } from "./note";
 export type {
   FleetClassId,
   AgentFleetRank,

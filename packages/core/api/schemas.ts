@@ -56,6 +56,7 @@ import type {
   RuntimeAgentWorkspacesResponse,
   NotePage,
   NotePageListResponse,
+  NoteAIJob,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
@@ -95,6 +96,42 @@ export const EMPTY_NOTE_PAGE: NotePage = {
 };
 
 export const EMPTY_NOTE_PAGE_LIST: NotePageListResponse = { pages: [] };
+
+export const NoteAIEditResultSchema = z.object({
+  action: z.enum(["insert", "replace_selection", "replace_page", "patch"]),
+  markdown: z.string().default(""),
+  target: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  rationale: z.string().nullable().optional(),
+}).loose();
+
+export const NoteAIJobSchema: z.ZodType<NoteAIJob> = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  page_id: z.string().default(""),
+  agent_id: z.string().default(""),
+  chat_session_id: z.string().default(""),
+  task_id: z.string().default(""),
+  status: z.enum(["queued", "dispatched", "running", "completed", "failed", "cancelled"]).catch("queued"),
+  result: NoteAIEditResultSchema.nullable().optional(),
+  failure_reason: z.string().nullable().optional(),
+  created_at: z.string().default(""),
+  updated_at: z.string().optional(),
+}).loose();
+
+export const EMPTY_NOTE_AI_JOB: NoteAIJob = {
+  id: "",
+  workspace_id: "",
+  page_id: "",
+  agent_id: "",
+  chat_session_id: "",
+  task_id: "",
+  status: "queued",
+  result: null,
+  failure_reason: null,
+  created_at: "",
+  updated_at: "",
+};
 
 export const ChannelGoalSchema = z.object({
   id: z.string(),

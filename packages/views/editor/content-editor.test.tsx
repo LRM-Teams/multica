@@ -268,7 +268,7 @@ describe("ContentEditor", () => {
   });
 
   it("opens the empty-line AI prompt when Space is pressed in an empty paragraph", () => {
-    const onEditPageWithAI = vi.fn(async () => "AI result");
+    const onEditPageWithAI = vi.fn(async () => ({ action: "insert" as const, markdown: "AI result" }));
     const preventDefault = vi.fn();
     const emptyParagraph = {
       depth: 1,
@@ -294,7 +294,7 @@ describe("ContentEditor", () => {
   });
 
   it("dismisses the empty-line AI prompt on a second Space so a literal space can be inserted", () => {
-    const onEditPageWithAI = vi.fn(async () => "AI result");
+    const onEditPageWithAI = vi.fn(async () => ({ action: "insert" as const, markdown: "AI result" }));
     const emptyParagraph = {
       depth: 1,
       parent: { type: { name: "paragraph" }, content: { size: 0 } },

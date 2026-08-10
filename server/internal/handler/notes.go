@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 type NotePageResponse struct {
@@ -64,6 +66,34 @@ type noteMoveRequest struct {
 
 type noteDuplicateRequest struct {
 	Title *string `json:"title"`
+}
+
+type noteAIJobCreateRequest struct {
+	AgentID string `json:"agent_id"`
+	Prompt  string `json:"prompt"`
+	Title   string `json:"title"`
+}
+
+type NoteAIEditResult struct {
+	Action    string  `json:"action"`
+	Markdown  string  `json:"markdown"`
+	Target    *string `json:"target,omitempty"`
+	Title     *string `json:"title,omitempty"`
+	Rationale *string `json:"rationale,omitempty"`
+}
+
+type NoteAIJobResponse struct {
+	ID            string            `json:"id"`
+	WorkspaceID   string            `json:"workspace_id"`
+	PageID        string            `json:"page_id"`
+	AgentID       string            `json:"agent_id"`
+	ChatSessionID string            `json:"chat_session_id"`
+	TaskID        string            `json:"task_id"`
+	Status        string            `json:"status"`
+	Result        *NoteAIEditResult `json:"result,omitempty"`
+	FailureReason *string           `json:"failure_reason,omitempty"`
+	CreatedAt     string            `json:"created_at"`
+	UpdatedAt     string            `json:"updated_at,omitempty"`
 }
 
 func (h *Handler) notesWorkspaceAndUser(w http.ResponseWriter, r *http.Request) (pgtype.UUID, pgtype.UUID, string, bool) {
@@ -755,4 +785,390 @@ func (h *Handler) UpdateNotePageShares(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, notePageToResponse(page, userID, shares))
+}
+
+func normalizeNoteAIJobTitle(title, noteTitle string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "Note AI: " + normalizeNoteTitle(noteTitle)
+	}
+	runes := []rune(title)
+	if len(runes) > chatSessionTitleMaxLen {
+		return string(runes[:chatSessionTitleMaxLen])
+	}
+	return title
+}
+
+func stripNoteAIJSONFences(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) < 3 || !strings.HasPrefix(strings.TrimSpace(lines[0]), "```") || !strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
+		return trimmed
+	}
+	return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+}
+
+var noteAIJSONActionRE = regexp.MustCompile(`(?s)"action"\s*:\s*"([^"]+)"`)
+var noteAIJSONTargetRE = regexp.MustCompile(`(?s)"target"\s*:\s*"([^"]*)"`)
+var noteAIJSONTitleRE = regexp.MustCompile(`(?s)"title"\s*:\s*"([^"]*)"`)
+var noteAIJSONRationaleRE = regexp.MustCompile(`(?s)"rationale"\s*:\s*"([^"]*)"`)
+
+func parseLooseNoteAIEditResult(content string) (*NoteAIEditResult, error) {
+	actionMatch := noteAIJSONActionRE.FindStringSubmatch(content)
+	if len(actionMatch) < 2 {
+		return nil, fmt.Errorf("note AI edit action is missing")
+	}
+	markdown, err := extractLooseNoteAIStringField(content, "markdown")
+	if err != nil {
+		return nil, err
+	}
+	result := &NoteAIEditResult{
+		Action:   actionMatch[1],
+		Markdown: markdown,
+	}
+	if targetMatch := noteAIJSONTargetRE.FindStringSubmatch(content); len(targetMatch) >= 2 {
+		target := strings.TrimSpace(strings.ReplaceAll(targetMatch[1], `\"`, `"`))
+		if target != "" {
+			result.Target = &target
+		}
+	}
+	if titleMatch := noteAIJSONTitleRE.FindStringSubmatch(content); len(titleMatch) >= 2 {
+		title := strings.TrimSpace(strings.ReplaceAll(titleMatch[1], `\"`, `"`))
+		if title != "" {
+			result.Title = &title
+		}
+	}
+	if rationaleMatch := noteAIJSONRationaleRE.FindStringSubmatch(content); len(rationaleMatch) >= 2 {
+		rationale := strings.TrimSpace(strings.ReplaceAll(rationaleMatch[1], `\"`, `"`))
+		if rationale != "" {
+			result.Rationale = &rationale
+		}
+	}
+	return result, nil
+}
+
+func extractLooseNoteAIStringField(content, field string) (string, error) {
+	fieldName := `"` + field + `"`
+	fieldIndex := strings.Index(content, fieldName)
+	if fieldIndex < 0 {
+		return "", fmt.Errorf("note AI edit %s is missing", field)
+	}
+	colon := strings.Index(content[fieldIndex+len(fieldName):], ":")
+	if colon < 0 {
+		return "", fmt.Errorf("note AI edit %s is invalid", field)
+	}
+	valueStart := fieldIndex + len(fieldName) + colon + 1
+	for valueStart < len(content) && (content[valueStart] == ' ' || content[valueStart] == '\n' || content[valueStart] == '\r' || content[valueStart] == '\t') {
+		valueStart++
+	}
+	if valueStart >= len(content) || content[valueStart] != '"' {
+		return "", fmt.Errorf("note AI edit %s must be a string", field)
+	}
+	valueStart++
+	for i := valueStart; i < len(content); i++ {
+		if content[i] != '"' {
+			continue
+		}
+		j := i + 1
+		for j < len(content) && (content[j] == ' ' || content[j] == '\n' || content[j] == '\r' || content[j] == '\t') {
+			j++
+		}
+		if j < len(content) && content[j] == ',' {
+			k := j + 1
+			for k < len(content) && (content[k] == ' ' || content[k] == '\n' || content[k] == '\r' || content[k] == '\t') {
+				k++
+			}
+			if strings.HasPrefix(content[k:], `"action"`) || strings.HasPrefix(content[k:], `"markdown"`) || strings.HasPrefix(content[k:], `"target"`) || strings.HasPrefix(content[k:], `"title"`) || strings.HasPrefix(content[k:], `"rationale"`) {
+				return strings.TrimSpace(strings.ReplaceAll(content[valueStart:i], `\"`, `"`)), nil
+			}
+		}
+		if j < len(content) && content[j] == '}' {
+			return strings.TrimSpace(strings.ReplaceAll(content[valueStart:i], `\"`, `"`)), nil
+		}
+	}
+	return "", fmt.Errorf("note AI edit %s is invalid", field)
+}
+
+func validateNoteAIEditResult(result *NoteAIEditResult) (*NoteAIEditResult, error) {
+	result.Action = strings.TrimSpace(result.Action)
+	result.Markdown = strings.TrimSpace(result.Markdown)
+	switch result.Action {
+	case "insert", "replace_selection", "replace_page", "patch":
+	default:
+		return nil, fmt.Errorf("unsupported note AI edit action %q", result.Action)
+	}
+	if result.Markdown == "" {
+		return nil, fmt.Errorf("note AI edit markdown is empty")
+	}
+	if result.Action == "patch" {
+		if result.Target == nil || strings.TrimSpace(*result.Target) == "" {
+			return nil, fmt.Errorf("note AI patch target is required")
+		}
+		target := strings.TrimSpace(*result.Target)
+		result.Target = &target
+	} else {
+		result.Target = nil
+	}
+	if result.Title != nil {
+		title := strings.TrimSpace(*result.Title)
+		if title == "" {
+			result.Title = nil
+		} else {
+			result.Title = &title
+		}
+	}
+	if result.Rationale != nil {
+		rationale := strings.TrimSpace(*result.Rationale)
+		if rationale == "" {
+			result.Rationale = nil
+		} else {
+			result.Rationale = &rationale
+		}
+	}
+	return result, nil
+}
+
+func parseNoteAIEditResult(content string) (*NoteAIEditResult, error) {
+	trimmed := stripNoteAIJSONFences(content)
+	var result NoteAIEditResult
+	if err := json.Unmarshal([]byte(trimmed), &result); err == nil {
+		return validateNoteAIEditResult(&result)
+	}
+	loose, err := parseLooseNoteAIEditResult(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	return validateNoteAIEditResult(loose)
+}
+
+func noteAIStatusFromTask(status string, terminalOutcome pgtype.Text, startedAt pgtype.Timestamptz, result *NoteAIEditResult, failure *string) string {
+	switch status {
+	case "pending", "failed":
+		return "queued"
+	case "draining":
+		if startedAt.Valid {
+			return "running"
+		}
+		return "dispatched"
+	case "suppressed":
+		return "cancelled"
+	case "acked":
+		if terminalOutcome.Valid {
+			switch terminalOutcome.String {
+			case "failed", "cancelled":
+				return terminalOutcome.String
+			}
+		}
+		if failure != nil {
+			return "failed"
+		}
+		if result != nil {
+			return "completed"
+		}
+		return "completed"
+	default:
+		return status
+	}
+}
+
+func (h *Handler) noteAIJobResponse(ctx context.Context, workspaceID, userID, jobID pgtype.UUID) (NoteAIJobResponse, error) {
+	var resp NoteAIJobResponse
+	var taskStatus string
+	var terminalOutcome pgtype.Text
+	var taskStartedAt pgtype.Timestamptz
+	var taskUpdatedAt pgtype.Timestamptz
+	var taskError pgtype.Text
+	var taskFailure pgtype.Text
+	var assistantContent pgtype.Text
+	var assistantFailure pgtype.Text
+	var createdAt pgtype.Timestamptz
+	var pageID, agentID, chatSessionID, taskID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+SELECT j.id, j.workspace_id, j.page_id, j.agent_id, j.chat_session_id, j.task_id, j.created_at,
+       e.status, e.terminal_outcome, e.started_at, e.updated_at, e.error, e.failure_reason,
+       m.content, m.failure_reason
+FROM note_ai_job j
+JOIN agent_inbox_event e ON e.id = j.task_id
+LEFT JOIN LATERAL (
+    SELECT content, failure_reason
+    FROM chat_message
+    WHERE chat_session_id = j.chat_session_id
+      AND role = 'assistant'
+      AND task_id = j.task_id
+    ORDER BY created_at DESC
+    LIMIT 1
+) m ON true
+WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspaceID, userID).Scan(
+		&jobID, &workspaceID, &pageID, &agentID, &chatSessionID, &taskID, &createdAt,
+		&taskStatus, &terminalOutcome, &taskStartedAt, &taskUpdatedAt, &taskError, &taskFailure,
+		&assistantContent, &assistantFailure,
+	)
+	if err != nil {
+		return resp, err
+	}
+	var result *NoteAIEditResult
+	var failure *string
+	if assistantContent.Valid && strings.TrimSpace(assistantContent.String) != "" {
+		parsed, err := parseNoteAIEditResult(assistantContent.String)
+		if err != nil {
+			value := "agent returned invalid structured note AI edit"
+			failure = &value
+		} else {
+			result = parsed
+		}
+	}
+	switch {
+	case assistantFailure.Valid && assistantFailure.String != "":
+		value := assistantFailure.String
+		failure = &value
+	case taskFailure.Valid && taskFailure.String != "":
+		value := taskFailure.String
+		failure = &value
+	case taskError.Valid && taskError.String != "":
+		value := taskError.String
+		failure = &value
+	}
+	resp = NoteAIJobResponse{
+		ID:            uuidToString(jobID),
+		WorkspaceID:   uuidToString(workspaceID),
+		PageID:        uuidToString(pageID),
+		AgentID:       uuidToString(agentID),
+		ChatSessionID: uuidToString(chatSessionID),
+		TaskID:        uuidToString(taskID),
+		Status:        noteAIStatusFromTask(taskStatus, terminalOutcome, taskStartedAt, result, failure),
+		Result:        result,
+		FailureReason: failure,
+		CreatedAt:     timestampToString(createdAt),
+		UpdatedAt:     timestampToString(taskUpdatedAt),
+	}
+	return resp, nil
+}
+
+func (h *Handler) CreateNoteAIJob(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, userIDString, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	page, _, ok := h.loadAccessibleNote(w, r, chi.URLParam(r, "id"), workspaceID, userID)
+	if !ok {
+		return
+	}
+	var req noteAIJobCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	agentID, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id")
+	if !ok {
+		return
+	}
+	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: page.WorkspaceID})
+	if err != nil || agent.ArchivedAt.Valid {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
+		WorkspaceID: page.WorkspaceID,
+		AgentID:     agentID,
+		CreatorID:   userID,
+		Title:       normalizeNoteAIJobTitle(req.Title, page.Title),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create note AI job")
+		return
+	}
+	msg, err := h.Queries.CreateChatMessage(r.Context(), db.CreateChatMessageParams{
+		ChatSessionID: session.ID,
+		Role:          "user",
+		Content:       prompt,
+		Parts:         []byte("[]"),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create note AI job")
+		return
+	}
+	task, err := h.TaskService.EnqueueChatTask(r.Context(), session, parseUUID(userIDString))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to enqueue note AI job: "+err.Error())
+		return
+	}
+	if err := h.Queries.LinkChatMessageToTask(r.Context(), db.LinkChatMessageToTaskParams{ID: msg.ID, TaskID: task.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to link note AI job")
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), `
+INSERT INTO note_ai_job (id, workspace_id, page_id, creator_id, agent_id, chat_session_id, task_id, prompt, title)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, task.ID, page.WorkspaceID, page.ID, userID, agentID, session.ID, task.ID, prompt, normalizeNoteAIJobTitle(req.Title, page.Title)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create note AI job")
+		return
+	}
+	_, _ = h.Queries.UpdateChatSessionStatus(r.Context(), db.UpdateChatSessionStatusParams{ID: session.ID, Status: "archived"})
+	resp, err := h.noteAIJobResponse(r.Context(), page.WorkspaceID, userID, task.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load note AI job")
+		return
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (h *Handler) GetNoteAIJob(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	jobID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "jobId"), "note AI job id")
+	if !ok {
+		return
+	}
+	resp, err := h.noteAIJobResponse(r.Context(), workspaceID, userID, jobID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "note AI job not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load note AI job")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) CancelNoteAIJob(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	jobID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "jobId"), "note AI job id")
+	if !ok {
+		return
+	}
+	var taskID pgtype.UUID
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT task_id
+FROM note_ai_job
+WHERE id = $1 AND workspace_id = $2 AND creator_id = $3`, jobID, workspaceID, userID).Scan(&taskID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "note AI job not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load note AI job")
+		return
+	}
+	if _, err := h.TaskService.CancelTaskWithResult(r.Context(), taskID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := h.noteAIJobResponse(r.Context(), workspaceID, userID, jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load note AI job")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

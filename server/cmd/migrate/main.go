@@ -61,6 +61,7 @@ type concurrentIndexSpec struct {
 // historical pre-table phase and create the index whenever the table exists.
 var agentDeleteIndexOptionalRelations = map[string]string{
 	"idx_agent_attachment_upload_session_agent": "agent_attachment_upload_session",
+	"idx_note_ai_job_agent":                     "note_ai_job",
 }
 
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {
@@ -81,6 +82,7 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_channel_agent_session_agent", `CREATE INDEX CONCURRENTLY idx_channel_agent_session_agent ON channel_agent_session (agent_id)`},
 		{"idx_channel_decision_audit_agent", `CREATE INDEX CONCURRENTLY idx_channel_decision_audit_agent ON channel_decision_audit (agent_id)`},
 		{"idx_chat_session_agent", `CREATE INDEX CONCURRENTLY idx_chat_session_agent ON chat_session (agent_id)`},
+		{"idx_note_ai_job_agent", `CREATE INDEX CONCURRENTLY idx_note_ai_job_agent ON note_ai_job (agent_id)`},
 		{"idx_collaboration_turn_agent", `CREATE INDEX CONCURRENTLY idx_collaboration_turn_agent ON collaboration_turn (agent_id)`},
 		{"idx_environment_agent_sandbox_agent", `CREATE INDEX CONCURRENTLY idx_environment_agent_sandbox_agent ON environment_agent_sandbox (agent_id)`},
 		{"idx_evolution_training_example_agent", `CREATE INDEX CONCURRENTLY idx_evolution_training_example_agent ON evolution_training_example (agent_id)`},

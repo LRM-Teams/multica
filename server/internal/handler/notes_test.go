@@ -80,3 +80,190 @@ func TestListNotePagesIncludesOwnedNotesAcrossWorkspaces(t *testing.T) {
 		t.Fatalf("GetNotePage from second workspace: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
 	}
 }
+
+func createNotePageForAITest(t *testing.T, title string) string {
+	t.Helper()
+	var noteID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO note_page (workspace_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+		VALUES ($1, $2, $3, 'body', '00000000000000000001', $2, $2)
+		RETURNING id
+	`, testWorkspaceID, testUserID, title).Scan(&noteID); err != nil {
+		t.Fatalf("create note page: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM note_page WHERE id = $1`, noteID) })
+	return noteID
+}
+
+func createNoteAIJobForTest(t *testing.T, noteID, agentID string) NoteAIJobResponse {
+	t.Helper()
+	req := withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/ai-jobs", map[string]any{
+		"agent_id": agentID,
+		"prompt":   "rewrite this note excerpt",
+		"title":    "Note AI Test",
+	}), "id", noteID)
+	w := httptest.NewRecorder()
+	testHandler.CreateNoteAIJob(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateNoteAIJob: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode note AI job: %v", err)
+	}
+	if resp.ID == "" || resp.TaskID == "" || resp.ChatSessionID == "" || resp.Status == "" {
+		t.Fatalf("incomplete note AI job response: %#v", resp)
+	}
+	return resp
+}
+
+func TestParseNoteAIEditResultAcceptsJSONLikeMarkdown(t *testing.T) {
+	result, err := parseNoteAIEditResult(`{"action":"patch","target":"old equation","markdown":"# Title
+
+$$
+\nabla \times \mathbf{E}
+$$","title":null,"rationale":"Updated equations."}`)
+	if err != nil {
+		t.Fatalf("parse JSON-like note AI result: %v", err)
+	}
+	if result.Action != "patch" || result.Target == nil || *result.Target != "old equation" || result.Markdown != "# Title\n\n$$\n\\nabla \\times \\mathbf{E}\n$$" || result.Rationale == nil || *result.Rationale != "Updated equations." {
+		t.Fatalf("parsed result = %#v", result)
+	}
+}
+
+func TestNoteAIJobCreateStatusAndHiddenChatSession(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Job Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI note "+uuid.NewString())
+	job := createNoteAIJobForTest(t, noteID, agentID)
+	if job.ID != job.TaskID || job.PageID != noteID || job.AgentID != agentID || job.Status != "queued" {
+		t.Fatalf("job response = %#v, want task-backed queued job", job)
+	}
+
+	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/ai-jobs/"+job.ID, nil), "jobId", job.ID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteAIJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNoteAIJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	listReq := withChatTestWorkspaceCtx(t, newRequest(http.MethodGet, "/api/chat/sessions?status=all", nil))
+	listRec := httptest.NewRecorder()
+	testHandler.ListChatSessions(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListChatSessions: expected 200, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	var sessions []ChatSessionResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&sessions); err != nil {
+		t.Fatalf("decode sessions: %v", err)
+	}
+	for _, session := range sessions {
+		if session.ID == job.ChatSessionID {
+			t.Fatalf("note AI backing chat session leaked into chat list: %#v", session)
+		}
+	}
+}
+
+func TestNoteAIJobCompletedReturnsAssistantResult(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Complete Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI completion note "+uuid.NewString())
+	job := createNoteAIJobForTest(t, noteID, agentID)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now()
+		WHERE id = $1
+	`, job.TaskID); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO chat_message (chat_session_id, role, content, task_id)
+		VALUES ($1, 'assistant', $2, $3)
+	`, job.ChatSessionID, `{"action":"replace_selection","markdown":"improved note text","rationale":"cleaner"}`, job.TaskID); err != nil {
+		t.Fatalf("insert assistant result: %v", err)
+	}
+
+	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/ai-jobs/"+job.ID, nil), "jobId", job.ID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteAIJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNoteAIJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode completed job: %v", err)
+	}
+	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_selection" || resp.Result.Markdown != "improved note text" || resp.Result.Rationale == nil || *resp.Result.Rationale != "cleaner" {
+		t.Fatalf("completed job response = %#v", resp)
+	}
+}
+
+func TestNoteAIJobInvalidStructuredResultFails(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Invalid Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI invalid note "+uuid.NewString())
+	job := createNoteAIJobForTest(t, noteID, agentID)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now()
+		WHERE id = $1
+	`, job.TaskID); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO chat_message (chat_session_id, role, content, task_id)
+		VALUES ($1, 'assistant', 'plain unstructured text', $2)
+	`, job.ChatSessionID, job.TaskID); err != nil {
+		t.Fatalf("insert assistant result: %v", err)
+	}
+
+	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/ai-jobs/"+job.ID, nil), "jobId", job.ID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteAIJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNoteAIJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode invalid job: %v", err)
+	}
+	if resp.Status != "failed" || resp.Result != nil || resp.FailureReason == nil {
+		t.Fatalf("invalid structured result response = %#v, want failed without result", resp)
+	}
+}
+
+func TestNoteAIJobCancelSuppressesTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Cancel Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI cancel note "+uuid.NewString())
+	job := createNoteAIJobForTest(t, noteID, agentID)
+
+	cancelReq := withURLParam(newRequest(http.MethodPost, "/api/notes/ai-jobs/"+job.ID+"/cancel", nil), "jobId", job.ID)
+	cancelRec := httptest.NewRecorder()
+	testHandler.CancelNoteAIJob(cancelRec, cancelReq)
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("CancelNoteAIJob: expected 200, got %d: %s", cancelRec.Code, cancelRec.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(cancelRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode cancelled job: %v", err)
+	}
+	if resp.Status != "cancelled" {
+		t.Fatalf("cancelled job status = %q, want cancelled", resp.Status)
+	}
+	if got := taskStatus(t, job.TaskID); got != "suppressed" {
+		t.Fatalf("task status = %q, want suppressed", got)
+	}
+}

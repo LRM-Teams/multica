@@ -31,6 +31,11 @@ vi.mock("@tanstack/react-query", () => ({
       ],
     },
     isLoading: false,
+    isFetching: false,
+  }),
+  useQueryClient: () => ({
+    prefetchQuery: vi.fn(),
+    invalidateQueries: vi.fn(),
   }),
 }));
 
@@ -39,26 +44,72 @@ vi.mock("@multica/core/runtimes", () => ({
   deriveRuntimeHealth: () => "online",
 }));
 
-vi.mock("./inspector/runtime-picker", () => ({
-  RuntimePicker: ({
-    value,
-    onChange,
+vi.mock("../../runtimes/components/runtime-machines", () => ({
+  buildRuntimeMachines: (runtimes: AgentRuntime[]) => [
+    {
+      id: "machine-1",
+      daemonId: "daemon-1",
+      title: "Test Mac",
+      subtitle: null,
+      deviceInfo: null,
+      deviceName: null,
+      cliVersion: null,
+      mode: "local",
+      section: "local",
+      isCurrent: true,
+      health: "online",
+      runtimeHealth: null,
+      updateError: null,
+      daemonTargetVersion: null,
+      runtimes,
+      onlineCount: runtimes.length,
+      issueCount: 0,
+      runningCount: 0,
+      queuedCount: 0,
+      providerNames: [],
+      lastSeenAt: null,
+    },
+  ],
+}));
+
+vi.mock("./computer-picker", () => ({
+  ComputerPicker: ({
+    selectedMachineId,
+    onSelect,
   }: {
-    value: string;
-    onChange: (id: string) => void;
+    selectedMachineId: string;
+    onSelect: (id: string) => void;
   }) => (
     <button
       type="button"
-      data-testid="draft-runtime"
-      onClick={() => onChange("rt-2")}
+      data-testid="draft-computer"
+      onClick={() => onSelect("machine-1")}
     >
-      {value}
+      {selectedMachineId || "none"}
     </button>
   ),
 }));
 
-vi.mock("./inspector/model-picker", () => ({
-  ModelPicker: ({
+vi.mock("./runtime-picker", () => ({
+  RuntimePicker: ({
+    selectedRuntimeId,
+    onSelect,
+  }: {
+    selectedRuntimeId: string;
+    onSelect: (id: string) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="draft-runtime"
+      onClick={() => onSelect("rt-2")}
+    >
+      {selectedRuntimeId}
+    </button>
+  ),
+}));
+
+vi.mock("./model-dropdown", () => ({
+  ModelDropdown: ({
     value,
     onChange,
   }: {
@@ -75,8 +126,8 @@ vi.mock("./inspector/model-picker", () => ({
   ),
 }));
 
-vi.mock("./inspector/thinking-picker", () => ({
-  ThinkingPicker: ({
+vi.mock("./thinking-dropdown", () => ({
+  ThinkingDropdown: ({
     value,
     onChange,
   }: {
@@ -98,6 +149,7 @@ const RESOURCES = {
     prop_runtime: "Runtime",
     prop_model: "Model",
     prop_thinking: "Thinking",
+    prop_computer: "Computer",
     save: "Save",
     cancel: "Cancel",
   },
@@ -105,6 +157,9 @@ const RESOURCES = {
     dialog_title: "Runtime config",
     dialog_description: "Edits stay local until you save.",
     dialog_saving: "Saving…",
+  },
+  create_dialog: {
+    runtime_label: "Runtime",
   },
 };
 
@@ -117,14 +172,47 @@ const agent = {
 } as Agent;
 
 const runtimes = [
-  { id: "rt-1", status: "online" },
-  { id: "rt-2", status: "online" },
+  {
+    id: "rt-1",
+    status: "online",
+    daemon_id: "daemon-1",
+    name: "Claude",
+    provider: "claude",
+    runtime_mode: "local",
+  },
+  {
+    id: "rt-2",
+    status: "online",
+    daemon_id: "daemon-1",
+    name: "Cursor",
+    provider: "cursor",
+    runtime_mode: "local",
+  },
 ] as AgentRuntime[];
 
 const members = [] as MemberWithUser[];
 
-describe("RuntimeConfigDialog (LRM-1351)", () => {
+describe("RuntimeConfigDialog — Computer → Runtime → Model → Reasoning", () => {
+  it("renders computer, runtime, model, and reasoning controls", () => {
+    render(
+      <RuntimeConfigDialog
+        agent={agent}
+        open
+        onOpenChange={vi.fn()}
+        runtimes={runtimes}
+        members={members}
+        currentUserId="user-1"
+        runtimeOnline
+        onSave={vi.fn()}
+      />,
+    );
 
+    expect(screen.getByTestId("execution-config-fields")).toBeInTheDocument();
+    expect(screen.getByTestId("draft-computer")).toBeInTheDocument();
+    expect(screen.getByTestId("draft-runtime")).toBeInTheDocument();
+    expect(screen.getByTestId("draft-model")).toBeInTheDocument();
+    expect(screen.getByTestId("draft-thinking")).toBeInTheDocument();
+  });
 
   it("Cancel discards draft without calling onSave", async () => {
     const onSave = vi.fn();
@@ -146,5 +234,33 @@ describe("RuntimeConfigDialog (LRM-1351)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onSave).not.toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("Save patches runtime and clears model cascade when runtime changes", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RuntimeConfigDialog
+        agent={agent}
+        open
+        onOpenChange={vi.fn()}
+        runtimes={runtimes}
+        members={members}
+        currentUserId="user-1"
+        runtimeOnline
+        onSave={onSave}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("draft-runtime"));
+    // After runtime change, model is cleared — pick a model then save
+    fireEvent.click(screen.getByTestId("draft-model"));
+    fireEvent.click(screen.getByTestId("agent-runtime-config-save"));
+
+    expect(onSave).toHaveBeenCalled();
+    const firstCall = onSave.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const patch = firstCall![0] as Record<string, unknown>;
+    expect(patch.runtime_id).toBe("rt-2");
+    expect(patch.model).toBe("claude-sonnet-5");
   });
 });

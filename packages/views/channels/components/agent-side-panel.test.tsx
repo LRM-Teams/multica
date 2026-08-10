@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { configStore } from "@multica/core/config";
@@ -450,32 +450,33 @@ describe("AgentSidePanel", () => {
     );
   });
 
-  // task #28: the Info section only ever showed Created/Owner — nobody had
-  // wired the machine-binding row into this surface (only agent-profile-card
-  // had it), so anyone opening an agent from the channel sidebar never saw
-  // which computer it runs on.
-  it("shows the bound computer's connection + label in the Info section (#28)", () => {
+  // task #28 + Computer-first: computer binding lives in Runtime config
+  // (not the Info section) so Computer → Runtime → Model stay together.
+  it("shows the bound computer's connection + label in Runtime config (#28)", () => {
     mockRuntimes.current = [
       { id: "runtime-1", status: "online", name: "Cursor (s144)", display_name: "s144" },
     ];
     renderPanel();
-    expect(screen.getByText("Computer")).toBeInTheDocument();
-    expect(screen.getByText("Connected")).toBeInTheDocument();
-    expect(screen.getByText("s144")).toBeInTheDocument();
+    const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
+    expect(within(runtimeSection).getByText("Computer")).toBeInTheDocument();
+    expect(within(runtimeSection).getByText("Connected")).toBeInTheDocument();
+    expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
   });
 
   it("shows disconnected + hostname when no display_name is set (#28)", () => {
     mockRuntimes.current = [{ id: "runtime-1", status: "offline", name: "Cursor (s144)" }];
     renderPanel();
-    expect(screen.getByText("Disconnected")).toBeInTheDocument();
-    expect(screen.getByText("s144")).toBeInTheDocument();
-    expect(screen.queryByText("Cursor (s144)")).not.toBeInTheDocument();
+    const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
+    expect(within(runtimeSection).getByText("Disconnected")).toBeInTheDocument();
+    expect(within(runtimeSection).getByText("s144")).toBeInTheDocument();
+    expect(within(runtimeSection).queryByText("Cursor (s144)")).not.toBeInTheDocument();
   });
 
   it("shows the no-computer fallback when the agent's runtime_id doesn't resolve (#28)", () => {
     mockRuntimes.current = [];
     renderPanel();
-    expect(screen.getByText("No computer")).toBeInTheDocument();
+    const runtimeSection = screen.getByTestId("agent-profile-runtime-config");
+    expect(within(runtimeSection).getByText("No computer")).toBeInTheDocument();
   });
 
   it("shows the agent honor summary on the profile tab", () => {

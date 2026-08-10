@@ -10,16 +10,18 @@ import {
   PopoverContent,
 } from "@multica/ui/components/ui/popover";
 import { Label } from "@multica/ui/components/ui/label";
+import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
+import {
+  executionFieldClass,
+  executionOptionClass,
+  executionOptionSelectedClass,
+  executionTriggerClass,
+} from "./execution-picker-styles";
 
 /**
- * Create-flow computer selector (Frank / Parker 2026-08-01): pick the
- * computer first, then a runtime on that computer. Groups runtimes via
- * `buildRuntimeMachines` so the list is one row per machine, not per
- * provider process.
- *
- * Selection seeding stays in the parent (derived effective id) — this
- * component never calls onSelect from an effect.
+ * Computer selector: one row per machine (via `buildRuntimeMachines`).
+ * Trigger is single-line Input density; secondary detail stays in the menu.
  */
 export function ComputerPicker({
   runtimes,
@@ -46,44 +48,48 @@ export function ComputerPicker({
     machines.find((machine) => machine.id === selectedMachineId) ?? null;
 
   return (
-    <div className="flex flex-col min-w-0">
-      <Label className="text-xs text-muted-foreground">
+    <div className={executionFieldClass}>
+      <Label className="text-xs font-medium text-muted-foreground">
         {t(($) => $.create_dialog.computer_label)}
       </Label>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           disabled={machines.length === 0 && !runtimesLoading}
-          className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+          className={executionTriggerClass}
         >
           {runtimesLoading ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
           ) : (
-            <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           )}
-          <div className="min-w-0 flex-1">
-            <div className="truncate font-medium">
-              {runtimesLoading
-                ? t(($) => $.create_dialog.computer_loading)
-                : (selected?.title ?? t(($) => $.create_dialog.computer_none))}
-            </div>
-            {selected?.subtitle && (
-              <div className="truncate text-xs text-muted-foreground">
-                {selected.subtitle}
-              </div>
-            )}
-          </div>
+          <span className="min-w-0 flex-1 truncate">
+            {runtimesLoading
+              ? t(($) => $.create_dialog.computer_loading)
+              : (selected?.title ?? t(($) => $.create_dialog.computer_none))}
+          </span>
+          {selected ? (
+            <span
+              className={cn(
+                "h-1.5 w-1.5 shrink-0 rounded-full",
+                selected.health === "online"
+                  ? "bg-success"
+                  : "bg-muted-foreground/40",
+              )}
+            />
+          ) : null}
           <ChevronDown
-            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
-              open ? "rotate-180" : ""
-            }`}
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
           />
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="w-[var(--anchor-width)] p-1 max-h-60 overflow-y-auto"
+          className="w-[var(--anchor-width)] max-h-60 overflow-y-auto p-1"
         >
           {machines.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground">
+            <p className="px-2.5 py-1.5 text-xs text-muted-foreground">
               {t(($) => $.create_dialog.computer_none)}
             </p>
           ) : (
@@ -97,25 +103,27 @@ export function ComputerPicker({
                     onSelect(machine.id);
                     setOpen(false);
                   }}
-                  className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
-                    machine.id === selectedMachineId
-                      ? "bg-accent"
-                      : "hover:bg-accent/50"
-                  }`}
+                  className={cn(
+                    executionOptionClass,
+                    machine.id === selectedMachineId &&
+                      executionOptionSelectedClass,
+                  )}
                 >
-                  <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium">{machine.title}</div>
-                    {machine.subtitle && (
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                  <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {machine.title}
+                    {machine.subtitle ? (
+                      <span className="text-muted-foreground">
+                        {" · "}
                         {machine.subtitle}
-                      </div>
-                    )}
-                  </div>
+                      </span>
+                    ) : null}
+                  </span>
                   <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${
-                      online ? "bg-success" : "bg-muted-foreground/40"
-                    }`}
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      online ? "bg-success" : "bg-muted-foreground/40",
+                    )}
                     aria-label={
                       online
                         ? t(($) => $.inspector.computer_connected)

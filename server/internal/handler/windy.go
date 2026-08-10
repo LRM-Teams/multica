@@ -199,8 +199,9 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var setup struct {
-		RuntimeID string `json:"runtime_id"`
-		Model     string `json:"model"`
+		RuntimeID     string `json:"runtime_id"`
+		Model         string `json:"model"`
+		ThinkingLevel string `json:"thinking_level"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -210,6 +211,7 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	}
 	setup.RuntimeID = strings.TrimSpace(setup.RuntimeID)
 	setup.Model = strings.TrimSpace(setup.Model)
+	setup.ThinkingLevel = strings.TrimSpace(setup.ThinkingLevel)
 	if setup.RuntimeID == "" {
 		writeError(w, http.StatusBadRequest, "runtime_id is required")
 		return
@@ -223,7 +225,7 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	agent, created, err := h.provisionOnboardingAgent(r.Context(), wsUUID, runtime, setup.Model)
+	agent, created, err := h.provisionOnboardingAgent(r.Context(), wsUUID, runtime, setup.Model, setup.ThinkingLevel)
 	if err != nil {
 		slog.Warn("ensure Wendy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		if errors.Is(err, errMultipleLegacyOnboardingAgents) {
@@ -267,7 +269,7 @@ var errMultipleLegacyOnboardingAgents = errors.New("multiple legacy onboarding-a
 // provisionOnboardingAgent is the setup commit boundary. The workspace row lock
 // serializes retries while the transaction creates or adopts Wendy, binds her,
 // joins #general, and writes the deterministic welcome messages.
-func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID pgtype.UUID, runtime db.AgentRuntime, model string) (db.Agent, bool, error) {
+func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID pgtype.UUID, runtime db.AgentRuntime, model string, thinkingLevel string) (db.Agent, bool, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return db.Agent{}, false, err
@@ -307,12 +309,16 @@ func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID pgty
 	}
 	created := candidateCount == 0
 	if created {
+		thinking := pgtype.Text{}
+		if thinkingLevel != "" {
+			thinking = pgtype.Text{String: thinkingLevel, Valid: true}
+		}
 		agent, err = h.createAgentWithIdentityTx(ctx, tx, qtx, db.CreateAgentParams{
 			WorkspaceID: workspaceID, Description: windyDescription, Instructions: windyInstructions,
 			AvatarUrl: pgtype.Text{String: windyAvatarURL, Valid: true}, AvatarSource: agentAvatarSourceAssigned,
 			RuntimeMode: runtime.RuntimeMode, RuntimeConfig: []byte("{}"), RuntimeID: runtime.ID,
 			MaxConcurrentTasks: 6, OwnerID: ownerID, CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-			Model: pgtype.Text{String: model, Valid: true},
+			Model: pgtype.Text{String: model, Valid: true}, ThinkingLevel: thinking,
 		}, windyAgentName, windyAgentName)
 		if err != nil {
 			return db.Agent{}, false, err

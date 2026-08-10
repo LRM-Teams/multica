@@ -250,7 +250,9 @@
     "managed_by_runtime_hint": "Configure the model on the runtime host (e.g. Hermes reads it from its own config file).",
     "discovery_failed": "discovery failed",
     "clear_full": "Clear selection (use provider default)",
-    "catalog_unavailable_hint": "Catalog unavailable — type a model ID"
+    "catalog_unavailable_hint": "Catalog unavailable — type a model ID",
+    "scanning_on_computer": "Checking models on this Computer…",
+    "rescan_aria": "Rescan models on this Computer"
   },
   "tabs": {
     "activity": "Activity",
@@ -284,7 +286,7 @@
     "name_placeholder": "e.g. deep-research-agent",
     "description_label": "Description",
     "description_placeholder": "What does this agent do?",
-    "thinking_label": "Thinking",
+    "thinking_label": "Reasoning",
     "computer_label": "Computer",
     "computer_loading": "Loading computers...",
     "computer_none": "No computer available",
@@ -560,11 +562,11 @@
     }
   },
   "execution_config": {
-    "applies_next_run": "Open the dialog to edit runtime, model, and thinking. Saving applies all changes and restarts the agent when available (at most once).",
+    "applies_next_run": "Open the dialog to edit Computer, Runtime, Model, and Reasoning. Saving applies all changes and restarts the agent when available (at most once).",
     "dialog_title": "Runtime config",
-    "dialog_description": "Edits stay local until you save. Cancel discards the draft without restarting.",
+    "dialog_description": "Choose Computer → Runtime → Model → Reasoning. Edits stay local until you save. Cancel discards the draft without restarting.",
     "dialog_saving": "Saving…",
-    "edit_trigger_aria": "Edit runtime, model, and thinking"
+    "edit_trigger_aria": "Edit Computer, Runtime, Model, and Reasoning"
   },
   "side_panel": {
     "close_aria": "Close agent panel",

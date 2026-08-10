@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Cpu, Loader2, Check, Info } from "lucide-react";
-import { runtimeModelsOptions } from "@multica/core/runtimes";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, Cpu, Loader2, Check, Info, RefreshCw } from "lucide-react";
+import {
+  runtimeModelsKeys,
+  runtimeModelsOptions,
+} from "@multica/core/runtimes";
 import type { RuntimeModel } from "@multica/core/types";
 import {
   Popover,
@@ -12,7 +15,12 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
+import { cn } from "@multica/ui/lib/utils";
 import { CustomModelIdRow } from "./custom-model-id-row";
+import {
+  executionFieldClass,
+  executionTriggerClass,
+} from "./execution-picker-styles";
 import { useT } from "../../i18n";
 
 // ModelDropdown: searchable model picker. Catalog fetch is gated on
@@ -41,15 +49,32 @@ export function ModelDropdown({
   autoSelectFirst?: boolean;
 }) {
   const { t } = useT("agents");
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
   // Catalog only while the runtime is online — never disable the control.
+  // Query is enabled as soon as runtimeId is set (not on open), so selecting
+  // a Runtime starts the daemon list-models scan immediately.
   const modelsQuery = useQuery(
     runtimeModelsOptions(runtimeOnline ? runtimeId : null),
   );
+  // In-flight discovery (initial or user rescan).
+  const isFetchingCatalog =
+    !!runtimeId &&
+    runtimeOnline &&
+    (modelsQuery.isLoading || modelsQuery.isFetching);
+  // First load only — replace trigger text with the scanning message.
+  const isInitialScan = isFetchingCatalog && !modelsQuery.data;
+
+  const rescanModels = () => {
+    if (!runtimeId || !runtimeOnline || isFetchingCatalog || disabled) return;
+    void queryClient.invalidateQueries({
+      queryKey: runtimeModelsKeys.forRuntime(runtimeId),
+    });
+  };
 
   const supported = modelsQuery.data?.supported ?? true;
   // Backend-owned capability — never infer from a frontend provider list.
@@ -139,58 +164,90 @@ export function ModelDropdown({
 
   if (!supported && !modelsQuery.isLoading) {
     return (
-      <div className="flex flex-col min-w-0">
-        <div className="flex h-6 items-center">
-          <Label className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.label)}</Label>
-        </div>
-        <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2.5 text-sm text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <div className="min-w-0">
-            <div>{t(($) => $.model_dropdown.managed_by_runtime_title)}</div>
-            <div className="mt-0.5 text-xs">
-              {t(($) => $.model_dropdown.managed_by_runtime_hint)}
-            </div>
-          </div>
+      <div className={executionFieldClass}>
+        <Label className="text-xs font-medium text-muted-foreground">
+          {t(($) => $.model_dropdown.label)}
+        </Label>
+        <div className="flex h-8 items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-2.5 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 truncate">
+            {t(($) => $.model_dropdown.managed_by_runtime_title)}
+          </span>
         </div>
       </div>
     );
   }
 
+  const canRescan =
+    !!runtimeId && runtimeOnline && !disabled && !isFetchingCatalog;
+
   return (
-    <div className="flex flex-col min-w-0">
-      <div className="flex h-6 items-center justify-between gap-2">
-        <Label className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.label)}</Label>
-        {catalogHint ? (
-          <span
-            className="truncate text-xs text-muted-foreground"
-            data-testid="model-dropdown-catalog-hint"
+    <div className={executionFieldClass}>
+      <div className="flex items-center justify-between gap-2">
+        <Label className="text-xs font-medium text-muted-foreground">
+          {t(($) => $.model_dropdown.label)}
+        </Label>
+        <div className="flex min-w-0 items-center gap-1">
+          {catalogHint && !isFetchingCatalog ? (
+            <span
+              className="truncate text-[11px] text-muted-foreground"
+              data-testid="model-dropdown-catalog-hint"
+            >
+              {catalogHint}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            data-testid="model-dropdown-rescan"
+            className={cn(
+              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors",
+              "hover:bg-accent hover:text-foreground",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "disabled:pointer-events-none disabled:opacity-40",
+            )}
+            disabled={!canRescan}
+            aria-label={t(($) => $.model_dropdown.rescan_aria)}
+            title={t(($) => $.model_dropdown.rescan_aria)}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              rescanModels();
+            }}
           >
-            {catalogHint}
-          </span>
-        ) : null}
+            <RefreshCw
+              className={cn(
+                "h-3.5 w-3.5",
+                isFetchingCatalog && "animate-spin",
+              )}
+              aria-hidden
+            />
+          </button>
+        </div>
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           disabled={disabled}
           data-testid="model-dropdown-trigger"
-          className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+          className={executionTriggerClass}
+          aria-busy={isFetchingCatalog || undefined}
         >
-          <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <div className="min-w-0 flex-1">
-            {/* Wrapped in flex to mirror RuntimePicker's trigger DOM. The
-                two pickers sit side-by-side; inline-in-flex vs block-line-
-                box height calc would otherwise leave them ~1px misaligned. */}
-            <div className="flex items-center gap-2">
-              <span className="truncate font-medium">{triggerLabel}</span>
-            </div>
-            {value && (
-              <div className="truncate text-xs text-muted-foreground">
-                {modelLabel(models, value)}
-              </div>
-            )}
-          </div>
+          {isInitialScan ? (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+          ) : (
+            <Cpu className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="min-w-0 flex-1 truncate">
+            {isInitialScan
+              ? t(($) => $.model_dropdown.scanning_on_computer)
+              : value
+                ? modelLabel(models, value) || value
+                : triggerLabel}
+          </span>
           <ChevronDown
-            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
           />
         </PopoverTrigger>
         <PopoverContent
@@ -207,14 +264,14 @@ export function ModelDropdown({
             />
           </div>
           <div className="max-h-72 overflow-y-auto p-1">
-            {runtimeOnline && modelsQuery.isLoading && (
+            {runtimeOnline && isInitialScan && (
               <div className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                {t(($) => $.pickers.model_discovering)}
+                {t(($) => $.model_dropdown.scanning_on_computer)}
               </div>
             )}
 
-            {(!runtimeOnline || !modelsQuery.isLoading) &&
+            {(!runtimeOnline || !isInitialScan) &&
               Object.entries(filtered).map(([provider, list]) => (
                 <div key={provider} className="mb-1">
                   {provider && (
@@ -247,7 +304,7 @@ export function ModelDropdown({
                 </div>
               ))}
 
-            {(!runtimeOnline || !modelsQuery.isLoading) &&
+            {(!runtimeOnline || !isInitialScan) &&
               Object.keys(filtered).length === 0 && (
               <div className="px-3 py-6 text-center text-sm text-muted-foreground">
                 {freeformAllowed
@@ -256,7 +313,7 @@ export function ModelDropdown({
               </div>
             )}
 
-            {(!runtimeOnline || !modelsQuery.isLoading) && freeformAllowed && (
+            {(!runtimeOnline || !isInitialScan) && freeformAllowed && (
               <CustomModelIdRow onSubmit={select} />
             )}
 
@@ -272,6 +329,14 @@ export function ModelDropdown({
           </div>
         </PopoverContent>
       </Popover>
+      {isFetchingCatalog ? (
+        <p
+          className="text-[11px] leading-snug text-muted-foreground"
+          data-testid="model-dropdown-scanning-hint"
+        >
+          {t(($) => $.model_dropdown.scanning_on_computer)}
+        </p>
+      ) : null}
     </div>
   );
 }

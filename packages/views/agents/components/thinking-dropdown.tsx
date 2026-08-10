@@ -10,8 +10,15 @@ import {
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
 import { Label } from "@multica/ui/components/ui/label";
+import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { useState } from "react";
+import {
+  executionFieldClass,
+  executionOptionClass,
+  executionOptionSelectedClass,
+  executionTriggerClass,
+} from "./execution-picker-styles";
 
 export function ThinkingDropdown({
   runtimeId,
@@ -50,21 +57,19 @@ export function ThinkingDropdown({
   };
 
   return (
-    <div className="flex min-w-0 flex-col">
-      <div className="flex h-6 items-center">
-        <Label className="text-xs text-muted-foreground">
-          {t(($) => $.create_dialog.thinking_label)}
-        </Label>
-      </div>
+    <div className={executionFieldClass}>
+      <Label className="text-xs font-medium text-muted-foreground">
+        {t(($) => $.create_dialog.thinking_label)}
+      </Label>
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          disabled={disabled}
-          className="mt-1.5 flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-        >
-          <Brain className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate font-medium">{triggerLabel}</span>
+        <PopoverTrigger disabled={disabled} className={executionTriggerClass}>
+          <Brain className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate">{triggerLabel}</span>
           <ChevronDown
-            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
           />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-[var(--anchor-width)] p-1">
@@ -103,19 +108,21 @@ function ThinkingRow({
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-        selected ? "bg-accent" : "hover:bg-accent/50"
-      }`}
+      className={cn(
+        executionOptionClass,
+        selected && executionOptionSelectedClass,
+      )}
     >
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">{label}</span>
-        {level?.description && (
-          <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
+      <span className="min-w-0 flex-1 truncate">
+        {label}
+        {level?.description ? (
+          <span className="text-muted-foreground">
+            {" · "}
             {level.description}
           </span>
-        )}
+        ) : null}
       </span>
-      {selected && <Check className="h-4 w-4 shrink-0 text-primary" />}
+      {selected ? <Check className="h-3.5 w-3.5 shrink-0 text-primary" /> : null}
     </button>
   );
 }

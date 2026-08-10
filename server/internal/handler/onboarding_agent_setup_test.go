@@ -143,7 +143,7 @@ func TestProvisionOnboardingAgent_RollsBackWholeSetupOnWelcomeFailure(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = testHandler.provisionOnboardingAgent(ctx, parseUUID(testWorkspaceID), runtime, "rollback-model")
+	_, _, err = testHandler.provisionOnboardingAgent(ctx, parseUUID(testWorkspaceID), runtime, "rollback-model", "")
 	if err == nil {
 		t.Fatal("setup unexpectedly succeeded")
 	}

@@ -250,22 +250,22 @@ generation 是 resident 的任期号。新进程接班后，服务端会拒绝�
 
 Raft 没有同名的 `version_store.go` 或完全相同的目录模型，但它也有持久升级标记、程序替换、新进程接班证明和失败 rollback。两边解决的是同一个问题：**升级不能切一半，旧进程和新进程不能同时冒充 Active**。Multica 把这组职责集中成 VersionStore；Raft 把它分散在升级交接流程里。
 
-## 9. 部署目标和当前事实
+## 9. 部署轨道
 
 ```mermaid
 flowchart LR
   D["合入 dev<br/>明确 commit SHA"]
-  T["测试轨<br/>服务 digest + alpha.N"]
+  T["Test 构建<br/>sha-{dev commit} + 精确 preview"]
   Q["腾讯 Test<br/>smoke + 验收"]
-  M["main / 发布批准"]
-  P["Production<br/>服务 digest + stable"]
+  M["验收后进入 main"]
+  P["Production 构建<br/>sha-{main commit} + stable"]
 
   D --> T --> Q --> M --> P
 ```
 
-目标契约：`dev` 自动部署腾讯测试服务并发布 preview 客户端；验收后，`main`/生产批准提升已验证的服务 digest，并发布 stable 客户端。服务和客户端制品都必须记录 commit、版本与校验和。
+`dev` push 自动构建带不可变 commit tag 的后端/Web 镜像并部署腾讯 Test；Test Web 同时锁定已经发布的精确 preview Computer tag。客户端 prerelease 由显式版本 tag 发布，不是每次 `dev` push 都自动增加 `alpha.N`。验收通过的代码进入 `main` 后，Production 流水线从这个明确的 main commit 构建自己的不可变镜像，正式 Computer 包则使用稳定 tag 发布。两条轨道都记录源 commit、镜像 tag、客户端版本与校验和。
 
-GitHub 已有互斥的在线 runner：`aliyun-144` 只接 Production，`s89-test` 只接 Test；`test` Environment 只允许 `dev` 部署。s89 的独立目录、数据库边界和 1 TB 数据盘已经配置。[#2497](https://github.com/LRM-Teams/multica/issues/2497) 还需要 workflow 合并后的真实部署、生产快照恢复、健康检查和 served commit 证据。
+GitHub runner 标签和部署边界也是分开的：`[self-hosted, aliyun]` 只接 Production，`[self-hosted, s89, test]` 只接 Test；`test` Environment 只允许 `dev` 部署。s89 使用独立目录、Compose project、数据库和数据盘，不能复用 Production 的运行时 credential。
 
 ## 10. 日常命令
 
@@ -295,15 +295,21 @@ multica computer logs
 
 当前 Test 登录中，已有用户使用固定验证码 `888888`，自由注册关闭。以后切到 `test.leagent.me` 时，只修改部署 origin 和 OAuth 回调，不改变 Computer 的环境模型。
 
-## 11. Issue 状态
+## 11. 怎么判断“真的完成了”
 
-| Issue | 状态 |
+这些证据不能混成一句“已经发布”：
+
+| 证据 | 只能证明什么 |
 | --- | --- |
-| [#2485](https://github.com/LRM-Teams/multica/issues/2485) | 前置 Computer module 契约已完成并关闭。 |
-| #2486–#2494、#2496 | 实现已由 [#2608](https://github.com/LRM-Teams/multica/pull/2608) 合入。 |
-| [#2495](https://github.com/LRM-Teams/multica/issues/2495) | Desktop 不在本轮范围。 |
-| [#2497](https://github.com/LRM-Teams/multica/issues/2497) | 腾讯 runner、Test Environment、独立数据盘和数据库边界已完成；真实部署、生产快照恢复、健康检查与 served evidence 待完成。 |
-| [#2484](https://github.com/LRM-Teams/multica/issues/2484) | 父 issue 等待 #2497 的真实交付证据。 |
+| PR 合并 + commit SHA | 代码进入了目标分支。 |
+| CI 全绿 | 这个 commit 通过了流水线检查。 |
+| Release tag + GitHub assets | 某个版本制品被构建出来。 |
+| CDN manifest + checksum | 用户能下载到哪份公开字节。 |
+| Deploy workflow + image tag | 哪份服务镜像被部署。 |
+| 公网 `/health` / 页面内容 | 外部用户实际访问到什么。 |
+| 本机 `type -a multica`、VersionStore、进程和 health | 某台电脑真正运行的是哪个版本和环境。 |
+
+所以“CDN 有 alpha 包”不能证明腾讯 Test 已部署，“Web 已部署”也不能证明某台 Computer 已升级。[#2497](https://github.com/LRM-Teams/multica/issues/2497) 按这些层次逐项记录真实验收证据，父 [#2484](https://github.com/LRM-Teams/multica/issues/2484) 最后关闭。
 
 ## 结论
 

@@ -36,6 +36,11 @@ const AgentHonorUnlockListener = lazy(() =>
     default: m.AgentHonorUnlockListener,
   })),
 );
+const ComputerUpdateToastListener = lazy(() =>
+  import("../runtimes/components/computer-update-toast-listener").then((m) => ({
+    default: m.ComputerUpdateToastListener,
+  })),
+);
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -69,6 +74,7 @@ export function DashboardLayout({
         <Suspense fallback={null}>
           <AgentMemoryXpListener />
           <AgentHonorUnlockListener />
+          <ComputerUpdateToastListener />
         </Suspense>
         <AppSidebar />
         <SidebarInset className="relative overflow-hidden">

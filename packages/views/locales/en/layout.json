@@ -300,11 +300,23 @@
     "copy_command_action": "Copy command",
     "copied_action": "Copied"
   },
-  "runtime_attention": {
-    "trigger_label_one": "{{count}} machine needs an update",
-    "trigger_label_other": "{{count}} machines need updates",
-    "count_one": "{{count}} machine has an available update.",
-    "count_other": "{{count}} machines have available updates.",
-    "view": "View"
+  "computer_update": {
+    "prompt_title": "Update available for {{name}}",
+    "version_line": "{{current}} → {{target}}",
+    "version_unknown": "unknown",
+    "update": "Update now",
+    "later": "Later",
+    "retry": "Retry",
+    "dismiss": "Dismiss",
+    "updating_title": "Updating {{name}}…",
+    "progress_pending": "Starting update…",
+    "progress_running": "Downloading and installing…",
+    "progress_ready": "Staged — applies when idle",
+    "success_title": "{{name}} updated",
+    "success_body": "Now on {{version}}",
+    "success_ready_body": "Update staged; applies when idle",
+    "failed_title": "Update failed for {{name}}",
+    "failed_generic": "Something went wrong. Try again or open Computers for details.",
+    "pinned": "This computer is pinned to a fixed version and cannot self-update."
   }
 }

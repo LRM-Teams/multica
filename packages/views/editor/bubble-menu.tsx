@@ -39,6 +39,7 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
 import { modKey } from "@multica/core/platform";
+import { NoteAIDiffPreview } from "./note-ai-diff";
 import { Toggle } from "@multica/ui/components/ui/toggle";
 import { Separator } from "@multica/ui/components/ui/separator";
 import {
@@ -685,9 +686,29 @@ function TextOptimizationReview({
           {t(($) => $.bubble_menu.optimize.title_suggestion)} <span className="font-medium text-foreground">{result.title}</span>
         </div>
       )}
-      <div className="max-h-52 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/60 p-3 text-sm leading-6">
-        {result.markdown}
-      </div>
+      {result.action === "patch" && result.target ? (
+        <NoteAIDiffPreview
+          before={result.target}
+          after={result.markdown}
+          beforeLabel={t(($) => $.bubble_menu.optimize.current_fragment)}
+          afterLabel={t(($) => $.bubble_menu.optimize.replacement_fragment)}
+          emptyLabel={t(($) => $.bubble_menu.optimize.no_diff)}
+          className="max-h-56"
+        />
+      ) : result.action === "replace_page" ? (
+        <NoteAIDiffPreview
+          before={editor.getMarkdown().trimEnd()}
+          after={result.markdown}
+          beforeLabel={t(($) => $.bubble_menu.optimize.current_page)}
+          afterLabel={t(($) => $.bubble_menu.optimize.proposed_page)}
+          emptyLabel={t(($) => $.bubble_menu.optimize.no_diff)}
+          className="max-h-56"
+        />
+      ) : (
+        <div className="max-h-52 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/60 p-3 text-sm leading-6">
+          {result.markdown}
+        </div>
+      )}
       <div className="mt-3 flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={onClose} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.discard)}</Button>
         {result.action === "patch" && <Button size="sm" variant="outline" onClick={copyPatch} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.copy_patch)}</Button>}

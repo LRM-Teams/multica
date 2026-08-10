@@ -90,13 +90,22 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(agentID string) error {
 }
 
 func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+	d.mu.Lock()
+	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+	d.mu.Unlock()
 	err := d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, func() {
 		d.emitMessageLifecycleActivity(agentID, runtimeID, protocol.ActivityKindWorking, "starting", "Starting")
 	}, func() {
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "runtime_handoff_accepted", "accepted", "")
 		d.emitMessageReceivedActivity(agentID, runtimeID, messages)
 	}, func(message agent.Message) {
 		d.emitResidentMessageRuntimeActivity(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64) {
+		outcome, reasonCode := "completed", ""
+		if turnErr != nil {
+			outcome, reasonCode = "failed", "provider_turn_failed"
+		}
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "provider_finished", outcome, reasonCode)
 		// Raft-aligned turn end: never auto body-handoff Pending solely because
 		// the prior turn finished. If Pending remains, schedule a content-free
 		// Notice; body handoff waits for idle Accept→Flush, recovery Flush, or
@@ -111,6 +120,13 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 			d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
 		})
 	})
+	if err != nil {
+		outcome := "rejected"
+		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+			outcome = "deferred"
+		}
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "runtime_handoff_accepted", outcome, canonicalMessageFailureReason(err))
+	}
 	if err != nil && !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		// Setup and native-acceptance failures happen before a completion
 		// receipt exists, so the onComplete path above cannot publish them.

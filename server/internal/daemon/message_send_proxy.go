@@ -76,6 +76,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 		if !request.Anyway {
 			freshness, err := proxy.PreflightMessageSend(request.AgentID, draft.ContextTarget)
 			if err != nil {
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "held", "freshness_unknown")
 				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, 0, "freshness_unknown")
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, MessageSendFreshness{}, "freshness_unknown"))
 				return
@@ -85,6 +86,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 					http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 					return
 				}
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "held", "local_pending")
 				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, freshness.NewMessageCount, "local_pending")
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, freshness, "newer_messages_available"))
 				return
@@ -116,6 +118,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			// The outcome is unknown whenever a send request did not return a
 			// successful response.  Keep the identity-bearing Draft for an
 			// explicit safe replay instead of trying again in the background.
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "failed", "service_send_failed")
 			http.Error(w, "send message through Credential Proxy: "+err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -134,6 +137,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 				return
 			}
 			count, _ := jsonInteger(response["newMessageCount"])
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_send", "held", "server_race")
 			d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, count, "server_race")
 		}
 		if !credentialProxyMessageOutputIsHeld(response) {
@@ -141,9 +145,11 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 				// A canonical Message may already exist, so do not claim an unknown
 				// send.  The stable server identity makes a later explicit replay
 				// safe if the local cleanup needs manual recovery.
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_accepted", "degraded", "draft_cleanup_failed")
 				http.Error(w, "clear sent local Draft: "+err.Error(), http.StatusConflict)
 				return
 			}
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_accepted", "accepted", "")
 		}
 		sanitizeCredentialProxyMessageSendResponse(response)
 		writeCredentialProxyMessageJSON(w, response)

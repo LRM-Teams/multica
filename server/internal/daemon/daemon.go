@@ -114,6 +114,7 @@ type Daemon struct {
 	lifecycleDiagnostics    *lifecycleDiagnosticWriter
 	machineUpgradeLog       *machineUpgradeEventLog
 	runnerInstanceID        string
+	runnerDiagnostics       *runnerDiagnosticRegistry
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -318,9 +319,20 @@ func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.
 	if err := d.ensureResidentMessageRuntime(ctx, delivery.AgentID, runtimeID); err != nil {
 		return protocol.AgentDeliverAckPayload{}, err
 	}
-	if _, err := coordinator.Accept(ctx, delivery); err != nil {
+	accepted, err := coordinator.Accept(ctx, delivery)
+	if err != nil {
 		return protocol.AgentDeliverAckPayload{}, err
 	}
+	d.mu.Lock()
+	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+	d.mu.Unlock()
+	outcome := "accepted"
+	if !accepted {
+		outcome = "deduplicated"
+	}
+	d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
+		workspaceID, runtimeID, delivery, "coordinator_accepted", outcome, "",
+	))
 	return coordinator.Acknowledgement(delivery), nil
 }
 
@@ -902,10 +914,24 @@ func (d *Daemon) Run(ctx context.Context) error {
 		defer residentLease.Close()
 	}
 
+	// Diagnostics are operational evidence only. Initialize them only after
+	// this process owns the resident lease: the rolling sink intentionally has
+	// one process writing each path. A missing or degraded sink must never
+	// prevent the Computer resident, Workspace Runners, or Agent turns from
+	// starting.
+	d.initializeRunnerDiagnostics()
+	if d.runnerDiagnostics != nil && d.runnerDiagnostics.store != nil {
+		defer d.runnerDiagnostics.store.Close()
+	}
+
 	// Wrap context so handleUpdate can cancel the daemon for restart.
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	d.cancelFunc = cancel
 	d.rootCtx = ctx
+	if d.runnerDiagnostics != nil && d.runnerDiagnostics.store != nil {
+		go d.runnerDiagnostics.store.RunCleanup(ctx)
+	}
 	defer func() { _ = d.canonicalRuntimes.closeAll() }()
 
 	// Bind health port early to detect another running daemon.
@@ -2877,22 +2903,25 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 				"seq_to", seqTo,
 			)
 		}
+		d.recordStandaloneChatCheckpoint(*task, "lease_acquired", "accepted", "draining", "", "", "", 0)
 		return task, nil
 	}
 }
 
 func agentInboxLeaseFromEvent(event *AgentInboxEvent, runtimeID string) AgentInboxLease {
 	return AgentInboxLease{
-		ID:             event.ID,
-		DeliveryID:     event.DeliveryID,
-		ConversationID: event.ConversationID,
-		LeaseToken:     event.LeaseToken,
-		LeaseExpiresAt: event.LeaseExpiresAt,
-		SeqFrom:        event.SeqFrom,
-		SeqTo:          event.SeqTo,
-		RequiresWake:   event.RequiresWake,
-		Reason:         event.Reason,
-		RuntimeID:      runtimeID,
+		ID:              event.ID,
+		DeliveryID:      event.DeliveryID,
+		ConversationID:  event.ConversationID,
+		SourceMessageID: event.SourceMessageID,
+		ResponseMode:    event.ResponseMode,
+		LeaseToken:      event.LeaseToken,
+		LeaseExpiresAt:  event.LeaseExpiresAt,
+		SeqFrom:         event.SeqFrom,
+		SeqTo:           event.SeqTo,
+		RequiresWake:    event.RequiresWake,
+		Reason:          event.Reason,
+		RuntimeID:       runtimeID,
 	}
 }
 
@@ -3236,15 +3265,27 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if task.isInboxTask() {
 		executionID = uuid.NewString()
 		if err := d.client.StartAgentInboxExecution(reportCtx, *task.InboxEvent, executionID); err != nil {
+			d.recordStandaloneChatCheckpoint(task, "execution_start_rejected", "rejected", "draining", "execution_ledger_error", executionID, provider, 0)
 			taskLog.Error("start inbox execution ledger record failed", "error", err)
 			d.reportTaskFailure(reportCtx, task, fmt.Sprintf("start inbox execution ledger record: %v", err), "", "", "execution_ledger_error", taskLog)
 			return
 		}
+		task.InboxEvent.ExecutionID = executionID
+		d.recordStandaloneChatCheckpoint(task, "execution_started", "accepted", "running", "", executionID, provider, 0)
 	}
 
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
 	result.ExecutionID = executionID
 	result = restrictResultForExecutionProfile(result, profile)
+	providerOutcome := "succeeded"
+	providerStatus := result.Status
+	providerReason := ""
+	if err != nil {
+		providerOutcome = "failed"
+		providerStatus = "failed"
+		providerReason = taskfailure.Classify(err.Error()).String()
+	}
+	d.recordStandaloneChatCheckpoint(task, "provider_finished", providerOutcome, providerStatus, providerReason, executionID, provider, 0)
 
 	// Lease-loss cancellation owns only the provider execution context. Keep
 	// terminal reporting on the daemon's parent context so a renew request that
@@ -3407,8 +3448,9 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 			taskLog.Error("task is missing its canonical inbox lease")
 			return
 		}
-		_, err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
+		receipt, err := d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		if err == nil {
+			d.recordStandaloneChatCheckpoint(task, "terminal_accepted", "accepted", "completed", "", result.ExecutionID, "", receipt.AckedSeq)
 			// Primary completed with agent output; ack folded leases so none
 			// remain leased for reclaim (Alice boundary #1).
 			d.ackFoldedInboxLeases(ctx, task, taskLog)
@@ -3429,6 +3471,7 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 		// has already refused this task and the only useful UI signal
 		// left is a concrete failure.
 		if isTransientError(err) {
+			d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_transient_error", result.ExecutionID, "", 0)
 			taskLog.Error("complete task failed after retries; leaving task in running rather than falling back to fail", "error", err)
 			return
 		}
@@ -3438,6 +3481,7 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 			taskLog.Error("channel onboarding completion rejected without send or typed skip; leaving delivery for lease retry", "error", err)
 			return
 		}
+		d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_permanent_error", result.ExecutionID, "", 0)
 		taskLog.Error("complete task rejected by server, falling back to fail", "error", err)
 		// MUL-2946: this fallback fires when a server-side complete
 		// callback was permanently rejected (4xx other than 408/429)
@@ -3549,7 +3593,10 @@ func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessi
 		reasonCode = "restarted_by_user"
 	}
 	if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
+		d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_fail_error", "", "", 0)
 		taskLog.Error("report failed inbox event failed", "error", err)
+	} else {
+		d.recordStandaloneChatCheckpoint(task, "terminal_accepted", "accepted", "failed", reasonCode, "", "", 0)
 	}
 	// Folded leases must not stay leased after primary failure (no orphan reclaim).
 	d.failFoldedInboxLeases(ctx, task, errMsg, sessionID, workDir, failureReason, reasonCode, taskLog)

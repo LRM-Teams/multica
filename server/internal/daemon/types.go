@@ -158,16 +158,19 @@ type TaskExecutionConfig struct {
 }
 
 type AgentInboxLease struct {
-	ID             string `json:"id"`
-	DeliveryID     string `json:"delivery_id"`
-	ConversationID string `json:"conversation_id,omitempty"`
-	LeaseToken     string `json:"lease_token"`
-	LeaseExpiresAt string `json:"lease_expires_at"`
-	SeqFrom        int64  `json:"seq_from"`
-	SeqTo          int64  `json:"seq_to"`
-	RequiresWake   bool   `json:"requires_wake"`
-	Reason         string `json:"reason,omitempty"`
-	RuntimeID      string `json:"-"`
+	ID              string `json:"id"`
+	DeliveryID      string `json:"delivery_id"`
+	ConversationID  string `json:"conversation_id,omitempty"`
+	SourceMessageID string `json:"source_message_id,omitempty"`
+	ResponseMode    string `json:"response_mode,omitempty"`
+	LeaseToken      string `json:"lease_token"`
+	LeaseExpiresAt  string `json:"lease_expires_at"`
+	SeqFrom         int64  `json:"seq_from"`
+	SeqTo           int64  `json:"seq_to"`
+	RequiresWake    bool   `json:"requires_wake"`
+	Reason          string `json:"reason,omitempty"`
+	RuntimeID       string `json:"-"`
+	ExecutionID     string `json:"-"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon

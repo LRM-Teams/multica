@@ -185,6 +185,7 @@ type TaskAvailablePayload struct {
 // The projection deliberately has no delivery or read-state fields.
 type AgentMessageProjection struct {
 	ID          string        `json:"id"`
+	ChannelID   string        `json:"channel_id,omitempty"`
 	Target      string        `json:"target"`
 	ReplyTarget string        `json:"reply_target,omitempty"`
 	Seq         int64         `json:"seq"`

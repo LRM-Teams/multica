@@ -127,7 +127,7 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 
 	rows, err := h.DB.Query(ctx, `
 		WITH eligible AS (
-			SELECT m.id, delivery.seq, m.content, m.parts, delivery.target,
+			SELECT m.id, m.channel_id, delivery.seq, m.content, m.parts, delivery.target,
 			       CASE c.kind
 			         WHEN 'group' THEN '#' || c.name
 			         WHEN 'dm' THEN 'dm:@' || COALESCE(peer.handle, '')
@@ -154,7 +154,7 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 			  AND delivery.agent_id = $2
 			  AND m.deleted_at IS NULL
 		)
-		SELECT id, seq, content, parts, target, reply_target
+		SELECT id, channel_id, seq, content, parts, target, reply_target
 		FROM eligible
 		WHERE seq > COALESCE(($3::jsonb ->> target)::bigint, 0)
 		  AND seq <= COALESCE(($4::jsonb ->> target)::bigint, 0)
@@ -169,11 +169,11 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 
 	items := make([]protocol.AgentMessageProjection, 0, limit+1)
 	for rows.Next() {
-		var id pgtype.UUID
+		var id, channelID pgtype.UUID
 		var seq int64
 		var content, target, replyTarget string
 		var rawParts []byte
-		if err := rows.Scan(&id, &seq, &content, &rawParts, &target, &replyTarget); err != nil {
+		if err := rows.Scan(&id, &channelID, &seq, &content, &rawParts, &target, &replyTarget); err != nil {
 			return protocol.AgentRecoveryPage{}, err
 		}
 		if strings.TrimSpace(replyTarget) == "" {
@@ -186,7 +186,7 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 			}
 		}
 		items = append(items, protocol.AgentMessageProjection{
-			ID: uuidToString(id), Target: target, ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
+			ID: uuidToString(id), ChannelID: uuidToString(channelID), Target: target, ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
 		})
 	}
 	if err := rows.Err(); err != nil {

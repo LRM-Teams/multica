@@ -453,7 +453,14 @@ jobs:
           for url in \
             https://cdn.leagent.me/agent-avatars/v1/human-01.jpg \
             https://cdn.leagent.me/agent-avatars/v2/agent-01.png; do
-            curl -fsS --retry 5 --retry-delay 2 "$url" >/dev/null
+            curl -fsS \
+              --retry 5 \
+              --retry-all-errors \
+              --retry-delay 2 \
+              --retry-max-time 120 \
+              --connect-timeout 10 \
+              --max-time 30 \
+              "$url" >/dev/null
           done
 
       # Run the new image's migration binary before changing any runtime

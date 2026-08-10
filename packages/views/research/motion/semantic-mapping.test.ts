@@ -18,7 +18,7 @@ import { DEFAULT_MOTION_PROFILE } from "./transition-queue";
 const REDUCED_PROFILE = { ...DEFAULT_MOTION_PROFILE, reducedMotion: true };
 
 describe("SEMANTIC_TRANSITION_KIND_MAP — AC1 exhaustive & deterministic", () => {
-  it("maps exactly all 10 kinds (exhaustive over the declared union)", () => {
+  it("maps exactly all 13 kinds (exhaustive over the declared union)", () => {
     const kinds = Object.keys(SEMANTIC_TRANSITION_KIND_MAP).sort();
     expect(kinds).toEqual(
       [
@@ -32,6 +32,10 @@ describe("SEMANTIC_TRANSITION_KIND_MAP — AC1 exhaustive & deterministic", () =
         "lead_escalated",
         "team_membership_changed",
         "report_revised",
+        // D5 lifecycle kinds (LRM-1537 §2):
+        "node_retired",
+        "task_restarted",
+        "goal_modified",
       ].sort(),
     );
   });
@@ -76,6 +80,31 @@ describe("SEMANTIC_TRANSITION_KIND_MAP — AC1 exhaustive & deterministic", () =
     expect(resolveSemanticDisplay("report_revised").marker).toBe("revise-pulse");
     // result_accepted keeps an accepted-check marker.
     expect(resolveSemanticDisplay("result_accepted").marker).toBe("accepted-check");
+  });
+
+  describe("D5 lifecycle kinds (LRM-1537 §2, Rule ①/②)", () => {
+    it("maps the three new kinds to their own verbs and persistent static markers", () => {
+      const retired = resolveSemanticDisplay("node_retired");
+      expect(retired.verb).toBe("retire");
+      expect(retired.marker).toBe("tombstone"); // grey-out + kept, never gone
+      expect(retired.group).toBe("stale");
+
+      const restarted = resolveSemanticDisplay("task_restarted");
+      expect(restarted.verb).toBe("restart");
+      expect(restarted.marker).toBe("restart-relation");
+      expect(restarted.group).toBe("appear");
+
+      const regoal = resolveSemanticDisplay("goal_modified");
+      expect(regoal.verb).toBe("regoal");
+      expect(regoal.marker).toBe("regoal-highlight");
+      expect(regoal.group).toBe("advance");
+    });
+
+    it("keeps the static markers persistent (Rule ②) for the D5 verbs", () => {
+      expect(resolveSemanticDisplay("node_retired").marker).toBe("tombstone");
+      expect(resolveSemanticDisplay("task_restarted").marker).toBe("restart-relation");
+      expect(resolveSemanticDisplay("goal_modified").marker).toBe("regoal-highlight");
+    });
   });
 });
 

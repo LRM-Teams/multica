@@ -21,6 +21,10 @@ export const ALL_TRANSITION_KINDS: SemanticTransitionKind[] = [
   "lead_escalated",
   "team_membership_changed",
   "report_revised",
+  // D5 lifecycle kinds (LRM-1537 §2):
+  "node_retired",
+  "task_restarted",
+  "goal_modified",
 ];
 
 /** One representative event per kind, each with stable related ids. */

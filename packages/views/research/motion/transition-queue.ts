@@ -146,6 +146,9 @@ const VERB_DURATION_MS: Record<DisplayVerb, number> = {
   revise: 300,
   reappear: 260,
   camera: 400,
+  retire: 300, // ⑤ 废弃 (LRM-1537 §3.1, stale family)
+  restart: 240, // ⑥ 重启 (edge-draw family)
+  regoal: 320, // ⑦ 目标修改 (≤ merge budget)
 };
 
 export function verbDurationMs(

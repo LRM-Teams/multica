@@ -46,6 +46,24 @@ describe("buildMotionDirective — AC1 deterministic per-verb output", () => {
     }
   });
 
+  it("maps the D5 lifecycle verbs to their own keyframes (LRM-1537 §2)", () => {
+    const cases: Array<[string, string]> = [
+      ["retire", "research-motion-retire"],
+      ["restart", "research-motion-restart"],
+      ["regoal", "research-motion-regoal"],
+    ];
+    for (const [verb, animation] of cases) {
+      const d = buildMotionDirective(verb as never, "t1", baseOpts);
+      expect(d.style.animationName).toBe(animation);
+      expect(d.dataVerb).toBe(verb);
+    }
+  });
+
+  it("retire ends at the stale opacity (grey-out, never disappears) — ⑤", () => {
+    const d = buildMotionDirective("retire", "t1", baseOpts);
+    expect(d.style.opacity).toBe("0.55");
+  });
+
   it("applies displacement CSS vars only to the verbs that move", () => {
     const appear = buildMotionDirective("appear", "t1", baseOpts);
     expect(appear.style["--motion-rise-px"]).toBe("8px");
@@ -120,11 +138,23 @@ describe("semanticMotionCss — Rule ② DOM contrast keyframes", () => {
       "research-motion-revise",
       "research-motion-fade-in",
       "research-motion-camera",
+      // D5 lifecycle keyframes (LRM-1537 §2):
+      "research-motion-retire",
+      "research-motion-restart",
+      "research-motion-regoal",
       "@media (prefers-reduced-motion: reduce)",
     ];
     for (const name of required) {
       expect(css).toContain(name);
     }
+  });
+
+  it("eliminates the hardcoded brand hex in research-motion-revise (Rule ② zero-hardcoded-hex)", () => {
+    const css = semanticMotionCss();
+    // The old rgba(59,130,246) must be replaced by the semantic --brand token.
+    expect(css).not.toContain("rgba(59,130,246");
+    expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(css).toContain("color-mix(in oklch, var(--brand)");
   });
 
   it("guards all classes under the scoped root so styles never leak", () => {

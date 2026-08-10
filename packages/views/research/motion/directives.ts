@@ -123,6 +123,19 @@ export function buildMotionDirective(
     case "revise":
       liveStyle.animationName = "research-motion-revise";
       break;
+    case "retire":
+      // ⑤ 废弃: grey-out to stale level + kept clickable (never disappears).
+      liveStyle.animationName = "research-motion-retire";
+      liveStyle.opacity = `${MOTION_STALE_OPACITY}`;
+      break;
+    case "restart":
+      // ⑥ 重启: short relation emphasis then weakens; old node kept.
+      liveStyle.animationName = "research-motion-restart";
+      break;
+    case "regoal":
+      // ⑦ 目标修改: impact-ordered highlight (single brightness pulse).
+      liveStyle.animationName = "research-motion-regoal";
+      break;
     case "reappear":
       liveStyle.animationName = "research-motion-fade-in";
       break;
@@ -152,6 +165,12 @@ function markerClassFor(verb: DisplayVerb): string | null {
       return markerClass("revise-pulse");
     case "appear":
       return markerClass("accepted-check"); // result_accepted → accepted marker
+    case "retire":
+      return markerClass("tombstone");
+    case "restart":
+      return markerClass("restart-relation");
+    case "regoal":
+      return markerClass("regoal-highlight");
     default:
       return null;
   }
@@ -188,9 +207,23 @@ export function semanticMotionCss(): string {
   to   { opacity: var(--motion-stale-opacity, 0.55); }
 }
 @keyframes research-motion-revise {
-  0%   { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
-  50%  { box-shadow: 0 0 0 4px rgba(59,130,246,0.5); }
-  100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklch, var(--brand) 0%, transparent); }
+  50%  { box-shadow: 0 0 0 4px color-mix(in oklch, var(--brand) 50%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--brand) 0%, transparent); }
+}
+@keyframes research-motion-retire {
+  from { opacity: 1; }
+  to   { opacity: var(--motion-stale-opacity, 0.55); }
+}
+@keyframes research-motion-restart {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklch, var(--brand) 0%, transparent); }
+  50%  { box-shadow: 0 0 0 4px color-mix(in oklch, var(--brand) 55%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--brand) 0%, transparent); }
+}
+@keyframes research-motion-regoal {
+  0%   { filter: brightness(1); }
+  50%  { filter: brightness(1.18); }
+  100% { filter: brightness(1); }
 }
 @keyframes research-motion-fade-in {
   from { opacity: 0; }

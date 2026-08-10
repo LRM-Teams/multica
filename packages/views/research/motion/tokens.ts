@@ -96,3 +96,48 @@ export const SEMANTIC_MOTION_TOTAL_BUDGET_MS = MOTION_TOTAL_BUDGET_MS;
 export const SEMANTIC_MOTION_START_MS = MOTION_START_MS;
 export const SEMANTIC_MOTION_STAGGER_MS = 36;
 export const SEMANTIC_MOTION_STAGGER_CAP = MOTION_STAGGER_CAP;
+
+// ─── D5 lifecycle verbs (LRM-1537 §3.1) ─────────────────────────────────────
+// Three D5 lifecycle events were missing from the 10-kind map. Their durations
+// inherit the closest existing families so every component stays on the shared
+// token source and never hardcodes its own timing curve.
+
+/** ⑤ 废弃 retire — grey-out + strikethrough + clickable history (same family as stale). */
+export const MOTION_RETIRE_MS = MOTION_STALE_MS; // 300ms
+/** ⑥ 重启 restart — short relation emphasis → weaken (edge-draw family). */
+export const MOTION_RESTART_MS = 240; // 240ms (edge-draw family upper bound)
+/** ⑦ 目标修改 regoal — impact-ordered playback, ≤ merge budget (180–320ms). */
+export const MOTION_REGOAL_MS = MOTION_MERGE_MS; // 320ms
+/** Restart relation emphasis retention (ms) before it weakens to rest. */
+export const MOTION_RESTART_EMPHASIS_MS = 600;
+/** Goal-modification highlight ceiling (ms) for the per-version highlight set. */
+export const MOTION_REGOAL_HIGHLIGHT_MS = 600;
+/** Stagger cap for a batch of D5 lifecycle events (LRM-1537 §3.4). */
+export const MOTION_D5_STAGGER_CAP = MOTION_STAGGER_CAP; // ≤6
+
+// ─── D5 motion layer tokens (LRM-1537 §3.2) ─────────────────────────────────
+// An explicit presentation-only layering so concurrent priorities do not fight
+// for the same glow/ring. NEVER written back to canonical (LRM-1471 boundary).
+
+export type MotionLayer =
+  | "ambient" // low-frequency progress tick / ambient pulse (dot token `pulse`)
+  | "canonical" // lifecycle transition (dispatch / outcome / merge / retire…)
+  | "focus" // user direct operation (selection / expand / chat-card link)
+  | "blocking"; // error / obstruction / restart emphasis
+
+/** Layer precedence, highest priority last; low-priority is cancelled by higher. */
+export const MOTION_LAYER_PRIORITY: readonly MotionLayer[] = [
+  "ambient",
+  "canonical",
+  "blocking",
+  "focus",
+];
+
+// ─── D5 glow concurrency limits (LRM-1537 §3.3) ─────────────────────────────
+// Simultaneous active visual emphasis is bounded so a burst never floods the
+// whole screen with rings/glows at once.
+
+export const MOTION_GLOW_MAX_ACTIVE = 1; // one active transition glow
+export const MOTION_GLOW_MAX_SELECTED = 1; // one selected ring
+export const MOTION_GLOW_MAX_BLOCKING = 1; // one blocking mark
+export const MOTION_GLOW_MAX_ROUTE_PROBE = 2; // two route probes

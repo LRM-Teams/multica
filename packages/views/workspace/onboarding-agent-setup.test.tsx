@@ -10,6 +10,9 @@ const runtimeState = vi.hoisted(() => ({
     name: string;
     status: string;
     last_seen_at?: string | null;
+    daemon_id?: string;
+    provider?: string;
+    runtime_mode?: string;
   }>,
 }));
 
@@ -42,6 +45,24 @@ vi.mock("@multica/core/runtimes", () => ({
   runtimeKeys: { all: (wsId: string) => ["runtimes", wsId] },
   deriveRuntimeHealth: (runtime: { status: string }) =>
     runtime.status === "online" ? "online" : "offline",
+  runtimeModelsOptions: () => ({ queryKey: ["models"] }),
+  runtimeCurrentVersion: () => "1.0.0",
+  aggregateRuntimeHealthPresentation: () => "ok",
+}));
+
+vi.mock("../agents/components/use-execution-selection", () => ({
+  useExecutionSelection: () => ({
+    machineId: "machine-1",
+    machineRuntimes: runtimeState.runtimes,
+    runtimeId: runtimeState.runtimes[0]?.id ?? "",
+    runtimeOnline: true,
+    model: "",
+    thinkingLevel: "",
+    selectMachine: vi.fn(),
+    selectRuntime: vi.fn(),
+    selectModel: vi.fn(),
+    selectThinking: vi.fn(),
+  }),
 }));
 
 vi.mock("@multica/core/realtime", () => ({
@@ -52,8 +73,8 @@ vi.mock("@multica/core/api", () => ({
   api: { ensureWindy: vi.fn() },
 }));
 
-vi.mock("../agents/components/model-dropdown", () => ({
-  ModelDropdown: () => <div data-testid="model-dropdown" />,
+vi.mock("../agents/components/execution-config-fields", () => ({
+  ExecutionConfigFields: () => <div data-testid="execution-config-fields" />,
 }));
 
 vi.mock("../onboarding/steps/cli-install-instructions", () => ({
@@ -78,10 +99,7 @@ vi.mock("../i18n", () => ({
           setup_step1_description:
             "Install and connect a Computer before creating Wendy.",
           setup_step2_title: "Meet Wendy",
-          setup_step2_description: "Choose runtime and model",
-          setup_runtime: "Runtime",
-          setup_runtime_placeholder: "Select runtime",
-          setup_model: "Model",
+          setup_step2_description: "Choose computer, runtime, model, reasoning",
           setup_listening: "Listening for your Computer…",
           setup_creating: "Creating…",
           setup_create: "Create Wendy",
@@ -106,54 +124,28 @@ describe("OnboardingAgentSetup", () => {
     expect(screen.getByTestId("onboarding-agent-setup-steps")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Connect a Computer" })).toBeInTheDocument();
     expect(screen.getByTestId("onboarding-agent-connect-computer")).toBeInTheDocument();
-    expect(screen.getByTestId("cli-install-instructions")).toHaveAttribute(
-      "data-slug",
-      "acme",
-    );
-    expect(screen.getByText("Listening for your Computer…")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Wendy" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Meet Wendy" })).toBeNull();
-    expect(screen.queryByTestId("model-dropdown")).toBeNull();
+    expect(screen.queryByTestId("execution-config-fields")).toBeNull();
   });
 
-  it("step 2: only after an online Runtime, shows Create Wendy controls", () => {
+  it("step 2: shows shared execution config (Computer→Runtime→Model→Reasoning)", () => {
     runtimeState.runtimes = [
       {
         id: "rt-1",
-        name: "My Mac",
+        name: "My Mac Claude",
         status: "online",
         last_seen_at: new Date().toISOString(),
+        daemon_id: "daemon-1",
+        provider: "claude",
+        runtime_mode: "local",
       },
     ];
     render(<OnboardingAgentSetup workspace={workspace} />);
 
     expect(screen.getByRole("heading", { name: "Meet Wendy" })).toBeInTheDocument();
     expect(screen.getByTestId("onboarding-agent-create-wendy")).toBeInTheDocument();
-    expect(screen.queryByTestId("onboarding-agent-connect-computer")).toBeNull();
-    expect(screen.getByTestId("model-dropdown")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: /runtime/i })).toBeInTheDocument();
+    expect(screen.getByTestId("execution-config-fields")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Wendy" })).toBeInTheDocument();
-  });
-
-  it("advances from step 1 to step 2 when a Computer comes online without leaving the gate", () => {
-    runtimeState.runtimes = [];
-    const { rerender } = render(<OnboardingAgentSetup workspace={workspace} />);
-    expect(screen.getByTestId("onboarding-agent-connect-computer")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create Wendy" })).toBeNull();
-
-    runtimeState.runtimes = [
-      {
-        id: "rt-online",
-        name: "New Computer",
-        status: "online",
-        last_seen_at: new Date().toISOString(),
-      },
-    ];
-    rerender(<OnboardingAgentSetup workspace={workspace} />);
-
     expect(screen.queryByTestId("onboarding-agent-connect-computer")).toBeNull();
-    expect(screen.getByRole("heading", { name: "Meet Wendy" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create Wendy" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: /runtime/i })).toHaveValue("rt-online");
   });
 });

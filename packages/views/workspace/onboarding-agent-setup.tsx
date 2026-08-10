@@ -16,20 +16,16 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { cn } from "@multica/ui/lib/utils";
-import { ModelDropdown } from "../agents/components/model-dropdown";
+import { ExecutionConfigFields } from "../agents/components/execution-config-fields";
+import { useExecutionSelection } from "../agents/components/use-execution-selection";
 import { useT } from "../i18n";
 import { CliInstallInstructions } from "../onboarding/steps/cli-install-instructions";
 
 /**
  * Mandatory Owner gate when `workspace.onboarding_agent_id` is unset.
  *
- * Two sequential steps — never jump to Wendy while no Computer is online:
- *
- *   1. Connect a Computer (install CLI + setup; listen for daemon:register)
- *   2. Create Wendy (pick online Runtime + Model, then ensureWindy)
- *
- * The workspace shell (including /computers) is blocked by this gate, so
- * step 1 must be self-contained on this page.
+ *   1. Connect a Computer (install + listen for daemon:register)
+ *   2. Create Wendy via site-wide Computer → Runtime → Model → Reasoning
  */
 export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
   const { t } = useT("agents");
@@ -56,25 +52,7 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
   const isOwner = members.some(
     (member) => member.user_id === currentUser?.id && member.role === "owner",
   );
-
-  // Optional manual pick. Effective runtime is derived so a newly online
-  // Computer auto-selects without an effect (and without a stale frame).
-  const [pickedRuntimeId, setPickedRuntimeId] = useState<string | null>(null);
-  // Model is scoped to a runtime id so a selection change does not need an
-  // effect to clear stale values.
-  const [modelByRuntime, setModelByRuntime] = useState<{
-    runtimeId: string;
-    value: string;
-  }>({ runtimeId: "", value: "" });
   const [submitting, setSubmitting] = useState(false);
-
-  const preferredOnlineId = onlineRuntimes[0]?.id ?? "";
-  const pickedStillOnline =
-    pickedRuntimeId != null &&
-    onlineRuntimes.some((runtime) => runtime.id === pickedRuntimeId);
-  const runtimeId = pickedStillOnline ? pickedRuntimeId : preferredOnlineId;
-  const model =
-    modelByRuntime.runtimeId === runtimeId ? modelByRuntime.value : "";
 
   const refreshRuntimes = useCallback(() => {
     void queryClient.invalidateQueries({
@@ -98,26 +76,7 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
     );
   }
 
-  const submit = async () => {
-    setSubmitting(true);
-    try {
-      await api.ensureWindy(runtimeId, model.trim());
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: workspaceKeys.list() }),
-        queryClient.invalidateQueries({
-          queryKey: workspaceKeys.agents(workspace.id),
-        }),
-      ]);
-    } catch (error) {
-      showErrorToast(
-        error instanceof Error ? error.message : t(($) => $.windy.setup_failed),
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // Step 1 until at least one Computer/Runtime is online; only then Step 2.
+  // Step 1 until at least one Runtime is online; only then Step 2.
   const step: 1 | 2 = onlineRuntimes.length === 0 ? 1 : 2;
 
   return (
@@ -163,51 +122,102 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
               </div>
             </div>
           ) : (
-            <div data-testid="onboarding-agent-create-wendy" className="space-y-4">
-              <label className="block space-y-1.5 text-sm font-medium">
-                {t(($) => $.windy.setup_runtime)}
-                <select
-                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-                  value={runtimeId}
-                  onChange={(event) => {
-                    setPickedRuntimeId(event.target.value || null);
-                  }}
-                  aria-label={t(($) => $.windy.setup_runtime)}
-                >
-                  <option value="">
-                    {t(($) => $.windy.setup_runtime_placeholder)}
-                  </option>
-                  {onlineRuntimes.map((runtime) => (
-                    <option key={runtime.id} value={runtime.id}>
-                      {runtime.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <ModelDropdown
-                runtimeId={runtimeId || null}
-                runtimeOnline={Boolean(runtimeId)}
-                value={model}
-                onChange={(value) =>
-                  setModelByRuntime({ runtimeId, value })
-                }
-                disabled={!runtimeId}
-                required
-              />
-              <div className="flex justify-end">
-                <Button
-                  disabled={!runtimeId || !model.trim() || submitting}
-                  onClick={() => void submit()}
-                >
-                  {submitting
-                    ? t(($) => $.windy.setup_creating)
-                    : t(($) => $.windy.setup_create)}
-                </Button>
-              </div>
-            </div>
+            <WendyCreateForm
+              workspaceId={workspace.id}
+              runtimes={onlineRuntimes}
+              members={members}
+              currentUserId={currentUser?.id ?? null}
+              submitting={submitting}
+              setSubmitting={setSubmitting}
+              queryClient={queryClient}
+            />
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function WendyCreateForm({
+  workspaceId,
+  runtimes,
+  members,
+  currentUserId,
+  submitting,
+  setSubmitting,
+  queryClient,
+}: {
+  workspaceId: string;
+  runtimes: import("@multica/core/types").AgentRuntime[];
+  members: import("@multica/core/types").MemberWithUser[];
+  currentUserId: string | null;
+  submitting: boolean;
+  setSubmitting: (v: boolean) => void;
+  queryClient: ReturnType<typeof useQueryClient>;
+}) {
+  const { t } = useT("agents");
+  const selection = useExecutionSelection({
+    runtimes,
+    currentUserId,
+    autoSeedMachine: true,
+  });
+
+  const submit = async () => {
+    if (!selection.runtimeId || !selection.model.trim()) return;
+    setSubmitting(true);
+    try {
+      await api.ensureWindy(
+        selection.runtimeId,
+        selection.model.trim(),
+        selection.thinkingLevel || undefined,
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceKeys.list() }),
+        queryClient.invalidateQueries({
+          queryKey: workspaceKeys.agents(workspaceId),
+        }),
+      ]);
+    } catch (error) {
+      showErrorToast(
+        error instanceof Error ? error.message : t(($) => $.windy.setup_failed),
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div data-testid="onboarding-agent-create-wendy" className="space-y-4">
+      <ExecutionConfigFields
+        runtimes={runtimes}
+        members={members}
+        currentUserId={currentUserId}
+        machineId={selection.machineId}
+        onMachineSelect={selection.selectMachine}
+        machineRuntimes={selection.machineRuntimes}
+        runtimeId={selection.runtimeId}
+        onRuntimeSelect={selection.selectRuntime}
+        runtimeOnline={selection.runtimeOnline}
+        model={selection.model}
+        onModelChange={selection.selectModel}
+        thinkingLevel={selection.thinkingLevel}
+        onThinkingChange={selection.selectThinking}
+        modelRequired
+        autoSelectFirstModel
+        disabled={submitting}
+      />
+      <div className="flex justify-end">
+        <Button
+          disabled={
+            !selection.runtimeId || !selection.model.trim() || submitting
+          }
+          onClick={() => void submit()}
+        >
+          {submitting
+            ? t(($) => $.windy.setup_creating)
+            : t(($) => $.windy.setup_create)}
+        </Button>
+      </div>
     </div>
   );
 }

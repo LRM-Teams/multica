@@ -1307,10 +1307,18 @@ export class ApiClient {
     });
   }
 
-  async ensureWindy(runtimeId: string, model: string): Promise<EnsureWindyResponse> {
+  async ensureWindy(
+    runtimeId: string,
+    model: string,
+    thinkingLevel?: string,
+  ): Promise<EnsureWindyResponse> {
     const raw = await this.fetch<unknown>("/api/agents/windy", {
       method: "POST",
-      body: JSON.stringify({ runtime_id: runtimeId, model }),
+      body: JSON.stringify({
+        runtime_id: runtimeId,
+        model,
+        ...(thinkingLevel ? { thinking_level: thinkingLevel } : {}),
+      }),
     });
     return EnsureWindyResponseSchema.parse(raw);
   }

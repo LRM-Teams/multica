@@ -170,6 +170,9 @@ export function AgentDetailInspector({
         {/* LRM-1351: runtime/model/thinking open one Dialog; summary shows
             effective values only. Frank pencil lock: trailing pencil only —
             summary chips are not a row-wide click target. */}
+        <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
+          <ComputerInfoRow runtime={runtime} />
+        </PropRow>
         <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             <RuntimePicker
@@ -231,9 +234,6 @@ export function AgentDetailInspector({
 
       {/* Details — read-only (no hover, no chip styling — these aren't clickable) */}
       <Section label={t(($) => $.inspector.section_details)}>
-        <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
-          <ComputerInfoRow runtime={runtime} />
-        </PropRow>
         {owner && (
           <PropRow label={t(($) => $.inspector.prop_owner)} interactive={false}>
             <span className="flex min-w-0 items-center gap-1.5">

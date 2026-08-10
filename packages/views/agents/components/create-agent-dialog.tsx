@@ -2,15 +2,13 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ModelDropdown } from "./model-dropdown";
-import { ThinkingDropdown } from "./thinking-dropdown";
-import { ComputerPicker } from "./computer-picker";
+import { ExecutionConfigFields } from "./execution-config-fields";
 import {
   firstRuntimeMachine,
   firstRuntimeIdOnMachine,
+  firstOnlineRuntimeIdOnMachine,
   machineForRuntime,
 } from "./computer-picker-utils";
-import { RuntimePicker } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
@@ -215,7 +213,15 @@ export function CreateAgentDialog({
     if (machineId === selectedMachineId) return;
     setSelectedMachineId(machineId);
     const next = machines.find((m) => m.id === machineId) ?? null;
-    setSelectedRuntimeId(firstRuntimeIdOnMachine(next));
+    setSelectedRuntimeId(firstOnlineRuntimeIdOnMachine(next));
+    setModel("");
+    setThinkingLevel("");
+  };
+
+  const handleRuntimeSelect = (runtimeId: string) => {
+    setSelectedRuntimeId(runtimeId);
+    setModel("");
+    setThinkingLevel("");
   };
 
   const selectedRuntime = runtimes.find((d) => d.id === effectiveRuntimeId) ?? null;
@@ -382,44 +388,26 @@ export function CreateAgentDialog({
             </div>
 
 
-            <ComputerPicker
+            <ExecutionConfigFields
               runtimes={runtimes}
-              runtimesLoading={runtimesLoading}
-              currentUserId={currentUserId}
-              selectedMachineId={effectiveMachineId}
-              onSelect={handleMachineSelect}
-            />
-
-            <RuntimePicker
-              runtimes={machineRuntimes}
               runtimesLoading={runtimesLoading}
               members={members}
               currentUserId={currentUserId}
-              selectedRuntimeId={effectiveRuntimeId}
-              onSelect={setSelectedRuntimeId}
-              label={t(($) => $.create_dialog.runtime_label)}
-            />
-
-            <ModelDropdown
-              runtimeId={selectedRuntime?.id ?? null}
+              machineId={effectiveMachineId}
+              onMachineSelect={handleMachineSelect}
+              machineRuntimes={machineRuntimes}
+              runtimeId={effectiveRuntimeId}
+              onRuntimeSelect={handleRuntimeSelect}
               runtimeOnline={selectedRuntimeOnline}
-              value={model}
-              onChange={(next) => {
+              model={model}
+              onModelChange={(next) => {
                 setModel(next);
                 setThinkingLevel("");
               }}
-              disabled={!selectedRuntime}
-              required
-              autoSelectFirst
-            />
-
-            <ThinkingDropdown
-              runtimeId={selectedRuntime?.id ?? null}
-              runtimeOnline={selectedRuntimeOnline}
-              model={model}
-              value={thinkingLevel}
-              onChange={setThinkingLevel}
-              disabled={!selectedRuntime}
+              thinkingLevel={thinkingLevel}
+              onThinkingChange={setThinkingLevel}
+              modelRequired
+              autoSelectFirstModel
             />
 
             {/* --- Optional sections (instructions / skills) ---

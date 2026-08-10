@@ -592,6 +592,14 @@ function RuntimeConfigSummary({
     <>
       <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
         <span className="pt-0.5 text-muted-foreground">
+          {t(($) => $.inspector.prop_computer)}
+        </span>
+        <ComputerInfoRow
+          runtime={
+            runtimes.find((r) => r.id === agent.runtime_id) ?? null
+          }
+        />
+        <span className="pt-0.5 text-muted-foreground">
           {t(($) => $.inspector.prop_runtime)}
         </span>
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">

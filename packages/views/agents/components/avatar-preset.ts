@@ -1,7 +1,7 @@
 import { AGENT_AVATAR_PRESETS } from "@multica/core/workspace/avatar-url";
 import type { AgentAvatarSelection } from "@multica/core/types";
 
-/** Pick a concrete preset path from the shared 24-face pool. */
+/** Pick a concrete URL from the immutable OSS-backed preset pool. */
 export function randomAgentAvatarPresetUrl(
   random: () => number = Math.random,
 ): string {

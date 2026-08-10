@@ -201,6 +201,48 @@ func TestMigration203PersistsAgentAvatarTruthAtWriteBoundary(t *testing.T) {
 	}
 }
 
+func TestMigration314MovesSystemAgentAvatarsToOSS(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "314_agent_avatar_oss_presets.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 314 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE OR REPLACE FUNCTION default_agent_avatar_url(agent_id UUID)",
+		"https://cdn.leagent.me/agent-avatars/v2/agent-%s.png",
+		"% 15",
+		"avatar_source IN ('assigned', 'picked')",
+		"^/agent-avatars/human-",
+		"https://cdn.leagent.me/agent-avatars/v1/",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 314 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "314_agent_avatar_oss_presets.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 314 down: %v", err)
+	}
+	downContents := string(down)
+	for _, required := range []string{
+		"/agent-avatars/human-%s.jpg",
+		"% 24",
+		"^https://cdn\\.leagent\\.me/agent-avatars/v1/human-",
+		"^https://cdn\\.leagent\\.me/agent-avatars/v2/agent-",
+	} {
+		if !strings.Contains(downContents, required) {
+			t.Errorf("migration 314 down missing %q", required)
+		}
+	}
+}
+
 func TestMigration218CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

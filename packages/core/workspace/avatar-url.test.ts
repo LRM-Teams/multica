@@ -67,12 +67,18 @@ describe("resolvePublicFileUrl", () => {
 });
 
 describe("AGENT_AVATAR_PRESETS", () => {
-  it("holds the full 24-photo pool including human-11", () => {
-    expect(AGENT_AVATAR_PRESETS).toHaveLength(24);
-    expect(AGENT_AVATAR_PRESETS).toContain("/agent-avatars/human-11.jpg");
-    expect(AGENT_AVATAR_PRESETS[0]).toBe("/agent-avatars/human-01.jpg");
-    expect(AGENT_AVATAR_PRESETS[23]).toBe("/agent-avatars/human-24.jpg");
-    expect(new Set(AGENT_AVATAR_PRESETS).size).toBe(24); // no dupes
+  it("holds the full immutable OSS-backed pool", () => {
+    expect(AGENT_AVATAR_PRESETS).toHaveLength(15);
+    expect(AGENT_AVATAR_PRESETS).toContain(
+      "https://cdn.leagent.me/agent-avatars/v2/agent-11.png",
+    );
+    expect(AGENT_AVATAR_PRESETS[0]).toBe(
+      "https://cdn.leagent.me/agent-avatars/v2/agent-01.png",
+    );
+    expect(AGENT_AVATAR_PRESETS[14]).toBe(
+      "https://cdn.leagent.me/agent-avatars/v2/agent-15.png",
+    );
+    expect(new Set(AGENT_AVATAR_PRESETS).size).toBe(15); // no dupes
   });
 });
 

@@ -12,27 +12,30 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentavatar"
 )
 
-var durableAgentAvatarPattern = regexp.MustCompile(`^/agent-avatars/human-(0[1-9]|1[0-9]|2[0-4])\.jpg$`)
+var durableAgentAvatarPattern = regexp.MustCompile(`^https://cdn\.leagent\.me/agent-avatars/v2/agent-(0[1-9]|1[0-5])\.png$`)
 
 func TestAgentAvatar_DurableCreateAndVerifiedUpdateProvenance(t *testing.T) {
 	requireAvatarTestDatabase(t)
 
 	marker := strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
 	created := createAvatarTestAgent(t, "avatar-durable-"+marker, nil)
-	if created.AvatarURL == nil || !durableAgentAvatarPattern.MatchString(*created.AvatarURL) {
-		t.Fatalf("create avatar_url = %v, want concrete preset path", created.AvatarURL)
+	wantAssignedURL := agentavatar.DefaultURL(created.ID)
+	if created.AvatarURL == nil || *created.AvatarURL != wantAssignedURL {
+		t.Fatalf("create avatar_url = %v, want %q", created.AvatarURL, wantAssignedURL)
 	}
 	if created.AvatarSource != agentAvatarSourceAssigned {
 		t.Fatalf("create avatar_source = %q, want assigned", created.AvatarSource)
 	}
 	requirePersistedAgentAvatar(t, created.ID, *created.AvatarURL, agentAvatarSourceAssigned, "")
 
-	pickedURL := "/agent-avatars/human-24.jpg"
+	legacyPickedURL := "/agent-avatars/human-24.jpg"
+	pickedURL := agentavatar.LegacyURL(24)
 	picked := updateAvatarTestAgent(t, created.ID, map[string]any{
 		"kind":       agentAvatarSourcePicked,
-		"preset_url": pickedURL,
+		"preset_url": legacyPickedURL,
 	}, http.StatusOK)
 	if picked.AvatarURL == nil || *picked.AvatarURL != pickedURL || picked.AvatarSource != agentAvatarSourcePicked {
 		t.Fatalf("picked response = avatar_url %v source %q", picked.AvatarURL, picked.AvatarSource)
@@ -376,8 +379,8 @@ func TestAgentAvatar_ConcurrentUpdatesKeepURLSourceAndAttachmentAtomic(t *testin
 		attachmentID string
 	}
 	updates := []updateCase{
-		{selection: map[string]any{"kind": agentAvatarSourcePicked, "preset_url": "/agent-avatars/human-01.jpg"}, url: "/agent-avatars/human-01.jpg", source: agentAvatarSourcePicked},
-		{selection: map[string]any{"kind": agentAvatarSourcePicked, "preset_url": "/agent-avatars/human-24.jpg"}, url: "/agent-avatars/human-24.jpg", source: agentAvatarSourcePicked},
+		{selection: map[string]any{"kind": agentAvatarSourcePicked, "preset_url": "/agent-avatars/human-01.jpg"}, url: agentavatar.LegacyURL(1), source: agentAvatarSourcePicked},
+		{selection: map[string]any{"kind": agentAvatarSourcePicked, "preset_url": agentavatar.URL(15)}, url: agentavatar.URL(15), source: agentAvatarSourcePicked},
 	}
 	for _, suffix := range []string{"a", "b"} {
 		url := "/uploads/agents/" + marker + "-" + suffix + ".png"

@@ -78,6 +78,7 @@ plain `POST /api/agents`. Do not teach templates as a create path.
 
 ## Durable avatar
 
-See migration 203, `agent.sql` avatar tuple write, and
-`agent_avatar_test.go` / migrate fixture tests for assigned/picked/uploaded
-and raw-URL rejection.
+See migrations 203 and 314, `internal/agentavatar/catalog.go`, `agent.sql`
+avatar tuple write, and `agent_avatar_test.go` / migrate fixture tests for
+assigned/picked/uploaded, identity-preserving legacy preset migration, and
+raw-URL rejection.

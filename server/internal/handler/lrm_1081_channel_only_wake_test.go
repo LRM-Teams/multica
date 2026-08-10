@@ -2,23 +2,23 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// LRM-1081 / LRM-1079 P2: ordinary mention and reminder wakes are channel-only.
+// LRM-1081 / #2295: ordinary mention traffic is delivery-only (no task-shaped wake).
 
-func TestChannelMentionEnqueueIsChannelOnly(t *testing.T) {
+func TestChannelMentionEnqueueIsDeliveryOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
 	agentHandle := "lrm-1081-mention-" + uuid.NewString()[:8]
+	// createHandlerTestAgent binds a runtime so canonical delivery can insert.
 	agentID := createHandlerTestAgent(t, agentHandle, nil)
 	channelID := seedChannelForTest(t, "lrm-1081-mention-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
@@ -40,41 +40,32 @@ func TestChannelMentionEnqueueIsChannelOnly(t *testing.T) {
 		t.Fatalf("insert trigger: %v", err)
 	}
 
+	// Publish path schedules canonical delivery; post-ack fanout must not mint wakes.
+	testHandler.publishChannelToMembers(ctx, protocol.EventChannelMessage, testWorkspaceID, "member", testUserID, parseUUID(channelID), trigger)
 	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
 
-	var eventID string
-	var chatSessionID pgtype.UUID
-	var eventChannelID pgtype.UUID
-	var rawContext []byte
+	var wakeCount int
 	if err := testPool.QueryRow(ctx, `
-		SELECT id::text, chat_session_id, channel_id, context
-		FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND reason = 'mention'
-		ORDER BY created_at DESC
-		LIMIT 1`, channelID, agentID).Scan(&eventID, &chatSessionID, &eventChannelID, &rawContext); err != nil {
-		t.Fatalf("load mention inbox event: %v", err)
+		SELECT count(*) FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2
+		  AND reason IN ('mention', 'channel_message', 'thread_reply', 'ambient', 'dm')`,
+		channelID, agentID).Scan(&wakeCount); err != nil {
+		t.Fatalf("count inbox wakes: %v", err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID) })
-	if chatSessionID.Valid {
-		t.Fatal("mention wake must not create chat_session_id")
+	if wakeCount != 0 {
+		t.Fatalf("ordinary mention created %d task-shaped inbox wakes; want 0 (delivery-only)", wakeCount)
 	}
-	if uuidToString(eventChannelID) != channelID {
-		t.Fatalf("channel_id=%q, want %q", uuidToString(eventChannelID), channelID)
+
+	var deliveryCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_message_delivery
+		WHERE agent_id = $1 AND message_id = $2`, agentID, parseUUID(trigger.ID)).Scan(&deliveryCount); err != nil {
+		t.Fatalf("count deliveries: %v", err)
 	}
-	prompt, ok := channelWakePromptFromContext(rawContext)
-	if !ok {
-		t.Fatalf("missing channel_wake context: %s", string(rawContext))
+	if deliveryCount != 1 {
+		t.Fatalf("canonical delivery count = %d, want 1", deliveryCount)
 	}
-	if !strings.Contains(prompt, triggerContent) {
-		t.Fatalf("wake prompt missing trigger content:\n%s", prompt)
-	}
-	var wake channelWakeContext
-	if err := json.Unmarshal(rawContext, &wake); err != nil {
-		t.Fatalf("decode wake context: %v", err)
-	}
-	if wake.ThreadID != "debate-thread" || wake.TriggerDepth != 2 {
-		t.Fatalf("wake thread/depth = %q/%d, want debate-thread/2", wake.ThreadID, wake.TriggerDepth)
-	}
+
 	var sessions int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_agent_session

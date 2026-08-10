@@ -4904,17 +4904,23 @@ func (h *Handler) dispatchTranscribedChannelMessageToAgents(ctx context.Context,
 }
 
 func (h *Handler) dispatchChannelMessageToAgentsWithCursorPolicy(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, replayTrigger bool) {
+	// #2295 hard-cut: ordinary channel/DM Agent chat no longer creates
+	// task-shaped agent_inbox_event wakes. Canonical Message delivery
+	// (scheduleCanonicalMessageDelivery → agent_message_delivery +
+	// agent:deliver → MessageCoordinator) is the sole chat receive path.
+	// Product-task inbox (issues, training, research, collaboration, voice
+	// bridge, onboarding) still uses enqueueChannelAgentPrompt* via dedicated
+	// callers.
+	//
 	// Keep this literal stable — ops greps production binaries for it to prove the
 	// #2539 wake restore is actually present in the deployed image.
 	slog.Debug("channel human wake dispatch restored", "channel", ch.ID, "replay", replayTrigger)
+	_ = initiatorUserID
+	_ = replayTrigger
 
-	// LRM-1523 echo suppression: an agent-authored pure acknowledgement (收到 /
-	// 明白 / OK …) carries no new information or action. It must NOT wake any
-	// other agent — not even its @-targets — otherwise every polite "收到" reply
-	// re-triggers the acknowledged agent and feeds the confirmation echo chain.
-	// The message stays in the channel and is observed when any agent next runs;
-	// it just never produces a wake-required run on its own.
-	if !channelMessageIsHumanAuthored(trigger.Type) && !replayTrigger {
+	// LRM-1523 echo suppression: confirmation no-wakes still skip non-delivery
+	// bookkeeping so facilitator / metrics stay quiet for pure acknowledgements.
+	if !channelMessageIsHumanAuthored(trigger.Type) {
 		if channelMessageIsConfirmationNoWake(trigger) {
 			if h.Metrics != nil {
 				h.Metrics.RecordChannelAmbientGateDecision(channelAmbientGateActionRelevanceSkipped, channelAmbientSkipReasonNonAction)
@@ -4923,54 +4929,30 @@ func (h *Handler) dispatchChannelMessageToAgentsWithCursorPolicy(ctx context.Con
 		}
 	}
 
-	dispatchWakeExcept := h.dispatchChannelMessageWakeExcept
-	if replayTrigger {
-		dispatchWakeExcept = h.dispatchTranscribedChannelMessageWakeExcept
-	}
-	// Notify mentioned humans regardless of the agent trigger limit — surfacing a
-	// mention to a person never feeds the automatic agent-reply loop.
+	// Notify mentioned humans — independent of Agent delivery.
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
 	groupCommand := channelMessageIsHumanAuthored(trigger.Type) && channelMessageIsGroupCommand(trigger.Content, trigger.Parts)
 	if len(mentionedAgents) > 0 && !groupCommand {
-		targetAgentIDs := make(map[string]struct{}, len(mentionedAgents))
 		for _, agent := range mentionedAgents {
-			targetAgentIDs[uuidToString(agent.ID)] = struct{}{}
 			if len(mentionedAgents) == 1 {
 				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
 			}
-			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
+			if h.Metrics != nil {
 				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
 			}
-		}
-		if channelMessageIsHumanAuthored(trigger.Type) {
-			// A human @mention upgrades only the mentioned agents to a directed,
-			// must-reply wake. Every other joined, unmuted agent still receives
-			// the message through the ordinary coalesced channel wake path so the
-			// mention does not make shared channel context disappear.
-			dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, targetAgentIDs)
-		} else {
-			// Preserve the existing loop boundary for agent-authored messages:
-			// non-targets observe without starting another agent run.
-			h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
 		}
 		return
 	}
 	if channelMessageIsHumanAuthored(trigger.Type) {
 		h.recordChannelUnmentionedMessage()
 	}
-	// Unmentioned human messages (including 大家/@all): wake every channel agent
-	// with a silent-capable ambient run (Andong wake-all) and let each agent
-	// decide whether to reply.
-	if groupCommand {
-		dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, nil)
-		return
+	if groupCommand || channelMessageIsHumanAuthored(trigger.Type) {
+		if h.Metrics != nil {
+			h.Metrics.RecordChannelFullExecutionWake("legacy_full")
+		}
+		h.recordChannelUnmentionedFullWake()
 	}
-	if !channelMessageIsHumanAuthored(trigger.Type) {
-		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
-		return
-	}
-	dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, nil)
 }
 
 func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -4978,10 +4960,13 @@ func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelRespons
 }
 
 func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	// #2295: thread replies use canonical Message delivery only. Keep human
+	// mentions, thread-follower bookkeeping, and facilitator marks; do not
+	// enqueue task-shaped agent_inbox_event wakes.
+	_ = initiatorUserID
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
 
-	// LRM-1523 echo suppression mirrors the main-channel path: an agent-authored
-	// pure acknowledgement inside a thread must not re-wake its @-targets.
+	// LRM-1523 echo suppression mirrors the main-channel path.
 	if !channelMessageIsHumanAuthored(trigger.Type) {
 		if channelMessageIsConfirmationNoWake(trigger) {
 			return
@@ -4997,36 +4982,23 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 			if len(mentionedAgents) == 1 {
 				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
 			}
-			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
+			if h.Metrics != nil {
 				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
 			}
 		}
 		return
 	}
 	if trigger.ThreadRootMessageID == nil {
-		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
 		return
 	}
-	threadAgents := h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID)
-	if len(threadAgents) == 0 {
-		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
-		return
-	}
-	targetAgentIDs := make(map[string]struct{}, len(threadAgents))
-	for _, agent := range threadAgents {
-		agentID := uuidToString(agent.ID)
-		targetAgentIDs[agentID] = struct{}{}
+	for _, agent := range h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {
 		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
 			continue
 		}
-		// No @ in a thread: participant delivery with the same silent-capable
-		// contract as main-channel ambient (priority 1). Must-reply stays on
-		// explicit @ / DM / group_command paths only.
-		if _, err := h.dispatchChannelThreadContinuation(ctx, ch, agent, trigger, initiatorUserID); err == nil && h.Metrics != nil {
+		if h.Metrics != nil {
 			h.Metrics.RecordChannelFullExecutionWake("thread_reply")
 		}
 	}
-	h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
 }
 
 func (h *Handler) dispatchChannelMessageWake(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -5042,22 +5014,14 @@ func (h *Handler) dispatchTranscribedChannelMessageWakeExcept(ctx context.Contex
 }
 
 func (h *Handler) dispatchChannelMessageWakeExceptWithCursorPolicy(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, skipAgentIDs map[string]struct{}, replayTrigger bool) {
-	if trigger.Type == "agent" || trigger.Type == "system" {
-		return
-	}
-	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
-		if _, skip := skipAgentIDs[uuidToString(agent.ID)]; skip {
-			continue
-		}
-		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
-			continue
-		}
-		h.dispatchSingleChannelMessageWakeWithCursorPolicy(ctx, ch, trigger, initiatorUserID, agent, replayTrigger)
-		h.recordChannelUnmentionedFullWake()
-		if h.Metrics != nil {
-			h.Metrics.RecordChannelFullExecutionWake("legacy_full")
-		}
-	}
+	// #2295: ambient/full channel wakes no longer mint agent_inbox_event rows.
+	// Canonical delivery already covers unmuted recipients on publish.
+	_ = ctx
+	_ = ch
+	_ = trigger
+	_ = initiatorUserID
+	_ = skipAgentIDs
+	_ = replayTrigger
 }
 
 func (h *Handler) dispatchSingleChannelMessageWake(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, agent db.Agent) {
@@ -6302,18 +6266,12 @@ func (h *Handler) dispatchChannelAmbientDelivery(ctx context.Context, ch Channel
 }
 
 func (h *Handler) dispatchChannelAmbientDeliveryExcept(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, skipAgentIDs map[string]struct{}) {
-	if skip, _ := channelMessageAmbientSkipReason(trigger); skip {
-		return
-	}
-	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
-		if _, skip := skipAgentIDs[uuidToString(agent.ID)]; skip {
-			continue
-		}
-		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
-			continue
-		}
-		h.recordChannelAmbientInboxEvent(ctx, ch, trigger, agent)
-	}
+	// #2295: observe-mode ambient inbox events removed. Agents learn about
+	// channel traffic solely through canonical Message delivery.
+	_ = ctx
+	_ = ch
+	_ = trigger
+	_ = skipAgentIDs
 }
 
 func (h *Handler) recordChannelAmbientInboxEvent(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, agent db.Agent) {

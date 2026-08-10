@@ -251,7 +251,8 @@
     "discovery_failed": "discovery failed",
     "clear_full": "Clear selection (use provider default)",
     "catalog_unavailable_hint": "Catalog unavailable — type a model ID",
-    "scanning_on_computer": "Checking models on this Computer…"
+    "scanning_on_computer": "Checking models on this Computer…",
+    "rescan_aria": "Rescan models on this Computer"
   },
   "tabs": {
     "activity": "Activity",

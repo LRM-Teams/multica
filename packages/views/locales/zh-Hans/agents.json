@@ -246,7 +246,8 @@
     "discovery_failed": "发现失败",
     "clear_full": "清除选择（使用提供方默认）",
     "catalog_unavailable_hint": "目录暂不可用，可手填模型 ID",
-    "scanning_on_computer": "正在此电脑上扫描模型…"
+    "scanning_on_computer": "正在此电脑上扫描模型…",
+    "rescan_aria": "重新扫描此电脑上的模型"
   },
   "tabs": {
     "activity": "动态",

@@ -30,6 +30,7 @@ export function InlineReferenceContent({
   className,
   sourceMessageId,
   issueAppearance = "inline",
+  mentionVariant = "soft-bg",
 }: {
   content: string | null | undefined;
   parts: readonly MessagePart[] | null | undefined;
@@ -40,6 +41,8 @@ export function InlineReferenceContent({
   sourceMessageId?: string;
   /** LRM-609 A' system rows: unfilled brand text link (title-primary). */
   issueAppearance?: "inline" | "systemChip";
+  /** LRM-1386 — chat surfaces pass `plain` for non-pill mention text. */
+  mentionVariant?: import("./mention-token").MentionTokenVariant;
 }): React.JSX.Element {
   // Key each run by its character offset in the body (stable across renders,
   // never the array index) so React reconciles the same run/token cleanly.
@@ -72,6 +75,7 @@ export function InlineReferenceContent({
             sourceMessageId={sourceMessageId}
             emphasis={seg.emphasis}
             issueAppearance={issueAppearance}
+            mentionVariant={mentionVariant}
           />
         ),
       )}
@@ -129,6 +133,7 @@ function ReferenceToken({
   sourceMessageId,
   emphasis,
   issueAppearance,
+  mentionVariant = "soft-bg",
 }: {
   reference: ReferencePart;
   text: string;
@@ -137,6 +142,7 @@ function ReferenceToken({
   sourceMessageId?: string;
   emphasis?: "strong" | "em";
   issueAppearance: "inline" | "systemChip";
+  mentionVariant?: import("./mention-token").MentionTokenVariant;
 }): React.JSX.Element {
   const token = renderReferenceToken({
     reference,
@@ -145,6 +151,7 @@ function ReferenceToken({
     highlightQuery,
     sourceMessageId,
     issueAppearance,
+    mentionVariant,
   });
   if (emphasis === "strong") return <strong>{token}</strong>;
   if (emphasis === "em") return <em>{token}</em>;
@@ -158,6 +165,7 @@ function renderReferenceToken({
   highlightQuery,
   sourceMessageId,
   issueAppearance,
+  mentionVariant = "soft-bg",
 }: {
   reference: ReferencePart;
   text: string;
@@ -165,6 +173,7 @@ function renderReferenceToken({
   highlightQuery?: string;
   sourceMessageId?: string;
   issueAppearance: "inline" | "systemChip";
+  mentionVariant?: import("./mention-token").MentionTokenVariant;
 }): React.JSX.Element {
   if (reference.ref_type === "mention") {
     // Non-interactive surfaces (e.g. the excerpt row, itself a link) render the
@@ -176,6 +185,7 @@ function renderReferenceToken({
           type={reference.ref_subtype ?? "member"}
           id={reference.ref_id}
           label={reference.label ?? text}
+          variant={mentionVariant}
         />
       );
     }
@@ -188,6 +198,7 @@ function renderReferenceToken({
         id={reference.ref_id}
         label={reference.label ?? text}
         highlightQuery={highlightQuery}
+        variant={mentionVariant}
       />
     );
   }
@@ -252,10 +263,12 @@ function NonInteractiveActorMention({
   type,
   id,
   label,
+  variant = "soft-bg",
 }: {
   type: string;
   id: string;
   label?: string;
+  variant?: import("./mention-token").MentionTokenVariant;
 }): React.JSX.Element {
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   return (
@@ -265,6 +278,7 @@ function NonInteractiveActorMention({
         unresolved
           ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
           : undefined,
+        variant,
       )}
       data-mention-type={type}
       data-mention-unresolved={unresolved ? "true" : undefined}

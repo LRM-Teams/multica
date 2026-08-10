@@ -32,9 +32,10 @@ import { useActorMentionChipLabel } from "../../common/actor-mention-chip-label"
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
+  type MentionTokenVariant,
 } from "../../common/mention-token";
 
-export function MentionView({ node }: NodeViewProps) {
+export function MentionView({ node, mentionVariant = "soft-bg" }: NodeViewProps & { mentionVariant?: MentionTokenVariant }) {
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
   // Same context-or-global-store fallback as ActorAvatarPanelTrigger, so an
   // @mention opens the panel whether it renders inside channels/DM (context)
@@ -80,6 +81,7 @@ export function MentionView({ node }: NodeViewProps) {
         openAgentPanel={openAgentPanel}
         openMemberPanel={openMemberPanel}
         closeAgentPanel={closeAgentPanel}
+        mentionVariant={mentionVariant}
       />
     </NodeViewWrapper>
   );
@@ -93,6 +95,7 @@ function ActorMentionEditorChip({
   openAgentPanel,
   openMemberPanel,
   closeAgentPanel,
+  mentionVariant = "soft-bg",
 }: {
   type: string;
   id: string;
@@ -101,6 +104,7 @@ function ActorMentionEditorChip({
   openAgentPanel: ((id: string) => void) | null | undefined;
   openMemberPanel: ((id: string) => void) | null | undefined;
   closeAgentPanel: () => void;
+  mentionVariant?: MentionTokenVariant;
 }): ReactNode {
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
@@ -111,6 +115,7 @@ function ActorMentionEditorChip({
         unresolved
           ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
           : undefined,
+        mentionVariant,
       )}
       data-mention-kind={kind}
       data-mention-type={type}

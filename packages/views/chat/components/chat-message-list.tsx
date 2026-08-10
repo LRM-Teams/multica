@@ -408,7 +408,7 @@ function MessageBubble({
               fadeVariant="muted"
             >
               <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                <Markdown attachments={message.attachments}>{message.content}</Markdown>
+                <Markdown attachments={message.attachments} mentionVariant="plain">{message.content}</Markdown>
               </div>
             </ChatCollapsibleBody>
             <AttachmentList

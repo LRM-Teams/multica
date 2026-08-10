@@ -41,6 +41,26 @@ describe("mentionTokenClassName", () => {
     expect(cls).not.toContain("rounded-full");
   });
 
+  it("plain variant drops the pill shell but keeps brand ink for chat mentions (LRM-1386)", () => {
+    const cls = mentionTokenClassName("default", undefined, "plain");
+    expect(cls).toContain("text-brand");
+    expect(cls).toContain("font-bold");
+    expect(cls).toContain("mention");
+    expect(cls).not.toContain("bg-brand/[0.10]");
+    expect(cls).not.toContain("px-0.5");
+    expect(cls).not.toContain("rounded-sm");
+    expect(cls).not.toContain("rounded-full");
+    expect(cls).toContain("hover:bg-brand/[0.06]");
+  });
+
+  it("plain variant ignores @self warm wash but stays non-pill (LRM-1386)", () => {
+    const cls = mentionTokenClassName("self", undefined, "plain");
+    expect(cls).toContain("text-brand");
+    expect(cls).not.toContain("bg-[#faf0c8]");
+    expect(cls).not.toContain("rounded-sm");
+    expect(cls).not.toContain("px-0.5");
+  });
+
   it("keeps @all on the same soft brand token as people/agents/squads", () => {
     const cls = mentionTokenClassName("all");
     expect(cls).toContain("text-brand");

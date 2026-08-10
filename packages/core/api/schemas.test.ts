@@ -449,6 +449,54 @@ describe("ChannelMessageSearchResponseSchema", () => {
 });
 
 describe("Channel message pagination schemas", () => {
+  it("strips legacy avatar snapshots from the message read model", () => {
+    const parsed = ChannelMessagesPageSchema.parse({
+      messages: [
+        {
+          id: "msg-1",
+          channel_id: "channel-1",
+          workspace_id: "ws-1",
+          type: "agent",
+          author_id: "agent-1",
+          author_name: "Ronan",
+          author_avatar_url: "/legacy/message.png",
+          content: "hello",
+          source: "multica",
+          external_message_id: null,
+          created_at: "2026-07-03T00:00:00Z",
+          reply_to: {
+            id: "msg-0",
+            type: "agent",
+            author_id: "agent-1",
+            author_name: "Ronan",
+            author_avatar_url: "/legacy/reply.png",
+            content: "parent",
+            created_at: "2026-07-03T00:00:00Z",
+          },
+          quote: {
+            messageId: "msg-0",
+            status: "active",
+            snapshot: {
+              type: "agent",
+              authorId: "agent-1",
+              authorName: "Ronan",
+              authorAvatarUrl: "/legacy/quote.png",
+              content: "parent",
+              createdAt: "2026-07-03T00:00:00Z",
+            },
+          },
+        },
+      ],
+    });
+
+    const message = parsed.messages[0] as Record<string, unknown>;
+    expect(message).not.toHaveProperty("author_avatar_url");
+    expect(message.reply_to).not.toHaveProperty("author_avatar_url");
+    expect((message.quote as { snapshot: Record<string, unknown> }).snapshot).not.toHaveProperty(
+      "authorAvatarUrl",
+    );
+  });
+
   it("keeps page cursor metadata and unknown future fields", () => {
     const parsed = ChannelMessagesPageSchema.parse({
       messages: [

@@ -76,11 +76,7 @@ export function ThreadRootPreview({
   // (#488 / LRM-292)
   const handleOpenAgentCapture =
     isAgent && onOpenAgent && profileActorId
-      ? () =>
-          onOpenAgent(profileActorId, {
-            display_name: message.author_name,
-            avatar_url: message.author_avatar_url ?? null,
-          })
+      ? () => onOpenAgent(profileActorId)
       : undefined;
   const handleOpenMemberCapture =
     !isAgent && onOpenMember && profileActorId

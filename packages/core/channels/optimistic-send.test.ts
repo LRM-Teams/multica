@@ -95,7 +95,7 @@ describe("optimistic send cache (LRM-222)", () => {
     expect(messages[0]?.client_message_id).toBe("client-1");
   });
 
-  it("preserves optimistic author_avatar_url when ACK omits it", () => {
+  it("does not put profile avatars into optimistic message state", () => {
     const optimistic = buildOptimisticChannelMessage({
       channelId: "c1",
       workspaceId: "w1",
@@ -103,26 +103,8 @@ describe("optimistic send cache (LRM-222)", () => {
       content: "face",
       authorId: "u1",
       authorName: "Alice",
-      authorAvatarUrl: "/uploads/alice.png",
     });
-
-    const ack: ChannelMessage = {
-      ...optimistic,
-      id: "server-3",
-      seq: 43,
-      local_send_status: null,
-      client_message_id: "client-3",
-      author_avatar_url: null,
-    };
-
-    const qc = new QueryClient();
-    seedPage(qc, "c1", [optimistic]);
-    upsertChannelMessageInCache(qc, ack);
-
-    const messages =
-      qc.getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("c1"))?.pages[0]
-        ?.messages ?? [];
-    expect(messages[0]?.author_avatar_url).toBe("/uploads/alice.png");
+    expect(optimistic).not.toHaveProperty("author_avatar_url");
   });
 
   it("marks a pending bubble failed and drops it on conflict remove", () => {

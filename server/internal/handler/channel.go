@@ -190,11 +190,11 @@ type ChannelMemberResponse struct {
 }
 
 type ChannelMessageResponse struct {
-	ID                  string                 `json:"id"`
-	ChannelID           string                 `json:"channel_id"`
-	WorkspaceID         string                 `json:"workspace_id"`
-	Seq                 int64                  `json:"seq"`
-	Type                string                 `json:"type"`
+	ID          string `json:"id"`
+	ChannelID   string `json:"channel_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Seq         int64  `json:"seq"`
+	Type        string `json:"type"`
 	// Kind is the structured message classification (LRM-1523 L1). Empty means
 	// the row predates kind persistence; dispatch falls back to the runtime
 	// classifier in that case. populated value is one of protocol.ChannelMessageKind*.
@@ -203,7 +203,6 @@ type ChannelMessageResponse struct {
 	KindSource          string                 `json:"kind_source,omitempty"`
 	AuthorID            *string                `json:"author_id"`
 	AuthorName          string                 `json:"author_name"`
-	AuthorAvatarURL     *string                `json:"author_avatar_url"`
 	Content             string                 `json:"content"`
 	Parts               []protocol.MessagePart `json:"parts,omitempty"`
 	Source              string                 `json:"source"`
@@ -276,14 +275,13 @@ type ChannelThreadMessagesPageResponse struct {
 }
 
 type ChannelMessageReply struct {
-	ID              string                 `json:"id"`
-	Type            string                 `json:"type"`
-	AuthorID        *string                `json:"author_id"`
-	AuthorName      string                 `json:"author_name"`
-	AuthorAvatarURL *string                `json:"author_avatar_url"`
-	Content         string                 `json:"content"`
-	Parts           []protocol.MessagePart `json:"parts,omitempty"`
-	CreatedAt       string                 `json:"created_at"`
+	ID         string                 `json:"id"`
+	Type       string                 `json:"type"`
+	AuthorID   *string                `json:"author_id"`
+	AuthorName string                 `json:"author_name"`
+	Content    string                 `json:"content"`
+	Parts      []protocol.MessagePart `json:"parts,omitempty"`
+	CreatedAt  string                 `json:"created_at"`
 }
 
 type ChannelMessageQuote struct {
@@ -293,13 +291,12 @@ type ChannelMessageQuote struct {
 }
 
 type ChannelMessageQuoteSnapshot struct {
-	Type            string                 `json:"type"`
-	AuthorID        *string                `json:"authorId,omitempty"`
-	AuthorName      string                 `json:"authorName"`
-	AuthorAvatarURL *string                `json:"authorAvatarUrl"`
-	Content         string                 `json:"content"`
-	Parts           []protocol.MessagePart `json:"parts,omitempty"`
-	CreatedAt       string                 `json:"createdAt"`
+	Type       string                 `json:"type"`
+	AuthorID   *string                `json:"authorId,omitempty"`
+	AuthorName string                 `json:"authorName"`
+	Content    string                 `json:"content"`
+	Parts      []protocol.MessagePart `json:"parts,omitempty"`
+	CreatedAt  string                 `json:"createdAt"`
 }
 
 type ChannelReactionResponse struct {
@@ -330,7 +327,6 @@ type ChannelMessageSearchResult struct {
 	Type                string  `json:"type"`
 	AuthorID            *string `json:"author_id"`
 	AuthorName          string  `json:"author_name"`
-	AuthorAvatarURL     *string `json:"author_avatar_url"`
 	Content             string  `json:"content"`
 	CreatedAt           string  `json:"created_at"`
 }
@@ -2070,7 +2066,6 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		out = append(out, desc[i])
 	}
 	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
-		h.attachChannelMessageAuthorAvatars(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageAttachments(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceID, msgs)
@@ -2241,7 +2236,6 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 
 	// Attach extras
 	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
-		h.attachChannelMessageAuthorAvatars(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageAttachments(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceIDStr, msgs)
@@ -2677,11 +2671,8 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 	args = append(args, limit, offset)
 	listSQL := `
 		SELECT m.id, m.channel_id, m.thread_root_message_id, m.author_type, m.author_id, m.author_name,
-		       CASE WHEN m.author_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
 		       m.content, m.created_at
 		FROM channel_message m
-		LEFT JOIN "user" u ON m.author_type = 'user' AND u.id = m.author_id
-		LEFT JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id AND a.workspace_id = m.workspace_id
 		WHERE ` + whereSQL + `
 		ORDER BY m.seq ASC
 		LIMIT $` + strconv.Itoa(len(args)-1) + ` OFFSET $` + strconv.Itoa(len(args))
@@ -2694,9 +2685,8 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 	for rows.Next() {
 		var id, chID, threadRootID, rowAuthorID pgtype.UUID
 		var rowAuthorType, authorName, content string
-		var avatarURL pgtype.Text
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &chID, &threadRootID, &rowAuthorType, &rowAuthorID, &authorName, &avatarURL, &content, &createdAt); err != nil {
+		if err := rows.Scan(&id, &chID, &threadRootID, &rowAuthorType, &rowAuthorID, &authorName, &content, &createdAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channel message search results")
 			return
 		}
@@ -2708,7 +2698,6 @@ func (h *Handler) SearchChannelMessages(w http.ResponseWriter, r *http.Request) 
 			Type:                rowAuthorType,
 			AuthorID:            uuidToPtr(rowAuthorID),
 			AuthorName:          authorName,
-			AuthorAvatarURL:     textToPtr(avatarURL),
 			Content:             content,
 			CreatedAt:           timestampToString(createdAt),
 		})
@@ -2848,7 +2837,6 @@ func (h *Handler) resolveChannelQuoteTarget(w http.ResponseWriter, ctx context.C
 
 func (h *Handler) attachChannelMessageReplySummary(ctx context.Context, workspaceID string, msg ChannelMessageResponse) ChannelMessageResponse {
 	messages := []ChannelMessageResponse{msg}
-	h.attachChannelMessageAuthorAvatars(ctx, workspaceID, messages)
 	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
 	h.attachChannelMessageReactions(ctx, workspaceID, messages)
 	h.attachChannelMessageQuotes(ctx, workspaceID, messages)
@@ -2857,7 +2845,6 @@ func (h *Handler) attachChannelMessageReplySummary(ctx context.Context, workspac
 
 func (h *Handler) attachSingleChannelMessageDetails(ctx context.Context, workspaceID string, userID pgtype.UUID, msg ChannelMessageResponse) ChannelMessageResponse {
 	messages := []ChannelMessageResponse{msg}
-	h.attachChannelMessageAuthorAvatars(ctx, workspaceID, messages)
 	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
 	h.attachChannelMessageReactions(ctx, workspaceID, messages)
 	h.attachChannelMessageQuotes(ctx, workspaceID, messages)
@@ -2883,78 +2870,6 @@ func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspace
 	grouped := h.groupChannelMessageAttachments(ctx, workspaceID, messageIDs)
 	for i := range messages {
 		messages[i].Attachments = grouped[messages[i].ID]
-	}
-}
-
-func (h *Handler) attachChannelMessageAuthorAvatars(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
-	if len(messages) == 0 {
-		return
-	}
-	userIDs := []pgtype.UUID{}
-	agentIDs := []pgtype.UUID{}
-	seenUsers := map[string]bool{}
-	seenAgents := map[string]bool{}
-	for _, msg := range messages {
-		if msg.AuthorID == nil || msg.DeletedAt != nil {
-			continue
-		}
-		switch msg.Type {
-		case "user":
-			if !seenUsers[*msg.AuthorID] {
-				seenUsers[*msg.AuthorID] = true
-				userIDs = append(userIDs, parseUUID(*msg.AuthorID))
-			}
-		case "agent":
-			if !seenAgents[*msg.AuthorID] {
-				seenAgents[*msg.AuthorID] = true
-				agentIDs = append(agentIDs, parseUUID(*msg.AuthorID))
-			}
-		}
-	}
-	avatars := map[string]*string{}
-	if len(userIDs) > 0 {
-		rows, err := h.DB.Query(ctx, `
-			SELECT id, avatar_url
-			FROM "user"
-			WHERE id = ANY($1::uuid[])`, userIDs)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var id pgtype.UUID
-				var avatarURL pgtype.Text
-				if err := rows.Scan(&id, &avatarURL); err != nil {
-					continue
-				}
-				avatars["user:"+uuidToString(id)] = textToPtr(avatarURL)
-			}
-		} else {
-			slog.Warn("channel message avatars: user lookup failed", "workspace", workspaceID, "error", err)
-		}
-	}
-	if len(agentIDs) > 0 {
-		rows, err := h.DB.Query(ctx, `
-			SELECT id, avatar_url
-			FROM agent
-			WHERE workspace_id = $1 AND id = ANY($2::uuid[])`, parseUUID(workspaceID), agentIDs)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var id pgtype.UUID
-				var avatarURL pgtype.Text
-				if err := rows.Scan(&id, &avatarURL); err != nil {
-					continue
-				}
-				avatars["agent:"+uuidToString(id)] = textToPtr(avatarURL)
-			}
-		} else {
-			slog.Warn("channel message avatars: agent lookup failed", "workspace", workspaceID, "error", err)
-		}
-	}
-	for i := range messages {
-		if messages[i].AuthorID == nil {
-			continue
-		}
-		messages[i].AuthorAvatarURL = avatars[messages[i].Type+":"+*messages[i].AuthorID]
 	}
 }
 
@@ -3047,11 +2962,8 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT m.id, m.author_type, m.author_id, m.author_name,
-		       CASE WHEN m.author_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
 		       m.content, m.parts, m.created_at
 		FROM channel_message m
-		LEFT JOIN "user" u ON m.author_type = 'user' AND u.id = m.author_id
-		LEFT JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id AND a.workspace_id = m.workspace_id
 		WHERE m.workspace_id = $1 AND m.id = ANY($2::uuid[]) AND m.deleted_at IS NULL`,
 		parseUUID(workspaceID), replyIDs)
 	if err != nil {
@@ -3063,22 +2975,20 @@ func (h *Handler) attachChannelMessageReplySummaries(ctx context.Context, worksp
 	for rows.Next() {
 		var id, authorID pgtype.UUID
 		var authorType, authorName, content string
-		var avatarURL pgtype.Text
 		var parts []byte
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &authorType, &authorID, &authorName, &avatarURL, &content, &parts, &createdAt); err != nil {
+		if err := rows.Scan(&id, &authorType, &authorID, &authorName, &content, &parts, &createdAt); err != nil {
 			continue
 		}
 		key := uuidToString(id)
 		byID[key] = ChannelMessageReply{
-			ID:              key,
-			Type:            authorType,
-			AuthorID:        uuidToPtr(authorID),
-			AuthorName:      authorName,
-			AuthorAvatarURL: textToPtr(avatarURL),
-			Content:         content,
-			Parts:           messageparts.Decode(parts),
-			CreatedAt:       timestampToString(createdAt),
+			ID:         key,
+			Type:       authorType,
+			AuthorID:   uuidToPtr(authorID),
+			AuthorName: authorName,
+			Content:    content,
+			Parts:      messageparts.Decode(parts),
+			CreatedAt:  timestampToString(createdAt),
 		}
 	}
 	for i := range messages {
@@ -3106,11 +3016,8 @@ func (h *Handler) attachChannelMessageQuotes(ctx context.Context, workspaceID st
 	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT m.id, m.channel_id, m.author_type, m.author_id, m.author_name,
-		       CASE WHEN m.author_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
 		       m.content, m.parts, m.created_at, m.deleted_at
 		FROM channel_message m
-		LEFT JOIN "user" u ON m.author_type = 'user' AND u.id = m.author_id
-		LEFT JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id AND a.workspace_id = m.workspace_id
 		WHERE m.workspace_id = $1 AND m.id = ANY($2::uuid[])`, parseUUID(workspaceID), quoteIDs)
 	if err != nil {
 		slog.Warn("channel quote: load failed", "workspace", workspaceID, "error", err)
@@ -3126,10 +3033,9 @@ func (h *Handler) attachChannelMessageQuotes(ctx context.Context, workspaceID st
 	for rows.Next() {
 		var id, channelID, authorID pgtype.UUID
 		var authorType, authorName, content string
-		var avatarURL pgtype.Text
 		var parts []byte
 		var createdAt, deletedAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &channelID, &authorType, &authorID, &authorName, &avatarURL, &content, &parts, &createdAt, &deletedAt); err != nil {
+		if err := rows.Scan(&id, &channelID, &authorType, &authorID, &authorName, &content, &parts, &createdAt, &deletedAt); err != nil {
 			continue
 		}
 		decodedParts := messageparts.Decode(parts)
@@ -3143,13 +3049,12 @@ func (h *Handler) attachChannelMessageQuotes(ctx context.Context, workspaceID st
 			channelID: uuidToString(channelID),
 			deleted:   deletedAt.Valid,
 			snapshot: ChannelMessageQuoteSnapshot{
-				Type:            authorType,
-				AuthorID:        uuidToPtr(authorID),
-				AuthorName:      authorName,
-				AuthorAvatarURL: textToPtr(avatarURL),
-				Content:         content,
-				Parts:           decodedParts,
-				CreatedAt:       timestampToString(createdAt),
+				Type:       authorType,
+				AuthorID:   uuidToPtr(authorID),
+				AuthorName: authorName,
+				Content:    content,
+				Parts:      decodedParts,
+				CreatedAt:  timestampToString(createdAt),
 			},
 		}
 	}
@@ -3195,11 +3100,8 @@ func (h *Handler) attachChannelMessageThreadRootSummaries(ctx context.Context, w
 	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT m.id, m.author_type, m.author_id, m.author_name,
-		       CASE WHEN m.author_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
 		       m.content, m.parts, m.created_at
 		FROM channel_message m
-		LEFT JOIN "user" u ON m.author_type = 'user' AND u.id = m.author_id
-		LEFT JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id AND a.workspace_id = m.workspace_id
 		WHERE m.workspace_id = $1 AND m.id = ANY($2::uuid[]) AND m.deleted_at IS NULL`,
 		parseUUID(workspaceID), rootIDs)
 	if err != nil {
@@ -3211,22 +3113,20 @@ func (h *Handler) attachChannelMessageThreadRootSummaries(ctx context.Context, w
 	for rows.Next() {
 		var id, authorID pgtype.UUID
 		var authorType, authorName, content string
-		var avatarURL pgtype.Text
 		var parts []byte
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &authorType, &authorID, &authorName, &avatarURL, &content, &parts, &createdAt); err != nil {
+		if err := rows.Scan(&id, &authorType, &authorID, &authorName, &content, &parts, &createdAt); err != nil {
 			continue
 		}
 		key := uuidToString(id)
 		byID[key] = ChannelMessageReply{
-			ID:              key,
-			Type:            authorType,
-			AuthorID:        uuidToPtr(authorID),
-			AuthorName:      authorName,
-			AuthorAvatarURL: textToPtr(avatarURL),
-			Content:         content,
-			Parts:           messageparts.Decode(parts),
-			CreatedAt:       timestampToString(createdAt),
+			ID:         key,
+			Type:       authorType,
+			AuthorID:   uuidToPtr(authorID),
+			AuthorName: authorName,
+			Content:    content,
+			Parts:      messageparts.Decode(parts),
+			CreatedAt:  timestampToString(createdAt),
 		}
 	}
 	for i := range messages {
@@ -3838,7 +3738,6 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	for i := len(repliesDesc) - 1; i >= 0; i-- {
 		out = append(out, repliesDesc[i])
 	}
-	h.attachChannelMessageAuthorAvatars(r.Context(), workspaceID, out)
 	h.attachChannelMessageAttachments(r.Context(), workspaceID, out)
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)

@@ -14,6 +14,9 @@ const RESOURCES = {
     avatar_system_choices_aria: "System avatars",
     avatar_system_choice_aria: "Choose system avatar",
     avatar_upload_custom: "Upload custom avatar",
+    avatar_custom_selected: "Custom avatar selected",
+    avatar_picker_cancel: "Cancel",
+    avatar_picker_save: "Save",
     avatar_err_type: "Please choose a PNG or JPG image.",
     avatar_err_size: "Image must be 5 MB or smaller.",
     avatar_err_dimensions: "Image must be at least 256×256 pixels.",
@@ -63,7 +66,14 @@ vi.mock("@multica/ui/components/common/actor-avatar", () => ({
   ActorAvatar: () => <div data-testid="actor-avatar" />,
 }));
 vi.mock("./avatar-crop-dialog", () => ({
-  AvatarCropDialog: () => <div data-testid="avatar-crop-dialog" />,
+  AvatarCropDialog: ({ onConfirm }: { onConfirm: (file: File) => void }) => (
+    <button
+      type="button"
+      onClick={() => onConfirm(new File(["cropped"], "avatar.png", { type: "image/png" }))}
+    >
+      Confirm crop
+    </button>
+  ),
 }));
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: mocks.invalidateQueries }),
@@ -127,7 +137,7 @@ describe("AgentProfileAvatarEditor", () => {
     expect(screen.getByTestId("agent-profile-avatar")).toHaveAttribute("data-can-edit", "true");
   });
 
-  it("opens system presets and commits a picked avatar", async () => {
+  it("stages a picked avatar and commits it only after Save", async () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     render(
       <AgentProfileAvatarEditor
@@ -144,6 +154,9 @@ describe("AgentProfileAvatarEditor", () => {
     ).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: "Choose system avatar 2" }));
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledWith("agent-1", {
         avatar_selection: {
@@ -154,6 +167,72 @@ describe("AgentProfileAvatarEditor", () => {
     });
     expect(mocks.invalidateQueries).toHaveBeenCalled();
     expect(mocks.toastSuccess).toHaveBeenCalledWith("Avatar updated");
+  });
+
+  it("discards a staged avatar when the picker is cancelled", () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <AgentProfileAvatarEditor
+        agent={makeAgent()}
+        canEdit
+        onUpdate={onUpdate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Change avatar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose system avatar 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "Choose an avatar" })).toBeNull();
+  });
+
+  it("stages an uploaded avatar and commits it only after Save", async () => {
+    vi.stubGlobal(
+      "Image",
+      class {
+        naturalWidth = 512;
+        naturalHeight = 512;
+        onload: (() => void) | null = null;
+
+        set src(_value: string) {
+          this.onload?.();
+        }
+      },
+    );
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:avatar"),
+      revokeObjectURL: vi.fn(),
+    });
+    upload.mockResolvedValue({
+      id: "attachment-1",
+      link: "https://cdn.leagent.me/workspaces/ws-1/avatar.png",
+    });
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <AgentProfileAvatarEditor agent={makeAgent()} canEdit onUpdate={onUpdate} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Change avatar" }));
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["image"], "avatar.png", { type: "image/png" })] },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm crop" }));
+
+    expect(await screen.findByText("Custom avatar selected")).toBeInTheDocument();
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith("agent-1", {
+        avatar_selection: {
+          kind: "uploaded",
+          attachment_id: "attachment-1",
+        },
+      });
+    });
   });
 
   it("rejects a non-image file with a toast", () => {

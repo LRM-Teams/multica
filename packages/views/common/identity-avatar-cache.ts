@@ -69,8 +69,10 @@ export function rememberIdentityAvatarUrl(
 }
 
 /**
- * Resolve face URL: explicit hint (if present) → sticky cache → directory.
- * Falsy hint never clears sticky / directory.
+ * Resolve face URL: live directory → explicit hint → sticky cache.
+ *
+ * Message payload URLs are transport hints used while the live directory is
+ * unavailable; they must never override a current profile avatar after an edit.
  */
 export function resolveIdentityAvatarUrl(options: {
   actorType: string;
@@ -84,6 +86,12 @@ export function resolveIdentityAvatarUrl(options: {
   const key = identityActorKey(actorType, actorId);
   const sticky = key ? identityAvatarOkCache.get(key) : undefined;
 
+  const fromDirectory = resolvePublicFileUrl(directoryUrl) ?? undefined;
+  if (fromDirectory) {
+    if (key) identityAvatarOkCache.set(key, fromDirectory);
+    return fromDirectory;
+  }
+
   const fromHint = resolvePublicFileUrl(avatarUrlHint) ?? undefined;
   if (fromHint) {
     if (key && shouldReplaceSticky(fromHint, sticky)) {
@@ -96,14 +104,6 @@ export function resolveIdentityAvatarUrl(options: {
   }
 
   if (sticky) return sticky;
-
-  const fromDirectory = resolvePublicFileUrl(directoryUrl) ?? undefined;
-  if (fromDirectory) {
-    if (key && shouldReplaceSticky(fromDirectory, sticky)) {
-      identityAvatarOkCache.set(key, fromDirectory);
-    }
-    return fromDirectory;
-  }
   return undefined;
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useReducer, useRef, useState } from "react";
 import { Camera, Check, Loader2, Upload } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -54,6 +54,60 @@ interface AgentProfileAvatarEditorProps {
   onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
 }
 
+type AvatarPickerState = {
+  open: boolean;
+  saving: boolean;
+  selection: AgentAvatarSelection | null;
+  previewUrl: string | null;
+};
+
+type AvatarPickerAction =
+  | { type: "open"; previewUrl: string | null }
+  | { type: "close" }
+  | { type: "setOpen"; open: boolean }
+  | {
+      type: "select";
+      selection: AgentAvatarSelection;
+      previewUrl: string;
+      open?: boolean;
+    }
+  | { type: "setSaving"; saving: boolean };
+
+const initialAvatarPickerState: AvatarPickerState = {
+  open: false,
+  saving: false,
+  selection: null,
+  previewUrl: null,
+};
+
+function avatarPickerReducer(
+  state: AvatarPickerState,
+  action: AvatarPickerAction,
+): AvatarPickerState {
+  switch (action.type) {
+    case "open":
+      return {
+        open: true,
+        saving: false,
+        selection: null,
+        previewUrl: action.previewUrl,
+      };
+    case "close":
+      return initialAvatarPickerState;
+    case "setOpen":
+      return { ...state, open: action.open };
+    case "select":
+      return {
+        ...state,
+        open: action.open ?? state.open,
+        selection: action.selection,
+        previewUrl: action.previewUrl,
+      };
+    case "setSaving":
+      return { ...state, saving: action.saving };
+  }
+}
+
 /**
  * Header avatar for the agent profile panel (LRM-542).
  *
@@ -83,8 +137,10 @@ export function AgentProfileAvatarEditor({
   const { upload, uploading } = useFileUpload(api);
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [savingPreset, setSavingPreset] = useState(false);
+  const [picker, dispatchPicker] = useReducer(
+    avatarPickerReducer,
+    initialAvatarPickerState,
+  );
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const lastObjectUrlRef = useRef<string | null>(null);
 
@@ -92,7 +148,7 @@ export function AgentProfileAvatarEditor({
   const initials = initialsOf(displayName);
   const avatarUrl = resolvePublicFileUrl(agent.avatar_url);
   const archived = !!agent.archived_at;
-  const busy = uploading || savingPreset;
+  const busy = uploading || picker.saving;
 
   // Revoke the last object URL when it is no longer needed (dialog closed or
   // a new one staged) so we don't leak the raw selected file. Revoke happens
@@ -103,7 +159,11 @@ export function AgentProfileAvatarEditor({
 
   const openPicker = () => {
     if (busy) return;
-    setPickerOpen(true);
+    dispatchPicker({ type: "open", previewUrl: agent.avatar_url });
+  };
+
+  const closePicker = () => {
+    dispatchPicker({ type: "close" });
   };
 
   const commitAvatarSelection = async (selection: AgentAvatarSelection) => {
@@ -120,15 +180,21 @@ export function AgentProfileAvatarEditor({
     return true;
   };
 
-  const handlePresetSelect = async (presetUrl: string) => {
+  const handlePresetSelect = (presetUrl: string) => {
     if (busy) return;
-    setSavingPreset(true);
-    const updated = await commitAvatarSelection({
-      kind: "picked",
-      preset_url: presetUrl,
+    dispatchPicker({
+      type: "select",
+      selection: { kind: "picked", preset_url: presetUrl },
+      previewUrl: presetUrl,
     });
-    setSavingPreset(false);
-    if (updated) setPickerOpen(false);
+  };
+
+  const handleSave = async () => {
+    if (busy || !picker.selection) return;
+    dispatchPicker({ type: "setSaving", saving: true });
+    const updated = await commitAvatarSelection(picker.selection);
+    dispatchPicker({ type: "setSaving", saving: false });
+    if (updated) closePicker();
   };
 
   const validateSelection = (file: File): string | null => {
@@ -167,6 +233,7 @@ export function AgentProfileAvatarEditor({
     const url = URL.createObjectURL(file);
     if (lastObjectUrlRef.current) URL.revokeObjectURL(lastObjectUrlRef.current);
     lastObjectUrlRef.current = url;
+    dispatchPicker({ type: "setOpen", open: false });
     setCropSrc(url);
   };
 
@@ -176,6 +243,7 @@ export function AgentProfileAvatarEditor({
       URL.revokeObjectURL(lastObjectUrlRef.current);
       lastObjectUrlRef.current = null;
     }
+    dispatchPicker({ type: "setOpen", open: true });
   };
 
   const handleCropConfirm = async (cropped: File) => {
@@ -195,12 +263,21 @@ export function AgentProfileAvatarEditor({
           ? err.message
           : t(($) => $.inspector.avatar_upload_failed_toast),
       );
+      dispatchPicker({ type: "setOpen", open: true });
       return;
     }
-    if (!result) return;
-    await commitAvatarSelection({
-      kind: "uploaded",
-      attachment_id: result.id,
+    if (!result) {
+      dispatchPicker({ type: "setOpen", open: true });
+      return;
+    }
+    dispatchPicker({
+      type: "select",
+      selection: {
+        kind: "uploaded",
+        attachment_id: result.id,
+      },
+      previewUrl: result.link,
+      open: true,
     });
   };
 
@@ -282,9 +359,11 @@ export function AgentProfileAvatarEditor({
       </div>
 
       <Dialog
-        open={pickerOpen}
+        open={picker.open}
         onOpenChange={(open) => {
-          if (!busy) setPickerOpen(open);
+          if (busy) return;
+          if (open) dispatchPicker({ type: "setOpen", open: true });
+          else closePicker();
         }}
       >
         <DialogContent className="sm:max-w-md">
@@ -300,7 +379,7 @@ export function AgentProfileAvatarEditor({
             aria-label={t(($) => $.side_panel.avatar_system_choices_aria)}
           >
             {AGENT_AVATAR_PRESETS.map((presetUrl, index) => {
-              const selected = agent.avatar_url === presetUrl;
+              const selected = picker.previewUrl === presetUrl;
               return (
                 <button
                   key={presetUrl}
@@ -308,7 +387,7 @@ export function AgentProfileAvatarEditor({
                   aria-label={`${t(($) => $.side_panel.avatar_system_choice_aria)} ${index + 1}`}
                   aria-pressed={selected}
                   disabled={busy}
-                  onClick={() => void handlePresetSelect(presetUrl)}
+                  onClick={() => handlePresetSelect(presetUrl)}
                   className={cn(
                     "relative aspect-square overflow-hidden rounded-full border-2 bg-muted outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-60",
                     selected ? "border-primary" : "border-transparent",
@@ -329,18 +408,45 @@ export function AgentProfileAvatarEditor({
             })}
           </div>
 
+          {picker.selection?.kind === "uploaded" && picker.previewUrl ? (
+            <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-2">
+              <span className="relative size-12 shrink-0 overflow-hidden rounded-full border-2 border-primary">
+                <img src={picker.previewUrl} alt="" className="size-full object-cover" />
+                <span className="absolute bottom-0 right-0 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground ring-2 ring-background">
+                  <Check className="size-2.5" aria-hidden />
+                </span>
+              </span>
+              <span className="text-sm font-medium">
+                {t(($) => $.side_panel.avatar_custom_selected)}
+              </span>
+            </div>
+          ) : null}
+
           <Button
             type="button"
             variant="outline"
             disabled={busy}
             onClick={() => {
-              setPickerOpen(false);
               fileInputRef.current?.click();
             }}
           >
             <Upload aria-hidden />
             {t(($) => $.side_panel.avatar_upload_custom)}
           </Button>
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" disabled={busy} onClick={closePicker}>
+              {t(($) => $.side_panel.avatar_picker_cancel)}
+            </Button>
+            <Button
+              type="button"
+              disabled={busy || !picker.selection}
+              onClick={() => void handleSave()}
+            >
+              {picker.saving ? <Loader2 className="animate-spin" aria-hidden /> : null}
+              {t(($) => $.side_panel.avatar_picker_save)}
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </>

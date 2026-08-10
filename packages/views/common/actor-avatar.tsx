@@ -119,8 +119,9 @@ export function ActorAvatar({
   const avatarUrl = resolveIdentityAvatarUrl({
     actorType,
     actorId,
-    avatarUrlHint: avatarUrlHint ?? profileIdentity.avatarUrl,
-    directoryUrl: getActorAvatarUrl(actorType, actorId),
+    avatarUrlHint,
+    directoryUrl:
+      profileIdentity.avatarUrl ?? getActorAvatarUrl(actorType, actorId),
   });
   const displayName = liveName;
   const initials = /[a-z]/i.test(displayName.charAt(0))

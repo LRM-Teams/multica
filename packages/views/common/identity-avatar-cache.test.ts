@@ -56,6 +56,17 @@ describe("identity-avatar-cache (LRM-224)", () => {
     ).toBe("/uploads/dir.png");
   });
 
+  it("prefers the current directory avatar over a stale message hint", () => {
+    expect(
+      resolveIdentityAvatarUrl({
+        actorType: "agent",
+        actorId: "a-current",
+        avatarUrlHint: "https://cdn.example.com/avatars/old.png",
+        directoryUrl: "https://cdn.example.com/avatars/current.png",
+      }),
+    ).toBe("https://cdn.example.com/avatars/current.png");
+  });
+
   it("never clears sticky when hint and directory are both empty", () => {
     rememberIdentityAvatarUrl("agent", "a-2", "/uploads/keep.png");
     expect(

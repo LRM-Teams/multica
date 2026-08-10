@@ -155,6 +155,11 @@
 - **为什么**：旧路径每条事件同时触发 agents、fleet rankings、runner-activity 三路 REST，并按页面/标签数量放大；WS 已携带同一服务端完整投影，正常事件再次 REST 没有新增权威性。
 - **物**：`runner-activity-updaters.ts`、`use-realtime-sync.ts` 的单一订阅/reconnect 前缀、`use-runner-activity.test.ts` 与 `use-realtime-sync-ws-instance.test.tsx`。两条回归均已先见红：一条捕获写后 invalidate，另一条捕获缺少专用 handler 导致的 `agent` 前缀失效。
 
+### 2.7 Message 只持有作者身份，外观永远现查 Profile — `可执行`（①②③⑤，owner: @Codex）
+- `channel_message` 只持久化 `author_type/author_id` 等通信事实；头像属于 `user.avatar_url` / `agent.avatar_url`，历史 Message 不保存、回填或粘住头像 URL。作者换头像后，全部历史消息随 Identity Profile 当前值更新。
+- 服务端 Message/list/reply/thread/search/quote/transport 响应不返回 `author_avatar_url`；对应查询也不得 JOIN Profile 头像。Web/desktop 的 `ChannelMessage` 类型中不存在该字段（①②）；HTTP schema 与 realtime cache seam 会剥离旧服务端输入，乐观消息也不复制登录用户头像。所有消息头像只走共享 `ActorAvatar → useResolvedActorIdentity`（③）。
+- **物**：`ChannelMessageResponse`/reply/search/quote snapshot 与 TS 对应类型；`stripLegacyMessageAvatar`；`withoutLegacyMessageAvatar`；`normalizeChannelMessages`；server/HTTP/WS/optimistic/bubble 回归（均已先见红）。
+
 ## 3. 属性显示（跨面）
 
 ### 3.1 本家属性语法 — `可执行`（task #518）

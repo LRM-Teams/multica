@@ -675,41 +675,41 @@ func TestAgentTransportNewerMessagesHold(t *testing.T) {
 	}
 
 	cases := []struct {
-		name      string
-		messages  []ChannelMessageResponse
-		omitted   int64
-		wantHold  bool
+		name     string
+		messages []ChannelMessageResponse
+		omitted  int64
+		wantHold bool
 	}{
 		{
-			name:      "all pure confirmations release the hold",
-			messages:  []ChannelMessageResponse{confirmation("收到"), confirmation("明白了")},
-			wantHold:  false,
+			name:     "all pure confirmations release the hold",
+			messages: []ChannelMessageResponse{confirmation("收到"), confirmation("明白了")},
+			wantHold: false,
 		},
 		{
-			name:      "single pure confirmation releases the hold",
-			messages:  []ChannelMessageResponse{confirmation("好的")},
-			wantHold:  false,
+			name:     "single pure confirmation releases the hold",
+			messages: []ChannelMessageResponse{confirmation("好的")},
+			wantHold: false,
 		},
 		{
-			name:      "actionable newer message keeps the hold",
-			messages:  []ChannelMessageResponse{confirmation("收到"), actionable("把接口改一下，然后提 PR")},
-			wantHold:  true,
+			name:     "actionable newer message keeps the hold",
+			messages: []ChannelMessageResponse{confirmation("收到"), actionable("把接口改一下，然后提 PR")},
+			wantHold: true,
 		},
 		{
-			name:      "pure confirmation mentioning an agent keeps the hold",
-			messages:  []ChannelMessageResponse{confirmation("收到"), confirmation("[@jhp](mention://agent/9f0169d5) 请处理")},
-			wantHold:  true,
+			name:     "pure confirmation mentioning an agent keeps the hold",
+			messages: []ChannelMessageResponse{confirmation("收到"), confirmation("[@jhp](mention://agent/9f0169d5) 请处理")},
+			wantHold: true,
 		},
 		{
-			name:      "omitted tail keeps the hold (cannot prove it is noise)",
-			messages:  []ChannelMessageResponse{confirmation("收到")},
-			omitted:   3,
-			wantHold:  true,
+			name:     "omitted tail keeps the hold (cannot prove it is noise)",
+			messages: []ChannelMessageResponse{confirmation("收到")},
+			omitted:  3,
+			wantHold: true,
 		},
 		{
-			name:      "empty window keeps the hold (defensive default)",
-			messages:  nil,
-			wantHold:  true,
+			name:     "empty window keeps the hold (defensive default)",
+			messages: nil,
+			wantHold: true,
 		},
 	}
 
@@ -1069,10 +1069,7 @@ func TestAgentTransportSendMessageLinksChannelPreboundOwnedAttachments(t *testin
 	}
 }
 
-// Regression: transport/radar publish used to omit author_avatar_url on the
-// WS/API payload, so group bubbles showed initials while the profile card had
-// the real photo. Attach before publish so the stream matches the DB avatar.
-func TestAgentTransportSendMessageIncludesAuthorAvatarURL(t *testing.T) {
+func TestAgentTransportSendMessageOmitsAuthorAvatar(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1094,12 +1091,14 @@ func TestAgentTransportSendMessageIncludesAuthorAvatarURL(t *testing.T) {
 	if resp.Code != http.StatusCreated {
 		t.Fatalf("transport send: status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	var body AgentTransportSendResponse
+	var body struct {
+		Message map[string]any `json:"message"`
+	}
 	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode transport send: %v", err)
 	}
-	if body.Message.AuthorAvatarURL == nil || *body.Message.AuthorAvatarURL != avatarURL {
-		t.Fatalf("message author_avatar_url = %v, want %q", body.Message.AuthorAvatarURL, avatarURL)
+	if _, exists := body.Message["author_avatar_url"]; exists {
+		t.Fatalf("transport message must not own author_avatar_url: %s", resp.Body.String())
 	}
 }
 

@@ -145,7 +145,6 @@ export function ThreadReplyPreview({
                   actorId={reply.author_id}
                   size={18}
                   className="size-[18px] shrink-0 rounded-[4px]"
-                  avatarUrlHint={reply.author_avatar_url}
                   showStatusDot={false}
                   profileLink={false}
                 />

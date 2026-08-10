@@ -6,7 +6,7 @@
 
 简单理解：Computer 是电脑上的常驻“工头”；每条 Workspace connection 是某个工作区发给它的一张门禁卡。一个工头可以持有多张门禁卡，同时为多个工作区工作。
 
-当前状态：Computer 核心实现已由 [#2608](https://github.com/LRM-Teams/multica/pull/2608) 合入；腾讯测试 runner、受保护环境、独立数据盘和数据库边界已经配置，真实部署、生产快照恢复、健康检查和 served commit 证据仍待完成。
+本文描述 Computer V1 的最终用户模型、环境切换、Workspace connection、版本发布和故障恢复契约。实时发布与部署证据记录在对应 PR 和 GitHub Actions 中，避免把会过期的运行状态写死在架构文档里。
 
 ## 1. 总模型
 
@@ -104,19 +104,22 @@ multica config show
 ```mermaid
 flowchart LR
   A["config use test"] --> B["下载并校验 preview 包"]
-  B --> C["停止领取新任务"]
-  C --> D["切换 Active 包和环境配置"]
-  D --> E["以新 generation 重启 resident"]
-  E --> F["验证 Test 已连接"]
+  B --> C{"Computer 正在运行？"}
+  C -->|是| D["提示可能中断当前任务<br/>用户选择 Y / N"]
+  C -->|否| E["切换 Active 包和环境配置"]
+  D -->|Y| E
+  D -->|N| X["取消切换<br/>现状不变"]
+  E --> F["立即停止旧 resident"]
+  F --> G["以新 generation 启动 resident"]
+  G --> H["验证 Test 已连接"]
 
-  B -.失败.-> R["恢复 Previous 包和原环境"]
-  C -.失败.-> R
-  D -.失败.-> R
-  E -.失败.-> R
+  E -.失败.-> R["恢复 Previous 包和原环境"]
   F -.失败.-> R
+  G -.失败.-> R
+  H -.失败.-> R
 ```
 
-切换前先停止领取新任务，让当前任务自然结束；任一步失败都恢复 Previous 包、原配置和原环境。
+切换不会为了等当前任务结束而卡住半小时。Computer 正在运行时，CLI 会明确提示：切换会立即重启 resident，当前任务可能中断；用户确认 `Y` 才继续，选择 `N` 时 Active 包、环境配置和 resident 都不变。自动化可以显式使用 `--yes`。切换后的连接验收失败时，恢复 Previous 包、原配置和原环境。
 
 ## 5. 一条任务如何找到本机 Agent
 

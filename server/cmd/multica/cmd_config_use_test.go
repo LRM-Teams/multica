@@ -49,15 +49,8 @@ func testEnvironmentSwitcher(t *testing.T, waitReadyErr error) (*environmentSwit
 		activeBindings: func(environment string) ([]computer.WorkspaceBinding, error) {
 			return []computer.WorkspaceBinding{{Environment: environment, WorkspaceID: "ws-test", Active: true}}, nil
 		},
-		health:       func(context.Context) map[string]any { return map[string]any{"status": "running"} },
-		controlToken: func() (string, error) { return "owner", nil },
-		prepare: func(context.Context, string) error {
-			events = append(events, "prepare")
-			return nil
-		},
-		release: func(context.Context, string) error {
-			events = append(events, "release")
-			return nil
+		health: func(context.Context) map[string]any {
+			return map[string]any{"status": "running", "active_task_count": float64(2)}
 		},
 		withPackageLock: func(_ context.Context, fn func() error) error {
 			events = append(events, "lock")
@@ -95,14 +88,20 @@ func testEnvironmentSwitcher(t *testing.T, waitReadyErr error) (*environmentSwit
 
 func TestEnvironmentSwitcherLiveSuccessCommitsInSafeOrder(t *testing.T) {
 	switcher, events, saves := testEnvironmentSwitcher(t, nil)
-	result, err := switcher.Switch(context.Background(), cli.ServiceEnvironmentTest)
+	result, err := switcher.Switch(context.Background(), cli.ServiceEnvironmentTest, func(activeTaskCount int64) (bool, error) {
+		if activeTaskCount != 2 {
+			t.Fatalf("activeTaskCount = %d, want 2", activeTaskCount)
+		}
+		*events = append(*events, "confirm")
+		return true, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.Restarted || result.PackageSource != "preview" || result.Version != "v2.0.0-alpha.1" {
 		t.Fatalf("result = %+v", result)
 	}
-	want := []string{"lock", "stage:preview", "prepare", "activate", "save:test", "stop", "start", "accept"}
+	want := []string{"lock", "stage:preview", "confirm", "lock", "activate", "save:test", "stop", "start", "accept"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}
@@ -113,12 +112,15 @@ func TestEnvironmentSwitcherLiveSuccessCommitsInSafeOrder(t *testing.T) {
 
 func TestEnvironmentSwitcherAcceptanceFailureRollsBackBeforeRestartingPrevious(t *testing.T) {
 	switcher, events, saves := testEnvironmentSwitcher(t, errors.New("test service unreachable"))
-	_, err := switcher.Switch(context.Background(), cli.ServiceEnvironmentTest)
+	_, err := switcher.Switch(context.Background(), cli.ServiceEnvironmentTest, func(int64) (bool, error) {
+		*events = append(*events, "confirm")
+		return true, nil
+	})
 	if err == nil {
 		t.Fatal("expected failed target acceptance")
 	}
 	want := []string{
-		"lock", "stage:preview", "prepare", "activate", "save:test", "stop", "start", "accept",
+		"lock", "stage:preview", "confirm", "lock", "activate", "save:test", "stop", "start", "accept",
 		"stop", "lock", "rollback:v1.0.0", "save:production", "start",
 	}
 	if !reflect.DeepEqual(*events, want) {
@@ -137,7 +139,28 @@ func TestEnvironmentSwitcherRequiresSetupForTarget(t *testing.T) {
 	}
 	cfg.PutServiceEnvironment(production)
 	switcher := &environmentSwitcher{loadConfig: func() (cli.CLIConfig, error) { return cfg, nil }}
-	if _, err := switcher.Switch(context.Background(), cli.ServiceEnvironmentTest); err == nil {
+	if _, err := switcher.Switch(context.Background(), cli.ServiceEnvironmentTest, nil); err == nil {
 		t.Fatal("unconfigured test environment was accepted")
+	}
+}
+
+func TestEnvironmentSwitcherDeclineLeavesActivePackageAndConfigUntouched(t *testing.T) {
+	switcher, events, saves := testEnvironmentSwitcher(t, nil)
+	result, err := switcher.Switch(context.Background(), cli.ServiceEnvironmentTest, func(activeTaskCount int64) (bool, error) {
+		*events = append(*events, "decline")
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Aborted {
+		t.Fatalf("result = %+v, want aborted", result)
+	}
+	want := []string{"lock", "stage:preview", "decline"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+	if len(*saves) != 0 {
+		t.Fatalf("declined switch saved configs: %+v", *saves)
 	}
 }

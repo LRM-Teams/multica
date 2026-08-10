@@ -49,7 +49,7 @@ multica computer upgrade --target-version <version> --output json
 
 `computer upgrade` uses the one machine-wide Computer identity and creates or
 polls the canonical machine-upgrade operation. Omit `--target-version` to use
-the Computer's selected `latest` or `alpha` release channel. Computer owners
+the package selected by the active production or test environment. Computer owners
 and workspace owners/admins can perform this action.
 
 The resident Computer is machine-wide: it runs as one detached process and is
@@ -74,11 +74,16 @@ contract change:
 ```bash
 multica setup /my-workspace
 multica setup --environment test --server-url https://test.leagent.me --app-url https://test.leagent.me /my-workspace
+multica config use test
+multica config use production
 ```
 
 Workspace connections are keyed locally by `(environment, workspace_id)`, so
 the same Computer can retain connections from both databases. One resident
-generation serves only the currently selected environment.
+generation serves only the currently selected environment. `config use`
+stages the matching package, then prompts before immediately restarting a
+running resident because current work may be interrupted. Use `--yes` only
+when that interruption has already been explicitly accepted by automation.
 
 `multica daemon ...` is a hidden, deprecated compatibility alias that delegates
 to the same machine-wide Computer; use `multica computer ...` instead.

@@ -3,7 +3,8 @@
 - `server/cmd/multica/cmd_runtime.go` registers runtime list, usage, and activity.
 - `server/cmd/multica/cmd_computer.go` registers the machine-wide Computer lifecycle (`start`/`stop`/`restart`/`status`/`logs`), release-channel selection, `doctor` diagnostics, and upgrades.
 - `server/cmd/multica/cmd_setup.go` exposes `--environment test --server-url <api-origin> --app-url <app-origin>`, validates the fixed production origins or explicit split test origins, establishes one Workspace connection, and starts the resident.
-- `server/internal/cli/service_environment.go` owns the production/test service-target contract; `release_channel.go` and `update.go` derive the matching `latest`/`alpha` manifest selection.
+- `server/cmd/multica/cmd_config_use.go` switches an already-configured production/test environment together with its matching package, requires confirmation before interrupting a running resident, and supports explicit `--yes` automation.
+- `server/internal/cli/service_environment.go` owns the production/test service-target contract; `release_channel.go` and `update.go` derive the matching stable/preview entry from the canonical `metainfo.json`.
 - `server/cmd/multica/cmd_daemon.go` registers the hidden, deprecated `daemon` lifecycle aliases that delegate to the same machine-wide Computer and emit deprecation guidance.
 - `server/internal/computer` owns the machine-wide resident lifecycle (identity, environment-keyed Workspace connections, process, state layout, health, diagnostics) that the Computer and the hidden daemon aliases both drive.
 - `server/cmd/server/router.go` registers daemon task claim, runtime APIs, canonical daemon upgrade APIs, and the temporary runtime update compatibility adapters.

@@ -504,31 +504,29 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 		// session/new and session/load both echo the CLI's live model catalog
 		// (models.availableModels) — Cursor validates set_model against this
 		// same live list server-side, not against anything we ship, so our
-		// own static catalog (models.go) can drift out of date at any time
-		// (new models, account/plan changes, Cursor renaming an ID). Skip the
-		// call entirely when our target isn't in the live list: better to run
-		// with the CLI's own default model than to fail the whole session
-		// over a config our own list produced, and the "always send unless we
-		// try to be clever" behavior this replaces is exactly the confirmed
-		// bug — an agent whose stored model is a name Cursor doesn't currently
-		// recognize (e.g. "auto", after Cursor's own catalog moved past it)
-		// could never start at all.
-		if models := parseACPSessionNewModels(created); models != nil && !acpModelListContains(models, opts.Model) {
-			b.cfg.Logger.Warn("cursor ACP: configured model not in live catalog, leaving CLI default",
-				"configured_model", opts.Model)
-		} else if _, err := p.client.request(ctx, "session/set_model", map[string]any{
-			"sessionId": p.sessionID, "modelId": opts.Model,
-		}); err != nil && !isACPMethodNotFound(err) && !isACPInvalidParams(err) {
-			// Method-not-found (CLI doesn't implement set_model) and
-			// invalid-params (CLI rejects this specific value) both mean "we
-			// couldn't apply the requested model," not "this session is
-			// broken" — every other error (auth, transport, crash) still
-			// fails the session, since those really are broken.
+		// own static catalog (models.go) can drift out of date at any time.
+		// Cursor also uses different identifiers for its public CLI alias and
+		// ACP catalog: `agent --model auto` is advertised to users as "auto",
+		// while live ACP exposes the same choice as an account/version-specific
+		// ID (currently `default[]`) named "Auto". Resolve that alias by display
+		// name. A missing or rejected model is fatal: omitting set_model would
+		// silently run Cursor's current model, which violates the configured
+		// model contract.
+		modelID := strings.TrimSpace(opts.Model)
+		models := parseACPSessionNewModels(created)
+		if models != nil {
+			var found bool
+			modelID, found = resolveCursorACPModelID(models, modelID)
+			if !found {
+				b.disposeProcess(p)
+				return nil, fmt.Errorf("Cursor model %q is not available in the live model catalog", opts.Model)
+			}
+		}
+		if _, err := p.client.request(ctx, "session/set_model", map[string]any{
+			"sessionId": p.sessionID, "modelId": modelID,
+		}); err != nil {
 			b.disposeProcess(p)
-			return nil, fmt.Errorf("cursor ACP set model: %w", err)
-		} else if err != nil {
-			b.cfg.Logger.Warn("cursor ACP: CLI rejected configured model, leaving CLI default",
-				"configured_model", opts.Model, "error", err)
+			return nil, fmt.Errorf("Cursor could not apply configured model %q: %w", opts.Model, err)
 		}
 	}
 	return p, nil
@@ -577,28 +575,6 @@ func isCursorACPAuthError(err error) bool {
 		strings.Contains(s, "not logged in")
 }
 
-func isACPMethodNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "method not found") || strings.Contains(s, "-32601")
-}
-
-// isACPInvalidParams reports whether err is a JSON-RPC "Invalid params"
-// (-32602) response. For session/set_model specifically, the only param is
-// modelId, so this code means "the CLI doesn't recognize this model value
-// right now" — confirmed against cursor-agent's real validation logic, which
-// checks modelId against a live, account/plan-specific catalog rather than a
-// fixed enum (see the caller's comment).
-func isACPInvalidParams(err error) bool {
-	var rpcErr *acpRPCError
-	if errors.As(err, &rpcErr) {
-		return rpcErr.Code == -32602
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "-32602")
-}
-
 // acpModelListContains reports whether id matches a model in models by ID.
 func acpModelListContains(models []Model, id string) bool {
 	for _, m := range models {
@@ -607,4 +583,24 @@ func acpModelListContains(models []Model, id string) bool {
 		}
 	}
 	return false
+}
+
+// resolveCursorACPModelID translates Cursor's public "auto" model alias to
+// the live ACP model whose display name is Auto. Cursor's ACP model IDs are
+// parameterized and may change independently of the public CLI spelling, so
+// the live name is the stable bridge. All concrete IDs still require an exact
+// catalog match.
+func resolveCursorACPModelID(models []Model, configured string) (string, bool) {
+	configured = strings.TrimSpace(configured)
+	if strings.EqualFold(configured, "auto") {
+		for _, model := range models {
+			if strings.EqualFold(strings.TrimSpace(model.Label), "auto") {
+				return model.ID, true
+			}
+		}
+	}
+	if acpModelListContains(models, configured) {
+		return configured, true
+	}
+	return "", false
 }

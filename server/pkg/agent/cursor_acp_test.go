@@ -299,29 +299,37 @@ done
 	}
 }
 
-// TestCursorACPBackendSkipsSetModelWhenNotInLiveCatalog is the regression
-// test for the "Invalid model value: auto" bug: a stale/wrong configured
-// model must never fail the whole session. Here session/new's live catalog
-// doesn't include the configured model at all, so set_model must never even
-// be called (the fake CLI fails hard if it sees one) — the session still
-// starts successfully with the CLI's own default.
-func TestCursorACPBackendSkipsSetModelWhenNotInLiveCatalog(t *testing.T) {
+// TestCursorACPBackendMapsAutoToLiveACPDefault pins Cursor's split model
+// vocabulary: the public CLI calls its automatic selection "auto", while the
+// live ACP catalog advertises that same choice as modelId "default[]" with the
+// display name "Auto". Falling back by omitting set_model is not equivalent —
+// Cursor then keeps its configured current model (composer in the live repro).
+func TestCursorACPBackendMapsAutoToLiveACPDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cursor-agent")
+	requestsPath := filepath.Join(dir, "requests.jsonl")
 	script := `#!/bin/sh
 while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$CURSOR_ACP_TEST_REQUESTS"
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
     *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"authMethods":[{"id":"cursor_login"}]}}\n' "$id" ;;
     *'"authenticate"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
-    *'"session/new"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"s1","models":{"currentModelId":"composer-2","availableModels":[{"modelId":"composer-2","name":"Composer 2"}]}}}\n' "$id" ;;
-    *'"session/set_model"'*) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"set_model should never be called for a model absent from the live catalog"}}\n' "$id" ;;
+    *'"session/new"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"s1","models":{"currentModelId":"composer-2.5[fast=true]","availableModels":[{"modelId":"default[]","name":"Auto"},{"modelId":"composer-2.5[fast=true]","name":"composer-2.5"}]}}}\n' "$id" ;;
+    *'"session/set_model"'*)
+      case "$line" in
+        *'"modelId":"default[]"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+        *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Invalid params","data":{"message":"Invalid model value"}}}\n' "$id" ;;
+      esac
+      ;;
     *'"session/prompt"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id" ;;
   esac
 done
 `
 	writeTestExecutable(t, path, []byte(script))
-	b := newCursorACPBackend(cursorACPTestConfig(path, nil))
+	b := newCursorACPBackend(cursorACPTestConfig(path, map[string]string{
+		"CURSOR_ACP_TEST_REQUESTS": requestsPath,
+	}))
 	t.Cleanup(b.Close)
 
 	s, err := b.Execute(context.Background(), "p", ExecOptions{Cwd: dir, Model: "auto"})
@@ -331,20 +339,74 @@ done
 	select {
 	case got := <-s.Result:
 		if got.Status != "completed" {
-			t.Fatalf("status = %+v, want completed (set_model must be skipped, not fail the session)", got)
+			t.Fatalf("status = %+v, want completed", got)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout")
 	}
+	requests, err := os.ReadFile(requestsPath)
+	if err != nil {
+		t.Fatalf("read requests: %v", err)
+	}
+	if !strings.Contains(string(requests), `"method":"session/set_model"`) ||
+		!strings.Contains(string(requests), `"modelId":"default[]"`) {
+		t.Fatalf("auto was not mapped to the live ACP default model:\n%s", requests)
+	}
+	if strings.Contains(string(requests), `"modelId":"auto"`) {
+		t.Fatalf("raw CLI alias auto must not be sent to ACP:\n%s", requests)
+	}
 }
 
-// TestCursorACPBackendDegradesOnInvalidParamsSetModel covers the case where
+func TestCursorACPBackendFailsWhenConfiguredModelIsMissingFromLiveCatalog(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cursor-agent")
+	requestsPath := filepath.Join(dir, "requests.jsonl")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$CURSOR_ACP_TEST_REQUESTS"
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"authMethods":[{"id":"cursor_login"}]}}\n' "$id" ;;
+    *'"authenticate"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+    *'"session/new"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"s1","models":{"currentModelId":"composer-2.5[fast=true]","availableModels":[{"modelId":"composer-2.5[fast=true]","name":"composer-2.5"}]}}}\n' "$id" ;;
+    *'"session/set_model"'*|*'"session/prompt"'*) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"model validation must fail before prompt"}}\n' "$id" ;;
+  esac
+done
+`
+	writeTestExecutable(t, path, []byte(script))
+	b := newCursorACPBackend(cursorACPTestConfig(path, map[string]string{
+		"CURSOR_ACP_TEST_REQUESTS": requestsPath,
+	}))
+	t.Cleanup(b.Close)
+
+	s, err := b.Execute(context.Background(), "p", ExecOptions{Cwd: dir, Model: "stale-model"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	select {
+	case got := <-s.Result:
+		if got.Status != "failed" || !strings.Contains(got.Error, `Cursor model "stale-model" is not available`) {
+			t.Fatalf("result = %+v, want visible unavailable-model failure", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout")
+	}
+	requests, err := os.ReadFile(requestsPath)
+	if err != nil {
+		t.Fatalf("read requests: %v", err)
+	}
+	if strings.Contains(string(requests), `"method":"session/set_model"`) || strings.Contains(string(requests), `"method":"session/prompt"`) {
+		t.Fatalf("missing configured model must fail before set_model or prompt:\n%s", requests)
+	}
+}
+
+// TestCursorACPBackendFailsOnInvalidParamsSetModel covers the case where
 // the live catalog isn't exposed at all (no `models` field in session/new,
 // e.g. an older/different CLI build) so the code falls through to actually
 // calling set_model — and the CLI rejects the value with Invalid params
-// (-32602), the exact code Frank hit. The session must still succeed rather
-// than being disposed.
-func TestCursorACPBackendDegradesOnInvalidParamsSetModel(t *testing.T) {
+// (-32602), the exact code Frank hit. The turn must fail visibly rather than
+// silently running Cursor's current/default model.
+func TestCursorACPBackendFailsOnInvalidParamsSetModel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cursor-agent")
 	script := `#!/bin/sh
@@ -369,14 +431,14 @@ done
 	}
 	select {
 	case got := <-s.Result:
-		if got.Status != "completed" {
-			t.Fatalf("status = %+v, want completed (invalid-params set_model must degrade, not fail the session)", got)
+		if got.Status != "failed" || !strings.Contains(got.Error, `Cursor could not apply configured model "auto"`) {
+			t.Fatalf("result = %+v, want visible set_model failure", got)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout")
 	}
-	if b.process.Load() == nil {
-		t.Fatal("process should still be alive/reusable after a degraded set_model")
+	if b.process.Load() != nil {
+		t.Fatal("process should be disposed after set_model rejects the configured model")
 	}
 }
 

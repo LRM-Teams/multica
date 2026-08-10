@@ -105,6 +105,12 @@
 - **完整文档（路径白名单 / 禁区 / 代码指针 / 退出条件）**：`docs/legacy/agent-chat-inbox-path.md`。
 - **退出**：#2296 full-delete 落地后，当天改写或删除该 legacy 文，并更新本条。
 
+### 1.8 Cursor ACP 模型选择必须 fail closed — `可执行`（⑤）
+- 产品模型 `auto` 必须按 live ACP catalog 中 display name 为 `Auto` 的条目解析成当次真实 `modelId`（当前实测为 `default[]`）；省略 `session/set_model` 只会沿用 Cursor 当前模型，不等于 Auto。
+- 显式模型不在 live catalog、ACP 不支持 `session/set_model`、或 Cursor 拒绝该值时，本次 turn 必须在 `session/prompt` 前失败；禁止静默沿用当前模型或降级到其他模型。
+- resident Message 在 native acceptance 前失败时也必须发布 `error/runtime_error` Activity，把原因显示给用户，不能只留 daemon warning。
+- **物**：`TestCursorACPBackendMapsAutoToLiveACPDefault`、`TestCursorACPBackendFailsWhenConfiguredModelIsMissingFromLiveCatalog`、`TestCursorACPBackendFailsOnInvalidParamsSetModel`、`TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity`。
+
 ## 2. 引用与渲染（FE）
 
 （详细规范与验收清单见 Iris 设计稿；此处为契约要点。）

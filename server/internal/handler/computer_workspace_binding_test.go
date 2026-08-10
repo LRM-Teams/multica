@@ -75,22 +75,42 @@ func TestComputerWorkspaceBinding_OneOwnerCanConnectMultipleWorkspaces(t *testin
 		t.Fatalf("owners/connections = %d/%d, want 1/2", owners, activeConnections)
 	}
 
-	req := newRequestAs(testUserID, http.MethodDelete, "/api/computers/"+computerID+"/workspace-connections/"+testWorkspaceID, nil)
-	req.SetPathValue("daemonId", computerID)
-	req.SetPathValue("workspaceId", testWorkspaceID)
-	w := httptest.NewRecorder()
-	testHandler.RevokeComputerWorkspaceBinding(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("remove one connection: got %d: %s", w.Code, w.Body.String())
+}
+
+func TestComputerWorkspaceBinding_ExplicitReconnectClearsDeletionFence(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
 	}
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM computer_workspace_bindings
-		WHERE daemon_id=$1 AND workspace_id=$2 AND active
-	`, computerID, siblingWorkspaceID).Scan(&activeConnections); err != nil {
+	ctx := context.Background()
+	computerID := "binding-reconnect-" + uuid.NewString()
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_registration_tombstone WHERE workspace_id=$1 AND daemon_id=lower($2)`, testWorkspaceID, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, computerID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_token WHERE daemon_id=$1`, computerID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO daemon_registration_tombstone (workspace_id, daemon_id, removed_by)
+		VALUES ($1, lower($2), $3)
+	`, testWorkspaceID, computerID, testUserID); err != nil {
+		t.Fatalf("insert deletion fence: %v", err)
+	}
+
+	w := createComputerWorkspaceBindingForTest(t, testUserID, computerID, testWorkspaceID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("reconnect Computer: got %d: %s", w.Code, w.Body.String())
+	}
+
+	var tombstones int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM daemon_registration_tombstone
+		WHERE workspace_id=$1 AND daemon_id=lower($2)
+	`, testWorkspaceID, computerID).Scan(&tombstones); err != nil {
 		t.Fatal(err)
 	}
-	if activeConnections != 1 {
-		t.Fatalf("active sibling connections = %d, want 1", activeConnections)
+	if tombstones != 0 {
+		t.Fatalf("deletion fences after explicit reconnect = %d, want 0", tombstones)
 	}
 }
 
@@ -128,13 +148,12 @@ func TestComputerWorkspaceBinding_RejectsCrossUserComputerTakeover(t *testing.T)
 		t.Fatalf("cross-user takeover: got %d, want 403: %s", w.Code, w.Body.String())
 	}
 
-	removeReq := newRequestAs(foreignUserID, http.MethodDelete, "/api/computers/"+computerID+"/workspace-connections/"+testWorkspaceID, nil)
-	removeReq.SetPathValue("daemonId", computerID)
-	removeReq.SetPathValue("workspaceId", testWorkspaceID)
-	removeResponse := httptest.NewRecorder()
-	testHandler.RevokeComputerWorkspaceBinding(removeResponse, removeReq)
-	if removeResponse.Code != http.StatusForbidden {
-		t.Fatalf("cross-user removal: got %d, want 403: %s", removeResponse.Code, removeResponse.Body.String())
+	deleteReq := newRequestAs(foreignUserID, http.MethodDelete, "/api/computers/"+computerID, nil)
+	deleteReq = withURLParam(deleteReq, "daemonId", computerID)
+	deleteResponse := httptest.NewRecorder()
+	testHandler.DeleteComputer(deleteResponse, deleteReq)
+	if deleteResponse.Code != http.StatusForbidden {
+		t.Fatalf("cross-user delete: got %d, want 403: %s", deleteResponse.Code, deleteResponse.Body.String())
 	}
 
 	var ownerUserID string
@@ -154,7 +173,7 @@ func TestComputerWorkspaceBinding_RejectsCrossUserComputerTakeover(t *testing.T)
 		t.Fatal(err)
 	}
 	if originalActive != 1 || foreignConnections != 0 || foreignTokens != 0 {
-		t.Fatalf("rejected takeover/removal left original/connections/tokens = %d/%d/%d, want 1/0/0", originalActive, foreignConnections, foreignTokens)
+		t.Fatalf("rejected takeover left original/connections/tokens = %d/%d/%d, want 1/0/0", originalActive, foreignConnections, foreignTokens)
 	}
 }
 

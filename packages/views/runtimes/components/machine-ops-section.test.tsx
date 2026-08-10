@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { ReactElement } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentRuntime } from "@multica/core/types";
@@ -19,38 +19,68 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
-vi.mock("@multica/core/workspace/queries", () => ({
-  memberListOptions: () => ({
-    queryKey: ["members"],
-    queryFn: async () => [
-      { user_id: "user-mine", role: "member", user: { name: "Me" } },
-    ],
-  }),
+vi.mock("@multica/core/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/paths")>();
+  return {
+    ...actual,
+    useCurrentWorkspace: () => ({ id: "ws-1", slug: "workspace" }),
+    useWorkspacePaths: () => ({
+      agentDetail: (agentId: string) => `/agents/${agentId}`,
+    }),
+  };
+});
+
+vi.mock("@multica/core/workspace/queries", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@multica/core/workspace/queries")
+  >();
+  return {
+    ...actual,
+    agentListOptions: () => ({
+      queryKey: ["agents"],
+      queryFn: async () => [],
+    }),
+    memberListOptions: () => ({
+      queryKey: ["members"],
+      queryFn: async () => [
+        { user_id: "user-mine", role: "member", user: { name: "Me" } },
+      ],
+    }),
+  };
+});
+
+vi.mock("@multica/core/agents", () => ({
+  useAgentPresenceDetail: () => "loading",
+  useRunnerActivity: () => ({ data: null }),
+  useWorkspacePresenceMap: () => ({ byAgent: new Map() }),
 }));
+
+vi.mock("../../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn() }),
+}));
+
+const deleteComputerMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@multica/core/api", () => ({
   api: {
+    deleteComputer: deleteComputerMock,
     initiateMachineUpgrade: vi.fn(),
     getMachineUpgrade: vi.fn(),
     initiateRestart: vi.fn(),
     getRestart: vi.fn(),
-    removeComputerWorkspaceBinding: vi.fn().mockResolvedValue({
-      ok: true,
-      workspace_id: "ws-1",
-      kept_local_data: true,
-    }),
   },
   ApiError: class ApiError extends Error {
     status: number;
     body: unknown;
-    constructor(status: number, body: unknown) {
-      super("api");
+    constructor(message: string, status: number, _statusText: string, body: unknown) {
+      super(message);
       this.status = status;
       this.body = body;
     }
   },
 }));
 
+import { ApiError } from "@multica/core/api";
 import { MachineHeaderOps } from "./machine-header-ops";
 import { MachineDaemonUpgrade } from "./machine-daemon-upgrade";
 import { MachineDangerZone } from "./machine-danger-zone";
@@ -376,22 +406,21 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
     );
   });
 
-  it("offers one-Workspace removal separately from permanent Computer delete", () => {
+  it("offers one Computer deletion action with accurate local-data copy", () => {
     wrap(<MachineDangerZone machine={makeMachine()} />);
 
-    expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
-      /Remove Workspace connection/i,
-    );
     expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
       /Delete computer/i,
     );
-    fireEvent.click(screen.getByTestId("machine-remove-binding"));
     expect(
-      screen.getByText(/other Workspace connections keep running/i),
+      screen.queryByTestId("machine-remove-binding"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Local files and other workspaces are not affected/i),
     ).toBeInTheDocument();
   });
 
-  it("can remove an owned Workspace connection with zero Agent runtimes", () => {
+  it("can delete an owned Computer connection with zero Agent runtimes", () => {
     wrap(
       <MachineDangerZone
         machine={makeMachine({
@@ -402,10 +431,37 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
       />,
     );
 
-    expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
-      /Remove Workspace connection/i,
+    expect(
+      screen.queryByTestId("machine-remove-binding"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("machine-danger-delete")).not.toBeDisabled();
+  });
+
+  it("blocks on active agents without offering a bulk-remove action", async () => {
+    deleteComputerMock.mockRejectedValueOnce(
+      new ApiError(
+        "computer has active agents",
+        409,
+        "Conflict",
+        {
+          code: "computer_has_active_agents",
+          active_agents: [{ id: "agent-1", name: "Agent One" }],
+        },
+      ),
     );
-    expect(screen.getByTestId("machine-danger-delete")).toBeDisabled();
+    wrap(<MachineDangerZone machine={makeMachine()} />);
+
+    fireEvent.click(screen.getByTestId("machine-danger-delete"));
+    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
+      target: { value: "s144" },
+    });
+    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Cannot delete this computer")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Agent One")).toBeInTheDocument();
+    expect(screen.queryByText("Remove all agents")).not.toBeInTheDocument();
   });
 
   it("shows delete for pending cloud computers owned by the caller", () => {

@@ -16,12 +16,6 @@ type workspaceBindingRequest struct {
 	WorkspaceID string `json:"workspace_id"`
 }
 
-// bindingService wires the machine-wide Binding contract to the
-// computer_workspace_bindings table (migration 307) via the pgx adapter.
-func (h *Handler) bindingService() *computer.BindingService {
-	return &computer.BindingService{Store: db.NewBindingStore(h.DB)}
-}
-
 // CreateComputerWorkspaceBinding establishes or repairs the Binding between
 // the named Computer (daemon_id) and one immutable Workspace, scoped to the
 // signed-in user. Idempotent: a repeat for the same (Computer, Workspace) is a
@@ -52,6 +46,10 @@ func (h *Handler) CreateComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if err := lockDaemonRegistration(r.Context(), tx, req.WorkspaceID, daemonID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to lock the Computer connection"})
+		return
+	}
 	txHandler := *h
 	txHandler.Queries = h.Queries.WithTx(tx)
 	txHandler.DB = tx
@@ -75,6 +73,16 @@ func (h *Handler) CreateComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 		writeJSON(w, status, map[string]any{"error": message})
 		return
 	}
+	// A deliberate setup after Computer deletion is a new connection. Clear
+	// the durable registration fence in the same transaction as the fresh
+	// binding so a still-running daemon cannot race the user's decision, while
+	// the newly issued credential can register after commit.
+	if _, err := tx.Exec(r.Context(), `
+DELETE FROM daemon_registration_tombstone
+ WHERE workspace_id = $1 AND daemon_id = LOWER($2)`, workspaceUUID, daemonID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to reopen the Computer connection"})
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to commit Workspace connection creation"})
 		return
@@ -87,47 +95,4 @@ func (h *Handler) CreateComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 		"credential":            credential.raw,
 		"credential_expires_at": credential.expiresAt.UTC().Format(time.RFC3339Nano),
 	})
-}
-
-// RevokeComputerWorkspaceBinding revokes exactly one (Computer, Workspace)
-// Binding, preserving every sibling Binding and all local Agent data (#2493).
-func (h *Handler) RevokeComputerWorkspaceBinding(w http.ResponseWriter, r *http.Request) {
-	daemonID := strings.TrimSpace(r.PathValue("daemonId"))
-	workspaceID := strings.TrimSpace(r.PathValue("workspaceId"))
-	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
-	if !ok {
-		return
-	}
-	workspaceID = uuidToString(workspaceUUID)
-	member, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found")
-	if !ok {
-		return
-	}
-	revokedTokenHashes, err := h.bindingService().Revoke(
-		computer.BindingRequest{
-			ActorUserID:             requestUserID(r),
-			ActorCanManageWorkspace: roleAllowed(member.Role, "owner", "admin"),
-			TargetComputerID:        daemonID,
-			TargetWorkspaceID:       workspaceID,
-		},
-		workspaceID,
-	)
-	if err != nil {
-		message := err.Error()
-		if errors.Is(err, computer.ErrBindingUnauthorized) {
-			message = "Workspace connection is not authorized for this Computer"
-		}
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": message})
-		return
-	}
-	for _, tokenHash := range revokedTokenHashes {
-		h.DaemonTokenCache.Invalidate(r.Context(), tokenHash)
-	}
-	// Binding removal is workspace-local: make only matching runtimes
-	// unavailable. Sibling Workspace runtimes and local Agent Roots are untouched.
-	_, _ = h.DB.Exec(r.Context(), `
-UPDATE agent_runtime
-   SET status = 'offline', updated_at = now()
- WHERE workspace_id = $1 AND LOWER(daemon_id) = LOWER($2) AND status <> 'offline'`, workspaceUUID, daemonID)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "workspace_id": workspaceID, "kept_local_data": true})
 }

@@ -415,13 +415,7 @@ import {
   WebPushTestSchema,
   DeleteComputerResponseSchema,
   EMPTY_DELETE_COMPUTER_RESPONSE,
-  RemoveComputerAgentsResponseSchema,
-  EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
   type DeleteComputerResponse,
-  type RemoveComputerAgentsResponse,
-  RemoveComputerWorkspaceBindingResponseSchema,
-  EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE,
-  type RemoveComputerWorkspaceBindingResponse,
   MachineUpgradeSchema,
   EMPTY_MACHINE_UPGRADE,
   NotePageSchema,
@@ -1755,63 +1749,19 @@ export class ApiClient {
     await this.fetch(`/api/runtimes/${runtimeId}`, { method: "DELETE" });
   }
 
-  async removeComputerWorkspaceBinding(
-    daemonId: string,
-    workspaceId: string,
-  ): Promise<RemoveComputerWorkspaceBindingResponse> {
+  // Permanently removes the current Workspace's server-side Computer
+  // projection. Active agents return a structured 409 and must be deleted
+  // through the normal Agent flow first.
+  async deleteComputer(daemonId: string): Promise<DeleteComputerResponse> {
     const raw = await this.fetch<unknown>(
-      `/api/computers/${encodeURIComponent(daemonId)}/workspace-connections/${encodeURIComponent(workspaceId)}`,
-      { method: "DELETE" },
-    );
-    return parseWithFallback(
-      raw,
-      RemoveComputerWorkspaceBindingResponseSchema,
-      EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE,
-      { endpoint: "DELETE /api/computers/{computerId}/workspace-connections/{workspaceId}" },
-    );
-  }
-
-  // Permanently deletes an empty Computer. Active agents return a structured
-  // 409 and must be explicitly removed through removeAgentsByDaemon first.
-  async deleteRuntimesByDaemon(
-    daemonId: string,
-    opts?: { runtimeMode?: string },
-  ): Promise<DeleteComputerResponse> {
-    const search = new URLSearchParams();
-    if (opts?.runtimeMode) search.set("runtime_mode", opts.runtimeMode);
-    const qs = search.toString();
-    const raw = await this.fetch<unknown>(
-      `/api/runtimes/by-daemon/${encodeURIComponent(daemonId)}${qs ? `?${qs}` : ""}`,
+      `/api/computers/${encodeURIComponent(daemonId)}`,
       { method: "DELETE" },
     );
     return parseWithFallback(
       raw,
       DeleteComputerResponseSchema,
       EMPTY_DELETE_COMPUTER_RESPONSE,
-      { endpoint: "DELETE /api/runtimes/by-daemon/{daemonId}" },
-    );
-  }
-
-  async removeAgentsByDaemon(
-    daemonId: string,
-    expectedActiveAgentIds: string[],
-    opts?: { runtimeMode?: string },
-  ): Promise<RemoveComputerAgentsResponse> {
-    const search = new URLSearchParams();
-    if (opts?.runtimeMode) search.set("runtime_mode", opts.runtimeMode);
-    const qs = search.toString();
-    const raw = await this.fetch<unknown>(
-      `/api/runtimes/by-daemon/${encodeURIComponent(daemonId)}/remove-agents${qs ? `?${qs}` : ""}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ expected_active_agent_ids: expectedActiveAgentIds }),
-      },
-    );
-    return parseWithFallback(
-      raw,
-      RemoveComputerAgentsResponseSchema,
-      EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
-      { endpoint: "POST /api/runtimes/by-daemon/{daemonId}/remove-agents" },
+      { endpoint: "DELETE /api/computers/{daemonId}" },
     );
   }
 

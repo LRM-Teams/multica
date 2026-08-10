@@ -7,15 +7,13 @@ import {
 } from "./delete-computer-conflict";
 
 describe("parseComputerDeleteConflict", () => {
-  it("maps structured 409 codes", () => {
+  it("ignores retired Computer delete conflict codes", () => {
     const err = new ApiError("conflict", 409, "Conflict", {
       code: "computer_agent_plan_changed",
       error: "agent set changed",
       active_agents: [{ id: "a1", name: "Agent One" }],
     });
-    const parsed = parseComputerDeleteConflict(err);
-    expect(parsed?.code).toBe("computer_agent_plan_changed");
-    expect(parsed?.activeAgents).toHaveLength(1);
+    expect(parseComputerDeleteConflict(err)).toBeNull();
   });
 
   it("extracts active agents for computer_has_active_agents", () => {

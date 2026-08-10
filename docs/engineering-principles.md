@@ -198,6 +198,11 @@
 - **部署拓扑**：workflow 结构固定为 `dev → GitHub Environment test → Tencent s89`、`main → legacy-named GitHub Environment aliyun-dev → Aliyun/leagent.me production`。`aliyun-dev` 只因现有 secrets 无法导出而保留旧名字，不代表 dev。部署验收仍必须分别证明 workflow、目标 runner、served origin、镜像 SHA 与数据库迁移；workflow 合并本身不等于已上线。
 - **客户端产物**：CLI/Computer 使用同一份签名二进制，环境在运行时选择，不为 test/production 各编一份。Desktop 不在 Computer v1 交付范围。预发布 tag 更新 `alpha.json`，稳定 tag 只更新 `manifest.json` / `latest.json`。
 
+### 4.0.b Computer 删除只有一个产品语义 — `可执行`（②③⑤，Computer v1）
+- **唯一入口**：产品只暴露 `Delete Computer`，canonical API 是 `DELETE /api/computers/{computerId}`。已安装客户端使用的 `DELETE /api/runtimes/by-daemon/{computerId}` 只能是同一 handler 的兼容别名；旧 `runtime_mode` query 不得缩小 Computer 删除范围。禁止再暴露独立 Workspace connection revoke 或 Computer 级批量删除 Agent 的旁路。
+- **前置条件**：只要当前工作区内该 Computer 仍绑定 active Agent，就以 `409 computer_has_active_agents` 整体拒绝，runtime、connection、credential 和本机数据都不变。用户必须通过正常 Agent 删除流程清空后重试；Computer 删除不替用户级联删除 Agent。
+- **事务语义**：成功删除会在一个事务内清除当前工作区的 runtime 投影和已归档 Agent 服务端数据、撤销当前 Workspace connection/credential，并写 registration tombstone；零 runtime 的 binding-only Computer 也能删除。其他工作区和全部本机文件均不在操作范围内。完整契约见 [`docs/computer-v1-global-view.md`](computer-v1-global-view.md#6-delete-computer)。
+
 ### 4.0.a 当前 Aliyun deployment ownership — `可执行`（③单一部署链 + ⑤ workflow/host gate；owner: @Barry；切换前事实）
 - **当前事实**：在腾讯 test 与 `main` production workflow 真正上线前，现有 `dev` 仍只部署到 Aliyun `101.200.210.144`；公开 Web/API origin 由部署环境变量提供，production 默认是 `https://www.leagent.me` / `https://api.leagent.me`；`:8090` 只保留 Computer 兼容与部署探针。腾讯 s89 已退出当前正式 release path、只保留离线回滚资料。不要把“目标分环境”误报为“线上已分环境”。
 - **构建与部署分界**：镜像和最小 deploy bundle 在 GitHub-hosted runner 生成；Aliyun self-hosted runner 只下载同一 `github.sha` 的 immutable artifact、拉固定 SHA 镜像并在本机执行 Compose/Caddy/readyz。self-hosted deploy job 禁止 `actions/checkout`/git fetch，避免大陆网络 partial clone 失败，也避免把 Actions checkout 变成人工/agent 共用源码树。

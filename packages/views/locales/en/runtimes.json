@@ -116,43 +116,25 @@
     "back_to_list": "Back to all machines",
     "delete_computer": {
       "button": "Delete computer",
-      "toast_deleted": "Permanently deleted \"{{name}}\".",
+      "toast_deleted": "Permanently removed \"{{name}}\" from this workspace.",
       "toast_deleted_cloud": "Deleted cloud computer \"{{name}}\" and its container.",
       "operation_failed": {
         "title": "Operation failed. Nothing was changed.",
         "description": "\"{{name}}\" was not deleted and its agents are unchanged. Try again later."
       },
       "confirm": {
-        "title": "Permanently delete this computer?",
-        "description": "This cannot be undone. \"{{name}}\", all archived agents on it ({{count}} total), and their history and messages will be permanently deleted. This computer will no longer be able to connect to Multica.",
+        "title": "Delete this computer from this workspace?",
+        "description": "Deleted server data cannot be recovered. \"{{name}}\", its runtimes, and all archived agents on it ({{count}} total), including their server history and messages, will be permanently deleted from this workspace. Files on the computer and its other workspaces are not affected. You can connect the computer again later as a new connection.",
         "description_cloud": "This cannot be undone. \"{{name}}\" and its cloud container will be permanently deleted, along with archived agents on it ({{count}} total) and their history.",
         "type_to_confirm": "Type the computer name \"{{name}}\" to confirm.",
         "cancel": "Cancel",
         "confirm": "Permanently delete",
-        "submitting": "Permanently deleting…"
+        "submitting": "Permanently deleting..."
       },
       "blocked_by_agents": {
-        "title_one": "\"{{name}}\" still has {{count}} agent",
-        "title_other": "\"{{name}}\" still has {{count}} agents",
-        "description": "Remove every agent from this computer before deleting it.",
-        "view_agent": "View agent",
-        "remove_all": "Remove all agents"
-      },
-      "plan_changed": {
-        "title": "\"{{name}}\" changed",
-        "description": "The agents on this computer changed before confirmation. Review the current list again.",
-        "review": "Review again"
-      },
-      "remove_agents": {
-        "title": "Remove all agents from \"{{name}}\"?",
-        "description_one": "This agent will be stopped, archived, and removed from this computer.",
-        "description_other": "These {{count}} agents will be stopped, archived, and removed from this computer.",
-        "restore_hint": "Before deleting the computer, you can still restore these agents from Agents → Archived.",
-        "confirm": "Remove all agents",
-        "submitting_one": "Removing {{count}} agent…",
-        "submitting_other": "Removing {{count}} agents…",
-        "toast_removed_one": "Removed {{count}} agent.",
-        "toast_removed_other": "Removed {{count}} agents."
+        "title": "Cannot delete this computer",
+        "description": "Delete every agent on this computer first, then try again.",
+        "view_agent": "View agent"
       },
       "blocked_missing_daemon": {
         "title": "Cannot delete this computer",
@@ -172,7 +154,7 @@
       "local_only": "Local only",
       "more_aria": "More computer actions",
       "restart_menu": "Restart…",
-      "delete_menu": "Delete computer…",
+      "delete_menu": "Delete computer...",
       "upgrade": "Upgrade",
       "upgrade_to": "Upgrade to {{version}}",
       "updating": "Updating…",
@@ -195,18 +177,8 @@
     },
     "danger_zone": {
       "title": "Danger Zone",
-      "description": "Permanently delete this computer and its runtimes from the workspace.",
+      "description": "Permanently remove this computer and its runtimes from the current workspace. Local files and other workspaces are not affected. All agents must be removed first.",
       "description_cloud": "Permanently delete this cloud computer, its container, and its runtimes from the workspace."
-    },
-    "remove_binding": {
-      "button": "Remove Workspace connection…",
-      "title": "Remove this Workspace connection?",
-      "description": "This removes only \"{{name}}\"'s connection to the current Workspace. Its other Workspace connections keep running, and local Agent data stays on the Computer for reconnection later.",
-      "cancel": "Cancel",
-      "confirm": "Remove connection",
-      "removing": "Removing…",
-      "success": "Workspace connection removed. Sibling connections and local Agent data were preserved.",
-      "invalid_response": "The server did not confirm that the Workspace connection was safely removed."
     },
     "agents_select": "Select",
     "agents_create": "Create",

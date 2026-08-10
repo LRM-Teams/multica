@@ -10,7 +10,11 @@
 	reverse_proxy frontend:3000
 }
 
-leagent.me, www.leagent.me {
+# Caddy manages and renews public ACME certificates for every hostname in this
+# site block. Keep api.leagent.me on the same application/API routing contract
+# so CLI and daemon requests under /api continue to reach the backend through
+# the frontend rewrite, while WebSocket and health routes stay direct.
+leagent.me, www.leagent.me, api.leagent.me {
 	import multica_app
 }
 

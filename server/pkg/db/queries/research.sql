@@ -402,3 +402,12 @@ RETURNING graph_version;
 -- name: GetResearchSessionGraphVersion :one
 SELECT graph_version FROM research_session
 WHERE id = $1 AND workspace_id = $2;
+
+-- name: ListResearchGraphNodesTyped :many
+SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id,
+       payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence,
+       document_count, conclusion_count, goal_version_id, derived_from, merged_from,
+       superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC;

@@ -1587,6 +1587,35 @@ type ResearchFleetPlaybook struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ResearchGraphCluster struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	SessionID     pgtype.UUID        `json:"session_id"`
+	Name          string             `json:"name"`
+	Label         string             `json:"label"`
+	Level         string             `json:"level"`
+	ClusterType   string             `json:"cluster_type"`
+	GoalVersionID pgtype.UUID        `json:"goal_version_id"`
+	Payload       []byte             `json:"payload"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchGraphCommand struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	SessionID      pgtype.UUID        `json:"session_id"`
+	Op             string             `json:"op"`
+	IdempotencyKey string             `json:"idempotency_key"`
+	ResultNodeID   pgtype.UUID        `json:"result_node_id"`
+	InputNodeIds   []pgtype.UUID      `json:"input_node_ids"`
+	Reason         string             `json:"reason"`
+	ActorType      string             `json:"actor_type"`
+	ActorID        pgtype.UUID        `json:"actor_id"`
+	Meta           []byte             `json:"meta"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type ResearchGraphEdge struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -1598,17 +1627,32 @@ type ResearchGraphEdge struct {
 }
 
 type ResearchGraphNode struct {
-	ID           pgtype.UUID        `json:"id"`
-	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
-	SessionID    pgtype.UUID        `json:"session_id"`
-	NodeType     string             `json:"node_type"`
-	Title        string             `json:"title"`
-	Summary      string             `json:"summary"`
-	Status       string             `json:"status"`
-	ActorAgentID pgtype.UUID        `json:"actor_agent_id"`
-	Payload      []byte             `json:"payload"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	SessionID       pgtype.UUID        `json:"session_id"`
+	NodeType        string             `json:"node_type"`
+	Title           string             `json:"title"`
+	Summary         string             `json:"summary"`
+	Status          string             `json:"status"`
+	ActorAgentID    pgtype.UUID        `json:"actor_agent_id"`
+	Payload         []byte             `json:"payload"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	RunEventID      pgtype.UUID        `json:"run_event_id"`
+	Level           string             `json:"level"`
+	Round           int32              `json:"round"`
+	ClusterID       pgtype.UUID        `json:"cluster_id"`
+	Confidence      pgtype.Float8      `json:"confidence"`
+	DocumentCount   int32              `json:"document_count"`
+	ConclusionCount int32              `json:"conclusion_count"`
+	GoalVersionID   pgtype.UUID        `json:"goal_version_id"`
+	DerivedFrom     pgtype.UUID        `json:"derived_from"`
+	MergedFrom      []pgtype.UUID      `json:"merged_from"`
+	SupersededBy    pgtype.UUID        `json:"superseded_by"`
+	RestartOf       pgtype.UUID        `json:"restart_of"`
+	InvalidatedBy   pgtype.UUID        `json:"invalidated_by"`
+	SupersededAt    pgtype.Timestamptz `json:"superseded_at"`
+	InvalidatedAt   pgtype.Timestamptz `json:"invalidated_at"`
 }
 
 type ResearchMessage struct {
@@ -1673,6 +1717,7 @@ type ResearchSession struct {
 	SingleLineConfirmed bool               `json:"single_line_confirmed"`
 	UnattendedAutoSteps int32              `json:"unattended_auto_steps"`
 	LastUserActivityAt  pgtype.Timestamptz `json:"last_user_activity_at"`
+	GraphVersion        int64              `json:"graph_version"`
 }
 
 type ResearchWorkItem struct {

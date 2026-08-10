@@ -1,13 +1,16 @@
 # Self-hosted CI runners (`[self-hosted, ci]`)
 
-> **Authoritative roles (Frank, 2026-07-29; updated same day — Aliyun also CI):**
+> **Authoritative roles (Frank, 2026-08-10):**
 >
 > | Role | Host / labels |
 > | --- | --- |
 > | **PR CI** (`ci.yml`) | Any runner with labels `[self-hosted, ci]`. **Aliyun** `101.200.210.144` **must** carry `ci` in addition to `aliyun`. Optional extra Tencent CI box may register the same `ci` label and share the queue. |
-> | **Shared Multica `dev` deploy** | Aliyun `101.200.210.144` (`leagent.me`), deploy job stays `runs-on: [self-hosted, aliyun]` — see `deploy.yml` / `docs/deploy-s89.md` |
+> | **Test deploy** | `dev` → Tencent s89 with `[self-hosted, s89, test]`; see `deploy-test.yml` / `docs/deploy-s89.md`. |
+> | **Production deploy** | `main` → Aliyun `101.200.210.144` (`leagent.me`) with `[self-hosted, aliyun]`; see `deploy.yml`. |
 >
-> YAML does **not** need a second `runs-on` variant: GitHub matches **all** listed labels. Aliyun keeps `aliyun` for Deploy and adds `ci` so it can also pick up PR CI. When CI and Deploy share Aliyun, expect CPU contention during large frontend suites — prefer not to start a deploy mid-CI, or add a dedicated Tencent `ci` box later for relief.
+> Deploy labels are intentionally disjoint: s89 cannot pick production, and
+> Aliyun cannot pick test. Generic PR CI remains a separate `[self-hosted, ci]`
+> concern when that lane is enabled.
 
 `.github/workflows/ci.yml` uses `runs-on: [self-hosted, ci]`. Until at least one runner with those labels is online and idle, PR checks will queue.
 
@@ -103,8 +106,8 @@ served Linux amd64 Web/backend images and Helm chart:
 
 - `release.yml` Linux amd64 Web/backend image builds and Helm chart publication
 
-`deploy.yml` prepares and builds images on `[self-hosted, ci]`; its final
-production deployment remains `[self-hosted, aliyun]`. Mobile, desktop,
+`deploy.yml` sends production to `[self-hosted, aliyun]`; `deploy-test.yml`
+sends test to `[self-hosted, s89, test]`. Mobile, desktop,
 cross-platform CLI, and Linux ARM workflow lanes are disabled by the web-only
 policy.
 
@@ -115,6 +118,8 @@ policy.
 - [ ] A PR into `dev` runs `CI / frontend` and `CI / backend` on a self-hosted runner (Aliyun and/or Tencent `ci`), not `ubuntu-latest`
 - [ ] Org Actions hosted-minute burn for `CI` drops after cutover
 - [ ] (Optional) Dedicated Tencent `ci` runner online for load relief
+- [ ] `dev` deploy jobs resolve only to `s89-test`
+- [ ] `main` production deploy jobs resolve only to `aliyun-144`
 
 ## CI cache
 

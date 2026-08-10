@@ -6,3 +6,4 @@ self-hosted-runner:
     - aliyun
     - ci
     - s89
+    - test

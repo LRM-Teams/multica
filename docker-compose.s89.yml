@@ -1,35 +1,40 @@
-# s89 is fronted by the repository-managed Caddy service. Keep the application
-# frontend private to the Compose network so Caddy resolves `frontend:3000`
-# directly and this deployment cannot collide with another workload's host
-# port. Caddy serves the existing HTTP :8090 entrypoint and trusted HTTPS on the
-# public IP for browser microphone access.
-#
-# Local/self-host usage continues to use docker-compose.selfhost.yml alone and
-# may publish FRONTEND_PORT for direct browser access.
+# Tencent s89 test overlay. The test stack is isolated by Compose project name
+# `multica-test`; it never shares containers or volumes with production.
 services:
+  postgres:
+    volumes: !override
+      - /data/multica-test/postgres:/var/lib/postgresql/data
+
   backend:
     ports: !override
-      - "127.0.0.1:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}:8080"
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+    volumes: !override
+      - /data/multica-test/uploads:/app/data/uploads
     environment:
-      FRONTEND_ORIGIN: https://82.157.184.89
-      # Google rejects non-localhost raw-IP OAuth callbacks. The web client
-      # derives its callback from window.location.origin, so the IP-only s89
-      # entrypoint must keep Google login disabled.
+      APP_ENV: test
+      ANALYTICS_ENVIRONMENT: staging
+      FRONTEND_ORIGIN: ${MULTICA_APP_URL:-https://82.157.184.89}
+      MULTICA_APP_URL: ${MULTICA_APP_URL:-https://82.157.184.89}
+      MULTICA_PUBLIC_URL: ${MULTICA_API_URL:-https://82.157.184.89}
+      CORS_ALLOWED_ORIGINS: ${MULTICA_CORS_ALLOWED_ORIGINS:-https://82.157.184.89}
+      COOKIE_DOMAIN: ""
       GOOGLE_CLIENT_ID: ""
       GOOGLE_CLIENT_SECRET: ""
       GOOGLE_REDIRECT_URI: ""
-      MULTICA_APP_URL: https://82.157.184.89
-      MULTICA_PUBLIC_URL: https://82.157.184.89
+      MULTICA_DEV_VERIFICATION_CODE: ${MULTICA_DEV_VERIFICATION_CODE:-}
+      MULTICA_DEV_AGENT_PROFILE_ACCESS: "true"
 
   frontend:
     ports: !reset []
 
   caddy:
     image: caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9
-    container_name: multica-caddy
+    container_name: multica-test-caddy
     depends_on:
       - frontend
       - backend
+    environment:
+      MULTICA_TEST_HOST: ${MULTICA_TEST_HOST:-82.157.184.89}
     ports:
       - "0.0.0.0:80:80"
       - "0.0.0.0:443:443"
@@ -37,10 +42,6 @@ services:
       - "0.0.0.0:8090:8090"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - /data/multica-test/caddy-data:/data
+      - /data/multica-test/caddy-config:/config
     restart: unless-stopped
-
-volumes:
-  caddy_data:
-  caddy_config:

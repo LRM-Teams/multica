@@ -40,6 +40,7 @@ import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
 import { modKey } from "@multica/core/platform";
 import { NoteAIDiffPreview } from "./note-ai-diff";
+import { serializeSelectionToMarkdown } from "./utils/selection-markdown";
 import { Toggle } from "@multica/ui/components/ui/toggle";
 import { Separator } from "@multica/ui/components/ui/separator";
 import {
@@ -105,7 +106,7 @@ const OPTIMIZATION_CONTEXT_CHARS = 1600;
 function buildTextOptimizationDraft(editor: Editor): TextOptimizationDraft | null {
   const { from, to } = editor.state.selection;
   if (from === to) return null;
-  const selectedText = editor.state.doc.textBetween(from, to, "\n", "\n").trim();
+  const selectedText = serializeSelectionToMarkdown(editor).trim();
   if (!selectedText) return null;
   const contextFrom = Math.max(0, from - OPTIMIZATION_CONTEXT_CHARS);
   const contextTo = Math.min(editor.state.doc.content.size, to + OPTIMIZATION_CONTEXT_CHARS);

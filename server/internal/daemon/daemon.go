@@ -3178,6 +3178,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		inboxLeaseLost = d.watchInboxLeases(executionCtx, task.inboxLeases(), d.cancelPollInterval, taskLog)
 		select {
 		case <-inboxLeaseLost:
+			d.recordStandaloneChatCheckpoint(task, "result_discarded", "discarded", "draining", "lease_lost_before_execution", "", provider, 0)
 			taskLog.Info("agent inbox lease lost before execution; discarding delivery")
 			return
 		default:
@@ -3196,8 +3197,10 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			if task.isInboxTask() {
 				select {
 				case <-inboxLeaseLost:
+					d.recordStandaloneChatCheckpoint(task, "result_discarded", "discarded", "draining", "lease_lost_before_execution", "", provider, 0)
 					taskLog.Info("agent inbox lease lost before execution; discarding delivery")
 				default:
+					d.recordStandaloneChatCheckpoint(task, "result_discarded", "discarded", "draining", "execution_context_cancelled", "", provider, 0)
 					taskLog.Info("agent wake cancelled while waiting for agent slot", "error", err)
 				}
 			} else {
@@ -3265,7 +3268,10 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if task.isInboxTask() {
 		executionID = uuid.NewString()
 		if err := d.client.StartAgentInboxExecution(reportCtx, *task.InboxEvent, executionID); err != nil {
-			d.recordStandaloneChatCheckpoint(task, "execution_start_rejected", "rejected", "draining", "execution_ledger_error", executionID, provider, 0)
+			// The UUID is only a local candidate until the execution ledger
+			// accepts it. Do not publish an execution identity that never became
+			// durable server evidence.
+			d.recordStandaloneChatCheckpoint(task, "execution_start_rejected", "rejected", "draining", "execution_ledger_error", "", provider, 0)
 			taskLog.Error("start inbox execution ledger record failed", "error", err)
 			d.reportTaskFailure(reportCtx, task, fmt.Sprintf("start inbox execution ledger record: %v", err), "", "", "execution_ledger_error", taskLog)
 			return
@@ -3313,6 +3319,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if inboxLeaseLost != nil {
 		select {
 		case <-inboxLeaseLost:
+			d.recordStandaloneChatCheckpoint(task, "result_discarded", "discarded", providerStatus, "lease_lost_during_execution", executionID, provider, 0)
 			taskLog.Info("agent inbox lease lost during execution; usage recorded and result discarded")
 			return
 		default:
@@ -3323,6 +3330,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if cancelledByPoll != nil {
 		select {
 		case <-cancelledByPoll:
+			d.recordStandaloneChatCheckpoint(task, "result_discarded", "discarded", providerStatus, "task_cancelled_during_execution", executionID, provider, 0)
 			taskLog.Info("task cancelled during execution, discarding result")
 			return
 		default:
@@ -3355,12 +3363,27 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// between the last poll tick and the backend returning) rather than
 	// the main cancellation path, but was equally dead for every real task.
 	if status, err := d.client.GetTaskStatus(ctx, task.ID); shouldInterruptAgent(status, err) {
+		d.recordStandaloneChatCheckpoint(task, "result_discarded", "discarded", providerStatus, taskResultDiscardReason(status, err), executionID, provider, 0)
 		taskLog.Info("task cancelled during execution, discarding result", "status", status, "error", err)
 		return
 	}
 
 	d.reportTaskResultForTask(ctx, task, result, taskLog)
 
+}
+
+func taskResultDiscardReason(status string, err error) string {
+	status = strings.TrimSpace(status)
+	switch status {
+	case "cancelled", "suppressed":
+		return "task_cancelled_before_terminal"
+	case "completed", "failed":
+		return "task_already_terminal"
+	}
+	if isTaskNotFoundError(err) {
+		return "task_deleted_before_terminal"
+	}
+	return "task_interrupted_before_terminal"
 }
 
 func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskLog *slog.Logger) (string, error) {

@@ -1,0 +1,45 @@
+package honorassets
+
+import (
+	"bytes"
+	"testing"
+)
+
+func TestAssetsMatchPublishedCatalog(t *testing.T) {
+	t.Parallel()
+
+	assets, err := Assets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assets) != AssetCount {
+		t.Fatalf("asset count = %d, want %d", len(assets), AssetCount)
+	}
+
+	byKey := make(map[string]Asset, len(assets))
+	for _, asset := range assets {
+		if asset.ContentType != "image/webp" {
+			t.Fatalf("asset %s content type = %q", asset.Key, asset.ContentType)
+		}
+		if len(asset.Data) < 12 || !bytes.Equal(asset.Data[:4], []byte("RIFF")) || !bytes.Equal(asset.Data[8:12], []byte("WEBP")) {
+			t.Fatalf("asset %s is not WebP", asset.Key)
+		}
+		byKey[asset.Key] = asset
+	}
+
+	for key, wantURL := range map[string]string{
+		"honor-assets/v1/users/user-honor-level-01.webp":   "https://cdn.leagent.me/honor-assets/v1/users/user-honor-level-01.webp",
+		"honor-assets/v1/users/user-honor-level-80.webp":   "https://cdn.leagent.me/honor-assets/v1/users/user-honor-level-80.webp",
+		"honor-assets/v1/agents/agent-honor-level-01.webp": "https://cdn.leagent.me/honor-assets/v1/agents/agent-honor-level-01.webp",
+		"honor-assets/v1/agents/agent-honor-level-30.webp": "https://cdn.leagent.me/honor-assets/v1/agents/agent-honor-level-30.webp",
+		"honor-assets/v1/honor-center-orbit.webp":          "https://cdn.leagent.me/honor-assets/v1/honor-center-orbit.webp",
+	} {
+		asset, ok := byKey[key]
+		if !ok {
+			t.Fatalf("missing catalog key %s", key)
+		}
+		if asset.URL != wantURL {
+			t.Fatalf("asset %s URL = %q, want %q", key, asset.URL, wantURL)
+		}
+	}
+}

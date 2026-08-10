@@ -363,6 +363,12 @@ func (s *S3Storage) Upload(ctx context.Context, key string, data []byte, content
 	return s.upload(ctx, key, data, contentType, filename, "max-age=432000,public")
 }
 
+// UploadImmutable publishes an asset under a versioned key with a one-year
+// browser/CDN cache. Callers must change the key whenever the bytes change.
+func (s *S3Storage) UploadImmutable(ctx context.Context, key string, data []byte, contentType string, filename string) (string, error) {
+	return s.upload(ctx, key, data, contentType, filename, "public,max-age=31536000,immutable")
+}
+
 func (s *S3Storage) upload(ctx context.Context, key string, data []byte, contentType string, filename string, cacheControl string) (string, error) {
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:             aws.String(s.bucket),

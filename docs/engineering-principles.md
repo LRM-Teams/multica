@@ -181,6 +181,12 @@
 - **为什么**：render-time hash 会让 pool 扩容/重排悄悄改掉所有未自选头像，同一个成员身份在不同时间与不同 surface 漂移。`assigned` 表示系统当前持有的基线头像（包括迁移保留值），不是声称迁移重新生成了 URL。
 - **物**：migration 203 的 `avatar_url NOT NULL` + 三态 CHECK + insert trigger（①②）；`Agent.avatar_source` API/type；`defaultAgentAvatarPath`/`stableHash` render-time exports 已删除（①）；create/pick/upload/direct-insert/concurrent-update handler tests，以及迁移 ledger 门（总数不变、非空 100%、既有非空 URL changed=0、source 分布）（⑤）。缺值只准走成员首字母占位，不再从 pool 派生第二真相。
 
+### 3.4 荣誉位图是版本化 OSS 目录，不进入 Web 构建资源 — `可执行`（③⑤，owner: @Codex）
+- **契约**：80 张用户等级图、30 张 Agent 等级图与荣誉中心背景只从 `https://cdn.leagent.me/honor-assets/v1` 加载；前端通过 `honor-assets.ts` 生成稳定 URL，不再静态 import 位图。内联 SVG 徽章不产生独立请求，继续由组件渲染。
+- **发布顺序**：资源嵌入后端发布器，部署必须先将每个对象以 `public,max-age=31536000,immutable` 上传并逐字节回读验证，再启动引用这些 URL 的前端。公开 CDN 首尾样本与背景探测失败时停止部署。修改既有 URL 的图片字节必须升级目录版本。
+- **为什么**：旧实现把约 3.9 MB 荣誉位图打进 Next.js 静态资源并从主站出口下载；在主站带宽拥塞时，群消息中的等级徽记也与 API/HTML 争用同一出口。
+- **物**：`server/internal/honorassets` 的嵌入目录与完整数量/命名/WebP 回归；一次性 `publish_honor_assets` 的 OSS 上传与回读验证；`selfhost-config.test.sh` 的发布先于迁移/重启门；用户与 Agent 等级 URL 回归。完整 OSS 边界见 `docs/research/nextjs-static-assets-on-aliyun-oss.md`。
+
 ## 4. Provider / 环境（daemon）
 
 ### 4.0 Adaptive Channel Goal 是按需状态机，不是所有任务的默认模式 — `可执行`（⑤，owner: @AIhpJ ✅ 已签）

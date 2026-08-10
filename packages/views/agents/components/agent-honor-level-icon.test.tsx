@@ -10,8 +10,12 @@ import {
 describe("AgentHonorLevelIcon", () => {
   it("publishes one icon for every supported agent honor level", () => {
     expect(MAX_AGENT_HONOR_LEVEL).toBe(30);
-    expect(agentHonorLevelIconURL(1)).toContain("agent-honor-level-01");
-    expect(agentHonorLevelIconURL(30)).toContain("agent-honor-level-30");
+    expect(agentHonorLevelIconURL(1)).toBe(
+      "https://cdn.leagent.me/honor-assets/v1/agents/agent-honor-level-01.webp",
+    );
+    expect(agentHonorLevelIconURL(30)).toBe(
+      "https://cdn.leagent.me/honor-assets/v1/agents/agent-honor-level-30.webp",
+    );
   });
 
   it("clamps stale or invalid server levels to the available asset range", () => {

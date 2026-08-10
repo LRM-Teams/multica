@@ -98,6 +98,13 @@
 - **物**：migration 230 的 `agent_dm_pair_control` / `agent_dm_owner_control` / `agent_dm_exchange` 与 inbox exchange/turn 锚；`agent_dm_a2a.go` 状态机和 owner control；`TestAgentTransportAgentDMThreeRoundBudgetAndMustReplyChain`、`TestAgentDMConcurrentFinalTurnCannotOverrunBudget`、`TestAgentDMFrequencyGateSpansMatters`、`TestAgentDMSupervisionListReadOnlyAndOwnerControls`、handle 歧义与 speech-control 权限回归。
 - **已见红**：完整 CLI package 首轮回归抓到 target 帮助仍把 DM 限定为 human handle；owner-control 回归在补齐全局 pause/resume 对称 system row 前无法观察恢复确认；并发终轮与跨 matter 频率测试分别锁住“只成功 1 条最终消息”和“第 12 条即暂停”。
 
+### 1.7 Channel chat 不得再走 legacy dual-write / residual inbox — `仅文档`（欠债至 #2296）
+- **现状**：#2295 已硬切 channel dual-write；residual reason（`mention` / `channel_message` / `thread_reply` / `ambient` / `dm`）只 suppress、不执行。普通频道/DM/thread 聊天的唯一交付路径是 **canonical Message → MessageCoordinator → `agent:deliver`**（ADR 0010）。#2596 起 hold 为 Raft one-path、禁止 batch cmid、turn 结束不自动 body-handoff。
+- **禁止新代码**：为普通 channel 聊天再 dual-write `agent_inbox_event`；新增 residual reason；让 residual 重新可执行；把 server “seen cursor” 当 Agent 已读真相；再引入 turn 坐标合成的 batch `client_message_id`；hold 后自动重发 draft。
+- **仍允许（产品 surface，不是 residual channel dual-write）**：`chat_session`（FAB bubble）、`voice_call`、`issue_thread_backflow`、`collaboration_turn`、`channel_onboarding` 等显式 product reason 继续用 inbox/drain——**#2296 未完成前不要硬删这些表/路由**，也不要把新 channel 功能伪装成这些 reason。
+- **完整文档（路径白名单 / 禁区 / 代码指针 / 退出条件）**：`docs/legacy/agent-chat-inbox-path.md`。
+- **退出**：#2296 full-delete 落地后，当天改写或删除该 legacy 文，并更新本条。
+
 ## 2. 引用与渲染（FE）
 
 （详细规范与验收清单见 Iris 设计稿；此处为契约要点。）

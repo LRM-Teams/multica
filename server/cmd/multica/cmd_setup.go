@@ -161,9 +161,6 @@ func requireWorkspacePath(_ *cobra.Command, args []string) error {
 }
 
 func runSetupCloud(cmd *cobra.Command, args []string) error {
-	if err := rejectRetiredComputerFlags(cmd); err != nil {
-		return err
-	}
 	// Capture legacy config before canonical setup may update the default
 	// Workspace/session fields. The snapshot is used only for verified,
 	// fail-closed migration and is never printed.
@@ -174,13 +171,7 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 	computerMode = true
 	defer func() { computerMode = previousComputerMode }()
 
-	if err := applyWorkspacePositional(cmd, args); err != nil {
-		return err
-	}
-	environment, _ := cmd.Flags().GetString("environment")
-	serverURL, _ := cmd.Flags().GetString("server-url")
-	appURL, _ := cmd.Flags().GetString("app-url")
-	target, err := cli.NewServiceTarget(environment, serverURL, appURL)
+	target, err := resolveSetupServiceTarget(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -220,6 +211,26 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stderr, "\n✓ Setup complete! This Computer is connected to the Workspace.")
 
 	return nil
+}
+
+// resolveSetupServiceTarget keeps the public setup flags and Workspace
+// positional argument on the exact preflight path used by runSetupCloud.
+// Keeping this phase pure makes contradictory flag validation testable before
+// setup writes config, opens a browser, or starts the resident.
+func resolveSetupServiceTarget(cmd *cobra.Command, args []string) (cli.ServiceTarget, error) {
+	// setup owns --server-url as the explicit Test API origin. Only the
+	// inherited legacy profile selector is retired on this command; lifecycle
+	// commands still reject their unrelated legacy --server-url flag.
+	if err := rejectRetiredComputerProfileFlag(cmd); err != nil {
+		return cli.ServiceTarget{}, err
+	}
+	if err := applyWorkspacePositional(cmd, args); err != nil {
+		return cli.ServiceTarget{}, err
+	}
+	environment, _ := cmd.Flags().GetString("environment")
+	serverURL, _ := cmd.Flags().GetString("server-url")
+	appURL, _ := cmd.Flags().GetString("app-url")
+	return cli.NewServiceTarget(environment, serverURL, appURL)
 }
 
 func cloudCLIConfig() cli.CLIConfig {

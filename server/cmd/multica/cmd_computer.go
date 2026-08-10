@@ -28,10 +28,18 @@ var computerCmd = &cobra.Command{
 }
 
 func rejectRetiredComputerFlags(cmd *cobra.Command) error {
-	for _, name := range []string{"profile", "server-url"} {
-		if flag := cmd.Flags().Lookup(name); flag != nil && cmd.Flags().Changed(name) {
-			return fmt.Errorf("--%s is not supported by the machine-wide Cloud Computer", name)
-		}
+	if err := rejectRetiredComputerProfileFlag(cmd); err != nil {
+		return err
+	}
+	if flag := cmd.Flags().Lookup("server-url"); flag != nil && cmd.Flags().Changed("server-url") {
+		return fmt.Errorf("--server-url is not supported by the machine-wide Cloud Computer")
+	}
+	return nil
+}
+
+func rejectRetiredComputerProfileFlag(cmd *cobra.Command) error {
+	if flag := cmd.Flags().Lookup("profile"); flag != nil && cmd.Flags().Changed("profile") {
+		return fmt.Errorf("--profile is not supported by the machine-wide Cloud Computer")
 	}
 	return nil
 }

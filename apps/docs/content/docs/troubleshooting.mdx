@@ -30,7 +30,7 @@ cat ~/.multica/config.json        # verify api_token exists
 multica workspace list            # confirm you're a member of the target workspace
 ```
 
-**How to fix**: re-run `multica setup /<workspace>` for production, or `multica setup --environment test --test-url <origin> /<workspace>` for Tencent test. To refresh an expired session, run `multica auth logout` and setup again.
+**How to fix**: re-run `multica setup /<workspace>` for production, or `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>` for Tencent test. To refresh an expired session, run `multica auth logout` and setup again.
 
 ## Tasks stuck in `queued`
 

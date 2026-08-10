@@ -18,6 +18,7 @@ export interface DaemonSetupCommands {
 export interface DaemonSetupTarget {
   environment?: ServiceEnvironment;
   serverUrl?: string;
+  appUrl?: string;
 }
 
 export function defaultDaemonSetupMode(): DaemonSetupMode {
@@ -49,7 +50,7 @@ export function daemonSetupCommands(
   const workspace = `/${workspaceSlug || "<workspace-slug>"}`;
   const setupCmd =
     target.environment === "test"
-      ? `multica setup --environment test --test-url ${normalizeCommandURL(target.serverUrl) || "<test-url>"} ${workspace}`
+      ? `multica setup --environment test --server-url ${normalizeCommandURL(target.serverUrl) || "<server-url>"} --app-url ${normalizeCommandURL(target.appUrl) || "<app-url>"} ${workspace}`
       : `multica setup ${workspace}`;
 
   return {

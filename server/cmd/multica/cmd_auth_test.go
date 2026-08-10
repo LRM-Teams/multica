@@ -521,7 +521,7 @@ func TestCloudLoginOriginHonorsTestOverride(t *testing.T) {
 func TestPersistAuthenticatedSessionPreservesProductionAppAPISplit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	target, err := cli.NewServiceTarget("production", "")
+	target, err := cli.NewServiceTarget("production", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

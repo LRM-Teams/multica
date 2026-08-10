@@ -151,7 +151,7 @@ local reverse proxy in front of both ports (the route shape in 5b works on
 localhost too), then connect the Computer explicitly as a test environment:
 
 ```bash
-multica setup --environment test --test-url http://localhost:8081 /<workspace-slug>
+multica setup --environment test --server-url http://localhost:8081 --app-url http://localhost:8081 /<workspace-slug>
 ```
 
 In this example the proxy listens on `http://localhost:8081`, sends `/api/*`
@@ -163,7 +163,7 @@ Setup stores the PAT, adds one Workspace connection, and starts the resident.
 Because the compose stack only listens on `127.0.0.1`, a daemon on a different machine cannot reach `http://<server-ip>:8080` directly — and you do not want it to, since server secrets would otherwise be reachable from the open internet. Put a reverse proxy on the server that terminates TLS and forwards to `127.0.0.1:8080` (backend) and `127.0.0.1:3000` (frontend), then point the CLI at the public HTTPS URL:
 
 ```bash
-multica setup --environment test --test-url https://<your-domain> /<workspace-slug>
+multica setup --environment test --server-url https://<your-domain> --app-url https://<your-domain> /<workspace-slug>
 ```
 
 <Callout type="info">
@@ -257,7 +257,7 @@ curl -H "Host: api.multica.dev.lan" http://<ingress-ip>/healthz
 Then open `http://multica.dev.lan` and continue at [Step 4 — First login](#4-first-login--create-a-workspace) above. Point the CLI at your Ingress hostnames:
 
 ```bash
-multica setup --environment test --test-url http://api.multica.dev.lan /<workspace-slug>
+multica setup --environment test --server-url http://api.multica.dev.lan --app-url http://api.multica.dev.lan /<workspace-slug>
 ```
 
 To pull the latest images without changing the chart, `kubectl -n multica rollout restart deploy/multica-backend deploy/multica-frontend`. To pin a specific Multica release, set `images.backend.tag` / `images.frontend.tag` in your values file and `helm upgrade`. `helm -n multica uninstall multica` removes the workloads but keeps the PVCs and Secret; `kubectl delete namespace multica` wipes everything.

@@ -168,10 +168,11 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
   const [mode, setMode] = useState<DaemonSetupMode>(() => defaultDaemonSetupMode());
   const environment = useConfigStore((state) => state.environment);
   const daemonServerUrl = useConfigStore((state) => state.daemonServerUrl);
+  const daemonAppUrl = useConfigStore((state) => state.daemonAppUrl);
   const { installCmd, setupCmd } = daemonSetupCommands(
     mode,
     useWorkspaceSlug() ?? undefined,
-    { environment, serverUrl: daemonServerUrl },
+    { environment, serverUrl: daemonServerUrl, appUrl: daemonAppUrl },
   );
   return (
     <>

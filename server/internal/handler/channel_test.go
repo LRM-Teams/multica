@@ -351,19 +351,17 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 		t.Fatalf("canonical mention delivery target = %q, want channel:%s", target, channelID)
 	}
 
-	var wakeReason string
-	var requiresWake bool
-	var priority int32
+	// #2295: mention is delivery-only; no task-shaped wake.
+	var wakeCount int
 	if err := testPool.QueryRow(ctx, `
-		SELECT reason, requires_wake, priority
+		SELECT count(*)
 		FROM agent_inbox_event
-		WHERE agent_id = $1 AND source_message_id = $2 AND requires_wake = true
-		ORDER BY created_at DESC
-		LIMIT 1`, agentID, trigger.ID).Scan(&wakeReason, &requiresWake, &priority); err != nil {
-		t.Fatalf("load mention wake inbox event: %v", err)
+		WHERE agent_id = $1 AND source_message_id = $2 AND requires_wake = true`,
+		agentID, trigger.ID).Scan(&wakeCount); err != nil {
+		t.Fatalf("count mention wake inbox events: %v", err)
 	}
-	if wakeReason != "mention" || !requiresWake || priority != channelDirectedWakePriority {
-		t.Fatalf("mention wake = reason:%q requires_wake:%v priority:%d, want mention/true/%d", wakeReason, requiresWake, priority, channelDirectedWakePriority)
+	if wakeCount != 0 {
+		t.Fatalf("mention wake inbox count = %d, want 0 (delivery-only)", wakeCount)
 	}
 }
 
@@ -678,9 +676,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 	if deliveryCount != 2 {
 		t.Fatalf("canonical follow-up delivery count = %d, want 2", deliveryCount)
 	}
-	// Directed mention wakes are restored alongside canonical Delivery. Each
-	// human @mention keeps its own must-reply wake while each message also keeps
-	// its own independent Delivery projection.
+	// #2295: follow-up mentions stay delivery-only. Each message keeps its own
+	// independent Delivery projection; no task-shaped wake is minted.
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM agent_inbox_event
@@ -690,8 +687,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 		  AND source_message_id IN ($2, $3)`, agentID, first.ID, second.ID).Scan(&inboxCount); err != nil {
 		t.Fatalf("count mention wake inbox events: %v", err)
 	}
-	if inboxCount != 2 {
-		t.Fatalf("mention wake inbox event count = %d, want 2 directed wakes", inboxCount)
+	if inboxCount != 0 {
+		t.Fatalf("mention wake inbox event count = %d, want 0 (delivery-only)", inboxCount)
 	}
 }
 

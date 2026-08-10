@@ -168,7 +168,7 @@ INSERT INTO agent_inbox_event (
 )
 SELECT
   a.workspace_id, ensure_agent_wake_session(a.id), a.id, $1,
-  $2, NULL, 'dm', true, 'pending',
+  $2, NULL, 'chat_session', true, 'pending',
   $3, $4, $5,
   COALESCE($6::boolean, FALSE),
   $2

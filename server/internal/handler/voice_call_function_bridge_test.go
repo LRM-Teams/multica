@@ -7,6 +7,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/integrations/volcenginertc"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestVoiceCallFunctionBridgeDispatchesRealAgentAndReturnsExactResult(t *testing.T) {
@@ -102,8 +103,9 @@ func TestVoiceCallFunctionBridgeDispatchesRealAgentAndReturnsExactResult(t *test
 		JOIN channel_message message ON message.id = event.source_message_id
 		WHERE message.channel_id = $1
 		  AND message.content = '创建一个 issue，修复登录页报错。'
-		  AND event.reason = 'dm'`,
+		  AND event.reason = $2`,
 		channelID,
+		protocol.AgentInboxReasonVoiceCall,
 	).Scan(&eventID, &chatSessionID); err != nil {
 		t.Fatalf("load dispatched agent task: %v", err)
 	}

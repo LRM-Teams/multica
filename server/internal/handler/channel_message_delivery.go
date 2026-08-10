@@ -53,6 +53,12 @@ func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch
 	if h == nil || h.DB == nil || strings.TrimSpace(message.ID) == "" || message.Seq <= 0 {
 		return
 	}
+	// LRM-1523: agent-authored pure confirmations must not enter any Agent's
+	// MessageCoordinator pending set (same no-wake contract as the retired
+	// task-shaped path).
+	if !channelMessageIsHumanAuthored(message.Type) && channelMessageIsConfirmationNoWake(message) {
+		return
+	}
 	for _, recipient := range h.canonicalMessageDeliveryRecipients(ctx, ch, message) {
 		delivery, ok, err := persistCanonicalMessageDelivery(ctx, h.DB, ch, message, recipient)
 		if err != nil {
@@ -173,10 +179,16 @@ func (h *Handler) notifyCanonicalMessageDelivery(ctx context.Context, ch Channel
 }
 
 // canonicalMessageDeliveryRecipients is the sole recipient policy for the
-// canonical Message transport. It deliberately preserves channel semantics:
-// normal channel messages wake every unmuted Agent, explicit @mentions wake
-// only their targets, and thread replies wake only explicit targets or active
-// thread participants. Agents never wake themselves from their own Messages.
+// canonical Message transport. It preserves channel semantics after the #2295
+// hard-cut (no dual-write inbox wakes):
+//   - normal human channel messages deliver to every unmuted Agent
+//   - explicit @mentions always deliver to their targets (mute does not apply)
+//   - human @mentions also deliver to other unmuted joined Agents so shared
+//     channel context does not disappear for bystanders
+//   - agent-authored @mentions deliver only to targets (no bystander fanout;
+//     keeps agent-reply loops bounded)
+//   - thread replies deliver to explicit targets or active thread participants
+// Agents never receive deliveries of their own Messages.
 func (h *Handler) canonicalMessageDeliveryRecipients(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) []db.Agent {
 	mentioned := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, message.Content, message.Parts)
 	threadRootID := ""
@@ -185,6 +197,14 @@ func (h *Handler) canonicalMessageDeliveryRecipients(ctx context.Context, ch Cha
 	}
 	if threadRootID != "" {
 		if len(mentioned) > 0 {
+			// Thread @mentions: targets pierce mute; human mentions also keep
+			// unmuted thread followers in the delivery set.
+			if channelMessageIsHumanAuthored(message.Type) {
+				return h.mergeCanonicalMessageDeliveryRecipients(
+					h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, mentioned, false),
+					h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, threadRootID), true),
+				)
+			}
 			return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, mentioned, false)
 		}
 		return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, threadRootID), true)
@@ -193,12 +213,39 @@ func (h *Handler) canonicalMessageDeliveryRecipients(ctx context.Context, ch Cha
 		return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID), true)
 	}
 	if len(mentioned) > 0 {
-		return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, mentioned, false)
+		targets := h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, mentioned, false)
+		if !channelMessageIsHumanAuthored(message.Type) {
+			return targets
+		}
+		// Human @mention: targets + unmuted bystanders (shared context).
+		return h.mergeCanonicalMessageDeliveryRecipients(
+			targets,
+			h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID), true),
+		)
 	}
 	if message.Type == "system" {
 		return nil
 	}
 	return h.filterCanonicalMessageDeliveryRecipients(ctx, ch, message, h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID), true)
+}
+
+func (h *Handler) mergeCanonicalMessageDeliveryRecipients(parts ...[]db.Agent) []db.Agent {
+	unique := make(map[string]struct{})
+	var result []db.Agent
+	for _, part := range parts {
+		for _, agent := range part {
+			id := uuidToString(agent.ID)
+			if id == "" {
+				continue
+			}
+			if _, ok := unique[id]; ok {
+				continue
+			}
+			unique[id] = struct{}{}
+			result = append(result, agent)
+		}
+	}
+	return result
 }
 
 func (h *Handler) filterCanonicalMessageDeliveryRecipients(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse, candidates []db.Agent, respectMute bool) []db.Agent {

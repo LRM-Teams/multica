@@ -139,6 +139,13 @@ type CompleteAgentInboxEventRequest struct {
 	TaskCompleteRequest
 }
 
+// isResidualChannelChatInboxEvent is true for leftover dual-write channel
+// chat wakes. Standalone bubble uses protocol.AgentInboxReasonChatSession and
+// is never residual channel chat.
+func isResidualChannelChatInboxEvent(event db.AgentInboxEvent) bool {
+	return protocol.IsResidualChannelChatInboxReason(strings.TrimSpace(event.Reason))
+}
+
 func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
 	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
@@ -183,6 +190,34 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 		if event.WorkspaceID != runtime.WorkspaceID {
 			writeError(w, http.StatusNotFound, "not found")
 			return
+		}
+		// Residual dual-write channel chat reasons only. Bubble chat_session
+		// and other product reasons execute normally.
+		if isResidualChannelChatInboxEvent(event) {
+			_, _ = h.DB.Exec(r.Context(), `
+				UPDATE agent_event_delivery
+				SET status = 'failed',
+				    last_error = 'residual channel chat inbox path removed; use canonical Message delivery',
+				    updated_at = now()
+				WHERE id = $1
+				  AND status IN ('leased', 'processing')`, delivery.ID)
+			_, _ = h.DB.Exec(r.Context(), `
+				UPDATE agent_inbox_event
+				SET status = 'suppressed',
+				    terminal_outcome = 'cancelled',
+				    terminal_delivery_id = $2,
+				    terminal_at = now(),
+				    completed_at = COALESCE(completed_at, now()),
+				    last_error = 'residual channel chat inbox path removed; use canonical Message delivery',
+				    updated_at = now()
+				WHERE id = $1
+				  AND status = 'draining'`, event.ID, delivery.ID)
+			slog.Info("suppressed residual channel chat inbox event on drain",
+				"runtime_id", runtimeID,
+				"event_id", uuidToString(event.ID),
+				"reason", event.Reason,
+			)
+			continue
 		}
 		respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
 		if event.RequiresWake && respEvent.Task == nil {

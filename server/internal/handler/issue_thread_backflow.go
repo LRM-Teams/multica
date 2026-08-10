@@ -365,7 +365,7 @@ func (h *Handler) enqueueIssueThreadBackflowTask(ctx context.Context, ch Channel
 	facilitatorState := h.loadChannelFacilitatorState(ctx, rootID, agent.ID, trigger)
 	actorType, actorID := channelPromptActor(trigger, initiatorUserID)
 	prompt := h.buildChannelMentionPromptForActor(ctx, ch, trigger, facilitatorState, actorType, actorID)
-	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, prompt, "issue thread backflow", true, "mention", channelDirectedWakePriority)
+	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, prompt, "issue thread backflow", true, protocol.AgentInboxReasonIssueThreadBackflow, channelDirectedWakePriority)
 }
 
 func issueThreadEventAggregatable(event string) bool {

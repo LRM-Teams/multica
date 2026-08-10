@@ -44,7 +44,8 @@ func TestAgentPureConfirmationDoesNotWakeMentionedAgent(t *testing.T) {
 	}
 	mentionMarkdown := "[@echo-b-" + suffix + "](mention://agent/" + agentB + ")"
 
-	// 1) Pure confirmation by agent A mentioning agent B -> no wake for B.
+	// 1) Pure confirmation by agent A mentioning agent B -> no delivery for B
+	// (echo suppression) and no task-shaped wake.
 	pureTrigger, err := testHandler.insertChannelMessageWithParts(
 		ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentA),
 		"Agent A", mentionMarkdown+" 收到", []protocol.MessagePart{mention}, "multica",
@@ -54,13 +55,12 @@ func TestAgentPureConfirmationDoesNotWakeMentionedAgent(t *testing.T) {
 		t.Fatalf("insert pure confirmation trigger: %v", err)
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, ch, pureTrigger, parseUUID(testUserID))
-	if wakeCount, err := countChannelWakeEvents(ctx, channelID, agentB); err != nil {
-		t.Fatalf("count wake events (pure ack): %v", err)
-	} else if wakeCount != 0 {
-		t.Fatalf("pure confirmation created %d wake-required events for mentioned agent; want 0 (echo)", wakeCount)
-	}
+	testHandler.deliverCanonicalMessageToChannelAgents(ctx, ch, pureTrigger)
+	assertChannelAgentDeliveryCount(t, agentB, pureTrigger.ID, 0)
+	assertChannelNoInboxWakes(t, channelID)
 
-	// 2) Control: agent A sends real content mentioning agent B -> B must be woken.
+	// 2) Control: agent A sends real content mentioning agent B -> B receives
+	// canonical Message delivery (no inbox wake after #2295 hard-cut).
 	realTrigger, err := testHandler.insertChannelMessageWithParts(
 		ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentA),
 		"Agent A", mentionMarkdown+" 请你 review 一下这个 PR，方案在这里：xxx",
@@ -71,37 +71,9 @@ func TestAgentPureConfirmationDoesNotWakeMentionedAgent(t *testing.T) {
 		t.Fatalf("insert real content trigger: %v", err)
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, ch, realTrigger, parseUUID(testUserID))
-	if wakeCount, err := countChannelWakeEvents(ctx, channelID, agentB); err != nil {
-		t.Fatalf("count wake events (real content): %v", err)
-	} else if wakeCount == 0 {
-		t.Fatal("real @content did not wake mentioned agent; suppression is over-eager")
-	}
-
-	// Cleanup: remove any wake events created by the control case.
-	var eventIDs []string
-	rows, err := testPool.Query(ctx, `
-		SELECT id::text FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake = true`, channelID, agentB)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if rows.Scan(&id) == nil {
-				eventIDs = append(eventIDs, id)
-			}
-		}
-	}
-	for _, id := range eventIDs {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, id)
-	}
-}
-
-func countChannelWakeEvents(ctx context.Context, channelID, agentID string) (int, error) {
-	var count int
-	err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake = true`, channelID, agentID).Scan(&count)
-	return count, err
+	testHandler.deliverCanonicalMessageToChannelAgents(ctx, ch, realTrigger)
+	assertChannelAgentDeliveryCount(t, agentB, realTrigger.ID, 1)
+	assertChannelNoInboxWakes(t, channelID)
 }
 
 // TestChannelMessageKindPersistence (LRM-1523 L1) verifies the structured kind

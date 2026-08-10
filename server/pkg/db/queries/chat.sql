@@ -133,7 +133,9 @@ INSERT INTO agent_inbox_event (
 )
 SELECT
   a.workspace_id, ensure_agent_wake_session(a.id), a.id, sqlc.arg(runtime_id),
-  sqlc.narg('context'), NULL, 'dm', true, 'pending',
+  -- reason=chat_session: standalone FAB/bubble only. Channel chat no longer
+  -- dual-writes inbox wakes; do not reuse the residual channel reason 'dm'.
+  sqlc.narg('context'), NULL, 'chat_session', true, 'pending',
   sqlc.arg(priority), sqlc.arg(chat_session_id), sqlc.arg(initiator_user_id),
   COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
   sqlc.narg('context')

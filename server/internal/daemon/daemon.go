@@ -2687,13 +2687,23 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 				continue
 			}
 			lease := agentInboxLeaseFromEvent(event, runtimeID)
-			if event.Task == nil {
+			// Residual dual-write channel chat reasons must not execute.
+			// Standalone bubble (chat_session) and product tasks still run.
+			if event.Task == nil || protocol.IsResidualChannelChatInboxReason(event.Reason) {
 				if err := d.client.AckAgentInboxEvent(ctx, lease); err != nil {
 					// fail-soft: try to ack remaining leases before surfacing
 					d.ackFoldedInboxLeasesBestEffort(ctx, append(folded, remainingLeasesAfter(batch.Events, event, runtimeID)...))
 					return nil, err
 				}
-				d.logger.Debug("acked non-runnable inbox event", "runtime_id", runtimeID, "event", shortID(event.ID))
+				if event.Task == nil {
+					d.logger.Debug("acked non-runnable inbox event", "runtime_id", runtimeID, "event", shortID(event.ID))
+				} else {
+					d.logger.Info("acked residual channel chat inbox event without execution",
+						"runtime_id", runtimeID,
+						"event", shortID(event.ID),
+						"reason", event.Reason,
+					)
+				}
 				continue
 			}
 			if primary == nil {

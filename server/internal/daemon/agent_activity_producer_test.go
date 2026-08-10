@@ -12,10 +12,130 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
+	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
+	runtime := AgentRuntimeObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", RuntimeGeneration: 3}
+	tool := runtime
+	tool.ToolName = "exec_command"
+	tool.ToolCallID = "call-1"
+	tests := []struct {
+		name        string
+		observation AgentObservation
+		kind        string
+		detail      string
+		entryKind   string
+		entryText   string
+		processID   string
+	}{
+		{name: "attached", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationAttached, Data: AgentAttachmentObservationData{RuntimeID: "runtime-1", AttachmentGeneration: 1}, At: at}, kind: protocol.ActivityKindOnline, detail: "attached", entryKind: "narrative", entryText: "Agent attached"},
+		{name: "launch accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationLaunchAccepted, Data: AgentLaunchObservationData{RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"}, At: at}, kind: protocol.ActivityKindOnline, detail: "launch_accepted", entryKind: "narrative", entryText: "Launch accepted"},
+		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
+		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at}, kind: protocol.ActivityKindWorking, entryKind: "narrative", entryText: "Working", processID: "process-1"},
+		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: runtime, At: at}, kind: protocol.ActivityKindThinking, entryKind: "narrative", entryText: "Thinking", processID: "process-1"},
+		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "Running tool", processID: "process-1"},
+		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "narrative", entryText: "Message received"},
+		{name: "freshness held", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "2 newer messages available — review then resend"},
+		{name: "error", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed"}, At: at}, kind: protocol.ActivityKindError, detail: "runtime_error", entryKind: "narrative", entryText: "Agent execution failed", processID: "process-1"},
+		{name: "stopped", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationStopped, Data: AgentStopObservationData{RuntimeID: "runtime-1", ReasonCode: "requested"}, At: at}, kind: protocol.ActivityKindOffline, detail: "stopped", entryKind: "narrative", entryText: "Stopped"},
+		{name: "detached", observation: AgentObservation{AgentID: "agent-a", Kind: AgentObservationDetached, Data: AgentAttachmentObservationData{RuntimeID: "runtime-1", AttachmentGeneration: 1}, At: at}, kind: protocol.ActivityKindOffline, detail: "detached", entryKind: "narrative", entryText: "Agent detached"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var sent []protocol.AgentActivityPayload
+			producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+			installActivityProducerAgent(t, producer)
+			if err := producer.Observe(test.observation); err != nil {
+				t.Fatalf("Observe: %v", err)
+			}
+			if len(sent) != 1 {
+				t.Fatalf("sent = %d, want 1", len(sent))
+			}
+			payload := sent[0]
+			if payload.Snapshot.ActivityKind != test.kind || payload.Snapshot.DetailKind != test.detail || payload.Snapshot.ProcessInstanceID != test.processID || !payload.Snapshot.ObservedAt.Equal(at) {
+				t.Fatalf("Snapshot = %+v", payload.Snapshot)
+			}
+			if len(payload.Entries) != 1 || payload.Entries[0].Kind != test.entryKind {
+				t.Fatalf("Entries = %+v", payload.Entries)
+			}
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(payload.Entries[0].Body, &body); err != nil || body.Text != test.entryText {
+				t.Fatalf("entry body = %+v err=%v", body, err)
+			}
+		})
+	}
+}
+
+func TestAgentActivityProducerObserveUsesDeterministicFactIdentity(t *testing.T) {
+	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
+	observation := AgentObservation{
+		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking,
+		Data: AgentRuntimeObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", RuntimeGeneration: 1}, At: at,
+	}
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	installActivityProducerAgent(t, producer)
+	if err := producer.Observe(observation); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.Observe(observation); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 2 || sent[0].Snapshot.ProducerFactID == "" || sent[0].Snapshot.ProducerFactID != sent[1].Snapshot.ProducerFactID || sent[0].Snapshot.ClientSequence != 1 || sent[1].Snapshot.ClientSequence != 2 {
+		t.Fatalf("observed payloads = %+v", sent)
+	}
+}
+
+func TestAgentActivityProducerObserveRejectsMissingOrStaleLaunch(t *testing.T) {
+	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	installActivityProducerAgent(t, producer)
+	observation := AgentObservation{
+		AgentID: "agent-a", LaunchID: "launch-stale", Kind: AgentObservationRuntimeWorking,
+		Data: AgentRuntimeObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", RuntimeGeneration: 1}, At: at,
+	}
+	if err := producer.Observe(observation); err == nil {
+		t.Fatal("Observe accepted a stale launch")
+	}
+	if len(sent) != 0 || len(producer.states) != 1 {
+		t.Fatalf("stale observation mutated producer: sent=%d states=%+v", len(sent), producer.states)
+	}
+	unmanaged := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	attached := AgentObservation{AgentID: "agent-unmanaged", Kind: AgentObservationAttached, Data: AgentAttachmentObservationData{RuntimeID: "runtime-1", AttachmentGeneration: 1}, At: at}
+	if err := unmanaged.Observe(attached); err == nil {
+		t.Fatal("Observe created a synthetic launch for an Attachment")
+	}
+	if len(unmanaged.states) != 0 {
+		t.Fatalf("Attachment observation created managed state: %+v", unmanaged.states)
+	}
+}
+
+func TestAgentActivityProducerObserveKeepsSessionAndProcessIdentitiesDistinct(t *testing.T) {
+	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, nil)
+	installActivityProducerAgent(t, producer)
+	observation := AgentObservation{
+		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, At: at,
+		Data: AgentRuntimeObservationData{
+			RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ProviderSessionID: "session-1", TurnID: "turn-1", RuntimeGeneration: 4,
+		},
+	}
+	if err := producer.Observe(observation); err != nil {
+		t.Fatal(err)
+	}
+	state := producer.states[agentActivityProducerKey{agentID: "agent-a", launchID: "launch-a"}]
+	if state.snapshot.ProcessInstanceID != "process-1" || state.session.ProviderSessionID != "session-1" || state.session.TurnID != "turn-1" || state.session.RuntimeGeneration != 4 {
+		t.Fatalf("managed identities = snapshot:%+v session:%+v", state.snapshot, state.session)
+	}
+}
+
 func TestAgentActivityProducerRetainsOnlyLatestSnapshotWhileDisconnected(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	producer.newID = sequentialActivityFactIDs()
 	installActivityProducerAgent(t, producer)
 	producer.SetConnected("agent-a", "launch-a", false)
@@ -42,7 +162,7 @@ func TestAgentActivityProducerRetainsOnlyLatestSnapshotWhileDisconnected(t *test
 func TestAgentActivityProducerHeartbeatsAndProbeDoNotInventState(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	producer.newID = sequentialActivityFactIDs()
 	installActivityProducerAgent(t, producer)
 	if err := producer.Publish(activitySnapshot("daemon-1", "working", 1, "fact-1", now), nil); err != nil {
@@ -73,7 +193,7 @@ func TestAgentActivityProducerHeartbeatsAndProbeDoNotInventState(t *testing.T) {
 
 func TestAgentActivityProducerReplacedTransportKeepsNewestRunnerConnected(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
-	producer := newAgentActivityProducer(func() time.Time { return now }, nil)
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, nil)
 	installActivityProducerAgent(t, producer)
 	var first, second []protocol.AgentActivityPayload
 	firstGeneration, _ := producer.AttachTransport(func(payload protocol.AgentActivityPayload) { first = append(first, payload) })
@@ -90,7 +210,7 @@ func TestAgentActivityProducerReplacedTransportKeepsNewestRunnerConnected(t *tes
 func TestAgentActivityProducerPublishesManagedMessageHandoff(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 0, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	installActivityProducerAgent(t, producer)
 	if err := producer.PublishForManagedAgent("agent-a", "daemon-1", protocol.ActivityKindWorking, "message_received", []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: []byte(`{"text":"Message received"}`)}}); err != nil {
 		t.Fatalf("PublishForManagedAgent: %v", err)
@@ -107,7 +227,7 @@ func TestAgentActivityProducerPublishesManagedMessageHandoff(t *testing.T) {
 func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing.T) {
 	now := time.Date(2026, time.August, 7, 0, 0, 0, 0, time.UTC)
 	var activities []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
+	producer := newAgentActivityProducer("daemon-instance-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
 		activities = append(activities, payload)
 	})
 	d := New(Config{}, nil)
@@ -141,7 +261,7 @@ func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing
 
 func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	var activities []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) {
+	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
 		activities = append(activities, payload)
 	})
 	installActivityProducerAgent(t, producer)
@@ -194,7 +314,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 
 func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T) {
 	var activities []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) {
+	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
 		activities = append(activities, payload)
 	})
 	installActivityProducerAgent(t, producer)
@@ -231,7 +351,7 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 
 func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
 	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
 	d.agentActivityProducers["workspace-1"] = producer
@@ -254,7 +374,7 @@ func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
 
 func TestTaskFailurePublishesRunnerErrorWithoutRawFailureText(t *testing.T) {
 	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
 	d.agentActivityProducers["workspace-1"] = producer
@@ -307,7 +427,7 @@ func sequentialActivityFactIDs() func() string {
 func TestActivityProducerPublishHoldEntryForUnmanagedAgentPushesFragment(t *testing.T) {
 	now := time.Date(2026, time.August, 9, 1, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	// NOTE: no installActivityProducerAgent -> agent-a/launch-a is NOT managed.
 
 	entry, err := activitySystemEntry("Message held", "1 newer message available")
@@ -333,7 +453,7 @@ func TestActivityProducerPublishHoldEntryForUnmanagedAgentPushesFragment(t *test
 
 	// The fragment must not register managed state: the agent is still NOT
 	// managed afterwards, so the managed-only entry path still rejects it.
-	producerWithTransport := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producerWithTransport := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	if err := producerWithTransport.PublishEntryForManagedAgent("agent-unmanaged", "daemon-1", []protocol.AgentActivityEntry{entry}); err == nil {
 		t.Fatal("expected managed-only entry path to still reject an unmanaged agent (fragment must not touch states map)")
 	}
@@ -346,7 +466,7 @@ func TestActivityProducerPublishHoldEntryForUnmanagedAgentPushesFragment(t *test
 func TestActivityProducerPublishHoldEntryForManagedAgentKeepsManagedStream(t *testing.T) {
 	now := time.Date(2026, time.August, 9, 1, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	producer.newID = sequentialActivityFactIDs()
 	installActivityProducerAgent(t, producer)
 

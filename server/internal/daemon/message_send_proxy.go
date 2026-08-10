@@ -386,20 +386,3 @@ func (d *Daemon) observeMessageSendHold(agentID, workspaceID, target string, new
 		d.logger.Debug("send-hold Runner Activity publish deferred", "error", err, "agent_id", agentID, "target", target)
 	}
 }
-
-// messageSendHoldTitle is the warning-row title surfaced on the Agent Activity
-// timeline when a message send is held pending review of newer messages. It is
-// the presentation contract consumed by the Activity tab (see Dax FE test).
-func messageSendHoldTitle() string {
-	return "Message held — review newer messages before sending"
-}
-
-// messageSendHoldSubtext builds the warning-row subtext from how many newer
-// messages are pending. It is deliberately text-only; the Activity projection
-// renders it as body_kind:none.
-func messageSendHoldSubtext(newer int64) string {
-	if newer > 0 {
-		return fmt.Sprintf("%d newer messages available — review then resend", newer)
-	}
-	return "Send held — review the channel before resending"
-}

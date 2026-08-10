@@ -87,7 +87,7 @@ func (d *Daemon) workspaceAgentActivityProducer(workspaceID string) *agentActivi
 	if producer := d.agentActivityProducers[workspaceID]; producer != nil {
 		return producer
 	}
-	producer := newAgentActivityProducer(time.Now, nil)
+	producer := newAgentActivityProducer(d.runnerInstanceID, time.Now, nil)
 	d.agentActivityProducers[workspaceID] = producer
 	return producer
 }

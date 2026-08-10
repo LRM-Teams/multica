@@ -115,7 +115,7 @@ func TestMessageSendHoldPresentationContract(t *testing.T) {
 func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 	now := time.Date(2026, time.August, 8, 0, 0, 0, 0, time.UTC)
 	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	producer := newAgentActivityProducer("daemon-instance-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	installActivityProducerAgent(t, producer)
 
 	d := New(Config{}, nil)

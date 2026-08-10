@@ -42,6 +42,7 @@ type agentActivityProducer struct {
 	now                 func() time.Time
 	newID               func() string
 	send                func(protocol.AgentActivityPayload)
+	daemonInstanceID    string
 	transportGeneration uint64
 	states              map[agentActivityProducerKey]*agentActivityProducerState
 }
@@ -65,11 +66,11 @@ type agentActivityReconnectFrame struct {
 	Payload   any
 }
 
-func newAgentActivityProducer(now func() time.Time, send func(protocol.AgentActivityPayload)) *agentActivityProducer {
+func newAgentActivityProducer(daemonInstanceID string, now func() time.Time, send func(protocol.AgentActivityPayload)) *agentActivityProducer {
 	if now == nil {
 		now = time.Now
 	}
-	return &agentActivityProducer{now: now, newID: func() string { return uuid.NewString() }, send: send, states: make(map[agentActivityProducerKey]*agentActivityProducerState)}
+	return &agentActivityProducer{daemonInstanceID: daemonInstanceID, now: now, newID: func() string { return uuid.NewString() }, send: send, states: make(map[agentActivityProducerKey]*agentActivityProducerState)}
 }
 
 func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, session protocol.AgentSessionPayload) error {

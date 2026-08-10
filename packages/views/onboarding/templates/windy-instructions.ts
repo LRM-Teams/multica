@@ -3,7 +3,8 @@ export const WINDY_AGENT_NAME = "Wendy";
 export const WINDY_DESCRIPTION =
   "Personal HR for building and updating your Multica agent team.";
 
-export const WINDY_AVATAR_URL = "/agent-avatars/human-11.jpg";
+export const WINDY_AVATAR_URL =
+  "https://cdn.leagent.me/agent-avatars/v2/agent-11.png";
 
 export const WINDY_INSTRUCTIONS = `Role
 

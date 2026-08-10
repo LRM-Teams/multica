@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
 import { AgentProfileAvatarEditor } from "./agent-profile-avatar-editor";
@@ -9,6 +9,11 @@ const RESOURCES = {
   side_panel: {
     change_avatar_aria: "Change avatar",
     avatar_updated_toast: "Avatar updated",
+    avatar_picker_title: "Choose an avatar",
+    avatar_picker_description: "Choose a system avatar or upload your own image.",
+    avatar_system_choices_aria: "System avatars",
+    avatar_system_choice_aria: "Choose system avatar",
+    avatar_upload_custom: "Upload custom avatar",
     avatar_err_type: "Please choose a PNG or JPG image.",
     avatar_err_size: "Image must be 5 MB or smaller.",
     avatar_err_dimensions: "Image must be at least 256×256 pixels.",
@@ -36,6 +41,10 @@ vi.mock("@multica/core/identity", () => ({
   resolveActorDisplayName: () => "Atlas",
 }));
 vi.mock("@multica/core/workspace/avatar-url", () => ({
+  AGENT_AVATAR_PRESETS: [
+    "https://cdn.leagent.me/agent-avatars/v2/agent-01.png",
+    "https://cdn.leagent.me/agent-avatars/v2/agent-02.png",
+  ],
   resolvePublicFileUrl: () => null,
 }));
 vi.mock("@multica/core/permissions", () => ({
@@ -95,19 +104,66 @@ describe("AgentProfileAvatarEditor", () => {
   afterEach(() => vi.clearAllMocks());
 
   it("renders read-only (no edit button) when canEdit is false", () => {
-    render(<AgentProfileAvatarEditor agent={makeAgent()} canEdit={false} onUpdate={() => Promise.resolve()} />);
+    render(
+      <AgentProfileAvatarEditor
+        agent={makeAgent()}
+        canEdit={false}
+        onUpdate={() => Promise.resolve()}
+      />,
+    );
     expect(screen.queryByRole("button", { name: "Change avatar" })).toBeNull();
     expect(screen.getByTestId("agent-presence-overlay")).toBeInTheDocument();
   });
 
   it("renders the camera edit affordance when canEdit is true", () => {
-    render(<AgentProfileAvatarEditor agent={makeAgent()} canEdit onUpdate={() => Promise.resolve()} />);
+    render(
+      <AgentProfileAvatarEditor
+        agent={makeAgent()}
+        canEdit
+        onUpdate={() => Promise.resolve()}
+      />,
+    );
     expect(screen.getByRole("button", { name: "Change avatar" })).toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-avatar")).toHaveAttribute("data-can-edit", "true");
   });
 
+  it("opens system presets and commits a picked avatar", async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <AgentProfileAvatarEditor
+        agent={makeAgent()}
+        canEdit
+        onUpdate={onUpdate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Change avatar" }));
+    expect(screen.getByRole("heading", { name: "Choose an avatar" })).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Choose system avatar/ }),
+    ).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose system avatar 2" }));
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith("agent-1", {
+        avatar_selection: {
+          kind: "picked",
+          preset_url: "https://cdn.leagent.me/agent-avatars/v2/agent-02.png",
+        },
+      });
+    });
+    expect(mocks.invalidateQueries).toHaveBeenCalled();
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("Avatar updated");
+  });
+
   it("rejects a non-image file with a toast", () => {
-    const { container } = render(<AgentProfileAvatarEditor agent={makeAgent()} canEdit onUpdate={() => Promise.resolve()} />);
+    const { container } = render(
+      <AgentProfileAvatarEditor
+        agent={makeAgent()}
+        canEdit
+        onUpdate={() => Promise.resolve()}
+      />,
+    );
     const input = container.querySelector(
       'input[type="file"]',
     ) as HTMLInputElement;
@@ -122,7 +178,13 @@ describe("AgentProfileAvatarEditor", () => {
   });
 
   it("rejects an oversize image with a toast", () => {
-    const { container } = render(<AgentProfileAvatarEditor agent={makeAgent()} canEdit onUpdate={() => Promise.resolve()} />);
+    const { container } = render(
+      <AgentProfileAvatarEditor
+        agent={makeAgent()}
+        canEdit
+        onUpdate={() => Promise.resolve()}
+      />,
+    );
     const input = container.querySelector(
       'input[type="file"]',
     ) as HTMLInputElement;

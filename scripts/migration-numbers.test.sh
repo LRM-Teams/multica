@@ -40,6 +40,8 @@ while IFS= read -r path; do
   [[ -z "$path" ]] && continue
   file="${path##*/}"
   number="$(grep -oE '^[0-9]+' <<<"$file" || true)"
+  migration="${file%.up.sql}"
+  migration="${migration%.down.sql}"
 
   if [[ -z "$number" ]]; then
     echo "Migration filename must start with a version number: $file"
@@ -60,14 +62,14 @@ while IFS= read -r path; do
 
   # Also reject two newly added migrations on this branch that share a number
   # (the #2567 vs #2568 class of collision before either lands on base).
-  if [[ -n "${added_numbers[$number]:-}" ]]; then
+  if [[ -n "${added_numbers[$number]:-}" && "${added_numbers[$number]}" != "$migration" ]]; then
     echo "New migrations on this branch collide on version number $number:"
     echo "    ${added_numbers[$number]}"
-    echo "    $file"
+    echo "    $migration"
     echo "  Reserve distinct numbers with: multica migration reserve"
     status=1
   else
-    added_numbers["$number"]="$file"
+    added_numbers["$number"]="$migration"
   fi
 done <<<"$added_files"
 

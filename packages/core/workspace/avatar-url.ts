@@ -75,17 +75,11 @@ export function preferAuthorAvatarUrl(
   return incoming || cached || undefined;
 }
 
-/**
- * The shared 24-photo default-avatar pool (assets live at
- * `apps/web/public/agent-avatars/human-01..24.jpg`). Frank's #451 ruling:
- * retire the bot glyph / random colors; give an actor with no self-chosen
- * avatar one of these real-person photos.
- *
- * New agents persist one concrete path from this pool at creation time.
- * Existing agents render their persisted value; this array is a picker/source
- * manifest, never a render-time fallback.
- */
+/** Immutable system presets stored in OSS and served through the product CDN.
+ * New Agents persist one concrete absolute URL at creation time. The absolute
+ * form is deliberate: old desktop clients must not resolve it against the
+ * separately-hosted API origin. */
 export const AGENT_AVATAR_PRESETS: readonly string[] = Array.from(
-  { length: 24 },
-  (_, i) => `/agent-avatars/human-${String(i + 1).padStart(2, "0")}.jpg`,
+  { length: 15 },
+  (_, i) => `https://cdn.leagent.me/agent-avatars/v2/agent-${String(i + 1).padStart(2, "0")}.png`,
 );

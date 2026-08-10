@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	executionProfileFull         = "full"
-	executionProfileProtocolTurn = "protocol_turn"
+	executionProfileFull           = "full"
+	executionProfileProtocolTurn   = "protocol_turn"
+	executionProfileAttentionProbe = "attention_probe"
 
 	restrictedAgentInstructionsBytes   = 4 * 1024
 	restrictedMemoryBytes              = 4 * 1024
@@ -30,7 +31,7 @@ func taskExecutionProfile(task Task) (string, error) {
 	switch profile {
 	case "", executionProfileFull:
 		return executionProfileFull, nil
-	case executionProfileProtocolTurn:
+	case executionProfileProtocolTurn, executionProfileAttentionProbe:
 		if err := validateRestrictedExecutionConfig(task.ExecutionConfig); err != nil {
 			return "", fmt.Errorf("execution profile %q: %w", profile, err)
 		}
@@ -60,7 +61,7 @@ func validateRestrictedExecutionConfig(config *TaskExecutionConfig) error {
 }
 
 func isRestrictedExecutionProfile(profile string) bool {
-	return profile == executionProfileProtocolTurn
+	return profile == executionProfileProtocolTurn || profile == executionProfileAttentionProbe
 }
 
 func restrictedOutputTokenLimit(profile string) int {
@@ -203,6 +204,8 @@ func restrictedExecutionSystemPrompt(profile string) string {
 	switch profile {
 	case executionProfileProtocolTurn:
 		return "You are running one bounded protocol turn. Tools, shell, files, network access, and public messaging are unavailable. Follow the supplied protocol state and return exactly the requested structured result with no extra prose."
+	case executionProfileAttentionProbe:
+		return "You are running an internal attention probe for your agent identity. Tools, shell, files, network access, and public messaging are unavailable. Judge only from the supplied bounded context and return exactly one JSON object: {\"decision\":\"SILENT|ANSWER|CONTRIBUTE|COORDINATE\",\"confidence\":<0..1>,\"value_type\":\"...\",\"summary\":\"...\",\"evidence_refs\":[\"...\"],\"seen_up_to_seq\":<int>} with no extra prose."
 	default:
 		return ""
 	}
@@ -212,6 +215,12 @@ func parseRestrictedExecutionOutput(profile, output string) (json.RawMessage, er
 	switch profile {
 	case executionProfileProtocolTurn:
 		return parseProtocolTurnOutput(output)
+	case executionProfileAttentionProbe:
+		dec, ok, _ := ParseAttentionProbeOutput(output)
+		if !ok {
+			return nil, fmt.Errorf("attention probe output: %w", errAttentionProbeUnusable)
+		}
+		return dec.CanonicalJSON()
 	default:
 		return nil, fmt.Errorf("execution profile %q has no restricted output contract", profile)
 	}

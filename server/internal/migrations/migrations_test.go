@@ -201,6 +201,48 @@ func TestMigration203PersistsAgentAvatarTruthAtWriteBoundary(t *testing.T) {
 	}
 }
 
+func TestMigration314MovesSystemAgentAvatarsToOSS(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "314_agent_avatar_oss_presets.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 314 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE OR REPLACE FUNCTION default_agent_avatar_url(agent_id UUID)",
+		"https://cdn.leagent.me/agent-avatars/v2/agent-%s.png",
+		"% 15",
+		"avatar_source IN ('assigned', 'picked')",
+		"^/agent-avatars/human-",
+		"https://cdn.leagent.me/agent-avatars/v1/",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 314 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "314_agent_avatar_oss_presets.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 314 down: %v", err)
+	}
+	downContents := string(down)
+	for _, required := range []string{
+		"/agent-avatars/human-%s.jpg",
+		"% 24",
+		"^https://cdn\\.leagent\\.me/agent-avatars/v1/human-",
+		"^https://cdn\\.leagent\\.me/agent-avatars/v2/agent-",
+	} {
+		if !strings.Contains(downContents, required) {
+			t.Errorf("migration 314 down missing %q", required)
+		}
+	}
+}
+
 func TestMigration218CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -733,6 +775,46 @@ func TestMigration314ComputerGenerationFenceAndWorkspaceAttestation(t *testing.T
 	for _, required := range []string{"DROP TABLE IF EXISTS computer_generation", "DROP COLUMN IF EXISTS computer_generation", "DROP COLUMN IF EXISTS accepted_workspace_ids"} {
 		if !strings.Contains(string(down), required) {
 			t.Errorf("migration 314 down missing %q", required)
+		}
+	}
+}
+
+func TestMigration313ChannelAttentionRoundSchema(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "314_channel_attention_round.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 313 up: %v", err)
+	}
+	for _, required := range []string{
+		"CREATE TABLE channel_attention_round",
+		"CREATE TABLE channel_attention_participant",
+		"CREATE TABLE channel_attention_response_grant",
+		"idx_channel_attention_round_collecting_channel",
+		"idx_channel_attention_participant_agent_id",
+		"SILENT", "ANSWER", "CONTRIBUTE", "COORDINATE",
+		"UNIQUE (round_id)",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Errorf("migration 313 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "314_channel_attention_round.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 313 down: %v", err)
+	}
+	for _, table := range []string{
+		"channel_attention_response_grant",
+		"channel_attention_participant",
+		"channel_attention_round",
+	} {
+		if !strings.Contains(string(down), "DROP TABLE IF EXISTS "+table) {
+			t.Errorf("migration 313 down missing DROP for %s", table)
 		}
 	}
 }

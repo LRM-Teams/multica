@@ -2,10 +2,10 @@ package handler
 
 import (
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/agentavatar"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -14,8 +14,6 @@ const (
 	agentAvatarSourcePicked   = "picked"
 	agentAvatarSourceUploaded = "uploaded"
 )
-
-var canonicalAgentAvatarPreset = regexp.MustCompile(`^/agent-avatars/human-(0[1-9]|1[0-9]|2[0-4])\.jpg$`)
 
 // AgentAvatarSelection is write intent, not persisted provenance supplied by
 // the client. The server verifies the referenced object/catalog entry and
@@ -122,8 +120,8 @@ func (h *Handler) resolveAgentAvatarSelection(
 		}, true
 
 	case agentAvatarSourcePicked:
-		presetURL := selection.PresetURL
-		if strings.TrimSpace(selection.AttachmentID) != "" || presetURL != strings.TrimSpace(presetURL) || !canonicalAgentAvatarPreset.MatchString(presetURL) {
+		presetURL, validPreset := agentavatar.CanonicalizeSelection(selection.PresetURL)
+		if strings.TrimSpace(selection.AttachmentID) != "" || !validPreset {
 			writeError(w, http.StatusBadRequest, "picked avatar_selection requires a canonical preset_url")
 			return resolvedAgentAvatar{}, false
 		}

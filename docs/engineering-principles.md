@@ -105,6 +105,12 @@
 - **完整文档（路径白名单 / 禁区 / 代码指针 / 退出条件）**：`docs/legacy/agent-chat-inbox-path.md`。
 - **退出**：#2296 full-delete 落地后，当天改写或删除该 legacy 文，并更新本条。
 
+### 1.8 Cursor ACP 模型选择必须 fail closed — `可执行`（⑤）
+- 产品模型 `auto` 必须按 live ACP catalog 中 display name 为 `Auto` 的条目解析成当次真实 `modelId`（当前实测为 `default[]`）；省略 `session/set_model` 只会沿用 Cursor 当前模型，不等于 Auto。
+- 显式模型不在 live catalog、ACP 不支持 `session/set_model`、或 Cursor 拒绝该值时，本次 turn 必须在 `session/prompt` 前失败；禁止静默沿用当前模型或降级到其他模型。
+- resident Message 在 native acceptance 前失败时也必须发布 `error/runtime_error` Activity，把原因显示给用户，不能只留 daemon warning。
+- **物**：`TestCursorACPBackendMapsAutoToLiveACPDefault`、`TestCursorACPBackendFailsWhenConfiguredModelIsMissingFromLiveCatalog`、`TestCursorACPBackendFailsOnInvalidParamsSetModel`、`TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity`。
+
 ## 2. 引用与渲染（FE）
 
 （详细规范与验收清单见 Iris 设计稿；此处为契约要点。）
@@ -142,6 +148,12 @@
 **档位可以是借来的，要写明借自谁**（#644 实例）：`data-ref-source`/`data-issue-ref` 这类属性约定本身只是档④；它们现在不漂移，唯一原因是 #520 让 `IssueRefLink` 成了正文渲染 issue 链接的独苗（档③）。**依赖链：lint 禁 IssueChip（④）→ 保住独苗（③）→ 属性才完整。** 正文冒出第二个渲染点，属性当场退回④、双卡回来——"新增 issue 链接渲染点必须走 `IssueRefLink`"是硬依赖不是风格建议。
 **为什么不能更强（被否的替代案要留档）**：按 href 抑制（任何内部 issue URL 都不弹 URL 卡）看似真③，**但手打的 markdown issue 链接没有 peek 卡，按 href 抑制会让它一个 hover 都不剩**——判据必须是"我自带卡"（组件属性），不是"我指向 issue"（href）。**档位停在哪，有时是语义正确性决定的，不是偷懒。**
 **「天花板」和「欠债」要分开标**：能升未升=欠债（照"能上一档就上一档"推进）；**再升会误伤=天花板**（记下被排除的更强方案和它误伤什么）——否则后人照着升档规则改它，正好踩进已排除过的坑。
+
+### 2.6 Runner Activity 完整投影实时写 Query cache，异常恢复才 REST — `可执行`（③⑤，owner: @Codex）
+- 服务端持久化后，`agent:activity` 事件会携带完整 `RunnerActivityResponse`（现有 wire field 为 `payload.activity`）；正常事件由 `useRealtimeSync` 的唯一订阅直接写对应 React Query cache，禁止再落入 `agent` 通用前缀失效，也禁止写后立即 invalidate。`useRunnerActivity` 只读 Query cache，不各自订阅 WS。
+- 断线恢复由中央 reconnect 对 `runnerActivityKeys.root(wsId)` 做一次前缀失效；TanStack Query 只立即 refetch active queries，未打开页面只标 stale。非法 payload 不覆盖已有 cache。
+- **为什么**：旧路径每条事件同时触发 agents、fleet rankings、runner-activity 三路 REST，并按页面/标签数量放大；WS 已携带同一服务端完整投影，正常事件再次 REST 没有新增权威性。
+- **物**：`runner-activity-updaters.ts`、`use-realtime-sync.ts` 的单一订阅/reconnect 前缀、`use-runner-activity.test.ts` 与 `use-realtime-sync-ws-instance.test.tsx`。两条回归均已先见红：一条捕获写后 invalidate，另一条捕获缺少专用 handler 导致的 `agent` 前缀失效。
 
 ## 3. 属性显示（跨面）
 

@@ -24,10 +24,8 @@ import { api, ApiError } from "@multica/core/api";
 import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { deriveUpdateStatus } from "@multica/core/runtimes";
-import {
-  MULTICA_INSTALL_COMMAND,
-  MULTICA_POWERSHELL_INSTALL_COMMAND,
-} from "@multica/core/constants/repository";
+import { multicaInstallCommand } from "@multica/core/constants/repository";
+import { useConfigStore } from "@multica/core/config";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
@@ -39,17 +37,6 @@ import type {
 import { useT } from "../../i18n/use-t";
 import { formatRuntimeUpdateError } from "./update-error";
 import { isNewerCliVersion } from "@multica/core/runtimes";
-
-const MANUAL_UPDATE_COMMANDS = [
-  {
-    key: "mac_linux",
-    command: `${MULTICA_INSTALL_COMMAND} && multica computer restart`,
-  },
-  {
-    key: "windows",
-    command: `${MULTICA_POWERSHELL_INSTALL_COMMAND}; multica computer restart`,
-  },
-] as const;
 
 const statusConfig: Record<
   RuntimeUpdateStatus,
@@ -481,6 +468,17 @@ function ManualUpdateDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const { t } = useT("runtimes");
+  const environment = useConfigStore((state) => state.environment);
+  const commands = [
+    {
+      key: "mac_linux",
+      command: `${multicaInstallCommand("unix", environment)} && multica computer restart`,
+    },
+    {
+      key: "windows",
+      command: `${multicaInstallCommand("windows-powershell", environment)}; multica computer restart`,
+    },
+  ] as const;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -493,7 +491,7 @@ function ManualUpdateDialog({
         </DialogHeader>
 
         <div className="space-y-3">
-          {MANUAL_UPDATE_COMMANDS.map((entry) => (
+          {commands.map((entry) => (
             <CommandRow
               key={entry.key}
               label={t(($) => $.update.manual_commands[entry.key])}

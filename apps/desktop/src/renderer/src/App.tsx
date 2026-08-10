@@ -344,6 +344,8 @@ export default function App() {
       {runtimeConfigResult.ok ? (
         <CoreProvider
           apiBaseUrl={runtimeConfigResult.config.apiUrl}
+          appUrl={runtimeConfigResult.config.appUrl}
+          environment="production"
           wsUrl={runtimeConfigResult.config.wsUrl}
           onLogout={handleDaemonLogout}
           identity={identity}

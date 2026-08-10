@@ -6,6 +6,7 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enRuntimes from "../../locales/en/runtimes.json";
 import { api, ApiError } from "@multica/core/api";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { configStore } from "@multica/core/config";
 import { UpdateSection } from "./update-section";
 
 vi.mock("@multica/core/api", async (importOriginal) => {
@@ -22,6 +23,7 @@ vi.mock("@multica/ui/lib/error-toast", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  configStore.getState().setDaemonConfig({ environment: "production" });
 });
 
 function renderSection(props: Partial<React.ComponentProps<typeof UpdateSection>> = {}) {
@@ -106,6 +108,26 @@ describe("UpdateSection up-to-date state (2026-08-01)", () => {
     expect(screen.queryByText(/CLI Version/i)).toBeNull();
     expect(screen.queryByText("0.3.93")).toBeNull();
     expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
+  });
+});
+
+describe("UpdateSection manual commands", () => {
+  it("keeps a test Computer on the alpha release channel", () => {
+    configStore.getState().setDaemonConfig({ environment: "test" });
+    renderSection();
+
+    fireEvent.click(screen.getByRole("button", { name: "Manual commands" }));
+
+    expect(
+      screen.getByText(
+        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha && multica computer restart",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version alpha; multica computer restart",
+      ),
+    ).toBeInTheDocument();
   });
 });
 

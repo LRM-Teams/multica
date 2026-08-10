@@ -36,6 +36,7 @@ import {
   nameToWorkspaceSlug,
 } from "../../workspace/slug";
 import { isReservedSlug } from "@multica/core/paths";
+import { workspaceURLPrefix } from "../../common/workspace-url";
 
 /**
  * Step 2 — create your first workspace, or continue with one set up in
@@ -49,8 +50,8 @@ import { isReservedSlug } from "@multica/core/paths";
  * because the footer-driven interaction needs externalized submit; the
  * shared form's own button would fight the footer CTA.
  *
- * The create-fields block doubles as a pedagogical preview: the URL is
- * rendered as a `leagent.me/[slug]` pill, and a live `Issues will look
+ * The create-fields block doubles as a pedagogical preview: the URL uses
+ * the current service origin, and a live `Issues will look
  * like ACME-123` line shows the user what their issue IDs will read
  * like before they've created anything.
  *
@@ -80,6 +81,8 @@ export function StepWorkspace({
   const mainRef = useRef<HTMLElement>(null);
   const fadeStyle = useScrollFade(mainRef);
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
+  const daemonAppUrl = useConfigStore((s) => s.daemonAppUrl);
+  const workspacePrefix = workspaceURLPrefix(daemonAppUrl);
   // Single source of truth for "can the user reach the create path on this
   // instance?" — drives the resume-mode picker, the eyebrow/headline/lede
   // copy, the side panel, and the footer CTA so the disabled state can't
@@ -241,7 +244,7 @@ export function StepWorkspace({
         </Label>
         <div className="flex items-center rounded-md border bg-muted transition-colors focus-within:border-foreground">
           <span className="select-none pl-3 font-mono text-sm text-muted-foreground">
-            {"leagent.me/"}
+            {workspacePrefix}
           </span>
           <Input
             id="ws-slug"
@@ -336,6 +339,7 @@ export function StepWorkspace({
                 <div className="flex flex-col gap-3">
                   <ExistingWorkspaceCard
                     workspace={reusing}
+                    workspacePrefix={workspacePrefix}
                     selected={mode === "existing"}
                     onSelect={pickExisting}
                   />
@@ -387,9 +391,12 @@ export function StepWorkspace({
         <DragStrip />
         <div className="min-h-0 flex-1 overflow-y-auto px-12 py-12">
           {reusing && mode !== "create" ? (
-            <ExistingWorkspaceSide workspace={reusing} />
+            <ExistingWorkspaceSide
+              workspace={reusing}
+              workspacePrefix={workspacePrefix}
+            />
           ) : (
-            <CreateWorkspaceSide />
+            <CreateWorkspaceSide workspacePrefix={workspacePrefix} />
           )}
         </div>
       </aside>
@@ -417,10 +424,12 @@ function CreationDisabledNotice({ onLogout }: { onLogout: () => void }) {
 
 function ExistingWorkspaceCard({
   workspace,
+  workspacePrefix,
   selected,
   onSelect,
 }: {
   workspace: Workspace;
+  workspacePrefix: string;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -443,7 +452,7 @@ function ExistingWorkspaceCard({
           {workspace.name}
         </div>
         <div className="truncate font-mono text-xs text-muted-foreground">
-          {`leagent.me/${workspace.slug}`}
+          {`${workspacePrefix}${workspace.slug}`}
         </div>
       </div>
       <RadioMark selected={selected} />
@@ -506,7 +515,7 @@ function CreateNewWorkspaceCard({
   );
 }
 
-function CreateWorkspaceSide() {
+function CreateWorkspaceSide({ workspacePrefix }: { workspacePrefix: string }) {
   const { t } = useT("onboarding");
   return (
     <div className="flex flex-col gap-6">
@@ -517,6 +526,7 @@ function CreateWorkspaceSide() {
       <WorkspacePreviewCard
         name={t(($) => $.step_workspace.side_preview_name)}
         slug={t(($) => $.step_workspace.side_preview_slug)}
+        workspacePrefix={workspacePrefix}
       />
 
       <div className="mt-2 text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
@@ -532,7 +542,13 @@ function CreateWorkspaceSide() {
   );
 }
 
-function ExistingWorkspaceSide({ workspace }: { workspace: Workspace }) {
+function ExistingWorkspaceSide({
+  workspace,
+  workspacePrefix,
+}: {
+  workspace: Workspace;
+  workspacePrefix: string;
+}) {
   const { t } = useT("onboarding");
   return (
     <div className="flex flex-col gap-6">
@@ -540,7 +556,11 @@ function ExistingWorkspaceSide({ workspace }: { workspace: Workspace }) {
         {t(($) => $.step_workspace.side_existing_eyebrow)}
       </div>
 
-      <WorkspacePreviewCard name={workspace.name} slug={workspace.slug} />
+      <WorkspacePreviewCard
+        name={workspace.name}
+        slug={workspace.slug}
+        workspacePrefix={workspacePrefix}
+      />
 
       <div className="mt-2 text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
         {t(($) => $.step_workspace.side_next_eyebrow)}
@@ -565,9 +585,11 @@ function ExistingWorkspaceSide({ workspace }: { workspace: Workspace }) {
 function WorkspacePreviewCard({
   name,
   slug,
+  workspacePrefix,
 }: {
   name: string;
   slug: string;
+  workspacePrefix: string;
 }) {
   const { t } = useT("onboarding");
   return (
@@ -579,7 +601,7 @@ function WorkspacePreviewCard({
             {name}
           </div>
           <div className="truncate font-mono text-[11.5px] text-muted-foreground">
-            {`leagent.me/${slug}`}
+            {`${workspacePrefix}${slug}`}
           </div>
         </div>
         <Lock

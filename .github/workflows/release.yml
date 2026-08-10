@@ -522,6 +522,7 @@ jobs:
             NEXT_PUBLIC_APP_URL=${{ env.MULTICA_APP_URL }}
             NEXT_PUBLIC_API_URL=${{ env.MULTICA_API_URL }}
             NEXT_PUBLIC_WS_URL=${{ env.MULTICA_WS_URL }}
+            NEXT_PUBLIC_ENVIRONMENT=production
             NEXT_PUBLIC_APP_VERSION=${{ needs.verify.outputs.tag_name }}
           outputs: type=image,name=ghcr.io/${{ env.GHCR_OWNER }}/multica-web,push-by-digest=true,name-canonical=true,push=true
 

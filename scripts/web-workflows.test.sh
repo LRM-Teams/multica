@@ -74,6 +74,16 @@ for required in \
   fi
 done
 
+if grep -Fq -- 'compose run --rm --no-deps --pull always' <<<"$deploy_test_workflow"; then
+  echo "Test migration must not use docker compose run --pull; s89 Compose does not support that flag"
+  exit 1
+fi
+
+if ! grep -Fq -- 'compose pull backend' <<<"$deploy_test_workflow"; then
+  echo "Test deployment must pull the migration image before docker compose run"
+  exit 1
+fi
+
 if grep -Fq -- 'branches: [dev]' <<<"$deploy_workflow"; then
   echo "Production deployment must not consume dev pushes"
   exit 1

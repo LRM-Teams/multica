@@ -61,6 +61,8 @@
     "share_action": "分享",
     "current_shares": "正在共享给",
     "no_current_shares": "未共享给其他人",
+    "share_member_workspace_label": "{{name}}（{{workspace}}）",
+    "share_member_unknown": "未知成员",
     "shared_by_label": "共享者",
     "duplicate_action": "复制",
     "delete_action": "删除",

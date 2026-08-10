@@ -61,6 +61,8 @@
     "share_action": "Share",
     "current_shares": "Shared with",
     "no_current_shares": "Not shared with anyone else",
+    "share_member_workspace_label": "{{name}} ({{workspace}})",
+    "share_member_unknown": "Unknown member",
     "shared_by_label": "Shared by",
     "duplicate_action": "Duplicate",
     "delete_action": "Delete",

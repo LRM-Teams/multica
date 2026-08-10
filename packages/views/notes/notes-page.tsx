@@ -12,7 +12,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { noteAIJobOptions, noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
 import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
 import { agentListOptions, memberListOptions, workspaceListOptions } from "@multica/core/workspace/queries";
-import type { Agent, MemberWithUser, NoteAIEditResult, NoteAIJob, NotePage } from "@multica/core/types";
+import type { Agent, MemberWithUser, NoteAIEditResult, NoteAIJob, NoteAIJobStatus, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -209,9 +209,11 @@ async function waitForNoteAIJobResult(
   jobId: string,
   messages: { failed: string; timeout: string },
   signal?: AbortSignal,
+  onStatus?: (status: NoteAIJobStatus) => void,
 ): Promise<NoteAIEditResult> {
   const initial = queryClient.getQueryData<NoteAIJob>(noteAIJobOptions(jobId).queryKey);
   if (initial) {
+    onStatus?.(initial.status);
     const value = noteAIJobResult(initial, messages);
     if (value) return value;
   }
@@ -236,6 +238,7 @@ async function waitForNoteAIJobResult(
     };
     timeout = window.setTimeout(() => {
       void queryClient.fetchQuery(noteAIJobOptions(jobId)).then((job) => {
+        onStatus?.(job.status);
         const value = noteAIJobResult(job, messages);
         if (value) finish(() => resolve(value));
         else finish(() => reject(new Error(messages.timeout)));
@@ -243,6 +246,7 @@ async function waitForNoteAIJobResult(
     }, 90000);
     unsubscribe = observer.subscribe((result) => {
       if (!result.data) return;
+      onStatus?.(result.data.status);
       try {
         const value = noteAIJobResult(result.data, messages);
         if (value) finish(() => resolve(value));
@@ -913,8 +917,8 @@ function NoteEditor({
   shareNames: string[];
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
-  onOptimizeSelection: (request: TextOptimizationRequest, options?: { signal?: AbortSignal }) => Promise<NoteAIEditResult>;
-  onEditPageWithAI: (request: PageEditAIRequest, options?: { signal?: AbortSignal }) => Promise<NoteAIEditResult>;
+  onOptimizeSelection: (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
+  onEditPageWithAI: (request: PageEditAIRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
 }) {
   const { t } = useT("layout");
   const editorRef = useRef<ContentEditorRef | null>(null);
@@ -1273,7 +1277,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   };
 
   const runNoteAiEdit = useCallback(
-    async ({ title, prompt }: { title: string; prompt: string }, options?: { signal?: AbortSignal }) => {
+    async ({ title, prompt }: { title: string; prompt: string }, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => {
       if (!selected?.id) throw new Error(t(($) => $.notes_page.ai_optimize_failed));
       const agent = agents.find((item) => item.id === configuredAiAgentId);
       if (!agent) {
@@ -1290,6 +1294,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
       try {
         const job = await api.createNoteAIJob(selected.id, { agent_id: agent.id, title, prompt });
         jobId = job.id;
+        options?.onStatus?.(job.status);
         queryClient.setQueryData(noteAIJobOptions(job.id).queryKey, job);
         if (signal?.aborted) {
           cancelJob();
@@ -1298,7 +1303,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         return await waitForNoteAIJobResult(queryClient, job.id, {
           failed: t(($) => $.notes_page.ai_optimize_failed),
           timeout: t(($) => $.notes_page.ai_optimize_timeout),
-        }, signal);
+        }, signal, options?.onStatus);
       } finally {
         signal?.removeEventListener("abort", cancelJob);
       }
@@ -1307,7 +1312,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   );
 
   const optimizeSelectedNoteText = useCallback(
-    async (request: TextOptimizationRequest, options?: { signal?: AbortSignal }) =>
+    async (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) =>
       runNoteAiEdit({
         title: t(($) => $.notes_page.ai_optimize_chat_title, { title: selected?.title || t(($) => $.notes_page.title) }),
         prompt: buildNoteOptimizationPrompt(request, selected?.title || "Untitled"),
@@ -1316,7 +1321,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   );
 
   const editNotePageWithAI = useCallback(
-    async (request: PageEditAIRequest, options?: { signal?: AbortSignal }) =>
+    async (request: PageEditAIRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) =>
       runNoteAiEdit({
         title: t(($) => $.notes_page.ai_page_edit_chat_title, { title: selected?.title || t(($) => $.notes_page.title) }),
         prompt: buildNotePageEditPrompt(request, selected?.title || "Untitled"),

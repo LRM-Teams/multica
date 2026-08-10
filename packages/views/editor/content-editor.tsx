@@ -45,7 +45,7 @@ import { cn } from "@multica/ui/lib/utils";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceSlug } from "@multica/core/paths";
 import { useQueryClient } from "@tanstack/react-query";
-import type { Attachment, NoteAIEditResult } from "@multica/core/types";
+import type { Attachment, NoteAIEditResult, NoteAIJobStatus } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
 import { Slice } from "@tiptap/pm/model";
 import {
@@ -94,7 +94,7 @@ interface ContentEditorProps {
   /** Show the floating formatting toolbar on text selection. Defaults true. */
   showBubbleMenu?: boolean;
   /** Optional AI rewrite action for the selected text plus nearby context. */
-  onOptimizeSelection?: (request: TextOptimizationRequest, options?: { signal?: AbortSignal }) => Promise<NoteAIEditResult>;
+  onOptimizeSelection?: (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
   /** Optional Notion-style empty-line AI action for editing the current page. */
   onEditPageWithAI?: PageEditAIAction;
   /** Applies an AI-suggested title only after the user confirms an edit. */

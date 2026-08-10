@@ -47,6 +47,15 @@
       "cancel": "取消",
       "run": "运行",
       "failed": "优化文本失败",
+      "invalid_markdown": "AI 返回的 Markdown 无法应用。",
+      "status_starting": "正在启动 AI 编辑…",
+      "status_queued": "排队中…",
+      "status_dispatched": "等待智能体响应…",
+      "status_running": "AI 正在编辑…",
+      "status_cancelling": "正在取消…",
+      "status_completed": "已完成",
+      "status_failed": "失败",
+      "status_cancelled": "已取消",
       "empty_result": "智能体返回了空的优化结果。"
     }
   },
@@ -196,6 +205,15 @@
     "replace_page": "替换整页",
     "discard": "舍弃",
     "failed": "AI 编辑失败",
+    "invalid_markdown": "AI 返回的 Markdown 无法应用。",
+    "status_starting": "正在启动 AI 编辑…",
+    "status_queued": "排队中…",
+    "status_dispatched": "等待智能体响应…",
+    "status_running": "AI 正在编辑…",
+    "status_cancelling": "正在取消…",
+    "status_completed": "已完成",
+    "status_failed": "失败",
+    "status_cancelled": "已取消",
     "empty_result": "智能体返回了空的编辑结果。"
   }
 }

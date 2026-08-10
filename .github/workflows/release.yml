@@ -14,6 +14,9 @@ permissions:
 
 env:
   GHCR_OWNER: lrm-teams
+  MULTICA_APP_URL: ${{ vars.MULTICA_APP_URL || 'https://www.leagent.me' }}
+  MULTICA_API_URL: ${{ vars.MULTICA_API_URL || 'https://api.leagent.me' }}
+  MULTICA_WS_URL: ${{ vars.MULTICA_WS_URL || 'wss://api.leagent.me/ws' }}
 
 jobs:
   verify:
@@ -494,6 +497,9 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/${{ env.GHCR_OWNER }}/multica-web:buildcache-release-${{ env.PLATFORM_PAIR }},mode=max
           build-args: |
             REMOTE_API_URL=http://backend:8080
+            NEXT_PUBLIC_APP_URL=${{ env.MULTICA_APP_URL }}
+            NEXT_PUBLIC_API_URL=${{ env.MULTICA_API_URL }}
+            NEXT_PUBLIC_WS_URL=${{ env.MULTICA_WS_URL }}
             NEXT_PUBLIC_APP_VERSION=${{ needs.verify.outputs.tag_name }}
           outputs: type=image,name=ghcr.io/${{ env.GHCR_OWNER }}/multica-web,push-by-digest=true,name-canonical=true,push=true
 

@@ -30,7 +30,7 @@ compliance matrix before being released.
 
 ```bash
 # Run all cases for a specific provider
-go run scripts/provider-compliance-matrix/main.go --provider pi --server-url https://leagent.me
+go run scripts/provider-compliance-matrix/main.go --provider pi --server-url https://api.leagent.me
 
 # Run a specific case
 go run scripts/provider-compliance-matrix/main.go --provider pi --case 3

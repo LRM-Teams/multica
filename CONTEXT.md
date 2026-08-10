@@ -17,7 +17,7 @@ _Avoid_: Agent workdir, machine directory
 
 The single machine-local authority for supervising Multica execution under one
 OS user environment. It connects to the Multica service at the canonical
-server origin `https://leagent.me` and may manage Workspace Execution Bindings
+server origin `https://api.leagent.me` and may manage Workspace Execution Bindings
 for multiple Workspaces.
 _Avoid_: Profile daemon, Workspace daemon
 

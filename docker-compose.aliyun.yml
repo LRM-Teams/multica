@@ -1,6 +1,6 @@
-# The dev deployment on 101.200.210.144 is served through leagent.me by the
-# repository-managed Caddy service. Keep application ports private to the host
-# or Compose network; only Caddy exposes the public HTTP/HTTPS entrypoints.
+# The dev deployment on 101.200.210.144 serves the web app and API through
+# environment-specific hosts. Keep application ports private to the host or
+# Compose network; only Caddy exposes public HTTP/HTTPS.
 #
 # Aliyun OSS credentials / SDK workarounds live in docker-compose.oss.yml —
 # deploy.yml always stacks selfhost + aliyun + oss (see LRM-766).
@@ -9,10 +9,12 @@ services:
     ports: !override
       - "127.0.0.1:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}:8080"
     environment:
-      FRONTEND_ORIGIN: https://leagent.me
-      GOOGLE_REDIRECT_URI: https://leagent.me/auth/callback
-      MULTICA_APP_URL: https://leagent.me
-      MULTICA_PUBLIC_URL: https://leagent.me
+      FRONTEND_ORIGIN: ${MULTICA_APP_URL:-https://www.leagent.me}
+      GOOGLE_REDIRECT_URI: ${MULTICA_GOOGLE_REDIRECT_URI:-https://www.leagent.me/auth/callback}
+      MULTICA_APP_URL: ${MULTICA_APP_URL:-https://www.leagent.me}
+      MULTICA_PUBLIC_URL: ${MULTICA_API_URL:-https://api.leagent.me}
+      CORS_ALLOWED_ORIGINS: ${MULTICA_CORS_ALLOWED_ORIGINS:-https://www.leagent.me,https://leagent.me}
+      COOKIE_DOMAIN: ${MULTICA_COOKIE_DOMAIN:-leagent.me}
       # LLM proxy base_url injected into env-dispatch training sandboxes. Must be
       # the address the cube sandbox VM can actually route to. The training pi
       # agent runs inside a cube microVM on the 192.168.0.0/18 network whose
@@ -44,6 +46,10 @@ services:
     depends_on:
       - frontend
       - backend
+    environment:
+      MULTICA_ROOT_HOST: ${MULTICA_ROOT_HOST:-leagent.me}
+      MULTICA_APP_HOST: ${MULTICA_APP_HOST:-www.leagent.me}
+      MULTICA_API_HOST: ${MULTICA_API_HOST:-api.leagent.me}
     ports:
       - "0.0.0.0:80:80"
       - "0.0.0.0:443:443"

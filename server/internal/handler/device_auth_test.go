@@ -77,8 +77,8 @@ func TestRequestDeviceCode_ReturnsRFC8628Shape(t *testing.T) {
 
 func TestDeviceAuthAppURLDefaultsToLeAgent(t *testing.T) {
 	t.Setenv("FRONTEND_ORIGIN", "")
-	if got := deviceAuthAppURL(); got != "https://leagent.me" {
-		t.Fatalf("deviceAuthAppURL() = %q, want https://leagent.me", got)
+	if got := deviceAuthAppURL(); got != "https://www.leagent.me" {
+		t.Fatalf("deviceAuthAppURL() = %q, want https://www.leagent.me", got)
 	}
 
 	t.Setenv("FRONTEND_ORIGIN", "https://self-host.example")

@@ -79,7 +79,7 @@ Now create an issue (or reassign an existing one) → set assignee = Multica Hel
 ## Where to go next
 
 - **Skills** — reusable instruction packs you can attach to any agent.
-- **Docs** — https://leagent.me/docs.`;
+- **Docs** — https://www.leagent.me/docs.`;
 }
 
 function zhBody(installRuntimeMention: string, lang: HelperInstructionsLang): string {
@@ -119,5 +119,5 @@ ${HELPER_INSTRUCTIONS[lang]}
 ## 接下来去哪
 
 - **Skills** —— 可复用的指令包，可挂到任何 agent 上。
-- **文档** —— https://leagent.me/docs。`;
+- **文档** —— https://www.leagent.me/docs。`;
 }

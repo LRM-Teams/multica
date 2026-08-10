@@ -32,7 +32,7 @@ var loginTokenPrefixes = []string{"mul_", auth.CloudPATPrefix}
 // (#2488). It is overridable only by tests (never by user-facing flags or
 // env vars), so Cloud login cannot be redirected by a legacy profile,
 // --server-url, or MULTICA_SERVER_URL.
-var cloudServerBaseURL = "https://leagent.me"
+var cloudServerBaseURL = cli.OfficialCloudAPIURL
 
 // cloudServerURL returns the normalized Cloud API base used by login.
 func cloudServerURL() string { return normalizeAPIBaseURL(cloudServerBaseURL) }

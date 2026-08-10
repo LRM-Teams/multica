@@ -4,11 +4,23 @@ import "testing"
 
 func TestAdoptionCanonicalUnambiguousAuto(t *testing.T) {
 	v, err := EvaluateAdoption(LegacyEvidence{
-		OriginHost: "leagent.me", SignedInUser: "u", WorkspaceID: "ws",
+		OriginHost: "api.leagent.me", SignedInUser: "u", WorkspaceID: "ws",
 		ComputerIDCandidates: []string{"c1"},
 	})
 	if err != nil || v != AdoptAuto {
 		t.Fatalf("canonical+unambiguous = %v, %v; want AdoptAuto", v, err)
+	}
+}
+
+func TestAdoptionAcceptsLegacyCloudHostsDuringMigration(t *testing.T) {
+	for _, host := range []string{"leagent.me", "www.leagent.me"} {
+		v, err := EvaluateAdoption(LegacyEvidence{
+			OriginHost: host, SignedInUser: "u", WorkspaceID: "ws",
+			ComputerIDCandidates: []string{"c1"},
+		})
+		if err != nil || v != AdoptAuto {
+			t.Fatalf("legacy cloud host %q = %v, %v; want AdoptAuto", host, v, err)
+		}
 	}
 }
 
@@ -24,8 +36,8 @@ func TestAdoptionRejectsNonCanonicalAndLocalhost(t *testing.T) {
 func TestAdoptionAmbiguousNeedsExplicitChoice(t *testing.T) {
 	// No user/workspace, or conflicting candidate ids → never silent.
 	cases := []LegacyEvidence{
-		{OriginHost: "leagent.me", ComputerIDCandidates: []string{"c1"}},                       // no user/ws
-		{OriginHost: "leagent.me", SignedInUser: "u", WorkspaceID: "ws"},                        // no id
+		{OriginHost: "leagent.me", ComputerIDCandidates: []string{"c1"}},                                             // no user/ws
+		{OriginHost: "leagent.me", SignedInUser: "u", WorkspaceID: "ws"},                                             // no id
 		{OriginHost: "leagent.me", SignedInUser: "u", WorkspaceID: "ws", ComputerIDCandidates: []string{"c1", "c2"}}, // conflicting
 	}
 	for _, e := range cases {

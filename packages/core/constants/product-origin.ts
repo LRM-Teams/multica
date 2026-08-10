@@ -7,7 +7,7 @@
  */
 
 /** Public web app origin (no trailing slash). */
-export const PRODUCT_APP_ORIGIN = "https://leagent.me";
+export const PRODUCT_APP_ORIGIN = "https://www.leagent.me";
 
 /** Public HTTP API origin. */
 export const PRODUCT_API_ORIGIN = "https://api.leagent.me";
@@ -19,7 +19,7 @@ export const PRODUCT_WS_ORIGIN = "wss://api.leagent.me/ws";
 export const PRODUCT_HOST_LABEL = "leagent.me";
 
 /** Public docs root. */
-export const PRODUCT_DOCS_ORIGIN = "https://leagent.me/docs";
+export const PRODUCT_DOCS_ORIGIN = "https://www.leagent.me/docs";
 
 /** Public changelog. */
-export const PRODUCT_CHANGELOG_URL = "https://leagent.me/changelog";
+export const PRODUCT_CHANGELOG_URL = "https://www.leagent.me/changelog";

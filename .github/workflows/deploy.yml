@@ -43,6 +43,19 @@ concurrency:
   group: deploy-aliyun
   cancel-in-progress: false
 
+# Public deployment coordinates are configuration, not application constants.
+# Repository variables can replace these defaults for a test/staging target.
+env:
+  MULTICA_ROOT_HOST: ${{ vars.MULTICA_ROOT_HOST || 'leagent.me' }}
+  MULTICA_APP_HOST: ${{ vars.MULTICA_APP_HOST || 'www.leagent.me' }}
+  MULTICA_API_HOST: ${{ vars.MULTICA_API_HOST || 'api.leagent.me' }}
+  MULTICA_APP_URL: ${{ vars.MULTICA_APP_URL || 'https://www.leagent.me' }}
+  MULTICA_API_URL: ${{ vars.MULTICA_API_URL || 'https://api.leagent.me' }}
+  MULTICA_WS_URL: ${{ vars.MULTICA_WS_URL || 'wss://api.leagent.me/ws' }}
+  MULTICA_CORS_ALLOWED_ORIGINS: ${{ vars.MULTICA_CORS_ALLOWED_ORIGINS || 'https://www.leagent.me,https://leagent.me' }}
+  MULTICA_COOKIE_DOMAIN: ${{ vars.MULTICA_COOKIE_DOMAIN || 'leagent.me' }}
+  MULTICA_GOOGLE_REDIRECT_URI: ${{ vars.MULTICA_GOOGLE_REDIRECT_URI || 'https://www.leagent.me/auth/callback' }}
+
 jobs:
   prepare:
     # Package the exact committed deployment contract on a self-hosted CI runner.
@@ -75,12 +88,14 @@ jobs:
           install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
           install -m 0755 scripts/run-aliyun-backend-migration.sh "${bundle}/scripts/run-aliyun-backend-migration.sh"
           install -m 0644 scripts/validate-rtc-environment.sh "${bundle}/scripts/validate-rtc-environment.sh"
+          install -m 0755 scripts/validate-public-origins.sh "${bundle}/scripts/validate-public-origins.sh"
           install -m 0755 scripts/assert-oss-compose-credentials.sh "${bundle}/scripts/assert-oss-compose-credentials.sh"
 
       - name: Validate deploy bundle
         run: |
           set -euo pipefail
           bundle="${RUNNER_TEMP}/multica-deploy-bundle"
+          bash "${bundle}/scripts/validate-public-origins.sh"
           docker compose \
             --project-name multica \
             --project-directory "$bundle" \
@@ -190,6 +205,9 @@ jobs:
             ${{ steps.prep.outputs.web_image }}:${{ steps.prep.outputs.tag }}
           build-args: |
             REMOTE_API_URL=http://backend:8080
+            NEXT_PUBLIC_APP_URL=${{ env.MULTICA_APP_URL }}
+            NEXT_PUBLIC_API_URL=${{ env.MULTICA_API_URL }}
+            NEXT_PUBLIC_WS_URL=${{ env.MULTICA_WS_URL }}
             NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
           cache-from: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-dev-amd64
           cache-to: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-dev-amd64,mode=max
@@ -328,6 +346,7 @@ jobs:
           # Aliyun/dev is the shared integration environment; keep this off by
           # default in docker-compose.selfhost.yml and opt in only for this lane.
           export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/validate-public-origins.sh"
           if [ ! -r "${DEPLOY_DIR}/.env" ]; then
             echo "::error::${DEPLOY_DIR}/.env is not readable by deploy user $(id -un)."
             exit 1
@@ -533,9 +552,9 @@ jobs:
           # Caddy reaches both app services only through their Docker service
           # names. These probes therefore validate the running container,
           # Compose DNS, Caddy upstream routing, and the externally served dev
-          # listeners as one boundary. The HTTPS probe connects to loopback
-          # while retaining leagent.me as the TLS identity, avoiding dependence
-          # on provider NAT hairpin behavior.
+          # listeners as one boundary. HTTPS probes connect to loopback while
+          # retaining the public www/API TLS identities, avoiding dependence on
+          # provider NAT hairpin behavior.
           for i in $(seq 1 45); do
             frontend_id="$(compose ps -q frontend)"
             backend_id="$(compose ps -q backend)"
@@ -556,16 +575,16 @@ jobs:
               curl -fsS --max-time 5 http://127.0.0.1:8090/ >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/healthz >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 && \
-              [ "$(curl -fsS -o /dev/null -w '%{redirect_url}' --max-time 5 -H 'Accept: text/html' http://127.0.0.1:8090/)" = "https://leagent.me/" ] && \
-              curl --resolve leagent.me:443:127.0.0.1 -fsS --max-time 5 https://leagent.me/healthz >/dev/null 2>&1 && \
-              curl --resolve leagent.me:443:127.0.0.1 -fsS --max-time 5 https://leagent.me/health >/dev/null 2>&1; then
-              echo "Frontend, backend, Caddy HTTP, and leagent.me HTTPS healthy after $((i * 2))s."
+              [ "$(curl -fsS -o /dev/null -w '%{redirect_url}' --max-time 5 -H 'Accept: text/html' http://127.0.0.1:8090/)" = "${MULTICA_APP_URL}/" ] && \
+              curl --resolve "${MULTICA_APP_HOST}:443:127.0.0.1" -fsS --max-time 5 "${MULTICA_APP_URL}/healthz" >/dev/null 2>&1 && \
+              curl --resolve "${MULTICA_API_HOST}:443:127.0.0.1" -fsS --max-time 5 "${MULTICA_API_URL}/health" >/dev/null 2>&1; then
+              echo "Frontend, backend, Caddy HTTP, and www/API HTTPS healthy after $((i * 2))s."
               exit 0
             fi
             echo "waiting for frontend/backend/Caddy/HTTPS readiness... ($i/45) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none} voice_configured=${backend_voice_configured:-false} caddy=${caddy_status:-none}"
             sleep 2
           done
-          echo "::error::frontend/backend/Caddy HTTP redirect + leagent.me HTTPS did not pass within 90s."
+          echo "::error::frontend/backend/Caddy HTTP redirect + www/API HTTPS did not pass within 90s."
           compose ps frontend backend caddy || true
           docker logs --tail 100 multica-caddy || true
           docker logs --tail 80 multica-frontend-1 || true

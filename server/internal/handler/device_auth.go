@@ -116,7 +116,7 @@ func (h *Handler) RequestDeviceCode(w http.ResponseWriter, r *http.Request) {
 func deviceAuthAppURL() string {
 	appURL := strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN"))
 	if appURL == "" {
-		return "https://leagent.me"
+		return "https://www.leagent.me"
 	}
 	return appURL
 }

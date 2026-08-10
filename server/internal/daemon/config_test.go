@@ -191,10 +191,10 @@ func TestIsOfficialCloudServer(t *testing.T) {
 		url  string
 		want bool
 	}{
-		{"canonical cloud https", "https://leagent.me", true},
-		{"canonical cloud with trailing slash stripped", "https://leagent.me/", true},
-		{"canonical cloud case-insensitive", "https://LEAGENT.ME", true},
-		{"cloud over plain http (unusual but match host)", "http://leagent.me", true},
+		{"canonical cloud API", "https://api.leagent.me", true},
+		{"legacy bare cloud host", "https://leagent.me/", true},
+		{"legacy www cloud host", "https://WWW.LEAGENT.ME", true},
+		{"legacy cloud over plain http", "http://leagent.me", true},
 		{"localhost is self-host", "http://localhost:8080", false},
 		{"loopback ip is self-host", "http://127.0.0.1:8080", false},
 		{"lan ip is self-host", "http://192.168.0.28:8080", false},
@@ -213,6 +213,28 @@ func TestIsOfficialCloudServer(t *testing.T) {
 				t.Errorf("isOfficialCloudServer(%q) = %v, want %v", tc.url, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeServerBaseURLMigratesLegacyCloudHosts(t *testing.T) {
+	for _, raw := range []string{
+		"https://leagent.me",
+		"https://www.leagent.me/",
+		"wss://leagent.me/ws",
+	} {
+		got, err := NormalizeServerBaseURL(raw)
+		if err != nil {
+			t.Fatalf("NormalizeServerBaseURL(%q): %v", raw, err)
+		}
+		if got != cli.OfficialCloudAPIURL {
+			t.Errorf("NormalizeServerBaseURL(%q) = %q, want %q", raw, got, cli.OfficialCloudAPIURL)
+		}
+	}
+
+	const testOrigin = "https://api.test.leagent.me"
+	got, err := NormalizeServerBaseURL(testOrigin)
+	if err != nil || got != testOrigin {
+		t.Fatalf("test origin must remain configurable: got %q, err=%v", got, err)
 	}
 }
 

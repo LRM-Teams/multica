@@ -1,13 +1,13 @@
 /**
  * LRM-844 AC2: 20 consecutive desktop cold-start hard refreshes.
- * Prefer production Next with the fix: REMOTE_API_URL=https://leagent.me next start
+ * Prefer production Next with the fix: REMOTE_API_URL=https://api.leagent.me next start
  */
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const BASE = process.env.BASE_URL || "http://127.0.0.1:3055";
-const AUTH_BASE = process.env.AUTH_BASE || "https://leagent.me";
+const AUTH_BASE = process.env.AUTH_BASE || "https://api.leagent.me";
 const EMAIL = process.env.QA_EMAIL || "qa-bot@lenovo.com";
 const CODE = process.env.QA_CODE || "888888";
 const RUNS = Number(process.env.RUNS || 20);

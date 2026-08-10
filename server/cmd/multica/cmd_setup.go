@@ -184,7 +184,7 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Configured for Multica Cloud (https://leagent.me).")
+	fmt.Fprintf(os.Stderr, "Configured for Multica Cloud (%s).\n", cli.OfficialCloudAppURL)
 	fmt.Fprintf(os.Stderr, "  server_url: %s\n", cfg.ServerURL)
 	fmt.Fprintf(os.Stderr, "  app_url:    %s\n", cfg.AppURL)
 	printConfigLocation(profile)

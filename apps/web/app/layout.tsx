@@ -7,6 +7,7 @@ import { WebProviders } from "@/components/web-providers";
 import type { SupportedLocale } from "@multica/core/i18n";
 import { RESOURCES } from "@multica/views/locales";
 import { getRequestLocale } from "@/lib/request-locale";
+import { PUBLIC_APP_ORIGIN } from "@/config/public-origin";
 import "./globals.css";
 
 // Inter is the Latin UI face. next/font produces a hashed family (`__Inter_xxx`)
@@ -58,7 +59,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://www.leagent.me"),
+  metadataBase: new URL(PUBLIC_APP_ORIGIN),
   title: {
     default: "Multica — Project Management for Human + Agent Teams",
     template: "%s | Multica",

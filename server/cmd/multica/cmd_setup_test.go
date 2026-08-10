@@ -49,11 +49,11 @@ func TestEstablishWorkspaceBindingPersistsLocalBinding(t *testing.T) {
 
 func TestCloudCLIConfigUsesLeAgentOrigins(t *testing.T) {
 	cfg := cloudCLIConfig()
-	if cfg.ServerURL != "https://leagent.me" {
-		t.Fatalf("server_url = %q, want https://leagent.me", cfg.ServerURL)
+	if cfg.ServerURL != "https://api.leagent.me" {
+		t.Fatalf("server_url = %q, want https://api.leagent.me", cfg.ServerURL)
 	}
-	if cfg.AppURL != "https://leagent.me" {
-		t.Fatalf("app_url = %q, want https://leagent.me", cfg.AppURL)
+	if cfg.AppURL != "https://www.leagent.me" {
+		t.Fatalf("app_url = %q, want https://www.leagent.me", cfg.AppURL)
 	}
 }
 

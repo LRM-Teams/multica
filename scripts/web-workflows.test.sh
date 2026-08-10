@@ -11,6 +11,7 @@ for disabled_workflow in \
 done
 
 release_workflow="$(<.github/workflows/release.yml)"
+deploy_workflow="$(<.github/workflows/deploy.yml)"
 # CLI/daemon archives are the sole non-web release lane retained after #1405:
 # Frank's Apple Silicon host needs the Darwin arm64 archive to upgrade Wendy.
 # Keep the server-image ARM runners disabled below.
@@ -27,6 +28,18 @@ if ! grep -Fq -- 'goreleaser/goreleaser-action' <<<"$release_workflow"; then
   echo "Daemon CLI release job must stay enabled"
   exit 1
 fi
+
+for workflow in "$deploy_workflow" "$release_workflow"; do
+  for required_public_setting in \
+    'NEXT_PUBLIC_APP_URL=${{ env.MULTICA_APP_URL }}' \
+    'NEXT_PUBLIC_API_URL=${{ env.MULTICA_API_URL }}' \
+    'NEXT_PUBLIC_WS_URL=${{ env.MULTICA_WS_URL }}'; do
+    if ! grep -Fq -- "$required_public_setting" <<<"$workflow"; then
+      echo "Web build is missing environment-specific public endpoint: $required_public_setting"
+      exit 1
+    fi
+  done
+done
 
 for required in \
   'publish-downloads-feed:' \

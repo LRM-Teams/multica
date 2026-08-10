@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // Diagnosis is a read-only evidence report for `computer doctor`. Nothing here
@@ -30,7 +32,7 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 
 	d := Diagnosis{
 		Resident:      "stopped",
-		CanonicalHost: "leagent.me",
+		CanonicalHost: cli.OfficialCloudAPIHost,
 	}
 
 	switch health["status"] {

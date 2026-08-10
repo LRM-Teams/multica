@@ -13,8 +13,8 @@ import { useT } from "../../i18n";
 export function RuntimeAsidePanel() {
   const { t, i18n } = useT("onboarding");
   const installDocHref = i18n.language?.startsWith("zh")
-    ? "https://leagent.me/docs/zh/install-agent-runtime"
-    : "https://leagent.me/docs/install-agent-runtime";
+    ? "https://www.leagent.me/docs/zh/install-agent-runtime"
+    : "https://www.leagent.me/docs/install-agent-runtime";
   return (
     <div className="flex flex-col gap-6">
       <section>

@@ -12,7 +12,7 @@ describe("runtime config", () => {
       schemaVersion: 1,
       apiUrl: "https://api.leagent.me",
       wsUrl: "wss://api.leagent.me/ws",
-      appUrl: "https://leagent.me",
+      appUrl: "https://www.leagent.me",
     });
   });
 

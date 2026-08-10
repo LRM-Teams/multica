@@ -3,14 +3,14 @@
  *
  * Usage:
  *   BASE_URL=http://127.0.0.1:13797 TOKEN=... node scripts/lrm-1264-heap-scan.mjs
- *   # or QA login against AUTH_BASE (default https://leagent.me)
+ *   # or QA login against AUTH_BASE (default https://api.leagent.me)
  *
  * Ready signal: channel title button "Open channel details" (same as LRM-1182 R2).
  */
 import { chromium } from "playwright";
 
 const BASE = process.env.BASE_URL || "http://127.0.0.1:13797";
-const AUTH_BASE = process.env.AUTH_BASE || "https://leagent.me";
+const AUTH_BASE = process.env.AUTH_BASE || "https://api.leagent.me";
 const EMAIL = process.env.QA_EMAIL || "qa-bot@lenovo.com";
 const CODE = process.env.QA_CODE || "888888";
 const PATH = process.env.APP_PATH || "/lrm-team/channels";

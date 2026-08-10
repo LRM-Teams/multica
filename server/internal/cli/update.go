@@ -83,19 +83,6 @@ func ReleaseWebURL() string {
 	return releaseManifestBaseURL()
 }
 
-// OfficialCloudAPIHost is the hostname of Multica's hosted cloud API. It is
-// the single source of truth for official-cloud checks and `multica setup`'s
-// default server URL.
-const OfficialCloudAPIHost = "leagent.me"
-
-// OfficialCloudAPIURL is OfficialCloudAPIHost as a full https:// base URL,
-// for callers that need a URL rather than a bare host.
-const OfficialCloudAPIURL = "https://" + OfficialCloudAPIHost
-
-// OfficialCloudAppURL is the browser origin used by the hosted Cloud setup
-// flow. Keep it explicit even though it currently shares the API hostname.
-const OfficialCloudAppURL = "https://leagent.me"
-
 const LegacyBrewPackage = "multica-ai/tap/multica"
 
 // BrewPackage returns the optional Homebrew package name to upgrade. It is

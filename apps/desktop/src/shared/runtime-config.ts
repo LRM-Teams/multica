@@ -19,7 +19,7 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = Object.freeze({
   schemaVersion: 1,
   apiUrl: "https://api.leagent.me",
   wsUrl: "wss://api.leagent.me/ws",
-  appUrl: "https://leagent.me",
+  appUrl: "https://www.leagent.me",
 });
 
 const LOCAL_DEV_RUNTIME_CONFIG: RuntimeConfig = Object.freeze({

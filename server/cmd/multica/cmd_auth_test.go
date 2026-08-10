@@ -93,14 +93,14 @@ func TestResolveAppURL(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		t.Setenv("MULTICA_APP_URL", "http://localhost:3000")
 		if err := cli.SaveCLIConfig(cli.CLIConfig{
-			ServerURL: "https://leagent.me",
-			AppURL:    "https://leagent.me",
+			ServerURL: "https://api.leagent.me",
+			AppURL:    "https://www.leagent.me",
 		}); err != nil {
 			t.Fatalf("SaveCLIConfig: %v", err)
 		}
 
-		if got := resolveAppURL(cmd); got != "https://leagent.me" {
-			t.Fatalf("resolveAppURL() = %q, want %q", got, "https://leagent.me")
+		if got := resolveAppURL(cmd); got != "https://www.leagent.me" {
+			t.Fatalf("resolveAppURL() = %q, want %q", got, "https://www.leagent.me")
 		}
 	})
 
@@ -501,18 +501,18 @@ func TestValidateLoginTokenPrefix(t *testing.T) {
 	}
 }
 
-// #2488: Cloud login origin is always the canonical leagent.me base and
+// #2488: Cloud login origin is always the canonical api.leagent.me base and
 // cannot be redirected by MULTICA_SERVER_URL or a flag/profile.
 func TestCloudLoginOriginIsCanonicalNotRedirectable(t *testing.T) {
 	old := cloudServerBaseURL
 	t.Cleanup(func() { cloudServerBaseURL = old })
 
-	cloudServerBaseURL = "https://leagent.me"
+	cloudServerBaseURL = cli.OfficialCloudAPIURL
 	t.Setenv("MULTICA_SERVER_URL", "http://evil.example:9999")
 
 	got := cloudServerURL()
-	if !strings.Contains(got, "leagent.me") || strings.Contains(got, "evil.example") {
-		t.Fatalf("cloudServerURL = %q, want canonical leagent.me (ignoring env)", got)
+	if got != "https://api.leagent.me" || strings.Contains(got, "evil.example") {
+		t.Fatalf("cloudServerURL = %q, want canonical api.leagent.me (ignoring env)", got)
 	}
 }
 

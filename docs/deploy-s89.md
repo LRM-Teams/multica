@@ -29,7 +29,7 @@ configuration, or database passwords in workflow logs or this repository.
 | Historical browser entry (not shared dev CD) | `https://82.157.184.89` |
 | Historical daemon/API HTTP entry | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
 | Caddy config source (s89 host) | `deploy/s89/Caddyfile` |
-| Shared dev product URL | **https://leagent.me** (Aliyun CD) |
+| Shared dev product URL | **https://www.leagent.me** (Aliyun CD) |
 
 The **Aliyun** deploy workflow runs only after `dev` changes (or an explicit
 manual dispatch) on runners labeled `aliyun`. If a job fails during

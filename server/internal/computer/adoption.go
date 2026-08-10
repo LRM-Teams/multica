@@ -3,6 +3,8 @@ package computer
 import (
 	"fmt"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // Legacy-adoption decision rules (#2492). Pure functions so the "what may be
@@ -11,7 +13,7 @@ import (
 // an adopted identity after it is fully verifiable.
 
 // CanonicHost is the single Cloud origin the Computer authenticates through.
-const CanonicHost = "leagent.me"
+const CanonicHost = cli.OfficialCloudAPIHost
 
 // AdoptionVerdict is the outcome of evaluating legacy Computer evidence.
 type AdoptionVerdict int
@@ -74,7 +76,7 @@ func isCanonicalOrigin(host string) bool {
 		strings.HasPrefix(h, "127.") || strings.HasPrefix(h, "192.168.") || strings.HasPrefix(h, "10.") {
 		return false
 	}
-	return h == CanonicHost || h == "leagent.me"
+	return cli.IsOfficialCloudHost(h)
 }
 
 func nonEmpty(in []string) []string {

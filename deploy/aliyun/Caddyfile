@@ -1,21 +1,45 @@
-(multica_app) {
+(multica_api) {
 	@multica_ws path /ws /ws/* /api/daemon/ws /api/sandbox/node/ws
 	reverse_proxy @multica_ws backend:8080 {
 		flush_interval -1
 	}
 
-	@multica_health path /health
-	reverse_proxy @multica_health backend:8080
+	reverse_proxy backend:8080
+}
 
+# Public web application. New browser builds call the configured API host;
+# redirects keep accidental /api and auth traffic off the www origin.
+{$MULTICA_APP_HOST:www.leagent.me} {
+	@service_path path /api/* /auth/* /uploads/* /ws /ws/*
+	redir @service_path https://{$MULTICA_API_HOST:api.leagent.me}{uri} 308
 	reverse_proxy frontend:3000
 }
 
-# Caddy manages and renews public ACME certificates for every hostname in this
-# site block. Keep api.leagent.me on the same application/API routing contract
-# so CLI and daemon requests under /api continue to reach the backend through
-# the frontend rewrite, while WebSocket and health routes stay direct.
-leagent.me, www.leagent.me, api.leagent.me {
-	import multica_app
+# Canonical API, authentication, attachment, health, and WebSocket origin.
+# Caddy obtains, persists, and renews this hostname's ACME certificate.
+{$MULTICA_API_HOST:api.leagent.me} {
+	import multica_api
+}
+
+# Bare-domain browser navigation is canonicalized to www. The legacy service
+# paths remain proxied during the client migration so already-running older
+# daemons do not disconnect; all newly built clients use the API host.
+{$MULTICA_ROOT_HOST:leagent.me} {
+	@legacy_ws path /ws /ws/* /api/daemon/ws /api/sandbox/node/ws
+	handle @legacy_ws {
+		reverse_proxy backend:8080 {
+			flush_interval -1
+		}
+	}
+
+	@legacy_service path /api/* /auth/* /uploads/* /health /healthz /readyz
+	handle @legacy_service {
+		reverse_proxy backend:8080
+	}
+
+	handle {
+		redir https://{$MULTICA_APP_HOST:www.leagent.me}{uri} 308
+	}
 }
 
 # Preserve the IP:8090 endpoint for daemon compatibility and deployment
@@ -23,7 +47,15 @@ leagent.me, www.leagent.me, api.leagent.me {
 # microphone access, and other secure-context browser APIs remain available.
 :8090 {
 	@browser_navigation header Accept *text/html*
-	redir @browser_navigation https://leagent.me{uri} 308
+	redir @browser_navigation https://{$MULTICA_APP_HOST:www.leagent.me}{uri} 308
 
-	import multica_app
+	@compat_ws path /ws /ws/* /api/daemon/ws /api/sandbox/node/ws
+	reverse_proxy @compat_ws backend:8080 {
+		flush_interval -1
+	}
+
+	@compat_health path /health /healthz /readyz
+	reverse_proxy @compat_health backend:8080
+
+	reverse_proxy frontend:3000
 }

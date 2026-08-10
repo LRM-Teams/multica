@@ -1,7 +1,8 @@
 import type { MetadataRoute } from "next";
+import { PUBLIC_APP_ORIGIN } from "@/config/public-origin";
 
 export default function robots(): MetadataRoute.Robots {
-  const baseUrl = "https://www.leagent.me";
+  const baseUrl = PUBLIC_APP_ORIGIN;
 
   return {
     rules: [

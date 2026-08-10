@@ -42,7 +42,7 @@ That gives you the project-management layer first. Once a runtime is connected, 
 
 ## Install your first agent runtime
 
-Full guide: https://leagent.me/docs/install-agent-runtime
+Full guide: https://www.leagent.me/docs/install-agent-runtime
 
 For English users, the fastest first path is Codex:
 
@@ -81,7 +81,7 @@ const zh = `欢迎来到 Multica。
 
 ## 安装第一个 Agent 运行时
 
-完整文档:https://leagent.me/docs/install-agent-runtime
+完整文档:https://www.leagent.me/docs/install-agent-runtime
 
 中文用户建议先装 Kimi CLI:
 

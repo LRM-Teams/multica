@@ -567,7 +567,7 @@ func isOfficialCloudServer(baseURL string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(u.Hostname(), officialCloudHost)
+	return cli.IsOfficialCloudHost(u.Hostname())
 }
 
 // NormalizeServerBaseURL converts a WebSocket or HTTP URL to a base HTTP URL.
@@ -591,7 +591,7 @@ func NormalizeServerBaseURL(raw string) (string, error) {
 	u.RawPath = ""
 	u.RawQuery = ""
 	u.Fragment = ""
-	return strings.TrimRight(u.String(), "/"), nil
+	return cli.CanonicalizeOfficialCloudAPIURL(strings.TrimRight(u.String(), "/")), nil
 }
 
 // ResolveWorkspacesRoot returns the absolute path that the daemon and CLI

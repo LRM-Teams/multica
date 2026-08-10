@@ -283,10 +283,12 @@ aliyun_backend_config="$(
 )"
 
 require_config "$aliyun_config" 'container_name: multica-caddy'
-require_config "$aliyun_config" 'FRONTEND_ORIGIN: https://leagent.me'
-require_config "$aliyun_config" 'GOOGLE_REDIRECT_URI: https://leagent.me/auth/callback'
-require_config "$aliyun_config" 'MULTICA_APP_URL: https://leagent.me'
-require_config "$aliyun_config" 'MULTICA_PUBLIC_URL: https://leagent.me'
+require_config "$aliyun_config" 'FRONTEND_ORIGIN: https://www.leagent.me'
+require_config "$aliyun_config" 'GOOGLE_REDIRECT_URI: https://www.leagent.me/auth/callback'
+require_config "$aliyun_config" 'MULTICA_APP_URL: https://www.leagent.me'
+require_config "$aliyun_config" 'MULTICA_PUBLIC_URL: https://api.leagent.me'
+require_config "$aliyun_config" 'CORS_ALLOWED_ORIGINS: https://www.leagent.me,https://leagent.me'
+require_config "$aliyun_config" 'COOKIE_DOMAIN: leagent.me'
 require_config "$aliyun_config" 'target: /etc/caddy/Caddyfile'
 require_config "$aliyun_backend_config" 'host_ip: 127.0.0.1'
 require_config "$aliyun_backend_config" 'AWS_ACCESS_KEY_ID'
@@ -340,11 +342,24 @@ require_config "$aliyun_controlled_config" 'POSTGRES_PASSWORD: multica'
 require_config "$aliyun_controlled_config" 'DATABASE_URL: postgres://multica:multica@postgres:5432/multica?sslmode=disable'
 
 aliyun_caddyfile="$(<deploy/aliyun/Caddyfile)"
-require_config "$aliyun_caddyfile" 'leagent.me, www.leagent.me'
+require_config "$aliyun_caddyfile" '{$MULTICA_APP_HOST:www.leagent.me}'
+require_config "$aliyun_caddyfile" '{$MULTICA_API_HOST:api.leagent.me}'
+require_config "$aliyun_caddyfile" '{$MULTICA_ROOT_HOST:leagent.me}'
 require_config "$aliyun_caddyfile" '@browser_navigation header Accept *text/html*'
-require_config "$aliyun_caddyfile" 'redir @browser_navigation https://leagent.me{uri} 308'
+require_config "$aliyun_caddyfile" 'redir @browser_navigation https://{$MULTICA_APP_HOST:www.leagent.me}{uri} 308'
 require_config "$aliyun_caddyfile" '/api/daemon/ws'
 require_config "$aliyun_caddyfile" '/api/sandbox/node/ws'
+
+MULTICA_ROOT_HOST=leagent.me \
+MULTICA_APP_HOST=www.leagent.me \
+MULTICA_API_HOST=api.leagent.me \
+MULTICA_APP_URL=https://www.leagent.me \
+MULTICA_API_URL=https://api.leagent.me \
+MULTICA_WS_URL=wss://api.leagent.me/ws \
+MULTICA_CORS_ALLOWED_ORIGINS=https://www.leagent.me,https://leagent.me \
+MULTICA_COOKIE_DOMAIN=leagent.me \
+MULTICA_GOOGLE_REDIRECT_URI=https://www.leagent.me/auth/callback \
+  bash scripts/validate-public-origins.sh >/dev/null
 
 for script in scripts/dev.sh scripts/check.sh; do
   if ! grep -Fq '. scripts/local-env.sh' "$script"; then

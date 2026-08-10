@@ -241,3 +241,43 @@ func TestUnknownProfileFailureSuppressesPublicOutput(t *testing.T) {
 		t.Fatal("unknown explicit profile failure could become public")
 	}
 }
+
+func TestAttentionProbeIsRestrictedProfile(t *testing.T) {
+	if !isRestrictedExecutionProfile(executionProfileAttentionProbe) {
+		t.Fatal("attention_probe should be a restricted profile")
+	}
+	// Approved task returns the profile itself.
+	task := Task{ExecutionConfig: &TaskExecutionConfig{ExecutionProfile: executionProfileAttentionProbe}}
+	got, err := taskExecutionProfile(task)
+	if err != nil {
+		t.Fatalf("taskExecutionProfile(attention_probe): %v", err)
+	}
+	if got != executionProfileAttentionProbe {
+		t.Fatalf("profile = %q, want %q", got, executionProfileAttentionProbe)
+	}
+	// Restricted execution still fails closed outside the Pi provider.
+	if err := validateExecutionProfileProvider(executionProfileAttentionProbe, "pi"); err != nil {
+		t.Fatalf("Pi rejected for attention_probe: %v", err)
+	}
+	if err := validateExecutionProfileProvider(executionProfileAttentionProbe, "codex"); err == nil {
+		t.Fatalf("unsupported provider accepted for attention_probe")
+	}
+}
+
+func TestParseRestrictedExecutionOutputAttentionProbe(t *testing.T) {
+	raw, err := parseRestrictedExecutionOutput(executionProfileAttentionProbe, `{"decision":"ANSWER","confidence":0.9,"value_type":"direct_answer","summary":"can help","evidence_refs":["m-1"]}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !strings.Contains(string(raw), `"decision":"ANSWER"`) {
+		t.Fatalf("result lacks decision: %s", raw)
+	}
+	// Restricted output never accepts prose around an otherwise valid object.
+	if _, err := parseRestrictedExecutionOutput(executionProfileAttentionProbe, `some prose {"decision":"CONTRIBUTE"} trailing`); err == nil {
+		t.Fatal("wrapped probe output should fail closed")
+	}
+	// An unusable output still errors (caller handles the single agent).
+	if _, err := parseRestrictedExecutionOutput(executionProfileAttentionProbe, `no json here`); err == nil {
+		t.Fatal("unusable probe output should error")
+	}
+}

@@ -100,3 +100,9 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
+
+# Keep semantic prereleases out of GitHub's stable "Latest" lane. The
+# production/test split in computer/metainfo.json remains the installer source
+# of truth, while GitHub now presents the same release maturity truthfully.
+release:
+  prerelease: auto

@@ -186,7 +186,8 @@ jobs:
         run: |
           set -euo pipefail
           current="${RUNNER_TEMP}/current-metainfo.json"
-          status="$(curl -sS -o "$current" -w '%{http_code}' "${PUBLIC_BASE_URL}/metainfo.json" || true)"
+          status="$(curl --retry 4 --retry-all-errors --connect-timeout 10 --max-time 30 \
+            -sS -o "$current" -w '%{http_code}' "${PUBLIC_BASE_URL}/metainfo.json" || true)"
           if [ "$status" = "200" ]; then
             jq -e '
               .schema_version == 1 and
@@ -219,7 +220,8 @@ jobs:
             fi
             [[ "$other_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]
             other_manifest="${RUNNER_TEMP}/bootstrap-${other_environment}.json"
-            curl -fsSL "${PUBLIC_BASE_URL}/${other_tag#v}/manifest.json" -o "$other_manifest"
+            curl --retry 4 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -fsSL "${PUBLIC_BASE_URL}/${other_tag#v}/manifest.json" -o "$other_manifest"
             jq -n \
               --arg environment "$other_environment" \
               --slurpfile other "$other_manifest" \

@@ -77,6 +77,7 @@ done
 for required in \
   'Resolve the Computer version pinned by test' \
   '"${COMPUTER_FEED_URL}/metainfo.json"' \
+  '--retry-all-errors --connect-timeout 10 --max-time 30' \
   "jq -er '.environments.test.tag'" \
   'NEXT_PUBLIC_COMPUTER_VERSION=${{ steps.computer_release.outputs.version }}'; do
   if ! grep -Fq -- "$required" <<<"$deploy_test_workflow"; then
@@ -118,6 +119,7 @@ for required in \
   's3://${OSS_BUCKET}/${canonical_prefix}/manifest.json' \
   'group: computer-release-feed' \
   'Build canonical environment metainfo' \
+  '--retry-all-errors --connect-timeout 10 --max-time 30' \
   's3://${OSS_BUCKET}/${RELEASE_PREFIX}/metainfo.json' \
   'verify_matches "${PUBLIC_BASE_URL}/metainfo.json"' \
   'Remove retired release metadata aliases' \

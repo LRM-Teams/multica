@@ -114,7 +114,8 @@ jobs:
         run: |
           set -euo pipefail
           metainfo="${RUNNER_TEMP}/computer-metainfo.json"
-          curl -fsSL "${COMPUTER_FEED_URL}/metainfo.json" -o "$metainfo"
+          curl --retry 4 --retry-all-errors --connect-timeout 10 --max-time 30 \
+            -fsSL "${COMPUTER_FEED_URL}/metainfo.json" -o "$metainfo"
           tag="$(jq -er '.environments.test.tag' "$metainfo")"
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]; then
             echo "::error title=Invalid test Computer release::${tag}"

@@ -99,6 +99,37 @@ All three preserve the server-side Agent identity, configuration, chat history,
 and Issues.
 _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
 
+## Agent Status Semantics
+
+### Agent Presence
+
+The binary user-facing reachability of a Workspace Agent: `Online` or
+`Offline`. It is derived from the current Workspace Runner connection together
+with the Manager's current managed/wakeable Agent state. Loading or missing
+evidence is not a third Presence state and must not be presented as Online.
+_Avoid_: Workload, runtime health, Disconnected, Stopped, Blocked, Crashed
+
+### Agent Activity
+
+A separate, best-effort projection of what an Agent is doing now and what it
+recently did. Activity may be Idle, Thinking, Working, or Error while Presence
+remains Online. Idle is Activity and never means Offline.
+_Avoid_: Presence, liveness heartbeat, management ownership
+
+### Agent Management State
+
+The internal active/inactive Manager ownership fact for a concrete Agent
+launch. It contributes to Agent Presence but is never compact user-interface
+copy.
+_Avoid_: Online label, Offline label, Stopped badge
+
+### Agent Diagnostic Reason
+
+A contextual explanation for lifecycle, transport, recovery, provider, or
+health evidence. Reasons belong in diagnostics, timelines, and recovery
+surfaces; they are never values of the Agent Presence enum.
+_Avoid_: Presence enum, compact Agent badge, avatar color
+
 ## Agent Message Delivery
 
 ### Message

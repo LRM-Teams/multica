@@ -33,7 +33,7 @@ import { chatTranscriptOptions, isTaskMessageTaskId } from "@multica/core/chat/q
 import { Markdown } from "@multica/views/common/markdown";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
-import type { AgentAvailability } from "@multica/core/agents";
+import type { AgentPresence } from "@multica/core/agents";
 import type { ChatMessage, ChatPendingTask, TaskFailureReason, TaskMessagePayload } from "@multica/core/types";
 import type { ChatTimelineItem } from "@multica/core/chat";
 import { parseStickerMessage } from "@multica/core/chat";
@@ -78,7 +78,7 @@ interface ChatListChrome {
   showStatusPill: boolean;
   pendingTask: ChatPendingTask | null | undefined;
   liveTaskMessages: readonly TaskMessagePayload[];
-  availability: AgentAvailability | undefined;
+  availability: AgentPresence | undefined;
   loadingOlderLabel: string;
   /** Stable key so process-fold open state survives live remounts (LRM-690). */
   liveFoldKey?: string;
@@ -142,7 +142,7 @@ interface ChatMessageListProps {
    */
   pendingTask: ChatPendingTask | null | undefined;
   /** Resolved presence; pass `undefined` while loading to keep the pill copy neutral. */
-  availability: AgentAvailability | undefined;
+  availability: AgentPresence | undefined;
   firstItemIndex?: number;
   hasOlderMessages?: boolean;
   isFetchingOlderMessages?: boolean;

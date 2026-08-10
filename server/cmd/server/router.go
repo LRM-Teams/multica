@@ -435,6 +435,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// The Runner contract remains dormant until the coordinated hard cut; this
 	// installs its fenced server intake without changing legacy WS routing.
 	daemonHub.SetWorkspaceRunnerHandler(h.HandleWorkspaceRunnerFrame)
+	daemonHub.SetWorkspaceRunnerDisconnectHandler(h.HandleWorkspaceRunnerDisconnect)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()
@@ -1094,6 +1095,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/agents", func(r chi.Router) {
 				r.Get("/", h.ListAgents)
 				r.Get("/runner-activity-summaries", h.ListRunnerActivitySummaries)
+				r.Get("/presence", h.GetAgentPresence)
 				r.Get("/fleet-rankings", h.GetAgentFleetRankings)
 				r.Get("/fleet-rank/rules", h.GetAgentFleetRankRules)
 				r.Get("/honor/rules", h.GetAgentHonorRules)

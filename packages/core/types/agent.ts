@@ -1,3 +1,4 @@
+/** Legacy persisted execution/diagnostic state. Never use as Agent Presence. */
 export type AgentStatus = "idle" | "working" | "blocked" | "error" | "offline";
 
 export type AgentRuntimeMode = "local" | "cloud";
@@ -19,11 +20,9 @@ export type RuntimeHealthState =
   | "offline";
 
 /**
- * `agentDisplayStatus*` in server/internal/handler/agent_health.go — the
- * honest, read-time lifecycle vocabulary for the agent list/detail health
- * badge (task #42③, 08-02 extended for Raft alignment). "crashed" isn't
- * emitted yet (task #1803) but is kept in the type so enabling it
- * server-side needs zero FE type changes.
+ * Legacy diagnostic compatibility vocabulary from Agent Health. Current Web
+ * Presence must never consume this field; lifecycle reasons belong only in
+ * diagnostics, Timeline, and recovery surfaces.
  */
 export type AgentRuntimeDisplayStatus =
   | "idle"
@@ -422,15 +421,8 @@ export interface Agent {
   /** ISO heartbeat from the bound runtime; pairs with `runtime_status`. */
   runtime_last_seen_at?: string | null;
   /**
-   * Honest, read-time status (task #42③) — freshness-gated the same way the
-   * Activity Health tab already is, so this never lags `runtime_status`'s
-   * up-to-180s sweeper delay. Prefer this over `runtime_status` for any
-   * live status badge. "crashed"/"thinking" are not emitted yet (no signal
-   * exists for them server-side — 08-02: "crashed" lands with task #1803,
-   * kept in the type now so turning it on server-side is a zero-FE-change
-   * flip, not guessed in the meantime) — values are kept hand-written in
-   * sync with `agentDisplayStatus*` in
-   * server/internal/handler/agent_health.go, not generated.
+   * Diagnostic/deprecated compatibility projection. Do not use for avatar,
+   * Profile, list, filter, or chat Presence; those read AgentPresence.
    */
   runtime_display_status?: AgentRuntimeDisplayStatus | null;
   /**
@@ -1389,4 +1381,14 @@ export interface RuntimeLocalSkillImportResult {
   status: "created" | "updated" | "conflict";
   skill?: Skill;
   conflict?: RuntimeLocalSkillImportConflict;
+}
+export type AgentPresence = "online" | "offline";
+
+export interface AgentPresenceItem {
+  agent_id: string;
+  presence: AgentPresence;
+}
+
+export interface AgentPresenceResponse {
+  items: AgentPresenceItem[];
 }

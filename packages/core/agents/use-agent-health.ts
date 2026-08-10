@@ -9,16 +9,9 @@ import { agentHealthOptions } from "./queries";
 // v0.1 contract. A thin wrapper over the single react-query options so consumers
 // get a stable shape and never touch query keys directly.
 //
-// One query fetches summary + events TOGETHER from `GET /api/agents/{id}/health`
-// — the presence dot COLOR and the Activity Health block consume the SAME
-// source (A1 same-source), never two caches that could drift.
-//
-// IMPORTANT (transitional): the health API may land AFTER this UI (#271). When
-// the endpoint isn't live, the query settles into an error (404) with `data`
-// undefined — this hook deliberately does NOT synthesise fake data. Callers
-// must degrade gracefully: the dot falls back to its prior color source and the
-// Health block shows loading/empty, never a crash. Once the BE is live,
-// `summary.state` becomes the SOLE color source for the presence dot.
+// One query fetches summary + events TOGETHER from `GET /api/agents/{id}/health`.
+// This is diagnostics-only evidence for the Activity Health block. It never
+// chooses avatar/Profile/list Presence or patches the Presence cache.
 
 export interface AgentHealthResult {
   summary: AgentHealthSummary | undefined;

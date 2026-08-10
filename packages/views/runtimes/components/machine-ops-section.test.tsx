@@ -50,9 +50,9 @@ vi.mock("@multica/core/workspace/queries", async (importOriginal) => {
 });
 
 vi.mock("@multica/core/agents", () => ({
-  useAgentPresenceDetail: () => "loading",
-  useRunnerActivity: () => ({ data: null }),
-  useWorkspacePresenceMap: () => ({ byAgent: new Map() }),
+  useAgentPresence: () => "loading",
+  useRunnerActivitySummary: () => ({ data: null }),
+  useWorkspaceAgentPresence: () => ({ byAgent: new Map(), loading: false }),
 }));
 
 vi.mock("../../navigation", () => ({

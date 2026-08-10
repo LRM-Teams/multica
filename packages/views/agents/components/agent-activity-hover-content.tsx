@@ -1,13 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { useWorkspaceId } from "@multica/core/hooks";
-import { runtimeListOptions } from "@multica/core/runtimes/queries";
-import { agentListOptions } from "@multica/core/workspace/queries";
-import { deriveAgentAvailability } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";
 import { workloadConfig } from "../presence";
 import { useT } from "../../i18n";
@@ -25,21 +20,14 @@ interface AgentActivityHoverContentProps {
  * (workspace-wide). One row per task: agent avatar, name, status dot,
  * status label, duration.
  *
- * Status colour follows the workspace's existing composition rule:
- *   - running                       → brand (text-brand)
- *   - queued, runtime online        → muted gray (transient race)
- *   - queued, runtime offline/etc.  → warning amber (genuine stuck)
- * — same rule as prior presence indicator so users see a single,
- * consistent language for "agent is in trouble" vs "just enqueued".
+ * This is Task workload, not Presence. Its label and tone are derived only
+ * from the Task state and never from Runtime reachability or Agent Presence.
  */
 export function AgentActivityHoverContent({
   tasks,
 }: AgentActivityHoverContentProps) {
   const { t } = useT("issues");
-  const wsId = useWorkspaceId();
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
 
   // Tick `now` once per second so the per-task duration label updates
   // live while the hover card is open. setInterval only runs while the
@@ -51,11 +39,6 @@ export function AgentActivityHoverContent({
     return () => clearInterval(id);
   }, []);
 
-  // Build O(1) lookups so each task row resolves agent + runtime without
-  // an N×M scan. Cheap — agents/runtimes count in tens at most.
-  const agentById = new Map(agents.map((a) => [a.id, a] as const));
-  const runtimeById = new Map(runtimes.map((r) => [r.id, r] as const));
-
   if (tasks.length === 0) return null;
 
   return (
@@ -65,27 +48,13 @@ export function AgentActivityHoverContent({
       </div>
       <div className="flex flex-col gap-1.5">
         {tasks.map((task) => {
-          const agent = agentById.get(task.agent_id);
-          const runtime = runtimeFrom(agent?.runtime_id, runtimeById);
-          const availability = deriveAgentAvailability(runtime, now);
           const isRunning = task.status === "running";
           // queued/dispatched both read as "queued" in the user-facing
           // copy — `dispatched` is the daemon-acked sub-state of queued
           // and not user-meaningful here.
           const wl = isRunning ? workloadConfig.working : workloadConfig.queued;
-          // queued + online → muted gray (transient race, no warning);
-          // queued + offline → keep warning amber from
-          // workloadConfig. Mirrors prior presence indicator.
-          const dotClass = isRunning
-            ? "bg-brand"
-            : availability === "online"
-              ? "bg-muted-foreground/40"
-              : "bg-warning";
-          const labelClass = isRunning
-            ? wl.textClass
-            : availability === "online"
-              ? "text-muted-foreground"
-              : wl.textClass;
+          const dotClass = isRunning ? "bg-brand" : "bg-muted-foreground/40";
+          const labelClass = wl.textClass;
           const startedFrom = isRunning
             ? (task.started_at ?? task.dispatched_at ?? task.created_at)
             : task.created_at;
@@ -122,14 +91,6 @@ export function AgentActivityHoverContent({
       </div>
     </div>
   );
-}
-
-function runtimeFrom<T extends { id: string }>(
-  id: string | undefined,
-  byId: Map<string, T>,
-): T | null {
-  if (!id) return null;
-  return byId.get(id) ?? null;
 }
 
 // Compact `2m 14s` / `45s` / `1h 03m` duration since the given ISO string.

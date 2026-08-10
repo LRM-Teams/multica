@@ -331,8 +331,6 @@ const RESOURCES = {
   row: {
     archived: "Archived",
   },
-  // Import real keys — do not hand-copy (Parker: mock drift).
-  lifecycle_status: enAgents.lifecycle_status,
 };
 
 // Extracted to a named const so the spreads below start from a concrete

@@ -22,6 +22,7 @@ export type WSEventType =
   | "comment:unresolved"
   | "agent:status"
   | "agent:activity"
+  | "agent:presence"
   | "agent:created"
   | "agent:archived"
   | "agent:restored"
@@ -313,6 +314,11 @@ export interface RunnerActivityRealtimePayload {
   activity: RunnerActivityResponse;
 }
 
+export interface AgentPresenceRealtimePayload {
+  agent_id: string;
+  presence: "online" | "offline";
+}
+
 export interface TaskQueuedPayload {
   task_id: string;
   agent_id: string;
@@ -538,6 +544,7 @@ export interface WSEventPayloadMap {
   "task:failed": TaskFailedPayload;
   "task:message": TaskMessagePayload;
   "agent:activity": RunnerActivityRealtimePayload;
+  "agent:presence": AgentPresenceRealtimePayload;
   "agent_reminder:changed": AgentReminderChangedPayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": unknown;

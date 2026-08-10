@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
-import type { AgentAvailability } from "@multica/core/agents";
+import type { AgentPresence } from "@multica/core/agents";
 import type { ChatPendingTask, TaskMessagePayload } from "@multica/core/types";
 import { formatElapsedSecs } from "../lib/format";
 import { useT } from "../../i18n";
@@ -14,7 +14,7 @@ interface Props {
   /** Live task-message stream — the latest non-error entry decides the running-stage label. */
   taskMessages: readonly TaskMessagePayload[];
   /** Resolved presence; pass `undefined` to suppress availability hints. */
-  availability: AgentAvailability | undefined;
+  availability: AgentPresence | undefined;
 }
 
 interface Stage {
@@ -74,7 +74,7 @@ const TOOL_KEY_BY_SLUG: Record<string, Exclude<ToolKey, "fallback">> = {
 export function pickStageKeys(
   status: string | undefined,
   taskMessages: readonly TaskMessagePayload[],
-  availability: AgentAvailability | undefined,
+  availability: AgentPresence | undefined,
 ): { stageKey: StageKey; toolKey?: ToolKey; static?: boolean } {
   if (
     (status === "queued" || status === "dispatched") &&
@@ -111,7 +111,7 @@ export function pickStageKeys(
 function useResolveStage(): (
   status: string | undefined,
   taskMessages: readonly TaskMessagePayload[],
-  availability: AgentAvailability | undefined,
+  availability: AgentPresence | undefined,
 ) => Stage {
   const { t } = useT("chat");
   return (status, taskMessages, availability) => {

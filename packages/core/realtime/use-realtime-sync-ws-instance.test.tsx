@@ -8,6 +8,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
 import { channelKeys } from "../channels/queries";
 import { runnerActivityKeys, runnerActivitySummaryKeys } from "../agents/queries";
+import { agentPresenceKeys } from "../agents/agent-presence";
 import { researchKeys } from "../research/queries";
 import { voiceCallKeys } from "../voice-calls/queries";
 import type {
@@ -112,10 +113,11 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (16 workspace-scoped + 6 per-issue prefixes + 1 channel-issues prefix
-    // (#562) + 1 session-scoped chat predicate + 1 workspaceKeys.list() = 25
+    // (17 workspace-scoped, including Activity summaries and Presence, +
+    // 6 per-issue prefixes + 1 channel-issues prefix (#562) + 1 session-scoped
+    // chat predicate + 1 workspaceKeys.list() = 26
     // calls; squads key removed in LRM-582; autopilot key removed in LRM-1050)
-    expect(invalidateSpy).toHaveBeenCalledTimes(25);
+    expect(invalidateSpy).toHaveBeenCalledTimes(26);
 
     // Assert the KEY, not just the count (Ronan): the reconnect resync must
     // invalidate the channel Tasks board prefix (#562) so tasks changed while
@@ -128,6 +130,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidatedKeys).toContainEqual(channelKeys.issuesRoot());
     expect(invalidatedKeys).toContainEqual(runnerActivitySummaryKeys.all("ws-1"));
     expect(invalidatedKeys).toContainEqual(runnerActivityKeys.root("ws-1"));
+    expect(invalidatedKeys).toContainEqual(agentPresenceKeys.workspace("ws-1"));
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -183,6 +186,43 @@ describe("useRealtimeSync — ws instance change", () => {
       vi.advanceTimersByTime(100);
 
       expect(qc.getQueryData(key)).toEqual(activity);
+      expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
+      expect(invalidateSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("patches Agent Presence once without REST invalidation", () => {
+    vi.useFakeTimers();
+    try {
+      const ws = createMockWs();
+      renderHook(() => useRealtimeSync(ws, stores), {
+        wrapper: createWrapper(qc),
+      });
+      const key = agentPresenceKeys.workspace("ws-1");
+      qc.setQueryData(key, new Map([["agent-1", "offline" as const]]));
+
+      const registrations = (ws.on as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([eventName]) => eventName === "agent:presence",
+      );
+      const presenceHandler = registrations[0]?.[1] as
+        | ((payload: unknown) => void)
+        | undefined;
+      const anyHandler = (ws.onAny as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        | ((message: { type: string; payload: unknown }) => void)
+        | undefined;
+
+      expect(registrations).toHaveLength(1);
+      invalidateSpy.mockClear();
+      presenceHandler?.({ agent_id: "agent-1", presence: "online" });
+      anyHandler?.({
+        type: "agent:presence",
+        payload: { agent_id: "agent-1", presence: "online" },
+      });
+      vi.advanceTimersByTime(100);
+
+      expect(qc.getQueryData(key)).toEqual(new Map([["agent-1", "online"]]));
       expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
       expect(invalidateSpy).not.toHaveBeenCalled();
     } finally {

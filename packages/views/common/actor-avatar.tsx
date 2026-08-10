@@ -11,10 +11,7 @@ import {
 import { useActorName } from "@multica/core/workspace/hooks";
 import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-name";
 import { useMemberOnline } from "@multica/core/workspace/use-member-presence";
-import {
-  useAgentPresenceDetail,
-  useRunnerActivitySummary,
-} from "@multica/core/agents";
+import { useAgentPresence, type AgentPresence } from "@multica/core/agents";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useMemberPanelStore } from "@multica/core/workspace";
@@ -56,11 +53,13 @@ interface ActorAvatarProps {
   enableHoverCard?: boolean;
   /**
    * Overlay a presence status dot at the avatar's bottom-right. Agents use
-   * runtime/task presence; members use WS online (LRM-462). Independent of
+   * server-owned Agent Presence; members use WS online (LRM-462). Independent of
    * `enableHoverCard` so picker rows can show the dot without nesting a
    * popover inside the dropdown.
    */
   showStatusDot?: boolean;
+  /** Optional page-level Presence snapshot avoids one Query observer per row. */
+  agentPresence?: AgentPresence | "loading";
   /**
    * Make the avatar click through to the actor page. Defaults on for members
    * and agents, while picker/menu controls keep their own click behavior.
@@ -101,6 +100,7 @@ export function ActorAvatar({
   avatarUrlHint,
   enableHoverCard,
   showStatusDot,
+  agentPresence,
   profileLink,
   showXpBurst = false,
   fleetRank,
@@ -141,7 +141,7 @@ export function ActorAvatar({
     />
   );
 
-  // Optional presence dot overlay. Agents use runtime presence; members use
+  // Optional presence dot overlay. Agents use server Presence; members use
   // WS online (LRM-462). Wrapping unconditionally would create extra DOM for
   // every avatar; we only wrap when a dot is asked for.
   const wrapDot =
@@ -149,7 +149,7 @@ export function ActorAvatar({
   const dotted = !wrapDot
     ? avatar
     : actorType === "agent" ? (
-        <AgentPresenceOverlay agentId={actorId} size={size}>
+        <AgentPresenceOverlay agentId={actorId} size={size} presence={agentPresence}>
           {avatar}
         </AgentPresenceOverlay>
       ) : (
@@ -361,11 +361,13 @@ export function AgentPresenceOverlay({
   agentId,
   size,
   className,
+  presence,
   children,
 }: {
   agentId: string;
   size?: number;
   className?: string;
+  presence?: AgentPresence | "loading";
   children: React.ReactNode;
 }) {
   // Base avatar defaults to 20px when `size` is omitted — keep the box in sync
@@ -381,7 +383,7 @@ export function AgentPresenceOverlay({
       style={{ width: boxSize, height: boxSize }}
     >
       {children}
-      <AgentStatusDot agentId={agentId} size={size} />
+      <AgentStatusDot agentId={agentId} size={size} presence={presence} />
     </span>
   );
 }
@@ -393,35 +395,46 @@ export function AgentPresenceOverlay({
 // minimum) so it reads correctly on both dense participant stacks (14–18px)
 // and large avatars. Exported for surfaces that render the base avatar
 // directly (e.g. comment trigger chips) but still want the standard dot.
-export function AgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
+export function AgentStatusDot({
+  agentId,
+  size,
+  presence,
+}: {
+  agentId: string;
+  size?: number;
+  presence?: AgentPresence | "loading";
+}) {
+  if (presence !== undefined) {
+    return <AgentStatusDotVisual presence={presence} size={size} />;
+  }
+  return <QueriedAgentStatusDot agentId={agentId} size={size} />;
+}
+
+function QueriedAgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
   const ws = useCurrentWorkspace();
-  const detail = useAgentPresenceDetail(ws?.id, agentId);
-  const { data: runnerActivity } = useRunnerActivitySummary(ws?.id, agentId);
-  if (detail === "loading") return null;
-  const live = toLiveAvailability(detail.availability);
+  const presence = useAgentPresence(ws?.id, agentId);
+  return <AgentStatusDotVisual presence={presence} size={size} />;
+}
+
+function AgentStatusDotVisual({
+  presence,
+  size,
+}: {
+  presence: AgentPresence | "loading";
+  size?: number;
+}) {
+  if (presence === "loading") return null;
+  const live = toLiveAvailability(presence);
   if (!live) return null;
-  const { dotClass: availabilityDotClass, label } = availabilityConfig[live];
+  const { dotClass, label } = availabilityConfig[live];
   // Diameter tracks the avatar so the indicator is proportional everywhere,
   // with a floor so it never disappears on the smallest (14–16px) avatars.
   const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
   const dotStyle = { width: diameter, height: diameter };
-  // Presence remains binary. A live Agent's current Runner observation adds
-  // a yellow motion cue while it works, including chat turns that have no
-  // Task row. Task workload remains a fallback for non-chat work.
-  const isWorking =
-    live === "online" &&
-    (["warning", "info", "active"].includes(runnerActivity?.tone ?? "") ||
-      detail.workload === "working");
-  const dotClass = isWorking ? "bg-warning" : availabilityDotClass;
-  // aria/title: Online / Offline only — never "Working" / "Unstable" as a
-  // live status label (LRM-248).
-  const statusLabel = label;
-
   // §3-v2 ①: an OFFLINE agent's dot is a HOLLOW gray ring (ring-only, no fill)
   // so "unavailable" reads distinctly from the filled active states. On tiny
   // participant-stack dots (~5px) a hollow ring is unreadable, so those fall
-  // back to the filled gray. Only the known-offline health state is hollow;
-  // the transitional availability fallback and all other states stay filled.
+  // back to the filled gray. Loading renders no dot at all.
   const HOLLOW_MIN_PX = 8;
   const isOfflineHollow = live === "offline" && diameter >= HOLLOW_MIN_PX;
   const dotColorClass = isOfflineHollow
@@ -433,25 +446,13 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
     // presence box — overflow:hidden ancestors can no longer shave the corner
     // into a residual arc (LRM-1119).
     <span className="pointer-events-none absolute bottom-0.5 right-0.5 z-[1] inline-flex">
-      {isWorking && (
-        // Motion layer only — hidden under prefers-reduced-motion so the
-        // static dot below remains the sole (accessible) status signal.
-        // aria-hidden: the label on the static dot already conveys "Working".
-        <span
-          aria-hidden="true"
-          style={dotStyle}
-          className={`absolute inline-flex animate-ping rounded-full ${dotClass} opacity-60 motion-reduce:hidden`}
-        />
-      )}
       {/* `ring-background` is a cut-out ring the color of the surface behind the
           dot, so it stays legible on dark/light/hover/selected backgrounds. */}
       <span
-        aria-label={`Status: ${statusLabel}`}
-        title={statusLabel}
+        aria-label={`Status: ${label}`}
+        title={label}
         style={dotStyle}
-        className={`relative rounded-full ring-2 ring-background ${dotColorClass} ${
-          isWorking ? "motion-reduce:ring-brand" : ""
-        }`}
+        className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
       />
     </span>
   );

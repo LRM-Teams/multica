@@ -24,10 +24,8 @@ export const agentHealthKeys = {
 };
 
 // Workspace-scoped agent task snapshot — every active task plus each agent's
-// most recent terminal task. This is the single shared source of truth that
-// powers per-agent presence derivation across the app. One fetch per
-// workspace; all agent dots / hover cards / list rows derive presence from
-// this cache with zero additional network traffic.
+// most recent terminal task. This is Task workload/capacity data only; Agent
+// Presence has its own server-owned Workspace query and never reads this cache.
 //
 // Freshness (post-step②): WS task events PATCH this cache in place
 // (`patchAgentTaskSnapshotStatus`) rather than invalidating it; the 30s

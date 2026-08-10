@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useAgentPresenceDetail } from "@multica/core/agents";
+import { useAgentPresence } from "@multica/core/agents";
 import { useT } from "../../i18n";
 import {
   formatPresenceStatus,
@@ -27,7 +27,7 @@ export function AgentCoarsePresenceLine({
 }) {
   const wsId = useWorkspaceId();
   const { t } = useT("agents");
-  const presence = useAgentPresenceDetail(wsId, agentId);
+  const presence = useAgentPresence(wsId, agentId);
   const status = useMemo<AgentLiveStatusView | null>(() => {
     const label = formatPresenceStatus(presence, t);
     const visual = presenceStatusVisual(presence);

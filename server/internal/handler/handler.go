@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -116,6 +117,8 @@ type Handler struct {
 	TxStarter                   txStarter
 	Hub                         *realtime.Hub
 	DaemonHub                   *daemonws.Hub
+	RunnerPresenceSource        RunnerPresenceSource
+	RunnerPresenceMu            *sync.Mutex
 	ReminderNotifier            daemonws.ReminderNotifier
 	AgentDeliveryNotifier       daemonws.AgentDeliveryNotifier
 	SandboxHub                  *sandboxws.Hub
@@ -279,6 +282,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		TxStarter:                   txStarter,
 		Hub:                         hub,
 		DaemonHub:                   daemonHub,
+		RunnerPresenceSource:        daemonHub,
+		RunnerPresenceMu:            &sync.Mutex{},
 		Bus:                         bus,
 		TaskService:                 taskSvc,
 		AgentFleetRankService:       agentFleetRankService,

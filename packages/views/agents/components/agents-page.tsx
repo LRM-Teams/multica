@@ -22,7 +22,7 @@ import {
   agentFleetRankingsOptions,
   summarizeActivityWindow,
   useWorkspaceActivityMap,
-  useWorkspacePresenceMap,
+  useWorkspaceAgentPresence,
 } from "@multica/core/agents";
 import { useAgentsViewStore } from "@multica/core/agents/stores";
 import { api } from "@multica/core/api";
@@ -77,7 +77,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { AgentActivityStatus } from "./agent-activity-list-item";
-import type { AgentPresenceDetail } from "@multica/core/agents";
+import type { AgentPresence } from "@multica/core/agents";
 
 // Filter axes:
 //
@@ -162,11 +162,10 @@ export function AgentsPage({
   const { data: runCountsRaw = [] } = useQuery(agentRunCounts30dOptions(wsId));
   const { data: fleetRankings = [] } = useQuery(agentFleetRankingsOptions(wsId));
 
-  // Single source of truth for derived agent state. The hook owns the
-  // 30s tick + the runtime/null/task orchestration; the page only reads
-  // the resulting Maps. Replaces the 24-line useMemo presenceMap +
-  // 12-line activityMap that lived here previously.
-  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+  // Presence is one server-owned Workspace snapshot. Consume it at the page
+  // boundary so a 30+ Agent rail does not mount one Query observer per row.
+  const { byAgent: presenceMap, loading: presenceLoading } =
+    useWorkspaceAgentPresence(wsId);
   const { byAgent: activityMap } = useWorkspaceActivityMap(wsId);
 
   const [view, setView] = useState<View>("active");
@@ -430,7 +429,7 @@ export function AgentsPage({
       // archived agents have no presence to match against.
       if (view === "active" && availabilityFilter !== "all") {
         const detail = presenceMap.get(a.id);
-        if (!matchesLiveAvailabilityFilter(detail?.availability, availabilityFilter)) {
+        if (!matchesLiveAvailabilityFilter(detail, availabilityFilter)) {
           return false;
         }
       }
@@ -471,9 +470,9 @@ export function AgentsPage({
     for (const a of inScopeOnMachine) {
       const detail = presenceMap.get(a.id);
       if (!detail) continue;
-      if (matchesLiveAvailabilityFilter(detail.availability, "online")) {
+      if (matchesLiveAvailabilityFilter(detail, "online")) {
         counts.online += 1;
-      } else if (matchesLiveAvailabilityFilter(detail.availability, "offline")) {
+      } else if (matchesLiveAvailabilityFilter(detail, "offline")) {
         counts.offline += 1;
       }
     }
@@ -780,7 +779,11 @@ export function AgentsPage({
                       agent={agent}
                       isOnboardingAgent={workspace?.onboarding_agent_id === agent.id}
                       fleet={fleetByAgentId.get(agent.id)}
-                      presence={presenceMap.get(agent.id)}
+                      presence={
+                        presenceLoading
+                          ? "loading"
+                          : presenceMap.get(agent.id) ?? "loading"
+                      }
                       selected={selectedAgent?.id === agent.id}
                       onClick={() => setSelectedId(agent.id)}
                     />
@@ -798,6 +801,11 @@ export function AgentsPage({
               runtime={runtimesById.get(selectedAgent.runtime_id) ?? null}
               metric={selectedMetric}
               fleet={fleetByAgentId.get(selectedAgent.id)}
+              presence={
+                presenceLoading
+                  ? "loading"
+                  : presenceMap.get(selectedAgent.id) ?? "loading"
+              }
               canManage={selectedCanManage}
               canLifecycle={selectedCanLifecycle}
               onHonor={() =>
@@ -1082,11 +1090,10 @@ function AgentRailRow({
   agent: Agent;
   isOnboardingAgent: boolean;
   fleet?: import("@multica/core/types/agent-fleet").AgentFleetRank;
-  presence?: AgentPresenceDetail;
+  presence: AgentPresence | "loading";
   selected: boolean;
   onClick: () => void;
 }) {
-	void presence;
   const { t } = useT("agents");
   const displayName = resolveActorDisplayName(agent, agent.name);
   const isArchived = !!agent.archived_at;
@@ -1113,6 +1120,7 @@ function AgentRailRow({
           size={32}
           fleetRank={fleet && !isArchived ? fleet.fleet_rank : undefined}
           showStatusDot={!isArchived}
+          agentPresence={presence}
           profileLink={false}
           className={isArchived ? "opacity-50 grayscale" : undefined}
         />

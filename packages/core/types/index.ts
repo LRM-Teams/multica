@@ -23,6 +23,9 @@ export type {
 } from "./agent-honor";
 export type {
   Agent,
+  AgentPresence,
+  AgentPresenceItem,
+  AgentPresenceResponse,
   AgentMemoryGrowth,
   AgentMemoryGrowthTier,
   AgentMemoryGrowthSegment,

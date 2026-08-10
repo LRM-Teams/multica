@@ -31,7 +31,7 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 		{"working", "future_detail", "Working..."},
 		{"error", "", "Error"},
 		{"offline", "machine_disconnected", "Offline"},
-		{"offline", "stopped", "Stopped"},
+		{"offline", "stopped", "Offline"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind+"/"+tc.detail, func(t *testing.T) {

@@ -22,7 +22,7 @@ vi.mock("@multica/core/agents", async () => {
   );
   return {
     ...actual,
-    useAgentPresenceDetail: () => mockPresence.current,
+    useAgentPresence: () => mockPresence.current,
   };
 });
 
@@ -43,13 +43,7 @@ describe("AgentCoarsePresenceLine (LRM-248)", () => {
   });
 
   it("shows Online as plain text — no second status dot", () => {
-    mockPresence.current = {
-      availability: "online",
-      workload: "idle",
-      runningCount: 0,
-      capacity: 1,
-      queuedCount: 0,
-    };
+    mockPresence.current = "online";
     renderLine();
     const mark = screen.getByTestId("agent-live-status");
     expect(mark).toHaveTextContent("Online");
@@ -58,13 +52,7 @@ describe("AgentCoarsePresenceLine (LRM-248)", () => {
   });
 
   it("shows Online while a task runs — never Working", () => {
-    mockPresence.current = {
-      availability: "online",
-      workload: "working",
-      runningCount: 1,
-      capacity: 2,
-      queuedCount: 0,
-    };
+    mockPresence.current = "online";
     renderLine();
     const mark = screen.getByTestId("agent-live-status");
     expect(mark).toHaveTextContent("Online");
@@ -72,13 +60,7 @@ describe("AgentCoarsePresenceLine (LRM-248)", () => {
   });
 
   it("shows Offline when the runtime is down", () => {
-    mockPresence.current = {
-      availability: "offline",
-      workload: "idle",
-      runningCount: 0,
-      capacity: 1,
-      queuedCount: 0,
-    };
+    mockPresence.current = "offline";
     renderLine();
     expect(screen.getByTestId("agent-live-status")).toHaveTextContent("Offline");
   });

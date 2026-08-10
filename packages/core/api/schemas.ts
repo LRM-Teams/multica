@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   Agent,
+  AgentPresenceResponse,
   AgentFileContentResponse,
   AgentFilesResponse,
   AgentTemplate,
@@ -1964,6 +1965,29 @@ export const RunnerActivitySummariesResponseSchema = z.object({
 }).loose();
 
 export const EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE = { items: [] };
+
+const AgentPresenceItemSchema = z.object({
+  agent_id: z.string().min(1),
+  presence: z.enum(["online", "offline"]),
+}).loose();
+
+export const AgentPresenceResponseSchema: z.ZodType<AgentPresenceResponse> = z.object({
+  items: z.array(AgentPresenceItemSchema),
+}).loose().superRefine((value, ctx) => {
+  const seen = new Set<string>();
+  for (const [index, item] of value.items.entries()) {
+    if (seen.has(item.agent_id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["items", index, "agent_id"],
+        message: "duplicate Agent Presence row",
+      });
+    }
+    seen.add(item.agent_id);
+  }
+});
+
+export const EMPTY_AGENT_PRESENCE_RESPONSE: AgentPresenceResponse = { items: [] };
 
 const AgentFileNodeSchema = z.object({
   path: z.string(),

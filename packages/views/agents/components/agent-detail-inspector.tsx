@@ -17,7 +17,7 @@ import type {
 } from "@multica/core/types";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
-  type AgentPresenceDetail,
+  type AgentPresence,
 } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
@@ -48,7 +48,7 @@ interface InspectorProps {
   agent: Agent;
   runtime: AgentRuntime | null;
   owner: MemberWithUser | null;
-  presence: AgentPresenceDetail | null | undefined;
+  presence: AgentPresence | null | undefined;
   // Below: needed for inline edit. The inspector now owns the editing surface
   // (no Settings tab anymore), so the parent has to pass through everything
   // a write needs.
@@ -93,6 +93,7 @@ export function AgentDetailInspector({
   agent,
   runtime,
   owner,
+  presence,
   runtimes,
   members,
   currentUserId,
@@ -116,7 +117,12 @@ export function AgentDetailInspector({
     <aside className="flex w-full flex-col rounded-lg border bg-background md:h-full md:min-h-0 md:overflow-y-auto">
       {/* Identity */}
       <div className="flex flex-col gap-3 border-b px-5 pb-5 pt-5">
-        <AvatarEditor agent={agent} canEdit={canEdit} onUpdate={update} />
+        <AvatarEditor
+          agent={agent}
+          presence={presence ?? "loading"}
+          canEdit={canEdit}
+          onUpdate={update}
+        />
         <NameAndDescription
           agent={agent}
           canEdit={canEdit}
@@ -131,6 +137,7 @@ export function AgentDetailInspector({
         ) : (
           <AgentActivityStatus
             agentId={agent.id}
+            presence={presence ?? "loading"}
             className="max-w-none"
             testId="agent-inspector-current-status"
           />
@@ -348,10 +355,12 @@ function Section({
 
 function AvatarEditor({
   agent,
+  presence,
   canEdit,
   onUpdate,
 }: {
   agent: Agent;
+  presence: AgentPresence | "loading";
   canEdit: boolean;
   onUpdate: (data: Record<string, unknown>) => Promise<void>;
 }) {
@@ -368,6 +377,7 @@ function AvatarEditor({
           size={56}
           className="rounded-none"
           showStatusDot={!agent.archived_at}
+          agentPresence={presence}
         />
       </div>
     );
@@ -404,6 +414,7 @@ function AvatarEditor({
           size={56}
           className="rounded-none"
           showStatusDot={!agent.archived_at}
+          agentPresence={presence}
         />
         <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
           {uploading ? (

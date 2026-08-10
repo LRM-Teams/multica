@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
-import type { AgentPresenceDetail } from "@multica/core/agents";
 import {
   formatPresenceStatus,
   matchesLiveAvailabilityFilter,
@@ -11,17 +10,6 @@ import {
   toLiveAvailability,
   availabilityConfig,
 } from "./presence";
-
-function presence(over: Partial<AgentPresenceDetail>): AgentPresenceDetail {
-  return {
-    availability: "online",
-    workload: "idle",
-    runningCount: 0,
-    queuedCount: 0,
-    capacity: 1,
-    ...over,
-  };
-}
 
 const LABELS = {
   workload: { working: "Working", queued: "Queued", idle: "Idle" },
@@ -48,43 +36,30 @@ describe("formatPresenceStatus (LRM-248 Online/Offline only)", () => {
     expect(formatPresenceStatus(undefined, t)).toBeNull();
   });
 
-  it("always shows Online while reachable — never Working / Idle / Queued", () => {
-    expect(
-      formatPresenceStatus(presence({ availability: "online", workload: "working" }), t),
-    ).toBe("Online");
-    expect(
-      formatPresenceStatus(presence({ availability: "online", workload: "idle" }), t),
-    ).toBe("Online");
-    expect(
-      formatPresenceStatus(presence({ availability: "online", workload: "queued" }), t),
-    ).toBe("Online");
+  it("shows Online without accepting workload input", () => {
+    expect(formatPresenceStatus("online", t)).toBe("Online");
   });
 
   it("shows Offline while disconnected", () => {
     expect(
-      formatPresenceStatus(
-        presence({ availability: "offline", workload: "working" }),
-        t,
-      ),
+      formatPresenceStatus("offline", t),
     ).toBe("Offline");
   });
 });
 
 describe("presenceStatusVisual", () => {
   it("returns the config for the binary state", () => {
-    const onlineWorking = presence({ availability: "online", workload: "working" });
-    expect(presenceStatusToken(onlineWorking)).toEqual({
+    expect(presenceStatusToken("online")).toEqual({
       kind: "availability",
       value: "online",
     });
-    expect(presenceStatusVisual(onlineWorking)).toBe(availabilityConfig.online);
+    expect(presenceStatusVisual("online")).toBe(availabilityConfig.online);
 
-    const offline = presence({ availability: "offline", workload: "working" });
-    expect(presenceStatusToken(offline)).toEqual({
+    expect(presenceStatusToken("offline")).toEqual({
       kind: "availability",
       value: "offline",
     });
-    expect(presenceStatusVisual(offline)).toBe(availabilityConfig.offline);
+    expect(presenceStatusVisual("offline")).toBe(availabilityConfig.offline);
   });
 });
 
@@ -96,10 +71,10 @@ describe("presenceStatusDotClass", () => {
 
   it("maps online to green and offline to gray", () => {
     expect(
-      presenceStatusDotClass(presence({ availability: "online", workload: "working" })),
+      presenceStatusDotClass("online"),
     ).toBe("bg-success");
     expect(
-      presenceStatusDotClass(presence({ availability: "offline", workload: "idle" })),
+      presenceStatusDotClass("offline"),
     ).toBe(availabilityConfig.offline.dotClass);
   });
 });

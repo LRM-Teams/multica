@@ -9,7 +9,7 @@ import { useDeleteComputer } from "@multica/core/runtimes/mutations";
 import { useDeleteSandboxMutation } from "@multica/core/sandboxes/mutations";
 import { runtimeKeys } from "@multica/core/runtimes/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import { useWorkspacePresenceMap } from "@multica/core/agents";
+import { useWorkspaceAgentPresence } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { resolveActorIdentityPresentation } from "@multica/core/identity";
@@ -416,7 +416,7 @@ function AgentList({
   const { t } = useT("runtimes");
   const wsId = useWorkspaceId();
   const navigation = useNavigation();
-  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+  const { byAgent: presenceMap } = useWorkspaceAgentPresence(wsId);
 
   return (
     <div className="mt-3 overflow-hidden rounded-md border divide-y">
@@ -436,7 +436,7 @@ function AgentList({
             displayName={presentation.displayName}
             provider={runtime?.provider}
             runtimeLabel={runtimeLabel}
-            presence={presenceMap.get(agent.id)}
+            presence={presenceMap.get(agent.id) ?? null}
             avatarSize={20}
             className="px-3 py-2.5 text-xs hover:bg-muted/40"
             onClick={() => navigation.push(agentHref(agent.id))}

@@ -14,6 +14,7 @@ import type {
   ListIssuesParams,
   ListGroupedIssuesParams,
   Agent,
+  AgentPresenceResponse,
   ComputerConnection,
   AgentFileContentResponse,
   AgentFilesResponse,
@@ -307,6 +308,8 @@ import {
   EMPTY_RUNNER_ACTIVITY_RESPONSE,
   RunnerActivitySummariesResponseSchema,
   EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
+  AgentPresenceResponseSchema,
+  EMPTY_AGENT_PRESENCE_RESPONSE,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
   ChannelMessagesPageSchema,
@@ -1459,6 +1462,16 @@ export class ApiClient {
       RunnerActivitySummariesResponseSchema,
       EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
       { endpoint: "GET /api/agents/runner-activity-summaries" },
+    );
+  }
+
+  async getAgentPresence(): Promise<AgentPresenceResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/presence`);
+    return parseWithFallback(
+      raw,
+      AgentPresenceResponseSchema,
+      EMPTY_AGENT_PRESENCE_RESPONSE,
+      { endpoint: "GET /api/agents/presence" },
     );
   }
 

@@ -116,11 +116,11 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
 }));
 
 // ChannelMessageBubble overlays the shared presence dot (AgentStatusDot) on
-// agent avatars, which reads presence via useAgentPresenceDetail and the
+// agent avatars, which reads presence via useAgentPresence and the
 // current workspace via useCurrentWorkspace. Stub both so this viewport test
 // stays free of QueryClient/workspace-provider wiring.
 vi.mock("@multica/core/agents", () => ({
-  useAgentPresenceDetail: () => "loading",
+  useAgentPresence: () => "loading",
   useRunnerActivity: () => ({ data: undefined }),
   useRunnerActivitySummary: () => ({ data: undefined }),
 }));

@@ -20,7 +20,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   agentTaskSnapshotOptions,
-  useWorkspacePresenceMap,
+  useWorkspaceAgentPresence,
 } from "@multica/core/agents";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import {
@@ -768,7 +768,7 @@ function MachineDetailView({
     () => agentsOnMachine(machine, agents),
     [machine, agents],
   );
-  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+  const { byAgent: presenceMap } = useWorkspaceAgentPresence(wsId);
   // One object for Select mode (react-doctor: avoid many related useState).
   const [select, setSelect] = useState<{
     mode: boolean;

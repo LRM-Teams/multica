@@ -9,7 +9,7 @@ import type { Agent, AgentRuntime } from "@multica/core/types";
 import { useDeleteRuntime } from "@multica/core/runtimes/mutations";
 import { runtimeKeys } from "@multica/core/runtimes/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import { useWorkspacePresenceMap } from "@multica/core/agents";
+import { useWorkspaceAgentPresence } from "@multica/core/agents";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
@@ -91,7 +91,7 @@ export function DeleteRuntimeDialog({
   // Pull cached workspace data — every consumer page already has this
   // mounted, so this dialog adds zero new fetches when opened.
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+  const { byAgent: presenceMap } = useWorkspaceAgentPresence(wsId);
 
   // Re-derived every render the dialog is open (not just on open) so an
   // agent archived elsewhere, or a fresh 409 from the strict DELETE below,
@@ -246,7 +246,7 @@ function AgentsBlockingBody({
 }: {
   runtime: AgentRuntime;
   agents: Agent[];
-  presenceMap: Map<string, import("@multica/core/agents").AgentPresenceDetail>;
+  presenceMap: ReadonlyMap<string, import("@multica/core/agents").AgentPresence>;
   agentHref: (agentId: string) => string;
   notice: string | null;
   onClose: () => void;
@@ -292,7 +292,7 @@ function AgentsBlockingBody({
                 displayName={presentation.displayName}
                 provider={runtime.provider}
                 runtimeLabel={runtimeLabel}
-                presence={presence}
+                presence={presence ?? null}
                 avatarSize={20}
                 className="px-3 py-2.5 text-xs hover:bg-muted/40"
                 onClick={() => navigation.push(agentHref(agent.id))}

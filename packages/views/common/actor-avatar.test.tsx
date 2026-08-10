@@ -3,36 +3,15 @@ import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActorAvatar, AgentPresenceOverlay, AgentStatusDot } from "./actor-avatar";
 
-// AgentStatusDot reads presence via useAgentPresenceDetail and the current
-// workspace via useCurrentWorkspace. Default to "online + idle" so the dot
-// renders; individual tests override the availability/workload per case.
-type PresenceDetail = {
-  availability: "online" | "offline";
-  workload: "idle" | "working" | "queued";
-  runningCount: number;
-  queuedCount: number;
-  capacity: number;
-};
-const presenceDetailMock = vi.fn((): PresenceDetail => ({
-  availability: "online",
-  workload: "idle",
-  runningCount: 0,
-  queuedCount: 0,
-  capacity: 1,
-}));
-
-const runnerActivityMock = vi.fn((): {
-  data: { label: string; tone: string; visibility: string };
-} => ({
-  data: { label: "Online", tone: "success", visibility: "visible" },
-}));
+// AgentStatusDot reads presence via useAgentPresence and the current
+// workspace via useCurrentWorkspace. Presence is deliberately binary and
+// independent from Runner Activity.
+const presenceDetailMock = vi.fn<() => "online" | "offline" | "loading">(
+  () => "online",
+);
 
 vi.mock("@multica/core/agents", () => ({
-  useAgentPresenceDetail: () => presenceDetailMock(),
-  useRunnerActivitySummary: () => runnerActivityMock(),
-  useRunnerActivity: () => {
-    throw new Error("avatar status must not mount the per-Agent Timeline query");
-  },
+  useAgentPresence: () => presenceDetailMock(),
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -150,13 +129,7 @@ vi.mock("@multica/ui/components/ui/hover-card", () => ({
 
 describe("AgentPresenceOverlay", () => {
   beforeEach(() => {
-    presenceDetailMock.mockReturnValue({
-      availability: "online",
-      workload: "idle",
-      runningCount: 0,
-      queuedCount: 0,
-      capacity: 1,
-    });
+    presenceDetailMock.mockReturnValue("online");
   });
 
   // The bug: inside a CSS grid / flex parent with the default
@@ -219,16 +192,7 @@ describe("AgentPresenceOverlay", () => {
 
 describe("AgentStatusDot", () => {
   beforeEach(() => {
-    presenceDetailMock.mockReturnValue({
-      availability: "online",
-      workload: "idle",
-      runningCount: 0,
-      queuedCount: 0,
-      capacity: 1,
-    });
-    runnerActivityMock.mockReturnValue({
-      data: { label: "Online", tone: "success", visibility: "visible" },
-    });
+    presenceDetailMock.mockReturnValue("online");
   });
 
   it("scales the dot diameter with the avatar size, clamped to a legible minimum", () => {
@@ -259,13 +223,7 @@ describe("AgentStatusDot", () => {
     const { rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(screen.getByLabelText(/^Status:/)).toHaveClass("bg-success");
 
-    presenceDetailMock.mockReturnValue({
-      availability: "offline",
-      workload: "idle",
-      runningCount: 0,
-      queuedCount: 0,
-      capacity: 1,
-    });
+    presenceDetailMock.mockReturnValue("offline");
     rerender(<AgentStatusDot agentId="agent-1" size={28} />);
     const dot = screen.getByLabelText(/^Status:/);
     expect(dot).not.toHaveClass("bg-success");
@@ -274,45 +232,21 @@ describe("AgentStatusDot", () => {
   });
 
   it("renders nothing while presence is still loading", () => {
-    presenceDetailMock.mockReturnValue("loading" as never);
+    presenceDetailMock.mockReturnValue("loading");
     const { container } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("shows a yellow pulse for an online Runner working on chat", () => {
-    presenceDetailMock.mockReturnValue({
-      availability: "online",
-      workload: "idle",
-      runningCount: 0,
-      queuedCount: 0,
-      capacity: 1,
-    });
-    runnerActivityMock.mockReturnValue({
-      data: { label: "Running command...", tone: "warning", visibility: "visible" },
-    });
-    const { container, rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
-    expect(container.querySelector(".animate-ping")).not.toBeNull();
-    expect(screen.getByLabelText(/^Status:/)).toHaveClass("bg-warning");
-
-    presenceDetailMock.mockReturnValue({
-      availability: "offline",
-      workload: "idle",
-      runningCount: 0,
-      queuedCount: 0,
-      capacity: 1,
-    });
-    rerender(<AgentStatusDot agentId="agent-1" size={28} />);
+  it("never recolors or pulses an Online Presence dot from Activity", () => {
+    presenceDetailMock.mockReturnValue("online");
+    const { container } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container.querySelector(".animate-ping")).toBeNull();
+    expect(screen.getByLabelText(/^Status:/)).toHaveClass("bg-success");
+    expect(screen.getByLabelText(/^Status:/)).not.toHaveClass("bg-warning");
   });
 
   it("renders an OFFLINE dot as a hollow ring at legible sizes, filled on tiny ones (§3-v2)", () => {
-    presenceDetailMock.mockReturnValue({
-      availability: "offline",
-      workload: "idle",
-      runningCount: 0,
-      queuedCount: 0,
-      capacity: 1,
-    });
+    presenceDetailMock.mockReturnValue("offline");
     // Legible size (40 → ~11px dot) → hollow ring, no filled gray.
     const { rerender } = render(<AgentStatusDot agentId="agent-1" size={40} />);
     let dot = screen.getByLabelText(/^Status:/);

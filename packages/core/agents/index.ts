@@ -1,8 +1,7 @@
 export * from "./types";
-export * from "./derive-presence";
+export * from "./agent-workload";
 export * from "./queries";
 export * from "./panel-open";
-export * from "./use-agent-presence";
 export * from "./use-agent-health";
 export * from "./agent-lifecycle";
 export * from "./use-agent-lifecycle";
@@ -15,3 +14,5 @@ export * from "./use-workspace-agent-availability";
 export * from "./fleet-queries";
 export * from "./honor-queries";
 export * from "./mcp-support";
+export * from "./agent-presence";
+export * from "./agent-presence-updaters";

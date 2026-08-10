@@ -279,6 +279,79 @@ func TestCloseWorkspaceRunnerFencesReplacementDaemonInstance(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T) {
+	hub := NewHub()
+	disconnected := make(chan string, 2)
+	hub.SetWorkspaceRunnerDisconnectHandler(func(_ context.Context, _ ClientIdentity, daemonInstanceID string) error {
+		disconnected <- daemonInstanceID
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+
+	dial := func() *websocket.Conn {
+		t.Helper()
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	ready := func(conn *websocket.Conn, instanceID string) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{
+			WorkspaceID: "workspace-1", DaemonInstanceID: instanceID,
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := dial()
+	defer first.Close()
+	ready(first, "instance-1")
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	if !hub.IsCurrentWorkspaceRunner("daemon-1", "workspace-1", "instance-1") {
+		t.Fatal("first ready connection was not current")
+	}
+
+	second := dial()
+	defer second.Close()
+	ready(second, "instance-2")
+	deadline := time.Now().Add(time.Second)
+	for !hub.IsCurrentWorkspaceRunner("daemon-1", "workspace-1", "instance-2") {
+		if time.Now().After(deadline) {
+			t.Fatal("replacement Runner did not become current")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case instanceID := <-disconnected:
+		t.Fatalf("replacement teardown emitted a disconnect for %q", instanceID)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if !hub.CloseWorkspaceRunner("daemon-1", "workspace-1", "instance-2") {
+		t.Fatal("current Runner did not close")
+	}
+	select {
+	case instanceID := <-disconnected:
+		if instanceID != "instance-2" {
+			t.Fatalf("disconnect instance = %q, want instance-2", instanceID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("current Runner disconnect callback was not delivered")
+	}
+	if hub.IsCurrentWorkspaceRunner("daemon-1", "workspace-1", "instance-2") {
+		t.Fatal("closed Runner remained current")
+	}
+}
+
 func waitForRunner(t *testing.T, hub *Hub, daemonID, workspaceID string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

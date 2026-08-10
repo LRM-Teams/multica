@@ -32,17 +32,7 @@
   "availability": {
     "all": "All",
     "online": "Online",
-    "unstable": "Unstable",
-    "offline": "Offline",
-    "archived": "Archived"
-  },
-  "lifecycle_status": {
-    "starting": "Starting",
-    "disconnected": "Disconnected",
-    "offline": "Offline",
-    "stopped": "Stopped",
-    "crashed": "Crashed",
-    "blocked": "Quota blocked"
+    "offline": "Offline"
   },
   "workload": {
     "working": "Working",

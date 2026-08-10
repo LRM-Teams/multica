@@ -160,6 +160,12 @@
 - 服务端 Message/list/reply/thread/search/quote/transport 响应不返回 `author_avatar_url`；对应查询也不得 JOIN Profile 头像。Web/desktop 的 `ChannelMessage` 类型中不存在该字段（①②）；HTTP schema 与 realtime cache seam 会剥离旧服务端输入，乐观消息也不复制登录用户头像。所有消息头像只走共享 `ActorAvatar → useResolvedActorIdentity`（③）。
 - **物**：`ChannelMessageResponse`/reply/search/quote snapshot 与 TS 对应类型；`stripLegacyMessageAvatar`；`withoutLegacyMessageAvatar`；`normalizeChannelMessages`；server/HTTP/WS/optimistic/bubble 回归（均已先见红）。
 
+### 2.8 Agent Presence 只有一个服务端真相源 — `可执行`（①②③⑤，owner: @Codex）
+- Agent Presence 只有 `online|offline`：服务端由当前 ready Workspace Runner 连接与该实例持有的 active managed launch 共同投影。Runtime heartbeat、Task workload、Runner Activity、Health、provider quota、crash reason 都不能覆盖这个结果；加载或坏响应不造第三态，也不冒充 Online。
+- Web 只读一个 Workspace 级 `agentPresenceKeys.workspace(wsId)` Query。`GET /api/agents/presence` 提供全量快照，中央 `agent:presence` handler 只 patch 该 cache；正常事件不 invalidate，WS 重连只做一次 reconcile。大型列表在页面边界读 Map 并传给行/头像，不挂 N 个 Presence Query 或订阅。
+- Avatar/Profile/列表/筛选只显示绿色 Online、灰色或空心 Offline；加载时省略。Working/Thinking/Error 属于独立 Activity 槽，不能把头像点染黄或加 pulse。Disconnected 是 Computer 词汇；Stopped/Blocked/Crashed 只进诊断、Timeline 或 recovery，不进紧凑 Agent Presence。
+- **物**：服务端 `internal/handler/agent_presence.go`、`daemonws.Hub` current-Runner disconnect fence、`agent_presence_test.go`；Web `agents/agent-presence.ts`、`agent-presence-updaters.ts`、`use-realtime-sync.ts`；`actor-avatar.tsx` 与 `agents/presence-contract.test.ts`。结构守卫会阻止 Runtime/Task/Health 推导、per-avatar Activity 染色和旧 hook 回流。
+
 ## 3. 属性显示（跨面）
 
 ### 3.1 本家属性语法 — `可执行`（task #518）

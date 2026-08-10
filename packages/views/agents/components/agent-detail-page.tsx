@@ -14,8 +14,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent } from "@multica/core/types";
 import {
   agentDetailOptions,
-  type AgentPresenceDetail,
-  useWorkspacePresenceMap,
+  type AgentPresence,
+  useWorkspaceAgentPresence,
 } from "@multica/core/agents";
 import { api, ApiError } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
@@ -69,9 +69,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
 
-  // Single workspace-level presence pass; this page just reads its slot.
-  // The hook owns the 30s tick so the failed-window auto-clears here too.
-  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+  // Single server-owned Workspace Presence snapshot; this page just reads its
+  // slot and treats loading/malformed data as unknown rather than Offline.
+  const { byAgent: presenceMap, loading: presenceLoading } =
+    useWorkspaceAgentPresence(wsId);
 
   const listedAgent = agents.find((a) => a.id === agentId) ?? null;
 
@@ -88,8 +89,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     enabled: !agentsLoading && !listedAgent && !!agentId,
   });
   const agent = listedAgent ?? detailAgent ?? null;
-  const presence: AgentPresenceDetail | null =
-    agent ? presenceMap.get(agent.id) ?? null : null;
+  const presence: AgentPresence | null = agent && !presenceLoading
+    ? presenceMap.get(agent.id) ?? null
+    : null;
   const isForbidden =
     detailError instanceof ApiError && detailError.status === 403;
 

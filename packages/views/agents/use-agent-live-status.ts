@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useAgentPresenceDetail, useRunnerActivitySummary } from "@multica/core/agents";
+import { useAgentPresence, useRunnerActivitySummary } from "@multica/core/agents";
 import { useT } from "../i18n/use-t";
 import { resolveAgentLiveStatus, type AgentLiveStatusView } from "./resolve-agent-live-status";
 
@@ -23,7 +23,7 @@ export function useAgentLiveStatus(
   agentId: string | undefined,
 ): AgentLiveStatusView | null {
   const { t: tAgents } = useT("agents");
-  const presence = useAgentPresenceDetail(wsId, agentId);
+  const presence = useAgentPresence(wsId, agentId);
 
   return useMemo(
     () =>

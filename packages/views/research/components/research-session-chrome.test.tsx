@@ -31,6 +31,12 @@ vi.mock("../../i18n/use-t", () => ({
           s3_validation: "S3 · Validate",
           s4_delivery: "S4 · Deliver",
         },
+        stage_short: {
+          s1_plan: "S1",
+          s2_sources: "S2",
+          s3_validation: "S3",
+          s4_delivery: "S4",
+        },
         panel: {
           confirm_continue: "Confirm & continue",
           gate_approve: "Approve",
@@ -54,6 +60,13 @@ vi.mock("../../i18n/use-t", () => ({
           subtitle: "Product rounds",
           budget_chip: "{{used}}/{{budget}}",
           budget_capped: "capped",
+        },
+        timeline: {
+          label: "Research stages",
+          done: "Done",
+          current: "Current",
+          upcoming: "Upcoming",
+          done_feedback: "Stage completed",
         },
         create_params: {
           session_menu: "Create parameters",
@@ -214,13 +227,14 @@ describe("ResearchSessionChrome", () => {
     mobileState.isMobile = false;
   });
 
-  it("renders identity + toolbar: title, status pill, stage context, goal", () => {
+  it("renders single header: identity, status, stage timeline, actions, goal", () => {
     renderChrome(makeSession());
     expect(screen.getByTestId("research-session-identity")).toBeTruthy();
-    expect(screen.getByTestId("research-session-toolbar")).toBeTruthy();
+    expect(screen.getByTestId("research-session-actions")).toBeTruthy();
+    expect(screen.getByTestId("research-stage-timeline")).toBeTruthy();
     expect(screen.getByText("知春路沿线房产市场深度调研")).toBeTruthy();
     expect(screen.getByTestId("research-session-status").textContent).toContain("Running");
-    expect(screen.getByText("S2 · Explore")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /S2 · Explore/ })).toBeTruthy();
     expect(screen.getByText("分析知春路沿线 3 公里二手房挂牌与成交")).toBeTruthy();
     const dot = document.querySelector(".bg-brand.animate-pulse");
     expect(dot).toBeTruthy();
@@ -360,17 +374,17 @@ describe("ResearchSessionChrome", () => {
     expect(document.querySelector(".bg-muted-foreground")).toBeTruthy();
   });
 
-  it("LRM-824: stage chip becomes a button that anchors to the current stage", () => {
+  it("LRM-824: stage step becomes a button that anchors to the current stage", () => {
     const onSelectStage = vi.fn();
     renderChrome(makeSession({ current_stage: "s2_sources" }), { onSelectStage });
-    const chip = screen.getByRole("button", { name: "S2 · Explore" });
-    fireEvent.click(chip);
+    const step = screen.getByRole("button", { name: /S2 · Explore — Current/ });
+    fireEvent.click(step);
     expect(onSelectStage).toHaveBeenCalledWith("s2_sources");
   });
 
-  it("LRM-824: stage chip stays inert when no anchor handler is wired", () => {
+  it("LRM-824: stage step stays inert when no anchor handler is wired", () => {
     renderChrome(makeSession({ current_stage: "s2_sources" }));
-    expect(screen.queryByRole("button", { name: "S2 · Explore" })).toBeNull();
-    expect(screen.getByText("S2 · Explore")).toBeTruthy();
+    const step = screen.getByRole("button", { name: /S2 · Explore — Current/ });
+    expect(step).toHaveAttribute("disabled");
   });
 });

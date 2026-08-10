@@ -117,7 +117,6 @@ import { ResearchSessionPageSkeleton } from "./research-session-page-skeleton";
 import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import {
   ResearchStageChatMarker,
-  ResearchStageTimeline,
 } from "./research-stage-timeline";
 import { SourceStrategyStrip } from "./source-strategy-strip";
 
@@ -643,13 +642,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         />
       ) : null}
 
-      {/* LRM-1061: S1–S4 stays a thin strip under chrome; red-box rails are drawer-only. */}
-      <ResearchStageTimeline
-        currentStage={session.current_stage}
-        sessionStatus={session.status}
-        onSelectStage={handleSelectStage}
-      />
-
+      {/* LRM-1112: S1–S4 timeline lives inside the single header surface (L2). */}
       <div className="relative flex min-h-0 flex-1">
         <section
           className="relative z-[1] min-h-0 min-w-0 flex-1"

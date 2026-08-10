@@ -50,6 +50,19 @@ vi.mock("../../i18n/use-t", () => ({
           s3_validation: "S3 · Validate",
           s4_delivery: "S4 · Deliver",
         },
+        stage_short: {
+          s1_plan: "S1",
+          s2_sources: "S2",
+          s3_validation: "S3",
+          s4_delivery: "S4",
+        },
+        timeline: {
+          label: "Research stages",
+          done: "Done",
+          current: "Current",
+          upcoming: "Upcoming",
+          done_feedback: "Stage completed",
+        },
         panel: {
           confirm_continue: "Confirm & continue",
           gate_approve: "Approve",
@@ -308,7 +321,7 @@ describe("research session chrome a11y static contract (LRM-1202)", () => {
     expect(hidden.length).toBeGreaterThan(0);
   });
 
-  it("render: interactive stage chip is a focusable button", () => {
+  it("render: interactive stage step is a focusable button", () => {
     render(
       <ResearchSessionChrome
         session={makeSession()}
@@ -323,7 +336,7 @@ describe("research session chrome a11y static contract (LRM-1202)", () => {
         onSelectStage={vi.fn()}
       />,
     );
-    const stage = screen.getByRole("button", { name: "S2 · Explore" });
+    const stage = screen.getByRole("button", { name: /S2 · Explore/ });
     expect(stage.tagName).toBe("BUTTON");
     expect(stage).not.toHaveAttribute("disabled");
     stage.focus();

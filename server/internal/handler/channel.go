@@ -5698,24 +5698,22 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 	var existingEventID, existingChatSessionID pgtype.UUID
 	var existingAgentSessionID pgtype.UUID
 	var existingSeqFrom, existingSeqTo int64
-	var existingStatus string
-	// Prefer draining (in-flight turn) over pending/failed so mid-turn channel
-	// messages extend the active exchange instead of opening a second turn
-	// (v0.4.24 gap: 里维 got 3 turns for one 报数 round). Alice: extending
-	// seq_to keeps true-new messages visible in-range; we never drop them.
-	// Matches Frank's source model: one conversation exchange range = one turn
-	// (grow seq_to; do not open a new turn per sub-interval).
+	// Coalesce only pending/failed — not draining. Extending a draining event's
+	// seq_to would mark mid-turn arrivals as covered when the agent still holds
+	// the original MULTICA_TURN_SEQ_* context and does not re-read (Alice:
+	// never swallow true-new messages). Residual mid-turn messages stay as a
+	// separate pending wake after the active lease ends (serial, not concurrent).
 	err := exec.QueryRow(ctx, `
-		SELECT id, agent_session_id, chat_session_id, seq_from, seq_to, status
+		SELECT id, agent_session_id, chat_session_id, seq_from, seq_to
 		FROM agent_inbox_event
 		WHERE conversation_id = $1
 		  AND agent_id = $2
 		  AND reason = $3
-		  AND status IN ('pending', 'failed', 'draining')
+		  AND status IN ('pending', 'failed')
 		  AND requires_wake = true
-		ORDER BY CASE status WHEN 'draining' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, created_at ASC
+		ORDER BY created_at ASC
 		LIMIT 1
-		FOR UPDATE`, conversationID, agent.ID, channelMessageWakeReason).Scan(&existingEventID, &existingAgentSessionID, &existingChatSessionID, &existingSeqFrom, &existingSeqTo, &existingStatus)
+		FOR UPDATE`, conversationID, agent.ID, channelMessageWakeReason).Scan(&existingEventID, &existingAgentSessionID, &existingChatSessionID, &existingSeqFrom, &existingSeqTo)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return channelAgentPromptTxResult{}, fmt.Errorf("load pending channel message wake: %w", err)
 	}
@@ -5732,11 +5730,6 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 		if err != nil {
 			return channelAgentPromptTxResult{}, fmt.Errorf("encode coalesced channel message wake context: %w", err)
 		}
-		// Keep draining if already in-flight; only re-arm pending/failed → pending.
-		nextStatus := "pending"
-		if existingStatus == "draining" {
-			nextStatus = "draining"
-		}
 		if _, err := exec.Exec(ctx, `
 			UPDATE agent_inbox_event
 			SET agent_session_id = $2,
@@ -5744,7 +5737,7 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 			    channel_id = $4,
 			    workspace_id = $5,
 			    source_message_id = COALESCE($6, source_message_id),
-			    status = $11,
+			    status = 'pending',
 			    priority = GREATEST(priority, $7),
 			    seq_from = $8,
 			    seq_to = $9,
@@ -5754,7 +5747,7 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 			    END,
 			    updated_at = now()
 			WHERE id = $1`,
-			existingEventID, existingAgentSessionID, existingChatSessionID, parseUUID(ch.ID), workspaceID, nullableUUID(channelAmbientTriggerID(trigger)), channelMessageWakePriority, seqFrom, seqTo, wakeContext, nextStatus); err != nil {
+			existingEventID, existingAgentSessionID, existingChatSessionID, parseUUID(ch.ID), workspaceID, nullableUUID(channelAmbientTriggerID(trigger)), channelMessageWakePriority, seqFrom, seqTo, wakeContext); err != nil {
 			return channelAgentPromptTxResult{}, fmt.Errorf("coalesce channel message wake: %w", err)
 		}
 		if existingChatSessionID.Valid {

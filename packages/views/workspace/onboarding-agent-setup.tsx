@@ -15,6 +15,7 @@ import { memberListOptions, workspaceKeys } from "@multica/core/workspace/querie
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { cn } from "@multica/ui/lib/utils";
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { useT } from "../i18n";
 import { CliInstallInstructions } from "../onboarding/steps/cli-install-instructions";
@@ -22,14 +23,13 @@ import { CliInstallInstructions } from "../onboarding/steps/cli-install-instruct
 /**
  * Mandatory Owner gate when `workspace.onboarding_agent_id` is unset.
  *
- * The previous version only listed already-online Runtimes. New users who
- * skipped (or never finished) Computer install on /onboarding landed here
- * with an empty dropdown and no path to connect a Computer — the workspace
- * shell, including /computers, is blocked by this same gate.
+ * Two sequential steps — never jump to Wendy while no Computer is online:
  *
- * When no online Runtime exists, this page embeds the install + setup
- * instructions and listens for `daemon:register` so Create Wendy unlocks
- * in place without navigating into the blocked dashboard.
+ *   1. Connect a Computer (install CLI + setup; listen for daemon:register)
+ *   2. Create Wendy (pick online Runtime + Model, then ensureWindy)
+ *
+ * The workspace shell (including /computers) is blocked by this gate, so
+ * step 1 must be self-contained on this page.
  */
 export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
   const { t } = useT("agents");
@@ -38,8 +38,6 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
   const { data: members = [] } = useQuery(memberListOptions(workspace.id));
   const { data: runtimes = [] } = useQuery({
     ...runtimeListOptions(workspace.id),
-    // Keep probing until a Computer comes online so install/setup can finish
-    // without leaving this gate page.
     refetchInterval: (query) => {
       const list = query.state.data ?? [];
       const hasOnline = list.some(
@@ -70,7 +68,7 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
   useWSEvent("daemon:register", refreshRuntimes);
 
   // Prefer the first online Runtime as soon as one appears, without
-  // overriding a manual selection.
+  // overriding a manual selection that is still online.
   useEffect(() => {
     if (runtimeId && onlineRuntimes.some((runtime) => runtime.id === runtimeId)) {
       return;
@@ -119,31 +117,40 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
     }
   };
 
-  const needsComputer = onlineRuntimes.length === 0;
+  // Step 1 until at least one Computer/Runtime is online; only then Step 2.
+  const step: 1 | 2 = onlineRuntimes.length === 0 ? 1 : 2;
 
   return (
     <div className="flex min-h-svh items-center justify-center p-6">
       <Card className="w-full max-w-xl">
-        <CardHeader>
-          <CardTitle>{t(($) => $.windy.setup_title)}</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            {t(($) => $.windy.setup_description)}
-          </p>
+        <CardHeader className="space-y-4">
+          <SetupStepIndicator activeStep={step} />
+          {step === 1 ? (
+            <>
+              <CardTitle role="heading" aria-level={1}>
+                {t(($) => $.windy.setup_step1_title)}
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                {t(($) => $.windy.setup_step1_description)}
+              </p>
+            </>
+          ) : (
+            <>
+              <CardTitle role="heading" aria-level={1}>
+                {t(($) => $.windy.setup_step2_title)}
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                {t(($) => $.windy.setup_step2_description)}
+              </p>
+            </>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
-          {needsComputer ? (
+          {step === 1 ? (
             <div
               className="space-y-3"
               data-testid="onboarding-agent-connect-computer"
             >
-              <div className="space-y-1">
-                <p className="text-sm font-medium">
-                  {t(($) => $.windy.setup_connect_title)}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {t(($) => $.windy.setup_connect_description)}
-                </p>
-              </div>
               <CliInstallInstructions workspaceSlug={workspace.slug} />
               <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2.5 text-sm">
                 <span
@@ -154,14 +161,9 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
                   {t(($) => $.windy.setup_listening)}
                 </span>
               </div>
-              <div className="flex justify-end">
-                <Button disabled>
-                  {t(($) => $.windy.setup_create)}
-                </Button>
-              </div>
             </div>
           ) : (
-            <>
+            <div data-testid="onboarding-agent-create-wendy" className="space-y-4">
               <label className="block space-y-1.5 text-sm font-medium">
                 {t(($) => $.windy.setup_runtime)}
                 <select
@@ -201,10 +203,62 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
                     : t(($) => $.windy.setup_create)}
                 </Button>
               </div>
-            </>
+            </div>
           )}
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function SetupStepIndicator({ activeStep }: { activeStep: 1 | 2 }) {
+  const { t } = useT("agents");
+  const steps = [
+    { n: 1 as const, label: t(($) => $.windy.setup_step_computer) },
+    { n: 2 as const, label: t(($) => $.windy.setup_step_wendy) },
+  ];
+  return (
+    <ol
+      className="flex items-center gap-2"
+      data-testid="onboarding-agent-setup-steps"
+      aria-label={t(($) => $.windy.setup_steps_label)}
+    >
+      {steps.map((step, index) => {
+        const done = activeStep > step.n;
+        const current = activeStep === step.n;
+        return (
+          <li key={step.n} className="flex min-w-0 flex-1 items-center gap-2">
+            {index > 0 ? (
+              <span
+                aria-hidden
+                className={cn(
+                  "h-px w-4 shrink-0 sm:w-8",
+                  done || current ? "bg-primary/60" : "bg-border",
+                )}
+              />
+            ) : null}
+            <span
+              className={cn(
+                "flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+                done || current
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground",
+              )}
+              aria-current={current ? "step" : undefined}
+            >
+              {step.n}
+            </span>
+            <span
+              className={cn(
+                "truncate text-xs font-medium",
+                current ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {step.label}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }

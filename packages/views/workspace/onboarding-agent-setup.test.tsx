@@ -71,19 +71,21 @@ vi.mock("../i18n", () => ({
         windy: {
           setup_waiting_title: "waiting",
           setup_waiting_description: "wait desc",
-          setup_title: "Meet Wendy",
-          setup_description: "Choose runtime and model",
+          setup_steps_label: "Workspace setup steps",
+          setup_step_computer: "Computer",
+          setup_step_wendy: "Wendy",
+          setup_step1_title: "Connect a Computer",
+          setup_step1_description:
+            "Install and connect a Computer before creating Wendy.",
+          setup_step2_title: "Meet Wendy",
+          setup_step2_description: "Choose runtime and model",
           setup_runtime: "Runtime",
           setup_runtime_placeholder: "Select runtime",
           setup_model: "Model",
-          setup_connect_title: "Connect a Computer",
-          setup_connect_description:
-            "Install and connect a Computer before creating Wendy.",
           setup_listening: "Listening for your Computer…",
           setup_creating: "Creating…",
           setup_create: "Create Wendy",
           setup_failed: "failed",
-          setup_runtime_offline: "offline hint",
         },
       }),
   }),
@@ -97,28 +99,39 @@ const workspace = {
 } as unknown as Parameters<typeof OnboardingAgentSetup>[0]["workspace"];
 
 describe("OnboardingAgentSetup", () => {
-  it("embeds computer install instructions when no online Runtime exists", () => {
+  it("step 1: requires Computer setup and does not show Create Wendy", () => {
     runtimeState.runtimes = [];
     render(<OnboardingAgentSetup workspace={workspace} />);
 
+    expect(screen.getByTestId("onboarding-agent-setup-steps")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Connect a Computer" })).toBeInTheDocument();
     expect(screen.getByTestId("onboarding-agent-connect-computer")).toBeInTheDocument();
     expect(screen.getByTestId("cli-install-instructions")).toHaveAttribute(
       "data-slug",
       "acme",
     );
     expect(screen.getByText("Listening for your Computer…")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create Wendy" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Create Wendy" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Meet Wendy" })).toBeNull();
     expect(screen.queryByTestId("model-dropdown")).toBeNull();
   });
 
-  it("shows Create Wendy controls once an online Runtime is available", () => {
+  it("step 2: only after an online Runtime, shows Create Wendy controls", () => {
     runtimeState.runtimes = [
-      { id: "rt-1", name: "My Mac", status: "online", last_seen_at: new Date().toISOString() },
+      {
+        id: "rt-1",
+        name: "My Mac",
+        status: "online",
+        last_seen_at: new Date().toISOString(),
+      },
     ];
     render(<OnboardingAgentSetup workspace={workspace} />);
 
+    expect(screen.getByRole("heading", { name: "Meet Wendy" })).toBeInTheDocument();
+    expect(screen.getByTestId("onboarding-agent-create-wendy")).toBeInTheDocument();
     expect(screen.queryByTestId("onboarding-agent-connect-computer")).toBeNull();
     expect(screen.getByTestId("model-dropdown")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: /runtime/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Wendy" })).toBeInTheDocument();
   });
 });

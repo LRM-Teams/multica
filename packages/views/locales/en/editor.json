@@ -47,6 +47,15 @@
       "cancel": "Cancel",
       "run": "Run",
       "failed": "Failed to optimize text",
+      "invalid_markdown": "The AI returned Markdown that could not be applied.",
+      "status_starting": "Starting AI edit…",
+      "status_queued": "Queued…",
+      "status_dispatched": "Waiting for agent…",
+      "status_running": "AI is editing…",
+      "status_cancelling": "Cancelling…",
+      "status_completed": "Completed",
+      "status_failed": "Failed",
+      "status_cancelled": "Cancelled",
       "empty_result": "The agent returned an empty optimization."
     }
   },
@@ -196,6 +205,15 @@
     "replace_page": "Replace page",
     "discard": "Discard",
     "failed": "Failed to edit with AI",
+    "invalid_markdown": "The AI returned Markdown that could not be applied.",
+    "status_starting": "Starting AI edit…",
+    "status_queued": "Queued…",
+    "status_dispatched": "Waiting for agent…",
+    "status_running": "AI is editing…",
+    "status_cancelling": "Cancelling…",
+    "status_completed": "Completed",
+    "status_failed": "Failed",
+    "status_cancelled": "Cancelled",
     "empty_result": "The agent returned an empty edit."
   }
 }

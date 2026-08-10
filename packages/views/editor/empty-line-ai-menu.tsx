@@ -5,7 +5,7 @@ import { computePosition, offset, flip, shift, autoUpdate } from "@floating-ui/d
 import type { Editor } from "@tiptap/core";
 import { Slice } from "@tiptap/pm/model";
 import { Button } from "@multica/ui/components/ui/button";
-import type { NoteAIEditResult } from "@multica/core/types";
+import type { NoteAIEditResult, NoteAIJobStatus } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUp, Loader2, Sparkles } from "lucide-react";
@@ -21,7 +21,7 @@ export type PageEditAIRequest = {
   contextAfter: string;
 };
 
-export type PageEditAIAction = (request: PageEditAIRequest, options?: { signal?: AbortSignal }) => Promise<NoteAIEditResult>;
+export type PageEditAIAction = (request: PageEditAIRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
 
 export type EmptyLineAiState = {
   status: "prompt" | "loading" | "review";
@@ -30,6 +30,8 @@ export type EmptyLineAiState = {
   caretPos: number;
   anchorRect: DOMRect;
   instruction: string;
+  jobStatus?: NoteAIJobStatus;
+  cancelling?: boolean;
   result?: NoteAIEditResult;
 };
 
@@ -86,6 +88,25 @@ function resizePromptField(el: HTMLTextAreaElement | null) {
   if (!el) return;
   el.style.height = "0px";
   el.style.height = `${Math.min(el.scrollHeight, PROMPT_MAX_HEIGHT_PX)}px`;
+}
+
+function noteAIStatusLabel(status: NoteAIJobStatus | undefined, t: any) {
+  switch (status) {
+  case "queued":
+    return t(($: any) => $.page_ai.status_queued);
+  case "dispatched":
+    return t(($: any) => $.page_ai.status_dispatched);
+  case "running":
+    return t(($: any) => $.page_ai.status_running);
+  case "completed":
+    return t(($: any) => $.page_ai.status_completed);
+  case "failed":
+    return t(($: any) => $.page_ai.status_failed);
+  case "cancelled":
+    return t(($: any) => $.page_ai.status_cancelled);
+  default:
+    return t(($: any) => $.page_ai.status_starting);
+  }
 }
 
 function insertSpaceAtCaret(editor: Editor, caretPos: number) {
@@ -196,9 +217,13 @@ function EmptyLineAiMenu({
     const request = buildRequest(editor, state);
     const abort = new AbortController();
     abortRef.current = abort;
-    onChange({ ...state, status: "loading", instruction: request.instruction });
+    const loadingState = { ...state, status: "loading" as const, instruction: request.instruction, jobStatus: "queued" as const, cancelling: false };
+    onChange(loadingState);
     try {
-      const result = await onEditPageWithAI(request, { signal: abort.signal });
+      const result = await onEditPageWithAI(request, {
+        signal: abort.signal,
+        onStatus: (jobStatus) => onChange({ ...loadingState, jobStatus }),
+      });
       // Ignore late results if the user already dismissed the prompt.
       if (!closedRef.current) {
         if (!result.markdown.trim()) throw new Error(t(($) => $.page_ai.empty_result));
@@ -207,8 +232,9 @@ function EmptyLineAiMenu({
     } catch (error) {
       if (!closedRef.current) {
         onChange({ ...state, status: "prompt" });
+        if (error instanceof Error && error.name === "AbortError") return;
         showErrorToast(
-          error instanceof Error && error.name !== "AbortError" && error.message
+          error instanceof Error && error.message
             ? error.message
             : t(($) => $.page_ai.failed),
         );
@@ -218,6 +244,12 @@ function EmptyLineAiMenu({
     }
   }, [editor, onChange, onEditPageWithAI, state, t]);
 
+  const cancelLoading = () => {
+    if (state.status !== "loading") return;
+    onChange({ ...state, cancelling: true });
+    abortRef.current?.abort();
+  };
+
   const applyTitle = (result: NoteAIEditResult) => {
     if (result.title) onApplyTitle?.(result.title);
   };
@@ -225,7 +257,12 @@ function EmptyLineAiMenu({
   const insertHere = () => {
     const result = state.result;
     if (!result) return;
-    replaceRangeWithMarkdown(editor, state.from, state.to, result.markdown);
+    try {
+      replaceRangeWithMarkdown(editor, state.from, state.to, result.markdown);
+    } catch {
+      showErrorToast(t(($) => $.page_ai.invalid_markdown));
+      return;
+    }
     applyTitle(result);
     close();
   };
@@ -233,7 +270,12 @@ function EmptyLineAiMenu({
   const replacePage = () => {
     const result = state.result;
     if (!result) return;
-    replaceDocumentWithMarkdown(editor, result.markdown);
+    try {
+      replaceDocumentWithMarkdown(editor, result.markdown);
+    } catch {
+      showErrorToast(t(($) => $.page_ai.invalid_markdown));
+      return;
+    }
     applyTitle(result);
     close();
   };
@@ -246,7 +288,12 @@ function EmptyLineAiMenu({
       showErrorToast(t(($) => $.page_ai.patch_target_missing));
       return;
     }
-    replaceDocumentWithMarkdown(editor, patched);
+    try {
+      replaceDocumentWithMarkdown(editor, patched);
+    } catch {
+      showErrorToast(t(($) => $.page_ai.invalid_markdown));
+      return;
+    }
     applyTitle(result);
     close();
   };
@@ -259,6 +306,11 @@ function EmptyLineAiMenu({
 
   const reviewResult = state.status === "review" ? state.result : null;
   const currentMarkdown = reviewResult ? editor.getMarkdown().trimEnd() : "";
+  const loadingLabel = state.status === "loading"
+    ? state.cancelling
+      ? t(($: any) => $.page_ai.status_cancelling)
+      : noteAIStatusLabel(state.jobStatus, t)
+    : null;
   const reviewTitle = reviewResult?.action === "insert"
     ? t(($) => $.page_ai.action_insert)
     : reviewResult?.action === "replace_selection"
@@ -372,6 +424,12 @@ function EmptyLineAiMenu({
               "placeholder:text-muted-foreground disabled:opacity-70",
             )}
           />
+          {loadingLabel && <span className="mb-1 hidden shrink-0 text-xs text-muted-foreground sm:inline">{loadingLabel}</span>}
+          {loading && (
+            <Button type="button" size="sm" variant="ghost" className="mb-0.5 h-8 shrink-0 px-2" onClick={cancelLoading} disabled={state.cancelling}>
+              {t(($) => $.page_ai.cancel)}
+            </Button>
+          )}
           <button
             type="button"
             onClick={() => void submit()}

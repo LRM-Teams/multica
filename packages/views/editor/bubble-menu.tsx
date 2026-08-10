@@ -34,7 +34,7 @@ import { posToDOMRect } from "@tiptap/core";
 import { Slice } from "@tiptap/pm/model";
 import { NodeSelection } from "@tiptap/pm/state";
 import { toast } from "sonner";
-import type { NoteAIEditResult } from "@multica/core/types";
+import type { NoteAIEditResult, NoteAIJobStatus } from "@multica/core/types";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
@@ -89,14 +89,14 @@ export type TextOptimizationRequest = {
   contextAfter: string;
 };
 
-type TextOptimizationAction = (request: TextOptimizationRequest, options?: { signal?: AbortSignal }) => Promise<NoteAIEditResult>;
+type TextOptimizationAction = (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
 
 type TextOptimizationDraft = TextOptimizationRequest & { from: number; to: number };
 
 type TextOptimizationState =
   | { status: "idle" }
   | ({ status: "prompt" } & TextOptimizationDraft)
-  | ({ status: "loading"; abort: AbortController } & TextOptimizationDraft)
+  | ({ status: "loading"; abort: AbortController; jobStatus?: NoteAIJobStatus; cancelling?: boolean } & TextOptimizationDraft)
   | { status: "review"; from: number; to: number; result: NoteAIEditResult };
 
 const OPTIMIZATION_CONTEXT_CHARS = 1600;
@@ -116,6 +116,25 @@ function buildTextOptimizationDraft(editor: Editor): TextOptimizationDraft | nul
     contextBefore: editor.state.doc.textBetween(contextFrom, from, "\n", "\n").trim(),
     contextAfter: editor.state.doc.textBetween(to, contextTo, "\n", "\n").trim(),
   };
+}
+
+function noteAIStatusLabel(status: NoteAIJobStatus | undefined, t: any) {
+  switch (status) {
+  case "queued":
+    return t(($: any) => $.bubble_menu.optimize.status_queued);
+  case "dispatched":
+    return t(($: any) => $.bubble_menu.optimize.status_dispatched);
+  case "running":
+    return t(($: any) => $.bubble_menu.optimize.status_running);
+  case "completed":
+    return t(($: any) => $.bubble_menu.optimize.status_completed);
+  case "failed":
+    return t(($: any) => $.bubble_menu.optimize.status_failed);
+  case "cancelled":
+    return t(($: any) => $.bubble_menu.optimize.status_cancelled);
+  default:
+    return t(($: any) => $.bubble_menu.optimize.status_starting);
+  }
 }
 
 function shouldShowBubbleMenu(editor: Editor): boolean {
@@ -511,9 +530,13 @@ function TextOptimizationPrompt({
       contextAfter: state.contextAfter,
     };
     const abort = new AbortController();
-    onStateChange({ status: "loading", from: state.from, to: state.to, ...request, abort });
+    const loadingState = { status: "loading" as const, from: state.from, to: state.to, ...request, abort, jobStatus: "queued" as const, cancelling: false };
+    onStateChange(loadingState);
     try {
-      const result = await onOptimizeSelection(request, { signal: abort.signal });
+      const result = await onOptimizeSelection(request, {
+        signal: abort.signal,
+        onStatus: (jobStatus) => onStateChange({ ...loadingState, jobStatus }),
+      });
       if (!result.markdown.trim()) throw new Error(t(($) => $.bubble_menu.optimize.empty_result));
       onStateChange({ status: "review", from: state.from, to: state.to, result });
     } catch (err) {
@@ -560,6 +583,28 @@ function TextOptimizationPrompt({
   );
 }
 
+function TextOptimizationLoading({
+  state,
+  onCancel,
+}: {
+  state: Extract<TextOptimizationState, { status: "loading" }>;
+  onCancel: () => void;
+}) {
+  const { t } = useT("editor");
+  const label = state.cancelling ? t(($: any) => $.bubble_menu.optimize.status_cancelling) : noteAIStatusLabel(state.jobStatus, t);
+  return (
+    <div className="w-[min(360px,calc(100vw-32px))] rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg" onMouseDown={(e) => e.preventDefault()}>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" />
+        <span className="flex-1 font-medium">{label}</span>
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={state.cancelling} onMouseDown={(e) => e.preventDefault()}>
+          {t(($) => $.bubble_menu.optimize.cancel)}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function TextOptimizationReview({
   editor,
   state,
@@ -577,17 +622,32 @@ function TextOptimizationReview({
     if (result.title) onApplyTitle?.(result.title);
   };
   const replaceSelection = () => {
-    replaceEditorRangeWithMarkdown(editor, state.from, state.to, result.markdown);
+    try {
+      replaceEditorRangeWithMarkdown(editor, state.from, state.to, result.markdown);
+    } catch {
+      showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
+      return;
+    }
     applyTitle();
     onClose();
   };
   const insertAfter = () => {
-    replaceEditorRangeWithMarkdown(editor, state.to, state.to, `\n\n${result.markdown}`);
+    try {
+      replaceEditorRangeWithMarkdown(editor, state.to, state.to, `\n\n${result.markdown}`);
+    } catch {
+      showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
+      return;
+    }
     applyTitle();
     onClose();
   };
   const replacePage = () => {
-    replaceDocumentWithMarkdown(editor, result.markdown);
+    try {
+      replaceDocumentWithMarkdown(editor, result.markdown);
+    } catch {
+      showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
+      return;
+    }
     applyTitle();
     onClose();
   };
@@ -597,7 +657,12 @@ function TextOptimizationReview({
       showErrorToast(t(($) => $.bubble_menu.optimize.patch_target_missing));
       return;
     }
-    replaceDocumentWithMarkdown(editor, patched);
+    try {
+      replaceDocumentWithMarkdown(editor, patched);
+    } catch {
+      showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
+      return;
+    }
     applyTitle();
     onClose();
   };
@@ -879,6 +944,13 @@ function EditorBubbleMenu({
     [editor],
   );
 
+  const cancelOptimization = useCallback(() => {
+    const current = optimizationStateRef.current;
+    if (current.status !== "loading") return;
+    setOptimizationState({ ...current, cancelling: true });
+    current.abort.abort();
+  }, []);
+
   return (
     <div
       ref={floatingRef}
@@ -892,6 +964,8 @@ function EditorBubbleMenu({
     >
       {optimizationState.status === "prompt" && onOptimizeSelection ? (
         <TextOptimizationPrompt state={optimizationState} onOptimizeSelection={onOptimizeSelection} onStateChange={setOptimizationState} onClose={() => { resetOptimization(); editor.commands.focus(); }} />
+      ) : optimizationState.status === "loading" ? (
+        <TextOptimizationLoading state={optimizationState} onCancel={cancelOptimization} />
       ) : optimizationState.status === "review" ? (
         <TextOptimizationReview editor={editor} state={optimizationState} onApplyTitle={onApplyTitle} onClose={() => { resetOptimization(); editor.commands.focus(); }} />
       ) : mode === "link-edit" ? (
@@ -925,7 +999,7 @@ function EditorBubbleMenu({
               <TooltipContent side="top" sideOffset={8}>{t(($) => $.bubble_menu.quote)}</TooltipContent>
             </Tooltip>
             {onOptimizeSelection && (
-              <OptimizeSelectionButton editor={editor} onStateChange={setOptimizationState} pending={optimizationState.status === "loading"} />
+              <OptimizeSelectionButton editor={editor} onStateChange={setOptimizationState} pending={false} />
             )}
             {currentIssueId && (
               <>

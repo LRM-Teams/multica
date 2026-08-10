@@ -63,7 +63,7 @@ flowchart LR
 | Production | `api.leagent.me` / `www.leagent.me` | stable | `/computer/manifest.json` |
 | Test | `https://82.157.184.89`；以后可通过部署配置切到 `test.leagent.me` | preview | `/computer/alpha.json` |
 
-Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url` 填入 Test origin；页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令，Test 自动显示带完整环境和 origin 的命令。
+Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url`、`daemon_app_url` 分别填入 Test API/Web origin。两个值今天可以相同，但协议允许以后拆成不同域名。页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令，Test 自动显示带完整环境和 origin 的命令。
 
 第一次连接环境：
 
@@ -71,7 +71,8 @@ Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `pro
 multica setup /my-workspace
 
 multica setup --environment test \
-  --test-url https://82.157.184.89 \
+  --server-url https://82.157.184.89 \
+  --app-url https://82.157.184.89 \
   /my-workspace
 ```
 
@@ -225,7 +226,7 @@ GitHub 已有互斥的在线 runner：`aliyun-144` 只接 Production，`s89-test
 multica setup /workspace-a
 
 # 连接腾讯测试工作区
-multica setup --environment test --test-url https://82.157.184.89 /workspace-a
+multica setup --environment test --server-url https://82.157.184.89 --app-url https://82.157.184.89 /workspace-a
 
 # 切换环境
 multica config use test

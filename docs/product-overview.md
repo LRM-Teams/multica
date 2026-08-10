@@ -322,7 +322,7 @@ Agent 是 Multica 的灵魂。几乎所有功能都围绕"如何让一个 agent 
 | 命令 | 说明 |
 |------|------|
 | `multica setup /<workspace>` | 连接正式环境中的一个 Workspace、登录并启动 resident |
-| `multica setup --environment test --test-url <origin> /<workspace>` | 连接显式测试环境中的一个 Workspace |
+| `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>` | 连接显式测试环境中的一个 Workspace |
 | `multica config show` | 查看当前环境，以及 production/test 两边保存的脱敏登录状态 |
 | `multica config use <production\|test>` | 安全切环境；production 固定 stable，test 固定 preview |
 | `multica login` | 浏览器打开 OAuth 登录，保存 90 天 PAT 到 `~/.multica/config.json` |

@@ -153,8 +153,8 @@ Production is fixed to app `https://www.leagent.me` plus API/auth/WebSocket `htt
 
 ```bash
 multica setup /my-workspace
-multica setup --environment test --test-url https://test.leagent.me /my-workspace
-multica setup --environment test --test-url http://203.0.113.8:8080 /my-workspace
+multica setup --environment test --server-url https://test.leagent.me --app-url https://test.leagent.me /my-workspace
+multica setup --environment test --server-url http://203.0.113.8:8080 --app-url http://203.0.113.8:8080 /my-workspace
 ```
 
 The same Computer retains connections and login sessions from both environments, keyed by `(environment, workspace_id)`, but one resident generation serves only the current environment. Package source is fixed by environment: production uses stable, test uses preview.

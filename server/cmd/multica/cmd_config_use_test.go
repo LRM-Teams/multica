@@ -12,11 +12,11 @@ import (
 
 func configuredEnvironmentSwitchTestConfig(t *testing.T) cli.CLIConfig {
 	t.Helper()
-	production, err := cli.NewServiceTarget("production", "")
+	production, err := cli.NewServiceTarget("production", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	testTarget, err := cli.NewServiceTarget("test", "https://test.leagent.me")
+	testTarget, err := cli.NewServiceTarget("test", "https://api.test.leagent.me", "https://test.leagent.me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestEnvironmentSwitcherAcceptanceFailureRollsBackBeforeRestartingPrevious(t
 
 func TestEnvironmentSwitcherRequiresSetupForTarget(t *testing.T) {
 	cfg := cli.CLIConfig{}
-	production, err := cli.NewServiceTarget("production", "")
+	production, err := cli.NewServiceTarget("production", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

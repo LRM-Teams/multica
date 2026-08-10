@@ -83,7 +83,7 @@ func TestReleaseChannelIsFixedByEnvironment(t *testing.T) {
 		},
 		{
 			name:        "test uses preview packages",
-			config:      CLIConfig{Environment: "test", ServerURL: "https://test.leagent.me"},
+			config:      CLIConfig{Environment: "test", ServerURL: "https://api.test.leagent.me", AppURL: "https://test.leagent.me"},
 			wantChannel: ReleaseChannelAlpha,
 		},
 	}

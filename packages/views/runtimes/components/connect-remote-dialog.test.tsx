@@ -96,16 +96,18 @@ describe("ConnectRemoteDialog", () => {
     expect(baseElement).not.toHaveTextContent("multica setup self-host");
   });
 
-  it("uses the explicit test environment and server URL in the setup command", () => {
+  it("uses explicit test server and app URLs in the setup command", () => {
     const { baseElement } = renderDialog({
       environment: "test",
-      daemonServerUrl: "https://82.157.184.89/",
-      daemonAppUrl: "https://82.157.184.89/",
+      daemonServerUrl: "https://api.test.leagent.me/",
+      daemonAppUrl: "https://test.leagent.me/",
     });
 
     expect(baseElement).toHaveTextContent(
-      "multica setup --environment test --test-url https://82.157.184.89 /workspace-test",
+      "multica setup --environment test --server-url https://api.test.leagent.me --app-url https://test.leagent.me /workspace-test",
     );
+    expect(baseElement).not.toHaveTextContent("--test-url");
+    expect(baseElement).not.toHaveTextContent("--url ");
     expect(baseElement).not.toHaveTextContent("multica setup /workspace-test");
   });
 

@@ -62,17 +62,18 @@ multica computer restart    # stop + start
 multica computer status     # read-only status (identity, resident, Workspace connections)
 multica computer logs       # tail the resident service log
 multica computer doctor     # read-only diagnostics (--fix only clears a confirmed-stopped stale PID)
-multica computer channel    # show latest or alpha; pass a value to change it while stopped
 ```
 
-The service environment and release channel are independent. Production uses
-`https://www.leagent.me` for the app and `https://api.leagent.me` for
-API/auth/WebSocket. Test requires one explicit Tencent Cloud HTTP(S) origin and
-may use either an IP address or `test.leagent.me`:
+The service environment determines the package source: production uses stable
+packages, while test uses preview packages. Production uses `https://www.leagent.me`
+for the app and `https://api.leagent.me` for API/auth/WebSocket. Test requires
+explicit Web and API HTTP(S) origins. They may currently use the same IP or
+`test.leagent.me`, but they are stored separately so a later split needs no CLI
+contract change:
 
 ```bash
 multica setup /my-workspace
-multica setup --environment test --test-url https://test.leagent.me /my-workspace
+multica setup --environment test --server-url https://test.leagent.me --app-url https://test.leagent.me /my-workspace
 ```
 
 Workspace connections are keyed locally by `(environment, workspace_id)`, so

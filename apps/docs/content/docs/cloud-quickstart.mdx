@@ -52,7 +52,7 @@ Replace `my-workspace` with the Workspace slug from its URL. `multica setup` wil
 5. **Start the machine-wide Computer automatically**
 
 <Callout type="info">
-For the Tencent test stage, use `multica setup --environment test --test-url https://test.leagent.me /my-workspace`. An explicit `http://IP:port` also works before DNS/TLS is ready. This changes the current service environment; it does not create a second Computer. After both environments are set up, use `multica config use test|production`; production always uses stable packages and test always uses preview packages, while both saved sessions and Workspace connections remain available.
+For the Tencent test stage, use `multica setup --environment test --server-url https://test.leagent.me --app-url https://test.leagent.me /my-workspace`. The API and Web origins are explicit and may currently have the same value; they can diverge later without changing the CLI contract. An explicit `http://IP:port` also works before DNS/TLS is ready. This changes the current service environment; it does not create a second Computer. After both environments are set up, use `multica config use test|production`; production always uses stable packages and test always uses preview packages, while both saved sessions and Workspace connections remain available.
 </Callout>
 
 Verify the Computer is running:

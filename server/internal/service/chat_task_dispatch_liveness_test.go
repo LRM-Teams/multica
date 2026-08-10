@@ -83,4 +83,10 @@ func TestCreateChatTaskRow_SucceedsRegardlessOfRuntimeConnectivity(t *testing.T)
 	if task.Status != "pending" {
 		t.Fatalf("task.Status = %q, want %q", task.Status, "pending")
 	}
+	// Standalone bubble / notes AI must keep reason=chat_session. If a stale
+	// fixture trigger rewrites this to 'dm', #2295 drain suppresses the task
+	// and the notes Space-AI UI times out waiting for an assistant message.
+	if task.Reason != "chat_session" {
+		t.Fatalf("task.Reason = %q, want %q", task.Reason, "chat_session")
+	}
 }

@@ -2981,6 +2981,46 @@ func TestFollowupChatDoesNotCancelRunningChatTask(t *testing.T) {
 	}
 }
 
+// TestCreateChatTaskKeepsChatSessionReason pins the #2295 product-reason split:
+// standalone bubble / notes Space-AI must enqueue reason=chat_session. A stale
+// test fixture trigger once rewrote this to 'dm', which drain then suppressed
+// so the notes UI polled until timeout with no assistant message.
+func TestCreateChatTaskKeepsChatSessionReason(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "Chat Session Reason Agent", nil)
+	sessionID := createHandlerTestChatSession(t, agentID)
+	ctx := context.Background()
+
+	task, err := testHandler.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
+		AgentID:         parseUUID(agentID),
+		RuntimeID:       parseUUID(handlerTestRuntimeID(t)),
+		Priority:        2,
+		ChatSessionID:   parseUUID(sessionID),
+		InitiatorUserID: parseUUID(testUserID),
+	})
+	if err != nil {
+		t.Fatalf("CreateChatTask: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, task.ID) })
+
+	if task.Reason != protocol.AgentInboxReasonChatSession {
+		t.Fatalf("CreateChatTask reason = %q, want %q", task.Reason, protocol.AgentInboxReasonChatSession)
+	}
+	if isResidualChannelChatInboxEvent(task) {
+		t.Fatalf("chat_session task must not be classified as residual channel chat (would be suppressed on drain)")
+	}
+
+	var persisted string
+	if err := testPool.QueryRow(ctx, `SELECT reason FROM agent_inbox_event WHERE id = $1`, task.ID).Scan(&persisted); err != nil {
+		t.Fatalf("load persisted reason: %v", err)
+	}
+	if persisted != protocol.AgentInboxReasonChatSession {
+		t.Fatalf("persisted reason = %q, want %q (fixture trigger must not rewrite chat_session→dm)", persisted, protocol.AgentInboxReasonChatSession)
+	}
+}
+
 // TestHumanDoneCancelsActiveIssueTasks verifies that manually closing an issue
 // releases any active task occupying the assignee's concurrency slot.
 func TestHumanDoneCancelsActiveIssueTasks(t *testing.T) {

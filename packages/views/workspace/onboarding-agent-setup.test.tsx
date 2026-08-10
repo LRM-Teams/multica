@@ -134,4 +134,26 @@ describe("OnboardingAgentSetup", () => {
     expect(screen.getByRole("combobox", { name: /runtime/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Wendy" })).toBeInTheDocument();
   });
+
+  it("advances from step 1 to step 2 when a Computer comes online without leaving the gate", () => {
+    runtimeState.runtimes = [];
+    const { rerender } = render(<OnboardingAgentSetup workspace={workspace} />);
+    expect(screen.getByTestId("onboarding-agent-connect-computer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Wendy" })).toBeNull();
+
+    runtimeState.runtimes = [
+      {
+        id: "rt-online",
+        name: "New Computer",
+        status: "online",
+        last_seen_at: new Date().toISOString(),
+      },
+    ];
+    rerender(<OnboardingAgentSetup workspace={workspace} />);
+
+    expect(screen.queryByTestId("onboarding-agent-connect-computer")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Meet Wendy" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Wendy" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /runtime/i })).toHaveValue("rt-online");
+  });
 });

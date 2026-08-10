@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
@@ -56,9 +56,25 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
   const isOwner = members.some(
     (member) => member.user_id === currentUser?.id && member.role === "owner",
   );
-  const [runtimeId, setRuntimeId] = useState("");
-  const [model, setModel] = useState("");
+
+  // Optional manual pick. Effective runtime is derived so a newly online
+  // Computer auto-selects without an effect (and without a stale frame).
+  const [pickedRuntimeId, setPickedRuntimeId] = useState<string | null>(null);
+  // Model is scoped to a runtime id so a selection change does not need an
+  // effect to clear stale values.
+  const [modelByRuntime, setModelByRuntime] = useState<{
+    runtimeId: string;
+    value: string;
+  }>({ runtimeId: "", value: "" });
   const [submitting, setSubmitting] = useState(false);
+
+  const preferredOnlineId = onlineRuntimes[0]?.id ?? "";
+  const pickedStillOnline =
+    pickedRuntimeId != null &&
+    onlineRuntimes.some((runtime) => runtime.id === pickedRuntimeId);
+  const runtimeId = pickedStillOnline ? pickedRuntimeId : preferredOnlineId;
+  const model =
+    modelByRuntime.runtimeId === runtimeId ? modelByRuntime.value : "";
 
   const refreshRuntimes = useCallback(() => {
     void queryClient.invalidateQueries({
@@ -66,22 +82,6 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
     });
   }, [queryClient, workspace.id]);
   useWSEvent("daemon:register", refreshRuntimes);
-
-  // Prefer the first online Runtime as soon as one appears, without
-  // overriding a manual selection that is still online.
-  useEffect(() => {
-    if (runtimeId && onlineRuntimes.some((runtime) => runtime.id === runtimeId)) {
-      return;
-    }
-    if (onlineRuntimes[0]) {
-      setRuntimeId(onlineRuntimes[0].id);
-      return;
-    }
-    if (runtimeId) {
-      setRuntimeId("");
-      setModel("");
-    }
-  }, [onlineRuntimes, runtimeId]);
 
   if (!isOwner) {
     return (
@@ -170,8 +170,7 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
                   className="h-9 w-full rounded-md border bg-background px-3 text-sm"
                   value={runtimeId}
                   onChange={(event) => {
-                    setRuntimeId(event.target.value);
-                    setModel("");
+                    setPickedRuntimeId(event.target.value || null);
                   }}
                   aria-label={t(($) => $.windy.setup_runtime)}
                 >
@@ -189,7 +188,9 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
                 runtimeId={runtimeId || null}
                 runtimeOnline={Boolean(runtimeId)}
                 value={model}
-                onChange={setModel}
+                onChange={(value) =>
+                  setModelByRuntime({ runtimeId, value })
+                }
                 disabled={!runtimeId}
                 required
               />

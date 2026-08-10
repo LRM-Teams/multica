@@ -695,22 +695,23 @@ func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
 	}
 }
 
-func TestMigration308ChannelAttentionRoundSchema(t *testing.T) {
+func TestMigration313ChannelAttentionRoundSchema(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
 	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
 
-	up, err := os.ReadFile(filepath.Join(migrationsDir, "308_channel_attention_round.up.sql"))
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "313_channel_attention_round.up.sql"))
 	if err != nil {
-		t.Fatalf("read migration 308 up: %v", err)
+		t.Fatalf("read migration 313 up: %v", err)
 	}
 	for _, required := range []string{
 		"CREATE TABLE channel_attention_round",
 		"CREATE TABLE channel_attention_participant",
 		"CREATE TABLE channel_attention_response_grant",
 		"idx_channel_attention_round_collecting_channel",
+		"idx_channel_attention_participant_agent_id",
 		"SILENT", "ANSWER", "CONTRIBUTE", "COORDINATE",
 		"UNIQUE (round_id)",
 	} {
@@ -719,9 +720,9 @@ func TestMigration308ChannelAttentionRoundSchema(t *testing.T) {
 		}
 	}
 
-	down, err := os.ReadFile(filepath.Join(migrationsDir, "308_channel_attention_round.down.sql"))
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "313_channel_attention_round.down.sql"))
 	if err != nil {
-		t.Fatalf("read migration 308 down: %v", err)
+		t.Fatalf("read migration 313 down: %v", err)
 	}
 	for _, table := range []string{
 		"channel_attention_response_grant",

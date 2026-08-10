@@ -31,49 +31,34 @@ func TestParseAttentionProbeOutputCleanJSON(t *testing.T) {
 	}
 }
 
-// The old strict parser rejected these; the whole point of the rewrite is that
-// a single noisy optional field must not fail the decision.
-func TestParseAttentionProbeOutputToleratesMalformedOptionalFields(t *testing.T) {
+func TestParseAttentionProbeOutputRejectsMalformedOrOutOfContractFields(t *testing.T) {
 	cases := []string{
-		// confidence out of range string
 		`{"decision":"SILENT","confidence":"high"}`,
-		// evidence_refs wrong type
 		`{"decision":"CONTRIBUTE","evidence_refs":"not-an-array"}`,
-		// negative seen_up_to_seq
 		`{"decision":"ANSWER","seen_up_to_seq":-5}`,
-		// missing optional fields entirely
-		`{"decision":"COORDINATE"}`,
-		// confidence out of [0,1] numeric (should clamp, not fail)
 		`{"decision":"ANSWER","confidence":7}`,
+		`{"decision":"ANSWER","value_type":"invented"}`,
+		`{"decision":"ANSWER","unknown":true}`,
 	}
 	for _, c := range cases {
-		dec, ok, issues := ParseAttentionProbeOutput(c)
-		if !ok {
-			t.Fatalf("case %q failed (want tolerant parse): issues=%v", c, issues)
+		if _, ok, _ := ParseAttentionProbeOutput(c); ok {
+			t.Fatalf("out-of-contract case %q unexpectedly parsed", c)
 		}
-		if dec.Decision == "" || !ValidAttentionDecision(dec.Decision) {
-			t.Fatalf("case %q produced invalid decision %q", c, dec.Decision)
-		}
+	}
+	if dec, ok, issues := ParseAttentionProbeOutput(`{"decision":"COORDINATE"}`); !ok || dec.Decision != "COORDINATE" {
+		t.Fatalf("minimal valid object failed: decision=%q issues=%v", dec.Decision, issues)
 	}
 }
 
-// Tolerate prose / markdown fences / trailing chatter around the JSON object.
-func TestParseAttentionProbeOutputToleratesWrapping(t *testing.T) {
+func TestParseAttentionProbeOutputRejectsWrappingAndTrailingContent(t *testing.T) {
 	cases := []string{
 		"Here is my judgment:\n```json\n{\"decision\":\"ANSWER\",\"summary\":\"I can help\"}\n```\n",
 		"What I think: {\"decision\":\"SILENT\"} (nothing more)",
 		"\n\n{\"decision\":\"CONTRIBUTE\",\"value_type\":\"correction\"}\n\nthanks",
 	}
 	for _, c := range cases {
-		dec, ok, issues := ParseAttentionProbeOutput(c)
-		if !ok {
-			t.Fatalf("case %q failed: issues=%v", c, issues)
-		}
-		if !ValidAttentionDecision(dec.Decision) {
-			t.Fatalf("case %q invalid decision %q", c, dec.Decision)
-		}
-		if len(issues) != 0 {
-			t.Fatalf("case %q produced issues: %v", c, issues)
+		if _, ok, _ := ParseAttentionProbeOutput(c); ok {
+			t.Fatalf("wrapped case %q unexpectedly parsed", c)
 		}
 	}
 }

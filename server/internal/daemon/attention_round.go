@@ -146,6 +146,12 @@ type ConvergenceVote struct {
 //   - All YIELD / no clear primary → manager (something claimed but no owner).
 func ResolveConvergence(votes []ConvergenceVote) AttentionResolution {
 	out := AttentionResolution{AnswerCount: len(votes)}
+	eligibleAgents := make(map[string]struct{}, len(votes))
+	for _, vote := range votes {
+		if vote.AgentID != "" {
+			eligibleAgents[vote.AgentID] = struct{}{}
+		}
+	}
 
 	keepAgent := ""
 	keepCount := 0
@@ -153,8 +159,14 @@ func ResolveConvergence(votes []ConvergenceVote) AttentionResolution {
 	mergeCount := 0
 	multiMerge := false
 	wantManager := false
+	invalidVote := false
+	outsiderMerge := false
 
 	for _, v := range votes {
+		if _, ok := eligibleAgents[v.AgentID]; !ok || !ValidConvergenceVote(v.Vote) {
+			invalidVote = true
+			continue
+		}
 		switch v.Vote {
 		case ConvergenceVoteRequestManager:
 			wantManager = true
@@ -163,6 +175,11 @@ func ResolveConvergence(votes []ConvergenceVote) AttentionResolution {
 			keepAgent = v.AgentID
 		case ConvergenceVoteMerge:
 			if v.TargetAgentID == "" {
+				invalidVote = true
+				continue
+			}
+			if _, ok := eligibleAgents[v.TargetAgentID]; !ok {
+				outsiderMerge = true
 				continue
 			}
 			mergeCount++
@@ -174,11 +191,18 @@ func ResolveConvergence(votes []ConvergenceVote) AttentionResolution {
 		}
 	}
 
-	if wantManager || keepCount > 1 || multiMerge {
+	if invalidVote || outsiderMerge || wantManager || keepCount > 1 || multiMerge || (keepCount == 1 && mergeCount > 0 && mergeTarget != keepAgent) {
 		out.Outcome = AttentionRoundOutcomeManager
 		out.ManagerReason = "convergence did not converge"
-		if keepCount > 1 {
+		switch {
+		case outsiderMerge:
+			out.ManagerReason = "merge target was not a convergence participant"
+		case invalidVote:
+			out.ManagerReason = "convergence contained an invalid vote"
+		case keepCount > 1:
 			out.ManagerReason = "multiple KEEP votes conflicted"
+		case keepCount == 1 && mergeCount > 0 && mergeTarget != keepAgent:
+			out.ManagerReason = "KEEP and MERGE votes selected different agents"
 		}
 		return out
 	}

@@ -68,6 +68,9 @@ CREATE TABLE channel_attention_participant (
 CREATE INDEX idx_channel_attention_participant_round_status
     ON channel_attention_participant(round_id, status, agent_id);
 
+CREATE INDEX idx_channel_attention_participant_agent_id
+    ON channel_attention_participant(agent_id);
+
 -- At most one public-response grant per round: after resolution, exactly one
 -- agent may publish to the channel (or the round escalates to the manager).
 CREATE TABLE channel_attention_response_grant (

@@ -272,13 +272,9 @@ func TestParseRestrictedExecutionOutputAttentionProbe(t *testing.T) {
 	if !strings.Contains(string(raw), `"decision":"ANSWER"`) {
 		t.Fatalf("result lacks decision: %s", raw)
 	}
-	// A lenient output that the old strict parser would reject must still parse.
-	raw2, err := parseRestrictedExecutionOutput(executionProfileAttentionProbe, `some prose {"decision":"CONTRIBUTE","confidence":"high"} trailing`)
-	if err != nil {
-		t.Fatalf("lenient parse failed: %v", err)
-	}
-	if !strings.Contains(string(raw2), `"decision":"CONTRIBUTE"`) {
-		t.Fatalf("result lacks decision: %s", raw2)
+	// Restricted output never accepts prose around an otherwise valid object.
+	if _, err := parseRestrictedExecutionOutput(executionProfileAttentionProbe, `some prose {"decision":"CONTRIBUTE"} trailing`); err == nil {
+		t.Fatal("wrapped probe output should fail closed")
 	}
 	// An unusable output still errors (caller handles the single agent).
 	if _, err := parseRestrictedExecutionOutput(executionProfileAttentionProbe, `no json here`); err == nil {

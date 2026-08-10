@@ -88,11 +88,24 @@ func TestResolveConvergenceUniqueKeepGrants(t *testing.T) {
 
 func TestResolveConvergenceMergeGrantsTarget(t *testing.T) {
 	res := ResolveConvergence([]ConvergenceVote{
-		{AgentID: "a", Vote: ConvergenceVoteMerge, TargetAgentID: "c"},
-		{AgentID: "b", Vote: ConvergenceVoteMerge, TargetAgentID: "c"},
+		{AgentID: "a", Vote: ConvergenceVoteMerge, TargetAgentID: "b"},
+		{AgentID: "b", Vote: ConvergenceVoteMerge, TargetAgentID: "b"},
 	})
-	if res.Outcome != AttentionRoundOutcomeGranted || res.GrantAgentID != "c" {
+	if res.Outcome != AttentionRoundOutcomeGranted || res.GrantAgentID != "b" {
 		t.Fatalf("merge resolution = %+v", res)
+	}
+}
+
+func TestResolveConvergenceRejectsOutsiderMergeTarget(t *testing.T) {
+	res := ResolveConvergence([]ConvergenceVote{
+		{AgentID: "a", Vote: ConvergenceVoteMerge, TargetAgentID: "outsider"},
+		{AgentID: "b", Vote: ConvergenceVoteMerge, TargetAgentID: "outsider"},
+	})
+	if res.Outcome != AttentionRoundOutcomeManager {
+		t.Fatalf("outsider merge outcome = %q, want manager", res.Outcome)
+	}
+	if res.GrantAgentID != "" {
+		t.Fatalf("outsider unexpectedly granted: %+v", res)
 	}
 }
 

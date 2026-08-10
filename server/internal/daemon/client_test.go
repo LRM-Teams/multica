@@ -166,6 +166,40 @@ func TestClient_RuntimeScopedCallsSkipExpiredRuntimeDaemonToken(t *testing.T) {
 	}
 }
 
+func TestClient_DrainAgentInboxReturnsFullBatchAndHasMore(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/runtimes/rt-1/agent-inbox/drain" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"events": [
+				{"id":"e1","delivery_id":"d1","conversation_id":"c1","lease_token":"t1","seq_from":1,"seq_to":2,"requires_wake":true},
+				{"id":"e2","delivery_id":"d2","conversation_id":"c1","lease_token":"t2","seq_from":3,"seq_to":4,"requires_wake":true}
+			],
+			"has_more": true,
+			"last_seen_seq": 4
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.URL)
+	batch, err := c.DrainAgentInbox(context.Background(), "rt-1")
+	if err != nil {
+		t.Fatalf("DrainAgentInbox: %v", err)
+	}
+	if batch == nil || !batch.HasMore || len(batch.Events) != 2 {
+		t.Fatalf("batch = %#v", batch)
+	}
+	if batch.Events[0].ID != "e1" || batch.Events[1].ID != "e2" {
+		t.Fatalf("events = %#v", batch.Events)
+	}
+	if batch.Events[0].RuntimeID != "rt-1" || batch.Events[1].RuntimeID != "rt-1" {
+		t.Fatalf("runtime not stamped: %#v", batch.Events)
+	}
+}
+
 func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
 	var body map[string]json.RawMessage
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

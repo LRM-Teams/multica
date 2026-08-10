@@ -337,18 +337,36 @@ type AgentInboxEvent struct {
 	RuntimeID        string `json:"-"`
 }
 
-func (c *Client) DrainAgentInbox(ctx context.Context, runtimeID string) (*AgentInboxEvent, error) {
+// DrainAgentInboxResult is one conversation batch from agent-inbox/drain.
+// Events are same-conversation leases (turn-fold); HasMore means another
+// conversation still has pending ready events.
+type DrainAgentInboxResult struct {
+	Events  []*AgentInboxEvent
+	HasMore bool
+}
+
+// DrainAgentInbox returns the full conversation batch (not only Events[0]).
+// Empty Events means idle. Callers must process/ack every returned lease —
+// nothing is parked server-side after drain.
+func (c *Client) DrainAgentInbox(ctx context.Context, runtimeID string) (*DrainAgentInboxResult, error) {
 	var resp struct {
-		Events []AgentInboxEvent `json:"events"`
+		Events  []AgentInboxEvent `json:"events"`
+		HasMore bool              `json:"has_more"`
 	}
 	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-inbox/drain", runtimeID), map[string]any{}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
 		return nil, err
 	}
 	if len(resp.Events) == 0 {
-		return nil, nil
+		return &DrainAgentInboxResult{}, nil
 	}
-	resp.Events[0].RuntimeID = runtimeID
-	return &resp.Events[0], nil
+	out := make([]*AgentInboxEvent, 0, len(resp.Events))
+	for i := range resp.Events {
+		ev := resp.Events[i]
+		ev.RuntimeID = runtimeID
+		copy := ev
+		out = append(out, &copy)
+	}
+	return &DrainAgentInboxResult{Events: out, HasMore: resp.HasMore}, nil
 }
 
 type AgentCredentialResponse struct {

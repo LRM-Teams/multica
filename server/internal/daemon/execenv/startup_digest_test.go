@@ -195,6 +195,7 @@ func TestStartupKernelKeepsHotPathsAndExcludesTurnWorkflow(t *testing.T) {
 		"multica-working-on-issues",
 		"ordinary Issue DAGs",
 		"multica <command> --help",
+		"## Output utility contract",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("startup kernel missing hot-path or lazy-loading pointer %q\n--- brief ---\n%s", want, brief)

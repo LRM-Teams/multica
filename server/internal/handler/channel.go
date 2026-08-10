@@ -195,6 +195,12 @@ type ChannelMessageResponse struct {
 	WorkspaceID         string                 `json:"workspace_id"`
 	Seq                 int64                  `json:"seq"`
 	Type                string                 `json:"type"`
+	// Kind is the structured message classification (LRM-1523 L1). Empty means
+	// the row predates kind persistence; dispatch falls back to the runtime
+	// classifier in that case. populated value is one of protocol.ChannelMessageKind*.
+	Kind string `json:"kind,omitempty"`
+	// KindSource records how Kind was derived (LRM-1529): structured|system|lexicon|default.
+	KindSource          string                 `json:"kind_source,omitempty"`
 	AuthorID            *string                `json:"author_id"`
 	AuthorName          string                 `json:"author_name"`
 	AuthorAvatarURL     *string                `json:"author_avatar_url"`
@@ -4837,7 +4843,7 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	inserted, err := insertChannelMessageWithPartsExec(
 		r.Context(), tx, parseUUID(ch.ID), parseUUID(workspaceID), "lark", pgtype.UUID{},
 		authorName, content, parts, "lark", external, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
-		pgtype.UUID{}, &threadID, 0,
+		pgtype.UUID{}, &threadID, 0, channelMessageKindHint{},
 	)
 	if err != nil {
 		if errorsIsNoRows(err) || isUniqueViolation(err) {
@@ -4902,6 +4908,21 @@ func (h *Handler) dispatchChannelMessageToAgentsWithCursorPolicy(ctx context.Con
 	// #2539 wake restore is actually present in the deployed image.
 	slog.Debug("channel human wake dispatch restored", "channel", ch.ID, "replay", replayTrigger)
 
+	// LRM-1523 echo suppression: an agent-authored pure acknowledgement (收到 /
+	// 明白 / OK …) carries no new information or action. It must NOT wake any
+	// other agent — not even its @-targets — otherwise every polite "收到" reply
+	// re-triggers the acknowledged agent and feeds the confirmation echo chain.
+	// The message stays in the channel and is observed when any agent next runs;
+	// it just never produces a wake-required run on its own.
+	if !channelMessageIsHumanAuthored(trigger.Type) && !replayTrigger {
+		if channelMessageIsConfirmationNoWake(trigger) {
+			if h.Metrics != nil {
+				h.Metrics.RecordChannelAmbientGateDecision(channelAmbientGateActionRelevanceSkipped, channelAmbientSkipReasonNonAction)
+			}
+			return
+		}
+	}
+
 	dispatchWakeExcept := h.dispatchChannelMessageWakeExcept
 	if replayTrigger {
 		dispatchWakeExcept = h.dispatchTranscribedChannelMessageWakeExcept
@@ -4958,6 +4979,15 @@ func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelRespons
 
 func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
+
+	// LRM-1523 echo suppression mirrors the main-channel path: an agent-authored
+	// pure acknowledgement inside a thread must not re-wake its @-targets.
+	if !channelMessageIsHumanAuthored(trigger.Type) {
+		if channelMessageIsConfirmationNoWake(trigger) {
+			return
+		}
+	}
+
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
@@ -5668,6 +5698,11 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 	var existingEventID, existingChatSessionID pgtype.UUID
 	var existingAgentSessionID pgtype.UUID
 	var existingSeqFrom, existingSeqTo int64
+	// Coalesce only pending/failed — not draining. Extending a draining event's
+	// seq_to would mark mid-turn arrivals as covered when the agent still holds
+	// the original MULTICA_TURN_SEQ_* context and does not re-read (Alice:
+	// never swallow true-new messages). Residual mid-turn messages stay as a
+	// separate pending wake after the active lease ends (serial, not concurrent).
 	err := exec.QueryRow(ctx, `
 		SELECT id, agent_session_id, chat_session_id, seq_from, seq_to
 		FROM agent_inbox_event
@@ -6217,6 +6252,13 @@ func channelMessageAmbientSkipReason(trigger ChannelMessageResponse) (bool, stri
 	}
 	if channelMessageHasOnlyNonTextNoiseParts(trigger.Parts) {
 		return true, channelAmbientGateReasonNonTextNoise
+	}
+	// LRM-1523: a pure confirmation / acknowledgement (收到 / 明白 / OK / …)
+	// carries no new information or action and must not be delivered as ambient
+	// context (nor wake anyone). Treat it as a non_action no-op with an
+	// observable silence reason.
+	if channelContentIsPureConfirmation(trigger.Content, trigger.Parts) {
+		return true, channelAmbientSkipReasonNonAction
 	}
 	if skip, reason := deterministicChannelAmbientRelevanceSkip(trigger.Content); skip {
 		return true, reason
@@ -7077,6 +7119,8 @@ type channelMessageInsertInput struct {
 	ThreadID            *string
 	TriggerDepth        int
 	ClientMessageID     *string
+	// KindHint carries an optional structured/system kind into persistence (LRM-1529).
+	KindHint channelMessageKindHint
 }
 
 type channelMessageCreateResult struct {
@@ -7152,7 +7196,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	if err != nil {
 		return channelMessageCreateResult{}, err
 	}
-	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth)
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth, in.KindHint)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if in.ClientMessageID != nil && isUniqueViolation(err) {
@@ -7358,7 +7402,7 @@ func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, 
 		return ChannelMessageResponse{}, err
 	}
 	defer tx.Rollback(ctx)
-	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, nil, replyToMessageID, pgtype.UUID{}, nil, threadRootMessageID, threadID, triggerDepth)
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, channelID, workspaceID, authorType, authorID, authorName, content, parts, source, externalID, nil, replyToMessageID, pgtype.UUID{}, nil, threadRootMessageID, threadID, triggerDepth, channelMessageKindHint{})
 	if err != nil {
 		return ChannelMessageResponse{}, err
 	}
@@ -7374,16 +7418,21 @@ type channelMessageInsertResult struct {
 }
 
 // insertChannelMessageWithPartsExec mutates only transactional state.
-func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int) (channelMessageInsertResult, error) {
+func insertChannelMessageWithPartsExec(ctx context.Context, exec dbExecutor, channelID, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID, authorName, content string, parts []protocol.MessagePart, source string, externalID, clientMessageID *string, replyToMessageID, quoteMessageID pgtype.UUID, quoteSnapshot []byte, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, kindHint channelMessageKindHint) (channelMessageInsertResult, error) {
+	// LRM-1523/1529: derive and persist kind + kind_source so dispatch can enforce
+	// observe-only no-wake structurally. Priority: structured → system → lexicon → default.
+	resolved := resolveChannelMessageKind(authorType, content, parts, kindHint)
 	row := exec.QueryRow(ctx, `
-			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16)
+			INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, kind, kind_source)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18)
 			RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
-		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth)
+		channelID, workspaceID, authorType, nullableUUID(authorID), authorName, content, messageparts.MustJSON(parts), source, externalID, clientMessageID, nullableUUID(replyToMessageID), nullableUUID(quoteMessageID), nullableJSONB(quoteSnapshot), nullableUUID(threadRootMessageID), threadID, triggerDepth, resolved.Kind, resolved.Source)
 	msg, err := scanChannelMessage(row)
 	if err != nil {
 		return channelMessageInsertResult{}, err
 	}
+	msg.Kind = resolved.Kind
+	msg.KindSource = resolved.Source
 	if err := incrementChannelMainUnreadCounters(ctx, exec, channelID, authorType, authorID, msg.Seq, threadRootMessageID); err != nil {
 		return channelMessageInsertResult{}, err
 	}

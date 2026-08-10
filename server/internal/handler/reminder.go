@@ -23,7 +23,42 @@ const (
 	reminderMinDelay  = time.Minute
 	reminderMaxDelay  = 90 * 24 * time.Hour
 	reminderActiveCap = 25
+
+	// reminderDailyFireQuota is LRM-1523 L4 governance: a cadence (every:*) /
+	// patrol reminder may post a visible "Reminder fired" receipt into its anchor
+	// channel at most this many times per (agent, channel, UTC day). Excess
+	// occurrences are coalesced into the day's first notice instead of spamming
+	// the shared development/scheduling channel on every tick.
+	reminderDailyFireQuota = 3
 )
+
+// reminderCadenceDailyQuotaExceeded reports whether a new cadence occurrence
+// would push the (agent, anchor channel, workspace) visual-fires for the current
+// UTC day past the quota. It counts FIRED occurrences (excluding the incoming
+// occurrenceID) that belong to the same agent + anchor channel + workspace and
+// fired today. Only cadence reminders participate; one-shot reminders are
+// unaffected.
+func reminderCadenceDailyQuotaExceeded(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID pgtype.UUID) (bool, error) {
+	if !reminder.Cadence.Valid || !reminder.AgentID.Valid || !reminder.AnchorChannelID.Valid {
+		return false, nil
+	}
+	var firedToday int64
+	err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_reminder_occurrence o
+		JOIN agent_reminder r ON r.id = o.reminder_id
+		WHERE r.agent_id = $1
+		  AND r.anchor_channel_id = $2
+		  AND r.workspace_id = $3
+		  AND o.status = 'fired'
+		  AND o.fired_at >= date_trunc('day', now())
+		  AND o.fired_at < date_trunc('day', now()) + interval '1 day'
+		  AND o.id <> $4`, reminder.AgentID, reminder.AnchorChannelID, reminder.WorkspaceID, occurrenceID).Scan(&firedToday)
+	if err != nil {
+		return false, err
+	}
+	return firedToday >= int64(reminderDailyFireQuota), nil
+}
 
 var errReminderDaemonOutdated = fmt.Errorf("daemon_outdated")
 
@@ -1732,6 +1767,20 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		return err
 	}
 	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
+
+	// LRM-1523 L4: govern the visual-fire rate of patrol/cadence reminders into a
+	// shared channel. Once the (agent, channel, UTC day) quota is reached, the
+	// occurrence still fires (terminal) but is coalesced: no fresh visible
+	// receipt and no agent re-wake — the day's first in-quota notice already
+	// covers this tick as a merged daily digest.
+	overQuota, err := reminderCadenceDailyQuotaExceeded(ctx, tx, reminder, occurrenceID)
+	if err != nil {
+		return err
+	}
+	if overQuota {
+		return h.coalesceReminderCadenceOccurrence(ctx, tx, reminder, occurrenceID)
+	}
+
 	anchor, err := loadReminderAnchorSnapshot(ctx, tx, reminder)
 	if err != nil {
 		return err
@@ -1892,6 +1941,7 @@ func insertReminderFiredReceiptExec(ctx context.Context, exec dbExecutor, ch Cha
 			EventParams: paramsJSON,
 		}},
 		"multica", &externalID, nil, pgtype.UUID{}, pgtype.UUID{}, nil, threadRootID, threadID, 0,
+		channelMessageKindHint{Kind: protocol.ChannelMessageKindSystemReminder, Source: protocol.ChannelMessageKindSourceSystem},
 	)
 	if err != nil {
 		return ChannelMessageResponse{}, fmt.Errorf("insert reminder fired receipt: %w", err)
@@ -1941,6 +1991,72 @@ func (h *Handler) terminalizeReminderOccurrence(ctx context.Context, tx pgx.Tx, 
 	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
 	reminder.Status = "cancelled"
 	h.projectReminderCancel(ctx, reminder)
+	return nil
+}
+
+// coalesceReminderCadenceOccurrence advances a cadence reminder past an
+// over-quota occurrence without posting a fresh visible receipt into the anchor
+// channel and without waking the agent. The occurrence is recorded as fired
+// (terminal, receipt_message_id = NULL) and the reminder is scheduled for the
+// next cadence slot; a quota_coalesced lifecycle event documents the merge. The
+// day's first in-quota fire already delivered the single visible notice, so
+// this tick is the asked-for "daily digest" coalescing rather than another
+// spam message.
+func (h *Handler) coalesceReminderCadenceOccurrence(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID pgtype.UUID) error {
+	var cadenceSlot pgtype.Timestamptz
+	if err := tx.QueryRow(ctx, `
+		SELECT cadence_scheduled_for
+		FROM agent_reminder_occurrence
+		WHERE id = $1 AND reminder_id = $2
+		FOR UPDATE`, occurrenceID, reminder.ID).Scan(&cadenceSlot); err != nil {
+		return err
+	}
+	if !reminder.Cadence.Valid {
+		return errors.New("coalesce cadence reminder with no cadence")
+	}
+	cadence, err := parseReminderCadence(reminder.Cadence.String, reminderCadenceTimezone(reminder))
+	if err != nil {
+		return err
+	}
+	next, err := nextReminderCadenceAfterSlot(cadence, cadenceSlot.Time, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_reminder_occurrence
+		SET status = 'fired', receipt_message_id = NULL, anchor_available = false,
+		    fired_at = now(), updated_at = now()
+		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, `
+		UPDATE agent_reminder
+		SET status = 'scheduled', fire_at = $2, cadence_next_at = $2,
+		    current_occurrence_id = NULL, fired_at = now(),
+		    version = version + 1, updated_at = now()
+		WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $3
+		RETURNING version`, reminder.ID, next, occurrenceID).Scan(&reminder.Version); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_reminder_lifecycle_event (
+			reminder_id, workspace_id, agent_id, occurrence_id, event_type,
+			actor_type, previous_fire_at, next_fire_at, title_snapshot,
+			cadence_snapshot, timezone_snapshot, resulting_state, reason_code,
+			details
+		) VALUES ($1, $2, $3, $4, 'fired', 'system', $5, $6, $7, $8, $9, 'scheduled', 'quota_coalesced', $10)`, reminder.ID, reminder.WorkspaceID, reminder.AgentID, occurrenceID, reminder.FireAt,
+		next, reminder.Title, nullableText(reminder.Cadence),
+		reminderTimezoneValue(reminder.Cadence, reminder.ScheduleTimezone),
+		[]byte(`{"coalesced":true}`)); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
+	reminder.Status = "scheduled"
+	reminder.FireAt = pgtype.Timestamptz{Time: next, Valid: true}
+	h.projectReminderUpsert(ctx, reminder)
 	return nil
 }
 

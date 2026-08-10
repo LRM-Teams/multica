@@ -2046,6 +2046,176 @@ func TestDrainInboxTaskAttachesLease(t *testing.T) {
 	}
 }
 
+// Turn-fold: same-conversation batch from drain → one Task with folded leases
+// and merged seq range (Alice boundary: one exchange = one turn).
+func TestDrainInboxTask_FoldsSameConversationBatch(t *testing.T) {
+	t.Parallel()
+
+	var acked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/ack") {
+			// non-runnable path should not fire in this test
+			parts := strings.Split(r.URL.Path, "/")
+			acked = append(acked, parts[len(parts)-2])
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		if r.URL.Path != "/api/daemon/runtimes/rt-1/agent-inbox/drain" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"events": [
+				{
+					"id": "event-a",
+					"delivery_id": "delivery-a",
+					"conversation_id": "conv-1",
+					"lease_token": "lease-a",
+					"lease_expires_at": "2026-08-09T00:00:00Z",
+					"seq_from": 10,
+					"seq_to": 12,
+					"requires_wake": true,
+					"task": {
+						"id": "event-a",
+						"agent_id": "agent-1",
+						"runtime_id": "rt-1",
+						"workspace_id": "ws-1"
+					}
+				},
+				{
+					"id": "event-b",
+					"delivery_id": "delivery-b",
+					"conversation_id": "conv-1",
+					"lease_token": "lease-b",
+					"lease_expires_at": "2026-08-09T00:00:00Z",
+					"seq_from": 13,
+					"seq_to": 15,
+					"requires_wake": true,
+					"task": {
+						"id": "event-b",
+						"agent_id": "agent-1",
+						"runtime_id": "rt-1",
+						"workspace_id": "ws-1"
+					}
+				}
+			],
+			"has_more": false
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	task, err := d.drainInboxTask(context.Background(), "rt-1")
+	if err != nil {
+		t.Fatalf("drainInboxTask: %v", err)
+	}
+	if task == nil || task.InboxEvent == nil {
+		t.Fatalf("drainInboxTask returned %#v", task)
+	}
+	if task.ID != "event-a" {
+		t.Fatalf("primary task id = %q, want event-a", task.ID)
+	}
+	if task.InboxEvent.ID != "event-a" || task.InboxEvent.DeliveryID != "delivery-a" {
+		t.Fatalf("primary lease = %#v", task.InboxEvent)
+	}
+	// Merged range across the conversation batch.
+	if task.InboxEvent.SeqFrom != 10 || task.InboxEvent.SeqTo != 15 {
+		t.Fatalf("merged seq = %d..%d, want 10..15", task.InboxEvent.SeqFrom, task.InboxEvent.SeqTo)
+	}
+	if len(task.FoldedInboxEvents) != 1 {
+		t.Fatalf("folded count = %d, want 1", len(task.FoldedInboxEvents))
+	}
+	if task.FoldedInboxEvents[0].ID != "event-b" || task.FoldedInboxEvents[0].DeliveryID != "delivery-b" {
+		t.Fatalf("folded lease = %#v", task.FoldedInboxEvents[0])
+	}
+	// Folded event keeps its own SeqTo for per-event ack (>= SeqTo).
+	if task.FoldedInboxEvents[0].SeqTo != 15 {
+		t.Fatalf("folded SeqTo = %d, want 15", task.FoldedInboxEvents[0].SeqTo)
+	}
+	if len(acked) != 0 {
+		t.Fatalf("unexpected acks during fold: %v", acked)
+	}
+	leases := task.inboxLeases()
+	if len(leases) != 2 {
+		t.Fatalf("inboxLeases() = %d, want 2", len(leases))
+	}
+}
+
+func TestDrainInboxTask_AcksNonRunnableThenFoldsRunnable(t *testing.T) {
+	t.Parallel()
+
+	var acked atomic.Value
+	acked.Store([]string{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/ack") {
+			parts := strings.Split(r.URL.Path, "/")
+			cur := acked.Load().([]string)
+			acked.Store(append(append([]string{}, cur...), parts[len(parts)-2]))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		if r.URL.Path != "/api/daemon/runtimes/rt-1/agent-inbox/drain" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"events": [
+				{
+					"id": "observe-1",
+					"delivery_id": "d-obs",
+					"conversation_id": "conv-1",
+					"lease_token": "l-obs",
+					"lease_expires_at": "2026-08-09T00:00:00Z",
+					"seq_from": 1,
+					"seq_to": 1,
+					"requires_wake": false
+				},
+				{
+					"id": "event-run",
+					"delivery_id": "d-run",
+					"conversation_id": "conv-1",
+					"lease_token": "l-run",
+					"lease_expires_at": "2026-08-09T00:00:00Z",
+					"seq_from": 2,
+					"seq_to": 3,
+					"requires_wake": true,
+					"task": {
+						"id": "event-run",
+						"agent_id": "agent-1",
+						"runtime_id": "rt-1",
+						"workspace_id": "ws-1"
+					}
+				}
+			]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	task, err := d.drainInboxTask(context.Background(), "rt-1")
+	if err != nil {
+		t.Fatalf("drainInboxTask: %v", err)
+	}
+	if task == nil || task.InboxEvent == nil || task.ID != "event-run" {
+		t.Fatalf("task = %#v", task)
+	}
+	gotAcked := acked.Load().([]string)
+	if len(gotAcked) != 1 || gotAcked[0] != "observe-1" {
+		t.Fatalf("acked = %v, want [observe-1]", gotAcked)
+	}
+	if len(task.FoldedInboxEvents) != 0 {
+		t.Fatalf("folded = %#v, want none (only one runnable)", task.FoldedInboxEvents)
+	}
+}
+
 func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	t.Parallel()
 

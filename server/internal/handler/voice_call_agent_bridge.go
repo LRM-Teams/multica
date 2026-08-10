@@ -152,6 +152,7 @@ func (bridge *VoiceCallAgentBridge) dispatch(
 		pgtype.UUID{},
 		insertInput.ThreadID,
 		0,
+		insertInput.KindHint,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {

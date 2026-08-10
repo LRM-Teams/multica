@@ -35,6 +35,7 @@ if [[ -z "$added_files" ]]; then
 fi
 
 status=0
+declare -A added_numbers=()
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
   file="${path##*/}"
@@ -53,7 +54,20 @@ while IFS= read -r path; do
       sed 's|.*/||' | grep -E "^${number}_" | sed 's/^/    /' | sort -u
     echo "  Pick the next free number. Do NOT rename the existing ones —"
     echo "  version is the filename, so renaming makes production treat them as unrun."
+    echo "  Prefer: multica migration reserve --number <N> --filename <file>"
     status=1
+  fi
+
+  # Also reject two newly added migrations on this branch that share a number
+  # (the #2567 vs #2568 class of collision before either lands on base).
+  if [[ -n "${added_numbers[$number]:-}" ]]; then
+    echo "New migrations on this branch collide on version number $number:"
+    echo "    ${added_numbers[$number]}"
+    echo "    $file"
+    echo "  Reserve distinct numbers with: multica migration reserve"
+    status=1
+  else
+    added_numbers["$number"]="$file"
   fi
 done <<<"$added_files"
 

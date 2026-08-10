@@ -128,6 +128,7 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		func(ctx context.Context, tx pgx.Tx, message ChannelMessageResponse) error {
 			return seedAgentActionMessageTx(ctx, tx, origin.workspaceID, message.ID, origin.agentID, name, description, req.PreferredComputer)
 		},
+		channelMessageKindHint{},
 	)
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {

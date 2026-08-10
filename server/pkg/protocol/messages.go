@@ -15,7 +15,79 @@ const (
 	MessagePartTypeVoice       = "voice"
 	MessagePartTypeChoice      = "choice"
 	MessagePartTypeChoiceReply = "choice_reply"
+	// MessagePartTypeConfirmation is the structured acknowledgement part (LRM-1523
+	// L1). A pure confirmation carries no new information, no @-directive and no
+	// action, and must not wake any agent.
+	MessagePartTypeConfirmation = "confirmation"
 )
+
+// ChannelMessageKind classifies a channel_message row on top of its author and
+// content (LRM-1523 L1 + LRM-1529). confirmation / status / system_reminder
+// carry no-wake (observe-only) semantics; everything else is ordinary content
+// that may wake.
+const (
+	ChannelMessageKindContent        = "content"
+	ChannelMessageKindConfirmation   = "confirmation"
+	ChannelMessageKindStatus         = "status"
+	ChannelMessageKindHandoff        = "handoff"
+	ChannelMessageKindDelegation     = "delegation"
+	ChannelMessageKindReview         = "review"
+	ChannelMessageKindDeliverable     = "deliverable"
+	ChannelMessageKindSystemReminder = "system_reminder"
+)
+
+// ChannelMessageKindSource records how kind was derived (LRM-1529).
+// Priority: structured → system → lexicon → default.
+const (
+	ChannelMessageKindSourceStructured = "structured"
+	ChannelMessageKindSourceSystem     = "system"
+	ChannelMessageKindSourceLexicon    = "lexicon"
+	ChannelMessageKindSourceDefault    = "default"
+)
+
+// AgentOutputEnvelope is the machine-readable agent output contract (LRM-1529).
+// When present on a send, Kind wins over the legacy confirmation lexicon.
+type AgentOutputEnvelope struct {
+	Kind                string `json:"kind"`
+	Intent              string `json:"intent,omitempty"`
+	RequiresPublicReply *bool  `json:"requires_public_reply,omitempty"`
+	AdvancesWork        *bool  `json:"advances_work,omitempty"`
+	Summary             string `json:"summary,omitempty"`
+}
+
+// NormalizeChannelMessageKind returns a canonical kind or "" when unknown.
+func NormalizeChannelMessageKind(kind string) string {
+	switch strings.TrimSpace(strings.ToLower(kind)) {
+	case ChannelMessageKindContent:
+		return ChannelMessageKindContent
+	case ChannelMessageKindConfirmation:
+		return ChannelMessageKindConfirmation
+	case ChannelMessageKindStatus:
+		return ChannelMessageKindStatus
+	case ChannelMessageKindHandoff:
+		return ChannelMessageKindHandoff
+	case ChannelMessageKindDelegation:
+		return ChannelMessageKindDelegation
+	case ChannelMessageKindReview:
+		return ChannelMessageKindReview
+	case ChannelMessageKindDeliverable:
+		return ChannelMessageKindDeliverable
+	case ChannelMessageKindSystemReminder:
+		return ChannelMessageKindSystemReminder
+	default:
+		return ""
+	}
+}
+
+// ChannelMessageKindIsObserveOnly reports whether kind must not wake agents.
+func ChannelMessageKindIsObserveOnly(kind string) bool {
+	switch NormalizeChannelMessageKind(kind) {
+	case ChannelMessageKindConfirmation, ChannelMessageKindStatus, ChannelMessageKindSystemReminder:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	ChoiceLayoutBinary = "binary"

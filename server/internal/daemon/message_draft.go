@@ -31,6 +31,8 @@ type messageDraft struct {
 	ClientMessageID string    `json:"client_message_id"`
 	SeenUpToSeq     int64     `json:"seen_up_to_seq"`
 	SavedAt         time.Time `json:"saved_at"`
+	// Kind is the optional structured agent output kind (LRM-1529).
+	Kind string `json:"kind,omitempty"`
 }
 
 func (c *MessageCoordinator) messageDraftPath() string {

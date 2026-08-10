@@ -82,7 +82,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 				return
 			}
 			if freshness.Held {
-				if _, err := proxy.RefreshMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID, draft.ContextTarget, freshness.LatestSeq, time.Now()); err != nil {
+				if _, err := proxy.RefreshMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.ClientMessageID, draft.ContextTarget, freshness.LatestSeq, time.Now()); err != nil {
 					http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 					return
 				}
@@ -132,7 +132,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 				http.Error(w, "persist held message Context Boundary: "+err.Error(), http.StatusConflict)
 				return
 			}
-			if _, err := proxy.RefreshMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID, draft.ContextTarget, latestSeq, time.Now()); err != nil {
+			if _, err := proxy.RefreshMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.ClientMessageID, draft.ContextTarget, latestSeq, time.Now()); err != nil {
 				http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 				return
 			}
@@ -141,7 +141,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, count, "server_race")
 		}
 		if !credentialProxyMessageOutputIsHeld(response) {
-			if err := proxy.ClearMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID); err != nil {
+			if err := proxy.ClearMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.ClientMessageID); err != nil {
 				// A canonical Message may already exist, so do not claim an unknown
 				// send.  The stable server identity makes a later explicit replay
 				// safe if the local cleanup needs manual recovery.
@@ -179,7 +179,7 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 	var draft messageDraft
 	var err error
 	if request.SendDraft {
-		loaded, found, err := proxy.LoadMessageDraft(request.AgentID, request.Target, now)
+		loaded, found, err := proxy.LoadMessageDraft(request.WorkspaceID, request.AgentID, request.Target, now)
 		if err != nil {
 			return messageDraft{}, http.StatusConflict, fmt.Errorf("load saved Draft: %w", err)
 		}
@@ -201,12 +201,12 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		// re-drives the same content for the same target (seq86/87). There is no
 		// turn-coordinate batch client_message_id.
 		clientMessageID := uuid.NewString()
-		if existing, found, loadErr := proxy.LoadMessageDraft(request.AgentID, request.Target, now); loadErr == nil && found {
+		if existing, found, loadErr := proxy.LoadMessageDraft(request.WorkspaceID, request.AgentID, request.Target, now); loadErr == nil && found {
 			if reused, ok := reuseClientMessageIDForIntent(existing, request.Content); ok {
 				clientMessageID = reused
 			}
 		}
-		saved, err := proxy.SaveNormalMessageDraft(request.AgentID, messageDraft{
+		saved, err := proxy.SaveNormalMessageDraft(request.WorkspaceID, request.AgentID, messageDraft{
 			Target: request.Target, ContextTarget: contextTarget, Content: request.Content, AttachmentIDs: append([]string(nil), request.AttachmentIDs...),
 			ClientMessageID: clientMessageID, SeenUpToSeq: seenUpToSeq,
 			Kind: strings.TrimSpace(request.Kind),
@@ -234,7 +234,7 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 	if err != nil {
 		return messageDraft{}, http.StatusConflict, err
 	}
-	draft, err = proxy.RefreshMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID, contextTarget, seenUpToSeq, time.Now())
+	draft, err = proxy.RefreshMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.ClientMessageID, contextTarget, seenUpToSeq, time.Now())
 	if err != nil {
 		return messageDraft{}, http.StatusConflict, fmt.Errorf("persist send freshness preflight: %w", err)
 	}

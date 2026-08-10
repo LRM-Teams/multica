@@ -419,8 +419,8 @@ func TestCredentialProxyMessageSendSavesDraftBeforeNetworkAndClearsKnownSuccess(
 			if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
 				t.Errorf("decode send request: %v", err)
 			}
-			draft, found, err := coordinator.LoadMessageDraft("#one", time.Now())
-			if err != nil || !found || draft.ContextTarget != "channel:one" || draft.SeenUpToSeq != 0 || draft.ClientMessageID != sent["client_message_id"] {
+			draft, found, err := NewMessageDraftStore(root).Load(DraftKey{WorkspaceID: "workspace-1", AgentID: "agent-1", Target: "#one"}, time.Now())
+			if err != nil || !found || draft.ContextTarget != "channel:one" || draft.SeenUpToSeq != 0 || draft.IdempotencyKey != sent["client_message_id"] {
 				t.Errorf("Draft was not atomically saved before upstream send: draft=%+v found=%v err=%v request=%+v", draft, found, err, sent)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"action": "message_send", "target": "#one", "created": true, "message": map[string]any{"id": "message-1", "client_message_id": "private"}, "transport_id": "private"})
@@ -442,7 +442,7 @@ func TestCredentialProxyMessageSendSavesDraftBeforeNetworkAndClearsKnownSuccess(
 	if sent["client_message_id"] == "" || sent["seen_up_to_seq"] != float64(0) || sent["context_target"] != "channel:one" {
 		t.Fatalf("upstream send = %+v", sent)
 	}
-	if _, found, err := d.CredentialProxy().LoadMessageDraft("agent-1", "#one", time.Now()); err != nil || found {
+	if _, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now()); err != nil || found {
 		t.Fatalf("successful send Draft found=%v err=%v", found, err)
 	}
 	var response map[string]any
@@ -454,6 +454,38 @@ func TestCredentialProxyMessageSendSavesDraftBeforeNetworkAndClearsKnownSuccess(
 	}
 	if message, _ := response["message"].(map[string]any); message["client_message_id"] != nil {
 		t.Fatalf("proxy leaked internal message identity: %+v", response)
+	}
+}
+
+func TestCredentialProxyMessageSendKeepsDraftWhenUpstreamOutcomeIsUnknown(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/messages/target":
+			_ = json.NewEncoder(w).Encode(map[string]any{"target": "#one", "context_target": "channel:one"})
+		case "/api/agent/messages/send":
+			http.Error(w, "outcome unavailable", http.StatusBadGateway)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
+	rec := httptest.NewRecorder()
+	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","content":"hello"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("message send status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
+	if err != nil || !found || draft.ClientMessageID == "" || draft.Content != "hello" {
+		t.Fatalf("Draft after unknown outcome = %+v found=%v err=%v", draft, found, err)
 	}
 }
 
@@ -505,7 +537,7 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 4 {
 		t.Fatalf("held boundary=%d known=%v, want 4 true", boundary, known)
 	}
-	if draft, found, err := d.CredentialProxy().LoadMessageDraft("agent-1", "#one", time.Now()); err != nil || !found || draft.SeenUpToSeq != 4 {
+	if draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now()); err != nil || !found || draft.SeenUpToSeq != 4 {
 		t.Fatalf("held Draft=%+v found=%v err=%v", draft, found, err)
 	}
 }
@@ -553,7 +585,7 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 5 {
 		t.Fatalf("held boundary=%d known=%v, want 5 true", boundary, known)
 	}
-	draft, found, err := d.CredentialProxy().LoadMessageDraft("agent-1", "#one", time.Now())
+	draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
 	if err != nil || !found || draft.SeenUpToSeq != 5 {
 		t.Fatalf("server-held Draft=%+v found=%v err=%v", draft, found, err)
 	}
@@ -578,11 +610,6 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 	if err := coordinator.MarkRead("channel:one", 2); err != nil {
 		t.Fatalf("seed Context Boundary: %v", err)
 	}
-	if _, err := coordinator.SaveNormalMessageDraft(messageDraft{
-		Target: "#one", ContextTarget: "channel:one", Content: "saved reply", ClientMessageID: "stable-id", SeenUpToSeq: 2,
-	}, time.Now()); err != nil {
-		t.Fatalf("save Draft: %v", err)
-	}
 	var sent map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/agent/messages/send" {
@@ -597,6 +624,11 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 	defer upstream.Close()
 
 	d := credentialProxySendTestDaemon(t, root, upstream.URL, coordinator)
+	if _, err := d.CredentialProxy().SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
+		Target: "#one", ContextTarget: "channel:one", Content: "saved reply", ClientMessageID: "stable-id", SeenUpToSeq: 2,
+	}, time.Now()); err != nil {
+		t.Fatalf("save Draft: %v", err)
+	}
 	rec := httptest.NewRecorder()
 	d.credentialProxyMessageSendHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","send_draft":true,"anyway":true}`)))
 	if rec.Code != http.StatusOK {
@@ -605,7 +637,7 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 	if sent["client_message_id"] != "stable-id" || sent["content"] != "saved reply" || sent["bypass_freshness"] != true {
 		t.Fatalf("replay request=%+v", sent)
 	}
-	if _, found, err := d.CredentialProxy().LoadMessageDraft("agent-1", "#one", time.Now()); err != nil || found {
+	if _, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now()); err != nil || found {
 		t.Fatalf("successful Draft replay found=%v err=%v", found, err)
 	}
 
@@ -613,6 +645,16 @@ func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *t
 	d.credentialProxyMessageSendHandler().ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","anyway":true}`)))
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("normal --anyway status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	for _, body := range []string{
+		`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","send_draft":true,"content":"replacement"}`,
+		`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","send_draft":true,"attachment_ids":["replacement"]}`,
+	} {
+		replacement := httptest.NewRecorder()
+		d.credentialProxyMessageSendHandler().ServeHTTP(replacement, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(body)))
+		if replacement.Code != http.StatusBadRequest {
+			t.Fatalf("replacement Draft request status=%d body=%s", replacement.Code, replacement.Body.String())
+		}
 	}
 }
 
@@ -628,6 +670,7 @@ func credentialProxySendTestDaemon(t *testing.T, root, serverURL string, coordin
 	d := &Daemon{
 		cfg:                 cfg,
 		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
+		messageDraftStore:   NewMessageDraftStore(root),
 	}
 	return d
 }

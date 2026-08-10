@@ -166,6 +166,7 @@ func TestObserveMessageSendHoldIsFailSoftWhenAgentNotManaged(t *testing.T) {
 // without a live backend.
 func newDraftReuseTestDaemon(t *testing.T) (*Daemon, *CredentialProxy) {
 	t.Helper()
+	root := t.TempDir()
 	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
@@ -183,12 +184,50 @@ func newDraftReuseTestDaemon(t *testing.T) (*Daemon, *CredentialProxy) {
 	t.Cleanup(server.Close)
 	d := &Daemon{
 		cfg: Config{
-			ServerBaseURL: server.URL,
+			ServerBaseURL:  server.URL,
+			WorkspacesRoot: root,
 		},
 		logger:              slog.Default(),
 		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
+		messageDraftStore:   NewMessageDraftStore(root),
 	}
 	return d, d.CredentialProxy()
+}
+
+func TestCredentialProxyDraftStoreDoesNotRequireMessageCoordinator(t *testing.T) {
+	root := t.TempDir()
+	d := &Daemon{
+		cfg:               Config{WorkspacesRoot: root},
+		messageDraftStore: NewMessageDraftStore(root),
+	}
+	proxy := d.CredentialProxy()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+
+	saved, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
+		Target: "#test", Content: "hello", ClientMessageID: "stable-intent-1",
+	}, now)
+	if err != nil {
+		t.Fatalf("SaveNormalMessageDraft: %v", err)
+	}
+	loaded, found, err := proxy.LoadMessageDraft("workspace-1", "agent-1", "#test", now.Add(time.Minute))
+	if err != nil || !found {
+		t.Fatalf("LoadMessageDraft: found=%v err=%v", found, err)
+	}
+	if loaded.ClientMessageID != saved.ClientMessageID || loaded.Content != saved.Content {
+		t.Fatalf("loaded Draft = %+v, want %+v", loaded, saved)
+	}
+	if _, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
+		Target: "#test", Content: "replacement", ClientMessageID: "stable-intent-2",
+	}, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("replace Draft: %v", err)
+	}
+	if err := proxy.ClearMessageDraft("workspace-1", "agent-1", "#test", saved.ClientMessageID); err != nil {
+		t.Fatalf("stale ClearMessageDraft: %v", err)
+	}
+	current, found, err := proxy.LoadMessageDraft("workspace-1", "agent-1", "#test", now.Add(3*time.Minute))
+	if err != nil || !found || current.ClientMessageID != "stable-intent-2" {
+		t.Fatalf("replacement after stale clear = %+v found=%v err=%v", current, found, err)
+	}
 }
 
 // TestPrepareMessageSendDraftSendDraftReusesClientMessageID locks the core
@@ -205,7 +244,7 @@ func TestPrepareMessageSendDraftSendDraftReusesClientMessageID(t *testing.T) {
 	// First delivery of this intent is a normal send that gets held as a local
 	// Draft (the freshness / local_hold path) carrying its identity-bearing
 	// client_message_id.
-	original, err := proxy.SaveNormalMessageDraft("agent-1", messageDraft{
+	original, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
 		Target:          "#test",
 		ContextTarget:   "channel:test",
 		Content:         "阿泰:1",
@@ -258,7 +297,7 @@ func TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent(t *testing.T) {
 
 	// Seed a prior DISTINCT intent so we can assert a fresh normal send of other
 	// content does not collide with any existing client_message_id.
-	if _, err := proxy.SaveNormalMessageDraft("agent-1", messageDraft{
+	if _, err := proxy.SaveNormalMessageDraft("workspace-1", "agent-1", messageDraft{
 		Target: "#test", ContextTarget: "channel:test", Content: "prior", ClientMessageID: "prior-intent-0001",
 	}, now); err != nil {
 		t.Fatalf("SaveNormalMessageDraft: %v", err)

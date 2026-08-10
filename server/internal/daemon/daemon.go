@@ -104,6 +104,7 @@ type Daemon struct {
 
 	messageCoordinatorMu    sync.RWMutex
 	messageCoordinators     map[string]*MessageCoordinator
+	messageDraftStore       *MessageDraftStore
 	messageRuntimeIDs       map[string]string
 	messageSendMu           sync.Mutex
 	messageSends            map[string]int
@@ -443,6 +444,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		activeCurationRuns:        make(map[string]string),
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
 		messageCoordinators:       make(map[string]*MessageCoordinator),
+		messageDraftStore:         NewMessageDraftStore(cfg.WorkspacesRoot),
 		messageRuntimeIDs:         make(map[string]string),
 		agentProcessManagers:      make(map[string]*agentProcessManager),
 		agentActivityProducers:    make(map[string]*agentActivityProducer),

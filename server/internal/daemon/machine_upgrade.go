@@ -527,6 +527,12 @@ func (d *Daemon) currentMachineUpgradeJournal() (*machineUpgradeJournal, error) 
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		// A clean machine has no upgrade journal directory until its first
+		// Machine Upgrade. That means there is nothing to attest, not that
+		// ordinary Workspace synchronization failed.
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var newest *machineUpgradeJournal

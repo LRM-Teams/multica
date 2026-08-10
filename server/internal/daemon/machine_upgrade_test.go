@@ -66,6 +66,22 @@ func TestMachineUpgradeJournalRestoresHandoffGeneration(t *testing.T) {
 	}
 }
 
+func TestCurrentMachineUpgradeJournalAllowsCleanMachine(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	d := &Daemon{}
+	journal, err := d.currentMachineUpgradeJournal()
+	if err != nil {
+		t.Fatalf("clean machine without journal directory: %v", err)
+	}
+	if journal != nil {
+		t.Fatalf("clean machine journal = %+v, want nil", journal)
+	}
+}
+
 func TestMachineUpgradeCandidateReadyIsDurableAndIdempotent(t *testing.T) {
 	root := t.TempDir()
 	previousRoot := versionStoreRootFn

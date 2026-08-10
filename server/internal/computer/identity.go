@@ -1,6 +1,7 @@
 package computer
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -159,24 +160,19 @@ func (s *IdentityStore) mintWithLock() (string, bool) {
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return "", false
 	}
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		if os.IsExist(err) {
-			// Another process is minting; wait briefly then hand back whatever
-			// it wrote.
-			for i := 0; i < 50; i++ {
-				if id, ok := s.read(); ok {
-					return id, true
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
-			return "", false
-		}
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := lockComputerFile(ctx, lock); err != nil {
+		_ = lock.Close()
 		return "", false
 	}
 	defer func() {
+		unlockComputerFile(lock)
 		_ = lock.Close()
-		_ = os.Remove(lockPath)
 	}()
 
 	// Re-check under the lock: another winner may have just written while we

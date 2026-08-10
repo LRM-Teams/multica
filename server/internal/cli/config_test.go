@@ -194,6 +194,125 @@ func TestCLIConfig_ProxyConfig_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestCLIConfig_LegacyCloudConfigMigratesToEnvironmentSessions(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	configDir := filepath.Join(tmp, ".multica")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{
+  "environment": "test",
+  "release_channel": "latest",
+  "server_url": "https://test.leagent.me",
+  "app_url": "https://test.leagent.me",
+  "workspace_id": "ws-test",
+  "token": "test-session"
+}`
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadCLIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Environment != "test" || cfg.Token != "test-session" || cfg.WorkspaceID != "ws-test" {
+		t.Fatalf("legacy effective projection = %+v", cfg)
+	}
+	channel, err := ResolveReleaseChannel(cfg)
+	if err != nil || channel != ReleaseChannelAlpha {
+		t.Fatalf("legacy release_channel must be ignored: got %q, %v", channel, err)
+	}
+	if err := SaveCLIConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["active_environment"] != "test" {
+		t.Fatalf("active_environment = %v, want test; file=%s", raw["active_environment"], data)
+	}
+	for _, retired := range []string{"environment", "release_channel", "server_url", "app_url", "workspace_id", "token"} {
+		if _, exists := raw[retired]; exists {
+			t.Fatalf("legacy key %q survived migration: %s", retired, data)
+		}
+	}
+}
+
+func TestCLIConfig_EnvironmentSwitchRestoresIndependentSessions(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	cfg := CLIConfig{}
+	production, err := NewServiceTarget("production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.PutServiceEnvironment(production)
+	cfg.Token = "prod-session"
+	cfg.WorkspaceID = "ws-prod"
+	testTarget, err := NewServiceTarget("test", "https://test.leagent.me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.PutServiceEnvironment(testTarget)
+	cfg.Token = "test-session"
+	cfg.WorkspaceID = "ws-test"
+	if err := SaveCLIConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadCLIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Environment != "test" || loaded.Token != "test-session" || loaded.WorkspaceID != "ws-test" {
+		t.Fatalf("test projection = %+v", loaded)
+	}
+	if err := loaded.ActivateServiceEnvironment(ServiceEnvironmentProduction); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Token != "prod-session" || loaded.WorkspaceID != "ws-prod" {
+		t.Fatalf("production session was not restored: %+v", loaded)
+	}
+	if err := SaveCLIConfig(loaded); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := LoadCLIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Environment != "production" || reloaded.Token != "prod-session" {
+		t.Fatalf("saved production projection = %+v", reloaded)
+	}
+	if err := reloaded.ActivateServiceEnvironment(ServiceEnvironmentTest); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Token != "test-session" || reloaded.WorkspaceID != "ws-test" {
+		t.Fatalf("test session did not survive round-trip: %+v", reloaded)
+	}
+}
+
+func TestCLIConfig_ActivateRequiresConfiguredEnvironment(t *testing.T) {
+	cfg := CLIConfig{}
+	production, err := NewServiceTarget("production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.PutServiceEnvironment(production)
+	if err := cfg.ActivateServiceEnvironment(ServiceEnvironmentTest); err == nil || !strings.Contains(err.Error(), "multica setup --environment test") {
+		t.Fatalf("ActivateServiceEnvironment(test) error = %v", err)
+	}
+}
+
 // TestCLIConfig_UnknownFieldsArePreserved verifies forward-compat: a future
 // daemon that adds, say, a `backends.codex` key should not have its data
 // destroyed when an older daemon (without knowledge of that key) reads and

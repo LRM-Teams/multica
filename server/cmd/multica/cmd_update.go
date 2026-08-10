@@ -22,7 +22,7 @@ var updateRequestID string
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Update multica to the latest version",
+	Short: "Update multica from the current environment's package source",
 	RunE:  runUpdate,
 }
 
@@ -38,8 +38,18 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 
 	fmt.Fprintf(os.Stderr, "Current version: %s (commit: %s, built: %s)\n", version, commit, date)
 
-	// Check latest version from the release feed.
-	latest, err := cli.FetchLatestRelease()
+	// The active service environment owns the package source: production
+	// follows the stable manifest, test follows the preview manifest. There is
+	// no independent user-selectable release channel.
+	machineConfig, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return fmt.Errorf("load service environment: %w", err)
+	}
+	channel, err := cli.ResolveReleaseChannel(machineConfig)
+	if err != nil {
+		return fmt.Errorf("resolve package source: %w", err)
+	}
+	latest, err := cli.FetchReleaseForChannelWithOverride(channel, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not check latest version: %v\n", err)
 	} else {

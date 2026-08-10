@@ -305,7 +305,7 @@ function TroubleDetails() {
                     CODE_LIGATURE_CLASS,
                   )}
                 >
-                  {"multica daemon status"}
+                  {"multica computer status"}
                 </code>
               </li>
               <li className="flex items-center gap-1.5">
@@ -317,7 +317,7 @@ function TroubleDetails() {
                     CODE_LIGATURE_CLASS,
                   )}
                 >
-                  {"multica daemon logs -f"}
+                  {"multica computer logs -f"}
                 </code>
               </li>
             </ul>

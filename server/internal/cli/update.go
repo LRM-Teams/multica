@@ -266,10 +266,41 @@ func FetchReleaseForChannelWithOverride(channel ReleaseChannel, serverDispatched
 		return nil, err
 	}
 	baseURL := strings.TrimRight(releaseManifestBaseURLWithOverride(serverDispatched), "/")
+	var manifest *ReleaseManifest
 	if channel == ReleaseChannelAlpha {
-		return fetchManifest(baseURL + "/alpha.json")
+		manifest, err = fetchManifest(baseURL + "/alpha.json")
+	} else {
+		manifest, err = fetchManifestWithNotFoundFallback(baseURL+"/manifest.json", baseURL+"/latest.json")
 	}
-	return fetchManifestWithNotFoundFallback(baseURL+"/manifest.json", baseURL+"/latest.json")
+	if err != nil {
+		return nil, err
+	}
+	if err := validateChannelManifest(channel, manifest); err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
+
+func validateChannelManifest(channel ReleaseChannel, manifest *ReleaseManifest) error {
+	if manifest == nil {
+		return fmt.Errorf("%s release manifest is empty", channel)
+	}
+	tag := strings.TrimSpace(manifest.TagName)
+	version := strings.TrimSpace(manifest.Version)
+	if tag == "" || version == "" || normalizeReleaseTag(version) != normalizeReleaseTag(tag) {
+		return fmt.Errorf("%s release manifest has inconsistent tag/version", channel)
+	}
+	switch channel {
+	case ReleaseChannelLatest:
+		if !IsStableReleaseVersion(tag) {
+			return fmt.Errorf("latest release manifest must point to a stable vX.Y.Z version, got %q", tag)
+		}
+	case ReleaseChannelAlpha:
+		if !IsPrereleaseVersion(tag) {
+			return fmt.Errorf("alpha release manifest must point to an alpha.N, beta.N, or rc.N version, got %q", tag)
+		}
+	}
+	return nil
 }
 
 // knownBrewPrefixes lists the install roots Homebrew uses on each platform.

@@ -24,7 +24,7 @@
     },
     "bootstrapping": {
       "title": "正在启动本地运行时...",
-      "hint": "通常需要几秒钟。守护进程正在向工作区注册。"
+      "hint": "通常需要几秒钟。Computer 正在连接当前工作区。"
     }
   },
   "machine": {
@@ -58,7 +58,7 @@
     "info_section": "基础信息",
     "info_name": "机器名称",
     "info_cli": "CLI 版本",
-    "info_daemon_id": "Daemon ID",
+    "info_daemon_id": "Computer ID",
     "info_providers": "Providers",
     "delete_danger_row": "删除这台机器",
     "table_status": "状态",
@@ -160,7 +160,7 @@
         "description": "「{{name}}」缺少沙箱标识，无法从这里删除云端容器。"
       }
     },
-    "daemon_version_chip": "daemon v{{version}}",
+    "daemon_version_chip": "Computer v{{version}}",
     "version_prefix": "v{{version}}",
     "basics_owner": "所有者",
     "basics_daemon_id": "Computer ID",
@@ -173,7 +173,7 @@
       "upgrade": "升级",
       "upgrade_to": "升级到 {{version}}",
       "updating": "升级中…",
-      "upgrade_progress_pending": "等待 daemon 接收升级…",
+      "upgrade_progress_pending": "等待 Computer 接收升级…",
       "upgrade_progress_running": "正在下载并安装…",
       "upgrade_progress_applying": "正在重启并切换版本…",
       "upgrade_failed_prefix": "升级失败：",
@@ -196,14 +196,14 @@
       "description_cloud": "从工作区永久删除此云端电脑、其容器及其全部 Runtime。"
     },
     "remove_binding": {
-      "button": "从当前 Workspace 移除…",
-      "title": "从当前 Workspace 移除这台电脑？",
-      "description": "只把“{{name}}”从当前 Workspace 移除；它在其他 Workspace 会继续运行，本地 Agent 数据也会保留，之后仍可重新连接。",
+      "button": "移除当前 Workspace 连接…",
+      "title": "移除这条 Workspace 连接？",
+      "description": "只移除“{{name}}”与当前 Workspace 的连接；其他 Workspace 连接会继续运行，本地 Agent 数据也会保留，之后仍可重新连接。",
       "cancel": "取消",
-      "confirm": "移除电脑",
+      "confirm": "移除连接",
       "removing": "正在移除…",
-      "success": "电脑已从当前 Workspace 移除，本地 Agent 数据已保留。",
-      "invalid_response": "服务端没有确认这台电脑已被安全移除。"
+      "success": "Workspace 连接已移除；其他连接和本地 Agent 数据均已保留。",
+      "invalid_response": "服务端没有确认这条 Workspace 连接已被安全移除。"
     },
     "agents_select": "选择",
     "agents_create": "创建",
@@ -230,7 +230,7 @@
     },
     "offline": {
       "label": "离线",
-      "description": "5 分钟以上没有心跳。请重启守护进程或排查主机。"
+      "description": "5 分钟以上没有心跳。请重启 Computer 或排查主机。"
     },
     "about_to_gc": {
       "label": "即将清理",
@@ -299,7 +299,7 @@
     "submit": "创建",
     "toast_created": "云端电脑创建请求已提交",
     "toast_create_failed": "创建云端电脑失败",
-    "provisioning_hint": "正在启动云端电脑。守护进程注册成功后会显示为已连接。"
+    "provisioning_hint": "正在启动云端电脑。Computer 注册成功后会显示为已连接。"
   },
   "connect": {
     "title": "连接电脑",
@@ -312,7 +312,7 @@
     },
     "step1_label": "安装",
     "step2_label": "设置",
-    "step2_hint": "会打开浏览器登录，然后在后台保持守护进程运行。",
+    "step2_hint": "会打开浏览器登录、连接当前工作区，然后让 Computer resident 在后台运行。",
     "live_listening": "等待电脑连接",
     "live_listening_hint": "请保持此对话框打开。电脑注册成功后会自动继续。",
     "trouble_summary": "遇到问题？",
@@ -386,12 +386,12 @@
     "unknown_error": "未知错误",
     "initiate_failed": "启动更新失败",
     "last_update_not_applied": "上次更新未生效，当前仍是 {{currentVersion}}，目标版本 {{targetVersion}}。可以重试或查看原因。",
-    "offline": "守护进程离线",
+    "offline": "Computer 离线",
     "manual_hint": "如果自动更新无法写入安装位置，请在那台电脑的终端手动更新。",
     "manual_action": "手动命令",
     "manual_dialog_title": "手动更新这台运行时",
     "manual_dialog_description": "在运行时所在电脑上运行对应命令。macOS/Linux 命令会从当前 Multica 发布源重新安装 CLI。",
-    "manual_after_restart": "命令完成后，守护进程会用新 CLI 版本重新连接。如果它仍然离线，请再运行一次 multica daemon restart。",
+    "manual_after_restart": "命令完成后，Computer 会用新 CLI 版本重新连接。如果它仍然离线，请再运行一次 multica computer restart。",
     "manual_close": "关闭",
     "copy_command": "复制命令",
     "copied": "已复制",
@@ -401,9 +401,9 @@
     },
     "status": {
       "queued": "已排队 — 这台机器下次上线时会自动开始。",
-      "pending": "等待守护进程...",
+      "pending": "等待 Computer...",
       "running": "更新中...",
-      "completed": "更新完成。守护进程正在重启...",
+      "completed": "更新完成。Computer 正在重启...",
       "ready_to_apply": "更新已准备好，空闲后自动生效。",
       "failed": "更新失败",
       "timeout": "超时"
@@ -414,14 +414,14 @@
   },
   "restart": {
     "action": "重启",
-    "confirm_title": "重启这个守护进程？",
-    "confirm_description": "这会中断该机器上正在运行的 agent。守护进程重启后会自动重新连接。",
+    "confirm_title": "重启这台 Computer？",
+    "confirm_description": "这会中断该机器上正在运行的 agent。Computer 重启后会自动重新连接。",
     "confirm_cancel": "取消",
     "confirm_action": "立即重启",
     "initiate_failed": "发起重启请求失败",
     "status": {
       "pending": "正在请求重启...",
-      "delivered": "重启请求已送达，等待守护进程重新连接...",
+      "delivered": "重启请求已送达，等待 Computer 重新连接...",
       "timeout": "重启请求超时"
     }
   },

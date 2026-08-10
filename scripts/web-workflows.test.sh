@@ -46,10 +46,17 @@ for required in \
   'OSS_BUCKET: leagent' \
   'RELEASE_PREFIX: computer' \
   'PUBLIC_BASE_URL: https://cdn.leagent.me/computer' \
+  '^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$' \
   'canonical_prefix="${RELEASE_PREFIX}/${version}"' \
   'legacy_prefix="${RELEASE_PREFIX}/${TAG_NAME}"' \
+  'immutable_keys=(' \
+  '"${canonical_prefix}/checksums.txt"' \
+  'immutable_keys+=("${canonical_prefix}/$(basename "$f")")' \
   '"${canonical_prefix}/manifest.json" "${legacy_prefix}/release.json"' \
   'for name in manifest.json latest.json' \
+  "if: env.IS_STABLE != 'true'" \
+  's3://${OSS_BUCKET}/${RELEASE_PREFIX}/alpha.json' \
+  'verify_matches "${PUBLIC_BASE_URL}/alpha.json"' \
   'aliyun --config-path "$config" \' \
   'cdn RefreshObjectCaches' \
   'Verify the published feed through the public CDN'; do

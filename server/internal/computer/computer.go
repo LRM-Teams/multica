@@ -2,7 +2,6 @@ package computer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -201,6 +200,14 @@ func (p *execProc) Release() error {
 // the adapter can surface.
 func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 	v := l.view()
+	startCtx, startCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	startLease, err := acquireStartLease(startCtx, RootDir(""))
+	startCancel()
+	if err != nil {
+		return StartResult{}, fmt.Errorf("another Computer start is already in progress: %w", err)
+	}
+	defer startLease.Close()
+
 	if options.Generation == 0 {
 		generation, err := NewGenerationStore(RootDir("")).Next()
 		if err != nil {
@@ -357,6 +364,15 @@ func (l *Lifecycle) Status() map[string]any {
 			health[key] = value
 		}
 	}
+	if value, ok := raw["server_url"]; ok {
+		health["resident_service_origin"] = value
+	}
+	if value, ok := raw["environment"]; ok {
+		health["resident_environment"] = value
+	}
+	if value, ok := raw["release_channel"]; ok {
+		health["resident_package_source"] = packageSourceForReleaseChannel(fmt.Sprint(value))
+	}
 	store := NewIdentityStore(RootDir(""))
 	for k, val := range store.Peek("") {
 		health[k] = val
@@ -379,11 +395,23 @@ func (l *Lifecycle) Status() map[string]any {
 		health["session_present"] = session.TokenPresent
 		health["service_origin"] = session.Origin
 		health["environment"] = session.Environment
-		health["release_channel"] = session.ReleaseChannel
+		health["package_source"] = packageSourceForReleaseChannel(session.ReleaseChannel)
+		if Alive(raw) {
+			health["configuration_drift"] = strings.TrimRight(fmt.Sprint(raw["server_url"]), "/") != strings.TrimRight(session.Origin, "/") ||
+				fmt.Sprint(raw["environment"]) != session.Environment ||
+				fmt.Sprint(raw["release_channel"]) != session.ReleaseChannel
+		}
 	} else {
 		health["session_present"] = false
 	}
 	return health
+}
+
+func packageSourceForReleaseChannel(channel string) string {
+	if strings.EqualFold(strings.TrimSpace(channel), string(cli.ReleaseChannelAlpha)) {
+		return "preview"
+	}
+	return "stable"
 }
 
 type sessionProjection struct {
@@ -396,13 +424,8 @@ type sessionProjection struct {
 // readSessionProjection deliberately parses only presence + origin. It never
 // returns or logs the token bytes and keeps status inside the Computer module.
 func readSessionProjection() (sessionProjection, bool) {
-	path := filepath.Join(filepath.Dir(RootDir("")), "config.json")
-	data, err := os.ReadFile(path)
+	cfg, err := cli.LoadCLIConfigForProfile("")
 	if err != nil {
-		return sessionProjection{}, false
-	}
-	var cfg cli.CLIConfig
-	if json.Unmarshal(data, &cfg) != nil {
 		return sessionProjection{}, false
 	}
 	target, err := cli.ResolveServiceTarget(cfg)

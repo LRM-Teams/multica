@@ -70,7 +70,7 @@ multica computer status
 multica computer status --output json
 ```
 
-Shows redacted identity, current environment, release channel, and Workspace connections.
+Shows redacted identity, current environment, its fixed stable/preview package source, and Workspace connections.
 
 ### Logs
 
@@ -149,7 +149,7 @@ Agent-specific overrides:
 
 ### Production and Tencent test environments
 
-Production is fixed to `https://leagent.me`. Test is an explicit stage and accepts either a Tencent Cloud IP origin or `test.leagent.me`:
+Production is fixed to app `https://www.leagent.me` plus API/auth/WebSocket `https://api.leagent.me`. Test is an explicit environment and accepts either a Tencent Cloud IP origin or `test.leagent.me`:
 
 ```bash
 multica setup /my-workspace
@@ -157,14 +157,13 @@ multica setup --environment test --test-url https://test.leagent.me /my-workspac
 multica setup --environment test --test-url http://203.0.113.8:8080 /my-workspace
 ```
 
-The same Computer retains connections from both environments, keyed by `(environment, workspace_id)`, but one resident generation serves only the current environment.
-
-Release maturity is separate:
+The same Computer retains connections and login sessions from both environments, keyed by `(environment, workspace_id)`, but one resident generation serves only the current environment. Package source is fixed by environment: production uses stable, test uses preview.
 
 ```bash
-multica computer channel          # alpha or latest
-multica computer channel alpha    # Computer must be stopped
-multica computer upgrade          # uses the selected channel
+multica config show
+multica config use test
+multica config use production
+multica computer upgrade          # stable in production, preview in test
 ```
 
 ## Workspaces

@@ -5,7 +5,7 @@ description: Multica CLI 的所有顶级命令一页概览。完整用法查 `mu
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-Multica CLI 把 Web UI 能做的事几乎全部搬到了命令行上（创建 [issue](/issues)、分配 [智能体](/agents)、启动 [守护进程](/daemon-runtimes) 等等）。这一页把所有顶级命令列出来，每条配一句用途。完整 flag 和示例用 `multica <命令> --help` 查。
+Multica CLI 把 Web UI 能做的事几乎全部搬到了命令行上（创建 [issue](/issues)、分配 [智能体](/agents)、启动机器级 [Computer](/daemon-runtimes) 等等）。这一页把所有顶级命令列出来，每条配一句用途。完整 flag 和示例用 `multica <命令> --help` 查。
 
 ## 认证入口
 
@@ -101,11 +101,10 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica computer start [/<workspace>]` | 启动全机唯一 resident |
 | `multica computer stop` | 平滑停止 resident |
 | `multica computer restart [/<workspace>]` | 重启同一个 resident |
-| `multica computer status` | 查看脱敏后的身份、环境、通道和工作区连接 |
+| `multica computer status` | 查看脱敏后的身份、环境、固定包源和工作区连接 |
 | `multica computer logs [/<workspace>]` | 查看 resident 日志，可按工作区过滤 |
 | `multica computer doctor [/<workspace>]` | 只读诊断本机 Computer 状态 |
-| `multica computer channel [latest\|alpha]` | 在 Computer 停止时查看或切换发布通道 |
-| `multica computer upgrade [--target-version <version>]` | 按所选通道升级，或安装指定版本 |
+| `multica computer upgrade [--target-version <version>]` | 按当前环境的固定包源升级，或安装排障用精确版本 |
 | `multica runtime list` | 列出当前工作区的 runtime |
 | `multica runtime usage` | 查看资源使用情况 |
 | `multica runtime activity` | 近期活动记录 |
@@ -114,9 +113,10 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 
 | 命令 | 用途 |
 |---|---|
-| `multica config` | 查看 / 修改 CLI 本地配置 |
+| `multica config show` | 查看当前环境和脱敏后的各环境登录状态 |
+| `multica config use <production\|test>` | 安全切换环境及其匹配的 stable/preview 包 |
 | `multica version` | 显示 CLI 版本 |
-| `multica update` | 升级 CLI 到最新版 |
+| `multica update` | 按当前环境的固定包源升级 CLI |
 | `multica attachment view --id <id> --output <path>` | 将附件下载到本地文件路径 |
 | `multica attachment upload --path <file> [--target '#channel']` | 上传文件；返回的 id 用于 `--attachment-id` |
 

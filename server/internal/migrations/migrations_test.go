@@ -673,14 +673,20 @@ func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
 		t.Fatalf("read migration 307 up: %v", err)
 	}
 	// Forward contract: keyed by immutable workspace_id, never by slug; idempotent;
-	// credential stored as a hash only; revocable via active/revoked_at.
+	// credential stored as a hash only; revocable via active/revoked_at; one
+	// machine-wide Computer identity cannot be claimed by multiple users.
 	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS computer_identity_owner",
+		"daemon_id          TEXT        PRIMARY KEY",
 		"CREATE TABLE IF NOT EXISTS computer_workspace_bindings",
 		"daemon_id          TEXT",
 		"workspace_id       UUID",
 		"execution_token_hash TEXT",
 		"revoked_at         TIMESTAMPTZ",
 		"PRIMARY KEY (daemon_id, workspace_id)",
+		"computer identity has bindings owned by multiple users",
+		"o.user_id <> b.user_id",
+		"computer identity owner conflicts with workspace connection owner",
 	} {
 		if !strings.Contains(string(up), required) {
 			t.Errorf("migration 307 up missing %q", required)
@@ -692,6 +698,9 @@ func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
 	}
 	if !strings.Contains(string(down), "DROP TABLE IF EXISTS computer_workspace_bindings") {
 		t.Error("migration 307 down must drop the bindings table")
+	}
+	if !strings.Contains(string(down), "DROP TABLE IF EXISTS computer_identity_owner") {
+		t.Error("migration 307 down must drop the Computer owner table")
 	}
 }
 

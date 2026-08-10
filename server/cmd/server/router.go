@@ -1229,10 +1229,17 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
-			// Workspace Execution Bindings for one Computer (machine-wide
-			// identity = daemon_id). Establishment is idempotent (#2489/#2490);
-			// removal revokes one Binding and never touches local Agent data
-			// (#2493).
+			// Public Computer Workspace-connection lifecycle. Establishment is
+			// idempotent (#2489/#2490); removal revokes exactly one connection
+			// and never touches local Agent data (#2493).
+			r.Route("/api/computers/{daemonId}/workspace-connections", func(r chi.Router) {
+				r.Post("/", h.CreateComputerWorkspaceBinding)
+				r.Delete("/{workspaceId}", h.RevokeComputerWorkspaceBinding)
+			})
+
+			// Compatibility path for clients shipped before the public Computer
+			// terminology. `binding` remains an internal protocol/database word;
+			// all new callers use /api/computers/.../workspace-connections.
 			r.Route("/api/daemons/{daemonId}/bindings", func(r chi.Router) {
 				r.Post("/", h.CreateComputerWorkspaceBinding)
 				r.Delete("/{workspaceId}", h.RevokeComputerWorkspaceBinding)

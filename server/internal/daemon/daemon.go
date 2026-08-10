@@ -159,7 +159,7 @@ type Daemon struct {
 	rootCtx       context.Context    // set by Run(); used by long-running recoveries that must survive per-runtime ctx cancellation
 	restartBinary string             // non-empty after a successful update; path to the new binary
 	updating      atomic.Bool        // prevents concurrent update attempts
-	activeTasks atomic.Int64 // number of tasks currently in handleTask; exposed via /health
+	activeTasks   atomic.Int64       // number of tasks currently in handleTask; exposed via /health
 	// machineUpgradeTaskCancels contains only task contexts created by this
 	// daemon. A Machine Upgrade may ask those managed turns to stop; it must
 	// never infer ownership of, or signal, an arbitrary local process.
@@ -204,6 +204,10 @@ type Daemon struct {
 	claimMu        sync.Mutex
 	pauseClaims    bool // when true, runRuntimePoller skips ClaimTask
 	claimsInFlight int  // pollers that have decided to claim but haven't yet handed the task off to handleTask
+	// environmentSwitchPrepared records ownership of pauseClaims by the local
+	// config-switch control flow. It prevents a release request from clearing
+	// a barrier held by an unrelated Machine Upgrade.
+	environmentSwitchPrepared atomic.Bool
 
 	// agentWakeSlots is a daemon-side fail-safe for the server's authoritative
 	// one-active-wake-per-agent rule. Every chat, DM, issue, autopilot, Radar,
@@ -883,6 +887,21 @@ func (d *Daemon) clearWSHeartbeatAcks() {
 
 // Run starts the daemon: resolves auth, registers runtimes, then polls for tasks.
 func (d *Daemon) Run(ctx context.Context) error {
+	// New Computer residents hold one machine-wide advisory lease for their
+	// complete lifetime. The control port remains a second observable gate,
+	// while the lease closes concurrent-start/PID races before network setup.
+	var residentLease *computer.FileLease
+	if strings.TrimSpace(d.cfg.BindingsRoot) != "" {
+		leaseCtx, leaseCancel := context.WithTimeout(ctx, 2*time.Second)
+		lease, err := computer.AcquireResidentLease(leaseCtx, d.cfg.BindingsRoot)
+		leaseCancel()
+		if err != nil {
+			return fmt.Errorf("another Computer resident owns this machine: %w", err)
+		}
+		residentLease = lease
+		defer residentLease.Close()
+	}
+
 	// Wrap context so handleUpdate can cancel the daemon for restart.
 	ctx, cancel := context.WithCancel(ctx)
 	d.cancelFunc = cancel
@@ -2473,6 +2492,28 @@ func (d *Daemon) setClaimBarrier() {
 	d.claimMu.Lock()
 	defer d.claimMu.Unlock()
 	d.pauseClaims = true
+}
+
+// trySetEnvironmentSwitchBarrier acquires the claim barrier only when no
+// other handoff currently owns it. The environment-switch handler keeps this
+// barrier held across config persistence and process shutdown.
+func (d *Daemon) trySetEnvironmentSwitchBarrier() bool {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	if d.pauseClaims {
+		return false
+	}
+	d.pauseClaims = true
+	d.environmentSwitchPrepared.Store(true)
+	return true
+}
+
+func (d *Daemon) releaseEnvironmentSwitchBarrier() bool {
+	if !d.environmentSwitchPrepared.CompareAndSwap(true, false) {
+		return false
+	}
+	d.releaseClaimBarrier()
+	return true
 }
 
 // claimBarrierDrained reports whether the stop-claim barrier is held and all

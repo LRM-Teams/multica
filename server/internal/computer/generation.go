@@ -1,6 +1,7 @@
 package computer
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,24 +41,19 @@ func (s *GenerationStore) Next() (int64, error) {
 		return 0, err
 	}
 	lockPath := filepath.Join(s.root, generationLockFile)
-	var lock *os.File
-	var err error
-	for attempt := 0; attempt < 100; attempt++ {
-		lock, err = os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			break
-		}
-		if !os.IsExist(err) {
-			return 0, err
-		}
-		time.Sleep(10 * time.Millisecond)
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return 0, err
 	}
-	if lock == nil {
-		return 0, fmt.Errorf("Computer generation lock is busy")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := lockComputerFile(ctx, lock); err != nil {
+		_ = lock.Close()
+		return 0, fmt.Errorf("Computer generation lock is busy: %w", err)
 	}
 	defer func() {
+		unlockComputerFile(lock)
 		_ = lock.Close()
-		_ = os.Remove(lockPath)
 	}()
 
 	next := s.Current() + 1

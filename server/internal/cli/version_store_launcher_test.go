@@ -39,6 +39,16 @@ func TestVersionStoreLauncherPathIsStableAndRejectsVersionBinary(t *testing.T) {
 	if err := store.RememberLauncherPath(staged.BinaryPath); err == nil {
 		t.Fatal("version-specific binary was accepted as stable launcher")
 	}
+	if err := store.RememberLauncherPath(store.VersionsRoot()); err == nil {
+		t.Fatal("versions root was accepted as stable launcher")
+	}
+	other := filepath.Join(root, "bin", "multica-other")
+	if err := os.WriteFile(other, []byte("other-launcher"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RememberLauncherPath(other); err == nil {
+		t.Fatal("stable launcher state was silently replaced")
+	}
 	got, ok, err = store.LauncherPath()
 	if err != nil || !ok || got != launcher {
 		t.Fatalf("rejected update changed launcher = %q, %v, %v", got, ok, err)

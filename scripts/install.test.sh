@@ -28,6 +28,21 @@ _setup_sandbox() {
 
   cat >"$payload_dir/multica" <<'STUB'
 #!/usr/bin/env bash
+if [[ "${1:-}" == "installer-activate" ]]; then
+  printf '%s\n' "$*" >>"$MULTICA_TEST_ACTIVATE_LOG"
+  launcher=""
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --launcher) launcher="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  mkdir -p "$(dirname "$launcher")"
+  cp "$0" "$launcher"
+  chmod +x "$launcher"
+  exit 0
+fi
 echo "multica v0.3.2 (commit: test)"
 STUB
   chmod +x "$payload_dir/multica"
@@ -45,6 +60,10 @@ STUB
   cat >"$tmp/latest.json" <<JSON
 {"tag":"v0.3.2","version":"0.3.2","platforms":{"${platform}":{"url":"https://cdn.leagent.me/computer/v0.3.2/multica-cli-0.3.2-${platform}.tar.gz","sha256":"${sha256}"}}}
 JSON
+  cat >"$tmp/alpha.json" <<JSON
+{"tag":"v0.4.0-alpha.7","version":"0.4.0-alpha.7","platforms":{"${platform}":{"url":"https://cdn.leagent.me/computer/0.4.0-alpha.7/multica-cli-0.4.0-alpha.7-${platform}.tar.gz","sha256":"${sha256}"}}}
+JSON
+  cp "$tmp/alpha.json" "$tmp/exact.json"
 
   # install.sh's manifest parsing needs jq or python3 on PATH. Stage the
   # host's real one into stub-bin so the sandboxed PATH below finds it
@@ -71,10 +90,13 @@ if [[ "$*" == *"github.com"* ]]; then
   exit 32
 fi
 
-is_manifest_request=0
-if [[ "$*" == *"latest.json"* ]]; then
-  is_manifest_request=1
-fi
+manifest_source=""
+case "$*" in
+  *"/computer/manifest.json"*) manifest_source="$MULTICA_TEST_LATEST_MANIFEST" ;;
+  *"/latest.json"*) manifest_source="$MULTICA_TEST_LATEST_MANIFEST" ;;
+  *"/alpha.json"*) manifest_source="$MULTICA_TEST_ALPHA_MANIFEST" ;;
+  *"/0.4.0-alpha.7/manifest.json"*) manifest_source="$MULTICA_TEST_EXACT_MANIFEST" ;;
+esac
 
 out=""
 while [[ $# -gt 0 ]]; do
@@ -93,8 +115,8 @@ if [[ -z "$out" ]]; then
   echo "stub curl expected -o" >&2
   exit 2
 fi
-if [[ "$is_manifest_request" -eq 1 ]]; then
-  cp "$MULTICA_TEST_MANIFEST" "$out"
+if [[ -n "$manifest_source" ]]; then
+  cp "$manifest_source" "$out"
 else
   cp "$MULTICA_TEST_ARCHIVE" "$out"
 fi
@@ -113,6 +135,7 @@ _run_installer() {
   local tmp="$1"
   local shell_path="$2"
   local extra_path="${3:-}"
+  local version_selector="${4:-}"
   local out="$tmp/install.out"
   local err="$tmp/install.err"
   local path="$tmp/stub-bin:/usr/bin:/bin"
@@ -120,14 +143,22 @@ _run_installer() {
     path="$extra_path:$path"
   fi
 
+  local installer_args=()
+  if [[ -n "$version_selector" ]]; then
+    installer_args=(--version "$version_selector")
+  fi
+
   if ! HOME="$tmp/home" \
     SHELL="$shell_path" \
     PATH="$path" \
     MULTICA_BIN_DIR="$tmp/must-not-be-used" \
     MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
-    MULTICA_TEST_MANIFEST="$tmp/latest.json" \
+    MULTICA_TEST_LATEST_MANIFEST="$tmp/latest.json" \
+    MULTICA_TEST_ALPHA_MANIFEST="$tmp/alpha.json" \
+    MULTICA_TEST_EXACT_MANIFEST="$tmp/exact.json" \
     MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
-    bash "$ROOT_DIR/scripts/install.sh" >"$out" 2>"$err"; then
+    MULTICA_TEST_ACTIVATE_LOG="$tmp/activate.log" \
+    bash "$ROOT_DIR/scripts/install.sh" "${installer_args[@]}" >"$out" 2>"$err"; then
     echo "install.sh exited non-zero" >&2
     cat "$out" >&2 || true
     cat "$err" >&2 || true
@@ -144,7 +175,12 @@ _run_installer() {
     echo "MULTICA_BIN_DIR must not create a second install root" >&2
     return 1
   fi
-  if ! grep -q "https://cdn.leagent.me/computer/v0.3.2/multica-cli-0.3.2-" "$tmp/curl.log"; then
+  if ! grep -qF "installer-activate --version" "$tmp/activate.log"; then
+    echo "installer must activate the verified candidate through VersionStore" >&2
+    cat "$tmp/activate.log" >&2 || true
+    return 1
+  fi
+  if ! grep -Eq "https://cdn\.leagent\.me/computer/[^ ]+/multica-cli-[^ ]+" "$tmp/curl.log"; then
     echo "expected download from the leagent.me release feed, not GitHub" >&2
     cat "$tmp/curl.log" >&2 || true
     return 1
@@ -152,6 +188,41 @@ _run_installer() {
   if grep -q "github.com" "$tmp/curl.log"; then
     echo "installer must never hit github.com — it 404s unauthenticated on this private repo" >&2
     cat "$tmp/curl.log" >&2 || true
+    return 1
+  fi
+}
+
+_run_installer_expect_failure() {
+  local tmp="$1"
+  local version_selector="${2:-}"
+  local status
+  local installer_args=()
+  if [[ -n "$version_selector" ]]; then
+    installer_args=(--version "$version_selector")
+  fi
+
+  set +e
+  HOME="$tmp/home" \
+    SHELL=/bin/bash \
+    PATH="$tmp/stub-bin:/usr/bin:/bin" \
+    MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
+    MULTICA_TEST_LATEST_MANIFEST="$tmp/latest.json" \
+    MULTICA_TEST_ALPHA_MANIFEST="$tmp/alpha.json" \
+    MULTICA_TEST_EXACT_MANIFEST="$tmp/exact.json" \
+    MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
+    MULTICA_TEST_ACTIVATE_LOG="$tmp/activate.log" \
+    bash "$ROOT_DIR/scripts/install.sh" "${installer_args[@]}" >"$tmp/install.out" 2>"$tmp/install.err"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 ]]; then
+    echo "installer unexpectedly succeeded" >&2
+    cat "$tmp/install.out" >&2 || true
+    cat "$tmp/install.err" >&2 || true
+    return 1
+  fi
+  if [[ -e "$tmp/home/.local/bin/multica" ]]; then
+    echo "a rejected manifest must not install a binary" >&2
     return 1
   fi
 }
@@ -195,16 +266,148 @@ test_same_version_legacy_path_is_migrated_to_user_local() {
     echo "installer must not destructively remove the legacy binary" >&2
     return 1
   fi
-  if ! grep -qF "\"$tmp/home/.local/bin/multica\" daemon restart" "$tmp/install.err"; then
-    echo "expected explicit idle daemon adoption command" >&2
+  if ! grep -qF "\"$tmp/home/.local/bin/multica\" computer restart" "$tmp/install.err"; then
+    echo "expected explicit idle Computer adoption command" >&2
     cat "$tmp/install.err" >&2
     return 1
   fi
-  if ! grep -qF "\"$tmp/home/.local/bin/multica\" --profile staging daemon restart" "$tmp/install.err"; then
-    echo "expected named-profile daemon adoption command" >&2
+  if grep -q -- "--profile\|daemon restart" "$tmp/install.err"; then
+    echo "installer must not suggest profiles or the retired daemon command" >&2
     cat "$tmp/install.err" >&2
     return 1
   fi
+}
+
+test_version_selector_installs_alpha_pointer() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  _run_installer "$tmp" /bin/zsh "" alpha
+
+  if ! grep -qF "https://cdn.leagent.me/computer/alpha.json" "$tmp/curl.log"; then
+    echo "--version alpha must read only the alpha pointer" >&2
+    cat "$tmp/curl.log" >&2
+    return 1
+  fi
+  if grep -qF "/latest.json" "$tmp/curl.log"; then
+    echo "alpha selection must never fall back to latest" >&2
+    cat "$tmp/curl.log" >&2
+    return 1
+  fi
+}
+
+test_default_uses_canonical_manifest_not_legacy_latest_file() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  _run_installer "$tmp" /bin/zsh
+
+  if ! grep -qF "https://cdn.leagent.me/computer/manifest.json" "$tmp/curl.log"; then
+    echo "the default installer must read the canonical root manifest" >&2
+    cat "$tmp/curl.log" >&2
+    return 1
+  fi
+  if grep -qF "/latest.json" "$tmp/curl.log"; then
+    echo "the new installer must not use the legacy latest.json name" >&2
+    cat "$tmp/curl.log" >&2
+    return 1
+  fi
+}
+
+test_version_selector_installs_exact_immutable_release() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  _run_installer "$tmp" /bin/zsh "" v0.4.0-alpha.7
+
+  if ! grep -qF "https://cdn.leagent.me/computer/0.4.0-alpha.7/manifest.json" "$tmp/curl.log"; then
+    echo "an exact --version must read its immutable per-version manifest" >&2
+    cat "$tmp/curl.log" >&2
+    return 1
+  fi
+  if grep -Eq "/(latest|alpha)\.json" "$tmp/curl.log"; then
+    echo "an exact version must not consult a movable pointer" >&2
+    cat "$tmp/curl.log" >&2
+    return 1
+  fi
+}
+
+test_invalid_version_selector_fails_before_network() {
+  local tmp status
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  _setup_sandbox "$tmp"
+  set +e
+  HOME="$tmp/home" \
+    SHELL=/bin/bash \
+    PATH="$tmp/stub-bin:/usr/bin:/bin" \
+    MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
+    MULTICA_TEST_LATEST_MANIFEST="$tmp/latest.json" \
+    MULTICA_TEST_ALPHA_MANIFEST="$tmp/alpha.json" \
+    MULTICA_TEST_EXACT_MANIFEST="$tmp/exact.json" \
+    MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
+    bash "$ROOT_DIR/scripts/install.sh" --version nightly >"$tmp/install.out" 2>"$tmp/install.err"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 ]]; then
+    echo "an unsupported version selector must fail" >&2
+    return 1
+  fi
+  if [[ -s "$tmp/curl.log" ]]; then
+    echo "an invalid version selector must fail before any network request" >&2
+    cat "$tmp/curl.log" >&2
+    return 1
+  fi
+  if ! grep -qF "Invalid --version 'nightly'" "$tmp/install.err"; then
+    echo "expected a useful invalid-version error" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
+}
+
+test_manifest_pointer_cannot_cross_release_channels() {
+  local tmp
+
+  tmp="$(mktemp -d)"
+  _setup_sandbox "$tmp"
+  cp "$tmp/alpha.json" "$tmp/latest.json"
+  _run_installer_expect_failure "$tmp"
+  if ! grep -qF "latest manifest must point to a stable" "$tmp/install.err"; then
+    echo "expected latest-to-prerelease rejection" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+
+  tmp="$(mktemp -d)"
+  _setup_sandbox "$tmp"
+  cp "$tmp/latest.json" "$tmp/alpha.json"
+  _run_installer_expect_failure "$tmp" alpha
+  if ! grep -qF "alpha channel manifest must point to" "$tmp/install.err"; then
+    echo "expected alpha-to-stable rejection" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+
+  tmp="$(mktemp -d)"
+  _setup_sandbox "$tmp"
+  sed -i.bak 's/v0\.4\.0-alpha\.7/v0.4.0-alpha.8/g' "$tmp/exact.json"
+  _run_installer_expect_failure "$tmp" v0.4.0-alpha.7
+  if ! grep -qF "does not match requested v0.4.0-alpha.7" "$tmp/install.err"; then
+    echo "expected exact-manifest tag mismatch rejection" >&2
+    cat "$tmp/install.err" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
 }
 
 test_fish_path_config_is_idempotent() {
@@ -355,7 +558,9 @@ test_checksum_mismatch_refuses_install() {
     SHELL=/bin/bash \
     PATH="$tmp/stub-bin:/usr/bin:/bin" \
     MULTICA_TEST_ARCHIVE="$tmp/multica.tar.gz" \
-    MULTICA_TEST_MANIFEST="$tmp/latest.json" \
+    MULTICA_TEST_LATEST_MANIFEST="$tmp/latest.json" \
+    MULTICA_TEST_ALPHA_MANIFEST="$tmp/alpha.json" \
+    MULTICA_TEST_EXACT_MANIFEST="$tmp/exact.json" \
     MULTICA_TEST_CURL_LOG="$tmp/curl.log" \
     bash "$ROOT_DIR/scripts/install.sh" >"$tmp/install.out" 2>"$tmp/install.err"
   status=$?
@@ -376,12 +581,37 @@ test_checksum_mismatch_refuses_install() {
   fi
 }
 
+test_powershell_installer_uses_same_version_store_bridge() {
+  local script
+  script="$(<"$ROOT_DIR/scripts/install.ps1")"
+  for required in \
+    '& $exeSrc installer-activate' \
+    '--version $latest' \
+    '--sha256 $binaryHash' \
+    '--launcher $launcher'; do
+    if ! grep -Fq -- "$required" <<<"$script"; then
+      echo "PowerShell installer is missing shared VersionStore activation: $required" >&2
+      return 1
+    fi
+  done
+  if grep -Fq -- 'Copy-Item $exeSrc (Join-Path $binDir "multica.exe") -Force' <<<"$script"; then
+    echo "PowerShell installer still overwrites the launcher outside VersionStore" >&2
+    return 1
+  fi
+}
+
 test_default_installs_only_to_user_local_without_sudo
+test_default_uses_canonical_manifest_not_legacy_latest_file
 test_same_version_legacy_path_is_migrated_to_user_local
+test_version_selector_installs_alpha_pointer
+test_version_selector_installs_exact_immutable_release
+test_invalid_version_selector_fails_before_network
+test_manifest_pointer_cannot_cross_release_channels
 test_fish_path_config_is_idempotent
 test_bash_login_and_non_login_shells_resolve_canonical_path
 test_managed_block_moves_after_legacy_shadow_and_stays_idempotent
 test_unknown_shell_fallback_moves_canonical_path_last
 test_managed_path_update_preserves_dotfile_symlink
 test_checksum_mismatch_refuses_install
+test_powershell_installer_uses_same_version_store_bridge
 echo "install.sh tests passed"

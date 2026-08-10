@@ -9,12 +9,12 @@ The fastest way to get started with Multica — no setup required.
 
 Go to [multica.ai](https://multica.ai) and create an account.
 
-## 2. Install the CLI and start the daemon
+## 2. Install the CLI and start the Computer
 
 Give this instruction to your AI agent (Claude Code, Codex, Gemini CLI, OpenClaw, OpenCode, etc.):
 
 ```
-Fetch https://github.com/LRM-Teams/multica/blob/main/CLI_INSTALL.md and follow the instructions to install Multica CLI, log in, and start the daemon on this machine.
+Fetch https://github.com/LRM-Teams/multica/blob/main/CLI_INSTALL.md and follow the instructions to install Multica CLI, connect a Workspace, and start the Computer on this machine.
 ```
 
 Or install manually:
@@ -32,20 +32,20 @@ curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 irm https://cdn.leagent.me/computer/install.ps1 | iex
 ```
 
-Then configure, authenticate, and start the daemon:
+Then configure, authenticate, connect a Workspace, and start the Computer:
 
 ```bash
-# Configure, authenticate, and start the daemon
-multica setup
+# Configure, authenticate, connect one Workspace, and start the Computer
+multica setup /my-workspace
 ```
 
-The daemon auto-detects available agent CLIs (`claude`, `codex`, `gemini`, `openclaw`, `opencode`, `hermes`, `pi`) on your PATH. When an agent is assigned a task, the daemon creates an isolated environment, runs the agent, and reports results back.
+The Computer auto-detects available agent CLIs (`claude`, `codex`, `gemini`, `openclaw`, `opencode`, `hermes`, `pi`) on your PATH. It reports one Runtime per `(Workspace connection × tool)` and executes assigned work locally.
 
 ## 3. Verify your runtime
 
 Open your workspace in the Multica web app. Navigate to **Settings → Runtimes** — you should see your machine listed as an active **Runtime**.
 
-> **What is a Runtime?** A Runtime is a compute environment that can execute agent tasks. It can be your local machine (via the daemon) or a cloud instance. Each runtime reports which agent CLIs are available, so Multica knows where to route work.
+> **What is a Runtime?** A Runtime is one `(Workspace connection × tool)` execution target reported by a Computer. Multica uses it to route work to the right local AI coding tool.
 
 ## 4. Create an agent
 

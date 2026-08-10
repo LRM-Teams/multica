@@ -39,7 +39,12 @@ export function MachineDangerZone({
   const removeBinding = useRemoveComputerWorkspaceBinding(wsId);
 
   const isCloud = isCloudComputerMachine(machine);
-  if (!machine.runtimes.length && !machine.pendingCloud) return null;
+  // An explicit Workspace connection remains manageable even when this
+  // Workspace has zero Agent runtime rows. Only the synthetic empty local
+  // placeholder lacks both a Computer id and a destructive action.
+  if (!machine.runtimes.length && !machine.pendingCloud && !machine.daemonId) {
+    return null;
+  }
 
   const canDeleteComputer = isCloud
     ? canDeleteCloudComputerMachine(machine, user?.id)
@@ -53,8 +58,10 @@ export function MachineDangerZone({
     !isCloud &&
     !!machine.daemonId &&
     !!user &&
-    machine.runtimes.length > 0 &&
-    machine.runtimes.every((r) => r.owner_id === user.id);
+    (machine.ownerUserId
+      ? machine.ownerUserId === user.id
+      : machine.runtimes.length > 0 &&
+        machine.runtimes.every((r) => r.owner_id === user.id));
 
   const handleRemoveBinding = async () => {
     if (!machine.daemonId || !canRemoveBinding) return;

@@ -211,6 +211,17 @@ func TestIdentityConcurrentMintConverges(t *testing.T) {
 	}
 }
 
+func TestIdentityMintIgnoresStaleUnlockedLockFile(t *testing.T) {
+	store, _ := newTestStore(t)
+	if err := os.WriteFile(filepath.Join(store.root, identityLockFile), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := store.Load("")
+	if result.Kind != IdentityMinted || result.ID == "" {
+		t.Fatalf("Load with stale lock file = %+v", result)
+	}
+}
+
 // read-only: Peek on a fresh machine reports "none" and creates no file.
 func TestIdentityPeekIsReadOnlyOnFreshMachine(t *testing.T) {
 	store, _ := newTestStore(t)

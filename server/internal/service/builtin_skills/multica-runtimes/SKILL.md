@@ -1,6 +1,6 @@
 ---
 name: multica-runtimes
-description: "Use when inspecting or debugging Multica runtimes, daemon task claiming, or an agent that did not run. Covers runtime online state, heartbeat, claim, lease, and safe diagnostic commands."
+description: "Use when inspecting or debugging Multica Computer runtimes, task claiming, or an Agent that did not run. Covers Workspace connections, runtime online state, heartbeat, claim, lease, and safe diagnostic commands."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -20,21 +20,22 @@ Do not restart daemons or update runtimes merely to test a hypothesis.
 
 ## Core model
 
-A runtime is the execution target behind an Agent. A daemon owns local runtime
+A runtime is one `(Workspace connection x provider tool)` execution target
+behind an Agent. The machine-wide Computer resident owns those local runtime
 processes and leases pending `agent_inbox_event` rows from the server.
 
 The chain is:
 
 1. a user action creates or updates an `agent_inbox_event`;
 2. the event targets an Agent and runtime;
-3. the server wakes the runtime over the daemon websocket when possible;
-4. the daemon drains and leases the canonical inbox event;
-5. the daemon starts the provider CLI in the Agent's durable workspace;
-6. the daemon reports completion.
+3. the server wakes the runtime over the Computer's websocket when possible;
+4. the Computer resident drains and leases the canonical inbox event;
+5. the resident starts the provider CLI in the Agent's durable workspace;
+6. the resident reports completion.
 
-Machine Upgrade is daemon-scoped: use the canonical daemon upgrade API for new
-work. Installed clients may still call the legacy runtime-scoped HTTP update
-paths; those are compatibility adapters over the same daemon operation and do
+Machine Upgrade is Computer-scoped. Internally it uses the canonical daemon
+upgrade API; installed clients may still call legacy runtime-scoped HTTP update
+paths. Those are compatibility adapters over the same Computer operation and do
 not create runtime-owned update state.
 
 ## CLI
@@ -58,15 +59,16 @@ controlled by the Computer lifecycle, not an OS supervisor:
 multica computer start      # run the machine-wide resident detached
 multica computer stop       # stop it gracefully
 multica computer restart    # stop + start
-multica computer status     # read-only status (identity, connect, bindings)
+multica computer status     # read-only status (identity, resident, Workspace connections)
 multica computer logs       # tail the resident service log
 multica computer doctor     # read-only diagnostics (--fix only clears a confirmed-stopped stale PID)
 multica computer channel    # show latest or alpha; pass a value to change it while stopped
 ```
 
-The service environment and release channel are independent. Production is
-fixed to `https://leagent.me`; test requires an explicit Tencent Cloud HTTP(S)
-origin and may use either an IP address or `test.leagent.me`:
+The service environment and release channel are independent. Production uses
+`https://www.leagent.me` for the app and `https://api.leagent.me` for
+API/auth/WebSocket. Test requires one explicit Tencent Cloud HTTP(S) origin and
+may use either an IP address or `test.leagent.me`:
 
 ```bash
 multica setup /my-workspace
@@ -86,7 +88,7 @@ to the same machine-wide Computer; use `multica computer ...` instead.
 1. Confirm a task was supposed to be created.
 2. Confirm the assignee is an active Agent or a supported routing target.
 3. Check the runtime with `multica runtime list --output json`.
-4. Check the daemon heartbeat (`last_seen_at`).
+4. Check the Computer heartbeat (`last_seen_at`).
 5. Determine whether the inbox event is pending, leased, running, or terminal.
 
 More source-backed details: `references/runtimes-source-map.md`.

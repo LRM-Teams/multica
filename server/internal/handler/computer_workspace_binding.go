@@ -48,7 +48,7 @@ func (h *Handler) CreateComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to begin Binding creation"})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to begin Workspace connection creation"})
 		return
 	}
 	defer tx.Rollback(r.Context())
@@ -57,7 +57,7 @@ func (h *Handler) CreateComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 	txHandler.DB = tx
 	credential, err := txHandler.prepareDaemonRegisterToken(r.Context(), workspaceUUID, daemonID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to issue Binding credential"})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to issue Workspace connection credential"})
 		return
 	}
 
@@ -67,14 +67,16 @@ func (h *Handler) CreateComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 	)
 	if err != nil {
 		status := http.StatusInternalServerError
+		message := err.Error()
 		if errors.Is(err, computer.ErrBindingUnauthorized) {
 			status = http.StatusForbidden
+			message = "Workspace connection is not authorized for this Computer"
 		}
-		writeJSON(w, status, map[string]any{"error": err.Error()})
+		writeJSON(w, status, map[string]any{"error": message})
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to commit Binding creation"})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to commit Workspace connection creation"})
 		return
 	}
 	h.cacheDaemonRegisterToken(r.Context(), credential, workspaceUUID, daemonID)
@@ -111,7 +113,11 @@ func (h *Handler) RevokeComputerWorkspaceBinding(w http.ResponseWriter, r *http.
 		workspaceID,
 	)
 	if err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		message := err.Error()
+		if errors.Is(err, computer.ErrBindingUnauthorized) {
+			message = "Workspace connection is not authorized for this Computer"
+		}
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": message})
 		return
 	}
 	for _, tokenHash := range revokedTokenHashes {

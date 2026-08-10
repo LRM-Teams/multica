@@ -290,6 +290,14 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		ownerID = member.UserID
 	}
 	if req.ComputerGeneration > 0 {
+		if err := h.authorizeComputerConnectionRequest(r.Context(), r, req.DaemonID, req.WorkspaceID); err != nil {
+			if errors.Is(err, errComputerConnectionUnauthorized) {
+				writeError(w, http.StatusForbidden, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to authorize Computer connection")
+			}
+			return
+		}
 		if err := h.claimComputerGeneration(r.Context(), req.DaemonID, req.ComputerGeneration); err != nil {
 			writeCodedError(w, http.StatusConflict, "stale_computer_generation", err.Error())
 			return

@@ -271,7 +271,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     );
     expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
     expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
-	    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Waiting for daemon to accept update…");
+    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Waiting for the Computer to accept the update…");
   });
 
   it("keeps rollback recovery active until every sibling has attested", () => {
@@ -380,15 +380,32 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
     wrap(<MachineDangerZone machine={makeMachine()} />);
 
     expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
-      /Remove from this Workspace/i,
+      /Remove Workspace connection/i,
     );
     expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
       /Delete computer/i,
     );
     fireEvent.click(screen.getByTestId("machine-remove-binding"));
     expect(
-      screen.getByText(/other Workspaces keep running/i),
+      screen.getByText(/other Workspace connections keep running/i),
     ).toBeInTheDocument();
+  });
+
+  it("can remove an owned Workspace connection with zero Agent runtimes", () => {
+    wrap(
+      <MachineDangerZone
+        machine={makeMachine({
+          daemonId: "computer-zero-agents",
+          runtimes: [],
+          ownerUserId: "user-mine",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
+      /Remove Workspace connection/i,
+    );
+    expect(screen.getByTestId("machine-danger-delete")).toBeDisabled();
   });
 
   it("shows delete for pending cloud computers owned by the caller", () => {

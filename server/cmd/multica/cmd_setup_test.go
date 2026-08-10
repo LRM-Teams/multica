@@ -60,8 +60,8 @@ func TestCloudCLIConfigUsesLeAgentOrigins(t *testing.T) {
 	if cfg.Environment != "production" {
 		t.Fatalf("environment = %q, want production", cfg.Environment)
 	}
-	if cfg.ReleaseChannel != "latest" {
-		t.Fatalf("release_channel = %q, want latest", cfg.ReleaseChannel)
+	if channel, err := cli.ResolveReleaseChannel(cfg); err != nil || channel != cli.ReleaseChannelLatest {
+		t.Fatalf("derived package source = %q, %v; want latest", channel, err)
 	}
 	if cfg.ServerURL != "https://api.leagent.me" {
 		t.Fatalf("server_url = %q, want https://api.leagent.me", cfg.ServerURL)
@@ -73,16 +73,19 @@ func TestCloudCLIConfigUsesLeAgentOrigins(t *testing.T) {
 
 func TestSetupEnvironmentFlagsExposeOnlyProductionOrExplicitTestOrigin(t *testing.T) {
 	for _, command := range []*cobra.Command{setupCmd, setupCloudCmd} {
-		if command.Flags().Lookup("environment") == nil || command.Flags().Lookup("test-url") == nil || command.Flags().Lookup("channel") == nil {
-			t.Fatalf("%s must expose --environment, --test-url, and --channel", command.Use)
+		if command.Flags().Lookup("environment") == nil || command.Flags().Lookup("test-url") == nil {
+			t.Fatalf("%s must expose --environment and --test-url", command.Use)
+		}
+		if command.Flags().Lookup("channel") != nil {
+			t.Fatalf("%s must not expose an independently selectable release channel", command.Use)
 		}
 	}
 }
 
 func TestResidentMatchesSetupTargetRequiresEnvironmentOriginAndChannel(t *testing.T) {
 	cfg := cli.CLIConfig{
-		Environment: "test", ReleaseChannel: "alpha",
-		ServerURL: "https://test.leagent.me", AppURL: "https://test.leagent.me",
+		Environment: "test",
+		ServerURL:   "https://test.leagent.me", AppURL: "https://test.leagent.me",
 	}
 	matching := map[string]any{
 		"server_url": "https://test.leagent.me", "environment": "test", "release_channel": "alpha",
@@ -101,6 +104,44 @@ func TestResidentMatchesSetupTargetRequiresEnvironmentOriginAndChannel(t *testin
 		if got, err := residentMatchesSetupTarget(drifted, cfg); err != nil || got {
 			t.Fatalf("%s drift: got=%v err=%v", key, got, err)
 		}
+	}
+}
+
+func TestSetupAcceptanceRequiresAuthenticatedConnectionNotJustLocalWorkspaceState(t *testing.T) {
+	cfg := cli.CLIConfig{
+		Environment: "test",
+		ServerURL:   "https://test.leagent.me",
+		AppURL:      "https://test.leagent.me",
+	}
+	health := map[string]any{
+		"status":      "running",
+		"connected":   true,
+		"server_url":  "https://test.leagent.me",
+		"environment": "test",
+		"workspaces": []any{
+			map[string]any{"id": "ws-123", "runtimes": []any{}},
+		},
+	}
+	if !healthProvesSetupAcceptance(health, cfg, "ws-123") {
+		t.Fatal("authenticated zero-Agent Workspace connection should complete setup")
+	}
+
+	disconnected := map[string]any{}
+	for key, value := range health {
+		disconnected[key] = value
+	}
+	disconnected["connected"] = false
+	if healthProvesSetupAcceptance(disconnected, cfg, "ws-123") {
+		t.Fatal("local Workspace state without a live authenticated Computer connection must not complete setup")
+	}
+
+	wrongEnvironment := map[string]any{}
+	for key, value := range health {
+		wrongEnvironment[key] = value
+	}
+	wrongEnvironment["environment"] = "production"
+	if healthProvesSetupAcceptance(wrongEnvironment, cfg, "ws-123") {
+		t.Fatal("a resident from another environment must not complete setup")
 	}
 }
 

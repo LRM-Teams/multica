@@ -131,6 +131,72 @@ func (d *Daemon) shutdownHandler() http.HandlerFunc {
 	}
 }
 
+func (d *Daemon) localControlAuthorized(r *http.Request) bool {
+	token := strings.TrimSpace(d.cfg.LocalControlToken)
+	provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
+	return token != "" && provided != "" && subtle.ConstantTimeCompare([]byte(token), []byte(provided)) == 1
+}
+
+// localEnvironmentSwitchPrepareHandler pauses new claims and waits for work
+// admitted before the barrier to finish naturally. Unlike Machine Upgrade,
+// changing service environments never cancels or force-terminates a task.
+// Success transfers the held barrier to the CLI until resident shutdown; all
+// request failure/cancellation paths release it.
+func (d *Daemon) localEnvironmentSwitchPrepareHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !d.localControlAuthorized(r) {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		if !d.trySetEnvironmentSwitchBarrier() {
+			http.Error(w, "another Computer handoff is already in progress", http.StatusConflict)
+			return
+		}
+		prepared := false
+		defer func() {
+			if !prepared {
+				d.releaseEnvironmentSwitchBarrier()
+			}
+		}()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for !d.claimBarrierDrained() {
+			select {
+			case <-r.Context().Done():
+				http.Error(w, "environment switch cancelled while waiting for active work", http.StatusRequestTimeout)
+				return
+			case <-ticker.C:
+			}
+		}
+		prepared = true
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "prepared"})
+	}
+}
+
+func (d *Daemon) localEnvironmentSwitchReleaseHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !d.localControlAuthorized(r) {
+			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
+			return
+		}
+		if !d.releaseEnvironmentSwitchBarrier() {
+			http.Error(w, "no environment switch is prepared", http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "released"})
+	}
+}
+
 type localMachineUpgradeRequest struct {
 	RequestID     string `json:"request_id"`
 	TargetVersion string `json:"target_version"`
@@ -147,9 +213,7 @@ func (d *Daemon) localMachineUpgradeHandler() http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		token := strings.TrimSpace(d.cfg.LocalControlToken)
-		provided := strings.TrimSpace(r.Header.Get("X-Multica-Control-Token"))
-		if token == "" || provided == "" || subtle.ConstantTimeCompare([]byte(token), []byte(provided)) != 1 {
+		if !d.localControlAuthorized(r) {
 			http.Error(w, "local control authentication failed", http.StatusUnauthorized)
 			return
 		}
@@ -483,6 +547,8 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
+	mux.HandleFunc("/environment-switch/prepare", d.localEnvironmentSwitchPrepareHandler())
+	mux.HandleFunc("/environment-switch/release", d.localEnvironmentSwitchReleaseHandler())
 	mux.HandleFunc("/machine-upgrades", d.localMachineUpgradeHandler())
 	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
 	mux.HandleFunc("/credential-proxy/messages/read", d.credentialProxyMessageReadHandler())

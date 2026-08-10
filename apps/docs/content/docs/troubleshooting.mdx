@@ -14,10 +14,10 @@ Look up issues by symptom. Each entry gives you **symptom / likely causes / how 
 **Likely causes**:
 
 1. **The selected service environment is wrong** — production is fixed to `leagent.me`; test must carry an explicit Tencent origin
-2. **Network / firewall blocking** — the daemon and server aren't on the same network, or outbound traffic is blocked
+2. **Network / firewall blocking** — the Computer and server aren't on the same network, or outbound traffic is blocked
 3. **Token expired or invalid** — you never ran `multica login`, or the PAT was revoked
 4. **Server rejected registration** — the account you signed in with isn't in the target workspace (register returns 403)
-5. **DNS resolution failure** — the hostname doesn't resolve on the daemon machine
+5. **DNS resolution failure** — the hostname doesn't resolve on the Computer's machine
 
 **How to diagnose**:
 
@@ -41,8 +41,8 @@ multica workspace list            # confirm you're a member of the target worksp
 1. **Agent concurrency limit reached** — this agent's `max_concurrent_tasks` (default 6) is fully occupied by other running tasks
 2. **Another task from the same agent is still running on the same issue** — same agent × same issue is forced to run sequentially (prevents duplicate execution)
 3. **Agent has been archived** — after archival, new tasks still enqueue but can't be claimed, and they time out after 5 minutes (code-issue G-01)
-4. **Daemon hasn't registered this runtime in the current workspace** — restart the daemon or reselect the runtime in the UI
-5. **Daemon disconnected** — no heartbeat in the last 45 seconds. `daemon status` reporting `online` may reflect a very recent disconnect
+4. **Computer hasn't registered this runtime for the current Workspace connection** — restart the Computer or reselect the runtime in the UI
+5. **Computer disconnected** — no resident heartbeat in the last 45 seconds. `multica computer status` separates the local process from service connectivity
 
 **How to diagnose**:
 

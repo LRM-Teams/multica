@@ -426,3 +426,39 @@ func TestNormalizeGOOS(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIClientRedirectsStayInsideConfiguredOrigin(t *testing.T) {
+	destinationHit := false
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		destinationHit = true
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	}))
+	defer destination.Close()
+
+	var source *httptest.Server
+	source = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/same":
+			http.Redirect(w, r, source.URL+"/final", http.StatusTemporaryRedirect)
+		case "/outside":
+			http.Redirect(w, r, destination.URL+"/final", http.StatusTemporaryRedirect)
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		}
+	}))
+	defer source.Close()
+
+	client := NewAPIClient(source.URL, "", "mul_secret")
+	var same map[string]bool
+	if err := client.GetJSON(context.Background(), "/same", &same); err != nil || !same["ok"] {
+		t.Fatalf("same-origin redirect = %+v, %v", same, err)
+	}
+	var outside map[string]bool
+	err := client.GetJSON(context.Background(), "/outside", &outside)
+	if err == nil || !strings.Contains(err.Error(), "refusing API redirect outside configured origin") {
+		t.Fatalf("cross-origin redirect error = %v", err)
+	}
+	if destinationHit {
+		t.Fatal("cross-origin redirect reached the destination")
+	}
+}

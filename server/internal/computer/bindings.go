@@ -1,6 +1,7 @@
 package computer
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ import (
 // workspace slug), so renaming a Workspace never moves or duplicates local
 // state and identity is never derived from a slug (#2489, #2490).
 const bindingsFile = "bindings.json"
+const bindingsLockFile = "bindings.lock"
 
 // WorkspaceBinding is one explicit Workspace Execution Binding: the Computer
 // is authorized to execute work for the immutable workspace_id using the
@@ -100,20 +102,13 @@ func (s *BindingsStore) GetForEnvironment(environment, workspaceID string) (Work
 // repeat for the same Workspace repairs/refreshes it without duplication
 // (#2490). It never derives local state from the slug.
 func (s *BindingsStore) AddOrRepair(b WorkspaceBinding) error {
-	all, _ := s.All()
-	b = normalizeWorkspaceBinding(b)
-	replaced := false
-	for i := range all {
-		if all[i].Environment == b.Environment && all[i].WorkspaceID == b.WorkspaceID {
-			all[i] = b
-			replaced = true
-			break
+	return s.withMutationLock(func() error {
+		all, err := s.All()
+		if err != nil {
+			return err
 		}
-	}
-	if !replaced {
-		all = append(all, b)
-	}
-	return s.write(all)
+		return s.addOrRepair(all, b)
+	})
 }
 
 // Remove deletes one production connection. Environment-aware callers use
@@ -124,18 +119,13 @@ func (s *BindingsStore) Remove(workspaceID string) error {
 
 // RemoveForEnvironment deletes exactly one connection by its full local key.
 func (s *BindingsStore) RemoveForEnvironment(environment, workspaceID string) error {
-	all, err := s.All()
-	if err != nil {
-		return err
-	}
-	environment = normalizeBindingEnvironment(environment)
-	out := all[:0]
-	for _, b := range all {
-		if b.Environment != environment || b.WorkspaceID != workspaceID {
-			out = append(out, b)
+	return s.withMutationLock(func() error {
+		all, err := s.All()
+		if err != nil {
+			return err
 		}
-	}
-	return s.write(out)
+		return s.remove(all, environment, workspaceID)
+	})
 }
 
 // AllActive returns only the valid (active) bindings — the set `computer
@@ -177,26 +167,70 @@ func (s *BindingsStore) AllActiveForEnvironment(environment string) ([]Workspace
 // additive setup leaves existing Bindings and the running Computer unchanged
 // (#2490).
 func (s *BindingsStore) Install(req BindingRequest, b WorkspaceBinding) error {
-	current, err := s.All()
-	if err != nil {
-		return err
-	}
-	if _, err := ValidateCreate(req, current); err != nil {
-		return err
-	}
-	return s.AddOrRepair(b)
+	return s.withMutationLock(func() error {
+		current, err := s.All()
+		if err != nil {
+			return err
+		}
+		if _, err := ValidateCreate(req, current); err != nil {
+			return err
+		}
+		return s.addOrRepair(current, b)
+	})
 }
 
 // Remove validates the removal request and then applies it atomically.
 func (s *BindingsStore) RemoveValidated(req BindingRequest, workspaceID string) error {
-	current, err := s.All()
+	return s.withMutationLock(func() error {
+		current, err := s.All()
+		if err != nil {
+			return err
+		}
+		if err := ValidateRemove(req, current); err != nil {
+			return err
+		}
+		return s.remove(current, string(cli.ServiceEnvironmentProduction), workspaceID)
+	})
+}
+
+func (s *BindingsStore) withMutationLock(mutate func() error) error {
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return fmt.Errorf("create bindings directory: %w", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(s.root, bindingsLockFile), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("open bindings lock: %w", err)
 	}
-	if err := ValidateRemove(req, current); err != nil {
-		return err
+	defer lock.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := lockComputerFile(ctx, lock); err != nil {
+		return fmt.Errorf("lock bindings: %w", err)
 	}
-	return s.Remove(workspaceID)
+	defer unlockComputerFile(lock)
+	return mutate()
+}
+
+func (s *BindingsStore) addOrRepair(all []WorkspaceBinding, binding WorkspaceBinding) error {
+	binding = normalizeWorkspaceBinding(binding)
+	for i := range all {
+		if all[i].Environment == binding.Environment && all[i].WorkspaceID == binding.WorkspaceID {
+			all[i] = binding
+			return s.write(all)
+		}
+	}
+	return s.write(append(all, binding))
+}
+
+func (s *BindingsStore) remove(all []WorkspaceBinding, environment, workspaceID string) error {
+	environment = normalizeBindingEnvironment(environment)
+	out := all[:0]
+	for _, binding := range all {
+		if binding.Environment != environment || binding.WorkspaceID != workspaceID {
+			out = append(out, binding)
+		}
+	}
+	return s.write(out)
 }
 
 // write persists the full binding set atomically with 0600 permissions.

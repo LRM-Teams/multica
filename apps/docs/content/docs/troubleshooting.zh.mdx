@@ -14,10 +14,10 @@ import { Callout } from "fumadocs-ui/components/callout";
 **可能原因**：
 
 1. **选错服务环境** —— 正式固定 `leagent.me`；测试必须显式配置腾讯云 origin
-2. **网络 / 防火墙阻挡** —— daemon 和 server 不在同一网络，或出站被 block
+2. **网络 / 防火墙阻挡** —— Computer 和 server 不在同一网络，或出站被 block
 3. **Token 过期或无效** —— 你从来没跑过 `multica login`，或 PAT 被撤销
 4. **服务器拒绝注册** —— 你登录的账号不在目标工作区（register 返 403）
-5. **DNS 解析失败** —— hostname 在 daemon 机器上解不出来
+5. **DNS 解析失败** —— hostname 在 Computer 所在机器上解不出来
 
 **怎么查**：
 
@@ -41,8 +41,8 @@ multica workspace list            # 确认你是目标工作区成员
 1. **智能体并发上限已满** —— 该 agent 的 `max_concurrent_tasks`（默认 6）已经被其他正在跑的任务占满
 2. **同一 issue 上有另一个同 agent 的任务还没结束** —— 同 agent × 同 issue 强制串行（防止重复执行）
 3. **智能体已经被 archive** —— 被归档后新任务仍能入队，但无法被 claim，会卡到 5 分钟超时（code-issue G-01）
-4. **Daemon 没在当前工作区注册该 runtime** —— 重启 daemon 或在 UI 重新选一次 runtime
-5. **守护进程失联** —— 最近 45 秒没心跳。`daemon status` 看起来 `online` 也可能是刚失联
+4. **Computer 没为当前 Workspace connection 注册该 runtime** —— 重启 Computer 或在 UI 重新选一次 runtime
+5. **Computer 失联** —— 最近 45 秒没 resident 心跳。`multica computer status` 会把本地进程和服务端连接状态分开显示
 
 **怎么查**：
 

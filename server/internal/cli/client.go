@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -163,7 +164,28 @@ func NewAPIClient(baseURL, workspaceID, token string) *APIClient {
 		BaseURL:     strings.TrimRight(baseURL, "/"),
 		WorkspaceID: workspaceID,
 		Token:       token,
-		HTTPClient:  &http.Client{Timeout: httpTimeout()},
+		HTTPClient: &http.Client{
+			Timeout:       httpTimeout(),
+			CheckRedirect: sameOriginRedirectPolicy(baseURL),
+		},
+	}
+}
+
+// sameOriginRedirectPolicy prevents an API/auth request from being redirected
+// to a different scheme, host, or port. The selected service origin is an
+// authentication boundary: production cannot be redirected away from
+// api.leagent.me, and an explicit test origin cannot silently become another
+// service. Callers must configure the final origin directly.
+func sameOriginRedirectPolicy(baseURL string) func(*http.Request, []*http.Request) error {
+	base, parseErr := url.Parse(strings.TrimSpace(baseURL))
+	return func(req *http.Request, _ []*http.Request) error {
+		if parseErr != nil || base.Scheme == "" || base.Host == "" {
+			return fmt.Errorf("invalid API origin %q", baseURL)
+		}
+		if !strings.EqualFold(req.URL.Scheme, base.Scheme) || !strings.EqualFold(req.URL.Host, base.Host) {
+			return fmt.Errorf("refusing API redirect outside configured origin %s", base.String())
+		}
+		return nil
 	}
 }
 

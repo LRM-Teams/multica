@@ -158,7 +158,7 @@
   "selfReviewChildRuns": "自审子运行",
   "noSelfReviewChildRuns": "该父运行没有记录自审子运行。",
   "perAgentResults": "逐智能体结果",
-  "noPerAgentDetails": "该 daemon 未上报逐智能体详情。",
+  "noPerAgentDetails": "该 Computer 未上报逐智能体详情。",
   "artifacts": "产物",
   "evolutionOutputTrend": "自进化产出趋势",
   "evolutionOutputTrendHint": "每日自审记忆/技能候选、共享进化晋升，以及策展写入的团队知识。",

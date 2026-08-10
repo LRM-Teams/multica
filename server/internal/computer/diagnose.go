@@ -16,13 +16,18 @@ import (
 type Diagnosis struct {
 	IdentityState            string   `json:"identity_state"`
 	ComputerID               string   `json:"computer_id,omitempty"`
+	LegacyIdentityCandidates []string `json:"legacy_identity_candidates,omitempty"`
 	Resident                 string   `json:"resident"` // running | starting | stopped
 	WorkspaceConnections     int      `json:"workspace_connections"`
 	Connected                bool     `json:"connected"`
 	CanonicalHost            string   `json:"canonical_host"`
 	Environment              string   `json:"environment,omitempty"`
 	ServiceOrigin            string   `json:"service_origin,omitempty"`
-	ReleaseChannel           string   `json:"release_channel,omitempty"`
+	PackageSource            string   `json:"package_source,omitempty"`
+	ResidentEnvironment      string   `json:"resident_environment,omitempty"`
+	ResidentServiceOrigin    string   `json:"resident_service_origin,omitempty"`
+	ResidentPackageSource    string   `json:"resident_package_source,omitempty"`
+	ConfigurationDrift       bool     `json:"configuration_drift"`
 	SelectedWorkspaceID      string   `json:"selected_workspace_id,omitempty"`
 	SelectedWorkspaceSlug    string   `json:"selected_workspace_slug,omitempty"`
 	SelectedConnectionActive bool     `json:"selected_connection_active,omitempty"`
@@ -43,7 +48,7 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 	if session, ok := readSessionProjection(); ok {
 		d.Environment = session.Environment
 		d.ServiceOrigin = session.Origin
-		d.ReleaseChannel = session.ReleaseChannel
+		d.PackageSource = packageSourceForReleaseChannel(session.ReleaseChannel)
 	}
 
 	switch health["status"] {
@@ -52,6 +57,20 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 		d.Connected, _ = health["connected"].(bool)
 	case "starting":
 		d.Resident = "starting"
+	}
+	if value, ok := health["environment"].(string); ok {
+		d.ResidentEnvironment = value
+	}
+	if value, ok := health["server_url"].(string); ok {
+		d.ResidentServiceOrigin = value
+	}
+	if value, ok := health["release_channel"].(string); ok {
+		d.ResidentPackageSource = packageSourceForReleaseChannel(value)
+	}
+	if d.Resident != "stopped" {
+		d.ConfigurationDrift = d.Environment != d.ResidentEnvironment ||
+			d.ServiceOrigin != d.ResidentServiceOrigin ||
+			d.PackageSource != d.ResidentPackageSource
 	}
 
 	// Identity + connections are strictly read-only projections (no minting).
@@ -62,6 +81,9 @@ func (l *Lifecycle) Diagnose() Diagnosis {
 	}
 	if st, ok := ident["identity_state"].(string); ok {
 		d.IdentityState = st
+	}
+	if candidates, ok := ident["legacy_identity_candidates"].([]string); ok {
+		d.LegacyIdentityCandidates = append([]string(nil), candidates...)
 	}
 
 	bindings, err := NewBindingsStore(RootDir("")).AllActive()

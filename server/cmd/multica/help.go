@@ -53,7 +53,7 @@ func initHelp(root *cobra.Command) {
 
 func applyTemplates(cmd *cobra.Command) {
 	for _, c := range cmd.Commands() {
-		if c.HasSubCommands() {
+		if c.HasAvailableSubCommands() {
 			c.SetHelpTemplate(subHelpTemplate)
 			c.SetUsageTemplate(subHelpTemplate)
 		} else {
@@ -118,13 +118,12 @@ USAGE
 FLAGS
 {{.LocalFlags.FlagUsages}}
 EXAMPLES
-  $ multica login
+  $ multica setup /my-workspace
   $ multica issue list --output json
-  $ multica daemon start
+  $ multica computer start
   $ multica workspace info --agents --output json
 
 ENVIRONMENT VARIABLES
-  MULTICA_SERVER_URL    Override the default server URL
   MULTICA_WORKSPACE_ID  Set the active workspace
 
 LEARN MORE

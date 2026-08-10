@@ -518,6 +518,25 @@ func TestCloudLoginOriginHonorsTestOverride(t *testing.T) {
 	}
 }
 
+func TestPersistAuthenticatedSessionPreservesProductionAppAPISplit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	target, err := cli.NewServiceTarget("production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persistAuthenticatedSession("", target, "mul_test_token"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := cli.LoadCLIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ServerURL != "https://api.leagent.me" || cfg.AppURL != "https://www.leagent.me" {
+		t.Fatalf("authenticated origins = API %q, app %q", cfg.ServerURL, cfg.AppURL)
+	}
+}
+
 // #2488: logout clears only the machine session and retains Computer Identity,
 // Workspace connections, and Agent Roots.
 func TestLogoutClearsOnlySessionAndRetainsComputerState(t *testing.T) {

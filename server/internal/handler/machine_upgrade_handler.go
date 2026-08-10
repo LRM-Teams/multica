@@ -65,6 +65,14 @@ func (h *Handler) AttestComputerMachineUpgrade(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusForbidden, "Computer credential scope mismatch")
 		return
 	}
+	if err := h.authorizeComputerOwnerRequest(r.Context(), r, req.DaemonID); err != nil {
+		if errors.Is(err, errComputerConnectionUnauthorized) {
+			writeError(w, http.StatusForbidden, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to authorize Computer owner")
+		}
+		return
+	}
 	if !h.requireCurrentComputerGeneration(w, r, req.DaemonID) {
 		return
 	}

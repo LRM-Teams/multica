@@ -82,7 +82,7 @@ var computerDoctorCmd = &cobra.Command{
 var computerUpgradeCmd = &cobra.Command{
 	Use:   "upgrade",
 	Short: "Upgrade this computer",
-	Long:  "Upgrade the daemon on this computer. By default it requests the latest version; pass --target-version to install a specific version.",
+	Long:  "Upgrade the resident Computer. Production uses stable packages and test uses preview packages; pass --target-version only to install a specific immutable recovery version.",
 	Args:  cobra.NoArgs,
 	RunE:  runComputerUpgrade,
 }
@@ -130,46 +130,6 @@ var computerIdentityFreshCmd = &cobra.Command{
 	},
 }
 
-var computerChannelCmd = &cobra.Command{
-	Use:   "channel [latest|alpha]",
-	Short: "Show or select the Computer release channel",
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
-		cfg, err := cli.LoadCLIConfigForProfile("")
-		if err != nil {
-			return err
-		}
-		current, err := cli.ResolveReleaseChannel(cfg)
-		if err != nil {
-			return err
-		}
-		if len(args) == 0 {
-			fmt.Fprintln(os.Stdout, current)
-			return nil
-		}
-		next, err := cli.NormalizeReleaseChannel(args[0])
-		if err != nil {
-			return err
-		}
-		if next == current {
-			fmt.Fprintf(os.Stdout, "Release channel is already %s.\n", current)
-			return nil
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		running := computer.Alive((&computer.Lifecycle{}).Health(ctx))
-		cancel()
-		if running {
-			return fmt.Errorf("stop the Computer before changing its release channel")
-		}
-		cfg.ReleaseChannel = string(next)
-		if err := cli.SaveCLIConfigForProfile(cfg, ""); err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stdout, "Release channel set to %s. Service environment is unchanged.\n", next)
-		return nil
-	},
-}
-
 func init() {
 	computerUpgradeCmd.Flags().String("target-version", "", "Target version to install (default: latest)")
 	computerUpgradeCmd.Flags().String("output", "json", "Output format: table or json")
@@ -204,7 +164,6 @@ func init() {
 	computerIdentityCmd.AddCommand(computerIdentityAdoptCmd)
 	computerIdentityCmd.AddCommand(computerIdentityFreshCmd)
 	computerCmd.AddCommand(computerIdentityCmd)
-	computerCmd.AddCommand(computerChannelCmd)
 }
 
 func requireComputerStoppedForIdentityChange() error {
@@ -241,8 +200,15 @@ func runComputerDoctor(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stdout, "connected:    %v\n", d.Connected)
 	fmt.Fprintf(os.Stdout, "environment:  %s\n", orDash(d.Environment))
 	fmt.Fprintf(os.Stdout, "service:      %s\n", orDash(d.ServiceOrigin))
-	fmt.Fprintf(os.Stdout, "channel:      %s\n", orDash(d.ReleaseChannel))
+	fmt.Fprintf(os.Stdout, "package:      %s\n", orDash(d.PackageSource))
+	fmt.Fprintf(os.Stdout, "resident env: %s\n", orDash(d.ResidentEnvironment))
+	fmt.Fprintf(os.Stdout, "resident svc: %s\n", orDash(d.ResidentServiceOrigin))
+	fmt.Fprintf(os.Stdout, "resident pkg: %s\n", orDash(d.ResidentPackageSource))
+	fmt.Fprintf(os.Stdout, "config drift: %v\n", d.ConfigurationDrift)
 	fmt.Fprintf(os.Stdout, "canonical:    %s\n", d.CanonicalHost)
+	for _, candidate := range d.LegacyIdentityCandidates {
+		fmt.Fprintf(os.Stdout, "legacy id:    %s (preserved; explicit choice required)\n", candidate)
+	}
 	for _, f := range d.FixApplied {
 		fmt.Fprintf(os.Stdout, "fixed:        %s\n", f)
 	}

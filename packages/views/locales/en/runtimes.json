@@ -24,7 +24,7 @@
     },
     "bootstrapping": {
       "title": "Starting local runtime…",
-      "hint": "This usually takes a few seconds. Your daemon is registering with the workspace."
+      "hint": "This usually takes a few seconds. Your Computer is connecting to the Workspace."
     }
   },
   "machine": {
@@ -61,7 +61,7 @@
     "info_section": "Basic info",
     "info_name": "Machine name",
     "info_cli": "CLI version",
-    "info_daemon_id": "Daemon ID",
+    "info_daemon_id": "Computer ID",
     "info_providers": "Providers",
     "delete_danger_row": "Delete this computer",
     "table_status": "Status",
@@ -156,14 +156,14 @@
       },
       "blocked_missing_daemon": {
         "title": "Cannot delete this computer",
-        "description": "\"{{name}}\" has no daemon id, so one-click delete is unavailable. Per-runtime delete is not used as a substitute."
+        "description": "\"{{name}}\" has no Computer ID, so one-click delete is unavailable. Per-runtime delete is not used as a substitute."
       },
       "blocked_missing_sandbox": {
         "title": "Cannot delete this cloud computer",
         "description": "\"{{name}}\" is missing its sandbox id, so the cloud container cannot be deleted from here."
       }
     },
-    "daemon_version_chip": "daemon v{{version}}",
+    "daemon_version_chip": "Computer v{{version}}",
     "version_prefix": "v{{version}}",
     "basics_owner": "Owner",
     "basics_daemon_id": "Computer ID",
@@ -176,7 +176,7 @@
       "upgrade": "Upgrade",
       "upgrade_to": "Upgrade to {{version}}",
       "updating": "Updating…",
-      "upgrade_progress_pending": "Waiting for daemon to accept update…",
+      "upgrade_progress_pending": "Waiting for the Computer to accept the update…",
       "upgrade_progress_running": "Downloading and installing…",
       "upgrade_progress_applying": "Restarting to switch version…",
       "upgrade_failed_prefix": "Upgrade failed: ",
@@ -199,14 +199,14 @@
       "description_cloud": "Permanently delete this cloud computer, its container, and its runtimes from the workspace."
     },
     "remove_binding": {
-      "button": "Remove from this Workspace…",
-      "title": "Remove this computer from the Workspace?",
-      "description": "This removes \"{{name}}\" from this Workspace only. Its other Workspaces keep running, and local Agent data stays on the computer so it can be reconnected later.",
+      "button": "Remove Workspace connection…",
+      "title": "Remove this Workspace connection?",
+      "description": "This removes only \"{{name}}\"'s connection to the current Workspace. Its other Workspace connections keep running, and local Agent data stays on the Computer for reconnection later.",
       "cancel": "Cancel",
-      "confirm": "Remove computer",
+      "confirm": "Remove connection",
       "removing": "Removing…",
-      "success": "Computer removed from this Workspace. Local Agent data was preserved.",
-      "invalid_response": "The server did not confirm that the computer was safely removed."
+      "success": "Workspace connection removed. Sibling connections and local Agent data were preserved.",
+      "invalid_response": "The server did not confirm that the Workspace connection was safely removed."
     },
     "agents_select": "Select",
     "agents_create": "Create",
@@ -233,7 +233,7 @@
     },
     "offline": {
       "label": "Offline",
-      "description": "No heartbeat for 5+ minutes. Restart the daemon or investigate the host."
+      "description": "No heartbeat for 5+ minutes. Restart the Computer or investigate the host."
     },
     "about_to_gc": {
       "label": "About to GC",
@@ -305,7 +305,7 @@
     "submit": "Create",
     "toast_created": "Cloud computer creation started",
     "toast_create_failed": "Failed to create cloud computer",
-    "provisioning_hint": "Starting this cloud computer. It will show as connected once the daemon registers."
+    "provisioning_hint": "Starting this cloud computer. It will show as connected once the Computer registers."
   },
   "connect": {
     "title": "Connect computer",
@@ -318,7 +318,7 @@
     },
     "step1_label": "Install",
     "step2_label": "Setup",
-    "step2_hint": "Opens a browser to sign in, then keeps the daemon running in the background.",
+    "step2_hint": "Opens a browser to sign in, connects this Workspace, then keeps the Computer resident running in the background.",
     "live_listening": "Waiting for computer to connect",
     "live_listening_hint": "Keep this dialog open. It will continue automatically when the computer is registered.",
     "trouble_summary": "Having trouble?",
@@ -392,12 +392,12 @@
     "unknown_error": "Unknown error",
     "initiate_failed": "Failed to initiate update",
     "last_update_not_applied": "Last update did not take effect. Still running {{currentVersion}} after attempting {{targetVersion}}. Retry or view the reason.",
-    "offline": "Daemon offline",
+    "offline": "Computer offline",
     "manual_hint": "Upgrades are explicit machine operations. If this computer cannot complete one, update it from a terminal on that computer.",
     "manual_action": "Manual commands",
     "manual_dialog_title": "Update this runtime manually",
     "manual_dialog_description": "Run the command that matches the runtime computer. The macOS/Linux command reinstalls the CLI from the current Multica release source.",
-    "manual_after_restart": "After the command finishes, the daemon reconnects with the new CLI version. If it stays offline, run multica daemon restart once more.",
+    "manual_after_restart": "After the command finishes, the Computer reconnects with the new CLI version. If it stays offline, run multica computer restart once more.",
     "manual_close": "Close",
     "copy_command": "Copy command",
     "copied": "Copied",
@@ -407,9 +407,9 @@
     },
     "status": {
       "queued": "Queued — will start when this runtime is next online.",
-      "pending": "Waiting for daemon...",
+      "pending": "Waiting for Computer...",
       "running": "Updating...",
-      "completed": "Update complete. Daemon is restarting...",
+      "completed": "Update complete. Computer is restarting...",
       "ready_to_apply": "Update is ready. It will apply when this runtime is idle.",
       "failed": "Update failed",
       "timeout": "Timeout"
@@ -420,14 +420,14 @@
   },
   "restart": {
     "action": "Restart",
-    "confirm_title": "Restart this daemon?",
-    "confirm_description": "This interrupts any agents currently working on this machine. The daemon reconnects automatically once it comes back up.",
+    "confirm_title": "Restart this Computer?",
+    "confirm_description": "This interrupts any agents currently working on this machine. The Computer reconnects automatically once it comes back up.",
     "confirm_cancel": "Cancel",
     "confirm_action": "Restart now",
     "initiate_failed": "Failed to request restart",
     "status": {
       "pending": "Restart requested...",
-      "delivered": "Restart delivered. Waiting for the daemon to reconnect...",
+      "delivered": "Restart delivered. Waiting for the Computer to reconnect...",
       "timeout": "Restart request timed out"
     }
   },

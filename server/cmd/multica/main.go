@@ -106,6 +106,7 @@ func init() {
 	rootCmd.AddCommand(workLeaseCmd)
 	rootCmd.AddCommand(stickerCmd)
 	rootCmd.AddCommand(sandboxdCmd)
+	rootCmd.AddCommand(installerActivateCmd)
 
 	initHelp(rootCmd)
 }

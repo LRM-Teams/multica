@@ -39,10 +39,10 @@ fi
 PLATFORM="${OS}-${ARCH}"
 
 # Fetch the release manifest
-curl -fsSL https://cdn.leagent.me/computer/latest.json -o /tmp/latest.json
-LATEST=$(jq -r '.tag' /tmp/latest.json)
-URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/latest.json)
-SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/latest.json)
+curl -fsSL https://cdn.leagent.me/computer/manifest.json -o /tmp/multica-manifest.json
+LATEST=$(jq -r '.tag' /tmp/multica-manifest.json)
+URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/multica-manifest.json)
+SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/multica-manifest.json)
 
 # Download, verify, and extract
 curl -sL "$URL" -o /tmp/multica.tar.gz
@@ -56,7 +56,7 @@ mkdir -p "$HOME/.local/bin"
 mv /tmp/multica "$HOME/.local/bin/multica"
 chmod +x "$HOME/.local/bin/multica"
 export PATH="$HOME/.local/bin:$PATH"
-rm /tmp/multica.tar.gz /tmp/latest.json
+rm /tmp/multica.tar.gz /tmp/multica-manifest.json
 ```
 
 `$HOME/.local/bin/multica` is the only supported macOS/Linux install target.
@@ -110,7 +110,7 @@ curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 # 2) Confirm the new binary
 export PATH="$HOME/.local/bin:$PATH"
 hash -r
-multica version   # expect 0.4.x (or whatever latest.json reports)
+multica version   # expect 0.4.x (or whatever manifest.json reports)
 
 # 3) Adopt it for the machine-wide Computer (wait until no agent tasks)
 multica computer restart

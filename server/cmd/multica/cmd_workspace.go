@@ -58,8 +58,8 @@ var workspaceUpdateCmd = &cobra.Command{
 
 var workspaceSwitchCmd = &cobra.Command{
 	Use:   "switch <workspace-id|slug|prefix>",
-	Short: "Set the default workspace for this profile",
-	Long: "Sets the default workspace for the current profile after verifying you " +
+	Short: "Set the default Workspace for ordinary CLI commands",
+	Long: "Sets the default Workspace for ordinary CLI commands after verifying you " +
 		"have access to it. Accepts a full UUID, a slug, or a short UUID " +
 		"prefix (≥4 hex chars) as shown in 'workspace list'. Subsequent " +
 		"commands without --workspace-id or MULTICA_WORKSPACE_ID will target " +

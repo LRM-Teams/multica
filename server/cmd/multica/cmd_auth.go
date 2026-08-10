@@ -363,13 +363,7 @@ func runAuthLoginDevice(cmd *cobra.Command) error {
 	}
 
 	profile := resolveProfile(cmd)
-	cfg, _ := cli.LoadCLIConfigForProfile(profile)
-	cfg.WorkspaceID = ""
-	cfg.Token = rawToken
-	cfg.Environment = string(target.Environment)
-	cfg.ServerURL = target.Origin
-	cfg.AppURL = target.Origin
-	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
+	if err := persistAuthenticatedSession(profile, target, rawToken); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
@@ -473,18 +467,26 @@ func runAuthLoginToken(cmd *cobra.Command, providedToken string) error {
 	}
 
 	profile := resolveProfile(cmd)
-	cfg, _ := cli.LoadCLIConfigForProfile(profile)
-	cfg.WorkspaceID = ""
-	cfg.Token = token
-	cfg.Environment = string(target.Environment)
-	cfg.ServerURL = target.Origin
-	cfg.AppURL = target.Origin
-	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
+	if err := persistAuthenticatedSession(profile, target, token); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Authenticated as %s (%s)\nToken saved to config.\n", me.Name, me.Email)
 	return nil
+}
+
+// persistAuthenticatedSession keeps the selected service's API and app
+// origins distinct. Production authenticates against api.leagent.me while
+// browser flows open www.leagent.me; test intentionally uses one explicit
+// origin for both. Login must not collapse the production split after setup.
+func persistAuthenticatedSession(profile string, target cli.ServiceTarget, token string) error {
+	cfg, _ := cli.LoadCLIConfigForProfile(profile)
+	cfg.WorkspaceID = ""
+	cfg.Token = token
+	cfg.Environment = string(target.Environment)
+	cfg.ServerURL = target.Origin
+	cfg.AppURL = target.AppOrigin
+	return cli.SaveCLIConfigForProfile(cfg, profile)
 }
 
 func runAuthStatus(cmd *cobra.Command, _ []string) error {

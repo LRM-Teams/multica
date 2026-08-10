@@ -7,8 +7,8 @@ import (
 )
 
 // ServiceEnvironment names the deployment stage a single machine-wide
-// Computer currently serves. It is intentionally separate from the binary
-// release channel: selecting test must not implicitly install alpha builds.
+// Computer currently serves. It also fixes the package source: production
+// uses stable packages and test uses preview packages.
 type ServiceEnvironment string
 
 const (

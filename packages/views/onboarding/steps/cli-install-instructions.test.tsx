@@ -101,8 +101,8 @@ describe("CliInstallInstructions", () => {
     expect(
       screen.getByText(/Retry — a flaky connection/),
     ).toBeTruthy();
-    expect(screen.getByText("multica daemon status")).toBeTruthy();
-    expect(screen.getByText("multica daemon logs -f")).toBeTruthy();
+    expect(screen.getByText("multica computer status")).toBeTruthy();
+    expect(screen.getByText("multica computer logs -f")).toBeTruthy();
 
     // No support email/Discord/etc. exists for this product yet — the
     // section must not fabricate one.

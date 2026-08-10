@@ -14,6 +14,72 @@ import (
 )
 
 var errStaleComputerGeneration = errors.New("stale Computer generation")
+var errComputerConnectionUnauthorized = errors.New("Computer Workspace connection unauthorized")
+
+// authorizeComputerConnectionRequest proves that this request may act for one
+// explicit (Computer, Workspace) connection. Daemon credentials must match
+// both immutable subjects; PAT/JWT compatibility must belong to the persisted
+// Computer owner. Membership alone is insufficient because it would let any
+// member claim an arbitrary daemon_id and fence another user's resident.
+func (h *Handler) authorizeComputerConnectionRequest(ctx context.Context, r *http.Request, daemonID, workspaceID string) error {
+	daemonID = strings.TrimSpace(daemonID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	var exists bool
+	if tokenWorkspace := middleware.DaemonWorkspaceIDFromContext(r.Context()); tokenWorkspace != "" {
+		if tokenWorkspace != workspaceID || !strings.EqualFold(middleware.DaemonIDFromContext(r.Context()), daemonID) {
+			return errComputerConnectionUnauthorized
+		}
+		if err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM computer_workspace_bindings
+   WHERE daemon_id=$1 AND workspace_id=$2 AND active=TRUE
+)`, daemonID, workspaceID).Scan(&exists); err != nil {
+			return err
+		}
+	} else {
+		userID := strings.TrimSpace(requestUserID(r))
+		if userID == "" {
+			return errComputerConnectionUnauthorized
+		}
+		if err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM computer_workspace_bindings
+   WHERE daemon_id=$1 AND workspace_id=$2 AND user_id=$3 AND active=TRUE
+)`, daemonID, workspaceID, userID).Scan(&exists); err != nil {
+			return err
+		}
+	}
+	if !exists {
+		return errComputerConnectionUnauthorized
+	}
+	return nil
+}
+
+// authorizeComputerOwnerRequest proves machine-wide ownership for operations
+// such as full-set successor attestation. A daemon token proves one active
+// connection; the database's immutable daemon_id owner fence then covers its
+// sibling connections. PAT/JWT requests must match that owner directly.
+func (h *Handler) authorizeComputerOwnerRequest(ctx context.Context, r *http.Request, daemonID string) error {
+	daemonID = strings.TrimSpace(daemonID)
+	if tokenWorkspace := middleware.DaemonWorkspaceIDFromContext(r.Context()); tokenWorkspace != "" {
+		return h.authorizeComputerConnectionRequest(ctx, r, daemonID, tokenWorkspace)
+	}
+	userID := strings.TrimSpace(requestUserID(r))
+	if userID == "" {
+		return errComputerConnectionUnauthorized
+	}
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM computer_identity_owner WHERE daemon_id=$1 AND user_id=$2
+)`, daemonID, userID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return errComputerConnectionUnauthorized
+	}
+	return nil
+}
 
 func (h *Handler) claimComputerGeneration(ctx context.Context, daemonID string, generation int64) error {
 	if h == nil || h.DB == nil || strings.TrimSpace(daemonID) == "" || generation < 1 {
@@ -91,12 +157,17 @@ func (h *Handler) ComputerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.WorkspaceID = uuidToString(workspaceUUID)
-	if tokenWorkspace := middleware.DaemonWorkspaceIDFromContext(r.Context()); tokenWorkspace != "" {
-		if tokenWorkspace != req.WorkspaceID || !strings.EqualFold(middleware.DaemonIDFromContext(r.Context()), req.DaemonID) {
-			writeError(w, http.StatusForbidden, "Computer credential scope mismatch")
+	if middleware.DaemonWorkspaceIDFromContext(r.Context()) == "" {
+		if _, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found"); !ok {
 			return
 		}
-	} else if _, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found"); !ok {
+	}
+	if err := h.authorizeComputerConnectionRequest(r.Context(), r, req.DaemonID, req.WorkspaceID); err != nil {
+		if errors.Is(err, errComputerConnectionUnauthorized) {
+			writeError(w, http.StatusForbidden, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to authorize Computer connection")
+		}
 		return
 	}
 	if err := h.claimComputerGeneration(r.Context(), req.DaemonID, req.Generation); err != nil {

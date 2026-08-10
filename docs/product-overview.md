@@ -317,18 +317,28 @@ Agent 是 Multica 的灵魂。几乎所有功能都围绕"如何让一个 agent 
 - **孤儿任务回收**：超过 5 分钟还在 dispatched 或超过 2.5 小时还在 running 的任务，sweeper 会把它标记为失败
 - **长期离线 GC**：7 天没心跳且没活跃 agent 的 runtime 会被回收
 
-#### CLI 与 Daemon 的关系
+#### CLI 与 Computer 的关系
 
 | 命令 | 说明 |
 |------|------|
-| `multica setup` | 一键配置：填 URL + 登录 + 启动 daemon |
+| `multica setup /<workspace>` | 连接正式环境中的一个 Workspace、登录并启动 resident |
+| `multica setup --environment test --test-url <origin> /<workspace>` | 连接显式测试环境中的一个 Workspace |
+| `multica config show` | 查看当前环境，以及 production/test 两边保存的脱敏登录状态 |
+| `multica config use <production\|test>` | 安全切环境；production 固定 stable，test 固定 preview |
 | `multica login` | 浏览器打开 OAuth 登录，保存 90 天 PAT 到 `~/.multica/config.json` |
 | `multica login --token <pat>` | 无头登录（SSH/CI） |
-| `multica daemon start` | 后台启动 daemon（写 PID 到 `~/.multica/daemon.pid`，日志到 `~/.multica/daemon.log`） |
-| `multica daemon stop` | 发 SIGTERM，优雅关闭（等待进行中的任务完成，超时 30s） |
-| `multica daemon status` | 打印 daemon 状态、探测到的 agent、watch 中的 workspace |
-| `multica daemon logs -f` | 实时跟随日志 |
-| `multica daemon start --profile <name>` | 启动独立配置的 daemon（用于多环境，比如同时连 staging 和生产） |
+| `multica computer start` | 启动全机唯一、脱离终端的 resident |
+| `multica computer stop` | 停止全机唯一 resident |
+| `multica computer status` | 只读显示 Identity、环境、固定包源、resident 和 Workspace connections |
+| `multica computer logs -f` | 实时跟随机器级服务日志 |
+| `multica computer doctor` | 诊断进程、环境、包源和连接，不创建或删除连接 |
+
+一个 OS 用户只有一个 `~/.multica/computer` 和一个 resident；它可保存多个
+Workspace connection。production 与 test 的连接可以同时留在本地，但一个
+resident generation 一次只连接一个环境。profile 只作为受限迁移证据，不再
+选择第二个 daemon。
+
+环境和客户端包不允许自由组合：production 永远使用 stable 清单，test 永远使用 preview 清单。两边 setup 完成后，`multica config use test|production` 会在旧任务自然完成后一起切换环境、包和 resident generation；失败则恢复 Previous 包与原环境。
 
 #### 安全边界
 

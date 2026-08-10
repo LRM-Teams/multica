@@ -652,7 +652,7 @@
     "full_reset_confirm_placeholder": "Enter {{handle}}",
     "disabled_reason": {
       "agent_active": "Wait until the current task finishes, then try again.",
-      "unsupported_runtime_capability": "Requires daemon v0.3.95 or newer.",
+      "unsupported_runtime_capability": "Requires Computer v0.3.95 or newer.",
       "no_runtime": "No runtime is bound to this agent.",
       "offline": "The runtime is offline.",
       "no_permission": "You don't have permission to restart this agent.",
@@ -748,8 +748,8 @@
   "task_failure": {
     "agent_error": "Agent execution error",
     "timeout": "Task timed out",
-    "runtime_offline": "Daemon offline",
-    "runtime_recovery": "Daemon restarted",
+    "runtime_offline": "Computer offline",
+    "runtime_recovery": "Computer restarted",
     "manual": "Cancelled by user"
   },
   "fleet": {

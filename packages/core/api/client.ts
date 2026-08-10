@@ -1723,14 +1723,14 @@ export class ApiClient {
     workspaceId: string,
   ): Promise<RemoveComputerWorkspaceBindingResponse> {
     const raw = await this.fetch<unknown>(
-      `/api/daemons/${encodeURIComponent(daemonId)}/bindings/${encodeURIComponent(workspaceId)}`,
+      `/api/computers/${encodeURIComponent(daemonId)}/workspace-connections/${encodeURIComponent(workspaceId)}`,
       { method: "DELETE" },
     );
     return parseWithFallback(
       raw,
       RemoveComputerWorkspaceBindingResponseSchema,
       EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE,
-      { endpoint: "DELETE /api/daemons/{daemonId}/bindings/{workspaceId}" },
+      { endpoint: "DELETE /api/computers/{computerId}/workspace-connections/{workspaceId}" },
     );
   }
 

@@ -1,6 +1,8 @@
 package computer
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -31,5 +33,16 @@ func TestGenerationStoreIsMonotonicAndConcurrent(t *testing.T) {
 	}
 	if len(seen) != count || store.Current() != count {
 		t.Fatalf("generations=%v current=%d, want unique 1..%d", seen, store.Current(), count)
+	}
+}
+
+func TestGenerationStoreIgnoresStaleUnlockedLockFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, generationLockFile), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	value, err := NewGenerationStore(root).Next()
+	if err != nil || value != 1 {
+		t.Fatalf("Next with stale lock file = %d, %v", value, err)
 	}
 }

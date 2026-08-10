@@ -128,14 +128,14 @@
       "windows-powershell": "适用于 Windows PowerShell。"
     },
     "step1_label": "安装 Multica CLI",
-    "step2_label": "启动守护进程",
-    "step2_hint": "会打开浏览器登录，然后启动守护进程。",
+    "step2_label": "连接这台 Computer",
+    "step2_hint": "会打开浏览器登录、连接当前工作区，然后启动 Computer resident。",
     "trouble_summary": "遇到问题了？",
     "trouble_intro": "如果第一步下载失败，或第二步连不上，可以试试：",
     "trouble_retry": "重试——网络不稳定可能会中断这两条命令中的任何一条。",
     "trouble_check_network": "确认这台机器能连上互联网，且没有防火墙或代理拦截了出站 HTTPS。",
     "trouble_check_daemon_prefix": "CLI 装好之后，",
-    "trouble_check_daemon_suffix": " 可以看到守护进程当前的状态。"
+    "trouble_check_daemon_suffix": " 可以看到 Computer resident 当前的状态。"
   },
   "cloud_waitlist": {
     "intro_main": "云运行时尚未上线。留下邮箱，上线时通过邮件通知你。",

@@ -24,6 +24,12 @@ var daemonCmd = &cobra.Command{
 	Use:    "daemon",
 	Short:  "Control the local agent runtime daemon",
 	Hidden: true, // compatibility alias for the machine-wide Computer (#2487)
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		// The hidden compatibility spelling must still target the one Computer;
+		// accepting a profile/custom server here would recreate the retired
+		// second-resident model behind an invisible flag.
+		return rejectRetiredComputerFlags(cmd)
+	},
 }
 
 var daemonStartCmd = &cobra.Command{
@@ -176,9 +182,9 @@ func printComputerStartResult(res computer.StartResult) error {
 
 	// Not ready within the startup window.
 	if res.LastStatus == "starting" {
-		fmt.Fprintf(os.Stderr, "Daemon is still starting after %s (agent detection / workspace sync is taking longer than expected). Check logs:\n  %s\n", computer.StartupTimeout, res.LogPath)
+		fmt.Fprintf(os.Stderr, "Computer is still starting after %s (Agent detection / Workspace sync is taking longer than expected). Check logs:\n  %s\n", computer.StartupTimeout, res.LogPath)
 	} else {
-		fmt.Fprintf(os.Stderr, "Daemon may not have started successfully. Check logs:\n  %s\n", res.LogPath)
+		fmt.Fprintf(os.Stderr, "Computer may not have started successfully. Check logs:\n  %s\n", res.LogPath)
 	}
 	return nil
 }
@@ -475,13 +481,8 @@ func runDaemonRestart(cmd *cobra.Command, args []string) error {
 
 func runDaemonStop(cmd *cobra.Command, _ []string) error {
 	daemonDeprecatedAliasNotices()
-	profile := ""
 	lc := &computer.Lifecycle{}
-
-	label := "Daemon"
-	if profile != "" {
-		label = fmt.Sprintf("Daemon [%s]", profile)
-	}
+	label := "Computer"
 
 	res := lc.Stop()
 	if !res.Running {
@@ -492,12 +493,12 @@ func runDaemonStop(cmd *cobra.Command, _ []string) error {
 		return res.Err
 	}
 	if res.Stopped {
-		fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", res.Pid)
-		fmt.Fprintln(os.Stderr, "Daemon stopped.")
+		fmt.Fprintf(os.Stderr, "Stopping Computer (pid %d)...\n", res.Pid)
+		fmt.Fprintln(os.Stderr, "Computer stopped.")
 		return nil
 	}
 
-	fmt.Fprintln(os.Stderr, "Daemon is still stopping. It may be finishing a running task.")
+	fmt.Fprintln(os.Stderr, "Computer is still stopping. It may be finishing a running task.")
 	return nil
 }
 
@@ -544,14 +545,44 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 	if session, ok := health["session_present"].(bool); ok {
 		rows = append(rows, row{"Session", map[bool]string{true: "present", false: "missing"}[session]})
 	}
+	if environment, ok := health["environment"].(string); ok && environment != "" {
+		rows = append(rows, row{"Configured environment", environment})
+	}
+	if environment, ok := health["resident_environment"].(string); ok && environment != "" {
+		rows = append(rows, row{"Resident environment", environment})
+	}
 	if origin, ok := health["service_origin"].(string); ok && origin != "" {
-		rows = append(rows, row{"Origin", origin})
+		rows = append(rows, row{"Configured origin", origin})
+	}
+	if origin, ok := health["resident_service_origin"].(string); ok && origin != "" {
+		rows = append(rows, row{"Resident origin", origin})
+	}
+	if source, ok := health["package_source"].(string); ok && source != "" {
+		rows = append(rows, row{"Configured package", source})
+	}
+	if source, ok := health["resident_package_source"].(string); ok && source != "" {
+		rows = append(rows, row{"Resident package", source})
+	}
+	if drift, ok := health["configuration_drift"].(bool); ok {
+		rows = append(rows, row{"Configuration drift", fmt.Sprint(drift)})
 	}
 	if connected, ok := health["connected"].(bool); ok {
 		rows = append(rows, row{"Connected", fmt.Sprint(connected)})
 	}
 	if connections, ok := health["workspace_connections"].([]map[string]any); ok {
 		rows = append(rows, row{"Workspace connections", strconv.Itoa(len(connections))})
+		for i, connection := range connections {
+			workspace := fmt.Sprint(connection["workspace_slug"])
+			if workspace == "" {
+				workspace = fmt.Sprint(connection["workspace_id"])
+			} else if id := fmt.Sprint(connection["workspace_id"]); id != "" {
+				workspace += " (" + id + ")"
+			}
+			rows = append(rows, row{
+				fmt.Sprintf("Connection %d", i+1),
+				fmt.Sprintf("%s / %s", connection["environment"], workspace),
+			})
+		}
 	}
 	if version, ok := health["cli_version"].(string); ok && version != "" {
 		rows = append(rows, row{"Version", version})

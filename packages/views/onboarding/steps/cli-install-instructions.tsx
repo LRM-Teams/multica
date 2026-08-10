@@ -137,7 +137,7 @@ function TroubleshootingDetails() {
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"multica daemon status"}
+              {"multica computer status"}
             </code>
             {" / "}
             {/* CLI command — literal shell string, not i18n content. */}
@@ -147,7 +147,7 @@ function TroubleshootingDetails() {
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"multica daemon logs -f"}
+              {"multica computer logs -f"}
             </code>
             {t(($) => $.cli_install.trouble_check_daemon_suffix)}
           </li>

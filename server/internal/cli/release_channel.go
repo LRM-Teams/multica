@@ -25,23 +25,23 @@ func NormalizeReleaseChannel(raw string) (ReleaseChannel, error) {
 	}
 }
 
-func DefaultReleaseChannelForEnvironment(environment ServiceEnvironment) ReleaseChannel {
+// ReleaseChannelForEnvironment is the fixed package source for one service
+// environment. It is deliberately not user-configurable: production always
+// runs stable packages and test always runs preview packages.
+func ReleaseChannelForEnvironment(environment ServiceEnvironment) ReleaseChannel {
 	if environment == ServiceEnvironmentTest {
 		return ReleaseChannelAlpha
 	}
 	return ReleaseChannelLatest
 }
 
-// ResolveReleaseChannel applies the environment-specific default only when a
-// config has never made an explicit channel choice. Once persisted, channel
-// and environment remain independent axes.
+// ResolveReleaseChannel derives package source solely from the effective
+// service environment. Legacy release_channel values in old config files are
+// ignored during migration.
 func ResolveReleaseChannel(cfg CLIConfig) (ReleaseChannel, error) {
-	if strings.TrimSpace(cfg.ReleaseChannel) != "" {
-		return NormalizeReleaseChannel(cfg.ReleaseChannel)
-	}
 	target, err := ResolveServiceTarget(cfg)
 	if err != nil {
 		return "", err
 	}
-	return DefaultReleaseChannelForEnvironment(target.Environment), nil
+	return ReleaseChannelForEnvironment(target.Environment), nil
 }

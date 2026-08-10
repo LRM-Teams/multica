@@ -36,8 +36,8 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           echo "Triggered by tag: $tag"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Release tags must look like vX.Y.Z or vX.Y.Z-suffix; got '$tag'."
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "::error::Release tags must be vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N; got '$tag'."
             exit 1
           fi
           if [[ "$tag" == *-dirty* ]]; then
@@ -183,7 +183,16 @@ jobs:
           version="${TAG_NAME#v}"
           canonical_prefix="${RELEASE_PREFIX}/${version}"
           legacy_prefix="${RELEASE_PREFIX}/${TAG_NAME}"
-          for key in "${canonical_prefix}/manifest.json" "${legacy_prefix}/release.json"; do
+          shopt -s nullglob
+          immutable_keys=(
+            "${canonical_prefix}/manifest.json"
+            "${legacy_prefix}/release.json"
+            "${canonical_prefix}/checksums.txt"
+          )
+          for f in "${RUNNER_TEMP}/release-assets"/multica-cli-*.tar.gz "${RUNNER_TEMP}/release-assets"/multica-cli-*.zip; do
+            immutable_keys+=("${canonical_prefix}/$(basename "$f")")
+          done
+          for key in "${immutable_keys[@]}"; do
             if aws s3api head-object \
               --endpoint-url "$OSS_ENDPOINT_URL" --bucket "$OSS_BUCKET" --key "$key" \
               >/dev/null 2>&1; then
@@ -191,7 +200,6 @@ jobs:
               exit 1
             fi
           done
-          shopt -s nullglob
           for f in "${RUNNER_TEMP}/release-assets"/multica-cli-*.tar.gz "${RUNNER_TEMP}/release-assets"/multica-cli-*.zip; do
             aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
               --cache-control "public,max-age=31536000,immutable" \

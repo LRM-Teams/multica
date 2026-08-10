@@ -8,7 +8,7 @@ import { Mermaid } from "@/components/mermaid";
 
 在 Multica 里，[智能体](/agents) **不**在我们的服务器上运行——它们跑在你自己的机器上，由全机唯一的 **Computer resident** 调用本地 [AI 编程工具](/providers)。Multica 服务器协调 issue、执行任务和**运行时**（运行时 = 一个工作区连接 × 一款本地 AI 工具）。
 
-这个结构带来 Multica 和 Linear / Jira 最大的差别：**你的 API 密钥、工具链、代码目录都留在本地**，Multica 服务器一个都看不到。"我的智能体不工作"类问题几乎都是本地问题——守护进程没启动、某款 AI 工具没装、密钥过期——请先从本地查起；定位指引见 [故障排查](/troubleshooting)。
+这个结构带来 Multica 和 Linear / Jira 最大的差别：**你的 API 密钥、工具链、代码目录都留在本地**，Multica 服务器一个都看不到。「我的智能体不工作」类问题几乎都是本地问题——Computer 没启动、某款 AI 工具没装或密钥过期——请先从本地查起；定位指引见 [故障排查](/troubleshooting)。
 
 ## 启动 Computer
 
@@ -33,7 +33,7 @@ multica computer start
 | `multica computer start [/<workspace>]` | 启动全机唯一 resident |
 | `multica computer stop` | 平滑停止 |
 | `multica computer restart [/<workspace>]` | 重启同一个 resident |
-| `multica computer status` | 查看环境、发布通道、身份和连接 |
+| `multica computer status` | 查看环境、固定包源、身份和连接 |
 | `multica computer logs [/<workspace>]` | 查看日志（加 `-f` 跟随）|
 | `multica computer doctor [/<workspace>]` | 只读诊断本机状态 |
 
@@ -43,7 +43,7 @@ multica computer start
 
 ## 为什么一台机器会有多个运行时
 
-运行时不是一个服务器，也不是一个容器——它是「**守护进程 × 一款 AI 编程工具**」的组合。举例：你在一台 MacBook 上启动守护进程，本机装了 Claude Code 和 Codex；你是两个工作区的成员。那么 Multica 会注册 4 个运行时：
+运行时不是服务器，也不是容器——它是「**一个明确的工作区连接 × 一款 AI 编程工具**」的组合。举例：一台 MacBook 的 Computer 明确连接两个工作区，并找到 Claude Code 和 Codex，那么 Multica 会注册 4 个运行时：
 
 <Mermaid chart={`
 graph TD
@@ -61,7 +61,7 @@ graph TD
 - Multica 界面的 **Runtimes** 页面列的就是这些行
 
 <Callout type="info">
-**云端运行时即将开放**，目前处于等待名单阶段。上线后，你无需在本地运行守护进程，即可在 Multica Cloud 上直接执行智能体任务。在 [下载页面](https://multica.ai/download) 登记邮箱以获取通知。
+**云端运行时即将开放**，目前处于等待名单阶段。上线后，你无需在本地运行 Computer，即可在 Multica Cloud 上直接执行智能体任务。在 [下载页面](https://multica.ai/download) 登记邮箱以获取通知。
 </Callout>
 
 ## 运行时什么时候被判定为离线
@@ -70,11 +70,11 @@ Multica 用心跳判断运行时是否在线。三个关键数字：
 
 | 事件 | 阈值 |
 |---|---|
-| 守护进程心跳频率 | 每 **15 秒** |
+| Computer 心跳频率 | 每 **15 秒** |
 | 标记为失联 | 超过 **45 秒** 没心跳（漏了 3 次）|
 | 自动删除 | 失联且无关联智能体超过 **7 天** |
 
-失联不是永久的——守护进程只要再次发出心跳就立刻回到在线，运行时记录也会保留。重启守护进程不会丢运行时。
+失联不是永久的——Computer 只要再次发出心跳就立刻回到在线，运行时记录也会保留。重启 Computer 不会丢运行时。
 
 <Callout type="warning">
 **失联的运行时上正在跑的执行任务会被标记为失败**（失败原因 `runtime_offline`）。对可重试的来源（issue、chat），Multica 会自动重新排队。详见 [执行任务 → 哪些失败会自动重试](/tasks#哪些失败会自动重试哪些不会)。
@@ -84,16 +84,16 @@ Multica 用心跳判断运行时是否在线。三个关键数字：
 
 Multica 对并发有两层限额：
 
-- **守护进程层**：默认 **20 个执行任务并发**（环境变量 `MULTICA_DAEMON_MAX_CONCURRENT_TASKS` 可调）
+- **Computer resident 层**：默认 **20 个执行任务并发**（内部环境变量 `MULTICA_DAEMON_MAX_CONCURRENT_TASKS` 可调）
 - **智能体层**：每个智能体默认 **6 个执行任务并发**（智能体配置里改）
 
-两层中更紧的那层生效。如果你的守护进程已经在跑 20 个任务，即使某个智能体还有余量，新的任务也要等。
+两层中更紧的那层生效。如果你的 Computer 已经在跑 20 个任务，即使某个智能体还有余量，新的任务也要等。
 
 如果你看到执行任务卡在 `queued` 状态不 `dispatched`，通常就是这两层里某一层打满了。
 
-## 守护进程崩溃后，没跑完的任务会怎样
+## Computer 崩溃后，没跑完的任务会怎样
 
-守护进程崩溃或被强行结束时，它领走的执行任务会停在 `dispatched` 或 `running` 状态。下次启动时，守护进程会告诉服务器：「这些任务不是我的了，请标记失败。」服务器把它们改成 `failed`，失败原因 `runtime_recovery`——对可重试的来源，任务自动重新排队。
+Computer resident 崩溃或被强行结束时，它领走的执行任务会停在 `dispatched` 或 `running` 状态。下次启动时，Computer 会告诉服务器这些任务已没有存活的执行者。服务器把它们改成 `failed`，失败原因 `runtime_recovery`；可重试来源会自动重新排队。
 
 即使这一步因网络问题没完成，还有**每 30 秒**一次的服务器端扫描作为后备：超过 45 秒没心跳的运行时会被统一标记为失联，上面的任务也一并回收。
 
@@ -109,5 +109,5 @@ Multica 对并发有两层限额：
 
 ## 下一步
 
-- [执行任务](/tasks) —— 守护进程领到任务后，它的完整生命周期
+- [执行任务](/tasks) —— Computer 领到任务后，它的完整生命周期
 - [Providers Matrix](/providers) —— 12 款 AI 编程工具的能力差异对照

@@ -100,7 +100,7 @@ describe("ApiClient", () => {
       kept_local_data: true,
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.example.test/api/daemons/computer%2Fone/bindings/workspace%2Fone",
+      "https://api.example.test/api/computers/computer%2Fone/workspace-connections/workspace%2Fone",
       expect.objectContaining({ method: "DELETE" }),
     );
   });

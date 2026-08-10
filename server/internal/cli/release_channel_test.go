@@ -44,13 +44,55 @@ func TestMissingAlphaDoesNotFallBackToLatest(t *testing.T) {
 	}
 }
 
-func TestReleaseChannelDefaultsByEnvironmentButExplicitChoiceWins(t *testing.T) {
-	testDefault, err := ResolveReleaseChannel(CLIConfig{Environment: "test", ServerURL: "https://test.leagent.me"})
-	if err != nil || testDefault != ReleaseChannelAlpha {
-		t.Fatalf("test default = %q err=%v", testDefault, err)
+func TestReleaseChannelRejectsCrossChannelOrInconsistentManifest(t *testing.T) {
+	tests := []struct {
+		name, channelPath, body string
+		channel                 ReleaseChannel
+	}{
+		{"stable in alpha", "/alpha.json", `{"tag":"v1.2.3","version":"1.2.3","platforms":{}}`, ReleaseChannelAlpha},
+		{"prerelease in latest", "/manifest.json", `{"tag":"v1.2.3-alpha.1","version":"1.2.3-alpha.1","platforms":{}}`, ReleaseChannelLatest},
+		{"tag version mismatch", "/alpha.json", `{"tag":"v1.2.3-alpha.2","version":"1.2.3-alpha.1","platforms":{}}`, ReleaseChannelAlpha},
 	}
-	explicit, err := ResolveReleaseChannel(CLIConfig{Environment: "test", ServerURL: "https://test.leagent.me", ReleaseChannel: "latest"})
-	if err != nil || explicit != ReleaseChannelLatest {
-		t.Fatalf("explicit test channel = %q err=%v", explicit, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tt.channelPath {
+					http.NotFound(w, r)
+					return
+				}
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			if _, err := FetchReleaseForChannelWithOverride(tt.channel, server.URL); err == nil {
+				t.Fatal("invalid channel manifest was accepted")
+			}
+		})
+	}
+}
+
+func TestReleaseChannelIsFixedByEnvironment(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      CLIConfig
+		wantChannel ReleaseChannel
+	}{
+		{
+			name:        "production uses stable packages",
+			config:      CLIConfig{Environment: "production", ServerURL: "https://api.leagent.me"},
+			wantChannel: ReleaseChannelLatest,
+		},
+		{
+			name:        "test uses preview packages",
+			config:      CLIConfig{Environment: "test", ServerURL: "https://test.leagent.me"},
+			wantChannel: ReleaseChannelAlpha,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolveReleaseChannel(tt.config)
+			if err != nil || got != tt.wantChannel {
+				t.Fatalf("ResolveReleaseChannel() = %q, %v; want %q", got, err, tt.wantChannel)
+			}
+		})
 	}
 }

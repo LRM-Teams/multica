@@ -1,6 +1,6 @@
 ---
 title: Desktop app
-description: What Multica Desktop is, how it differs from the web app, and when it's worth using.
+description: Historical behavior of the legacy, unmaintained Multica Desktop app.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -11,7 +11,9 @@ Desktop is a legacy, unmaintained surface and is not part of the machine-wide Co
 
 Multica Desktop is a native desktop app for macOS, Windows, and Linux. For the environment it is configured for, it talks to the same backend as the web app and shows the same data. By default Desktop uses Multica Cloud; self-hosted instances can be configured with a local runtime config file. Desktop also adds a few things the browser can't: **independent tab groups per [workspace](/workspaces)**, **automatic [daemon](/daemon-runtimes) startup**, and **one-click upgrades**.
 
-## Desktop or web — which to pick
+The details below document the existing legacy app; they are not a recommendation or a Computer v1 support promise.
+
+## Desktop or web
 
 | | Web | Desktop |
 |---|---|---|
@@ -21,8 +23,7 @@ Multica Desktop is a native desktop app for macOS, Windows, and Linux. For the e
 | Upgrades | Refresh to get the latest | App checks in the background and installs on next launch |
 | Signed-in data | Identical | Identical |
 
-**Pick web** for one-off use, working on someone else's machine, or when you'd rather not install anything.
-**Pick desktop** for daily use, juggling multiple workspaces, or avoiding manual daemon management.
+Use the Web app for supported workflows. Do not choose Desktop for a new Computer setup.
 
 ## Multiple tabs: what happens when you switch workspaces
 
@@ -49,9 +50,9 @@ The whole process **doesn't interrupt what you're working on**.
 
 The macOS build is signed and notarized, so you won't see an "unidentified developer" warning on first launch. The Linux build is an `.AppImage` — auto-updates rely on electron-updater, which can be flaky on some distros. **If auto-update doesn't work, download the new version manually and replace the old file.**
 
-## Do I still need the standalone CLI and daemon?
+## Do I still need the standalone CLI and Computer?
 
-**No.** Desktop ships with the same `multica` CLI binary embedded inside it, and it launches its own daemon profile at startup (isolated from any daemon you may be running manually from the terminal).
+**Yes, for the supported Computer v1 path.** Desktop ships a legacy embedded CLI and launches an isolated profile daemon, but that lifecycle is unmaintained and outside the Computer contract.
 
 If you've already started the machine-wide Computer, Desktop does not take it over. Its old profile-specific daemon behavior is retained only as legacy implementation and is not a supported Computer lifecycle.
 

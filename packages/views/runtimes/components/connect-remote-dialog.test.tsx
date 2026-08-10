@@ -117,7 +117,7 @@ describe("ConnectRemoteDialog", () => {
     const { baseElement } = renderDialog();
 
     const statusCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
-      node.textContent?.includes("multica daemon status"),
+      node.textContent?.includes("multica computer status"),
     );
 
     expect(statusCode).toHaveClass(...ligatureClasses);

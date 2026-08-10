@@ -189,11 +189,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	} else {
 		applyProxyConfig(cliCfg.Proxy)
 		workspaceID = strings.TrimSpace(cliCfg.WorkspaceID)
-		channel, channelErr := cli.NormalizeReleaseChannel(cliCfg.ReleaseChannel)
-		if channelErr != nil {
-			return Config{}, channelErr
-		}
-		releaseChannel = string(channel)
+		releaseChannel = string(cli.ReleaseChannelForEnvironment(cli.ServiceEnvironment(cliCfg.Environment)))
 		if oc := openclawOverrideFrom(cliCfg); oc != nil {
 			applyOpenclawOverride(oc)
 		}

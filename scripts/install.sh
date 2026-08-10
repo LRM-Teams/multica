@@ -7,7 +7,13 @@
 # Install CLI + provision self-host server:
 #   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 #
-# After installation, run `multica setup` to configure your environment.
+# Install the current prerelease:
+#   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha
+#
+# Install one exact immutable release:
+#   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.5.0-alpha.3
+#
+# After installation, run `multica setup /<workspace>` to configure your environment.
 #
 set -euo pipefail
 
@@ -21,8 +27,11 @@ REPO_WEB_URL="https://github.com/LRM-Teams/multica"
 # API/asset host always 404s, so a bare install here would fail on the first
 # release lookup. See server/internal/cli/update.go ReleaseManifestBaseURL.
 #
-# Primary feed: filed custom domain. OSS mirror via MULTICA_RELEASE_MANIFEST_BASE_URL.
+# Primary feed: fixed custom domain. Override only for controlled mirrors/tests.
 MANIFEST_BASE_URL="${MULTICA_RELEASE_MANIFEST_BASE_URL:-https://cdn.leagent.me/computer}"
+RELEASE_SELECTOR="${MULTICA_VERSION:-latest}"
+RELEASE_VERSION=""
+RELEASE_MANIFEST_PATH=""
 INSTALL_SCRIPT_URL="${MANIFEST_BASE_URL}/install.sh"
 POWERSHELL_INSTALL_SCRIPT_URL="${MANIFEST_BASE_URL}/install.ps1"
 INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
@@ -50,6 +59,29 @@ warn()  { printf "${BOLD}${YELLOW}⚠ %s${RESET}\n" "$*" >&2; }
 fail()  { printf "${BOLD}${RED}✗ %s${RESET}\n" "$*" >&2; exit 1; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+configure_release_selector() {
+  case "$RELEASE_SELECTOR" in
+    latest|alpha)
+      RELEASE_VERSION=""
+      if [ "$RELEASE_SELECTOR" = "latest" ]; then
+        RELEASE_MANIFEST_PATH="manifest.json"
+      else
+        RELEASE_MANIFEST_PATH="alpha.json"
+      fi
+      ;;
+    v[0-9]*.[0-9]*.[0-9]*)
+      if [[ ! "$RELEASE_SELECTOR" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+        fail "Invalid --version '$RELEASE_SELECTOR'; use latest, alpha, or vX.Y.Z[-(alpha|beta|rc).N]."
+      fi
+      RELEASE_VERSION="$RELEASE_SELECTOR"
+      RELEASE_MANIFEST_PATH="${RELEASE_VERSION#v}/manifest.json"
+      ;;
+    *)
+      fail "Invalid --version '$RELEASE_SELECTOR'; use latest, alpha, or vX.Y.Z[-(alpha|beta|rc).N]."
+      ;;
+  esac
+}
 
 env_file_value() {
   local file="$1"
@@ -119,6 +151,24 @@ print(data.get("tag") or "")' "$file" ;;
   esac
 }
 
+validate_selected_manifest_tag() {
+  local tag="$1"
+  case "$RELEASE_SELECTOR" in
+    latest)
+      [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+        fail "The latest manifest must point to a stable vX.Y.Z release, got '$tag'."
+      ;;
+    alpha)
+      [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]] ||
+        fail "The alpha channel manifest must point to an alpha.N, beta.N, or rc.N release, got '$tag'."
+      ;;
+    *)
+      [ "$tag" = "$RELEASE_VERSION" ] ||
+        fail "Pinned manifest tag $tag does not match requested $RELEASE_VERSION."
+      ;;
+  esac
+}
+
 manifest_platform_field() {
   local file="$1" platform="$2" field="$3" tool
   tool="$(json_tool)"
@@ -131,16 +181,20 @@ print(data.get("platforms", {}).get(sys.argv[2], {}).get(sys.argv[3]) or "")' "$
   esac
 }
 
+file_sha256() {
+	local file="$1"
+	if command_exists sha256sum; then
+		sha256sum "$file" | awk '{print $1}'
+	elif command_exists shasum; then
+		shasum -a 256 "$file" | awk '{print $1}'
+	else
+		fail "Checksum verification requires sha256sum or shasum; refusing to install unverified bytes."
+	fi
+}
+
 verify_sha256() {
-  local file="$1" expected="$2" actual
-  if command_exists sha256sum; then
-    actual="$(sha256sum "$file" | awk '{print $1}')"
-  elif command_exists shasum; then
-    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
-  else
-    warn "No sha256sum or shasum found; skipping checksum verification of the downloaded archive."
-    return 0
-  fi
+	local file="$1" expected="$2" actual
+	actual="$(file_sha256 "$file")"
   actual="$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')"
   expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
   [ -n "$expected" ] && [ "$actual" = "$expected" ]
@@ -173,17 +227,18 @@ install_cli_binary() {
 
   local manifest_file
   manifest_file=$(mktemp)
-  if ! curl -fsSL "$MANIFEST_BASE_URL/latest.json" -o "$manifest_file"; then
-    rm -f "$manifest_file"
-    fail "Could not fetch the release manifest from ${MANIFEST_BASE_URL}/latest.json. Check your network connection."
+  if ! curl -fsSL "$MANIFEST_BASE_URL/$RELEASE_MANIFEST_PATH" -o "$manifest_file"; then
+		rm -f "$manifest_file"
+		fail "Could not fetch the release manifest from ${MANIFEST_BASE_URL}/${RELEASE_MANIFEST_PATH}. Check your network connection."
   fi
 
   local latest platform url sha256
   latest="$(manifest_tag "$manifest_file")"
-  if [ -z "$latest" ]; then
+	if [ -z "$latest" ]; then
     rm -f "$manifest_file"
-    fail "Could not determine latest release from the manifest at ${MANIFEST_BASE_URL}/latest.json."
-  fi
+		fail "Could not determine a release from the manifest at ${MANIFEST_BASE_URL}/${RELEASE_MANIFEST_PATH}."
+	fi
+  validate_selected_manifest_tag "$latest"
   platform="${OS}-${ARCH}"
   url="$(manifest_platform_field "$manifest_file" "$platform" "url")"
   sha256="$(manifest_platform_field "$manifest_file" "$platform" "sha256")"
@@ -208,10 +263,18 @@ install_cli_binary() {
 
   tar -xzf "$tmp_dir/multica.tar.gz" -C "$tmp_dir" multica
 
-  mkdir -p "$CLI_BIN_DIR"
-  mv "$tmp_dir/multica" "$CLI_PATH"
-  chmod +x "$CLI_PATH"
-  prepend_to_path "$CLI_BIN_DIR"
+	mkdir -p "$CLI_BIN_DIR"
+	chmod +x "$tmp_dir/multica"
+	local binary_sha256
+	binary_sha256="$(file_sha256 "$tmp_dir/multica")"
+	if ! "$tmp_dir/multica" installer-activate \
+		--version "$latest" \
+		--sha256 "$binary_sha256" \
+		--launcher "$CLI_PATH"; then
+		rm -rf "$tmp_dir"
+		fail "The downloaded release could not be activated through VersionStore; the existing launcher was preserved or rolled back."
+	fi
+	prepend_to_path "$CLI_BIN_DIR"
   persist_cli_path
 
   rm -rf "$tmp_dir"
@@ -309,27 +372,26 @@ persist_cli_path() {
 }
 
 print_daemon_adoption_guidance() {
-  local old_path="$1"
-  warn "A daemon already started from $old_path keeps using that executable until it is restarted."
-  warn "Do not interrupt active agent work. When all work on the profile is idle, adopt the canonical binary with:"
-  printf '  "%s" daemon status\n' "$CLI_PATH" >&2
-  printf '  "%s" daemon restart\n' "$CLI_PATH" >&2
-  printf '  "%s" daemon status\n' "$CLI_PATH" >&2
-  warn "For a named profile, put --profile before daemon, for example:"
-  printf '  "%s" --profile staging daemon restart\n' "$CLI_PATH" >&2
-  warn "Adoption is complete when daemon status reports the same Version as:"
-  printf '  "%s" version\n' "$CLI_PATH" >&2
+	local old_path="$1"
+	warn "A Computer resident already started from $old_path keeps using that executable until it is restarted."
+	warn "Do not interrupt active Agent work. When the Computer is idle, adopt the canonical binary with:"
+	printf '  "%s" computer status\n' "$CLI_PATH" >&2
+	printf '  "%s" computer restart\n' "$CLI_PATH" >&2
+	printf '  "%s" computer status\n' "$CLI_PATH" >&2
+	warn "Adoption is complete when Computer status reports the same Version as:"
+	printf '  "%s" version\n' "$CLI_PATH" >&2
 }
 
 get_latest_version() {
   local manifest_file tag
   manifest_file=$(mktemp)
-  if ! curl -fsSL "$MANIFEST_BASE_URL/latest.json" -o "$manifest_file" 2>/dev/null; then
+	if ! curl -fsSL "$MANIFEST_BASE_URL/$RELEASE_MANIFEST_PATH" -o "$manifest_file" 2>/dev/null; then
     rm -f "$manifest_file"
     return
   fi
-  tag="$(manifest_tag "$manifest_file" 2>/dev/null || true)"
-  rm -f "$manifest_file"
+	tag="$(manifest_tag "$manifest_file" 2>/dev/null || true)"
+	rm -f "$manifest_file"
+  validate_selected_manifest_tag "$tag"
   printf '%s' "$tag"
 }
 
@@ -392,7 +454,7 @@ install_cli() {
     local latest_ver
     latest_ver=$(get_latest_version)
     if [ -z "$latest_ver" ]; then
-      fail "Could not determine latest release from ${MANIFEST_BASE_URL}/latest.json. Refusing to assume the installed CLI is current."
+		fail "Could not determine the selected release from ${MANIFEST_BASE_URL}/${RELEASE_MANIFEST_PATH}. Refusing to assume the installed CLI is current."
     fi
 
     # Normalize: strip leading 'v' for comparison
@@ -639,10 +701,17 @@ main() {
       --with-server) mode="with-server" ;;
       --local)       mode="with-server" ;;  # backwards compat alias
       --stop)        mode="stop" ;;
+      --version)
+        [ $# -ge 2 ] || fail "--version requires latest, alpha, or an exact vX.Y.Z[-(alpha|beta|rc).N] value."
+        RELEASE_SELECTOR="$2"
+        shift
+        ;;
+      --version=*) RELEASE_SELECTOR="${1#*=}" ;;
       --help|-h)
-        echo "Usage: install.sh [--with-server | --stop]"
+        echo "Usage: install.sh [--version VERSION] [--with-server | --stop]"
         echo ""
         echo "  (default)       Install / upgrade the Multica CLI"
+        echo "  --version       Select latest (default), alpha, or an exact release tag"
         echo "  --with-server   Install CLI + provision a self-host server (Docker)"
         echo "  --stop          Stop a self-hosted installation"
         echo ""
@@ -654,14 +723,17 @@ main() {
         echo "  MULTICA_RELEASE_MANIFEST_BASE_URL"
         echo "                        Base URL of the CLI release manifest/archives"
         echo "                        (default: https://cdn.leagent.me/computer)"
+        echo "  MULTICA_VERSION       Automation equivalent of --version"
         echo ""
-        echo "After installation, run 'multica setup' to configure your environment."
+        echo "After installation, run 'multica setup /<workspace>' to connect a Workspace."
         exit 0
         ;;
-      *) warn "Unknown option: $1" ;;
+      *) fail "Unknown option: $1. Run with --help for supported options." ;;
     esac
     shift
   done
+
+  configure_release_selector
 
   case "$mode" in
     default)     run_default ;;

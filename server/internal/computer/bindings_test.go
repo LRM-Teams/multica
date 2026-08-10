@@ -3,6 +3,8 @@ package computer
 import (
 	"os"
 	"path/filepath"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -10,6 +12,26 @@ func newTestBindings(t *testing.T) (*BindingsStore, string) {
 	t.Helper()
 	root := t.TempDir()
 	return NewBindingsStore(root), root
+}
+
+func TestBindingsConcurrentAddPreservesEverySibling(t *testing.T) {
+	s, _ := newTestBindings(t)
+	const count = 24
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := s.AddOrRepair(WorkspaceBinding{WorkspaceID: fmt.Sprintf("ws-%02d", i), Active: true}); err != nil {
+				t.Errorf("AddOrRepair: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	all, err := s.All()
+	if err != nil || len(all) != count {
+		t.Fatalf("All = %d, err=%v", len(all), err)
+	}
 }
 
 func TestBindingsPersistAndReloadStable(t *testing.T) {

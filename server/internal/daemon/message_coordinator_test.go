@@ -292,7 +292,11 @@ func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testin
 	secondDone <- nil
 }
 
-func TestResidentMessageTurnCompletionContinuesPendingBeforeIdle(t *testing.T) {
+// TestResidentMessageTurnCompletionDoesNotAutoHandoffPending locks Raft
+// alignment: after a turn ends, Pending must not auto body-handoff into a new
+// turn (former FlushOnTurnCompletion). Idle Accept→Flush or explicit Flush /
+// message check advances bodies later.
+func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-4111-8111-111111111111"
 		runtimeID   = "22222222-2222-4222-8222-222222222222"
@@ -336,34 +340,36 @@ func TestResidentMessageTurnCompletionContinuesPendingBeforeIdle(t *testing.T) {
 	}
 	firstDone <- nil
 
-	var secondDone chan error
+	// Raft: no automatic second body handoff after turn completion.
 	select {
-	case secondDone = <-backend.accepted:
-	case <-time.After(time.Second):
-		t.Fatal("pending Message did not start after prior turn completed")
+	case <-backend.accepted:
+		t.Fatal("pending Message must not auto body-handoff after turn completion")
+	case <-time.After(200 * time.Millisecond):
 	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 1 {
+		t.Fatalf("Context Boundary after first turn = %d, want 1 (pending not consumed)", got)
+	}
+
+	// Explicit idle Flush still hands off the remaining Pending body.
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("explicit flush of pending: %v", err)
+	}
+	secondDone := <-backend.accepted
 	secondDone <- nil
 
-	wantKinds := []string{protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindOnline}
-	gotKinds := make([]string, 0, len(wantKinds))
-	deadline := time.After(time.Second)
-	for len(gotKinds) < len(wantKinds) {
-		select {
-		case activity := <-activities:
-			gotKinds = append(gotKinds, activity.Snapshot.ActivityKind)
-		case <-deadline:
-			t.Fatalf("Activity kinds = %v, want %v", gotKinds, wantKinds)
+	// Working (first) → Online (first complete) → Working (explicit flush) → Online
+	// Activity ordering can interleave; require boundary advanced through seq 2.
+	deadline := time.Now().Add(time.Second)
+	for coordinator.Boundaries()["channel:one"] != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Context Boundary = %d, want 2 after explicit flush", coordinator.Boundaries()["channel:one"])
 		}
+		runtime.Gosched()
 	}
-	if !reflect.DeepEqual(gotKinds, wantKinds) {
-		t.Fatalf("Activity kinds = %v, want %v", gotKinds, wantKinds)
-	}
-	if got := coordinator.Boundaries()["channel:one"]; got != 2 {
-		t.Fatalf("Context Boundary = %d, want 2", got)
-	}
+	_ = activities // activity channel drained optionally; boundary is authoritative
 }
 
-func TestResidentMessageTurnErrorContinuesPendingAfterError(t *testing.T) {
+func TestResidentMessageTurnErrorDoesNotAutoHandoffPending(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-4111-8111-111111111111"
 		runtimeID   = "22222222-2222-4222-8222-222222222222"
@@ -404,12 +410,15 @@ func TestResidentMessageTurnErrorContinuesPendingAfterError(t *testing.T) {
 	}
 	firstDone <- errors.New("provider stream failed")
 
-	var secondDone chan error
 	select {
-	case secondDone = <-backend.accepted:
-	case <-time.After(time.Second):
-		t.Fatal("pending Message did not start after the prior turn failed")
+	case <-backend.accepted:
+		t.Fatal("pending Message must not auto body-handoff after turn error")
+	case <-time.After(200 * time.Millisecond):
 	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("explicit flush after error: %v", err)
+	}
+	secondDone := <-backend.accepted
 	secondDone <- nil
 
 	deadline := time.Now().Add(time.Second)

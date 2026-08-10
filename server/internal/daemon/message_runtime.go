@@ -97,42 +97,19 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	}, func(message agent.Message) {
 		d.emitResidentMessageRuntimeActivity(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64) {
-		if turnErr != nil {
-			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
-				d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
-			})
-		}
-		flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		// Raft-aligned turn end: never auto body-handoff Pending solely because
+		// the prior turn finished. If Pending remains, schedule a content-free
+		// Notice; body handoff waits for idle Accept→Flush, recovery Flush, or
+		// agent `message check`.
 		d.messageCoordinatorMu.RLock()
 		coordinator := d.messageCoordinators[agentID]
 		d.messageCoordinatorMu.RUnlock()
-		if coordinator == nil {
-			if turnErr == nil {
-				d.emitMessageTurnCompletionActivity(agentID, runtimeID, nil)
-			}
-			return
+		if coordinator != nil {
+			coordinator.NotifyPendingAfterTurn()
 		}
-		continued, err := coordinator.FlushOnTurnCompletion(flushCtx)
-		if err != nil {
-			// Another delivery may have won admission after the prior turn
-			// released. Its Message received Activity is already authoritative.
-			if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
-				return
-			}
-			if d.logger != nil {
-				d.logger.Warn("resident Message completion flush failed", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
-			}
-			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
-				d.emitMessageTurnCompletionActivity(agentID, runtimeID, err)
-			})
-			return
-		}
-		if !continued && turnErr == nil {
-			d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
-				d.emitMessageTurnCompletionActivity(agentID, runtimeID, nil)
-			})
-		}
+		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
+			d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
+		})
 	})
 }
 

@@ -37,8 +37,10 @@ func newMessageSendCmd() *cobra.Command {
 			"body on stdin. Attach completed files with repeatable --attachment-id values " +
 			"from `multica attachment upload`; attachment-only sends are rejected. If the " +
 			"freshness check holds a send because newer messages arrived, it remains an unsent " +
-			"draft. Do not automatically retry it or send it later; after reviewing the newer " +
-			"context, compose a fresh response if one is still needed.",
+			"draft. Do not automatically retry it. After reviewing the newer context, choose one " +
+			"path: revise with a normal send, `multica message send --send-draft` for the saved " +
+			"draft unchanged, or send nothing. Use `--send-draft --anyway` only after repeated " +
+			"holds when that draft is still correct.",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
@@ -292,23 +294,8 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		}
 		body["kind"] = normalized
 	}
-	// Turn-at-most-once batch identity: stamp the send with the turn's
-	// conversation + seq range so the daemon derives one stable client_message_id
-	// for the whole batch (server dedup) and never re-mints a second identity for
-	// the same exchange.
-	if conv := strings.TrimSpace(os.Getenv("MULTICA_TURN_CONVERSATION_ID")); conv != "" {
-		body["conversation_id"] = conv
-	}
-	if from := os.Getenv("MULTICA_TURN_SEQ_FROM"); from != "" {
-		if n, err := strconv.ParseInt(from, 10, 64); err == nil {
-			body["seq_from"] = n
-		}
-	}
-	if to := os.Getenv("MULTICA_TURN_SEQ_TO"); to != "" {
-		if n, err := strconv.ParseInt(to, 10, 64); err == nil {
-			body["seq_to"] = n
-		}
-	}
+	// Raft-aligned: chat send identity is minted by the Credential Proxy
+	// (independent uuid / draft reuse). CLI does not stamp turn batch keys.
 	var out map[string]any
 	if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
 		return fmt.Errorf("send message: %w", err)

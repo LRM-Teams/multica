@@ -70,6 +70,8 @@
     "last_seen_active_now": "刚刚活跃",
     "basics_section": "基本信息",
     "basics_display_name": "显示名称",
+    "rename_aria": "重命名电脑：{{name}}",
+    "rename_hint": "重命名这台电脑",
     "basics_hostname": "主机名",
     "basics_os": "操作系统",
     "basics_daemon": "Computer",

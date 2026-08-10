@@ -5698,6 +5698,11 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 	var existingEventID, existingChatSessionID pgtype.UUID
 	var existingAgentSessionID pgtype.UUID
 	var existingSeqFrom, existingSeqTo int64
+	// Coalesce only pending/failed — not draining. Extending a draining event's
+	// seq_to would mark mid-turn arrivals as covered when the agent still holds
+	// the original MULTICA_TURN_SEQ_* context and does not re-read (Alice:
+	// never swallow true-new messages). Residual mid-turn messages stay as a
+	// separate pending wake after the active lease ends (serial, not concurrent).
 	err := exec.QueryRow(ctx, `
 		SELECT id, agent_session_id, chat_session_id, seq_from, seq_to
 		FROM agent_inbox_event

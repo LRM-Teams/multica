@@ -158,6 +158,11 @@ type Daemon struct {
 	restartBinary string             // non-empty after a successful update; path to the new binary
 	updating      atomic.Bool        // prevents concurrent update attempts
 	activeTasks   atomic.Int64       // number of tasks currently in handleTask; exposed via /health
+	// activeInboxTurns maps agent_id → primary inbox lease for the in-flight
+	// turn. Credential-proxy message send uses this to stamp batch
+	// client_message_id when the CLI omitted MULTICA_TURN_* (Alice ①:
+	// inbox-turn sends only; non-turn/draft/proactive keep the legacy path).
+	activeInboxTurns sync.Map // string agentID -> AgentInboxLease
 	// machineUpgradeTaskCancels contains only task contexts created by this
 	// daemon. A Machine Upgrade may ask those managed turns to stop; it must
 	// never infer ownership of, or signal, an arbitrary local process.
@@ -2969,6 +2974,13 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 	task = restrictTaskForExecutionProfile(task, profile)
 
+	// Publish this turn's inbox lease for credential-proxy batch cmid stamping
+	// for the whole execution (including wait-for-slot). Cleared on exit.
+	if task.isInboxTask() && strings.TrimSpace(task.AgentID) != "" {
+		d.registerActiveInboxTurn(task.AgentID, *task.InboxEvent)
+		defer d.clearActiveInboxTurn(task.AgentID)
+	}
+
 	// Task-scoped logger with short ID for readable concurrent logs.
 	taskLog := d.logger.With("task", shortID(task.ID), "execution_profile", profile)
 	agentName := "agent"
@@ -3453,6 +3465,63 @@ func (t Task) inboxLeases() []AgentInboxLease {
 		}
 	}
 	return out
+}
+
+func (d *Daemon) registerActiveInboxTurn(agentID string, lease AgentInboxLease) {
+	if d == nil || strings.TrimSpace(agentID) == "" || lease.ID == "" {
+		return
+	}
+	d.activeInboxTurns.Store(agentID, lease)
+}
+
+func (d *Daemon) clearActiveInboxTurn(agentID string) {
+	if d == nil || strings.TrimSpace(agentID) == "" {
+		return
+	}
+	d.activeInboxTurns.Delete(agentID)
+}
+
+// lookupActiveInboxTurn returns the in-flight inbox lease for agentID, if any.
+func (d *Daemon) lookupActiveInboxTurn(agentID string) (AgentInboxLease, bool) {
+	if d == nil || strings.TrimSpace(agentID) == "" {
+		return AgentInboxLease{}, false
+	}
+	v, ok := d.activeInboxTurns.Load(agentID)
+	if !ok {
+		return AgentInboxLease{}, false
+	}
+	lease, ok := v.(AgentInboxLease)
+	if !ok || lease.ID == "" {
+		return AgentInboxLease{}, false
+	}
+	return lease, true
+}
+
+// fillTurnIdentityFromActiveInboxTurn fills missing ConversationID/Seq* on a
+// credential-proxy send from the agent's in-flight inbox lease. Only applies
+// when an inbox turn is active (Alice: do not force-hold non-turn / draft /
+// proactive sends that never had turn context).
+func (d *Daemon) fillTurnIdentityFromActiveInboxTurn(request *credentialProxyMessageSendRequest) bool {
+	if d == nil || request == nil {
+		return false
+	}
+	if request.ConversationID != "" && request.SeqFrom > 0 && request.SeqTo >= request.SeqFrom {
+		return false // already complete
+	}
+	lease, ok := d.lookupActiveInboxTurn(request.AgentID)
+	if !ok || lease.ConversationID == "" || lease.SeqFrom <= 0 || lease.SeqTo < lease.SeqFrom {
+		return false
+	}
+	if request.ConversationID == "" {
+		request.ConversationID = lease.ConversationID
+	}
+	if request.SeqFrom <= 0 {
+		request.SeqFrom = lease.SeqFrom
+	}
+	if request.SeqTo < request.SeqFrom {
+		request.SeqTo = lease.SeqTo
+	}
+	return request.ConversationID != "" && request.SeqFrom > 0 && request.SeqTo >= request.SeqFrom
 }
 
 // providerNeedsInlineSystemPrompt is sourced from agent.Capabilities

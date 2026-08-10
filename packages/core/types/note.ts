@@ -39,3 +39,33 @@ export interface DuplicateNotePageRequest {
 export interface UpdateNotePageSharesRequest {
   user_ids: string[];
 }
+
+export type NoteAIJobStatus = "queued" | "dispatched" | "running" | "completed" | "failed" | "cancelled";
+export type NoteAIEditAction = "insert" | "replace_selection" | "replace_page" | "patch";
+
+export interface NoteAIEditResult {
+  action: NoteAIEditAction;
+  markdown: string;
+  title?: string | null;
+  rationale?: string | null;
+}
+
+export interface CreateNoteAIJobRequest {
+  agent_id: string;
+  prompt: string;
+  title?: string;
+}
+
+export interface NoteAIJob {
+  id: string;
+  workspace_id: string;
+  page_id: string;
+  agent_id: string;
+  chat_session_id: string;
+  task_id: string;
+  status: NoteAIJobStatus;
+  result?: NoteAIEditResult | null;
+  failure_reason?: string | null;
+  created_at: string;
+  updated_at?: string;
+}

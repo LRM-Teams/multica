@@ -47,6 +47,7 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
+import { noteKeys } from "../notes/queries";
 import {
   channelKeys,
   invalidateChannelIssues,
@@ -1023,6 +1024,9 @@ export function useRealtimeSync(
       // for CHANNELS + DMs; keep it fresh on the same chat lifecycle events.
       qc.invalidateQueries({ queryKey: conversationKeys.list(id) });
     };
+    const invalidateNoteAIJob = (taskId: string | null | undefined) => {
+      if (taskId) qc.invalidateQueries({ queryKey: noteKeys.aiJob(taskId) });
+    };
 
     const unsubChatMessage = ws.on("chat:message", (p) => {
       const payload = p as { chat_session_id: string };
@@ -1056,6 +1060,7 @@ export function useRealtimeSync(
       // work: they ignore the extra fields and rely on the invalidate
       // below, which keeps the old behavior alive.
       applyChatDoneToCache(qc, payload);
+      invalidateNoteAIJob(payload.task_id);
       invalidatePendingAggregate();
       // Assistant message just landed → has_unread may have flipped to true.
       invalidateChatConversationLists();
@@ -1074,6 +1079,7 @@ export function useRealtimeSync(
     const unsubTaskQueued = ws.on("task:queued", (p) => {
       const payload = p as TaskQueuedPayload;
       applyTaskStatusToSnapshot(payload.task_id, "queued");
+      invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return;
       qc.setQueryData<ChatPendingTask>(
         chatKeys.pendingTask(payload.chat_session_id),
@@ -1095,6 +1101,7 @@ export function useRealtimeSync(
     const unsubTaskDispatch = ws.on("task:dispatch", (p) => {
       const payload = p as TaskDispatchPayload;
       applyTaskStatusToSnapshot(payload.task_id, "dispatched");
+      invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return;
       qc.setQueryData<ChatPendingTask>(
         chatKeys.pendingTask(payload.chat_session_id),
@@ -1109,6 +1116,7 @@ export function useRealtimeSync(
     const unsubTaskRunning = ws.on("task:running", (p) => {
       const payload = p as TaskRunningPayload;
       applyTaskStatusToSnapshot(payload.task_id, "running");
+      invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return;
       qc.setQueryData<ChatPendingTask>(
         chatKeys.pendingTask(payload.chat_session_id),
@@ -1130,6 +1138,7 @@ export function useRealtimeSync(
     const unsubTaskCancelled = ws.on("task:cancelled", (p) => {
       const payload = p as TaskCancelledPayload;
       applyTaskStatusToSnapshot(payload.task_id, "cancelled");
+      invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return;
       chatWsLogger.info("task:cancelled (global, chat)", {
         task_id: payload.task_id,
@@ -1151,6 +1160,7 @@ export function useRealtimeSync(
     const unsubTaskCompleted = ws.on("task:completed", (p) => {
       const payload = p as TaskCompletedPayload;
       applyTaskStatusToSnapshot(payload.task_id, "completed");
+      invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return; // issue tasks handled elsewhere
       chatWsLogger.info("task:completed (global, chat)", {
         task_id: payload.task_id,
@@ -1168,6 +1178,7 @@ export function useRealtimeSync(
     const unsubTaskFailed = ws.on("task:failed", (p) => {
       const payload = p as TaskFailedPayload;
       applyTaskStatusToSnapshot(payload.task_id, "failed");
+      invalidateNoteAIJob(payload.task_id);
       if (!payload.chat_session_id) return;
       chatWsLogger.warn("task:failed (global, chat)", {
         task_id: payload.task_id,

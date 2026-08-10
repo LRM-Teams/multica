@@ -34,6 +34,7 @@ import { posToDOMRect } from "@tiptap/core";
 import { Slice } from "@tiptap/pm/model";
 import { NodeSelection } from "@tiptap/pm/state";
 import { toast } from "sonner";
+import type { NoteAIEditResult } from "@multica/core/types";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
@@ -88,15 +89,15 @@ export type TextOptimizationRequest = {
   contextAfter: string;
 };
 
-type TextOptimizationAction = (request: TextOptimizationRequest) => Promise<string>;
+type TextOptimizationAction = (request: TextOptimizationRequest, options?: { signal?: AbortSignal }) => Promise<NoteAIEditResult>;
 
 type TextOptimizationDraft = TextOptimizationRequest & { from: number; to: number };
 
 type TextOptimizationState =
   | { status: "idle" }
   | ({ status: "prompt" } & TextOptimizationDraft)
-  | ({ status: "loading" } & TextOptimizationDraft)
-  | { status: "review"; from: number; to: number; text: string };
+  | ({ status: "loading"; abort: AbortController } & TextOptimizationDraft)
+  | { status: "review"; from: number; to: number; result: NoteAIEditResult };
 
 const OPTIMIZATION_CONTEXT_CHARS = 1600;
 
@@ -214,6 +215,14 @@ function replaceEditorRangeWithMarkdown(editor: Editor, from: number, to: number
     tr.replaceRange(from, to, slice);
     return true;
   }).run();
+}
+
+function replaceDocumentWithMarkdown(editor: Editor, markdown: string) {
+  if (editor.markdown) {
+    editor.commands.setContent(markdown, { contentType: "markdown" });
+    return;
+  }
+  editor.commands.setContent(markdown);
 }
 
 function normalizeUrl(input: string): string {
@@ -491,13 +500,15 @@ function TextOptimizationPrompt({
       contextBefore: state.contextBefore,
       contextAfter: state.contextAfter,
     };
-    onStateChange({ status: "loading", from: state.from, to: state.to, ...request });
+    const abort = new AbortController();
+    onStateChange({ status: "loading", from: state.from, to: state.to, ...request, abort });
     try {
-      const optimized = (await onOptimizeSelection(request)).trim();
-      if (!optimized) throw new Error(t(($) => $.bubble_menu.optimize.empty_result));
-      onStateChange({ status: "review", from: state.from, to: state.to, text: optimized });
+      const result = await onOptimizeSelection(request, { signal: abort.signal });
+      if (!result.markdown.trim()) throw new Error(t(($) => $.bubble_menu.optimize.empty_result));
+      onStateChange({ status: "review", from: state.from, to: state.to, result });
     } catch (err) {
       onStateChange({ status: "idle" });
+      if (err instanceof Error && err.name === "AbortError") return;
       showErrorToast(
         err instanceof Error && err.message
           ? err.message
@@ -542,35 +553,66 @@ function TextOptimizationPrompt({
 function TextOptimizationReview({
   editor,
   state,
+  onApplyTitle,
   onClose,
 }: {
   editor: Editor;
   state: Extract<TextOptimizationState, { status: "review" }>;
+  onApplyTitle?: (title: string) => void;
   onClose: () => void;
 }) {
   const { t } = useT("editor");
-  const replace = () => {
-    replaceEditorRangeWithMarkdown(editor, state.from, state.to, state.text);
+  const { result } = state;
+  const applyTitle = () => {
+    if (result.title) onApplyTitle?.(result.title);
+  };
+  const replaceSelection = () => {
+    replaceEditorRangeWithMarkdown(editor, state.from, state.to, result.markdown);
+    applyTitle();
     onClose();
   };
-  const append = () => {
-    replaceEditorRangeWithMarkdown(editor, state.to, state.to, `\n\n${state.text}`);
+  const insertAfter = () => {
+    replaceEditorRangeWithMarkdown(editor, state.to, state.to, `\n\n${result.markdown}`);
+    applyTitle();
     onClose();
+  };
+  const replacePage = () => {
+    replaceDocumentWithMarkdown(editor, result.markdown);
+    applyTitle();
+    onClose();
+  };
+  const copyPatch = () => {
+    if (typeof navigator === "undefined") return;
+    void navigator.clipboard?.writeText(result.markdown);
   };
 
   return (
     <div className="w-[min(520px,calc(100vw-32px))] rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg" onMouseDown={(e) => e.preventDefault()}>
-      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-        <Sparkles className="size-3.5" />
-        {t(($) => $.bubble_menu.optimize.result_title)}
+      <div className="mb-2 flex items-start gap-2 text-xs text-muted-foreground">
+        <Sparkles className="mt-0.5 size-3.5" />
+        <div className="min-w-0">
+          <div className="font-medium">{t(($) => $.bubble_menu.optimize[`action_${result.action}`])}</div>
+          {result.rationale && <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">{result.rationale}</div>}
+        </div>
       </div>
+      {result.title && (
+        <div className="mb-2 rounded-md bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground">
+          {t(($) => $.bubble_menu.optimize.title_suggestion)} <span className="font-medium text-foreground">{result.title}</span>
+        </div>
+      )}
       <div className="max-h-52 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/60 p-3 text-sm leading-6">
-        {state.text}
+        {result.markdown}
       </div>
       <div className="mt-3 flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={onClose} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.discard)}</Button>
-        <Button size="sm" variant="outline" onClick={append} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.append)}</Button>
-        <Button size="sm" onClick={replace} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.replace)}</Button>
+        {result.action === "patch" && <Button size="sm" variant="outline" onClick={copyPatch} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.copy_patch)}</Button>}
+        {result.action === "insert" ? (
+          <Button size="sm" onClick={insertAfter} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.insert_after)}</Button>
+        ) : result.action === "replace_page" || result.action === "patch" ? (
+          <Button size="sm" onClick={replacePage} onMouseDown={(e) => e.preventDefault()}>{result.action === "patch" ? t(($) => $.bubble_menu.optimize.apply_patch) : t(($) => $.bubble_menu.optimize.replace_page)}</Button>
+        ) : (
+          <Button size="sm" onClick={replaceSelection} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.replace)}</Button>
+        )}
       </div>
     </div>
   );
@@ -678,15 +720,26 @@ function EditorBubbleMenu({
   editor,
   currentIssueId,
   onOptimizeSelection,
+  onApplyTitle,
 }: {
   editor: Editor;
   currentIssueId?: string;
   onOptimizeSelection?: TextOptimizationAction;
+  onApplyTitle?: (title: string) => void;
 }) {
   const { t } = useT("editor");
   const [visible, setVisible] = useState(false);
   const [mode, setMode] = useState<"toolbar" | "link-edit">("toolbar");
   const [optimizationState, setOptimizationState] = useState<TextOptimizationState>({ status: "idle" });
+  const optimizationStateRef = useRef(optimizationState);
+  optimizationStateRef.current = optimizationState;
+  const resetOptimizationRef = useRef<() => void>(() => {});
+  resetOptimizationRef.current = () => {
+    const current = optimizationStateRef.current;
+    if (current.status === "loading") current.abort.abort();
+    setOptimizationState({ status: "idle" });
+  };
+  const resetOptimization = useCallback(() => resetOptimizationRef.current(), []);
   const floatingRef = useRef<HTMLDivElement>(null);
 
   // Precise subscription to formatting state — only re-renders when these
@@ -781,6 +834,7 @@ function EditorBubbleMenu({
       const target = e.target as HTMLElement;
       if (editor.view.dom.contains(target)) return;
       if (floatingRef.current?.contains(target)) return;
+      resetOptimizationRef.current();
       setVisible(false);
     };
     document.addEventListener("mousedown", handle);
@@ -791,7 +845,7 @@ function EditorBubbleMenu({
   useEffect(() => {
     const handler = () => {
       setMode("toolbar");
-      setOptimizationState({ status: "idle" });
+      resetOptimizationRef.current();
     };
     editor.on("selectionUpdate", handler);
     return () => { editor.off("selectionUpdate", handler); };
@@ -815,9 +869,9 @@ function EditorBubbleMenu({
       onMouseDown={(e) => e.preventDefault()}
     >
       {optimizationState.status === "prompt" && onOptimizeSelection ? (
-        <TextOptimizationPrompt state={optimizationState} onOptimizeSelection={onOptimizeSelection} onStateChange={setOptimizationState} onClose={() => { setOptimizationState({ status: "idle" }); editor.commands.focus(); }} />
+        <TextOptimizationPrompt state={optimizationState} onOptimizeSelection={onOptimizeSelection} onStateChange={setOptimizationState} onClose={() => { resetOptimization(); editor.commands.focus(); }} />
       ) : optimizationState.status === "review" ? (
-        <TextOptimizationReview editor={editor} state={optimizationState} onClose={() => { setOptimizationState({ status: "idle" }); editor.commands.focus(); }} />
+        <TextOptimizationReview editor={editor} state={optimizationState} onApplyTitle={onApplyTitle} onClose={() => { resetOptimization(); editor.commands.focus(); }} />
       ) : mode === "link-edit" ? (
         <LinkEditBar editor={editor} onClose={() => { setMode("toolbar"); editor.commands.focus(); }} />
       ) : (

@@ -5,6 +5,7 @@ import { computePosition, offset, flip, shift, autoUpdate } from "@floating-ui/d
 import type { Editor } from "@tiptap/core";
 import { Slice } from "@tiptap/pm/model";
 import { Button } from "@multica/ui/components/ui/button";
+import type { NoteAIEditResult } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUp, Loader2, Sparkles } from "lucide-react";
@@ -20,7 +21,7 @@ export type PageEditAIRequest = {
   contextAfter: string;
 };
 
-export type PageEditAIAction = (request: PageEditAIRequest) => Promise<string>;
+export type PageEditAIAction = (request: PageEditAIRequest, options?: { signal?: AbortSignal }) => Promise<NoteAIEditResult>;
 
 export type EmptyLineAiState = {
   status: "prompt" | "loading" | "review";
@@ -29,7 +30,7 @@ export type EmptyLineAiState = {
   caretPos: number;
   anchorRect: DOMRect;
   instruction: string;
-  result?: string;
+  result?: NoteAIEditResult;
 };
 
 function replaceRangeWithMarkdown(editor: Editor, from: number, to: number, markdown: string) {
@@ -88,18 +89,21 @@ function EmptyLineAiMenu({
   state,
   onChange,
   onEditPageWithAI,
+  onApplyTitle,
   onClose,
 }: {
   editor: Editor;
   state: EmptyLineAiState;
   onChange: (state: EmptyLineAiState) => void;
   onEditPageWithAI: PageEditAIAction;
+  onApplyTitle?: (title: string) => void;
   onClose: () => void;
 }) {
   const { t } = useT("editor");
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const closedRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const loading = state.status === "loading";
   const canSubmit = !loading;
 
@@ -113,11 +117,13 @@ function EmptyLineAiMenu({
 
   const close = useCallback(() => {
     closedRef.current = true;
+    abortRef.current?.abort();
     onClose();
   }, [onClose]);
 
   const closeAndInsertSpace = useCallback(() => {
     closedRef.current = true;
+    abortRef.current?.abort();
     onClose();
     insertSpaceAtCaret(editor, state.caretPos);
   }, [editor, onClose, state.caretPos]);
@@ -178,35 +184,66 @@ function EmptyLineAiMenu({
   const submit = useCallback(async () => {
     if (state.status === "loading" || closedRef.current) return;
     const request = buildRequest(editor, state);
+    const abort = new AbortController();
+    abortRef.current = abort;
     onChange({ ...state, status: "loading", instruction: request.instruction });
     try {
-      const result = (await onEditPageWithAI(request)).trim();
+      const result = await onEditPageWithAI(request, { signal: abort.signal });
       // Ignore late results if the user already dismissed the prompt.
       if (!closedRef.current) {
-        if (!result) throw new Error(t(($) => $.page_ai.empty_result));
+        if (!result.markdown.trim()) throw new Error(t(($) => $.page_ai.empty_result));
         onChange({ ...state, status: "review", instruction: request.instruction, result });
       }
     } catch (error) {
       if (!closedRef.current) {
         onChange({ ...state, status: "prompt" });
         showErrorToast(
-          error instanceof Error && error.message
+          error instanceof Error && error.name !== "AbortError" && error.message
             ? error.message
             : t(($) => $.page_ai.failed),
         );
       }
+    } finally {
+      if (abortRef.current === abort) abortRef.current = null;
     }
   }, [editor, onChange, onEditPageWithAI, state, t]);
 
+  const applyTitle = (result: NoteAIEditResult) => {
+    if (result.title) onApplyTitle?.(result.title);
+  };
+
   const insertHere = () => {
-    replaceRangeWithMarkdown(editor, state.from, state.to, state.result ?? "");
+    const result = state.result;
+    if (!result) return;
+    replaceRangeWithMarkdown(editor, state.from, state.to, result.markdown);
+    applyTitle(result);
     close();
   };
 
   const replacePage = () => {
-    replaceDocumentWithMarkdown(editor, state.result ?? "");
+    const result = state.result;
+    if (!result) return;
+    replaceDocumentWithMarkdown(editor, result.markdown);
+    applyTitle(result);
     close();
   };
+
+  const copyPatch = () => {
+    const markdown = state.result?.markdown;
+    if (!markdown || typeof navigator === "undefined") return;
+    void navigator.clipboard?.writeText(markdown);
+  };
+
+  const reviewResult = state.status === "review" ? state.result : null;
+  const reviewTitle = reviewResult?.action === "insert"
+    ? t(($) => $.page_ai.action_insert)
+    : reviewResult?.action === "replace_selection"
+      ? t(($) => $.page_ai.action_replace_selection)
+      : reviewResult?.action === "replace_page"
+        ? t(($) => $.page_ai.action_replace_page)
+        : reviewResult?.action === "patch"
+          ? t(($) => $.page_ai.action_patch)
+          : "";
 
   return (
     <div
@@ -216,21 +253,33 @@ function EmptyLineAiMenu({
       className="w-[min(560px,calc(100vw-32px))]"
       onMouseDown={(event) => event.stopPropagation()}
     >
-      {state.status === "review" ? (
+      {reviewResult ? (
         <div className="overflow-hidden rounded-2xl border bg-popover text-popover-foreground shadow-lg">
           <div className="flex items-center gap-2 border-b px-3.5 py-2.5">
             <span className="flex size-6 items-center justify-center rounded-full bg-muted text-foreground/80">
               <Sparkles className="size-3.5" />
             </span>
-            <span className="text-xs font-medium text-muted-foreground">{t(($) => $.page_ai.result_title)}</span>
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-muted-foreground">{reviewTitle}</div>
+              {reviewResult.rationale && <div className="mt-0.5 truncate text-[11px] text-muted-foreground/80">{reviewResult.rationale}</div>}
+            </div>
           </div>
+          {reviewResult.title && (
+            <div className="border-b px-3.5 py-2 text-xs text-muted-foreground">
+              {t(($) => $.page_ai.title_suggestion)} <span className="font-medium text-foreground">{reviewResult.title}</span>
+            </div>
+          )}
           <div className="max-h-64 overflow-y-auto whitespace-pre-wrap px-3.5 py-3 text-sm leading-6">
-            {state.result}
+            {reviewResult.markdown}
           </div>
           <div className="flex flex-wrap justify-end gap-1.5 border-t px-2.5 py-2">
             <Button size="sm" variant="ghost" onClick={close}>{t(($) => $.page_ai.discard)}</Button>
-            <Button size="sm" variant="outline" onClick={replacePage}>{t(($) => $.page_ai.replace_page)}</Button>
-            <Button size="sm" onClick={insertHere}>{t(($) => $.page_ai.insert)}</Button>
+            {reviewResult.action === "patch" && <Button size="sm" variant="outline" onClick={copyPatch}>{t(($) => $.page_ai.copy_patch)}</Button>}
+            {(reviewResult.action === "replace_page" || reviewResult.action === "patch") ? (
+              <Button size="sm" onClick={replacePage}>{reviewResult.action === "patch" ? t(($) => $.page_ai.apply_patch) : t(($) => $.page_ai.replace_page)}</Button>
+            ) : (
+              <Button size="sm" onClick={insertHere}>{reviewResult.action === "insert" ? t(($) => $.page_ai.insert) : t(($) => $.page_ai.replace_selection)}</Button>
+            )}
           </div>
         </div>
       ) : (

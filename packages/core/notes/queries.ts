@@ -6,6 +6,7 @@ export const noteKeys = {
   list: (wsId: string) => [...noteKeys.all(wsId), "list"] as const,
   trash: (wsId: string) => [...noteKeys.all(wsId), "trash"] as const,
   detail: (wsId: string, pageId: string) => [...noteKeys.all(wsId), "detail", pageId] as const,
+  aiJob: (jobId: string) => ["notes", "ai-job", jobId] as const,
 };
 
 export function noteListOptions(wsId: string) {
@@ -29,6 +30,20 @@ export function noteDetailOptions(wsId: string, pageId: string) {
     queryKey: noteKeys.detail(wsId, pageId),
     queryFn: () => api.getNotePage(pageId),
     enabled: !!wsId && !!pageId,
+    retry: (count, err) => {
+      const status = typeof err === "object" && err && "status" in err ? Number((err as { status: number }).status) : 0;
+      if (status === 403 || status === 404) return false;
+      return count < 2;
+    },
+  });
+}
+
+export function noteAIJobOptions(jobId: string) {
+  return queryOptions({
+    queryKey: noteKeys.aiJob(jobId),
+    queryFn: () => api.getNoteAIJob(jobId),
+    enabled: !!jobId,
+    staleTime: Infinity,
     retry: (count, err) => {
       const status = typeof err === "object" && err && "status" in err ? Number((err as { status: number }).status) : 0;
       if (status === 403 || status === 404) return false;

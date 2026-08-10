@@ -227,6 +227,8 @@ import type {
   MoveNotePageRequest,
   UpdateNotePageRequest,
   UpdateNotePageSharesRequest,
+  CreateNoteAIJobRequest,
+  NoteAIJob,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -420,6 +422,8 @@ import {
   NotePageListResponseSchema,
   EMPTY_NOTE_PAGE,
   EMPTY_NOTE_PAGE_LIST,
+  NoteAIJobSchema,
+  EMPTY_NOTE_AI_JOB,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1034,6 +1038,31 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}/restore`, { method: "POST" });
     return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
       endpoint: "POST /api/notes/pages/{id}/restore",
+    });
+  }
+
+  async createNoteAIJob(pageId: string, data: CreateNoteAIJobRequest, init?: { signal?: AbortSignal }): Promise<NoteAIJob> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/ai-jobs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      signal: init?.signal,
+    });
+    return parseWithFallback(raw, NoteAIJobSchema, EMPTY_NOTE_AI_JOB, {
+      endpoint: "POST /api/notes/pages/{id}/ai-jobs",
+    });
+  }
+
+  async getNoteAIJob(jobId: string, init?: { signal?: AbortSignal }): Promise<NoteAIJob> {
+    const raw = await this.fetch<unknown>(`/api/notes/ai-jobs/${encodeURIComponent(jobId)}`, init?.signal ? { signal: init.signal } : undefined);
+    return parseWithFallback(raw, NoteAIJobSchema, EMPTY_NOTE_AI_JOB, {
+      endpoint: "GET /api/notes/ai-jobs/{id}",
+    });
+  }
+
+  async cancelNoteAIJob(jobId: string): Promise<NoteAIJob> {
+    const raw = await this.fetch<unknown>(`/api/notes/ai-jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+    return parseWithFallback(raw, NoteAIJobSchema, EMPTY_NOTE_AI_JOB, {
+      endpoint: "POST /api/notes/ai-jobs/{id}/cancel",
     });
   }
 

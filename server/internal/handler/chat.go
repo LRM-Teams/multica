@@ -122,6 +122,11 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve chat sessions")
 		return
 	}
+	noteAIJobBound, err := h.noteAIJobChatSessionIDs(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve chat sessions")
+		return
+	}
 
 	// Two call sites → two row types with identical shape. Collect into a
 	// common response slice via small per-branch loops.
@@ -140,7 +145,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
-			if channelBound[uuidToString(s.ID)] {
+			if channelBound[uuidToString(s.ID)] || noteAIJobBound[uuidToString(s.ID)] {
 				continue
 			}
 			resp = append(resp, ChatSessionResponse{
@@ -169,7 +174,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
-			if channelBound[uuidToString(s.ID)] {
+			if channelBound[uuidToString(s.ID)] || noteAIJobBound[uuidToString(s.ID)] {
 				continue
 			}
 			resp = append(resp, ChatSessionResponse{
@@ -249,6 +254,23 @@ func (h *Handler) channelBoundChatSessionIDs(ctx context.Context, workspaceID st
 		out[uuidToString(id)] = true
 	}
 	return out, orphanRows.Err()
+}
+
+func (h *Handler) noteAIJobChatSessionIDs(ctx context.Context, workspaceID string) (map[string]bool, error) {
+	rows, err := h.DB.Query(ctx, `SELECT chat_session_id FROM note_ai_job WHERE workspace_id = $1`, parseUUID(workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[uuidToString(id)] = true
+	}
+	return out, rows.Err()
 }
 
 func (h *Handler) loadChatSessionForUser(w http.ResponseWriter, r *http.Request, userID, workspaceID, sessionID string) (db.ChatSession, bool) {

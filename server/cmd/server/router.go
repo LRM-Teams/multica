@@ -879,20 +879,25 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/member-profiles/{memberType}/{memberId}", h.GetMemberProfile)
 
 			// Notes
-			r.Route("/api/notes/pages", func(r chi.Router) {
-				r.Get("/", h.ListNotePages)
-				r.Post("/", h.CreateNotePage)
-				r.Get("/trash", h.ListDeletedNotePages)
-				r.Route("/{id}", func(r chi.Router) {
-					r.Get("/", h.GetNotePage)
-					r.Patch("/", h.UpdateNotePage)
-					r.Delete("/", h.DeleteNotePage)
-					r.Patch("/move", h.MoveNotePage)
-					r.Post("/duplicate", h.DuplicateNotePage)
-					r.Delete("/permanent", h.PermanentlyDeleteNotePage)
-					r.Post("/restore", h.RestoreNotePage)
-					r.Put("/shares", h.UpdateNotePageShares)
+			r.Route("/api/notes", func(r chi.Router) {
+				r.Route("/pages", func(r chi.Router) {
+					r.Get("/", h.ListNotePages)
+					r.Post("/", h.CreateNotePage)
+					r.Get("/trash", h.ListDeletedNotePages)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Get("/", h.GetNotePage)
+						r.Patch("/", h.UpdateNotePage)
+						r.Delete("/", h.DeleteNotePage)
+						r.Patch("/move", h.MoveNotePage)
+						r.Post("/duplicate", h.DuplicateNotePage)
+						r.Delete("/permanent", h.PermanentlyDeleteNotePage)
+						r.Post("/restore", h.RestoreNotePage)
+						r.Put("/shares", h.UpdateNotePageShares)
+						r.Post("/ai-jobs", h.CreateNoteAIJob)
+					})
 				})
+				r.Get("/ai-jobs/{jobId}", h.GetNoteAIJob)
+				r.Post("/ai-jobs/{jobId}/cancel", h.CancelNoteAIJob)
 			})
 
 			// Issues

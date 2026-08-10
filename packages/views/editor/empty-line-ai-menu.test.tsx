@@ -66,7 +66,15 @@ vi.mock("../i18n", () => ({
           instruction_placeholder: "Edit with AI",
           send: "Send",
           result_title: "AI draft",
+          action_insert: "Insert action",
+          action_replace_selection: "Replace block action",
+          action_replace_page: "Replace page action",
+          action_patch: "Patch action",
+          title_suggestion: "Suggested title:",
+          copy_patch: "Copy patch",
+          apply_patch: "Apply patch",
           insert: "Insert",
+          replace_selection: "Replace block",
           replace_page: "Replace",
           discard: "Discard",
           failed: "Failed",
@@ -163,6 +171,37 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
     );
 
     fireEvent.pointerDown(screen.getByTestId("outside"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the structured replace-page action and suggested title", () => {
+    const editor = makeEditor();
+    const onClose = vi.fn();
+    const onApplyTitle = vi.fn();
+    render(
+      <EmptyLineAiMenu
+        editor={editor}
+        state={makeState({
+          status: "review",
+          result: {
+            action: "replace_page",
+            markdown: "# Revised page",
+            title: "Revised title",
+            rationale: "Whole-page rewrite requested.",
+          },
+        })}
+        onChange={vi.fn()}
+        onEditPageWithAI={vi.fn()}
+        onApplyTitle={onApplyTitle}
+        onClose={onClose}
+      />,
+    );
+
+    expect(screen.getByText("Replace page action")).toBeInTheDocument();
+    expect(screen.getByText("Whole-page rewrite requested.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    expect(editor.commands.setContent).toHaveBeenCalledWith("# Revised page");
+    expect(onApplyTitle).toHaveBeenCalledWith("Revised title");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

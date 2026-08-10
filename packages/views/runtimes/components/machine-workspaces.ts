@@ -40,8 +40,8 @@ export function workspaceDisplayPath(relPath: string): string {
 export interface BindingRemovalResult {
   ok: boolean;
   workspaceID?: string;
-  /** true when the server refused to delete local data (contract drift). */
-  deleteBlocked?: boolean;
+  /** Revocation intentionally preserves local Agent data for later re-bind. */
+  keptLocalData?: boolean;
   error?: string;
 }
 
@@ -59,10 +59,8 @@ export function parseBindingRemovalResult(payload: unknown): BindingRemovalResul
   if (typeof p.workspace_id === "string" && p.workspace_id) {
     result.workspaceID = p.workspace_id;
   }
-  // Contract drift: if the newest server keeps local data (rather than
-  // deleting on revocation), surface that instead of assuming a delete happened.
-  if (p.kept_local_data === true || p.deletes_local_data === false) {
-    result.deleteBlocked = true;
+  if (p.kept_local_data === true) {
+    result.keptLocalData = true;
   }
   if (typeof p.error === "string" && p.error) {
     result.error = p.error;

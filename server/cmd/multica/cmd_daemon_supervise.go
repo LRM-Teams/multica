@@ -74,7 +74,8 @@ func init() {
 	f.Bool("no-auto-update", false, "Deprecated no-op; upgrades are explicit Machine Upgrade operations")
 	f.Duration("auto-update-interval", 0, "Deprecated no-op; periodic release polling is disabled")
 
-	daemonCmd.AddCommand(daemonSuperviseCmd)
+	// Retained only for old installed OS service definitions during the
+	// compatibility window. It is no longer reachable from the supported CLI.
 }
 
 // buildSuperviseConfig builds the supervisor.Config for running the daemon as

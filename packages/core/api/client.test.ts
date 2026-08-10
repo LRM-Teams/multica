@@ -78,6 +78,51 @@ describe("ApiClient", () => {
     });
   });
 
+  it("removes exactly one encoded Computer Workspace connection", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: true,
+        workspace_id: "workspace/one",
+        kept_local_data: true,
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(
+      client.removeComputerWorkspaceBinding("computer/one", "workspace/one"),
+    ).resolves.toEqual({
+      ok: true,
+      workspace_id: "workspace/one",
+      kept_local_data: true,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/daemons/computer%2Fone/bindings/workspace%2Fone",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("fails safe when Workspace removal response drifts", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, deletes_local_data: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(
+      client.removeComputerWorkspaceBinding("computer-1", "workspace-1"),
+    ).resolves.toEqual({
+      ok: false,
+      workspace_id: "",
+      kept_local_data: true,
+    });
+  });
+
   it("keeps a runtime row while degrading an unknown auto-update enum to null", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(JSON.stringify([{
@@ -128,6 +173,32 @@ describe("ApiClient", () => {
     await expect(client.listRuntimes()).resolves.toMatchObject([
       { id: "runtime-1", auto_update: null },
     ]);
+  });
+
+  it("lists explicit Computers independently of Agent runtimes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            daemon_id: "computer-1",
+            owner_id: "user-1",
+            connected: true,
+            last_seen_at: "2026-08-10T00:00:00Z",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.listComputers("workspace-1")).resolves.toEqual([
+      expect.objectContaining({ daemon_id: "computer-1", connected: true }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/computers?workspace_id=workspace-1",
+      expect.anything(),
+    );
   });
 
   it("transcribes PCM through the authenticated voice endpoint", async () => {

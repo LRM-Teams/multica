@@ -12,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -32,6 +34,52 @@ type machineUpgradeProgressRequest struct {
 	Generation   string              `json:"generation_id,omitempty"`
 	ErrorCode    string              `json:"error_code,omitempty"`
 	ErrorMessage string              `json:"error_message,omitempty"`
+}
+
+type attestComputerMachineUpgradeRequest struct {
+	DaemonID     string   `json:"daemon_id"`
+	GenerationID string   `json:"generation_id"`
+	CLIVersion   string   `json:"cli_version"`
+	WorkspaceIDs []string `json:"workspace_ids"`
+}
+
+// AttestComputerMachineUpgrade is the successor's complete machine proof.
+// Runtime registrations still provide compatibility evidence, but only this
+// exact Workspace set can complete a generation-aware Computer upgrade.
+func (h *Handler) AttestComputerMachineUpgrade(w http.ResponseWriter, r *http.Request) {
+	if h.MachineUpgradeStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
+		return
+	}
+	var req attestComputerMachineUpgradeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.DaemonID = strings.TrimSpace(req.DaemonID)
+	if req.DaemonID == "" || strings.TrimSpace(req.GenerationID) == "" || strings.TrimSpace(req.CLIVersion) == "" {
+		writeError(w, http.StatusBadRequest, "daemon_id, generation_id, and cli_version are required")
+		return
+	}
+	if tokenDaemon := middleware.DaemonIDFromContext(r.Context()); tokenDaemon != "" && !strings.EqualFold(tokenDaemon, req.DaemonID) {
+		writeError(w, http.StatusForbidden, "Computer credential scope mismatch")
+		return
+	}
+	if !h.requireCurrentComputerGeneration(w, r, req.DaemonID) {
+		return
+	}
+	for _, workspaceID := range req.WorkspaceIDs {
+		if _, err := util.ParseUUID(workspaceID); err != nil {
+			writeError(w, http.StatusBadRequest, "workspace_ids must contain immutable UUIDs")
+			return
+		}
+	}
+	op, err := h.MachineUpgradeStore.AttestComputer(r.Context(), req.DaemonID, chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion, req.WorkspaceIDs)
+	if err != nil {
+		h.writeMachineUpgradeDaemonError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
 }
 
 // AcceptMachineUpgrade is daemon-authenticated. The daemon may accept an

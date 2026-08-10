@@ -195,6 +195,16 @@
       "description": "从工作区永久删除此电脑及其全部 Runtime。",
       "description_cloud": "从工作区永久删除此云端电脑、其容器及其全部 Runtime。"
     },
+    "remove_binding": {
+      "button": "从当前 Workspace 移除…",
+      "title": "从当前 Workspace 移除这台电脑？",
+      "description": "只把“{{name}}”从当前 Workspace 移除；它在其他 Workspace 会继续运行，本地 Agent 数据也会保留，之后仍可重新连接。",
+      "cancel": "取消",
+      "confirm": "移除电脑",
+      "removing": "正在移除…",
+      "success": "电脑已从当前 Workspace 移除，本地 Agent 数据已保留。",
+      "invalid_response": "服务端没有确认这台电脑已被安全移除。"
+    },
     "agents_select": "选择",
     "agents_create": "创建",
     "agents_done": "完成",

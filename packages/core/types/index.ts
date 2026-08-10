@@ -47,6 +47,7 @@ export type {
   AgentTaskStats,
   TaskFailureReason,
   AgentRuntime,
+  ComputerConnection,
   RuntimeDevice,
   RuntimeAgentWorkspace,
   RuntimeAgentWorkspacesResponse,

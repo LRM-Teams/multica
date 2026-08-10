@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // bindingsFile is the machine-wide file that persists the Computer's Workspace
@@ -18,17 +22,22 @@ const bindingsFile = "bindings.json"
 // is authorized to execute work for the immutable workspace_id using the
 // revocable execution credential. The slug is a display/selector only.
 type WorkspaceBinding struct {
-	WorkspaceID   string    `json:"workspace_id"`
-	WorkspaceSlug string    `json:"workspace_slug,omitempty"`
-	ComputerID    string    `json:"computer_id"`
-	Credential    string    `json:"credential,omitempty"`
-	AcceptedAt    time.Time `json:"accepted_at,omitempty"`
-	Active        bool      `json:"active,omitempty"`
+	Environment         string    `json:"environment,omitempty"`
+	Origin              string    `json:"origin,omitempty"`
+	WorkspaceID         string    `json:"workspace_id"`
+	WorkspaceSlug       string    `json:"workspace_slug,omitempty"`
+	ComputerID          string    `json:"computer_id"`
+	UserID              string    `json:"-"`
+	Credential          string    `json:"credential,omitempty"`
+	CredentialExpiresAt time.Time `json:"credential_expires_at,omitempty"`
+	AcceptedAt          time.Time `json:"accepted_at,omitempty"`
+	Active              bool      `json:"active,omitempty"`
 }
 
 // BindingsStore persists the machine-wide set of Workspace Bindings with
-// atomic, permission-restricted writes. It is keyed by the immutable
-// workspace_id, so re-adding or repairing a Binding never duplicates it.
+// atomic, permission-restricted writes. It is keyed by (environment,
+// workspace_id), so production and test databases may use the same UUID
+// without overwriting each other's credentials.
 type BindingsStore struct {
 	root string
 }
@@ -53,17 +62,34 @@ func (s *BindingsStore) All() ([]WorkspaceBinding, error) {
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("parse bindings: %w", err)
 	}
+	for i := range out {
+		out[i] = normalizeWorkspaceBinding(out[i])
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Environment == out[j].Environment {
+			return out[i].WorkspaceID < out[j].WorkspaceID
+		}
+		return out[i].Environment < out[j].Environment
+	})
 	return out, nil
 }
 
-// Get returns the binding for workspaceID, if present and active.
+// Get returns the production binding for workspaceID. New Computer callers
+// should use GetForEnvironment; this method keeps old on-disk/test callers on
+// the only environment that existed before the environment axis was added.
 func (s *BindingsStore) Get(workspaceID string) (WorkspaceBinding, bool, error) {
+	return s.GetForEnvironment(string(cli.ServiceEnvironmentProduction), workspaceID)
+}
+
+// GetForEnvironment returns one active connection by its full local key.
+func (s *BindingsStore) GetForEnvironment(environment, workspaceID string) (WorkspaceBinding, bool, error) {
 	all, err := s.All()
 	if err != nil {
 		return WorkspaceBinding{}, false, err
 	}
+	environment = normalizeBindingEnvironment(environment)
 	for _, b := range all {
-		if b.WorkspaceID == workspaceID && b.Active {
+		if b.Environment == environment && b.WorkspaceID == workspaceID && b.Active {
 			return b, true, nil
 		}
 	}
@@ -75,9 +101,10 @@ func (s *BindingsStore) Get(workspaceID string) (WorkspaceBinding, bool, error) 
 // (#2490). It never derives local state from the slug.
 func (s *BindingsStore) AddOrRepair(b WorkspaceBinding) error {
 	all, _ := s.All()
+	b = normalizeWorkspaceBinding(b)
 	replaced := false
 	for i := range all {
-		if all[i].WorkspaceID == b.WorkspaceID {
+		if all[i].Environment == b.Environment && all[i].WorkspaceID == b.WorkspaceID {
 			all[i] = b
 			replaced = true
 			break
@@ -89,16 +116,22 @@ func (s *BindingsStore) AddOrRepair(b WorkspaceBinding) error {
 	return s.write(all)
 }
 
-// Remove deletes exactly one Binding by workspace_id (see #2493 for the Web
-// removal contract; local removal here applies the same single-Workspace scope).
+// Remove deletes one production connection. Environment-aware callers use
+// RemoveForEnvironment so an identical test Workspace id remains untouched.
 func (s *BindingsStore) Remove(workspaceID string) error {
+	return s.RemoveForEnvironment(string(cli.ServiceEnvironmentProduction), workspaceID)
+}
+
+// RemoveForEnvironment deletes exactly one connection by its full local key.
+func (s *BindingsStore) RemoveForEnvironment(environment, workspaceID string) error {
 	all, err := s.All()
 	if err != nil {
 		return err
 	}
+	environment = normalizeBindingEnvironment(environment)
 	out := all[:0]
 	for _, b := range all {
-		if b.WorkspaceID != workspaceID {
+		if b.Environment != environment || b.WorkspaceID != workspaceID {
 			out = append(out, b)
 		}
 	}
@@ -115,6 +148,24 @@ func (s *BindingsStore) AllActive() ([]WorkspaceBinding, error) {
 	var out []WorkspaceBinding
 	for _, b := range all {
 		if b.Active {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
+// AllActiveForEnvironment returns the connections restored by the single
+// resident for its current service stage. Connections from the other stage
+// stay persisted but are not contacted by this resident generation.
+func (s *BindingsStore) AllActiveForEnvironment(environment string) ([]WorkspaceBinding, error) {
+	all, err := s.All()
+	if err != nil {
+		return nil, err
+	}
+	environment = normalizeBindingEnvironment(environment)
+	var out []WorkspaceBinding
+	for _, b := range all {
+		if b.Active && b.Environment == environment {
 			out = append(out, b)
 		}
 	}
@@ -180,4 +231,20 @@ func (s *BindingsStore) write(bindings []WorkspaceBinding) error {
 		return err
 	}
 	return nil
+}
+
+func normalizeBindingEnvironment(environment string) string {
+	environment = strings.ToLower(strings.TrimSpace(environment))
+	if environment == "" {
+		return string(cli.ServiceEnvironmentProduction)
+	}
+	return environment
+}
+
+func normalizeWorkspaceBinding(binding WorkspaceBinding) WorkspaceBinding {
+	binding.Environment = normalizeBindingEnvironment(binding.Environment)
+	if binding.Origin == "" && binding.Environment == string(cli.ServiceEnvironmentProduction) {
+		binding.Origin = cli.OfficialCloudAPIURL
+	}
+	return binding
 }

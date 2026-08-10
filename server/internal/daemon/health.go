@@ -32,7 +32,10 @@ type HealthResponse struct {
 	DaemonID        string            `json:"daemon_id"`
 	DeviceName      string            `json:"device_name"`
 	ServerURL       string            `json:"server_url"`
+	Environment     string            `json:"environment,omitempty"`
+	ReleaseChannel  string            `json:"release_channel,omitempty"`
 	CLIVersion      string            `json:"cli_version"`
+	Connected       bool              `json:"connected"`
 	ActiveTaskCount int64             `json:"active_task_count"`
 	Agents          []string          `json:"agents"`
 	Workspaces      []healthWorkspace `json:"workspaces"`
@@ -92,7 +95,10 @@ func (d *Daemon) healthHandler(startedAt time.Time) http.HandlerFunc {
 			DaemonID:        d.cfg.DaemonID,
 			DeviceName:      d.cfg.DeviceName,
 			ServerURL:       d.cfg.ServerBaseURL,
+			Environment:     d.cfg.Environment,
+			ReleaseChannel:  d.cfg.ReleaseChannel,
 			CLIVersion:      d.cfg.CLIVersion,
+			Connected:       d.serverConnected.Load(),
 			ActiveTaskCount: d.activeTasks.Load(),
 			Agents:          agents,
 			Workspaces:      wsList,

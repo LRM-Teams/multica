@@ -13,10 +13,12 @@ const defaultCLIConfigPath = ".multica/config.json"
 
 // CLIConfig holds persistent CLI settings.
 type CLIConfig struct {
-	ServerURL   string `json:"server_url,omitempty"`
-	AppURL      string `json:"app_url,omitempty"`
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Token       string `json:"token,omitempty"`
+	Environment    string `json:"environment,omitempty"`
+	ReleaseChannel string `json:"release_channel,omitempty"`
+	ServerURL      string `json:"server_url,omitempty"`
+	AppURL         string `json:"app_url,omitempty"`
+	WorkspaceID    string `json:"workspace_id,omitempty"`
+	Token          string `json:"token,omitempty"`
 
 	// Proxy contains machine-local daemon egress overrides. Environment
 	// variables remain authoritative; these values are translated into the

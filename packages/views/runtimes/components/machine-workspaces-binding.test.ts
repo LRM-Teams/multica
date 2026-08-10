@@ -17,10 +17,10 @@ describe("parseBindingRemovalResult (#2493 fail-safe)", () => {
     }
   });
 
-  it("flags contract drift where the server keeps local data", () => {
-    const r = parseBindingRemovalResult({ ok: false, kept_local_data: true });
-    expect(r.ok).toBe(false);
-    expect(r.deleteBlocked).toBe(true);
+  it("reports the intentional local-data preservation contract", () => {
+    const r = parseBindingRemovalResult({ ok: true, kept_local_data: true });
+    expect(r.ok).toBe(true);
+    expect(r.keptLocalData).toBe(true);
   });
 
   it("never crashes on missing or drifted fields", () => {

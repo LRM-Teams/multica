@@ -41,6 +41,10 @@ func init() {
 	rootCmd.PersistentFlags().String("server-url", "", "Multica server URL (env: MULTICA_SERVER_URL)")
 	rootCmd.PersistentFlags().String("workspace-id", "", "Workspace ID (env: MULTICA_WORKSPACE_ID)")
 	rootCmd.PersistentFlags().String("profile", "", "Configuration profile name (e.g. dev) — isolates config and daemon state")
+	// Kept parseable for one compatibility cycle by non-Computer management
+	// commands, but retired from public help and rejected by setup/computer.
+	_ = rootCmd.PersistentFlags().MarkHidden("server-url")
+	_ = rootCmd.PersistentFlags().MarkHidden("profile")
 	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "Print full error details on failure (env: MULTICA_DEBUG)")
 
 	// Core commands

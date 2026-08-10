@@ -66,10 +66,10 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	if err := configureSelectedWorkspace(cmd); err != nil {
 		fmt.Fprintf(os.Stderr, "\nCould not configure the selected workspace: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Run 'multica workspace list' and re-run 'multica setup /<workspace-slug>'.\n")
-		return nil
+		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "\n→ Run 'multica daemon install-service' to install the managed daemon (auto-start + auto-restart).\n  For development only: 'multica daemon start'.\n")
+	fmt.Fprintln(os.Stderr, "\nWorkspace selected. Setup will start the machine-wide Computer.")
 	return nil
 }
 

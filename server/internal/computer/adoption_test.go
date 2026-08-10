@@ -1,11 +1,16 @@
 package computer
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/uuid"
+)
 
 func TestAdoptionCanonicalUnambiguousAuto(t *testing.T) {
 	v, err := EvaluateAdoption(LegacyEvidence{
-		OriginHost: "api.leagent.me", SignedInUser: "u", WorkspaceID: "ws",
-		ComputerIDCandidates: []string{"c1"},
+		OriginHost: "api.leagent.me", SignedInUser: uuid.NewString(), WorkspaceID: uuid.NewString(),
+		ComputerIDCandidates: []string{uuid.NewString()}, UserVerified: true,
+		WorkspaceVerified: true, ComputerVerified: true,
 	})
 	if err != nil || v != AdoptAuto {
 		t.Fatalf("canonical+unambiguous = %v, %v; want AdoptAuto", v, err)
@@ -15,8 +20,9 @@ func TestAdoptionCanonicalUnambiguousAuto(t *testing.T) {
 func TestAdoptionAcceptsLegacyCloudHostsDuringMigration(t *testing.T) {
 	for _, host := range []string{"leagent.me", "www.leagent.me"} {
 		v, err := EvaluateAdoption(LegacyEvidence{
-			OriginHost: host, SignedInUser: "u", WorkspaceID: "ws",
-			ComputerIDCandidates: []string{"c1"},
+			OriginHost: host, SignedInUser: uuid.NewString(), WorkspaceID: uuid.NewString(),
+			ComputerIDCandidates: []string{uuid.NewString()}, UserVerified: true,
+			WorkspaceVerified: true, ComputerVerified: true,
 		})
 		if err != nil || v != AdoptAuto {
 			t.Fatalf("legacy cloud host %q = %v, %v; want AdoptAuto", host, v, err)
@@ -26,7 +32,11 @@ func TestAdoptionAcceptsLegacyCloudHostsDuringMigration(t *testing.T) {
 
 func TestAdoptionRejectsNonCanonicalAndLocalhost(t *testing.T) {
 	for _, host := range []string{"", "localhost", "http://127.0.0.1:8080", "http://192.168.1.5", "custom.example.com"} {
-		v, err := EvaluateAdoption(LegacyEvidence{OriginHost: host, SignedInUser: "u", WorkspaceID: "ws", ComputerIDCandidates: []string{"c1"}})
+		v, err := EvaluateAdoption(LegacyEvidence{
+			OriginHost: host, SignedInUser: uuid.NewString(), WorkspaceID: uuid.NewString(),
+			ComputerIDCandidates: []string{uuid.NewString()}, UserVerified: true,
+			WorkspaceVerified: true, ComputerVerified: true,
+		})
 		if v != AdoptRejected {
 			t.Fatalf("origin %q = %v (err=%v), want AdoptRejected", host, v, err)
 		}
@@ -36,9 +46,9 @@ func TestAdoptionRejectsNonCanonicalAndLocalhost(t *testing.T) {
 func TestAdoptionAmbiguousNeedsExplicitChoice(t *testing.T) {
 	// No user/workspace, or conflicting candidate ids → never silent.
 	cases := []LegacyEvidence{
-		{OriginHost: "leagent.me", ComputerIDCandidates: []string{"c1"}},                                             // no user/ws
-		{OriginHost: "leagent.me", SignedInUser: "u", WorkspaceID: "ws"},                                             // no id
-		{OriginHost: "leagent.me", SignedInUser: "u", WorkspaceID: "ws", ComputerIDCandidates: []string{"c1", "c2"}}, // conflicting
+		{OriginHost: "leagent.me", ComputerIDCandidates: []string{uuid.NewString()}},
+		{OriginHost: "leagent.me", SignedInUser: uuid.NewString(), WorkspaceID: uuid.NewString(), UserVerified: true, WorkspaceVerified: true, ComputerVerified: true},
+		{OriginHost: "leagent.me", SignedInUser: uuid.NewString(), WorkspaceID: uuid.NewString(), ComputerIDCandidates: []string{uuid.NewString(), uuid.NewString()}, UserVerified: true, WorkspaceVerified: true, ComputerVerified: true},
 	}
 	for _, e := range cases {
 		v, err := EvaluateAdoption(e)
@@ -51,7 +61,8 @@ func TestAdoptionAmbiguousNeedsExplicitChoice(t *testing.T) {
 func TestAdoptionHostnameDisplayNeverIdentityProof(t *testing.T) {
 	// Rich hostname/display with no computer id must NOT auto-adopt.
 	v, _ := EvaluateAdoption(LegacyEvidence{
-		OriginHost: "leagent.me", SignedInUser: "u", WorkspaceID: "ws",
+		OriginHost: "leagent.me", SignedInUser: uuid.NewString(), WorkspaceID: uuid.NewString(),
+		UserVerified: true, WorkspaceVerified: true, ComputerVerified: true,
 		HasHostnameEvidence: true, HasDisplayEvidence: true,
 	})
 	if v != AdoptNeedsExplicitChoice {

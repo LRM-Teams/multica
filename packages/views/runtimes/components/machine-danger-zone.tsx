@@ -1,9 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useRemoveComputerWorkspaceBinding } from "@multica/core/runtimes/mutations";
 import { Button } from "@multica/ui/components/ui/button";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
 import { useT } from "../../i18n/use-t";
 import { DeleteComputerDialog } from "./delete-computer-dialog";
 import {
@@ -26,6 +35,8 @@ export function MachineDangerZone({
   const wsId = useWorkspaceId();
   const user = useAuthStore((s) => s.user);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [removeBindingOpen, setRemoveBindingOpen] = useState(false);
+  const removeBinding = useRemoveComputerWorkspaceBinding(wsId);
 
   const isCloud = isCloudComputerMachine(machine);
   if (!machine.runtimes.length && !machine.pendingCloud) return null;
@@ -38,6 +49,27 @@ export function MachineDangerZone({
   const deleteBlockedReason = canDeleteComputer
     ? null
     : t(($) => $.machine.ops.delete_owner_only);
+  const canRemoveBinding =
+    !isCloud &&
+    !!machine.daemonId &&
+    !!user &&
+    machine.runtimes.length > 0 &&
+    machine.runtimes.every((r) => r.owner_id === user.id);
+
+  const handleRemoveBinding = async () => {
+    if (!machine.daemonId || !canRemoveBinding) return;
+    try {
+      const result = await removeBinding.mutateAsync(machine.daemonId);
+      if (!result.ok || result.workspace_id !== wsId || !result.kept_local_data) {
+        throw new Error(t(($) => $.machine.remove_binding.invalid_response));
+      }
+      toast.success(t(($) => $.machine.remove_binding.success));
+      setRemoveBindingOpen(false);
+      onDeleted?.();
+    } catch (error) {
+      showErrorToast(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   return (
     <section
@@ -63,19 +95,32 @@ export function MachineDangerZone({
             </p>
           ) : null}
         </div>
-        <Button
-          type="button"
-          variant="destructive"
-          size="sm"
-          className="shrink-0"
-          disabled={!canDeleteComputer}
-          onClick={() => {
-            if (canDeleteComputer) setDeleteOpen(true);
-          }}
-          data-testid="machine-danger-delete"
-        >
-          {t(($) => $.machine.ops.delete_menu)}
-        </Button>
+        <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+          {canRemoveBinding ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setRemoveBindingOpen(true)}
+              data-testid="machine-remove-binding"
+            >
+              {t(($) => $.machine.remove_binding.button)}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={!canDeleteComputer}
+            onClick={() => {
+              if (canDeleteComputer) setDeleteOpen(true);
+            }}
+            data-testid="machine-danger-delete"
+          >
+            {t(($) => $.machine.ops.delete_menu)}
+          </Button>
+        </div>
       </div>
 
       {canDeleteComputer && deleteOpen ? (
@@ -91,6 +136,42 @@ export function MachineDangerZone({
           }}
         />
       ) : null}
+
+      <AlertDialog open={removeBindingOpen} onOpenChange={setRemoveBindingOpen}>
+        <AlertDialogContent>
+          <div className="px-5 pb-4 pt-5">
+            <AlertDialogTitle>
+              {t(($) => $.machine.remove_binding.title)}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="mt-2">
+              {t(($) => $.machine.remove_binding.description, {
+                name: machine.title,
+              })}
+            </AlertDialogDescription>
+          </div>
+          <div className="flex flex-col-reverse gap-2 border-t bg-muted/25 px-5 py-3 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRemoveBindingOpen(false)}
+              disabled={removeBinding.isPending}
+            >
+              {t(($) => $.machine.remove_binding.cancel)}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void handleRemoveBinding()}
+              disabled={removeBinding.isPending}
+              data-testid="machine-remove-binding-confirm"
+            >
+              {removeBinding.isPending
+                ? t(($) => $.machine.remove_binding.removing)
+                : t(($) => $.machine.remove_binding.confirm)}
+            </Button>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

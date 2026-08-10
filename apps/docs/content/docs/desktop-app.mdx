@@ -5,6 +5,10 @@ description: What Multica Desktop is, how it differs from the web app, and when 
 
 import { Callout } from "fumadocs-ui/components/callout";
 
+<Callout type="warning">
+Desktop is a legacy, unmaintained surface and is not part of the machine-wide Computer v1 contract. Use the web app plus `multica computer` for supported lifecycle operations.
+</Callout>
+
 Multica Desktop is a native desktop app for macOS, Windows, and Linux. For the environment it is configured for, it talks to the same backend as the web app and shows the same data. By default Desktop uses Multica Cloud; self-hosted instances can be configured with a local runtime config file. Desktop also adds a few things the browser can't: **independent tab groups per [workspace](/workspaces)**, **automatic [daemon](/daemon-runtimes) startup**, and **one-click upgrades**.
 
 ## Desktop or web — which to pick
@@ -13,7 +17,7 @@ Multica Desktop is a native desktop app for macOS, Windows, and Linux. For the e
 |---|---|---|
 | Access | Open a URL in your browser | Install a native app |
 | Multiple tabs | Your browser's own tabs (no workspace separation) | **One independent tab group per workspace** |
-| Daemon | You run `multica daemon start` yourself | **Started automatically** on launch |
+| Local execution | You run `multica computer start` yourself | Legacy profile daemon (unsupported by Computer v1) |
 | Upgrades | Refresh to get the latest | App checks in the background and installs on next launch |
 | Signed-in data | Identical | Identical |
 
@@ -49,7 +53,7 @@ The macOS build is signed and notarized, so you won't see an "unidentified devel
 
 **No.** Desktop ships with the same `multica` CLI binary embedded inside it, and it launches its own daemon profile at startup (isolated from any daemon you may be running manually from the terminal).
 
-If you've already installed the CLI and run `multica daemon start` by hand, Desktop won't take over your daemon — it starts its own with a separate profile. Both register as **different runtimes**, and you'll see two independent runtimes in the UI.
+If you've already started the machine-wide Computer, Desktop does not take it over. Its old profile-specific daemon behavior is retained only as legacy implementation and is not a supported Computer lifecycle.
 
 If you want to run CLI commands in your terminal, Desktop doesn't offer a special path — use the CLI you installed separately, or run the bundled copy at `resources/bin/multica` inside the app's resources directory.
 

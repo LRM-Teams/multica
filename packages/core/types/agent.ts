@@ -174,6 +174,14 @@ export interface RuntimeDevice {
 
 export type AgentRuntime = RuntimeDevice;
 
+/** Workspace-scoped Computer connection, independent of Agent runtime rows. */
+export interface ComputerConnection {
+  daemon_id: string;
+  owner_id: string;
+  connected: boolean;
+  last_seen_at: string | null;
+}
+
 /** One durable on-disk Agent workspace at `~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. */
 export interface RuntimeAgentWorkspace {
   dir_name: string;

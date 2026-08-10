@@ -39,45 +39,45 @@ multica auth logout
 
 Removes the stored authentication token.
 
-## Agent Daemon
+## Computer resident
 
-The daemon is the local agent runtime. It detects available AI CLIs on your machine, registers them with the Multica server, and executes tasks when agents are assigned work.
+The machine-wide Computer resident detects available AI CLIs, restores every explicit Workspace connection in the current environment, and executes assigned work. Profiles cannot create a second resident.
 
 ### Start
 
 ```bash
-multica daemon start
+multica computer start
 ```
 
-By default, the daemon runs in the background and logs to `~/.multica/daemon.log`.
+By default, the resident runs in the background and logs to `~/.multica/computer/daemon.log`.
 
 To run in the foreground (useful for debugging):
 
 ```bash
-multica daemon start --foreground
+multica computer start --foreground
 ```
 
 ### Stop
 
 ```bash
-multica daemon stop
+multica computer stop
 ```
 
 ### Status
 
 ```bash
-multica daemon status
-multica daemon status --output json
+multica computer status
+multica computer status --output json
 ```
 
-Shows PID, uptime, detected agents, and watched workspaces.
+Shows redacted identity, current environment, release channel, and Workspace connections.
 
 ### Logs
 
 ```bash
-multica daemon logs              # Last 50 lines
-multica daemon logs -f           # Follow (tail -f)
-multica daemon logs -n 100       # Last 100 lines
+multica computer logs              # Last 50 lines
+multica computer logs -f           # Follow (tail -f)
+multica computer logs -n 100       # Last 100 lines
 ```
 
 ### Supported Agents
@@ -147,41 +147,25 @@ Agent-specific overrides:
 | `MULTICA_KIRO_PATH` | Custom path to the `kiro-cli` binary |
 | `MULTICA_KIRO_MODEL` | Override the Kiro model used |
 
-### Self-Hosted Server
+### Production and Tencent test environments
 
-When connecting to a self-hosted Multica instance, point the CLI to your server before logging in:
-
-```bash
-export MULTICA_APP_URL=https://app.example.com
-export MULTICA_SERVER_URL=wss://api.example.com/ws
-
-multica login
-multica daemon start
-```
-
-Or set them persistently:
+Production is fixed to `https://leagent.me`. Test is an explicit stage and accepts either a Tencent Cloud IP origin or `test.leagent.me`:
 
 ```bash
-multica config set app_url https://app.example.com
-multica config set server_url wss://api.example.com/ws
+multica setup /my-workspace
+multica setup --environment test --test-url https://test.leagent.me /my-workspace
+multica setup --environment test --test-url http://203.0.113.8:8080 /my-workspace
 ```
 
-### Profiles
+The same Computer retains connections from both environments, keyed by `(environment, workspace_id)`, but one resident generation serves only the current environment.
 
-Profiles let you run multiple daemons on the same machine — for example, one for production and one for a staging server.
+Release maturity is separate:
 
 ```bash
-# Set up a staging profile
-multica setup self-host --profile staging --server-url https://api-staging.example.com --app-url https://staging.example.com
-
-# Start its daemon
-multica daemon start --profile staging
-
-# Default profile runs separately
-multica daemon start
+multica computer channel          # alpha or latest
+multica computer channel alpha    # Computer must be stopped
+multica computer upgrade          # uses the selected channel
 ```
-
-Each profile gets its own config directory (`~/.multica/profiles/<name>/`), daemon state, and health port. Agent workspaces share `~/.multica/workspaces/`.
 
 ## Workspaces
 
@@ -427,5 +411,5 @@ Most commands support `--output` with two formats:
 
 ```bash
 multica issue list --output json
-multica daemon status --output json
+multica computer status --output json
 ```

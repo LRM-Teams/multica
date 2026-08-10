@@ -30,6 +30,7 @@ import type {
   ChannelThreadMessagesPage,
   AgentHealthResponse,
   AgentRuntime,
+  ComputerConnection,
   MachineUpgrade,
   StickerCatalogResponse,
   ListIssuesResponse,
@@ -248,6 +249,24 @@ export interface RemoveComputerAgentsResponse {
   tasks_cancelled: number;
 }
 
+export interface RemoveComputerWorkspaceBindingResponse {
+  ok: boolean;
+  workspace_id: string;
+  kept_local_data: boolean;
+}
+
+export const RemoveComputerWorkspaceBindingResponseSchema = z.object({
+  ok: z.literal(true),
+  workspace_id: z.string().min(1),
+  kept_local_data: z.literal(true),
+}).loose();
+
+export const EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE: RemoveComputerWorkspaceBindingResponse = {
+  ok: false,
+  workspace_id: "",
+  kept_local_data: true,
+};
+
 export const DeleteComputerResponseSchema = z.object({
   status: z.string(),
   daemon_id: z.string(),
@@ -401,6 +420,15 @@ export const AgentRuntimeSchema = z.object({
 
 export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
 export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
+
+export const ComputerConnectionSchema = z.object({
+  daemon_id: z.string().min(1),
+  owner_id: z.string().min(1),
+  connected: z.boolean(),
+  last_seen_at: z.string().nullable(),
+}).loose();
+export const ComputerConnectionListSchema = z.array(ComputerConnectionSchema);
+export const EMPTY_COMPUTER_CONNECTION_LIST: ComputerConnection[] = [];
 
 export const MachineUpgradeSchema = z.object({
   id: z.string(),

@@ -46,10 +46,10 @@ multica runtime activity <runtime-id> --output json
 multica computer upgrade --target-version <version> --output json
 ```
 
-`computer upgrade` uses this profile's local computer identity and creates or
-polls the canonical daemon-scoped machine-upgrade operation. Omit
-`--target-version` to request the latest version. Computer owners and workspace
-owners/admins can perform this action.
+`computer upgrade` uses the one machine-wide Computer identity and creates or
+polls the canonical machine-upgrade operation. Omit `--target-version` to use
+the Computer's selected `latest` or `alpha` release channel. Computer owners
+and workspace owners/admins can perform this action.
 
 The resident Computer is machine-wide: it runs as one detached process and is
 controlled by the Computer lifecycle, not an OS supervisor:
@@ -61,7 +61,21 @@ multica computer restart    # stop + start
 multica computer status     # read-only status (identity, connect, bindings)
 multica computer logs       # tail the resident service log
 multica computer doctor     # read-only diagnostics (--fix only clears a confirmed-stopped stale PID)
+multica computer channel    # show latest or alpha; pass a value to change it while stopped
 ```
+
+The service environment and release channel are independent. Production is
+fixed to `https://leagent.me`; test requires an explicit Tencent Cloud HTTP(S)
+origin and may use either an IP address or `test.leagent.me`:
+
+```bash
+multica setup /my-workspace
+multica setup --environment test --test-url https://test.leagent.me /my-workspace
+```
+
+Workspace connections are keyed locally by `(environment, workspace_id)`, so
+the same Computer can retain connections from both databases. One resident
+generation serves only the currently selected environment.
 
 `multica daemon ...` is a hidden, deprecated compatibility alias that delegates
 to the same machine-wide Computer; use `multica computer ...` instead.

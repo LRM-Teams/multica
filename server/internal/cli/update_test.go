@@ -323,12 +323,19 @@ func TestIsReleaseVersion(t *testing.T) {
 		{"bare release", "0.1.13", true},
 		{"v-prefixed release", "v0.1.13", true},
 		{"surrounding whitespace", "  v0.1.13  ", true},
+		{"alpha prerelease", "v0.4.0-alpha.7", true},
+		{"beta prerelease", "v0.4.0-beta.2", true},
+		{"release candidate", "0.4.0-rc.1", true},
+		{"rc without separator", "v0.4.0-rc1", false},
+		{"generic prerelease", "v0.4.0-preview.1", false},
+		{"build metadata", "v0.4.0+build.1", false},
 		{"dev describe", "v0.2.15-235-gdaf0e935", false},
 		{"dirty dev describe", "v0.2.15-235-gdaf0e935-dirty", false},
 		{"empty", "", false},
 		{"two components", "0.1", false},
 		{"four components", "0.1.2.3", false},
 		{"non-numeric", "1.0.x", false},
+		{"numeric prerelease leading zero", "1.0.0-alpha.01", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -351,6 +358,11 @@ func TestIsNewerVersion(t *testing.T) {
 		{"same version", "v0.1.13", "v0.1.13", false},
 		{"older latest", "v0.1.12", "v0.1.13", false},
 		{"mixed v prefix", "0.1.14", "v0.1.13", true},
+		{"next alpha after stable", "v0.2.0-alpha.1", "v0.1.99", true},
+		{"alpha sequence", "v0.4.0-alpha.8", "v0.4.0-alpha.7", true},
+		{"rc after alpha", "v0.4.0-rc.1", "v0.4.0-alpha.99", true},
+		{"stable after rc", "v0.4.0", "v0.4.0-rc.1", true},
+		{"alpha older than same stable", "v0.4.0-alpha.8", "v0.4.0", false},
 		{"current is dev describe → unparseable → false", "v0.1.14", "v0.1.13-5-gabcdef0", false},
 		{"latest is dev describe → unparseable → false", "v0.1.14-1-gabcdef0", "v0.1.13", false},
 		{"latest unparseable → false", "garbage", "v0.1.13", false},
@@ -364,6 +376,15 @@ func TestIsNewerVersion(t *testing.T) {
 				t.Fatalf("IsNewerVersion(%q, %q) = %v, want %v", tt.latest, tt.current, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStableAndPrereleaseVersionClassification(t *testing.T) {
+	if !IsStableReleaseVersion("v0.4.0") || IsStableReleaseVersion("v0.4.0-alpha.1") {
+		t.Fatal("stable release classification is wrong")
+	}
+	if !IsPrereleaseVersion("v0.4.0-alpha.1") || IsPrereleaseVersion("v0.4.0") {
+		t.Fatal("prerelease classification is wrong")
 	}
 }
 

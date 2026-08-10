@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { ReactElement } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentRuntime } from "@multica/core/types";
@@ -34,6 +34,11 @@ vi.mock("@multica/core/api", () => ({
     getMachineUpgrade: vi.fn(),
     initiateRestart: vi.fn(),
     getRestart: vi.fn(),
+    removeComputerWorkspaceBinding: vi.fn().mockResolvedValue({
+      ok: true,
+      workspace_id: "ws-1",
+      kept_local_data: true,
+    }),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -369,6 +374,21 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
     expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
       /Delete computer/i,
     );
+  });
+
+  it("offers one-Workspace removal separately from permanent Computer delete", () => {
+    wrap(<MachineDangerZone machine={makeMachine()} />);
+
+    expect(screen.getByTestId("machine-remove-binding")).toHaveTextContent(
+      /Remove from this Workspace/i,
+    );
+    expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
+      /Delete computer/i,
+    );
+    fireEvent.click(screen.getByTestId("machine-remove-binding"));
+    expect(
+      screen.getByText(/other Workspaces keep running/i),
+    ).toBeInTheDocument();
   });
 
   it("shows delete for pending cloud computers owned by the caller", () => {

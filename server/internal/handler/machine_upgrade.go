@@ -47,25 +47,27 @@ func (p MachineUpgradePhase) terminal() bool {
 }
 
 type MachineUpgrade struct {
-	ID                 string              `json:"id"`
-	DaemonID           string              `json:"daemon_id"`
-	RequestID          string              `json:"request_id"`
-	RequestedTarget    string              `json:"requested_target"`
-	ResolvedTarget     *string             `json:"resolved_target,omitempty"`
-	Phase              MachineUpgradePhase `json:"phase"`
-	Result             *string             `json:"result,omitempty"`
-	ErrorCode          *string             `json:"error_code,omitempty"`
-	ErrorMessage       *string             `json:"error_message,omitempty"`
-	AcceptedAt         *time.Time          `json:"accepted_at,omitempty"`
-	AcceptedGeneration *string             `json:"accepted_generation,omitempty"`
-	AcceptedRuntimeIDs []string            `json:"accepted_runtime_ids,omitempty"`
-	AttestedRuntimeIDs []string            `json:"attested_runtime_ids,omitempty"`
-	SourceVersion      *string             `json:"source_version,omitempty"`
-	RollbackGeneration *string             `json:"rollback_generation,omitempty"`
-	RollbackRuntimeIDs []string            `json:"rollback_runtime_ids,omitempty"`
-	CompletedAt        *time.Time          `json:"completed_at,omitempty"`
-	CreatedAt          time.Time           `json:"created_at"`
-	UpdatedAt          time.Time           `json:"updated_at"`
+	ID                   string              `json:"id"`
+	DaemonID             string              `json:"daemon_id"`
+	RequestID            string              `json:"request_id"`
+	RequestedTarget      string              `json:"requested_target"`
+	ResolvedTarget       *string             `json:"resolved_target,omitempty"`
+	Phase                MachineUpgradePhase `json:"phase"`
+	Result               *string             `json:"result,omitempty"`
+	ErrorCode            *string             `json:"error_code,omitempty"`
+	ErrorMessage         *string             `json:"error_message,omitempty"`
+	AcceptedAt           *time.Time          `json:"accepted_at,omitempty"`
+	AcceptedGeneration   *string             `json:"accepted_generation,omitempty"`
+	AcceptedRuntimeIDs   []string            `json:"accepted_runtime_ids,omitempty"`
+	AttestedRuntimeIDs   []string            `json:"attested_runtime_ids,omitempty"`
+	AcceptedWorkspaceIDs []string            `json:"accepted_workspace_ids,omitempty"`
+	AttestedWorkspaceIDs []string            `json:"attested_workspace_ids,omitempty"`
+	SourceVersion        *string             `json:"source_version,omitempty"`
+	RollbackGeneration   *string             `json:"rollback_generation,omitempty"`
+	RollbackRuntimeIDs   []string            `json:"rollback_runtime_ids,omitempty"`
+	CompletedAt          *time.Time          `json:"completed_at,omitempty"`
+	CreatedAt            time.Time           `json:"created_at"`
+	UpdatedAt            time.Time           `json:"updated_at"`
 }
 
 // MachineUpgradeStore owns the additive machine contract. RuntimeUpdateStore
@@ -81,6 +83,7 @@ type MachineUpgradeStore interface {
 	AttestLegacy(ctx context.Context, daemonID, id, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string, runtimeIDs []string) (*MachineUpgrade, error)
 	Attest(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
+	AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, workspaceIDs []string) (*MachineUpgrade, error)
 	BeginRollback(ctx context.Context, daemonID, id, generation, errorCode, errorMessage string) (*MachineUpgrade, error)
 	AttestRollback(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	Progress(ctx context.Context, daemonID, id string, phase MachineUpgradePhase, errorCode, errorMessage string) (*MachineUpgrade, error)
@@ -379,7 +382,11 @@ func (s *PostgresMachineUpgradeStore) Accept(ctx context.Context, daemonID, id, 
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
 		SET phase = $3, resolved_target = $4, source_version = $5, accepted_generation = $6,
-			accepted_runtime_ids = $7::uuid[], accepted_at = now(), updated_at = now()
+			accepted_runtime_ids = $7::uuid[],
+			accepted_workspace_ids = ARRAY(
+				SELECT workspace_id FROM computer_workspace_bindings
+				WHERE daemon_id = $1 AND active = TRUE ORDER BY workspace_id
+			), accepted_at = now(), updated_at = now()
 		WHERE daemon_id = $1 AND id = $2 AND phase = 'starting' AND accepted_generation IS NULL
 		RETURNING `+machineUpgradeColumns,
 		strings.TrimSpace(daemonID), strings.TrimSpace(id), string(phase), strings.TrimSpace(resolvedTarget), strings.TrimSpace(runningVersion), strings.TrimSpace(generation), runtimeIDs))
@@ -450,16 +457,42 @@ func (s *PostgresMachineUpgradeStore) Attest(ctx context.Context, daemonID, id, 
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
 		SET attested_runtime_ids = ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid])),
-			phase = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
+			phase = CASE WHEN cardinality(accepted_workspace_ids) = 0 AND accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
 				THEN 'completed' ELSE 'converging' END,
-			result = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
+			result = CASE WHEN cardinality(accepted_workspace_ids) = 0 AND accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
 				THEN 'completed' ELSE NULL END,
-			completed_at = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
+			completed_at = CASE WHEN cardinality(accepted_workspace_ids) = 0 AND accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
 				THEN now() ELSE NULL END,
 			updated_at = now()
 		WHERE daemon_id = $1 AND id = $2 AND phase IN ('handoff', 'converging') AND accepted_generation = $4
 		RETURNING `+machineUpgradeColumns,
 		strings.TrimSpace(daemonID), strings.TrimSpace(id), strings.TrimSpace(runtimeID), strings.TrimSpace(generation)))
+}
+
+// AttestComputer is the Computer-level successor proof. Unlike runtime
+// attestation it includes every explicit Workspace connection, including
+// zero-Agent Workspaces, and therefore owns completion for generation-aware
+// Computer upgrades.
+func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, workspaceIDs []string) (*MachineUpgrade, error) {
+	op, err := s.Get(ctx, daemonID, id)
+	if err != nil || op == nil {
+		return op, err
+	}
+	workspaceIDs = normalizedMachineRuntimeIDs(workspaceIDs)
+	if (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) ||
+		op.AcceptedGeneration == nil || *op.AcceptedGeneration != strings.TrimSpace(generation) ||
+		!sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) ||
+		op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
+		return nil, errMachineUpgradeAttestationRejected
+	}
+	return scanMachineUpgrade(s.db.QueryRow(ctx, `
+		UPDATE machine_upgrade
+		SET attested_workspace_ids = $3::uuid[], phase='completed', result='completed',
+			completed_at=now(), updated_at=now()
+		WHERE daemon_id=$1 AND id=$2 AND phase IN ('handoff','converging')
+		  AND accepted_generation=$4
+		RETURNING `+machineUpgradeColumns,
+		strings.TrimSpace(daemonID), strings.TrimSpace(id), workspaceIDs, strings.TrimSpace(generation)))
 }
 
 // BeginRollback is monotonic: only an operation that reached handoff may move
@@ -561,7 +594,8 @@ func (s *PostgresMachineUpgradeStore) activeForDaemon(ctx context.Context, daemo
 const machineUpgradeColumns = `
 	id, daemon_id, request_id, requested_target, resolved_target, phase, result,
 	error_code, error_message, accepted_at, accepted_generation, accepted_runtime_ids,
-	attested_runtime_ids, source_version, rollback_generation, rollback_runtime_ids,
+	attested_runtime_ids, accepted_workspace_ids, attested_workspace_ids,
+	source_version, rollback_generation, rollback_runtime_ids,
 	completed_at, created_at, updated_at`
 
 const machineUpgradeSelect = `SELECT ` + machineUpgradeColumns + ` FROM machine_upgrade `
@@ -573,11 +607,12 @@ func scanMachineUpgrade(row machineUpgradeScanner) (*MachineUpgrade, error) {
 	var resolvedTarget, result, errorCode, errorMessage, sourceVersion, rollbackGeneration *string
 	var acceptedAt, completedAt *time.Time
 	var acceptedGeneration *string
-	var acceptedRuntimeIDs, attestedRuntimeIDs []string
+	var acceptedRuntimeIDs, attestedRuntimeIDs, acceptedWorkspaceIDs, attestedWorkspaceIDs []string
 	err := row.Scan(
 		&op.ID, &op.DaemonID, &op.RequestID, &op.RequestedTarget, &resolvedTarget,
 		&op.Phase, &result, &errorCode, &errorMessage, &acceptedAt, &acceptedGeneration, &acceptedRuntimeIDs,
-		&attestedRuntimeIDs, &sourceVersion, &rollbackGeneration, &op.RollbackRuntimeIDs, &completedAt,
+		&attestedRuntimeIDs, &acceptedWorkspaceIDs, &attestedWorkspaceIDs,
+		&sourceVersion, &rollbackGeneration, &op.RollbackRuntimeIDs, &completedAt,
 		&op.CreatedAt, &op.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -594,6 +629,8 @@ func scanMachineUpgrade(row machineUpgradeScanner) (*MachineUpgrade, error) {
 	op.AcceptedGeneration = acceptedGeneration
 	op.AcceptedRuntimeIDs = acceptedRuntimeIDs
 	op.AttestedRuntimeIDs = attestedRuntimeIDs
+	op.AcceptedWorkspaceIDs = acceptedWorkspaceIDs
+	op.AttestedWorkspaceIDs = attestedWorkspaceIDs
 	op.SourceVersion = sourceVersion
 	op.RollbackGeneration = rollbackGeneration
 	op.CompletedAt = completedAt

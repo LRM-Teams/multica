@@ -19,9 +19,11 @@ var (
 
 // BindingRequest is whom+what a binding creation/validation targets.
 type BindingRequest struct {
-	ActorUserID      string
-	TargetComputerID string
-	TargetWorkspaceID string
+	ActorUserID             string
+	ActorCanManageWorkspace bool
+	BindingOwnerUserID      string
+	TargetComputerID        string
+	TargetWorkspaceID       string
 }
 
 // ValidationKind distinguishes an idempotent repair from a fresh create.
@@ -52,7 +54,10 @@ func ValidateCreate(req BindingRequest, current []WorkspaceBinding) (ValidationK
 		return ValidationKindUnknown, errors.New("binding request requires an immutable workspace id (never a slug)")
 	}
 	for _, b := range current {
-		if b.WorkspaceID == req.TargetWorkspaceID {
+		if b.WorkspaceID == req.TargetWorkspaceID && b.ComputerID == req.TargetComputerID {
+			if b.UserID != "" && b.UserID != req.ActorUserID {
+				return ValidationKindUnknown, fmt.Errorf("%w: Computer belongs to another user", ErrBindingUnauthorized)
+			}
 			if !b.Active {
 				// An explicitly revoked binding must be re-created, not treated
 				// as a quiet repair.
@@ -78,7 +83,10 @@ func ValidateRemove(req BindingRequest, current []WorkspaceBinding) error {
 		return fmt.Errorf("%w: removal requires the immutable workspace id", ErrBindingUnauthorized)
 	}
 	for _, b := range current {
-		if b.WorkspaceID == req.TargetWorkspaceID {
+		if b.WorkspaceID == req.TargetWorkspaceID && b.ComputerID == req.TargetComputerID {
+			if b.UserID != "" && b.UserID != req.ActorUserID && !req.ActorCanManageWorkspace {
+				return fmt.Errorf("%w: Computer belongs to another user", ErrBindingUnauthorized)
+			}
 			return nil // target + actor + workspace present → allowed to remove
 		}
 	}

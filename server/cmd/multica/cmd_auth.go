@@ -37,6 +37,25 @@ var cloudServerBaseURL = cli.OfficialCloudAPIURL
 // cloudServerURL returns the normalized Cloud API base used by login.
 func cloudServerURL() string { return normalizeAPIBaseURL(cloudServerBaseURL) }
 
+// loginServiceTarget resolves the selected service stage from the machine
+// config. cloudServerBaseURL remains a production-only test seam; no public
+// flag or environment variable can redirect production.
+func loginServiceTarget() (cli.ServiceTarget, string, error) {
+	cfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return cli.ServiceTarget{}, "", err
+	}
+	target, err := cli.ResolveServiceTarget(cfg)
+	if err != nil {
+		return cli.ServiceTarget{}, "", err
+	}
+	requestOrigin := target.Origin
+	if target.Environment == cli.ServiceEnvironmentProduction {
+		requestOrigin = cloudServerURL()
+	}
+	return target, requestOrigin, nil
+}
+
 // validateLoginTokenPrefix returns nil if token starts with one of the
 // CLI-recognised PAT prefixes, or an error describing the accepted set.
 // Extracted so the prefix list has one obvious test surface.
@@ -301,9 +320,10 @@ type issueDeviceTokenResponse struct {
 // HTTPS to the server, and confirmation happens wherever the user opens the
 // printed link.
 func runAuthLoginDevice(cmd *cobra.Command) error {
-	// Cloud login always targets the canonical leagent.me origin; it cannot
-	// be redirected by --server-url, MULTICA_SERVER_URL, or a profile. #2488
-	serverURL := cloudServerURL()
+	target, serverURL, err := loginServiceTarget()
+	if err != nil {
+		return err
+	}
 	client := cli.NewAPIClient(serverURL, "", "")
 
 	hostname, _ := os.Hostname()
@@ -346,8 +366,9 @@ func runAuthLoginDevice(cmd *cobra.Command) error {
 	cfg, _ := cli.LoadCLIConfigForProfile(profile)
 	cfg.WorkspaceID = ""
 	cfg.Token = rawToken
-	cfg.ServerURL = serverURL
-	cfg.AppURL = resolveAppURL(cmd)
+	cfg.Environment = string(target.Environment)
+	cfg.ServerURL = target.Origin
+	cfg.AppURL = target.Origin
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
@@ -434,7 +455,10 @@ func runAuthLoginToken(cmd *cobra.Command, providedToken string) error {
 		return err
 	}
 
-	serverURL := cloudServerURL()
+	target, serverURL, err := loginServiceTarget()
+	if err != nil {
+		return err
+	}
 	client := cli.NewAPIClient(serverURL, "", token)
 
 	ctx, cancel := cli.APIContext(context.Background())
@@ -452,7 +476,9 @@ func runAuthLoginToken(cmd *cobra.Command, providedToken string) error {
 	cfg, _ := cli.LoadCLIConfigForProfile(profile)
 	cfg.WorkspaceID = ""
 	cfg.Token = token
-	cfg.ServerURL = serverURL
+	cfg.Environment = string(target.Environment)
+	cfg.ServerURL = target.Origin
+	cfg.AppURL = target.Origin
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
@@ -494,7 +520,9 @@ func runAuthStatus(cmd *cobra.Command, _ []string) error {
 }
 
 func runAuthLogout(cmd *cobra.Command, _ []string) error {
-	profile := resolveProfile(cmd)
+	// Cloud auth is one machine-wide session. A legacy --profile flag must not
+	// redirect logout to a different credential file.
+	profile := ""
 	cfg, _ := cli.LoadCLIConfigForProfile(profile)
 
 	if cfg.Token != "" {
@@ -506,11 +534,11 @@ func runAuthLogout(cmd *cobra.Command, _ []string) error {
 
 	// #2488: logout stops the resident Computer but retains Computer Identity,
 	// Bindings, and Agent Roots — only the user session is cleared.
-	if res := (&computer.Lifecycle{Profile: ""}).Stop(); res.Err != nil && res.Running {
+	if res := (&computer.Lifecycle{}).Stop(); res.Err != nil && res.Running {
 		return fmt.Errorf("cleared session but could not stop the Computer: %w", res.Err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Logged out. The Computer has been stopped; your Identity, Workspace Bindings, and Agent data are retained.")
+	fmt.Fprintln(os.Stderr, "Logged out. The Computer has been stopped; your Identity, Workspace connections, and Agent data are retained.")
 	return nil
 }
 
@@ -523,7 +551,11 @@ func reuseValidCloudSession() (bool, error) {
 	if err != nil || cfg.Token == "" {
 		return false, nil
 	}
-	client := cli.NewAPIClient(cloudServerURL(), "", cfg.Token)
+	_, serverURL, err := loginServiceTarget()
+	if err != nil {
+		return false, err
+	}
+	client := cli.NewAPIClient(serverURL, "", cfg.Token)
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 	var me struct {

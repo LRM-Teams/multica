@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -20,8 +21,8 @@ import (
 )
 
 var daemonCmd = &cobra.Command{
-	Use:   "daemon",
-	Short: "Control the local agent runtime daemon",
+	Use:    "daemon",
+	Short:  "Control the local agent runtime daemon",
 	Hidden: true, // compatibility alias for the machine-wide Computer (#2487)
 }
 
@@ -68,6 +69,8 @@ func init() {
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
 	f.Bool("no-auto-update", false, "Deprecated no-op; upgrades are explicit Machine Upgrade operations")
 	f.Duration("auto-update-interval", 0, "Deprecated no-op; periodic release polling is disabled")
+	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
+	_ = f.MarkHidden("computer-generation")
 
 	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
 	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
@@ -105,46 +108,68 @@ func daemonDeprecatedAliasNotices() {
 
 // --- daemon start ---
 
-func runDaemonStart(cmd *cobra.Command, _ []string) error {
+func runDaemonStart(cmd *cobra.Command, args []string) error {
 	daemonDeprecatedAliasNotices()
+	binding, selected, err := resolveWorkspaceBinding(args)
+	if err != nil {
+		return err
+	}
+	if selected {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		health := (&computer.Lifecycle{}).Health(ctx)
+		cancel()
+		if computer.Alive(health) {
+			return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout)
+		}
+	}
 	foreground, _ := cmd.Flags().GetBool("foreground")
 	if foreground {
 		return runDaemonForeground(cmd)
 	}
-	return runDaemonBackground(cmd)
+	if err := runDaemonBackground(cmd); err != nil {
+		return err
+	}
+	if selected {
+		return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout)
+	}
+	return nil
 }
 
-func runDaemonBackground(cmd *cobra.Command) error {
-	profile := resolveProfile(cmd)
-	lc := &computer.Lifecycle{Profile: profile}
-
-	// Check if the Computer is already running.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
-	if computer.Alive(health) {
-		label := "daemon"
-		if profile != "" {
-			label = fmt.Sprintf("daemon [%s]", profile)
-		}
-		pid, _ := health["pid"].(float64)
-		return fmt.Errorf("%s is already running (pid %v). Use 'daemon restart' to restart it", label, int(pid))
+func waitForWorkspaceReady(workspaceID string, timeout time.Duration) error {
+	lifecycle := &computer.Lifecycle{}
+	cfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return fmt.Errorf("load current service environment: %w", err)
 	}
-
-	// Build child args: daemon start --foreground + forwarded flags.
-	args := buildDaemonStartArgs(cmd)
-
-	res, err := lc.StartBackground(args)
+	target, err := cli.ResolveServiceTarget(cfg)
 	if err != nil {
 		return err
 	}
-
-	if res.Started {
-		if profile != "" {
-			fmt.Fprintf(os.Stderr, "Daemon [%s] started (pid %d, version %s)\n", profile, res.Pid, version)
-		} else {
-			fmt.Fprintf(os.Stderr, "Daemon started (pid %d, version %s)\n", res.Pid, version)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		health := lifecycle.Health(ctx)
+		cancel()
+		if health["status"] == "running" && health["connected"] == true && normalizeAPIBaseURL(fmt.Sprint(health["server_url"])) == normalizeAPIBaseURL(target.Origin) && healthContainsWorkspace(health, workspaceID) {
+			return nil
 		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("Computer is not connected for Workspace %s", workspaceID)
+}
+
+func runDaemonBackground(cmd *cobra.Command) error {
+	lc := &computer.Lifecycle{}
+	res, err := lc.StartBackground(computerStartOptions(cmd))
+	if err != nil {
+		return err
+	}
+	return printComputerStartResult(res)
+}
+
+func printComputerStartResult(res computer.StartResult) error {
+	if res.Started {
+		fmt.Fprintf(os.Stderr, "Computer started (pid %d, version %s)\n", res.Pid, version)
 		fmt.Fprintf(os.Stderr, "Logs: %s\n", res.LogPath)
 		return nil
 	}
@@ -156,6 +181,31 @@ func runDaemonBackground(cmd *cobra.Command) error {
 		fmt.Fprintf(os.Stderr, "Daemon may not have started successfully. Check logs:\n  %s\n", res.LogPath)
 	}
 	return nil
+}
+
+func computerStartOptions(cmd *cobra.Command) computer.StartOptions {
+	options := computer.StartOptions{
+		DaemonID:                       flagString(cmd, "daemon-id"),
+		DeviceName:                     flagString(cmd, "device-name"),
+		RuntimeName:                    flagString(cmd, "runtime-name"),
+		PollInterval:                   flagDuration(cmd, "poll-interval"),
+		HeartbeatInterval:              flagDuration(cmd, "heartbeat-interval"),
+		CodexSemanticInactivityTimeout: flagDuration(cmd, "codex-semantic-inactivity-timeout"),
+	}
+	if cmd.Flags().Changed("agent-timeout") {
+		options.AgentTimeout, _ = cmd.Flags().GetDuration("agent-timeout")
+		options.AgentTimeoutSet = true
+	}
+	return options
+}
+
+func flagDuration(cmd *cobra.Command, name string) time.Duration {
+	flag := cmd.Flags().Lookup(name)
+	if flag == nil {
+		return 0
+	}
+	value, _ := cmd.Flags().GetDuration(name)
+	return value
 }
 
 // buildDaemonStartArgs constructs args for the background child process.
@@ -193,21 +243,13 @@ func buildDaemonStartArgs(cmd *cobra.Command) []string {
 		args = append(args, "--auto-update-interval", d.String())
 	}
 
-	// Forward global persistent flags.
-	if v, _ := cmd.Flags().GetString("server-url"); v != "" {
-		args = append(args, "--server-url", v)
-	}
-	if v := resolveProfile(cmd); v != "" {
-		args = append(args, "--profile", v)
-	}
-
 	return args
 }
 
 func runDaemonForeground(cmd *cobra.Command) error {
 	util.EnsureHiddenConsole()
 
-	profile := resolveProfile(cmd)
+	profile := ""
 
 	// Preflight (task #815): every freshly started worker generation checks
 	// whether it's already on the VersionStore's committed Active version.
@@ -224,26 +266,37 @@ func runDaemonForeground(cmd *cobra.Command) error {
 			// drain.
 			os.Exit(daemonHandoffExitCode)
 		}
-		// Outside supervision, nothing is watching to catch a worker that
-		// exits and doesn't come back — spawning a replacement unattended is
-		// worse than just staying on the current binary and saying so
-		// (Parker's call, task #815). Fall through and start normally.
-		fmt.Fprintf(os.Stderr, "Note: a newer version is staged (%s). Run `multica daemon restart` to apply it.\n", target)
+		// The stable launcher remains the lifecycle entrypoint; the immutable
+		// Active binary is an internal child and never becomes persisted
+		// Computer/service state.
+		return runActiveComputerBinary(target)
 	}
 
-	serverURL := cli.FlagOrEnv(cmd, "server-url", "MULTICA_SERVER_URL", "")
-	if serverURL == "" {
-		if c, err := cli.LoadCLIConfigForProfile(profile); err == nil && c.ServerURL != "" {
-			serverURL = c.ServerURL
-		}
+	// The service environment is an explicit machine choice. Production is
+	// fixed to leagent.me; only test may carry a validated Tencent Cloud
+	// IP/domain origin.
+	machineConfig, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return fmt.Errorf("read Computer environment: %w", err)
+	}
+	serviceTarget, err := cli.ResolveServiceTarget(machineConfig)
+	if err != nil {
+		return fmt.Errorf("resolve Computer environment: %w", err)
 	}
 	overrides := daemon.Overrides{
-		ServerURL:   serverURL,
+		ServerURL:   serviceTarget.Origin,
 		DaemonID:    flagString(cmd, "daemon-id"),
 		DeviceName:  flagString(cmd, "device-name"),
 		RuntimeName: flagString(cmd, "runtime-name"),
 		Profile:     profile,
 		HealthPort:  computer.HealthPort(profile),
+	}
+	if overrides.DaemonID == "" {
+		identity, err := (&computer.Lifecycle{}).Identity()
+		if err != nil {
+			return fmt.Errorf("resolve machine-wide Computer identity: %w", err)
+		}
+		overrides.DaemonID = identity
 	}
 	if d, _ := cmd.Flags().GetDuration("poll-interval"); d > 0 {
 		overrides.PollInterval = d
@@ -272,6 +325,20 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		return err
 	}
 	cfg.CLIVersion = version
+	cfg.Environment = string(serviceTarget.Environment)
+	channel, err := cli.ResolveReleaseChannel(machineConfig)
+	if err != nil {
+		return err
+	}
+	cfg.ReleaseChannel = string(channel)
+	cfg.BindingsRoot = computer.RootDir("")
+	cfg.ComputerGeneration, _ = cmd.Flags().GetInt64("computer-generation")
+	if cfg.ComputerGeneration == 0 {
+		cfg.ComputerGeneration, err = computer.NewGenerationStore(computer.RootDir("")).Next()
+		if err != nil {
+			return fmt.Errorf("allocate Computer generation: %w", err)
+		}
+	}
 	controlToken, err := ensureMachineUpgradeControlToken(profile)
 	if err != nil {
 		return err
@@ -290,7 +357,7 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	// Write PID file so "daemon stop" can find us. Best-effort: a resident
 	// whose state directory cannot be created simply runs without a PID file,
 	// exactly as before.
-	lc := &computer.Lifecycle{Profile: profile}
+	lc := &computer.Lifecycle{}
 	cleanupPID := func() {}
 	if computer.RootDir(profile) != "" {
 		cleanup, err := lc.PublishPID()
@@ -343,6 +410,18 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	return nil
 }
 
+func runActiveComputerBinary(target string) error {
+	child := exec.Command(target, os.Args[1:]...)
+	child.Stdin = os.Stdin
+	child.Stdout = os.Stdout
+	child.Stderr = os.Stderr
+	child.Env = os.Environ()
+	if err := child.Run(); err != nil {
+		return fmt.Errorf("run Active Computer binary %s: %w", target, err)
+	}
+	return nil
+}
+
 func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
 	if d == nil {
 		return errors.New("daemon is required for detached rollback")
@@ -371,27 +450,33 @@ func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
 
 func runDaemonRestart(cmd *cobra.Command, args []string) error {
 	daemonDeprecatedAliasNotices()
-	profile := resolveProfile(cmd)
-	lc := &computer.Lifecycle{Profile: profile}
-
-	// Stop if running (graceful shutdown with kill fallback), then start fresh.
-	res := lc.Stop()
-	if res.Err != nil {
-		return res.Err
+	binding, selected, err := resolveWorkspaceBinding(args)
+	if err != nil {
+		return err // validate before stopping the one resident
 	}
-	if res.Running && res.Pid > 0 {
-		fmt.Fprintf(os.Stderr, "Stopping daemon (pid %d)...\n", res.Pid)
+	lc := &computer.Lifecycle{}
+	result, err := lc.Restart(computerStartOptions(cmd))
+	if err != nil {
+		return err
 	}
-
-	return runDaemonStart(cmd, args)
+	if result.Stop.Running && result.Stop.Pid > 0 {
+		fmt.Fprintf(os.Stderr, "Stopping Computer (pid %d)...\n", result.Stop.Pid)
+	}
+	if err := printComputerStartResult(result.Start); err != nil {
+		return err
+	}
+	if selected {
+		return waitForWorkspaceReady(binding.WorkspaceID, computer.StartupTimeout)
+	}
+	return nil
 }
 
 // --- daemon stop ---
 
 func runDaemonStop(cmd *cobra.Command, _ []string) error {
 	daemonDeprecatedAliasNotices()
-	profile := resolveProfile(cmd)
-	lc := &computer.Lifecycle{Profile: profile}
+	profile := ""
+	lc := &computer.Lifecycle{}
 
 	label := "Daemon"
 	if profile != "" {
@@ -420,32 +505,16 @@ func runDaemonStop(cmd *cobra.Command, _ []string) error {
 
 func runDaemonStatus(cmd *cobra.Command, _ []string) error {
 	daemonDeprecatedAliasNotices()
-	profile := resolveProfile(cmd)
-	lc := &computer.Lifecycle{Profile: profile}
+	lc := &computer.Lifecycle{}
 
 	health := lc.Status()
-
-	// Report the configured Workspace Bindings as part of truthful status.
-	if bs, err := computer.NewBindingsStore(computer.RootDir("")).AllActive(); err == nil {
-		health["bindings"] = len(bs)
-	}
-
-	// Surface the Computer's state layout so a Desktop-facing adapter can
-	// learn the health port and log path from the module instead of
-	// duplicating the layout rules.
-	health["health_port"] = computer.HealthPort(profile)
-	health["log_path"] = computer.LogPath(profile)
-	health["pid_path"] = computer.PIDPath(profile)
 
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
 		return cli.PrintJSON(os.Stdout, health)
 	}
 
-	label := "Daemon"
-	if profile != "" {
-		label = fmt.Sprintf("Daemon [%s]", profile)
-	}
+	label := "Computer"
 
 	switch health["status"] {
 	case "running":
@@ -454,6 +523,9 @@ func runDaemonStatus(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(os.Stdout, "%s: starting (pid %v)\n", label, health["pid"])
 	default:
 		fmt.Fprintf(os.Stdout, "%s: stopped\n", label)
+	}
+	if connected, _ := health["connected"].(bool); !connected {
+		return fmt.Errorf("Computer is disconnected")
 	}
 	return nil
 }
@@ -466,18 +538,23 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 	rows := []row{
 		{label, fmt.Sprintf("running (pid %v, uptime %v)", health["pid"], health["uptime"])},
 	}
+	if id, ok := health["computer_id"].(string); ok && id != "" {
+		rows = append(rows, row{"Computer ID", id})
+	}
+	if session, ok := health["session_present"].(bool); ok {
+		rows = append(rows, row{"Session", map[bool]string{true: "present", false: "missing"}[session]})
+	}
+	if origin, ok := health["service_origin"].(string); ok && origin != "" {
+		rows = append(rows, row{"Origin", origin})
+	}
+	if connected, ok := health["connected"].(bool); ok {
+		rows = append(rows, row{"Connected", fmt.Sprint(connected)})
+	}
+	if connections, ok := health["workspace_connections"].([]map[string]any); ok {
+		rows = append(rows, row{"Workspace connections", strconv.Itoa(len(connections))})
+	}
 	if version, ok := health["cli_version"].(string); ok && version != "" {
 		rows = append(rows, row{"Version", version})
-	}
-	if agents, ok := health["agents"].([]any); ok && len(agents) > 0 {
-		parts := make([]string, len(agents))
-		for i, a := range agents {
-			parts[i] = fmt.Sprint(a)
-		}
-		rows = append(rows, row{"Agents", strings.Join(parts, ", ")})
-	}
-	if ws, ok := health["workspaces"].([]any); ok {
-		rows = append(rows, row{"Workspaces", strconv.Itoa(len(ws))})
 	}
 
 	keyWidth := 0
@@ -493,14 +570,20 @@ func printDaemonStatusReport(w io.Writer, label string, health map[string]any) {
 
 // --- daemon logs ---
 
-func runDaemonLogs(cmd *cobra.Command, _ []string) error {
+func runDaemonLogs(cmd *cobra.Command, args []string) error {
 	daemonDeprecatedAliasNotices()
-	profile := resolveProfile(cmd)
-	lc := &computer.Lifecycle{Profile: profile}
+	lc := &computer.Lifecycle{}
 
 	follow, _ := cmd.Flags().GetBool("follow")
 	lines, _ := cmd.Flags().GetInt("lines")
 
+	binding, selected, err := resolveWorkspaceBinding(args)
+	if err != nil {
+		return err
+	}
+	if selected {
+		return lc.LogsForWorkspace(lines, follow, binding.WorkspaceID)
+	}
 	return lc.Logs(lines, follow)
 }
 

@@ -1,21 +1,22 @@
 ---
-title: 守护进程与运行时
+title: Computer 与运行时
 description: 智能体不在 Multica 服务器上运行——它们跑在你自己的机器上。
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 import { Mermaid } from "@/components/mermaid";
 
-在 Multica 里，[智能体](/agents) **不**在我们的服务器上运行——它们跑在你自己的机器上，由一个叫**守护进程**（daemon）的小程序调用本地安装的 [AI 编程工具](/providers)。Multica 服务器只做协调：存 [issue](/issues)、排 [任务](/tasks)、派发给正确的**运行时**（runtime = 守护进程 × 一款 AI 编程工具）。
+在 Multica 里，[智能体](/agents) **不**在我们的服务器上运行——它们跑在你自己的机器上，由全机唯一的 **Computer resident** 调用本地 [AI 编程工具](/providers)。Multica 服务器协调 issue、执行任务和**运行时**（运行时 = 一个工作区连接 × 一款本地 AI 工具）。
 
 这个结构带来 Multica 和 Linear / Jira 最大的差别：**你的 API 密钥、工具链、代码目录都留在本地**，Multica 服务器一个都看不到。"我的智能体不工作"类问题几乎都是本地问题——守护进程没启动、某款 AI 工具没装、密钥过期——请先从本地查起；定位指引见 [故障排查](/troubleshooting)。
 
-## 启动守护进程
+## 启动 Computer
 
-守护进程是 Multica CLI 的一部分。装好 [Multica CLI](/cli) 后，在自己机器上跑：
+Computer 是 Multica CLI 的一部分。先连接一个工作区，之后任意终端都控制同一个 resident：
 
 ```bash
-multica daemon start
+multica setup /my-workspace
+multica computer start
 ```
 
 启动后它会做四件事：
@@ -29,15 +30,16 @@ multica daemon start
 
 | 命令 | 作用 |
 |---|---|
-| `multica daemon start` | 启动（默认后台，加 `--foreground` 前台运行）|
-| `multica daemon stop` | 停止 |
-| `multica daemon restart` | 重启 |
-| `multica daemon status` | 查看状态 |
-| `multica daemon logs` | 查看日志（加 `-f` 跟随）|
+| `multica computer start [/<workspace>]` | 启动全机唯一 resident |
+| `multica computer stop` | 平滑停止 |
+| `multica computer restart [/<workspace>]` | 重启同一个 resident |
+| `multica computer status` | 查看环境、发布通道、身份和连接 |
+| `multica computer logs [/<workspace>]` | 查看日志（加 `-f` 跟随）|
+| `multica computer doctor [/<workspace>]` | 只读诊断本机状态 |
 
 完整 CLI 参考见 [CLI 命令速查](/cli)。
 
-**桌面应用自带守护进程。**用 [桌面应用](/desktop-app) 就不必手动 `multica daemon start`——它启动时会自动拉起守护进程。哪种方式更适合你的工作流，详见 [桌面应用](/desktop-app) 页面。
+`multica daemon ...` 只保留为隐藏兼容别名。新初始化和运维统一使用 `multica computer ...`。
 
 ## 为什么一台机器会有多个运行时
 
@@ -45,7 +47,7 @@ multica daemon start
 
 <Mermaid chart={`
 graph TD
-    D["你的守护进程<br/>MacBook"]
+    D["你的 Computer<br/>MacBook"]
     D --> R1["运行时<br/>工作区 A × Claude Code"]
     D --> R2["运行时<br/>工作区 A × Codex"]
     D --> R3["运行时<br/>工作区 B × Claude Code"]
@@ -54,8 +56,8 @@ graph TD
 
 关键的点：
 
-- **一个守护进程可以对应多个运行时**——装了多款工具、加入了多个工作区，每个组合就各一个
-- **同一个守护进程在同一个工作区同一款工具上只会有一条运行时**——重启守护进程不会产生重复记录
+- **一个 Computer 可以对应多个运行时**——每个已明确连接的工作区与本地工具组合各一个
+- **同一个 Computer、环境、工作区和工具只会有一条运行时**——重启不会产生重复记录
 - Multica 界面的 **Runtimes** 页面列的就是这些行
 
 <Callout type="info">
@@ -99,8 +101,8 @@ Multica 对并发有两层限额：
 
 遇到「我的智能体不工作」类问题，先过一遍这三步：
 
-1. 跑 `multica daemon status`，确认守护进程在运行且在线
-2. 跑 `multica daemon logs -f`，看是否有错误
+1. 跑 `multica computer status`，确认 resident 在预期环境运行且在线
+2. 跑 `multica computer logs -f`，看是否有错误
 3. 去 Multica 界面的 **Runtimes** 页面，确认你的运行时显示「在线」
 
 更多场景见 [Troubleshooting](/troubleshooting)。

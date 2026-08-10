@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -66,7 +67,7 @@ func (d *Daemon) checkForNewerRelease(ctx context.Context) {
 	if d.updateObservation == nil {
 		return
 	}
-	manifest, err := fetchReleaseManifest(ctx)
+	manifest, err := fetchReleaseManifestForChannel(ctx, d.cfg.ReleaseChannel, d.releaseManifestBaseURLOverride())
 	if err != nil {
 		d.logger.Debug("auto-update detection: manifest fetch failed", "error", err)
 		return
@@ -130,8 +131,19 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 // resolved by releaseManifestBaseURL(). It is kept small and dependency-light on
 // purpose so the detection loop never touches the server API client.
 func fetchReleaseManifest(ctx context.Context) (*cli.ReleaseManifest, error) {
-	base := cli.ReleaseManifestBaseURL()
+	return fetchReleaseManifestForChannel(ctx, string(cli.ReleaseChannelLatest), "")
+}
+
+func fetchReleaseManifestForChannel(ctx context.Context, rawChannel, serverDispatched string) (*cli.ReleaseManifest, error) {
+	channel, err := cli.NormalizeReleaseChannel(rawChannel)
+	if err != nil {
+		return nil, err
+	}
+	base := strings.TrimRight(cli.ReleaseManifestBaseURLWithOverride(serverDispatched), "/")
 	manifestURLs := []string{base + "/manifest.json", base + "/latest.json", base + "/release.json"}
+	if channel == cli.ReleaseChannelAlpha {
+		manifestURLs = []string{base + "/alpha.json"}
+	}
 	// A dedicated client with a per-request timeout keeps a hung release-feed
 	// endpoint from stalling a detection tick indefinitely.
 	client := &http.Client{Timeout: 15 * time.Second}

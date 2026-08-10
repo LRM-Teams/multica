@@ -145,26 +145,24 @@ The CLI install is the same as in [Cloud quickstart → 2. Install the CLI](/clo
 
 ### 5a. Same machine
 
-If the CLI and the server run on the same host, the defaults already work:
+After creating a Workspace in the web app, connect the Computer explicitly as a test environment:
 
 ```bash
-multica setup self-host
+multica setup --environment test --test-url http://localhost:8080 /<workspace-slug>
 ```
 
-That points the CLI at `http://localhost:8080` (backend) and `http://localhost:3000` (frontend), takes you through browser login, stores the PAT locally, and **starts the daemon automatically**.
+The server-provided device link opens the frontend login, while the Computer API origin remains `http://localhost:8080`. Setup stores the PAT, adds one Workspace connection, and starts the resident.
 
 ### 5b. Cross-machine: front with a reverse proxy
 
 Because the compose stack only listens on `127.0.0.1`, a daemon on a different machine cannot reach `http://<server-ip>:8080` directly — and you do not want it to, since server secrets would otherwise be reachable from the open internet. Put a reverse proxy on the server that terminates TLS and forwards to `127.0.0.1:8080` (backend) and `127.0.0.1:3000` (frontend), then point the CLI at the public HTTPS URL:
 
 ```bash
-multica setup self-host \
-  --server-url https://<your-domain> \
-  --app-url https://<your-domain>
+multica setup --environment test --test-url https://<your-domain> /<workspace-slug>
 ```
 
 <Callout type="info">
-Prefer environment variables over flags? `setup self-host` reads `MULTICA_SERVER_URL` and `MULTICA_APP_URL` when the matching flag is omitted — a flag still takes precedence over the env var. `MULTICA_SERVER_URL` also accepts the `ws://…/ws` daemon form from [Environment variables](/environment-variables) and normalizes it to the HTTP base.
+The `test` label is explicit here: production cannot be redirected away from `leagent.me`, and the retired profile/self-host setup path cannot create a second resident.
 </Callout>
 
 A minimal Caddyfile that fronts both the frontend and the backend (with WebSocket support, which the daemon and the web app both need) on a single hostname:
@@ -254,9 +252,7 @@ curl -H "Host: api.multica.dev.lan" http://<ingress-ip>/healthz
 Then open `http://multica.dev.lan` and continue at [Step 4 — First login](#4-first-login--create-a-workspace) above. Point the CLI at your Ingress hostnames:
 
 ```bash
-multica setup self-host \
-  --server-url http://api.multica.dev.lan \
-  --app-url http://multica.dev.lan
+multica setup --environment test --test-url http://api.multica.dev.lan /<workspace-slug>
 ```
 
 To pull the latest images without changing the chart, `kubectl -n multica rollout restart deploy/multica-backend deploy/multica-frontend`. To pin a specific Multica release, set `images.backend.tag` / `images.frontend.tag` in your values file and `helm upgrade`. `helm -n multica uninstall multica` removes the workloads but keeps the PVCs and Secret; `kubectl delete namespace multica` wipes everything.

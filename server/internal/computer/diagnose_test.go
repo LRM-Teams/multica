@@ -7,9 +7,9 @@ import (
 
 func TestDiagnoseReadOnlyAndReflectsResident(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 	lc.Probe = func(context.Context, int) map[string]any {
-		return map[string]any{"status": "running", "daemon_id": "d1"}
+		return map[string]any{"status": "running", "connected": true, "daemon_id": "d1"}
 	}
 
 	d := lc.Diagnose()
@@ -21,9 +21,22 @@ func TestDiagnoseReadOnlyAndReflectsResident(t *testing.T) {
 	}
 }
 
+func TestDiagnoseRunningButServerDisconnected(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	lc := &Lifecycle{}
+	lc.Probe = func(context.Context, int) map[string]any {
+		return map[string]any{"status": "running", "connected": false, "agents": []any{"fresh-agent"}}
+	}
+
+	d := lc.Diagnose()
+	if d.Resident != "running" || d.Connected {
+		t.Fatalf("doctor = %+v, local process or Agent health must not imply server connectivity", d)
+	}
+}
+
 func TestDiagnoseStoppedIsDisconnected(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	lc := &Lifecycle{Profile: ""}
+	lc := &Lifecycle{}
 	lc.Probe = func(context.Context, int) map[string]any { return map[string]any{"status": "stopped"} }
 
 	d := lc.Diagnose()

@@ -13,13 +13,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/computer"
 )
 
-// newTestComputerIdentityStore returns a machine-wide Computer identity store
-// rooted under the given HOME (test temp dir).
-func newTestComputerIdentityStore(t *testing.T, home string) *computer.IdentityStore {
-	t.Helper()
-	return computer.NewIdentityStore(filepath.Join(home, ".multica"))
-}
-
 // cliProfileConfigPath is the machine-wide CLI config path under HOME.
 func cliProfileConfigPath(home string) string {
 	return filepath.Join(home, ".multica", "config.json")
@@ -525,14 +518,26 @@ func TestCloudLoginOriginHonorsTestOverride(t *testing.T) {
 	}
 }
 
-// #2488: logout clears the user session but retains Computer Identity.
-func TestLogoutClearsSessionAndRetainsIdentity(t *testing.T) {
+// #2488: logout clears only the machine session and retains Computer Identity,
+// Workspace connections, and Agent Roots.
+func TestLogoutClearsOnlySessionAndRetainsComputerState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	// Create a machine identity and a session token.
-	store := newTestComputerIdentityStore(t, home)
-	store.Load("")
+	identity, err := (&computer.Lifecycle{}).Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := computer.NewBindingsStore(computer.RootDir(""))
+	if err := bindings.AddOrRepair(computer.WorkspaceBinding{
+		WorkspaceID: "ws-1", ComputerID: identity, Active: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agentRoot := filepath.Join(computer.RootDir(""), "agents", "agent-1")
+	if err := os.MkdirAll(agentRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(cliProfileConfigPath(home), []byte(`{"token":"mul_secret","server_url":"https://leagent.me"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -549,9 +554,14 @@ func TestLogoutClearsSessionAndRetainsIdentity(t *testing.T) {
 	if cfg.Token != "" {
 		t.Fatalf("token not cleared after logout: %q", cfg.Token)
 	}
-	// Identity must be retained.
-	identityPath := filepath.Join(home, ".multica", "daemon.id")
+	identityPath := filepath.Join(home, ".multica", "computer", "daemon.id")
 	if _, err := os.Stat(identityPath); err != nil {
 		t.Fatalf("Computer Identity was not retained after logout: %v", err)
+	}
+	if got, err := bindings.AllActive(); err != nil || len(got) != 1 {
+		t.Fatalf("Workspace connection was not retained: %+v, %v", got, err)
+	}
+	if _, err := os.Stat(agentRoot); err != nil {
+		t.Fatalf("Agent Root was not retained: %v", err)
 	}
 }

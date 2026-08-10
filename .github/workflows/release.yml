@@ -228,6 +228,15 @@ jobs:
           done
           echo "Promoted ${TAG_NAME} to the canonical and legacy release manifests"
 
+      - name: Promote alpha release manifest
+        if: env.IS_STABLE != 'true'
+        run: |
+          set -euo pipefail
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+            --cache-control "no-cache,max-age=0,must-revalidate" \
+            "${RUNNER_TEMP}/manifest.json" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/alpha.json"
+          echo "Promoted ${TAG_NAME} to the alpha release channel"
+
       - name: Install pinned Aliyun CLI
         run: |
           set -euo pipefail
@@ -264,6 +273,8 @@ jobs:
           if [ "$IS_STABLE" = "true" ]; then
             object_paths+=$'\n'"${PUBLIC_BASE_URL}/manifest.json"
             object_paths+=$'\n'"${PUBLIC_BASE_URL}/latest.json"
+          else
+            object_paths+=$'\n'"${PUBLIC_BASE_URL}/alpha.json"
           fi
           aliyun --config-path "$config" \
             cdn RefreshObjectCaches \
@@ -304,6 +315,9 @@ jobs:
               "${RUNNER_TEMP}/manifest.json" "canonical promoted manifest"
             verify_matches "${PUBLIC_BASE_URL}/latest.json" \
               "${RUNNER_TEMP}/manifest.json" "legacy promoted manifest"
+          else
+            verify_matches "${PUBLIC_BASE_URL}/alpha.json" \
+              "${RUNNER_TEMP}/manifest.json" "alpha promoted manifest"
           fi
           echo "Verified: public CDN bytes match the canonical release feed."
 

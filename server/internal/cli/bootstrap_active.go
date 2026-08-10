@@ -102,5 +102,12 @@ func (s *VersionStore) BootstrapActiveFromExecutable(
 		// Fall back to raw executable path.
 		resolved = exe
 	}
+	// Record only a stable installation entrypoint. A successor already
+	// running from versions/<tag>/multica must preserve the earlier launcher.
+	if !insidePath(s.VersionsRoot(), resolved) {
+		if err := s.RememberLauncherPath(resolved); err != nil {
+			return ActivationState{}, fmt.Errorf("remember stable launcher: %w", err)
+		}
+	}
 	return s.BootstrapActiveFromBinary(ctx, resolved, version)
 }

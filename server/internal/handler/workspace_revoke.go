@@ -60,6 +60,43 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 
 	result := revocationResult{Runtimes: runtimes}
 
+	// Revoke explicit Computer Bindings even when this Workspace currently has
+	// zero runtimes. Runtime-derived revocation alone misses that case and would
+	// leave the machine credential usable after membership loss.
+	if err := tx.QueryRow(ctx, `
+SELECT count(*) FROM computer_workspace_bindings
+ WHERE workspace_id = $1 AND user_id = $2 AND active = TRUE`, workspaceID, userID).Scan(&result.RevokedBindings); err != nil {
+		return empty, err
+	}
+	bindingTokenRows, err := tx.Query(ctx, `
+WITH revoked AS (
+    UPDATE computer_workspace_bindings
+       SET active = FALSE, revoked_at = now()
+     WHERE workspace_id = $1 AND user_id = $2 AND active = TRUE
+ RETURNING daemon_id
+), deleted_tokens AS (
+    DELETE FROM daemon_token t
+     USING revoked r
+     WHERE t.workspace_id = $1 AND t.daemon_id = r.daemon_id
+ RETURNING t.token_hash
+)
+SELECT token_hash FROM deleted_tokens`, workspaceID, userID)
+	if err != nil {
+		return empty, err
+	}
+	for bindingTokenRows.Next() {
+		var tokenHash string
+		if err := bindingTokenRows.Scan(&tokenHash); err != nil {
+			bindingTokenRows.Close()
+			return empty, err
+		}
+		result.RevokedTokenHashes = append(result.RevokedTokenHashes, tokenHash)
+	}
+	if err := bindingTokenRows.Err(); err != nil {
+		bindingTokenRows.Close()
+		return empty, err
+	}
+	bindingTokenRows.Close()
 	if len(runtimes) > 0 {
 		runtimeIDs := make([]pgtype.UUID, len(runtimes))
 		daemonIDs := make([]string, 0, len(runtimes))
@@ -137,10 +174,11 @@ type revocationResult struct {
 	CancelledTasks     []db.AgentInboxEvent
 	OfflineRuntimeIDs  []db.ForceOfflineRuntimesByIDsRow
 	RevokedTokenHashes []string
+	RevokedBindings    int
 }
 
 func (r revocationResult) isEmpty() bool {
-	return len(r.Runtimes) == 0
+	return len(r.Runtimes) == 0 && r.RevokedBindings == 0 && len(r.RevokedTokenHashes) == 0
 }
 
 // publishRevocation runs all post-commit side effects: invalidate daemon token
@@ -199,6 +237,7 @@ func logRevocation(result revocationResult, workspaceID, userID string, attrs ..
 		"tasks_cancelled", len(result.CancelledTasks),
 		"runtimes_taken_offline", len(result.OfflineRuntimeIDs),
 		"daemon_tokens_revoked", len(result.RevokedTokenHashes),
+		"computer_bindings_revoked", result.RevokedBindings,
 	}
 	slog.Info("member runtimes revoked", append(base, attrs...)...)
 }

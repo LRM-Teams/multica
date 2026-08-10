@@ -173,8 +173,14 @@
 - **Subgoal 收敛方向**：现有 `channel_goal_subgoal` 不发展成第二套 DAG；通用图内核落地后，Goal 子目标 UI 应成为 Work Graph Node 投影或被明确迁移，禁止长期双向同步两套执行真相。
 - **当前物**：assignment runtime 的 `Work Decomposition Gate` 及回归测试；完整分期见 [`docs/superpowers/plans/2026-08-06-goal-work-graph-runtime.md`](superpowers/plans/2026-08-06-goal-work-graph-runtime.md)。原子建图、ready scheduler、Graph Delta、Artifact/verification 和失效传播尚未实现，不得由 Prompt 冒充。
 
-### 4.0 Aliyun 单一正式 CD 与 runner ownership — `可执行`（③单一部署链 + ⑤ workflow/host gate；owner: @Barry）
-- **唯一正式 dev 环境**：`dev` 只部署到 Aliyun `101.200.210.144`；公开 Web/API origin 由部署环境变量提供，production 默认分别是 `https://www.leagent.me` 与 `https://api.leagent.me`，test/staging 必须使用自己的值；`:8090` 只保留 daemon 兼容与部署探针。腾讯 s89 已退出正式 release path，只保留离线回滚资料；workflow 不得有 s89 runner、环境或 fallback 分支。
+### 4.0 服务环境、发布通道与产物晋级是三条轴 — `仅文档`（腾讯 test / main 保护与 digest promotion 尚未落 workflow，owner: @Barry）
+- **服务环境**：`production` 是 leagent.me 正式服务，browser/API 的 canonical origin 分别是 `https://www.leagent.me` 与 `https://api.leagent.me`，客户端和 Computer 不得重定向到别处；`test` 是显式选择，目标为腾讯云，允许带协议的 IP/端口或 `https://test.leagent.me`，首版同一 origin 同时承担 app/API。本机只有一个 Computer root/identity/resident，但 Workspace connection 的本地键是 `(environment, workspace_id)`；可同时保留两边连接，单个 resident generation 只服务当前环境。
+- **发布通道**：`latest` 只指向无预发布后缀的稳定 SemVer，`alpha` 指向 `vX.Y.Z-alpha.N` / `beta.N` / `rc.N` 预发布；manifest 是可移动指针，带版本的 archive、checksum、manifest 永远不可变。环境与通道独立：test 默认 alpha、production 默认 latest，但显式选择可覆盖默认，缺 alpha manifest 必须失败，不得 fallback 到 latest。
+- **部署晋级**：目标拓扑是 `dev → Tencent test`、验收后 `main → leagent.me production`；backend/web 应提升同一个已验证 image digest，禁止在 production 重新构建出另一份未知字节。当前仓库仍是 `dev → Aliyun/leagent.me` 且没有受保护 `main` / Tencent deployment environment，这一段在基础设施切换完成前不得标 `可执行`，也不得把目标拓扑写成已经上线。
+- **客户端产物**：CLI/Computer 使用同一份签名二进制，环境在运行时选择，不为 test/production 各编一份。Desktop 不在 Computer v1 交付范围。预发布 tag 更新 `alpha.json`，稳定 tag 只更新 `manifest.json` / `latest.json`。
+
+### 4.0.a 当前 Aliyun deployment ownership — `可执行`（③单一部署链 + ⑤ workflow/host gate；owner: @Barry；切换前事实）
+- **当前事实**：在腾讯 test 与 `main` production workflow 真正上线前，现有 `dev` 仍只部署到 Aliyun `101.200.210.144`；公开 Web/API origin 由部署环境变量提供，production 默认是 `https://www.leagent.me` / `https://api.leagent.me`；`:8090` 只保留 Computer 兼容与部署探针。腾讯 s89 已退出当前正式 release path、只保留离线回滚资料。不要把“目标分环境”误报为“线上已分环境”。
 - **构建与部署分界**：镜像和最小 deploy bundle 在 GitHub-hosted runner 生成；Aliyun self-hosted runner 只下载同一 `github.sha` 的 immutable artifact、拉固定 SHA 镜像并在本机执行 Compose/Caddy/readyz。self-hosted deploy job 禁止 `actions/checkout`/git fetch，避免大陆网络 partial clone 失败，也避免把 Actions checkout 变成人工/agent 共用源码树。
 - **runner ownership**：Aliyun runner/deploy user 是 `dev`，`/home/dev/actions-runner/_work/**` 必须全为 `dev`。artifact 前、artifact 后、deploy 后、终局四个 phase 都扫描整棵 work root；任何异主路径立即报 phase + owner/mode + exact path，禁止 broad chown。人工/agent 永远不得在 `_work/**` 建 branch/worktree。
 - **runtime owner 与 secrets**：`/data/multica` 由 deploy owner `dev` 管理，Caddyfile 从 runner-owned artifact 先校验，再通过 sibling + atomic rename 安装；不 sudo、不回写 runner work root。runtime secrets 只在 host-owned `/data/multica/.env`，受保护 GitHub Environment `aliyun-dev` 只做部署边界；Compose dotenv 永远只作为数据解析，禁止 `source`/`eval`，不能覆盖 workflow 控制变量。每次 restart 前必须用同一份 host 目标 user/database/password 三元组做真实 PostgreSQL TCP `SELECT 1`，不把“文件有值”或旧容器 identity 当 credential 有效。

@@ -198,6 +198,16 @@
       "description": "Permanently delete this computer and its runtimes from the workspace.",
       "description_cloud": "Permanently delete this cloud computer, its container, and its runtimes from the workspace."
     },
+    "remove_binding": {
+      "button": "Remove from this Workspace…",
+      "title": "Remove this computer from the Workspace?",
+      "description": "This removes \"{{name}}\" from this Workspace only. Its other Workspaces keep running, and local Agent data stays on the computer so it can be reconnected later.",
+      "cancel": "Cancel",
+      "confirm": "Remove computer",
+      "removing": "Removing…",
+      "success": "Computer removed from this Workspace. Local Agent data was preserved.",
+      "invalid_response": "The server did not confirm that the computer was safely removed."
+    },
     "agents_select": "Select",
     "agents_create": "Create",
     "agents_done": "Done",

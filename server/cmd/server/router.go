@@ -563,6 +563,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/deregister", h.DaemonDeregister)
 		r.Post("/starting", h.DaemonMarkStarting)
 		r.Post("/heartbeat", h.DaemonHeartbeat)
+		r.Post("/computer/heartbeat", h.ComputerHeartbeat)
+		r.Post("/computer/machine-upgrades/{upgradeId}/attest", h.AttestComputerMachineUpgrade)
 		r.Get("/ws", h.DaemonWebSocket)
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
@@ -1178,6 +1180,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			})
 
 			// Runtimes
+			r.Get("/api/computers", h.ListComputers)
 			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
 				// Computer / host one-click delete (LRM-438). Must be

@@ -87,7 +87,7 @@ func runtimeReleaseFromManifest(manifest *cli.ReleaseManifest) (*RuntimeRelease,
 	if tag == "" {
 		return nil, fmt.Errorf("latest release tag is empty")
 	}
-	if !cli.IsReleaseVersion(tag) {
+	if !cli.IsStableReleaseVersion(tag) {
 		return nil, fmt.Errorf("latest release tag %q is not a stable CLI release", tag)
 	}
 	if len(manifest.Platforms) == 0 {

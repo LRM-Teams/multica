@@ -11,10 +11,9 @@ import (
 // in-memory fake so the authorization/idempotency/negative-control contract is
 // verified without a database.
 type BindingStore interface {
-	Get(workspaceID string) (WorkspaceBinding, bool, error)
-	AddOrRepair(WorkspaceBinding) error
-	Remove(workspaceID string) error
-	All() ([]WorkspaceBinding, error)
+	ListScoped(computerID, userID string) ([]WorkspaceBinding, error)
+	UpsertScoped(BindingRequest, WorkspaceBinding) error
+	RevokeScoped(BindingRequest) ([]string, error)
 }
 
 // BindingService implements the server-side creation/repair/revocation
@@ -35,7 +34,7 @@ type CreateResult struct {
 // repeat for the same (Computer, Workspace) by the same actor is a repair, not
 // a duplicate. A revoked binding is re-created fresh (no silent quiet-repair).
 func (s *BindingService) Create(req BindingRequest, b WorkspaceBinding) (CreateResult, error) {
-	cur, err := s.Store.All()
+	cur, err := s.Store.ListScoped(req.TargetComputerID, "")
 	if err != nil {
 		return CreateResult{}, err
 	}
@@ -47,8 +46,10 @@ func (s *BindingService) Create(req BindingRequest, b WorkspaceBinding) (CreateR
 		return CreateResult{}, fmt.Errorf("binding workspace_id must equal the immutable request target")
 	}
 	b.Active = true
+	b.ComputerID = req.TargetComputerID
+	b.UserID = req.ActorUserID
 	b.AcceptedAt = time.Now().UTC()
-	if err := s.Store.AddOrRepair(b); err != nil {
+	if err := s.Store.UpsertScoped(req, b); err != nil {
 		return CreateResult{}, err
 	}
 	return CreateResult{Binding: b, Kind: kind}, nil
@@ -57,21 +58,28 @@ func (s *BindingService) Create(req BindingRequest, b WorkspaceBinding) (CreateR
 // Revoke revokes exactly one Binding by immutable workspace_id, preserving every
 // sibling and all local Agent data (#2493). Returns ErrBindingUnauthorized on
 // fail-closed paths.
-func (s *BindingService) Revoke(req BindingRequest, workspaceID string) error {
-	cur, err := s.Store.All()
+func (s *BindingService) Revoke(req BindingRequest, workspaceID string) ([]string, error) {
+	cur, err := s.Store.ListScoped(req.TargetComputerID, "")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := ValidateRemove(req, cur); err != nil {
-		return err
+		return nil, err
 	}
-	if err := s.Store.Remove(workspaceID); err != nil {
-		return err
+	for _, binding := range cur {
+		if binding.WorkspaceID == req.TargetWorkspaceID {
+			req.BindingOwnerUserID = binding.UserID
+			break
+		}
 	}
-	return nil
+	revokedTokenHashes, err := s.Store.RevokeScoped(req)
+	if err != nil {
+		return nil, err
+	}
+	return revokedTokenHashes, nil
 }
 
 // All returns the current active bindings.
-func (s *BindingService) All() ([]WorkspaceBinding, error) {
-	return s.Store.All()
+func (s *BindingService) All(computerID, userID string) ([]WorkspaceBinding, error) {
+	return s.Store.ListScoped(computerID, userID)
 }

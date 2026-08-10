@@ -14,6 +14,7 @@ import type {
   ListIssuesParams,
   ListGroupedIssuesParams,
   Agent,
+  ComputerConnection,
   AgentFileContentResponse,
   AgentFilesResponse,
   CreateAgentRequest,
@@ -281,6 +282,7 @@ import {
   EMPTY_AGENT_FILES_RESPONSE,
   EMPTY_AGENT_HEALTH_RESPONSE,
   EMPTY_AGENT_RUNTIME_LIST,
+  EMPTY_COMPUTER_CONNECTION_LIST,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -301,6 +303,7 @@ import {
   RunnerActivityResponseSchema,
   EMPTY_RUNNER_ACTIVITY_RESPONSE,
   AgentRuntimeListSchema,
+  ComputerConnectionListSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelGoalEnvelopeSchema,
@@ -414,6 +417,9 @@ import {
   EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
   type DeleteComputerResponse,
   type RemoveComputerAgentsResponse,
+  RemoveComputerWorkspaceBindingResponseSchema,
+  EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE,
+  type RemoveComputerWorkspaceBindingResponse,
   MachineUpgradeSchema,
   EMPTY_MACHINE_UPGRADE,
   NotePageSchema,
@@ -1525,6 +1531,17 @@ export class ApiClient {
     );
   }
 
+  async listComputers(workspaceId: string): Promise<ComputerConnection[]> {
+    const search = new URLSearchParams({ workspace_id: workspaceId });
+    const raw = await this.fetch<unknown>(`/api/computers?${search}`);
+    return parseWithFallback(
+      raw,
+      ComputerConnectionListSchema,
+      EMPTY_COMPUTER_CONNECTION_LIST,
+      { endpoint: "GET /api/computers" },
+    );
+  }
+
   async listCloudRuntimeNodes(
     params?: ListCloudRuntimeNodesParams,
   ): Promise<CloudRuntimeNode[]> {
@@ -1699,6 +1716,22 @@ export class ApiClient {
 
   async deleteRuntime(runtimeId: string): Promise<void> {
     await this.fetch(`/api/runtimes/${runtimeId}`, { method: "DELETE" });
+  }
+
+  async removeComputerWorkspaceBinding(
+    daemonId: string,
+    workspaceId: string,
+  ): Promise<RemoveComputerWorkspaceBindingResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/daemons/${encodeURIComponent(daemonId)}/bindings/${encodeURIComponent(workspaceId)}`,
+      { method: "DELETE" },
+    );
+    return parseWithFallback(
+      raw,
+      RemoveComputerWorkspaceBindingResponseSchema,
+      EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE,
+      { endpoint: "DELETE /api/daemons/{daemonId}/bindings/{workspaceId}" },
+    );
   }
 
   // Permanently deletes an empty Computer. Active agents return a structured

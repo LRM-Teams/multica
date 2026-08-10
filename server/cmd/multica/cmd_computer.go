@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -20,16 +19,28 @@ var computerCmd = &cobra.Command{
 	// The Computer is machine-wide: Workspace selectors are scoping only and
 	// never select a profile or a second resident.
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := rejectRetiredComputerFlags(cmd); err != nil {
+			return err
+		}
 		computerMode = true
 		return nil
 	},
 }
 
+func rejectRetiredComputerFlags(cmd *cobra.Command) error {
+	for _, name := range []string{"profile", "server-url"} {
+		if flag := cmd.Flags().Lookup(name); flag != nil && cmd.Flags().Changed(name) {
+			return fmt.Errorf("--%s is not supported by the machine-wide Cloud Computer", name)
+		}
+	}
+	return nil
+}
+
 var computerStartCmd = &cobra.Command{
-	Use:   "start",
+	Use:   "start [/<workspace>]",
 	Short: "Start the resident Computer",
 	Long:  "Start the machine-wide resident Computer that polls for tasks and executes them using local agent CLIs (Claude, Codex).\nRuns detached in the background by default. Use --foreground to run in the current terminal.",
-	Args:  cobra.NoArgs,
+	Args:  optionalWorkspacePath,
 	RunE:  runDaemonStart,
 }
 
@@ -48,23 +59,23 @@ var computerStatusCmd = &cobra.Command{
 }
 
 var computerRestartCmd = &cobra.Command{
-	Use:   "restart",
+	Use:   "restart [/<workspace>]",
 	Short: "Restart the resident Computer (stop + start)",
-	Args:  cobra.NoArgs,
+	Args:  optionalWorkspacePath,
 	RunE:  runDaemonRestart,
 }
 
 var computerLogsCmd = &cobra.Command{
-	Use:   "logs",
+	Use:   "logs [/<workspace>]",
 	Short: "Show resident Computer service logs",
-	Args:  cobra.NoArgs,
+	Args:  optionalWorkspacePath,
 	RunE:  runDaemonLogs,
 }
 
 var computerDoctorCmd = &cobra.Command{
-	Use:   "doctor",
+	Use:   "doctor [/<workspace>]",
 	Short: "Diagnose the Computer (read-only evidence)",
-	Args:  cobra.NoArgs,
+	Args:  optionalWorkspacePath,
 	RunE:  runComputerDoctor,
 }
 
@@ -74,6 +85,89 @@ var computerUpgradeCmd = &cobra.Command{
 	Long:  "Upgrade the daemon on this computer. By default it requests the latest version; pass --target-version to install a specific version.",
 	Args:  cobra.NoArgs,
 	RunE:  runComputerUpgrade,
+}
+
+var computerIdentityCmd = &cobra.Command{
+	Use:   "identity",
+	Short: "Inspect or explicitly resolve Computer identity evidence",
+	Args:  cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		return cli.PrintJSON(os.Stdout, computer.NewIdentityStore(computer.RootDir("")).Peek(""))
+	},
+}
+
+var computerIdentityAdoptCmd = &cobra.Command{
+	Use:   "adopt <computer-id>",
+	Short: "Adopt a preserved legacy Computer identity",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		if err := requireComputerStoppedForIdentityChange(); err != nil {
+			return err
+		}
+		result, err := computer.NewIdentityStore(computer.RootDir("")).Adopt(args[0])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "Adopted Computer identity %s. Preserved legacy evidence was not deleted.\n", result.ID)
+		return nil
+	},
+}
+
+var computerIdentityFreshCmd = &cobra.Command{
+	Use:   "fresh",
+	Short: "Explicitly create a new Computer identity while preserving legacy evidence",
+	Args:  cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		if err := requireComputerStoppedForIdentityChange(); err != nil {
+			return err
+		}
+		result, err := computer.NewIdentityStore(computer.RootDir("")).CreateFresh()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "Computer identity is %s. Preserved legacy evidence was not deleted.\n", result.ID)
+		return nil
+	},
+}
+
+var computerChannelCmd = &cobra.Command{
+	Use:   "channel [latest|alpha]",
+	Short: "Show or select the Computer release channel",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		cfg, err := cli.LoadCLIConfigForProfile("")
+		if err != nil {
+			return err
+		}
+		current, err := cli.ResolveReleaseChannel(cfg)
+		if err != nil {
+			return err
+		}
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stdout, current)
+			return nil
+		}
+		next, err := cli.NormalizeReleaseChannel(args[0])
+		if err != nil {
+			return err
+		}
+		if next == current {
+			fmt.Fprintf(os.Stdout, "Release channel is already %s.\n", current)
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		running := computer.Alive((&computer.Lifecycle{}).Health(ctx))
+		cancel()
+		if running {
+			return fmt.Errorf("stop the Computer before changing its release channel")
+		}
+		cfg.ReleaseChannel = string(next)
+		if err := cli.SaveCLIConfigForProfile(cfg, ""); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "Release channel set to %s. Service environment is unchanged.\n", next)
+		return nil
+	},
 }
 
 func init() {
@@ -107,11 +201,33 @@ func init() {
 	computerCmd.AddCommand(computerLogsCmd)
 	computerCmd.AddCommand(computerDoctorCmd)
 	computerCmd.AddCommand(computerUpgradeCmd)
+	computerIdentityCmd.AddCommand(computerIdentityAdoptCmd)
+	computerIdentityCmd.AddCommand(computerIdentityFreshCmd)
+	computerCmd.AddCommand(computerIdentityCmd)
+	computerCmd.AddCommand(computerChannelCmd)
 }
 
-func runComputerDoctor(cmd *cobra.Command, _ []string) error {
-	lc := &computer.Lifecycle{Profile: ""}
+func requireComputerStoppedForIdentityChange() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if computer.Alive((&computer.Lifecycle{}).Health(ctx)) {
+		return fmt.Errorf("stop the Computer before changing its identity")
+	}
+	return nil
+}
+
+func runComputerDoctor(cmd *cobra.Command, args []string) error {
+	binding, selected, err := resolveWorkspaceBinding(args)
+	if err != nil {
+		return err
+	}
+	lc := &computer.Lifecycle{}
 	d := lc.Diagnose()
+	if selected {
+		d.SelectedWorkspaceID = binding.WorkspaceID
+		d.SelectedWorkspaceSlug = binding.WorkspaceSlug
+		d.SelectedConnectionActive = binding.Active
+	}
 	if fix, _ := cmd.Flags().GetBool("fix"); fix {
 		d = lc.Fix(d)
 	}
@@ -121,8 +237,11 @@ func runComputerDoctor(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "identity:     %s (%s)\n", d.IdentityState, orDash(d.ComputerID))
 	fmt.Fprintf(os.Stdout, "resident:     %s\n", d.Resident)
-	fmt.Fprintf(os.Stdout, "bindings:     %d\n", d.Bindings)
+	fmt.Fprintf(os.Stdout, "connections:  %d\n", d.WorkspaceConnections)
 	fmt.Fprintf(os.Stdout, "connected:    %v\n", d.Connected)
+	fmt.Fprintf(os.Stdout, "environment:  %s\n", orDash(d.Environment))
+	fmt.Fprintf(os.Stdout, "service:      %s\n", orDash(d.ServiceOrigin))
+	fmt.Fprintf(os.Stdout, "channel:      %s\n", orDash(d.ReleaseChannel))
 	fmt.Fprintf(os.Stdout, "canonical:    %s\n", d.CanonicalHost)
 	for _, f := range d.FixApplied {
 		fmt.Fprintf(os.Stdout, "fixed:        %s\n", f)
@@ -132,6 +251,51 @@ func runComputerDoctor(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("Computer is not connected")
 	}
 	return nil
+}
+
+// optionalWorkspacePath accepts an immutable-id or display-slug selector only
+// in the public /workspace form. It scopes readiness/diagnostics/log filtering;
+// it never selects a profile or changes which Bindings the resident restores.
+func optionalWorkspacePath(_ *cobra.Command, args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("accepts at most one Workspace selector")
+	}
+	if len(args) == 1 && (!strings.HasPrefix(args[0], "/") || len(args[0]) == 1) {
+		return fmt.Errorf("Workspace selector must be /<workspace-id-or-slug>")
+	}
+	return nil
+}
+
+func resolveWorkspaceBinding(args []string) (computer.WorkspaceBinding, bool, error) {
+	if len(args) == 0 {
+		return computer.WorkspaceBinding{}, false, nil
+	}
+	selector := strings.TrimPrefix(args[0], "/")
+	cfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return computer.WorkspaceBinding{}, true, fmt.Errorf("load current service environment: %w", err)
+	}
+	target, err := cli.ResolveServiceTarget(cfg)
+	if err != nil {
+		return computer.WorkspaceBinding{}, true, err
+	}
+	bindings, err := computer.NewBindingsStore(computer.RootDir("")).AllActiveForEnvironment(string(target.Environment))
+	if err != nil {
+		return computer.WorkspaceBinding{}, true, fmt.Errorf("load Computer Workspace connections: %w", err)
+	}
+	var matched []computer.WorkspaceBinding
+	for _, binding := range bindings {
+		if binding.WorkspaceID == selector || binding.WorkspaceSlug == selector {
+			matched = append(matched, binding)
+		}
+	}
+	if len(matched) == 0 {
+		return computer.WorkspaceBinding{}, true, fmt.Errorf("Workspace %q is not connected; run `multica setup /%s`", selector, selector)
+	}
+	if len(matched) > 1 {
+		return computer.WorkspaceBinding{}, true, fmt.Errorf("Workspace selector %q is ambiguous; use the immutable Workspace id", selector)
+	}
+	return matched[0], true, nil
 }
 
 func orDash(s string) string {
@@ -147,40 +311,18 @@ func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	identity, err := (&computer.Lifecycle{Profile: resolveProfile(cmd)}).Identity()
-	if err != nil {
-		return fmt.Errorf("resolve local computer identity: %w", err)
-	}
 	targetVersion, _ := cmd.Flags().GetString("target-version")
+	wait, _ := cmd.Flags().GetBool("wait")
 	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(150*time.Second))
 	defer cancel()
-
-	body := map[string]any{"target_version": strings.TrimSpace(targetVersion), "request_id": uuid.NewString()}
-	var upgrade map[string]any
-	if err := client.PostJSON(ctx, "/api/daemons/"+identity+"/upgrades", body, &upgrade); err != nil {
-		return fmt.Errorf("create computer upgrade: %w", err)
+	upgrade, err := (&computer.Lifecycle{}).Upgrade(ctx, client, computer.UpgradeOptions{
+		TargetVersion: targetVersion,
+		Wait:          wait,
+	})
+	if err != nil {
+		return err
 	}
-
-	wait, _ := cmd.Flags().GetBool("wait")
-	if !wait {
-		return printComputerUpgrade(cmd, upgrade)
-	}
-	upgradeID := strVal(upgrade, "id")
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for computer upgrade (last phase: %s)", strVal(upgrade, "phase"))
-		case <-time.After(2 * time.Second):
-		}
-		if err := client.GetJSON(ctx, "/api/daemons/"+identity+"/upgrades/"+upgradeID, &upgrade); err != nil {
-			return fmt.Errorf("get computer upgrade status: %w", err)
-		}
-		phase := strVal(upgrade, "phase")
-		if phase != "completed" && phase != "failed" && phase != "rolled_back" && phase != "timeout" && phase != "cancelled" {
-			continue
-		}
-		return printComputerUpgrade(cmd, upgrade)
-	}
+	return printComputerUpgrade(cmd, upgrade)
 }
 
 func printComputerUpgrade(cmd *cobra.Command, upgrade map[string]any) error {

@@ -694,3 +694,36 @@ func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
 		t.Error("migration 307 down must drop the bindings table")
 	}
 }
+
+func TestMigration314ComputerGenerationFenceAndWorkspaceAttestation(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "314_computer_generation_fence.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"CREATE TABLE computer_generation",
+		"generation  BIGINT",
+		"ADD COLUMN computer_generation BIGINT",
+		"accepted_workspace_ids UUID[]",
+		"attested_workspace_ids UUID[]",
+		"deployment/apply notes",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Errorf("migration 314 up missing %q", required)
+		}
+	}
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "314_computer_generation_fence.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"DROP TABLE IF EXISTS computer_generation", "DROP COLUMN IF EXISTS computer_generation", "DROP COLUMN IF EXISTS accepted_workspace_ids"} {
+		if !strings.Contains(string(down), required) {
+			t.Errorf("migration 314 down missing %q", required)
+		}
+	}
+}

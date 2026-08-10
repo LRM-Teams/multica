@@ -118,7 +118,7 @@ func createNoteAIJobForTest(t *testing.T, noteID, agentID string) NoteAIJobRespo
 }
 
 func TestParseNoteAIEditResultAcceptsJSONLikeMarkdown(t *testing.T) {
-	result, err := parseNoteAIEditResult(`{"action":"patch","markdown":"# Title
+	result, err := parseNoteAIEditResult(`{"action":"patch","target":"old equation","markdown":"# Title
 
 $$
 \nabla \times \mathbf{E}
@@ -126,7 +126,7 @@ $$","title":null,"rationale":"Updated equations."}`)
 	if err != nil {
 		t.Fatalf("parse JSON-like note AI result: %v", err)
 	}
-	if result.Action != "patch" || result.Markdown != "# Title\n\n$$\n\\nabla \\times \\mathbf{E}\n$$" || result.Rationale == nil || *result.Rationale != "Updated equations." {
+	if result.Action != "patch" || result.Target == nil || *result.Target != "old equation" || result.Markdown != "# Title\n\n$$\n\\nabla \\times \\mathbf{E}\n$$" || result.Rationale == nil || *result.Rationale != "Updated equations." {
 		t.Fatalf("parsed result = %#v", result)
 	}
 }

@@ -46,6 +46,8 @@ export type NoteAIEditAction = "insert" | "replace_selection" | "replace_page" |
 export interface NoteAIEditResult {
   action: NoteAIEditAction;
   markdown: string;
+  /** Exact current Markdown fragment to replace when action is patch. */
+  target?: string | null;
   title?: string | null;
   rationale?: string | null;
 }

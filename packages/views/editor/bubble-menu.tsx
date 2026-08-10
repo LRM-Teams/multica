@@ -225,6 +225,16 @@ function replaceDocumentWithMarkdown(editor: Editor, markdown: string) {
   editor.commands.setContent(markdown);
 }
 
+function patchedDocumentMarkdown(current: string, result: NoteAIEditResult) {
+  const target = result.target?.trim();
+  if (!target) return null;
+  const source = current.trimEnd();
+  if (source.includes(target)) return source.replace(target, result.markdown);
+  const looseTarget = target.trim();
+  if (looseTarget && source.includes(looseTarget)) return source.replace(looseTarget, result.markdown);
+  return null;
+}
+
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return "";
@@ -581,9 +591,19 @@ function TextOptimizationReview({
     applyTitle();
     onClose();
   };
+  const applyPatch = () => {
+    const patched = patchedDocumentMarkdown(editor.getMarkdown(), result);
+    if (!patched) {
+      showErrorToast(t(($) => $.bubble_menu.optimize.patch_target_missing));
+      return;
+    }
+    replaceDocumentWithMarkdown(editor, patched);
+    applyTitle();
+    onClose();
+  };
   const copyPatch = () => {
     if (typeof navigator === "undefined") return;
-    void navigator.clipboard?.writeText(result.markdown);
+    void navigator.clipboard?.writeText(result.target ? `${result.target}\n---\n${result.markdown}` : result.markdown);
   };
 
   return (
@@ -608,8 +628,10 @@ function TextOptimizationReview({
         {result.action === "patch" && <Button size="sm" variant="outline" onClick={copyPatch} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.copy_patch)}</Button>}
         {result.action === "insert" ? (
           <Button size="sm" onClick={insertAfter} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.insert_after)}</Button>
-        ) : result.action === "replace_page" || result.action === "patch" ? (
-          <Button size="sm" onClick={replacePage} onMouseDown={(e) => e.preventDefault()}>{result.action === "patch" ? t(($) => $.bubble_menu.optimize.apply_patch) : t(($) => $.bubble_menu.optimize.replace_page)}</Button>
+        ) : result.action === "replace_page" ? (
+          <Button size="sm" onClick={replacePage} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.replace_page)}</Button>
+        ) : result.action === "patch" ? (
+          <Button size="sm" onClick={applyPatch} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.apply_patch)}</Button>
         ) : (
           <Button size="sm" onClick={replaceSelection} onMouseDown={(e) => e.preventDefault()}>{t(($) => $.bubble_menu.optimize.replace)}</Button>
         )}

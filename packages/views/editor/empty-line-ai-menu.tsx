@@ -60,6 +60,16 @@ function replaceDocumentWithMarkdown(editor: Editor, markdown: string) {
   editor.commands.setContent(markdown);
 }
 
+function patchedDocumentMarkdown(current: string, result: NoteAIEditResult) {
+  const target = result.target?.trim();
+  if (!target) return null;
+  const source = current.trimEnd();
+  if (source.includes(target)) return source.replace(target, result.markdown);
+  const looseTarget = target.trim();
+  if (looseTarget && source.includes(looseTarget)) return source.replace(looseTarget, result.markdown);
+  return null;
+}
+
 function buildRequest(editor: Editor, state: EmptyLineAiState): PageEditAIRequest {
   const docSize = editor.state.doc.content.size;
   const from = Math.max(0, Math.min(state.from, docSize));
@@ -228,13 +238,27 @@ function EmptyLineAiMenu({
     close();
   };
 
+  const applyPatch = () => {
+    const result = state.result;
+    if (!result) return;
+    const patched = patchedDocumentMarkdown(editor.getMarkdown(), result);
+    if (!patched) {
+      showErrorToast(t(($) => $.page_ai.patch_target_missing));
+      return;
+    }
+    replaceDocumentWithMarkdown(editor, patched);
+    applyTitle(result);
+    close();
+  };
+
   const copyPatch = () => {
     const markdown = state.result?.markdown;
     if (!markdown || typeof navigator === "undefined") return;
-    void navigator.clipboard?.writeText(markdown);
+    void navigator.clipboard?.writeText(state.result?.target ? `${state.result.target}\n---\n${markdown}` : markdown);
   };
 
   const reviewResult = state.status === "review" ? state.result : null;
+  const currentMarkdown = reviewResult ? editor.getMarkdown().trimEnd() : "";
   const reviewTitle = reviewResult?.action === "insert"
     ? t(($) => $.page_ai.action_insert)
     : reviewResult?.action === "replace_selection"
@@ -269,14 +293,40 @@ function EmptyLineAiMenu({
               {t(($) => $.page_ai.title_suggestion)} <span className="font-medium text-foreground">{reviewResult.title}</span>
             </div>
           )}
-          <div className="max-h-64 overflow-y-auto whitespace-pre-wrap px-3.5 py-3 text-sm leading-6">
-            {reviewResult.markdown}
-          </div>
+          {reviewResult.action === "patch" && reviewResult.target ? (
+            <div className="grid max-h-72 gap-2 overflow-y-auto p-3.5 md:grid-cols-2">
+              <div>
+                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.page_ai.current_fragment)}</div>
+                <div className="whitespace-pre-wrap rounded-lg bg-muted/60 p-2.5 text-xs leading-5 text-muted-foreground">{reviewResult.target}</div>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.page_ai.replacement_fragment)}</div>
+                <div className="whitespace-pre-wrap rounded-lg bg-primary/10 p-2.5 text-xs leading-5">{reviewResult.markdown}</div>
+              </div>
+            </div>
+          ) : reviewResult.action === "replace_page" ? (
+            <div className="grid max-h-72 gap-2 overflow-y-auto p-3.5 md:grid-cols-2">
+              <div>
+                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.page_ai.current_page)}</div>
+                <div className="whitespace-pre-wrap rounded-lg bg-muted/60 p-2.5 text-xs leading-5 text-muted-foreground">{currentMarkdown || "(empty)"}</div>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.page_ai.proposed_page)}</div>
+                <div className="whitespace-pre-wrap rounded-lg bg-primary/10 p-2.5 text-xs leading-5">{reviewResult.markdown}</div>
+              </div>
+            </div>
+          ) : (
+            <div className="max-h-64 overflow-y-auto whitespace-pre-wrap px-3.5 py-3 text-sm leading-6">
+              {reviewResult.markdown}
+            </div>
+          )}
           <div className="flex flex-wrap justify-end gap-1.5 border-t px-2.5 py-2">
             <Button size="sm" variant="ghost" onClick={close}>{t(($) => $.page_ai.discard)}</Button>
             {reviewResult.action === "patch" && <Button size="sm" variant="outline" onClick={copyPatch}>{t(($) => $.page_ai.copy_patch)}</Button>}
-            {(reviewResult.action === "replace_page" || reviewResult.action === "patch") ? (
-              <Button size="sm" onClick={replacePage}>{reviewResult.action === "patch" ? t(($) => $.page_ai.apply_patch) : t(($) => $.page_ai.replace_page)}</Button>
+            {reviewResult.action === "replace_page" ? (
+              <Button size="sm" onClick={replacePage}>{t(($) => $.page_ai.replace_page)}</Button>
+            ) : reviewResult.action === "patch" ? (
+              <Button size="sm" onClick={applyPatch}>{t(($) => $.page_ai.apply_patch)}</Button>
             ) : (
               <Button size="sm" onClick={insertHere}>{reviewResult.action === "insert" ? t(($) => $.page_ai.insert) : t(($) => $.page_ai.replace_selection)}</Button>
             )}

@@ -77,6 +77,7 @@ type noteAIJobCreateRequest struct {
 type NoteAIEditResult struct {
 	Action    string  `json:"action"`
 	Markdown  string  `json:"markdown"`
+	Target    *string `json:"target,omitempty"`
 	Title     *string `json:"title,omitempty"`
 	Rationale *string `json:"rationale,omitempty"`
 }
@@ -811,6 +812,7 @@ func stripNoteAIJSONFences(content string) string {
 }
 
 var noteAIJSONActionRE = regexp.MustCompile(`(?s)"action"\s*:\s*"([^"]+)"`)
+var noteAIJSONTargetRE = regexp.MustCompile(`(?s)"target"\s*:\s*"([^"]*)"`)
 var noteAIJSONTitleRE = regexp.MustCompile(`(?s)"title"\s*:\s*"([^"]*)"`)
 var noteAIJSONRationaleRE = regexp.MustCompile(`(?s)"rationale"\s*:\s*"([^"]*)"`)
 
@@ -826,6 +828,12 @@ func parseLooseNoteAIEditResult(content string) (*NoteAIEditResult, error) {
 	result := &NoteAIEditResult{
 		Action:   actionMatch[1],
 		Markdown: markdown,
+	}
+	if targetMatch := noteAIJSONTargetRE.FindStringSubmatch(content); len(targetMatch) >= 2 {
+		target := strings.TrimSpace(strings.ReplaceAll(targetMatch[1], `\"`, `"`))
+		if target != "" {
+			result.Target = &target
+		}
 	}
 	if titleMatch := noteAIJSONTitleRE.FindStringSubmatch(content); len(titleMatch) >= 2 {
 		title := strings.TrimSpace(strings.ReplaceAll(titleMatch[1], `\"`, `"`))
@@ -873,7 +881,7 @@ func extractLooseNoteAIStringField(content, field string) (string, error) {
 			for k < len(content) && (content[k] == ' ' || content[k] == '\n' || content[k] == '\r' || content[k] == '\t') {
 				k++
 			}
-			if strings.HasPrefix(content[k:], `"title"`) || strings.HasPrefix(content[k:], `"rationale"`) {
+			if strings.HasPrefix(content[k:], `"action"`) || strings.HasPrefix(content[k:], `"markdown"`) || strings.HasPrefix(content[k:], `"target"`) || strings.HasPrefix(content[k:], `"title"`) || strings.HasPrefix(content[k:], `"rationale"`) {
 				return strings.TrimSpace(strings.ReplaceAll(content[valueStart:i], `\"`, `"`)), nil
 			}
 		}
@@ -894,6 +902,15 @@ func validateNoteAIEditResult(result *NoteAIEditResult) (*NoteAIEditResult, erro
 	}
 	if result.Markdown == "" {
 		return nil, fmt.Errorf("note AI edit markdown is empty")
+	}
+	if result.Action == "patch" {
+		if result.Target == nil || strings.TrimSpace(*result.Target) == "" {
+			return nil, fmt.Errorf("note AI patch target is required")
+		}
+		target := strings.TrimSpace(*result.Target)
+		result.Target = &target
+	} else {
+		result.Target = nil
 	}
 	if result.Title != nil {
 		title := strings.TrimSpace(*result.Title)

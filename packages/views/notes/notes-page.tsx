@@ -149,6 +149,7 @@ The JSON schema is:
 {
   "action": "insert" | "replace_selection" | "replace_page" | "patch",
   "markdown": "Markdown for the requested edit",
+  "target": "Required only for patch: exact existing Markdown fragment to replace, otherwise null",
   "title": "Optional new note title, or null",
   "rationale": "One short sentence explaining why this action is appropriate"
 }
@@ -156,7 +157,7 @@ Choose action deterministically:
 - "insert": add/continue/draft/brainstorm content at the cursor; markdown is only the inserted content.
 - "replace_selection": replace the empty line/cursor block only; markdown is only the replacement block.
 - "replace_page": rewrite, translate, summarize, reorganize, or polish the whole page; markdown is the complete revised page.
-- "patch": make a targeted edit elsewhere in the page; markdown is the complete page Markdown after applying the targeted patch.
+- "patch": make a targeted edit elsewhere in the page; target is the exact current Markdown fragment to replace, and markdown is ONLY the replacement fragment. Never return the complete page for patch.
 Never make the user infer whether to insert or replace; encode the operation in action.
 
 Note title:
@@ -187,6 +188,7 @@ function normalizeNoteAIEditResult(result: NoteAIEditResult): NoteAIEditResult {
   return {
     ...result,
     markdown: result.markdown.trim(),
+    target: result.target?.trim() || null,
     title: result.title?.trim() || null,
     rationale: result.rationale?.trim() || null,
   };

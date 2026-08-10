@@ -99,6 +99,7 @@ export const EMPTY_NOTE_PAGE_LIST: NotePageListResponse = { pages: [] };
 export const NoteAIEditResultSchema = z.object({
   action: z.enum(["insert", "replace_selection", "replace_page", "patch"]),
   markdown: z.string().default(""),
+  target: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
   rationale: z.string().nullable().optional(),
 }).loose();

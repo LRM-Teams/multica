@@ -276,9 +276,9 @@ describe("CreateAgentDialog workspace runtime selection", () => {
     });
     renderDialog([onS144, onOther], undefined, runtimeMachineKey(onS144));
 
-    // Open computer picker and switch to other-box.
-    fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));
-    fireEvent.click(screen.getByText("other-box", { selector: "div.truncate" }));
+    // Open computer picker and switch to other-box (single-line triggers).
+    fireEvent.click(screen.getByText("s144", { selector: "span.truncate" }));
+    fireEvent.click(screen.getByText("other-box", { exact: false }));
 
     // Runtime trigger should now show the other machine's brand.
     expect(

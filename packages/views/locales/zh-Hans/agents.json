@@ -279,7 +279,7 @@
     "name_placeholder": "例如：deep-research-agent",
     "description_label": "描述",
     "description_placeholder": "这个智能体做什么？",
-    "thinking_label": "思考等级",
+    "thinking_label": "推理强度",
     "computer_label": "电脑",
     "computer_loading": "加载电脑...",
     "computer_none": "暂无可用电脑",

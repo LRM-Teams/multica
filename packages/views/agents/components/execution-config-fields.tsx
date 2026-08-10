@@ -51,7 +51,7 @@ export function ExecutionConfigFields({
   disabled?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-3" data-testid="execution-config-fields">
+    <div className="flex flex-col gap-2.5" data-testid="execution-config-fields">
       <ComputerPicker
         runtimes={runtimes}
         runtimesLoading={runtimesLoading}

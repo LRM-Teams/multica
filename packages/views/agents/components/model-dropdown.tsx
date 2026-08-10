@@ -12,7 +12,12 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
+import { cn } from "@multica/ui/lib/utils";
 import { CustomModelIdRow } from "./custom-model-id-row";
+import {
+  executionFieldClass,
+  executionTriggerClass,
+} from "./execution-picker-styles";
 import { useT } from "../../i18n";
 
 // ModelDropdown: searchable model picker. Catalog fetch is gated on
@@ -139,30 +144,29 @@ export function ModelDropdown({
 
   if (!supported && !modelsQuery.isLoading) {
     return (
-      <div className="flex flex-col min-w-0">
-        <div className="flex h-6 items-center">
-          <Label className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.label)}</Label>
-        </div>
-        <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2.5 text-sm text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <div className="min-w-0">
-            <div>{t(($) => $.model_dropdown.managed_by_runtime_title)}</div>
-            <div className="mt-0.5 text-xs">
-              {t(($) => $.model_dropdown.managed_by_runtime_hint)}
-            </div>
-          </div>
+      <div className={executionFieldClass}>
+        <Label className="text-xs font-medium text-muted-foreground">
+          {t(($) => $.model_dropdown.label)}
+        </Label>
+        <div className="flex h-8 items-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-2.5 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 truncate">
+            {t(($) => $.model_dropdown.managed_by_runtime_title)}
+          </span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col min-w-0">
-      <div className="flex h-6 items-center justify-between gap-2">
-        <Label className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.label)}</Label>
+    <div className={executionFieldClass}>
+      <div className="flex items-center justify-between gap-2">
+        <Label className="text-xs font-medium text-muted-foreground">
+          {t(($) => $.model_dropdown.label)}
+        </Label>
         {catalogHint ? (
           <span
-            className="truncate text-xs text-muted-foreground"
+            className="truncate text-[11px] text-muted-foreground"
             data-testid="model-dropdown-catalog-hint"
           >
             {catalogHint}
@@ -173,24 +177,17 @@ export function ModelDropdown({
         <PopoverTrigger
           disabled={disabled}
           data-testid="model-dropdown-trigger"
-          className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+          className={executionTriggerClass}
         >
-          <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <div className="min-w-0 flex-1">
-            {/* Wrapped in flex to mirror RuntimePicker's trigger DOM. The
-                two pickers sit side-by-side; inline-in-flex vs block-line-
-                box height calc would otherwise leave them ~1px misaligned. */}
-            <div className="flex items-center gap-2">
-              <span className="truncate font-medium">{triggerLabel}</span>
-            </div>
-            {value && (
-              <div className="truncate text-xs text-muted-foreground">
-                {modelLabel(models, value)}
-              </div>
-            )}
-          </div>
+          <Cpu className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate">
+            {value ? modelLabel(models, value) || value : triggerLabel}
+          </span>
           <ChevronDown
-            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
           />
         </PopoverTrigger>
         <PopoverContent

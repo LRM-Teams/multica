@@ -52,9 +52,16 @@ export function ModelDropdown({
   onChangeRef.current = onChange;
 
   // Catalog only while the runtime is online — never disable the control.
+  // Query is enabled as soon as runtimeId is set (not on open), so selecting
+  // a Runtime starts the daemon list-models scan immediately.
   const modelsQuery = useQuery(
     runtimeModelsOptions(runtimeOnline ? runtimeId : null),
   );
+  const isScanning =
+    !!runtimeId &&
+    runtimeOnline &&
+    (modelsQuery.isLoading || modelsQuery.isFetching) &&
+    !modelsQuery.data;
 
   const supported = modelsQuery.data?.supported ?? true;
   // Backend-owned capability — never infer from a frontend provider list.
@@ -164,7 +171,7 @@ export function ModelDropdown({
         <Label className="text-xs font-medium text-muted-foreground">
           {t(($) => $.model_dropdown.label)}
         </Label>
-        {catalogHint ? (
+        {catalogHint && !isScanning ? (
           <span
             className="truncate text-[11px] text-muted-foreground"
             data-testid="model-dropdown-catalog-hint"
@@ -178,10 +185,19 @@ export function ModelDropdown({
           disabled={disabled}
           data-testid="model-dropdown-trigger"
           className={executionTriggerClass}
+          aria-busy={isScanning || undefined}
         >
-          <Cpu className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          {isScanning ? (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+          ) : (
+            <Cpu className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
           <span className="min-w-0 flex-1 truncate">
-            {value ? modelLabel(models, value) || value : triggerLabel}
+            {isScanning
+              ? t(($) => $.model_dropdown.scanning_on_computer)
+              : value
+                ? modelLabel(models, value) || value
+                : triggerLabel}
           </span>
           <ChevronDown
             className={cn(
@@ -204,10 +220,10 @@ export function ModelDropdown({
             />
           </div>
           <div className="max-h-72 overflow-y-auto p-1">
-            {runtimeOnline && modelsQuery.isLoading && (
+            {runtimeOnline && (modelsQuery.isLoading || modelsQuery.isFetching) && !modelsQuery.data && (
               <div className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                {t(($) => $.pickers.model_discovering)}
+                {t(($) => $.model_dropdown.scanning_on_computer)}
               </div>
             )}
 
@@ -269,6 +285,14 @@ export function ModelDropdown({
           </div>
         </PopoverContent>
       </Popover>
+      {isScanning ? (
+        <p
+          className="text-[11px] leading-snug text-muted-foreground"
+          data-testid="model-dropdown-scanning-hint"
+        >
+          {t(($) => $.model_dropdown.scanning_on_computer)}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { runtimeModelsOptions } from "@multica/core/runtimes";
 import type { MemberWithUser, RuntimeDevice } from "@multica/core/types";
 import { ComputerPicker } from "./computer-picker";
 import { RuntimePicker } from "./runtime-picker";
@@ -11,6 +14,10 @@ import { ThinkingDropdown } from "./thinking-dropdown";
  *
  * Visuals match Create Agent (bordered full-width pickers). Parents own
  * cascade state via `useExecutionSelection` or equivalent.
+ *
+ * Selecting a Runtime immediately prefetches the model catalog (daemon
+ * list-models scan) so Model/Reasoning do not wait for the user to open
+ * the Model menu.
  */
 export function ExecutionConfigFields({
   runtimes,
@@ -50,6 +57,14 @@ export function ExecutionConfigFields({
   autoSelectFirstModel?: boolean;
   disabled?: boolean;
 }) {
+  const queryClient = useQueryClient();
+
+  // Kick off list-models as soon as Runtime is chosen (not on Model open).
+  useEffect(() => {
+    if (!runtimeId || !runtimeOnline) return;
+    void queryClient.prefetchQuery(runtimeModelsOptions(runtimeId));
+  }, [runtimeId, runtimeOnline, queryClient]);
+
   return (
     <div className="flex flex-col gap-2.5" data-testid="execution-config-fields">
       <ComputerPicker

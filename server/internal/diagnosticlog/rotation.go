@@ -2,104 +2,145 @@ package diagnosticlog
 
 import (
 	"bufio"
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
+// Lumberjack owns per-stream size rotation, backup count, retention, and gzip
+// compression. This file adds only Multica's hard contracts around that sink:
+// private paths, complete JSONL tails, 24-hour low-volume rotation, physical
+// per-stream/global budgets, and health accounting.
+
+var lumberjackBackupPattern = regexp.MustCompile(`^(.+)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}\.log(?:\.gz)?$`)
+
 type segment struct {
-	path    string
-	stream  string
-	size    int64
-	modTime time.Time
-	closed  bool
+	path      string
+	stream    string
+	size      int64
+	modTime   time.Time
+	closed    bool
+	evictable bool
 }
 
-func (s *Store) append(dest destination, data []byte, now time.Time) (bool, error) {
-	written := false
-	err := s.withTreeLock(func() error {
-		if err := ensureDestinationDir(s.root, dest); err != nil {
-			return err
-		}
-		_, err := s.rotateBeforeAppend(dest, int64(len(data)), now)
-		if err != nil {
-			return err
-		}
-		file, err := openNoFollow(dest.activePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			return fmt.Errorf("open %s diagnostic stream: %w", dest.scope, err)
-		}
-		if err := file.Chmod(0o600); err != nil {
-			file.Close()
-			return fmt.Errorf("restrict %s diagnostic stream: %w", dest.scope, err)
-		}
-		n, writeErr := file.Write(data)
-		closeErr := file.Close()
-		if writeErr != nil {
-			return fmt.Errorf("write %s diagnostic stream: %w", dest.scope, writeErr)
-		}
-		if n != len(data) {
-			return fmt.Errorf("write %s diagnostic stream: short write %d/%d", dest.scope, n, len(data))
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close %s diagnostic stream: %w", dest.scope, closeErr)
-		}
-		written = true
-		if err := s.cleanupLocked(now); err != nil {
-			return err
-		}
-		return nil
-	})
-	return written, err
-}
+func (l *Logger) append(data []byte, now time.Time) (written, rotated bool, err error) {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
 
-func (s *Store) rotateBeforeAppend(dest destination, nextBytes int64, now time.Time) (bool, error) {
-	info, err := os.Lstat(dest.activePath)
-	if os.IsNotExist(err) {
-		return false, nil
+	if err := ensureDestinationDir(l.store.root, l.dest); err != nil {
+		return false, false, err
 	}
+	info, exists, err := inspectActiveSegment(l.dest.activePath)
 	if err != nil {
-		return false, fmt.Errorf("inspect active diagnostic segment: %w", err)
+		return false, false, err
 	}
-	if pathIsUnsafe(dest.activePath, info.Mode()) {
-		return false, fmt.Errorf("active diagnostic segment is a symlink: %s", dest.activePath)
-	}
-	if !info.Mode().IsRegular() {
-		return false, fmt.Errorf("active diagnostic segment is not a regular file: %s", dest.activePath)
-	}
-	if info.Size() > 0 {
-		complete, err := hasCompleteTail(dest.activePath, info.Size())
-		if err != nil {
-			return false, err
+	if exists {
+		if err := os.Chmod(l.dest.activePath, 0o600); err != nil {
+			return false, false, fmt.Errorf("restrict %s diagnostic stream: %w", l.dest.scope, err)
 		}
-		if !complete {
-			if err := s.closeAndCompress(dest.activePath, dest.base, now); err != nil {
-				return false, err
+		if info.Size() > 0 {
+			complete, tailErr := hasCompleteTail(l.dest.activePath, info.Size())
+			if tailErr != nil {
+				return false, false, tailErr
 			}
-			return true, nil
+			if !complete {
+				if err := l.rotateLocked(now); err != nil {
+					return false, false, err
+				}
+				rotated = true
+				info = nil
+				exists = false
+			}
 		}
 	}
-	startedAt := segmentStart(dest.activePath, info.ModTime())
-	if info.Size()+nextBytes <= s.limits.SegmentBytes && now.Sub(startedAt) < s.limits.SegmentAge {
-		return false, nil
-	}
-	if info.Size() == 0 {
-		if err := os.Remove(dest.activePath); err != nil {
-			return false, fmt.Errorf("remove empty active diagnostic segment: %w", err)
+
+	if exists && info.Size() > 0 {
+		if l.segmentStartedAt.IsZero() {
+			l.segmentStartedAt = segmentStart(l.dest.activePath, info.ModTime())
 		}
-		return true, nil
+		if now.Sub(l.segmentStartedAt) >= l.store.limits.SegmentAge {
+			if err := l.rotateLocked(now); err != nil {
+				return false, rotated, err
+			}
+			rotated = true
+			info = nil
+			exists = false
+		}
 	}
-	if err := s.closeAndCompress(dest.activePath, dest.base, now); err != nil {
+
+	willSizeRotate := exists && info.Size()+int64(len(data)) >= int64(l.sink.MaxSize)*(1<<20)
+	n, err := l.sink.Write(data)
+	if err != nil {
+		return n > 0, rotated, fmt.Errorf("write %s diagnostic stream: %w", l.dest.scope, err)
+	}
+	if n != len(data) {
+		return n > 0, rotated, fmt.Errorf("write %s diagnostic stream: short write %d/%d", l.dest.scope, n, len(data))
+	}
+	if err := os.Chmod(l.dest.activePath, 0o600); err != nil {
+		return true, rotated, fmt.Errorf("restrict %s diagnostic stream: %w", l.dest.scope, err)
+	}
+	if l.segmentStartedAt.IsZero() || willSizeRotate {
+		l.segmentStartedAt = now
+	}
+	return true, rotated || willSizeRotate, nil
+}
+
+func (l *Logger) rotateLocked(now time.Time) error {
+	if err := l.sink.Rotate(); err != nil {
+		return fmt.Errorf("rotate %s diagnostic stream: %w", l.dest.scope, err)
+	}
+	l.segmentStartedAt = now
+	return nil
+}
+
+func (l *Logger) rotateIfAged(now time.Time) (bool, error) {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	info, exists, err := inspectActiveSegment(l.dest.activePath)
+	if err != nil || !exists || info.Size() == 0 {
 		return false, err
 	}
-	return true, nil
+	if l.segmentStartedAt.IsZero() {
+		l.segmentStartedAt = segmentStart(l.dest.activePath, info.ModTime())
+	}
+	if now.Sub(l.segmentStartedAt) < l.store.limits.SegmentAge {
+		return false, nil
+	}
+	return true, l.rotateLocked(now)
+}
+
+func (l *Logger) forceRotate(now time.Time) (bool, error) {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	info, exists, err := inspectActiveSegment(l.dest.activePath)
+	if err != nil || !exists || info.Size() == 0 {
+		return false, err
+	}
+	return true, l.rotateLocked(now)
+}
+
+func inspectActiveSegment(path string) (os.FileInfo, bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect active diagnostic segment: %w", err)
+	}
+	if pathIsUnsafe(path, info.Mode()) {
+		return nil, false, fmt.Errorf("active diagnostic segment is a symlink or reparse point: %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("active diagnostic segment is not a regular file: %s", path)
+	}
+	return info, true, nil
 }
 
 func segmentStart(path string, fallback time.Time) time.Time {
@@ -141,186 +182,45 @@ func hasCompleteTail(path string, size int64) (bool, error) {
 	return one[0] == '\n', nil
 }
 
-func (s *Store) closeAndCompress(activePath, base string, now time.Time) error {
-	dir := filepath.Dir(activePath)
-	stamp := now.UTC().Format("20060102T150405")
-	var closedPath string
-	for sequence := 1; ; sequence++ {
-		candidate := filepath.Join(dir, fmt.Sprintf("%s.%s.%06d.log", base, stamp, sequence))
-		_, plainErr := os.Lstat(candidate)
-		_, gzipErr := os.Lstat(candidate + ".gz")
-		if os.IsNotExist(plainErr) && os.IsNotExist(gzipErr) {
-			closedPath = candidate
-			break
-		}
-		if plainErr != nil && !os.IsNotExist(plainErr) {
-			return fmt.Errorf("inspect rotated diagnostic segment: %w", plainErr)
-		}
-		if gzipErr != nil && !os.IsNotExist(gzipErr) {
-			return fmt.Errorf("inspect compressed diagnostic segment: %w", gzipErr)
-		}
-		continue
-	}
-	if err := os.Rename(activePath, closedPath); err != nil {
-		return fmt.Errorf("rotate diagnostic segment: %w", err)
-	}
-	if err := compressSegment(closedPath, now); err != nil {
-		return err
-	}
-	return nil
-}
-
-func compressSegment(path string, now time.Time) error {
-	if info, err := os.Lstat(path); err != nil {
-		return fmt.Errorf("inspect segment for compression: %w", err)
-	} else if pathIsUnsafe(path, info.Mode()) || !info.Mode().IsRegular() {
-		return fmt.Errorf("refuse to compress unsafe diagnostic segment: %s", path)
-	}
-	source, err := openNoFollow(path, os.O_RDONLY, 0)
-	if err != nil {
-		return fmt.Errorf("open diagnostic segment for compression: %w", err)
-	}
-	defer source.Close()
-	temp, err := os.CreateTemp(filepath.Dir(path), ".diagnostic-*.log.gz.tmp")
-	if err != nil {
-		return fmt.Errorf("create diagnostic compression temporary file: %w", err)
-	}
-	tempPath := temp.Name()
-	removeTemp := true
-	defer func() {
-		if removeTemp {
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err := temp.Chmod(0o600); err != nil {
-		temp.Close()
-		return fmt.Errorf("restrict diagnostic compression temporary file: %w", err)
-	}
-	writer := gzip.NewWriter(temp)
-	writer.Header.ModTime = now.UTC()
-	if _, err := io.Copy(writer, source); err != nil {
-		writer.Close()
-		temp.Close()
-		return fmt.Errorf("compress diagnostic segment: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		temp.Close()
-		return fmt.Errorf("finish diagnostic compression: %w", err)
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return fmt.Errorf("sync diagnostic compression: %w", err)
-	}
-	if err := temp.Close(); err != nil {
-		return fmt.Errorf("close diagnostic compression: %w", err)
-	}
-	target := path + ".gz"
-	if _, err := os.Lstat(target); err == nil {
-		return fmt.Errorf("compressed diagnostic segment already exists: %s", target)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("inspect compressed diagnostic segment: %w", err)
-	}
-	if err := os.Rename(tempPath, target); err != nil {
-		return fmt.Errorf("publish compressed diagnostic segment: %w", err)
-	}
-	removeTemp = false
-	if err := os.Chtimes(target, now, now); err != nil {
-		return fmt.Errorf("timestamp compressed diagnostic segment: %w", err)
-	}
-	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("remove uncompressed diagnostic segment: %w", err)
-	}
-	return nil
-}
-
 func (s *Store) Cleanup() error {
 	now := s.now().UTC()
-	err := s.withTreeLock(func() error { return s.cleanupLocked(now) })
-	if err != nil {
-		s.mu.Lock()
-		loggers := append([]*Logger(nil), s.loggers...)
-		s.mu.Unlock()
-		for _, logger := range loggers {
-			logger.observeFailure(err, false, now)
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+
+	s.mu.Lock()
+	loggers := append([]*Logger(nil), s.loggers...)
+	s.mu.Unlock()
+	for _, logger := range loggers {
+		if _, err := logger.rotateIfAged(now); err != nil {
+			s.observeCleanupFailure(loggers, err, now)
+			return err
 		}
 	}
-	return err
+	if err := s.cleanupBudgets(now, loggers); err != nil {
+		s.observeCleanupFailure(loggers, err, now)
+		return err
+	}
+	return nil
 }
 
-func (s *Store) cleanupLocked(now time.Time) error {
-	segments, err := discoverSegments(s.root)
-	if err != nil {
-		return err
+func (s *Store) observeCleanupFailure(loggers []*Logger, err error, now time.Time) {
+	for _, logger := range loggers {
+		logger.observeFailure(err, false, now)
 	}
-	for _, item := range segments {
-		if item.closed {
-			continue
-		}
-		started := segmentStart(item.path, item.modTime)
-		if item.size > 0 && now.Sub(started) >= s.limits.SegmentAge {
-			base := strings.TrimSuffix(filepath.Base(item.path), ".log")
-			if err := s.closeAndCompress(item.path, base, now); err != nil {
-				return err
-			}
-		}
-	}
-	segments, err = discoverSegments(s.root)
-	if err != nil {
-		return err
-	}
-
-	for _, item := range segments {
-		if item.closed && now.Sub(item.modTime.UTC()) > s.limits.Retention {
-			if err := os.Remove(item.path); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("remove expired diagnostic segment: %w", err)
-			}
-		}
-	}
-	segments, err = discoverSegments(s.root)
-	if err != nil {
-		return err
-	}
-	if err := enforceStreamBudgets(segments, s.limits.StreamBytes); err != nil {
-		return err
-	}
-	segments, err = discoverSegments(s.root)
-	if err != nil {
-		return err
-	}
-	if err := enforceGlobalBudget(segments, s.limits.GlobalBytes); err != nil {
-		return err
-	}
-	return s.rebalanceActiveSegments(now)
 }
 
-func (s *Store) rebalanceActiveSegments(now time.Time) error {
+func (s *Store) cleanupBudgets(now time.Time, loggers []*Logger) error {
 	for {
 		segments, err := discoverSegments(s.root)
 		if err != nil {
 			return err
 		}
-		overStream := overBudgetStream(segments, s.limits.StreamBytes)
-		globalOver := totalSegmentBytes(segments) > s.limits.GlobalBytes
-		if overStream == "" && !globalOver {
-			return nil
-		}
-		var active []segment
 		for _, item := range segments {
-			if item.closed {
-				continue
+			if item.closed && item.evictable && now.Sub(item.modTime.UTC()) > s.limits.Retention {
+				if err := os.Remove(item.path); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("remove expired diagnostic segment: %w", err)
+				}
 			}
-			if overStream == "" || item.stream == overStream {
-				active = append(active, item)
-			}
-		}
-		if len(active) == 0 {
-			return fmt.Errorf("diagnostic closed segments exceed storage budget")
-		}
-		sort.Slice(active, func(i, j int) bool { return active[i].modTime.Before(active[j].modTime) })
-		oldest := active[0]
-		base := strings.TrimSuffix(filepath.Base(oldest.path), ".log")
-		if err := s.closeAndCompress(oldest.path, base, now); err != nil {
-			return err
 		}
 		segments, err = discoverSegments(s.root)
 		if err != nil {
@@ -335,6 +235,41 @@ func (s *Store) rebalanceActiveSegments(now time.Time) error {
 		}
 		if err := enforceGlobalBudget(segments, s.limits.GlobalBytes); err != nil {
 			return err
+		}
+		segments, err = discoverSegments(s.root)
+		if err != nil {
+			return err
+		}
+		if overBudgetStream(segments, s.limits.StreamBytes) == "" && totalSegmentBytes(segments) <= s.limits.GlobalBytes {
+			return nil
+		}
+		for _, item := range segments {
+			if item.closed && !item.evictable {
+				s.requestCleanup()
+				return nil
+			}
+		}
+
+		activeByPath := make(map[string]*Logger, len(loggers))
+		for _, logger := range loggers {
+			activeByPath[logger.dest.activePath] = logger
+		}
+		var candidates []segment
+		for _, item := range segments {
+			if !item.closed && activeByPath[item.path] != nil && item.size > 0 {
+				candidates = append(candidates, item)
+			}
+		}
+		if len(candidates) == 0 {
+			return fmt.Errorf("diagnostic active segments exceed storage budget")
+		}
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].modTime.Before(candidates[j].modTime) })
+		rotated, err := activeByPath[candidates[0].path].forceRotate(now)
+		if err != nil {
+			return err
+		}
+		if !rotated {
+			return fmt.Errorf("diagnostic active segments exceed storage budget")
 		}
 	}
 }
@@ -371,55 +306,62 @@ func discoverSegments(root string) ([]segment, error) {
 		}
 		info, infoErr := entry.Info()
 		if infoErr != nil {
+			if os.IsNotExist(infoErr) {
+				// Lumberjack may finish an asynchronous source-to-gzip rename
+				// between WalkDir reading the directory and this stat.
+				return nil
+			}
 			return infoErr
 		}
 		if pathIsUnsafe(path, info.Mode()) {
-			return fmt.Errorf("diagnostic tree contains symlink: %s", path)
+			return fmt.Errorf("diagnostic tree contains symlink or reparse point: %s", path)
 		}
 		if entry.IsDir() {
 			return nil
 		}
 		name := entry.Name()
-		if name == lockFileName {
+		if matches := lumberjackBackupPattern.FindStringSubmatch(name); len(matches) == 2 {
+			segments = append(segments, segment{
+				path: path, stream: filepath.Join(filepath.Dir(path), matches[1]),
+				size: info.Size(), modTime: info.ModTime().UTC(), closed: true, evictable: true,
+			})
 			return nil
 		}
-		if strings.HasPrefix(name, ".diagnostic-") && strings.HasSuffix(name, ".tmp") {
-			segments = append(segments, segment{path: path, stream: filepath.Join(filepath.Dir(path), ".temporary"), size: info.Size(), modTime: info.ModTime().UTC(), closed: true})
+		if !strings.HasSuffix(name, ".log") {
 			return nil
 		}
-		active := strings.HasSuffix(name, ".log") && !isClosedName(name)
-		closed := strings.HasSuffix(name, ".log.gz") || isClosedName(name)
-		if !active && !closed {
-			return nil
-		}
-		stream := streamKey(path, active)
-		segments = append(segments, segment{path: path, stream: stream, size: info.Size(), modTime: info.ModTime().UTC(), closed: closed})
+		segments = append(segments, segment{
+			path: path, stream: filepath.Join(filepath.Dir(path), strings.TrimSuffix(name, ".log")),
+			size: info.Size(), modTime: info.ModTime().UTC(), closed: false,
+		})
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scan diagnostic tree: %w", err)
 	}
-	return segments, nil
-}
-
-func isClosedName(name string) bool {
-	trimmed := strings.TrimSuffix(strings.TrimSuffix(name, ".gz"), ".log")
-	parts := strings.Split(trimmed, ".")
-	return len(parts) >= 3
-}
-
-func streamKey(path string, active bool) string {
-	dir := filepath.Dir(path)
-	name := filepath.Base(path)
-	if active {
-		return filepath.Join(dir, strings.TrimSuffix(name, ".log"))
+	// During lumberjack's asynchronous gzip pass both the plain rotated source
+	// and its .gz target exist. Count the source once and protect it from quota
+	// eviction until compression completes; deleting either side mid-copy would
+	// race the mature sink's ownership.
+	byPath := make(map[string]struct{}, len(segments))
+	for _, item := range segments {
+		byPath[item.path] = struct{}{}
 	}
-	trimmed := strings.TrimSuffix(strings.TrimSuffix(name, ".gz"), ".log")
-	base, _, ok := strings.Cut(trimmed, ".")
-	if !ok {
-		base = trimmed
+	settled := segments[:0]
+	for _, item := range segments {
+		if strings.HasSuffix(item.path, ".gz") {
+			if _, compressing := byPath[strings.TrimSuffix(item.path, ".gz")]; compressing {
+				continue
+			}
+		}
+		if item.closed && strings.HasSuffix(item.path, ".log") {
+			if _, compressing := byPath[item.path+".gz"]; compressing {
+				item.evictable = false
+			}
+		}
+		settled = append(settled, item)
 	}
-	return filepath.Join(dir, base)
+	return settled, nil
 }
 
 func enforceStreamBudgets(segments []segment, limit int64) error {
@@ -432,7 +374,7 @@ func enforceStreamBudgets(segments []segment, limit int64) error {
 		var closed []segment
 		for _, item := range items {
 			total += item.size
-			if item.closed {
+			if item.closed && item.evictable {
 				closed = append(closed, item)
 			}
 		}
@@ -455,7 +397,7 @@ func enforceGlobalBudget(segments []segment, limit int64) error {
 	var closed []segment
 	for _, item := range segments {
 		total += item.size
-		if item.closed {
+		if item.closed && item.evictable {
 			closed = append(closed, item)
 		}
 	}

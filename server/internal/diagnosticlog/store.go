@@ -16,23 +16,26 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
-	lockFileName          = ".diagnostic.lock"
 	failureRollupInterval = 5 * time.Minute
 )
 
 var safeTokenPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
-var safeIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var safeIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 type Store struct {
 	root   string
 	now    func() time.Time
 	limits Limits
 
-	mu      sync.Mutex
-	loggers []*Logger
+	mu        sync.Mutex
+	cleanupMu sync.Mutex
+	loggers   []*Logger
+	byPath    map[string]*Logger
+	cleanupCh chan struct{}
 }
 
 type destination struct {
@@ -50,7 +53,11 @@ type destination struct {
 type Logger struct {
 	store *Store
 	dest  destination
+	sink  *lumberjack.Logger
 	seq   atomic.Uint64
+
+	writeMu          sync.Mutex
+	segmentStartedAt time.Time
 
 	healthMu sync.Mutex
 	health   Health
@@ -101,7 +108,13 @@ func Open(config Config) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
-	store := &Store{root: root, now: now, limits: config.Limits.normalized()}
+	store := &Store{
+		root:      root,
+		now:       now,
+		limits:    config.Limits.normalized(),
+		byPath:    make(map[string]*Logger),
+		cleanupCh: make(chan struct{}, 1),
+	}
 	// Startup cleanup is best effort for product availability. There are no
 	// registered sinks yet, so a later caller observes any persistent storage
 	// failure on its first write.
@@ -161,12 +174,24 @@ func (s *Store) Runner(options RunnerOptions) (*Logger, error) {
 }
 
 func (s *Store) newLogger(dest destination) (*Logger, error) {
-	if err := s.withTreeLock(func() error { return ensureDestinationDir(s.root, dest) }); err != nil {
+	if err := ensureDestinationDir(s.root, dest); err != nil {
 		return nil, err
 	}
+	maxBackups := int(s.limits.StreamBytes/s.limits.SegmentBytes) - 1
+	if maxBackups < 1 {
+		maxBackups = 1
+	}
 	logger := &Logger{
-		store:     s,
-		dest:      dest,
+		store: s,
+		dest:  dest,
+		sink: &lumberjack.Logger{
+			Filename:   dest.activePath,
+			MaxSize:    bytesToMegabytes(s.limits.SegmentBytes),
+			MaxAge:     durationToDays(s.limits.Retention),
+			MaxBackups: maxBackups,
+			LocalTime:  false,
+			Compress:   true,
+		},
 		incidents: make(map[string]*incident),
 		health: Health{
 			Scope:       dest.scope,
@@ -177,6 +202,11 @@ func (s *Store) newLogger(dest destination) (*Logger, error) {
 		},
 	}
 	s.mu.Lock()
+	if s.byPath[dest.activePath] != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("diagnostic stream already registered: %s", dest.activePath)
+	}
+	s.byPath[dest.activePath] = logger
 	s.loggers = append(s.loggers, logger)
 	s.mu.Unlock()
 	return logger, nil
@@ -226,7 +256,7 @@ func (l *Logger) Record(event Event) error {
 		return err
 	}
 
-	written, err := l.store.append(l.dest, encoded, now)
+	written, rotated, err := l.append(encoded, now)
 	if err != nil {
 		l.rollbackRate(mutation)
 		if written {
@@ -234,6 +264,9 @@ func (l *Logger) Record(event Event) error {
 		}
 		l.observeFailure(err, !written, now)
 		return err
+	}
+	if rotated {
+		l.store.requestCleanup()
 	}
 	l.observeSuccess(now)
 	if recoveryKey != "" {
@@ -414,7 +447,7 @@ func validateOptionalIdentifier(name, value string) error {
 	if value == "" {
 		return nil
 	}
-	if !safeIdentifierPattern.MatchString(value) || jwtPattern.MatchString(value) || credentialTokenPattern.MatchString(value) {
+	if !safeIdentifierPattern.MatchString(value) || strings.Contains(value, "://") || jwtPattern.MatchString(value) || credentialTokenPattern.MatchString(value) {
 		return fmt.Errorf("%s is not a safe bounded identifier", name)
 	}
 	return nil
@@ -579,6 +612,41 @@ func (s *Store) Health() []Health {
 	return health
 }
 
+// Close releases all open rolling-file handles. It does not remove retained
+// diagnostics and is safe to call during normal daemon shutdown.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	loggers := append([]*Logger(nil), s.loggers...)
+	s.mu.Unlock()
+	var closeErr error
+	for _, logger := range loggers {
+		logger.writeMu.Lock()
+		err := logger.sink.Close()
+		logger.writeMu.Unlock()
+		if closeErr == nil && err != nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func bytesToMegabytes(bytes int64) int {
+	const megabyte = int64(1 << 20)
+	megabytes := int((bytes + megabyte - 1) / megabyte)
+	if megabytes < 1 {
+		return 1
+	}
+	return megabytes
+}
+
+func durationToDays(duration time.Duration) int {
+	days := int((duration + 24*time.Hour - 1) / (24 * time.Hour))
+	if days < 1 {
+		return 1
+	}
+	return days
+}
+
 // RunCleanup performs periodic age and budget enforcement until ctx is
 // cancelled. Callers normally start one loop for the Machine Service. A failed
 // pass is reflected in registered sink health and the loop keeps running.
@@ -591,7 +659,27 @@ func (s *Store) RunCleanup(ctx context.Context) {
 			return
 		case <-ticker.C:
 			_ = s.Cleanup()
+		case <-s.cleanupCh:
+			// Lumberjack publishes a rotated file synchronously and compresses it
+			// asynchronously. Debounce quota scans so they do not race its mill.
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+				_ = s.Cleanup()
+			}
 		}
+	}
+}
+
+func (s *Store) requestCleanup() {
+	select {
+	case s.cleanupCh <- struct{}{}:
+	default:
 	}
 }
 

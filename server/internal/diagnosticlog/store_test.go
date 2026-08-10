@@ -135,6 +135,14 @@ func TestRunnerRejectsInvalidDestination(t *testing.T) {
 	if err := runner.Record(Event{Name: EventComputerStateChanged, Level: LevelInfo, Component: "test"}); err == nil {
 		t.Fatal("Runner accepted a Service-scoped event")
 	}
+	if err := runner.Record(Event{
+		Name:      EventDeliveryStateChanged,
+		Level:     LevelInfo,
+		Component: "test",
+		Identity:  Identity{DeliveryID: "message:55555555-5555-4555-8555-555555555555:agent:" + testAgentID},
+	}); err != nil {
+		t.Fatalf("Runner rejected canonical Message delivery identity: %v", err)
+	}
 	if err := service.Record(Event{Name: EventComputerStateChanged, Level: LevelInfo, Component: "test", Identity: Identity{RequestID: "https://user:password@example.com"}}); err == nil {
 		t.Fatal("Service accepted a URL-shaped identity")
 	}
@@ -167,6 +175,20 @@ func TestLimitsCannotExpandTheStorageContract(t *testing.T) {
 	})
 	if store.limits != defaults {
 		t.Fatalf("expanded limits = %+v, want defaults %+v", store.limits, defaults)
+	}
+}
+
+func TestLoggerDelegatesRollingPolicyToLumberjack(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "logs"), time.Now, Limits{})
+	logger, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logger.sink == nil {
+		t.Fatal("rolling sink is nil")
+	}
+	if logger.sink.MaxSize != 16 || logger.sink.MaxAge != 30 || logger.sink.MaxBackups != 7 || !logger.sink.Compress || logger.sink.LocalTime {
+		t.Fatalf("lumberjack policy = %+v, want 16 MiB, 30 days, 7 backups, gzip, UTC", logger.sink)
 	}
 }
 
@@ -224,6 +246,7 @@ func TestRecordRedactsAndBoundsUntrustedEvidence(t *testing.T) {
 	if err := service.Record(Event{Name: EventComputerStateChanged, Level: LevelInfo, Component: "machine_service"}); err != nil {
 		t.Fatal(err)
 	}
+	waitForCompressedSegment(t, root, "service-")
 	allBytes := readDiagnosticTree(t, root)
 	for _, forbidden := range []string{secret, "alice:", "?token=", "#fragment", "/Users/alice/private", "sk-1234567890abcdefghijklmnop", "AKIA1234567890ABCDEF", "ftp://"} {
 		if strings.Contains(string(allBytes), forbidden) {
@@ -235,24 +258,24 @@ func TestRecordRedactsAndBoundsUntrustedEvidence(t *testing.T) {
 func TestRotationCompressesClosedSegmentAndRespectsAge(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	root := filepath.Join(t.TempDir(), "logs")
-	limits := Limits{SegmentBytes: 800, SegmentAge: time.Hour, Retention: 30 * 24 * time.Hour, StreamBytes: 4 << 10, GlobalBytes: 8 << 10}
+	limits := Limits{SegmentBytes: 1 << 20, SegmentAge: time.Hour, Retention: 30 * 24 * time.Hour, StreamBytes: 4 << 20, GlobalBytes: 8 << 20}
 	store := openTestStore(t, root, func() time.Time { return now }, limits)
 	service, err := store.Service(ServiceOptions{ComputerGeneration: "generation-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 4; i++ {
-		if err := service.Record(Event{Name: EventComputerStateChanged, Level: LevelInfo, Component: "machine_service", Evidence: Evidence{Detail: strings.Repeat("a", 300)}}); err != nil {
+	for i := 0; i < 600; i++ {
+		if err := service.Record(Event{Name: EventComputerStateChanged, Level: LevelInfo, Component: "machine_service", Evidence: Evidence{Detail: strings.Repeat("a", 3000)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	assertHasCompressedSegment(t, root, "service.")
+	waitForCompressedSegment(t, root, "service-")
 
 	now = now.Add(2 * time.Hour)
 	if err := service.Record(Event{Name: EventComputerStateChanged, Level: LevelInfo, Component: "machine_service"}); err != nil {
 		t.Fatal(err)
 	}
-	assertHasCompressedSegment(t, root, "service.")
+	waitForCompressedSegment(t, root, "service-")
 	if _, err := os.Stat(filepath.Join(root, "service.log")); err != nil {
 		t.Fatalf("active service.log missing after rotation: %v", err)
 	}
@@ -286,7 +309,7 @@ func TestCleanupEnforcesRetentionStreamAndGlobalBudgets(t *testing.T) {
 		now = now.Add(10 * time.Minute)
 	}
 
-	old := filepath.Join(root, "service.20260801T000000.000001.log.gz")
+	old := filepath.Join(root, "service-2026-08-01T00-00-00.000.log.gz")
 	if err := os.WriteFile(old, []byte(strings.Repeat("old", 100)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -310,22 +333,19 @@ func TestCleanupEnforcesRetentionStreamAndGlobalBudgets(t *testing.T) {
 	}
 }
 
-func TestConcurrentStoresAppendWholeJSONLines(t *testing.T) {
+// Lumberjack serializes concurrent writes through one logger. Production has
+// exactly one Store owner because Daemon.Run acquires the Computer resident
+// lease before initializing diagnostics.
+func TestConcurrentLoggerWritesWholeJSONLines(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "logs")
-	storeA := openTestStore(t, root, time.Now, Limits{})
-	storeB := openTestStore(t, root, time.Now, Limits{})
-	loggerA, err := storeA.Service(ServiceOptions{ComputerGeneration: "generation-a"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	loggerB, err := storeB.Service(ServiceOptions{ComputerGeneration: "generation-b"})
+	store := openTestStore(t, root, time.Now, Limits{})
+	logger, err := store.Service(ServiceOptions{ComputerGeneration: "generation-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var wg sync.WaitGroup
-	for _, logger := range []*Logger{loggerA, loggerB} {
-		logger := logger
+	for range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -380,7 +400,7 @@ func TestPartialTailIsQuarantinedBeforeNextRecord(t *testing.T) {
 	}
 	record := readOneRecord(t, active)
 	assertField(t, record, "event", string(EventComputerStateChanged))
-	assertHasCompressedSegment(t, root, "service.")
+	waitForCompressedSegment(t, root, "service-")
 }
 
 func TestSymlinkEscapeIsRejected(t *testing.T) {
@@ -545,7 +565,7 @@ func assertField(t *testing.T, record map[string]any, key string, want any) {
 	}
 }
 
-func assertHasCompressedSegment(t *testing.T, root, prefix string) {
+func assertHasCompressedSegment(t *testing.T, root, prefix string) bool {
 	t.Helper()
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -562,22 +582,34 @@ func assertHasCompressedSegment(t *testing.T, root, prefix string) {
 			}
 			file, openErr := os.Open(filepath.Join(root, entry.Name()))
 			if openErr != nil {
-				t.Fatal(openErr)
+				return false
 			}
 			reader, gzipErr := gzip.NewReader(file)
 			if gzipErr != nil {
 				file.Close()
-				t.Fatal(gzipErr)
+				return false
 			}
 			if _, readErr := io.ReadAll(reader); readErr != nil {
 				reader.Close()
 				file.Close()
-				t.Fatal(readErr)
+				return false
 			}
 			reader.Close()
 			file.Close()
+			return true
+		}
+	}
+	return false
+}
+
+func waitForCompressedSegment(t *testing.T, root, prefix string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if assertHasCompressedSegment(t, root, prefix) {
 			return
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("no compressed segment with prefix %q under %s", prefix, root)
 }
@@ -607,7 +639,7 @@ func treeBytes(t *testing.T, root string) int64 {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && filepath.Base(path) != lockFileName {
+		if !info.IsDir() {
 			total += info.Size()
 		}
 		return nil
@@ -625,7 +657,7 @@ func readDiagnosticTree(t *testing.T, root string) []byte {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || filepath.Base(path) == lockFileName {
+		if info.IsDir() {
 			return nil
 		}
 		file, err := os.Open(path)

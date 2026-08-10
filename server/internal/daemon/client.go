@@ -333,6 +333,7 @@ type AgentInboxEvent struct {
 	ID               string `json:"id"`
 	DeliveryID       string `json:"delivery_id"`
 	ConversationID   string `json:"conversation_id"`
+	SourceMessageID  string `json:"source_message_id"`
 	LeaseToken       string `json:"lease_token"`
 	LeaseExpiresAt   string `json:"lease_expires_at"`
 	SeqFrom          int64  `json:"seq_from"`

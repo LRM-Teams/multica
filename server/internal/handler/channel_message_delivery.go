@@ -105,7 +105,7 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 		Seq:        message.Seq,
 		DeliveryID: "message:" + message.ID + ":agent:" + agentID,
 		Message: protocol.AgentMessageProjection{
-			ID: message.ID, Target: target, ReplyTarget: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
+			ID: message.ID, ChannelID: ch.ID, Target: target, ReplyTarget: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
 		},
 	}, true, nil
 }
@@ -188,6 +188,7 @@ func (h *Handler) notifyCanonicalMessageDelivery(ctx context.Context, ch Channel
 //   - agent-authored @mentions deliver only to targets (no bystander fanout;
 //     keeps agent-reply loops bounded)
 //   - thread replies deliver to explicit targets or active thread participants
+//
 // Agents never receive deliveries of their own Messages.
 func (h *Handler) canonicalMessageDeliveryRecipients(ctx context.Context, ch ChannelResponse, message ChannelMessageResponse) []db.Agent {
 	mentioned := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, message.Content, message.Parts)

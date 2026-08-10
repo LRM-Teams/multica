@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -168,20 +169,55 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 		closeConnectionOnce.Do(func() { _ = conn.Close() })
 	}
 	deliveryDispatcher := newWorkspaceRunnerDeliveryDispatcher(connectionCtx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
+		d.messageCoordinatorMu.RLock()
+		runtimeID := d.messageRuntimeIDs[delivery.AgentID]
+		d.messageCoordinatorMu.RUnlock()
+		d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
+			workspaceID, runtimeID, delivery, "runner_received", "accepted", "",
+		))
 		ack, err := d.acceptIdleAgentDelivery(deliveryCtx, delivery)
+		// Restart-time delivery may recreate the coordinator and discover its
+		// durable runtime during acceptance. Re-read routing identity so every
+		// later checkpoint joins the same runtime even when runner_received could
+		// only identify the Workspace and Agent.
+		d.messageCoordinatorMu.RLock()
+		runtimeID = d.messageRuntimeIDs[delivery.AgentID]
+		d.messageCoordinatorMu.RUnlock()
 		if err != nil {
+			d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
+				workspaceID, runtimeID, delivery, "coordinator_accepted", "rejected", canonicalMessageFailureReason(err),
+			))
 			if d.logger != nil {
 				d.logger.Warn("workspace Runner agent delivery not acknowledged", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
 			}
 			return
 		}
 		if err := writeFrame(protocol.EventAgentDeliverAck, ack); err != nil {
+			d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
+				workspaceID, runtimeID, delivery, "ack_sent", "failed", "runner_connection_write_failed",
+			))
 			failConnection(err)
 			return
 		}
-		if err := d.flushIdleAgentDelivery(deliveryCtx, delivery.AgentID); err != nil && d.logger != nil {
-			d.logger.Warn("workspace Runner idle agent Message handoff failed after delivery acknowledgement", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+		d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
+			workspaceID, runtimeID, delivery, "ack_sent", "accepted", "",
+		))
+		if err := d.flushIdleAgentDelivery(deliveryCtx, delivery.AgentID); err != nil {
+			outcome := "failed"
+			if errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown") {
+				outcome = "deferred"
+			}
+			d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
+				workspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
+			))
+			if d.logger != nil {
+				d.logger.Warn("workspace Runner idle agent Message handoff failed after delivery acknowledgement", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+			}
+			return
 		}
+		d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
+			workspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
+		))
 	})
 	messageTransportGeneration := d.attachWorkspaceRunnerMessageTransport(workspaceID, writeFrame)
 	defer d.detachWorkspaceRunnerMessageTransport(workspaceID, messageTransportGeneration)

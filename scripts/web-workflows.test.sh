@@ -12,6 +12,14 @@ done
 
 release_workflow="$(<.github/workflows/release.yml)"
 deploy_workflow="$(<.github/workflows/deploy.yml)"
+if grep -Fq -- 'Publish Agent avatar presets to OSS' <<<"$deploy_workflow"; then
+  echo "One-time Agent avatar publication must not gate every application deployment"
+  exit 1
+fi
+if grep -Fq -- 'publish_agent_avatar_presets' Dockerfile; then
+  echo "The runtime image must not carry the retired one-time Agent avatar publisher"
+  exit 1
+fi
 # CLI/daemon archives are the sole non-web release lane retained after #1405:
 # Frank's Apple Silicon host needs the Darwin arm64 archive to upgrade Wendy.
 # Keep the server-image ARM runners disabled below.

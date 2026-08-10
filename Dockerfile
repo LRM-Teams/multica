@@ -22,7 +22,6 @@ RUN cd server && echo "building commit=${COMMIT}" && CGO_ENABLED=0 go build -ldf
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o bin/multica ./cmd/multica
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/migrate ./cmd/migrate
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/backfill_agent_usage_hourly ./cmd/backfill_agent_usage_hourly
-RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/publish_agent_avatar_presets ./cmd/publish-agent-avatar-presets
 
 # --- Runtime stage ---
 FROM alpine:3.21
@@ -35,7 +34,6 @@ COPY --from=builder /src/server/bin/server .
 COPY --from=builder /src/server/bin/multica .
 COPY --from=builder /src/server/bin/migrate .
 COPY --from=builder /src/server/bin/backfill_agent_usage_hourly .
-COPY --from=builder /src/server/bin/publish_agent_avatar_presets .
 COPY server/migrations/ ./migrations/
 COPY docker/entrypoint.sh .
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh

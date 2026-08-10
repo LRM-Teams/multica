@@ -240,10 +240,7 @@ import {
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
-import {
-  ConversationActivityStrip,
-  type ConversationActivityAgent,
-} from "./conversation-activity-strip";
+import { ConversationActivityStrip } from "./conversation-activity-strip";
 import {
   dmAgentBubbleActivity,
   useAgentBubbleActivityByAgent,
@@ -1403,21 +1400,6 @@ export function ChannelsPage({
       ),
     [active?.id, typingActors],
   );
-  const activeWorkingAgents = useMemo<ConversationActivityAgent[]>(() => {
-    if (!active || active.kind !== "group") return [];
-    const seen = new Set<string>();
-    const out: ConversationActivityAgent[] = [];
-    for (const member of channelMembers) {
-      if (member.member_type !== "agent" || seen.has(member.member_id)) continue;
-      seen.add(member.member_id);
-      out.push({
-        id: member.member_id,
-        displayName: resolveActorDisplayName(member, member.name || member.member_id),
-      });
-    }
-    return out;
-  }, [active, channelMembers]);
-
   // Pinned conversations live in the unified PINNED section (Slack-style),
   // not floated to the top of Channels / Direct messages.
   //
@@ -4178,10 +4160,7 @@ export function ChannelsPage({
                 </ReadOnlyConversationBanner>
               ) : (
                 <>
-                  <ConversationActivityStrip
-                    typingActors={activeTypingActors}
-                    workingAgents={activeWorkingAgents}
-                  />
+                  <ConversationActivityStrip typingActors={activeTypingActors} />
                   <Composer
                     surface="channel"
                     sendLabel={t(($) => $.composer.send)}

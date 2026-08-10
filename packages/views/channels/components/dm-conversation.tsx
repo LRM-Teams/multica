@@ -129,10 +129,6 @@ import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
-import {
-  ConversationActivityStrip,
-  type ConversationActivityAgent,
-} from "./conversation-activity-strip";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 
 /**
@@ -140,10 +136,6 @@ import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
  *  - `dm_channel` — the DM IS a kind='dm' channel, so we reuse the exact
  *    channel conversation stack (ChannelMessageBubble + ContentEditor composer
  *    + channel queries/mutations + channel:message WS).
- *
- * DM composer renders the shared ConversationActivityStrip so active agents are
- * visible below the transcript (typing / editing / searching) without bringing
- * back the heavy Stop rail. Profile ACTIONS still owns explicit stop controls.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
@@ -838,23 +830,6 @@ function DmChannelConversation({
   const readOnlyContent = supervisedReadOnly
     ? supervisedReadOnlyContent
     : archivedPeerReadOnlyContent;
-
-  const conversationWorkingAgents = useMemo<ConversationActivityAgent[]>(() => {
-    const seen = new Set<string>();
-    const out: ConversationActivityAgent[] = [];
-    const peers =
-      dm.mode === "agent_pair" && dm.participants?.length
-        ? dm.participants
-        : dm.peer.type === "agent" && !dm.peer.archived
-          ? [dm.peer]
-          : [];
-    for (const peer of peers) {
-      if (peer.type !== "agent" || seen.has(peer.id)) continue;
-      seen.add(peer.id);
-      out.push({ id: peer.id, displayName: peer.name });
-    }
-    return out;
-  }, [dm.mode, dm.participants, dm.peer]);
 
   const searchHitIds = useMemo(
     () =>
@@ -1700,7 +1675,6 @@ function DmChannelConversation({
       />
       {!readOnly ? dmSelectionMenu.menu : null}
       </div>
-      <ConversationActivityStrip workingAgents={conversationWorkingAgents} />
       <Composer
         surface="dm_channel"
         readOnly={readOnly}

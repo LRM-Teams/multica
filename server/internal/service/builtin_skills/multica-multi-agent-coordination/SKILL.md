@@ -88,6 +88,11 @@ produce a deliverable, ask one blocking question, or stay silent.
 
 ### Check Pending messages at a natural breakpoint
 
+When a resident runtime is idle, the machine-local coordinator hands concrete
+canonical Messages into a native provider turn automatically. Reply using the
+explicit target carried with each Message; final assistant output is not a
+visible channel or DM reply.
+
 A busy runtime can receive a content-free Notice that reports Pending counts
 without carrying Message bodies. At a natural breakpoint, inspect the concrete
 Messages through the machine-local coordinator:

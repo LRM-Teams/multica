@@ -28,7 +28,10 @@ const (
 	launcherLockName          = "launcher.lock"
 )
 
-var ErrActivationConflict = errors.New("activation generation conflict")
+var (
+	ErrActivationConflict            = errors.New("activation generation conflict")
+	ErrStagedBinaryIntegrityMismatch = errors.New("staged binary integrity mismatch")
+)
 
 type BinaryVerifier func(ctx context.Context, binaryPath, expectedVersion string) error
 
@@ -68,11 +71,12 @@ type StagedVersion struct {
 }
 
 type ActivationState struct {
-	SchemaVersion   int       `json:"schema_version"`
-	ActiveVersion   string    `json:"active_version"`
-	PreviousVersion string    `json:"previous_version,omitempty"`
-	Generation      uint64    `json:"generation"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	SchemaVersion           int       `json:"schema_version"`
+	ActiveVersion           string    `json:"active_version"`
+	PreviousVersion         string    `json:"previous_version,omitempty"`
+	PreviousVersionUnusable bool      `json:"previous_version_unusable,omitempty"`
+	Generation              uint64    `json:"generation"`
+	UpdatedAt               time.Time `json:"updated_at"`
 }
 
 type versionMetadata struct {
@@ -539,7 +543,8 @@ func (s *VersionStore) verifyExisting(
 	}
 	if actualDigest != metadata.BinarySHA256 {
 		return StagedVersion{}, fmt.Errorf(
-			"staged binary integrity mismatch for %s: metadata %s, actual %s",
+			"%w for %s: metadata %s, actual %s",
+			ErrStagedBinaryIntegrityMismatch,
 			staged.Version,
 			metadata.BinarySHA256,
 			actualDigest,
@@ -624,6 +629,8 @@ func validateActivationState(state ActivationState) error {
 	case state.ActiveVersion != "" &&
 		state.ActiveVersion == state.PreviousVersion:
 		return errors.New("invalid activation state: active and predecessor must differ")
+	case state.PreviousVersionUnusable && state.PreviousVersion == "":
+		return errors.New("invalid activation state: unusable predecessor must name a version")
 	}
 	return nil
 }
@@ -632,6 +639,19 @@ func (s *VersionStore) CompareAndSwapActivation(
 	ctx context.Context,
 	expectedGeneration uint64,
 	activeVersion string,
+) (ActivationState, error) {
+	return s.compareAndSwapActivation(ctx, expectedGeneration, activeVersion, false)
+}
+
+// compareAndSwapActivation optionally permits an explicit installer recovery
+// to advance away from a corrupted current Active. The corrupted version is
+// retained only as diagnostic history and is marked unusable so rollback can
+// never present it as a safe predecessor. Ordinary upgrades remain fail-closed.
+func (s *VersionStore) compareAndSwapActivation(
+	ctx context.Context,
+	expectedGeneration uint64,
+	activeVersion string,
+	allowUnusablePrevious bool,
 ) (ActivationState, error) {
 	active, err := normalizeVersionStoreTag(activeVersion)
 	if err != nil {
@@ -677,20 +697,25 @@ func (s *VersionStore) CompareAndSwapActivation(
 		return ActivationState{}, err
 	}
 	previous := current.ActiveVersion
+	previousUnusable := false
 	if previous != "" {
 		if _, err := s.verifyExisting(ctx, previous, ""); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			if allowUnusablePrevious && errors.Is(err, ErrStagedBinaryIntegrityMismatch) {
+				previousUnusable = true
+			} else if errors.Is(err, os.ErrNotExist) {
 				return ActivationState{}, fmt.Errorf("previous version %s is not staged", previous)
+			} else {
+				return ActivationState{}, err
 			}
-			return ActivationState{}, err
 		}
 	}
 	next := ActivationState{
-		SchemaVersion:   versionStoreSchemaVersion,
-		ActiveVersion:   active,
-		PreviousVersion: previous,
-		Generation:      current.Generation + 1,
-		UpdatedAt:       time.Now().UTC(),
+		SchemaVersion:           versionStoreSchemaVersion,
+		ActiveVersion:           active,
+		PreviousVersion:         previous,
+		PreviousVersionUnusable: previousUnusable,
+		Generation:              current.Generation + 1,
+		UpdatedAt:               time.Now().UTC(),
 	}
 	if err := s.writeActivationState(next); err != nil {
 		return ActivationState{}, err

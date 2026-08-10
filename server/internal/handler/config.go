@@ -10,7 +10,8 @@ import (
 )
 
 type AppConfig struct {
-	CdnDomain string `json:"cdn_domain"`
+	CdnDomain   string `json:"cdn_domain"`
+	Environment string `json:"environment"`
 	// Public auth config consumed by the web app at runtime so self-hosted
 	// deployments do not need to rebuild the frontend image when operators
 	// toggle signup or wire Google OAuth.
@@ -49,6 +50,7 @@ type AppConfig struct {
 // to anonymous callers — never user- or tenant-scoped data.
 func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	config := AppConfig{
+		Environment:                  serviceEnvironmentFromEnv(),
 		AllowSignup:                  os.Getenv("ALLOW_SIGNUP") != "false",
 		GoogleClientID:               os.Getenv("GOOGLE_CLIENT_ID"),
 		WorkspaceCreationDisabled:    os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
@@ -71,6 +73,17 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, config)
+}
+
+// serviceEnvironmentFromEnv is the public deployment identity used by setup
+// surfaces. Computer supports exactly production and test; unknown or missing
+// APP_ENV values fail closed to production so an older/self-hosted deployment
+// never makes the UI opt into an arbitrary test origin by accident.
+func serviceEnvironmentFromEnv() string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "test") {
+		return "test"
+	}
+	return "production"
 }
 
 func devAgentProfileAccessEnabled() bool {

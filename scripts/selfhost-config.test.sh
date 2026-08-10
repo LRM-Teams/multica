@@ -42,6 +42,7 @@ for obsolete in \
 done
 
 deploy_workflow="$(<.github/workflows/deploy.yml)"
+deploy_test_workflow="$(<.github/workflows/deploy-test.yml)"
 require_config "$deploy_workflow" 'db-bridge-stub-multica'
 if grep -Fq 'db-bridge-executor-multica' <<<"$deploy_workflow"; then
   echo "Deploy workflow still manages the removed Multica-side bridge executor."
@@ -74,7 +75,7 @@ for obsolete in \
 done
 
 require_config "$deploy_workflow" 'compose up -d --no-deps --force-recreate caddy'
-require_config "$deploy_workflow" 'environment: aliyun-dev'
+require_config "$deploy_workflow" 'name: aliyun-dev'
 require_config "$deploy_workflow" 'runs-on: [self-hosted, aliyun]'
 require_config "$deploy_workflow" 'RUNNER_EXPECTED_USER: dev'
 require_config "$deploy_workflow" 'uses: actions/upload-artifact@v7'
@@ -118,6 +119,11 @@ require_config "$deploy_workflow" '-U "$target_user"'
 require_config "$deploy_workflow" '-d "$target_db"'
 require_config "$deploy_workflow" 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD'
 require_config "$deploy_workflow" 'compose_environment="$(compose config --environment)"'
+require_config "$deploy_test_workflow" 'name: test'
+require_config "$deploy_test_workflow" 'runs-on: [self-hosted, s89, test]'
+require_config "$deploy_test_workflow" '--project-name multica-test'
+require_config "$deploy_test_workflow" 'DEPLOY_DIR: /data/multica-test'
+require_config "$deploy_test_workflow" 'findmnt -n -o TARGET'
 compose_environment_unset_line="$(grep -nF -- 'unset compose_environment' .github/workflows/deploy.yml | cut -d: -f1)"
 oss_credential_assert_line="$(
   grep -nF -- 'bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"' \
@@ -130,7 +136,7 @@ if [[ -z "$compose_environment_unset_line" || -z "$oss_credential_assert_line" ]
   echo "Aliyun deploy must retain compose_environment until the OSS credential assertion has consumed it."
   exit 1
 fi
-if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 4 ]]; then
+if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 3 ]]; then
   echo "Every Aliyun deploy/verify Compose wrapper must clear ambient POSTGRES_* values."
   exit 1
 fi
@@ -237,7 +243,7 @@ s89_backend_config="$(
     config backend
 )"
 
-require_config "$s89_config" 'container_name: multica-caddy'
+require_config "$s89_config" 'container_name: multica-test-caddy'
 require_config "$s89_config" 'image: caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9'
 require_config "$s89_config" 'FRONTEND_ORIGIN: https://82.157.184.89'
 require_config "$s89_config" 'GOOGLE_CLIENT_ID: ""'
@@ -245,6 +251,9 @@ require_config "$s89_config" 'GOOGLE_CLIENT_SECRET: ""'
 require_config "$s89_config" 'GOOGLE_REDIRECT_URI: ""'
 require_config "$s89_config" 'MULTICA_APP_URL: https://82.157.184.89'
 require_config "$s89_config" 'MULTICA_PUBLIC_URL: https://82.157.184.89'
+require_config "$s89_config" 'APP_ENV: test'
+require_config "$s89_config" 'source: /data/multica-test/postgres'
+require_config "$s89_config" 'source: /data/multica-test/uploads'
 require_config "$s89_config" 'target: /etc/caddy/Caddyfile'
 require_config "$s89_backend_config" 'host_ip: 127.0.0.1'
 if grep -Fq 'host_ip: 0.0.0.0' <<<"$s89_backend_config"; then
@@ -259,7 +268,7 @@ s89_caddyfile="$(<deploy/s89/Caddyfile)"
 require_config "$s89_caddyfile" 'profile shortlived'
 require_config "$s89_caddyfile" 'disable_tlsalpn_challenge'
 require_config "$s89_caddyfile" '@browser_navigation header Accept *text/html*'
-require_config "$s89_caddyfile" 'redir @browser_navigation https://82.157.184.89{uri} 308'
+require_config "$s89_caddyfile" 'redir @browser_navigation https://{$MULTICA_TEST_HOST:82.157.184.89}{uri} 308'
 require_config "$s89_caddyfile" '/api/daemon/ws'
 require_config "$s89_caddyfile" '/api/sandbox/node/ws'
 

@@ -1,32 +1,29 @@
 name: Deploy
 
-# Continuous deployment to the Aliyun host (101.200.210.144, runner label
-# `aliyun`). Images build on self-hosted CI runners and push to GHCR; the
-# Aliyun runner pulls images and restarts Compose locally.
+# Production deployment to the Aliyun host (101.200.210.144, runner label
+# `aliyun`). Images build on GitHub-hosted runners and push to GHCR; the
+# Aliyun runner pulls exact immutable image tags and restarts Compose locally.
 #
-# Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
-# feature branch → PR → merge to `dev`, which builds images and deploys
-# to the Aliyun host.
-# `main` is left as the upstream-tracking branch and never deploys via this
-# workflow.
+# Test has its own `dev` → Tencent s89 workflow in deploy-test.yml. This lane
+# runs only after an accepted promotion reaches `main`; production never
+# consumes a `dev` push directly.
 #
 # Host layout: deploy/runner user `dev`, stack under `/data/multica`. The
-# protected `aliyun-dev` Environment is the deployment boundary. Database
+# protected `aliyun-dev` Environment is the legacy-named production credential
+# boundary. Database
 # identity stays in the host-owned `/data/multica/.env`; the speech API key is
 # injected from that Environment so host migrations cannot silently disable
 # voice.
 
 on:
-  # Deploy only from the `dev` integration branch, after a PR has already been
-  # merged. PR events must not deploy to the shared Aliyun/dev environment;
-  # they can build/test in CI, but that host must always represent `dev` or an
-  # explicit manual dispatch from `dev`. Rollback dispatches must name an
+  # Deploy only from the `main` production branch, after promotion. PR events
+  # never deploy production; rollback dispatches must run from `main` and name an
   # existing image tag.
   # Docs-only changes (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
   push:
-    branches: [dev]
+    branches: [main]
     paths-ignore:
       - "docs/**"
       - "*.md"
@@ -40,7 +37,7 @@ on:
 
 # Never run two deploys at once; never cancel an in-flight one mid-restart.
 concurrency:
-  group: deploy-aliyun
+  group: deploy-production-aliyun
   cancel-in-progress: false
 
 # Public deployment coordinates are configuration, not application constants.
@@ -64,8 +61,8 @@ jobs:
     # place for operators or privileged commands to reuse as a worktree.
     if: >-
       github.repository_owner == 'LRM-Teams' &&
-      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
-       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'))
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     # Hosted minutes blocked by org spending limit; prepare on self-hosted ci.
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -120,12 +117,12 @@ jobs:
   build:
     # Only build/deploy from the team fork — never upstream or other forks.
     # On manual dispatch with an image_tag we skip building and redeploy that tag.
-    # Empty-tag manual builds must also target dev; this lane never builds a feature ref.
+    # Empty-tag manual builds must also target main; this lane never builds a feature ref.
     if: >-
       github.repository_owner == 'LRM-Teams' &&
-      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
        (github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/dev' &&
+        github.ref == 'refs/heads/main' &&
         github.event.inputs.image_tag == ''))
     # Hosted minutes blocked by org spending limit; build on self-hosted ci.
     runs-on: ubuntu-latest
@@ -139,12 +136,12 @@ jobs:
       web_image: ${{ steps.prep.outputs.web_image }}
       db_bridge_image: ${{ steps.prep.outputs.db_bridge_image }}
     steps:
-      # On dev push or manual dev dispatch, build the committed dev head.
+      # On main push or manual main dispatch, build the committed production head.
       - uses: actions/checkout@v7
 
       # GHCR paths must be lowercase, but github.repository_owner preserves the
       # org's display case (e.g. "LRM-Teams"). Lowercase it here. The tag is the
-      # short SHA of the checked-out commit — the real dev commit being deployed.
+      # short SHA of the checked-out commit — the real production commit deployed.
       - name: Compute image refs + tag
         id: prep
         run: |
@@ -190,8 +187,8 @@ jobs:
             COMMIT=${{ github.sha }}
           # BuildKit cache lives in GHCR (free under GitHub's 2026-07 policy;
           # re-evaluate this backend if GitHub starts charging for GHCR).
-          cache-from: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-dev-amd64
-          cache-to: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-dev-amd64,mode=max
+          cache-from: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-production-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-production-amd64,mode=max
 
       - name: Build & push web
         uses: docker/build-push-action@v7
@@ -209,8 +206,8 @@ jobs:
             NEXT_PUBLIC_API_URL=${{ env.MULTICA_API_URL }}
             NEXT_PUBLIC_WS_URL=${{ env.MULTICA_WS_URL }}
             NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
-          cache-from: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-dev-amd64
-          cache-to: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-dev-amd64,mode=max
+          cache-from: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-production-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-production-amd64,mode=max
 
       - name: Build & push db-bridge
         # The multica-side bridge server image. Context is the db_bridge/
@@ -228,23 +225,25 @@ jobs:
           tags: |
             ${{ steps.prep.outputs.db_bridge_image }}:latest
             ${{ steps.prep.outputs.db_bridge_image }}:${{ steps.prep.outputs.tag }}
-          cache-from: type=registry,ref=${{ steps.prep.outputs.db_bridge_image }}:buildcache-dev-amd64
-          cache-to: type=registry,ref=${{ steps.prep.outputs.db_bridge_image }}:buildcache-dev-amd64,mode=max
+          cache-from: type=registry,ref=${{ steps.prep.outputs.db_bridge_image }}:buildcache-production-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.db_bridge_image }}:buildcache-production-amd64,mode=max
 
   deploy:
     needs: [prepare, build]
     # The Environment is the protected Aliyun deployment boundary. Runtime
     # secrets remain host-local and are validated before any container changes.
-    environment: aliyun-dev
+    environment:
+      name: aliyun-dev
+      url: https://www.leagent.me
     # Run after a successful build (push / dispatch-without-tag), OR straight
-    # away on a dev dispatch that names an existing tag to roll back to.
+    # away on a main dispatch that names an existing tag to roll back to.
     if: >-
       always() &&
       github.repository_owner == 'LRM-Teams' &&
       needs.prepare.result == 'success' &&
       (needs.build.result == 'success' ||
        (github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/dev' &&
+        github.ref == 'refs/heads/main' &&
         github.event.inputs.image_tag != ''))
     runs-on: [self-hosted, aliyun]
     timeout-minutes: 15
@@ -343,9 +342,8 @@ jobs:
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
           export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
-          # Aliyun/dev is the shared integration environment; keep this off by
-          # default in docker-compose.selfhost.yml and opt in only for this lane.
-          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          # Production must never enable the shared-test Agent profile bypass.
+          export MULTICA_DEV_AGENT_PROFILE_ACCESS=false
           bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/validate-public-origins.sh"
           if [ ! -r "${DEPLOY_DIR}/.env" ]; then
             echo "::error::${DEPLOY_DIR}/.env is not readable by deploy user $(id -un)."
@@ -424,38 +422,6 @@ jobs:
             caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
-      # Publish immutable preset objects before migration 314 can make database
-      # rows reference them. Rollbacks reuse the already-published versioned
-      # objects and may target images that predate this publisher binary.
-      - name: Publish Agent avatar presets to OSS
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.image_tag == ''
-        run: |
-          set -euo pipefail
-          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
-          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
-          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
-          export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
-          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
-          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
-          compose() {
-            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
-              docker compose \
-              --project-name multica \
-              --project-directory "${DEPLOY_DIR}" \
-              --env-file "${DEPLOY_DIR}/.env" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" "$@"
-          }
-          compose pull backend
-          compose run --rm --no-deps \
-            --entrypoint ./publish_agent_avatar_presets backend
-          for url in \
-            https://cdn.leagent.me/agent-avatars/v1/human-01.jpg \
-            https://cdn.leagent.me/agent-avatars/v2/agent-01.png; do
-            curl -fsS --retry 5 --retry-delay 2 "$url" >/dev/null
-          done
-
       # Run the new image's migration binary before changing any runtime
       # container or the live Caddyfile. A failure is therefore reported as a
       # migration failure and leaves the currently served stack untouched.
@@ -480,9 +446,8 @@ jobs:
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
           export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
-          # Aliyun/dev is the shared integration environment; keep this off by
-          # default in docker-compose.selfhost.yml and opt in only for this lane.
-          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          # Production must never enable the shared-test Agent profile bypass.
+          export MULTICA_DEV_AGENT_PROFILE_ACCESS=false
           if [ ! -r "${DEPLOY_DIR}/.env" ]; then
             echo "::error::${DEPLOY_DIR}/.env is not readable by deploy user $(id -un)."
             exit 1
@@ -583,7 +548,7 @@ jobs:
 
           # Caddy reaches both app services only through their Docker service
           # names. These probes therefore validate the running container,
-          # Compose DNS, Caddy upstream routing, and the externally served dev
+          # Compose DNS, Caddy upstream routing, and the externally served production
           # listeners as one boundary. HTTPS probes connect to loopback while
           # retaining the public www/API TLS identities, avoiding dependence on
           # provider NAT hairpin behavior.

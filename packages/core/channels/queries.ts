@@ -1,7 +1,6 @@
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage, ListIssuesParams } from "../types";
-import { preferAuthorAvatarUrl } from "../workspace/avatar-url";
 import { CHANNEL_MESSAGE_GC_TIME_MS } from "./evict-inactive-caches";
 
 /**
@@ -150,32 +149,28 @@ export function flattenChannelMessagePages(data?: InfiniteData<ChannelMessagesPa
   const flat = data
     ? [...data.pages].reverse().flatMap((page) => page.messages ?? []).filter(Boolean)
     : [];
-  return enrichChannelMessagesPreservingAvatars(flat);
+  return normalizeChannelMessages(flat);
 }
 
 /**
- * Backfill `author_avatar_url` across a read-model list (API refetch / flatten)
- * using the same preserve/sibling rules as WS upserts. Refetches and list
- * payloads that omit avatars must not regress bubbles to glyph placeholders
- * when an earlier row or optimistic ACK already had the face (LRM-218).
+ * Normalize a channel-message list at the cache seam.
  *
- * Soft-deleted tombstones (`deleted_at` set) MUST stay in the list — do not
- * reuse WS upsert's shouldRender filter, which drops them.
+ * Duplicate API pages collapse onto one canonical row. Soft-deleted tombstones
+ * stay in the list; only the realtime upsert path decides whether to hide them.
  */
-export function enrichChannelMessagesPreservingAvatars(
+export function normalizeChannelMessages(
   messages: readonly ChannelMessage[],
 ): ChannelMessage[] {
   const out: ChannelMessage[] = [];
   for (const message of messages) {
     // List/refetch pages (and some test fixtures) can include sparse holes.
     if (!message) continue;
-    const existing = out.find((m) => matchesChannelMessage(m, message));
-    const enriched = withPreservedAuthorAvatar(message, existing, out);
-    if (existing) {
-      const idx = out.findIndex((m) => matchesChannelMessage(m, message));
-      out[idx] = enriched;
+    const normalized = withoutLegacyMessageAvatar(message);
+    const idx = out.findIndex((existing) => matchesChannelMessage(existing, normalized));
+    if (idx >= 0) {
+      out[idx] = normalized;
     } else {
-      out.push(enriched);
+      out.push(normalized);
     }
   }
   return out;
@@ -288,7 +283,7 @@ export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMes
     const siblings = flattenChannelMessagePages(old);
     const matchIndex = findChannelMessageMatchIndex(siblings, message);
     const existing = matchIndex >= 0 ? siblings[matchIndex] : undefined;
-    const enriched = asCacheMessage(message, existing, siblings);
+    const enriched = asCacheMessage(message, existing);
     const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
       page.messages.some((m: ChannelMessage) => matchesChannelMessage(m, enriched)),
     );
@@ -360,37 +355,37 @@ function shouldRenderChannelMessage(message: ChannelMessage | null | undefined):
   return !message.deleted_at || (message.thread_reply_count ?? 0) > 0;
 }
 
-/**
- * WS channel:message payloads sometimes omit `author_avatar_url` (publish path
- * forgot to attach it) while list fetches include it. Prefer the incoming URL,
- * else keep the cached row's, else copy from another same-author bubble already
- * in the thread — so consecutive agent messages don't flicker to initials.
- *
- * LRM-855: a non-empty incoming URL still wins in the common case, but a stale
- * legacy `/uploads/` path must not overwrite a cached OSS/CDN face (and the
- * reverse — OSS incoming always replaces `/uploads/` cache).
- */
-export function withPreservedAuthorAvatar(
-  incoming: ChannelMessage,
-  existing: ChannelMessage | undefined,
-  siblings: readonly ChannelMessage[] | undefined,
-): ChannelMessage {
-  let fromSibling: string | null | undefined;
-  if (!incoming.author_avatar_url && !existing?.author_avatar_url && incoming.author_id && siblings?.length) {
-    fromSibling = siblings.find(
-      (m) =>
-        !matchesChannelMessage(m, incoming) &&
-        m.author_id === incoming.author_id &&
-        m.type === incoming.type &&
-        !!m.author_avatar_url,
-    )?.author_avatar_url;
-  }
-  const chosen = preferAuthorAvatarUrl(
-    incoming.author_avatar_url,
-    existing?.author_avatar_url ?? fromSibling ?? null,
-  );
-  if (!chosen || chosen === incoming.author_avatar_url) return incoming;
-  return { ...incoming, author_avatar_url: chosen };
+function withoutLegacyMessageAvatar(message: ChannelMessage): ChannelMessage {
+  const stripSnakeCaseAvatar = <T extends object>(value: T): T => {
+    const { author_avatar_url: _legacyAvatar, ...identityOnly } = value as T & {
+      author_avatar_url?: unknown;
+    };
+    return identityOnly as T;
+  };
+  const stripCamelCaseAvatar = <T extends object>(value: T): T => {
+    const { authorAvatarUrl: _legacyAvatar, ...identityOnly } = value as T & {
+      authorAvatarUrl?: unknown;
+    };
+    return identityOnly as T;
+  };
+  const identityOnlyMessage = stripSnakeCaseAvatar(message);
+  return {
+    ...identityOnlyMessage,
+    ...(identityOnlyMessage.reply_to
+      ? { reply_to: stripSnakeCaseAvatar(identityOnlyMessage.reply_to) }
+      : {}),
+    ...(identityOnlyMessage.thread_root
+      ? { thread_root: stripSnakeCaseAvatar(identityOnlyMessage.thread_root) }
+      : {}),
+    ...(identityOnlyMessage.quote?.snapshot
+      ? {
+          quote: {
+            ...identityOnlyMessage.quote,
+            snapshot: stripCamelCaseAvatar(identityOnlyMessage.quote.snapshot),
+          },
+        }
+      : {}),
+  };
 }
 
 /**
@@ -401,9 +396,8 @@ export function withPreservedAuthorAvatar(
 function asCacheMessage(
   incoming: ChannelMessage,
   existing: ChannelMessage | undefined,
-  siblings: readonly ChannelMessage[] | undefined,
 ): ChannelMessage {
-  let enriched = withPreservedAuthorAvatar(incoming, existing, siblings);
+  let enriched = withoutLegacyMessageAvatar(incoming);
   // Keep client_message_id so list identity / keys / retry stay stable when ACK omits it.
   if (!enriched.client_message_id && existing?.client_message_id) {
     enriched = { ...enriched, client_message_id: existing.client_message_id };
@@ -422,10 +416,10 @@ function upsertChannelMessage(old: ChannelMessage[] | undefined, message: Channe
   if (!shouldRenderChannelMessage(message)) {
     return old?.filter((existing) => !matchesChannelMessage(existing, message));
   }
-  if (!old) return [asCacheMessage(message, undefined, undefined)];
+  if (!old) return [asCacheMessage(message, undefined)];
   const index = findChannelMessageMatchIndex(old, message);
   const existing = index >= 0 ? old[index] : undefined;
-  const enriched = asCacheMessage(message, existing, old);
+  const enriched = asCacheMessage(message, existing);
   if (index >= 0) {
     return old.map((m, i) => (i === index ? enriched : m));
   }

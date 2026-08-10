@@ -20,7 +20,6 @@ export function channelMessageRenderEqual(
   if (prev.deleted_at !== next.deleted_at) return false;
   if (prev.local_send_status !== next.local_send_status) return false;
   if (prev.author_name !== next.author_name) return false;
-  if (prev.author_avatar_url !== next.author_avatar_url) return false;
   if (prev.thread_reply_count !== next.thread_reply_count) return false;
   if (prev.thread_unread_count !== next.thread_unread_count) return false;
   if (prev.thread_followed !== next.thread_followed) return false;

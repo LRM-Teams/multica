@@ -232,10 +232,7 @@ describe("ThreadRootPreview", () => {
     // fires the capture handler with the agent id (parity with the channel bubble).
     const [firstTrigger] = screen.getAllByTestId("actor-profile-trigger");
     fireEvent.click(firstTrigger!);
-    expect(onOpenAgent).toHaveBeenCalledWith("agent-1", {
-      display_name: "Research Agent",
-      avatar_url: null,
-    });
+    expect(onOpenAgent).toHaveBeenCalledWith("agent-1");
   });
 
   it("opens the member Profile dock when the root human author's avatar/name is clicked (LRM-619 parity)", () => {

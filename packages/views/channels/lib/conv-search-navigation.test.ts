@@ -16,7 +16,6 @@ function hit(id: string): ChannelMessageSearchResult {
     type: "user",
     author_id: "u1",
     author_name: "Ada",
-    author_avatar_url: null,
     content: "hit",
     created_at: "2026-08-01T00:00:00Z",
   };

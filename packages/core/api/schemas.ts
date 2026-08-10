@@ -223,6 +223,7 @@ export const EMPTY_CHANNEL_GOAL_SUBGOAL_LIST = { subgoals: [] };
 
 export interface AppConfigResponse {
   cdn_domain: string;
+  environment: "production" | "test";
   allow_signup: boolean;
   google_client_id?: string;
   posthog_key?: string;
@@ -552,8 +553,14 @@ const BooleanWithDefaultSchema = (fallback: boolean) =>
     z.boolean().default(fallback),
   );
 
+const ServiceEnvironmentSchema = z.preprocess(
+  (value) => (value === "production" || value === "test" ? value : undefined),
+  z.enum(["production", "test"]).default("production"),
+);
+
 export const AppConfigSchema = z.object({
   cdn_domain: z.string().default(""),
+  environment: ServiceEnvironmentSchema,
   allow_signup: BooleanWithDefaultSchema(true),
   google_client_id: OptionalStringSchema,
   posthog_key: OptionalStringSchema,
@@ -567,6 +574,7 @@ export const AppConfigSchema = z.object({
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {
   cdn_domain: "",
+  environment: "production",
   allow_signup: true,
   google_client_id: "",
   daemon_server_url: "",
@@ -1318,6 +1326,20 @@ export const EMPTY_KNOWLEDGE_NEIGHBORS = {
 };
 
 
+function stripLegacyMessageAvatar<T extends Record<string, unknown>>(
+  value: T,
+): T {
+  const { author_avatar_url: _legacyAvatar, ...message } = value;
+  return message as T;
+}
+
+function stripLegacyQuoteAvatar<T extends Record<string, unknown>>(
+  value: T,
+): T {
+  const { authorAvatarUrl: _legacyAvatar, ...snapshot } = value;
+  return snapshot as T;
+}
+
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),
@@ -1326,11 +1348,10 @@ const ChannelMessageSearchResultSchema = z.object({
   type: z.string().default(""),
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),
-  author_avatar_url: z.string().nullable().optional(),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   created_at: z.string().default(""),
-}).loose();
+}).loose().transform((value) => stripLegacyMessageAvatar(value));
 
 const ChannelReactionSchema = z.object({
   id: z.string().default(""),
@@ -1347,21 +1368,19 @@ const ChannelMessageReplySchema = z.object({
   type: z.string().default(""),
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),
-  author_avatar_url: z.string().nullable().optional(),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   created_at: z.string().default(""),
-}).loose();
+}).loose().transform((value) => stripLegacyMessageAvatar(value));
 
 const ChannelMessageQuoteSnapshotSchema = z.object({
   type: z.string().default(""),
   authorId: z.string().nullable().optional(),
   authorName: z.string().default(""),
-  authorAvatarUrl: z.string().nullable().optional(),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   createdAt: z.string().default(""),
-}).loose();
+}).loose().transform((value) => stripLegacyQuoteAvatar(value));
 
 const ChannelMessageQuoteSchema = z.object({
   messageId: z.string().default(""),
@@ -1385,7 +1404,6 @@ const ChannelMessageSchema = z.object({
   type: z.string().default(""),
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),
-  author_avatar_url: z.string().nullable().optional(),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   source: z.string().default(""),
@@ -1410,7 +1428,7 @@ const ChannelMessageSchema = z.object({
   created_at: z.string().default(""),
   edited_at: z.string().nullable().optional(),
   deleted_at: z.string().nullable().optional(),
-}).loose();
+}).loose().transform((value) => stripLegacyMessageAvatar(value));
 
 const ChannelMessagesCursorSchema = z.object({
   seq: z.number().default(0),

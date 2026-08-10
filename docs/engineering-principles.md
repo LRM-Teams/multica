@@ -155,6 +155,11 @@
 - **为什么**：旧路径每条事件同时触发 agents、fleet rankings、runner-activity 三路 REST，并按页面/标签数量放大；WS 已携带同一服务端完整投影，正常事件再次 REST 没有新增权威性。
 - **物**：`runner-activity-updaters.ts`、`use-realtime-sync.ts` 的单一订阅/reconnect 前缀、`use-runner-activity.test.ts` 与 `use-realtime-sync-ws-instance.test.tsx`。两条回归均已先见红：一条捕获写后 invalidate，另一条捕获缺少专用 handler 导致的 `agent` 前缀失效。
 
+### 2.7 Message 只持有作者身份，外观永远现查 Profile — `可执行`（①②③⑤，owner: @Codex）
+- `channel_message` 只持久化 `author_type/author_id` 等通信事实；头像属于 `user.avatar_url` / `agent.avatar_url`，历史 Message 不保存、回填或粘住头像 URL。作者换头像后，全部历史消息随 Identity Profile 当前值更新。
+- 服务端 Message/list/reply/thread/search/quote/transport 响应不返回 `author_avatar_url`；对应查询也不得 JOIN Profile 头像。Web/desktop 的 `ChannelMessage` 类型中不存在该字段（①②）；HTTP schema 与 realtime cache seam 会剥离旧服务端输入，乐观消息也不复制登录用户头像。所有消息头像只走共享 `ActorAvatar → useResolvedActorIdentity`（③）。
+- **物**：`ChannelMessageResponse`/reply/search/quote snapshot 与 TS 对应类型；`stripLegacyMessageAvatar`；`withoutLegacyMessageAvatar`；`normalizeChannelMessages`；server/HTTP/WS/optimistic/bubble 回归（均已先见红）。
+
 ## 3. 属性显示（跨面）
 
 ### 3.1 本家属性语法 — `可执行`（task #518）
@@ -185,10 +190,12 @@
 - **Subgoal 收敛方向**：现有 `channel_goal_subgoal` 不发展成第二套 DAG；通用图内核落地后，Goal 子目标 UI 应成为 Work Graph Node 投影或被明确迁移，禁止长期双向同步两套执行真相。
 - **当前物**：assignment runtime 的 `Work Decomposition Gate` 及回归测试；完整分期见 [`docs/superpowers/plans/2026-08-06-goal-work-graph-runtime.md`](superpowers/plans/2026-08-06-goal-work-graph-runtime.md)。原子建图、ready scheduler、Graph Delta、Artifact/verification 和失效传播尚未实现，不得由 Prompt 冒充。
 
-### 4.0 服务环境、发布通道与产物晋级是三条轴 — `仅文档`（腾讯 test / main 保护与 digest promotion 尚未落 workflow，owner: @Barry）
-- **服务环境**：`production` 是 leagent.me 正式服务，browser/API 的 canonical origin 分别是 `https://www.leagent.me` 与 `https://api.leagent.me`，客户端和 Computer 不得重定向到别处；`test` 是显式选择，目标为腾讯云，允许带协议的 IP/端口或 `https://test.leagent.me`，首版同一 origin 同时承担 app/API。本机只有一个 Computer root/identity/resident，但 Workspace connection 的本地键是 `(environment, workspace_id)`；可同时保留两边连接，单个 resident generation 只服务当前环境。
-- **发布通道**：`latest` 只指向无预发布后缀的稳定 SemVer，`alpha` 指向 `vX.Y.Z-alpha.N` / `beta.N` / `rc.N` 预发布；manifest 是可移动指针，带版本的 archive、checksum、manifest 永远不可变。环境与通道独立：test 默认 alpha、production 默认 latest，但显式选择可覆盖默认，缺 alpha manifest 必须失败，不得 fallback 到 latest。
-- **部署晋级**：目标拓扑是 `dev → Tencent test`、验收后 `main → leagent.me production`；backend/web 应提升同一个已验证 image digest，禁止在 production 重新构建出另一份未知字节。当前仓库仍是 `dev → Aliyun/leagent.me` 且没有受保护 `main` / Tencent deployment environment，这一段在基础设施切换完成前不得标 `可执行`，也不得把目标拓扑写成已经上线。
+### 4.0 服务环境决定连接目标与 Computer 包源 — `可执行`（⑤，owner: @Barry）
+- **服务环境**：`production` 是 leagent.me 正式服务，browser/API 的 canonical origin 分别是 `https://www.leagent.me` 与 `https://api.leagent.me`；`test` 是腾讯云测试服务，首版以 `https://82.157.184.89` 同时承担 app/API，之后可只改部署配置切到 `https://test.leagent.me`。服务端用 `APP_ENV=production|test` 声明身份，并通过公共 `/api/config.environment` 明确告诉页面，禁止根据域名或 IP 猜环境。旧服务缺字段或字段非法时，前端保守降级为 production。
+- **Computer 本机模型**：同一 OS 用户只有一个 Computer root/identity/resident；每个环境分别保存登录和 Workspace connection，本地键为 `(environment, workspace_id)`。两边连接可以同时保留，但单个 resident generation 同一时刻只服务当前环境；切换必须 drain、重启、验收，不能并发连接 production/test。
+- **包源随环境固定**：production 只用稳定 manifest；test 只用 preview/alpha manifest。没有独立 `release_channel` 让用户制造“test 连稳定包”或“production 连预发布包”的组合。带版本 archive/checksum/manifest 不可变，可移动 manifest 只负责各自环境内的当前版本。
+- **页面引导**：Computer 页面用 `/api/config.environment` 决定命令类型，用 `daemon_server_url` 填 test origin。production 显示 `multica setup /<workspace>`；test 显示 `multica setup --environment test --test-url <origin> /<workspace>`。页面不能读取本机 `~/.multica`，所以首次连接必须把目标写进命令；完成后本机配置保存 active environment。
+- **部署拓扑**：workflow 结构固定为 `dev → GitHub Environment test → Tencent s89`、`main → legacy-named GitHub Environment aliyun-dev → Aliyun/leagent.me production`。`aliyun-dev` 只因现有 secrets 无法导出而保留旧名字，不代表 dev。部署验收仍必须分别证明 workflow、目标 runner、served origin、镜像 SHA 与数据库迁移；workflow 合并本身不等于已上线。
 - **客户端产物**：CLI/Computer 使用同一份签名二进制，环境在运行时选择，不为 test/production 各编一份。Desktop 不在 Computer v1 交付范围。预发布 tag 更新 `alpha.json`，稳定 tag 只更新 `manifest.json` / `latest.json`。
 
 ### 4.0.b Computer 删除只有一个产品语义 — `可执行`（②③⑤，Computer v1）

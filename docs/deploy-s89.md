@@ -1,17 +1,17 @@
-# s89 CI runner / host operations
+# Tencent s89 test deployment / runner operations
 
-> **Authoritative roles (Frank, 2026-07-28):**
+> **Authoritative roles (Frank, 2026-08-10):**
 >
 > | Role | Host |
 > | --- | --- |
-> | **Shared Multica `dev` deploy target** | **Aliyun** `101.200.210.144` (**leagent.me**); workflow `.github/workflows/deploy.yml` (`runs-on: [self-hosted, aliyun]`, Environment `aliyun-dev`, stack `/data/multica`). See `docker-compose.aliyun.yml`, `docker-compose.oss.yml`, and `deploy/aliyun/`. |
-> | **s89** | **CI runner host**, not the deploy target. It may still run jobs / hold residual services; that does **not** make it the product dev environment. |
+> | **Production** | `main` → Aliyun `101.200.210.144` → `leagent.me`; workflow `.github/workflows/deploy.yml`, runner label `aliyun`. |
+> | **Test** | `dev` → Tencent s89 `82.157.184.89`; workflow `.github/workflows/deploy-test.yml`, Environment `test`, runner labels `s89` + `test`. |
 >
-> **Do not write that s89 is decommissioned** — it can remain as a runner.  
-> **Do not use** `https://82.157.184.89` / s89 as “the dev stack” for product verification; use **leagent.me** / Aliyun. Confirm CD with `deploy.yml` if unsure.
+> `leagent.me` is production. Verify unpromoted `dev` changes only on the s89
+> test origin, with the exact deployed image tag.
 
-This document is the host-side runbook for the **s89** self-hosted runner and
-related TLS/proxy triage — **not** the continuous-deploy contract. The s89
+This document is the host-side runbook for the **s89 test deployment** and its
+self-hosted runner. The s89
 runner reaches GitHub through the host-local `sing-box` proxy at
 `http://127.0.0.1:7893` when that path is in use. Do not put credentials, proxy
 configuration, or database passwords in workflow logs or this repository.
@@ -20,21 +20,35 @@ configuration, or database passwords in workflow logs or this repository.
 
 | Purpose | Value |
 | --- | --- |
-| Runner service | `actions.runner.LRM-Teams-multica.s89.service` |
+| Runner service | `actions.runner.LRM-Teams-multica.s89-test.service` |
 | Runner user | `gha` |
 | Runner directory | `/home/gha/actions-runner` |
 | Runner diagnostics | `/home/gha/actions-runner/_diag` |
 | Outbound proxy service | `sing-box.service` |
 | Outbound proxy address | `http://127.0.0.1:7893` |
-| Historical browser entry (not shared dev CD) | `https://82.157.184.89` |
-| Historical daemon/API HTTP entry | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
+| Test browser/API entry | `https://82.157.184.89` |
+| Compatibility HTTP entry | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
 | Caddy config source (s89 host) | `deploy/s89/Caddyfile` |
-| Shared dev product URL | **https://www.leagent.me** (Aliyun CD) |
+| Test deploy directory / Compose project | `/data/multica-test` / `multica-test` |
+| Production URL | **https://www.leagent.me** (Aliyun; never a test target) |
 
-The **Aliyun** deploy workflow runs only after `dev` changes (or an explicit
-manual dispatch) on runners labeled `aliyun`. If a job fails during
-`Set up job` on **this** s89 runner, that is runner/proxy/TLS triage for s89 —
-not evidence about the Aliyun Multica Compose stack, images, or migrations.
+The s89 workflow runs only after `dev` changes or a manual dispatch from `dev`.
+The Aliyun production workflow runs only from `main`. A failure during `Set up
+job` on s89 is runner/proxy/TLS evidence, not application or production evidence.
+
+## Test data boundary
+
+- PostgreSQL, uploads, and Caddy state live below `/data/multica-test` on the
+  s89 data disk; the Compose project is always `multica-test`.
+- The initial database may be seeded from a consistent read-only Aliyun
+  production snapshot. This is a one-time copy, never replication: later test
+  writes do not flow to production and production writes do not flow to test.
+- Never commit or upload the database dump as an Actions artifact. Transfer it
+  host-to-host, verify its checksum, restore into the test-only data directory,
+  and then run the target test image's migrations.
+- Test signup is disabled. Existing seeded users use the host-only fixed
+  verification code `888888`; outbound mail and production OAuth/integration
+  credentials stay disabled on the IP-based test origin.
 
 ## TLS/action-download incident signature
 
@@ -67,7 +81,7 @@ stack.
 ### 1. Confirm both services are healthy
 
 ```bash
-systemctl status actions.runner.LRM-Teams-multica.s89.service --no-pager -l
+systemctl status actions.runner.LRM-Teams-multica.s89-test.service --no-pager -l
 systemctl status sing-box.service --no-pager -l
 sudo ss -ltnp '( sport = :7893 )'
 ```
@@ -127,7 +141,7 @@ preflight cannot catch this failure. Monitor it on the host instead.
 
 Recommended host monitor (systemd timer or existing host monitoring):
 
-1. verify `actions.runner.LRM-Teams-multica.s89.service` and
+1. verify `actions.runner.LRM-Teams-multica.s89-test.service` and
    `sing-box.service` are active;
 2. verify port 7893 is listening;
 3. run the three runner-user proxy probes above;
@@ -145,7 +159,7 @@ After a successful job, verify the deployed state separately from the runner
 transport:
 
 ```bash
-docker compose -p multica ps
+docker compose -p multica-test ps
 curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8090/api/config
 curl --connect-to 82.157.184.89:443:127.0.0.1:443 \
@@ -155,7 +169,7 @@ curl --connect-to 82.157.184.89:443:127.0.0.1:443 \
 The HTTPS probe validates the public-IP certificate while connecting over
 loopback, so provider NAT hairpin behavior cannot create a false failure. Caddy
 uses Let's Encrypt's `shortlived` profile; the certificate lasts about six days
-and is renewed automatically from the persistent `multica_caddy_data` volume.
+and is renewed automatically from `/data/multica-test/caddy-data`.
 Ports 80 and 443 must remain publicly reachable for HTTP-01 validation and
 browser traffic. Do not replace the public certificate with Caddy's internal
 CA: browsers that do not trust that private root would still reject microphone

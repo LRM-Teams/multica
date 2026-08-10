@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, Copy, Terminal } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useConfigStore } from "@multica/core/config";
 import { runtimeKeys } from "@multica/core/runtimes/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
@@ -165,9 +166,12 @@ function CommandStep({
 function InstructionsStep({ onClose }: { onClose: () => void }) {
   const { t } = useT("runtimes");
   const [mode, setMode] = useState<DaemonSetupMode>(() => defaultDaemonSetupMode());
+  const environment = useConfigStore((state) => state.environment);
+  const daemonServerUrl = useConfigStore((state) => state.daemonServerUrl);
   const { installCmd, setupCmd } = daemonSetupCommands(
     mode,
     useWorkspaceSlug() ?? undefined,
+    { environment, serverUrl: daemonServerUrl },
   );
   return (
     <>

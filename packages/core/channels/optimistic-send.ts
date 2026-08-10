@@ -72,7 +72,6 @@ export interface BuildOptimisticChannelMessageArgs {
   parts?: MessagePart[];
   authorId: string;
   authorName: string;
-  authorAvatarUrl?: string | null;
   quoteMessageId?: string | null;
   threadRootMessageId?: string | null;
   /** Existing cache rows used to pick the next local seq. */
@@ -94,7 +93,6 @@ export function buildOptimisticChannelMessage(
     type: "user",
     author_id: args.authorId,
     author_name: args.authorName,
-    author_avatar_url: args.authorAvatarUrl ?? null,
     content: args.content,
     parts: args.parts,
     source: "multica",

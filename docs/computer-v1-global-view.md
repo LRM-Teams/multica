@@ -6,7 +6,7 @@
 
 简单理解：Computer 是电脑上的常驻“工头”；每条 Workspace connection 是某个工作区发给它的一张门禁卡。一个工头可以持有多张门禁卡，同时为多个工作区工作。
 
-当前状态：Computer 核心实现已由 [#2608](https://github.com/LRM-Teams/multica/pull/2608) 合入；腾讯测试环境和生产部署编排仍待真实基础设施落地。
+当前状态：Computer 核心实现已由 [#2608](https://github.com/LRM-Teams/multica/pull/2608) 合入；腾讯测试 runner、受保护环境、独立数据盘和数据库边界已经配置，真实部署、生产快照恢复、健康检查和 served commit 证据仍待完成。
 
 ## 1. 总模型
 
@@ -61,7 +61,9 @@ flowchart LR
 | 环境 | 服务 | 包 | 清单 |
 | --- | --- | --- | --- |
 | Production | `api.leagent.me` / `www.leagent.me` | stable | `/computer/manifest.json` |
-| Test | `test.leagent.me` 或明确的腾讯云 HTTP(S) origin | preview | `/computer/alpha.json` |
+| Test | `https://82.157.184.89`；以后可通过部署配置切到 `test.leagent.me` | preview | `/computer/alpha.json` |
+
+Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url` 填入 Test origin；页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令，Test 自动显示带完整环境和 origin 的命令。
 
 第一次连接环境：
 
@@ -69,7 +71,7 @@ flowchart LR
 multica setup /my-workspace
 
 multica setup --environment test \
-  --test-url https://test.leagent.me \
+  --test-url https://82.157.184.89 \
   /my-workspace
 ```
 
@@ -214,7 +216,7 @@ flowchart LR
 
 目标契约：`dev` 自动部署腾讯测试服务并发布 preview 客户端；验收后，`main`/生产批准提升已验证的服务 digest，并发布 stable 客户端。服务和客户端制品都必须记录 commit、版本与校验和。
 
-当前仓库仍只有 `aliyun-dev` Environment 和 Aliyun self-hosted runner，没有腾讯 runner，也没有独立的 Test / Production 受保护 Environment。因此 [#2497](https://github.com/LRM-Teams/multica/issues/2497) 仍需要真实基础设施、服务健康和 CDN/部署证据。
+GitHub 已有互斥的在线 runner：`aliyun-144` 只接 Production，`s89-test` 只接 Test；`test` Environment 只允许 `dev` 部署。s89 的独立目录、数据库边界和 1 TB 数据盘已经配置。[#2497](https://github.com/LRM-Teams/multica/issues/2497) 还需要 workflow 合并后的真实部署、生产快照恢复、健康检查和 served commit 证据。
 
 ## 10. 日常命令
 
@@ -223,7 +225,7 @@ flowchart LR
 multica setup /workspace-a
 
 # 连接腾讯测试工作区
-multica setup --environment test --test-url https://test.leagent.me /workspace-a
+multica setup --environment test --test-url https://82.157.184.89 /workspace-a
 
 # 切换环境
 multica config use test
@@ -242,6 +244,8 @@ multica computer logs
 
 产品文案使用 `Computer` 和 `Workspace connection`。`daemon` 与 `binding` 只保留在内部兼容 API、数据库和代码标识中。
 
+当前 Test 登录中，已有用户使用固定验证码 `888888`，自由注册关闭。以后切到 `test.leagent.me` 时，只修改部署 origin 和 OAuth 回调，不改变 Computer 的环境模型。
+
 ## 11. Issue 状态
 
 | Issue | 状态 |
@@ -249,7 +253,7 @@ multica computer logs
 | [#2485](https://github.com/LRM-Teams/multica/issues/2485) | 前置 Computer module 契约已完成并关闭。 |
 | #2486–#2494、#2496 | 实现已由 [#2608](https://github.com/LRM-Teams/multica/pull/2608) 合入。 |
 | [#2495](https://github.com/LRM-Teams/multica/issues/2495) | Desktop 不在本轮范围。 |
-| [#2497](https://github.com/LRM-Teams/multica/issues/2497) | 腾讯测试基础设施、真实部署与 served evidence 待完成。 |
+| [#2497](https://github.com/LRM-Teams/multica/issues/2497) | 腾讯 runner、Test Environment、独立数据盘和数据库边界已完成；真实部署、生产快照恢复、健康检查与 served evidence 待完成。 |
 | [#2484](https://github.com/LRM-Teams/multica/issues/2484) | 父 issue 等待 #2497 的真实交付证据。 |
 
 ## 结论

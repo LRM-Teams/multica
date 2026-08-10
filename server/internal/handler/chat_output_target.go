@@ -502,7 +502,6 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 		h.followChannelThreadAgent(ctx, channelID, threadRootMessageID, agentID)
 	}
 	messages := []ChannelMessageResponse{msg}
-	h.attachChannelMessageAuthorAvatars(ctx, ch.WorkspaceID, messages)
 	msg = messages[0]
 	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	h.clearDMHiddenForChannelMembers(ctx, ch.WorkspaceID, channelID)

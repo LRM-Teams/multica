@@ -13,6 +13,7 @@ func TestGetConfigIncludesRuntimeAuthConfig(t *testing.T) {
 	defer func() { testHandler.Storage = origStorage }()
 
 	t.Setenv("ALLOW_SIGNUP", "false")
+	t.Setenv("APP_ENV", "test")
 	t.Setenv("GOOGLE_CLIENT_ID", "google-client-id")
 	t.Setenv("POSTHOG_API_KEY", "phc_test")
 	t.Setenv("POSTHOG_HOST", "https://eu.i.posthog.com")
@@ -34,6 +35,9 @@ func TestGetConfigIncludesRuntimeAuthConfig(t *testing.T) {
 
 	if cfg.CdnDomain != "cdn.example.com" {
 		t.Fatalf("cdn_domain: want cdn.example.com, got %q", cfg.CdnDomain)
+	}
+	if cfg.Environment != "test" {
+		t.Fatalf("environment: want test, got %q", cfg.Environment)
 	}
 	if cfg.AllowSignup {
 		t.Fatalf("allow_signup: want false, got true")

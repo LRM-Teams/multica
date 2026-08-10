@@ -15,10 +15,30 @@ export const MULTICA_INSTALL_SCRIPT_URL =
   `${MULTICA_RELEASE_CDN_BASE_URL}/install.sh`;
 export const MULTICA_INSTALL_COMMAND =
   `curl -fsSL ${MULTICA_INSTALL_SCRIPT_URL} | bash`;
+export const MULTICA_ALPHA_INSTALL_COMMAND =
+  `${MULTICA_INSTALL_COMMAND} -s -- --version alpha`;
 export const MULTICA_POWERSHELL_INSTALL_SCRIPT_URL =
   `${MULTICA_RELEASE_CDN_BASE_URL}/install.ps1`;
 export const MULTICA_POWERSHELL_INSTALL_COMMAND =
   `irm ${MULTICA_POWERSHELL_INSTALL_SCRIPT_URL} | iex`;
+export const MULTICA_ALPHA_POWERSHELL_INSTALL_COMMAND =
+  `& ([scriptblock]::Create((irm ${MULTICA_POWERSHELL_INSTALL_SCRIPT_URL}))) -Version alpha`;
+
+export type MulticaInstallMode = "unix" | "windows-powershell";
+
+export function multicaInstallCommand(
+  mode: MulticaInstallMode,
+  environment: "production" | "test" = "production",
+): string {
+  if (mode === "windows-powershell") {
+    return environment === "test"
+      ? MULTICA_ALPHA_POWERSHELL_INSTALL_COMMAND
+      : MULTICA_POWERSHELL_INSTALL_COMMAND;
+  }
+  return environment === "test"
+    ? MULTICA_ALPHA_INSTALL_COMMAND
+    : MULTICA_INSTALL_COMMAND;
+}
 
 export const MULTICA_RELEASE_REPOSITORY = MULTICA_REPOSITORY;
 export const MULTICA_RELEASE_GITHUB_URL =

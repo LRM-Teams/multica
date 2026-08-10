@@ -6,6 +6,7 @@ import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
+import { useConfigStore } from "@multica/core/config";
 import { useT } from "../../i18n/use-t";
 import {
   DAEMON_SETUP_MODES,
@@ -64,14 +65,7 @@ function Step({ n, label, cmd }: { n: number; label: string; cmd: string }) {
   );
 }
 
-/**
- * CLI install instructions — two copy-and-run commands. Hardcoded because
- * there's nothing environmental to infer: step 1 is the public install
- * script, step 2 is the cloud `multica setup /<workspace-slug>` command
- * the endpoints for. Local development tests a self-host variant by
- * typing the extended command directly in the terminal; no need to
- * thread env vars through React.
- */
+/** CLI install instructions for the environment serving the current UI. */
 export function CliInstallInstructions({
   mode: controlledMode,
   onModeChange,
@@ -83,6 +77,9 @@ export function CliInstallInstructions({
   workspaceSlug?: string;
 } = {}) {
   const { t } = useT("onboarding");
+  const environment = useConfigStore((state) => state.environment);
+  const daemonServerUrl = useConfigStore((state) => state.daemonServerUrl);
+  const daemonAppUrl = useConfigStore((state) => state.daemonAppUrl);
   const [uncontrolledMode, setUncontrolledMode] = useState<DaemonSetupMode>(() =>
     defaultDaemonSetupMode(),
   );
@@ -93,7 +90,11 @@ export function CliInstallInstructions({
     }
     onModeChange?.(nextMode);
   };
-  const { installCmd, setupCmd } = daemonSetupCommands(mode, workspaceSlug);
+  const { installCmd, setupCmd } = daemonSetupCommands(mode, workspaceSlug, {
+    environment,
+    serverUrl: daemonServerUrl,
+    appUrl: daemonAppUrl,
+  });
   return (
     <Card className="w-full">
       <CardContent className="space-y-4 pt-4">

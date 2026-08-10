@@ -18,8 +18,16 @@ const TEST_RESOURCES = {
 const mockLogout = vi.hoisted(() => vi.fn());
 const mockUseConfigStore = vi.hoisted(() =>
   vi.fn(
-    (selector: (state: { workspaceCreationDisabled: boolean }) => unknown) =>
-      selector({ workspaceCreationDisabled: false }),
+    (selector: (state: {
+      workspaceCreationDisabled: boolean;
+      environment: "production" | "test";
+      daemonAppUrl: string;
+    }) => unknown) =>
+      selector({
+        workspaceCreationDisabled: false,
+        environment: "production",
+        daemonAppUrl: "https://www.leagent.me",
+      }),
   ),
 );
 
@@ -28,7 +36,11 @@ vi.mock("../../auth", () => ({
 }));
 
 vi.mock("@multica/core/config", () => ({
-  useConfigStore: (selector: (state: { workspaceCreationDisabled: boolean }) => unknown) =>
+  useConfigStore: (selector: (state: {
+    workspaceCreationDisabled: boolean;
+    environment: "production" | "test";
+    daemonAppUrl: string;
+  }) => unknown) =>
     mockUseConfigStore(selector),
 }));
 
@@ -53,13 +65,21 @@ function I18nWrapper({ children }: { children: ReactNode }) {
 function renderStep({
   existing,
   disabled,
+  environment = "production",
+  daemonAppUrl = "https://www.leagent.me",
 }: {
   existing: Workspace | null;
   disabled: boolean;
+  environment?: "production" | "test";
+  daemonAppUrl?: string;
 }) {
   mockUseConfigStore.mockImplementation(
-    (selector: (state: { workspaceCreationDisabled: boolean }) => unknown) =>
-      selector({ workspaceCreationDisabled: disabled }),
+    (selector: (state: {
+      workspaceCreationDisabled: boolean;
+      environment: "production" | "test";
+      daemonAppUrl: string;
+    }) => unknown) =>
+      selector({ workspaceCreationDisabled: disabled, environment, daemonAppUrl }),
   );
   return render(
     <StepWorkspace existing={existing} onCreated={vi.fn()} onBack={vi.fn()} />,
@@ -134,5 +154,19 @@ describe("StepWorkspace — DISABLE_WORKSPACE_CREATION gate", () => {
     // enabled, so the user can press it without further interaction.
     const cta = screen.getByRole("button", { name: "Open Acme" });
     expect(cta).toBeEnabled();
+  });
+});
+
+describe("StepWorkspace — workspace URL origin", () => {
+  it("uses the configured test app host across the create and preview UI", () => {
+    renderStep({
+      existing: null,
+      disabled: false,
+      environment: "test",
+      daemonAppUrl: "https://82.157.184.89/",
+    });
+
+    expect(screen.getAllByText(/82\.157\.184\.89\//).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/leagent\.me\//)).not.toBeInTheDocument();
   });
 });

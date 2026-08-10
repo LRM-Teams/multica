@@ -60,7 +60,8 @@ export function AuthInitializer({
         configStore.getState().setDaemonConfig({
           environment: cfg.environment,
           daemonServerUrl: cfg.daemon_server_url,
-          daemonAppUrl: cfg.daemon_app_url,
+          daemonAppUrl:
+            cfg.daemon_app_url || configStore.getState().daemonAppUrl,
         });
         configStore.getState().setAgentProfileConfig({
           devAccessEnabled: cfg.dev_agent_profile_access_enabled === true,

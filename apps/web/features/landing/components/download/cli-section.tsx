@@ -2,11 +2,17 @@
 
 import { useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
-import { MULTICA_INSTALL_COMMAND } from "@multica/core/constants/repository";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useLocale } from "../../i18n/context";
+import { landingCLICommands } from "./cli-commands";
 
-const SETUP_CMD = "multica setup";
+const ENVIRONMENT =
+  process.env.NEXT_PUBLIC_ENVIRONMENT === "test" ? "test" : "production";
+const { installCmd: INSTALL_CMD, setupCmd: SETUP_CMD } = landingCLICommands({
+  environment: ENVIRONMENT,
+  appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
+  apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "",
+});
 
 /**
  * Scenario-first CLI section. Copy leans into servers / remote dev
@@ -30,7 +36,7 @@ export function CliSection() {
         <div className="mt-10 flex flex-col gap-5">
           <CommandBlock
             label={d.installLabel}
-            cmd={MULTICA_INSTALL_COMMAND}
+            cmd={INSTALL_CMD}
             copyLabel={d.copyLabel}
             copiedLabel={d.copiedLabel}
           />

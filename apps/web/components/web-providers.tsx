@@ -44,6 +44,8 @@ function deriveWsUrl(): string | undefined {
 // to the package.json version so local dev still reports something useful.
 const WEB_VERSION =
   process.env.NEXT_PUBLIC_APP_VERSION || packageJson.version || "dev";
+const WEB_ENVIRONMENT =
+  process.env.NEXT_PUBLIC_ENVIRONMENT === "test" ? "test" : "production";
 
 export function WebProviders({
   children,
@@ -65,6 +67,8 @@ export function WebProviders({
   return (
     <CoreProvider
       apiBaseUrl={process.env.NEXT_PUBLIC_API_URL}
+      appUrl={process.env.NEXT_PUBLIC_APP_URL}
+      environment={WEB_ENVIRONMENT}
       wsUrl={deriveWsUrl()}
       cookieAuth={cookieAuth}
       onLogin={setLoggedInCookie}

@@ -104,6 +104,9 @@ describe("ConnectRemoteDialog", () => {
     });
 
     expect(baseElement).toHaveTextContent(
+      "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha",
+    );
+    expect(baseElement).toHaveTextContent(
       "multica setup --environment test --server-url https://api.test.leagent.me --app-url https://test.leagent.me /workspace-test",
     );
     expect(baseElement).not.toHaveTextContent("--test-url");

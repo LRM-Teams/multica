@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
+import { configStore } from "@multica/core/config";
 import enCommon from "../../locales/en/common.json";
 import enOnboarding from "../../locales/en/onboarding.json";
 import { CliInstallInstructions } from "./cli-install-instructions";
@@ -13,6 +14,14 @@ const ligatureClasses = [
 ];
 
 describe("CliInstallInstructions", () => {
+  beforeEach(() => {
+    configStore.getState().setDaemonConfig({
+      environment: "production",
+      daemonServerUrl: "https://api.leagent.me",
+      daemonAppUrl: "https://www.leagent.me",
+    });
+  });
+
   it("uses the CDN install script", () => {
     render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
@@ -55,6 +64,48 @@ describe("CliInstallInstructions", () => {
     ).toBeTruthy();
     expect(
       screen.getByText("multica setup /<workspace-slug>"),
+    ).toBeTruthy();
+  });
+
+  it("uses the alpha installer and explicit endpoints in test", () => {
+    configStore.getState().setDaemonConfig({
+      environment: "test",
+      daemonServerUrl: "https://82.157.184.89/",
+      daemonAppUrl: "https://82.157.184.89/",
+    });
+
+    render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <CliInstallInstructions workspaceSlug="lrm-team-test" />
+      </I18nProvider>,
+    );
+
+    expect(
+      screen.getByText(
+        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "multica setup --environment test --server-url https://82.157.184.89 --app-url https://82.157.184.89 /lrm-team-test",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses the alpha PowerShell installer in test", () => {
+    configStore.getState().setDaemonConfig({ environment: "test" });
+
+    render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <CliInstallInstructions />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Windows" }));
+
+    expect(
+      screen.getByText(
+        "& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version alpha",
+      ),
     ).toBeTruthy();
   });
 

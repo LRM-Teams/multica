@@ -251,6 +251,8 @@ ON CONFLICT DO NOTHING`,
 		t.Fatalf("process delayed voice message: %v", err)
 	}
 
+	// #2295: delayed transcript becomes a canonical delivery only — no
+	// task-shaped channel_message inbox wake.
 	var deliveryCount, inboxCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT
@@ -259,10 +261,9 @@ ON CONFLICT DO NOTHING`,
 		agentID, voice.Message.ID).Scan(&deliveryCount, &inboxCount); err != nil {
 		t.Fatalf("count delayed voice delivery: %v", err)
 	}
-	if deliveryCount != 1 || inboxCount != 1 {
-		t.Fatalf("delayed voice delivery/inbox = %d/%d, want 1 canonical delivery and 1 channel_message wake", deliveryCount, inboxCount)
+	if deliveryCount != 1 || inboxCount != 0 {
+		t.Fatalf("delayed voice delivery/inbox = %d/%d, want 1 canonical delivery and 0 inbox wakes", deliveryCount, inboxCount)
 	}
-	assertChannelAgentWakeReasonPriority(t, channelID, agentID, voice.Message.ID, channelMessageWakeReason, channelMessageWakePriority)
 }
 
 func testPCM16MonoWAV(pcm []byte, sampleRate uint32) []byte {

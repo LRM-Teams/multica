@@ -65,8 +65,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	assertIssueThreadBackflowReference(t, events[1], issueID)
 	assertIssueThreadBackflowReference(t, events[2], issueID)
 
-	// LRM-1079: directed issue-event wakes are channel-only inbox events
-	// (no channel_agent_session / chat_session bridge).
+	// Directed issue-event wakes are channel-only inbox events with the
+	// dedicated product reason (not residual channel chat "mention").
 	for _, agentID := range []string{creatorID, assigneeID} {
 		var count int
 		if err := testPool.QueryRow(ctx, `
@@ -75,7 +75,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			WHERE channel_id = $1
 			  AND agent_id = $2
 			  AND requires_wake = true
-			  AND reason = 'mention'`, channelID, agentID).Scan(&count); err != nil {
+			  AND reason = $3`, channelID, agentID, protocol.AgentInboxReasonIssueThreadBackflow).Scan(&count); err != nil {
 			t.Fatalf("count target agent wakes: %v", err)
 		}
 		if count == 0 {

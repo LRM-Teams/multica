@@ -53,6 +53,12 @@ func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch
 	if h == nil || h.DB == nil || strings.TrimSpace(message.ID) == "" || message.Seq <= 0 {
 		return
 	}
+	// LRM-1523: agent-authored pure confirmations must not enter any Agent's
+	// MessageCoordinator pending set (same no-wake contract as the retired
+	// task-shaped path).
+	if !channelMessageIsHumanAuthored(message.Type) && channelMessageIsConfirmationNoWake(message) {
+		return
+	}
 	for _, recipient := range h.canonicalMessageDeliveryRecipients(ctx, ch, message) {
 		delivery, ok, err := persistCanonicalMessageDelivery(ctx, h.DB, ch, message, recipient)
 		if err != nil {

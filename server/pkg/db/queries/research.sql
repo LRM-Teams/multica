@@ -337,3 +337,77 @@ WHERE n.session_id = $1
       AND c.status = 'active'
       AND c.node_type IN ('subquestion', 'probe', 'finding', 'conflict')
   );
+
+-- name: ListResearchGraphClusters :many
+SELECT * FROM research_graph_cluster
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC;
+
+-- name: GetResearchGraphCluster :one
+SELECT * FROM research_graph_cluster
+WHERE id = $1 AND workspace_id = $2;
+
+-- name: CreateResearchGraphNodeTyped :one
+INSERT INTO research_graph_node (
+  workspace_id, session_id, node_type, title, summary, status, actor_agent_id, level,
+  round, cluster_id, confidence, document_count, conclusion_count, goal_version_id,
+  derived_from, merged_from, superseded_by, restart_of, invalidated_by, payload
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+RETURNING *;
+
+-- name: UpdateResearchGraphNodeTyped :one
+UPDATE research_graph_node SET
+  status = COALESCE(sqlc.narg('status'), status),
+  level = COALESCE(sqlc.narg('level'), level),
+  cluster_id = COALESCE(sqlc.narg('cluster_id'), cluster_id),
+  confidence = COALESCE(sqlc.narg('confidence'), confidence),
+  title = COALESCE(sqlc.narg('title'), title),
+  summary = COALESCE(sqlc.narg('summary'), summary),
+  superseded_by = COALESCE(sqlc.narg('superseded_by'), superseded_by),
+  superseded_at = COALESCE(sqlc.narg('superseded_at'), superseded_at),
+  merged_from = COALESCE(sqlc.narg('merged_from'), merged_from),
+  restart_of = COALESCE(sqlc.narg('restart_of'), restart_of),
+  invalidated_by = COALESCE(sqlc.narg('invalidated_by'), invalidated_by),
+  updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING *;
+
+-- name: ResearchGraphCommandExists :one
+SELECT EXISTS(
+  SELECT 1 FROM research_graph_command
+  WHERE workspace_id = $1 AND session_id = $2 AND idempotency_key = $3
+) AS exists;
+
+-- name: GetResearchGraphCommandByKey :one
+SELECT * FROM research_graph_command
+WHERE workspace_id = $1 AND session_id = $2 AND idempotency_key = $3;
+
+-- name: CreateResearchGraphCommand :one
+INSERT INTO research_graph_command (
+  workspace_id, session_id, op, idempotency_key, result_node_id,
+  input_node_ids, reason, actor_type, actor_id, meta
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING *;
+
+-- name: ListResearchGraphCommands :many
+SELECT * FROM research_graph_command
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at DESC;
+
+-- name: BumpResearchGraphVersion :one
+UPDATE research_session SET graph_version = graph_version + 1
+WHERE id = $1 AND workspace_id = $2
+RETURNING graph_version;
+
+-- name: GetResearchSessionGraphVersion :one
+SELECT graph_version FROM research_session
+WHERE id = $1 AND workspace_id = $2;
+
+-- name: ListResearchGraphNodesTyped :many
+SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id,
+       payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence,
+       document_count, conclusion_count, goal_version_id, derived_from, merged_from,
+       superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC;

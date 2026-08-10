@@ -1441,7 +1441,7 @@ type UpdateResearchSessionParams struct {
 	ProjectID           pgtype.UUID        `json:"project_id"`
 	ChannelID           pgtype.UUID        `json:"channel_id"`
 	HandoffSummary      pgtype.Text        `json:"handoff_summary"`
-	DepthTier            pgtype.Text        `json:"depth_tier"`
+	DepthTier           pgtype.Text        `json:"depth_tier"`
 	ProductRound        pgtype.Int4        `json:"product_round"`
 	ProductRoundBudget  pgtype.Int4        `json:"product_round_budget"`
 	UnattendedEnabled   pgtype.Bool        `json:"unattended_enabled"`
@@ -1616,4 +1616,489 @@ func (q *Queries) UpsertResearchSource(ctx context.Context, arg UpsertResearchSo
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const bumpResearchGraphVersion = `-- name: BumpResearchGraphVersion :one
+UPDATE research_session SET graph_version = graph_version + 1
+WHERE id = $1 AND workspace_id = $2
+RETURNING graph_version
+`
+
+type BumpResearchGraphVersionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) BumpResearchGraphVersion(ctx context.Context, arg BumpResearchGraphVersionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, bumpResearchGraphVersion, arg.ID, arg.WorkspaceID)
+	var graph_version int64
+	err := row.Scan(&graph_version)
+	return graph_version, err
+}
+
+const createResearchGraphCommand = `-- name: CreateResearchGraphCommand :one
+INSERT INTO research_graph_command (
+  workspace_id, session_id, op, idempotency_key, result_node_id,
+  input_node_ids, reason, actor_type, actor_id, meta
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, workspace_id, session_id, op, idempotency_key, result_node_id, input_node_ids, reason, actor_type, actor_id, meta, created_at
+`
+
+type CreateResearchGraphCommandParams struct {
+	WorkspaceID    pgtype.UUID   `json:"workspace_id"`
+	SessionID      pgtype.UUID   `json:"session_id"`
+	Op             string        `json:"op"`
+	IdempotencyKey string        `json:"idempotency_key"`
+	ResultNodeID   pgtype.UUID   `json:"result_node_id"`
+	InputNodeIds   []pgtype.UUID `json:"input_node_ids"`
+	Reason         string        `json:"reason"`
+	ActorType      string        `json:"actor_type"`
+	ActorID        pgtype.UUID   `json:"actor_id"`
+	Meta           []byte        `json:"meta"`
+}
+
+func (q *Queries) CreateResearchGraphCommand(ctx context.Context, arg CreateResearchGraphCommandParams) (ResearchGraphCommand, error) {
+	row := q.db.QueryRow(ctx, createResearchGraphCommand,
+		arg.WorkspaceID,
+		arg.SessionID,
+		arg.Op,
+		arg.IdempotencyKey,
+		arg.ResultNodeID,
+		arg.InputNodeIds,
+		arg.Reason,
+		arg.ActorType,
+		arg.ActorID,
+		arg.Meta,
+	)
+	var i ResearchGraphCommand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.Op,
+		&i.IdempotencyKey,
+		&i.ResultNodeID,
+		&i.InputNodeIds,
+		&i.Reason,
+		&i.ActorType,
+		&i.ActorID,
+		&i.Meta,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createResearchGraphNodeTyped = `-- name: CreateResearchGraphNodeTyped :one
+INSERT INTO research_graph_node (
+  workspace_id, session_id, node_type, title, summary, status, actor_agent_id, level,
+  round, cluster_id, confidence, document_count, conclusion_count, goal_version_id,
+  derived_from, merged_from, superseded_by, restart_of, invalidated_by, payload
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+RETURNING id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence, document_count, conclusion_count, goal_version_id, derived_from, merged_from, superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+`
+
+type CreateResearchGraphNodeTypedParams struct {
+	WorkspaceID     pgtype.UUID   `json:"workspace_id"`
+	SessionID       pgtype.UUID   `json:"session_id"`
+	NodeType        string        `json:"node_type"`
+	Title           string        `json:"title"`
+	Summary         string        `json:"summary"`
+	Status          string        `json:"status"`
+	ActorAgentID    pgtype.UUID   `json:"actor_agent_id"`
+	Level           string        `json:"level"`
+	Round           int32         `json:"round"`
+	ClusterID       pgtype.UUID   `json:"cluster_id"`
+	Confidence      pgtype.Float8 `json:"confidence"`
+	DocumentCount   int32         `json:"document_count"`
+	ConclusionCount int32         `json:"conclusion_count"`
+	GoalVersionID   pgtype.UUID   `json:"goal_version_id"`
+	DerivedFrom     pgtype.UUID   `json:"derived_from"`
+	MergedFrom      []pgtype.UUID `json:"merged_from"`
+	SupersededBy    pgtype.UUID   `json:"superseded_by"`
+	RestartOf       pgtype.UUID   `json:"restart_of"`
+	InvalidatedBy   pgtype.UUID   `json:"invalidated_by"`
+	Payload         []byte        `json:"payload"`
+}
+
+func (q *Queries) CreateResearchGraphNodeTyped(ctx context.Context, arg CreateResearchGraphNodeTypedParams) (ResearchGraphNode, error) {
+	row := q.db.QueryRow(ctx, createResearchGraphNodeTyped,
+		arg.WorkspaceID,
+		arg.SessionID,
+		arg.NodeType,
+		arg.Title,
+		arg.Summary,
+		arg.Status,
+		arg.ActorAgentID,
+		arg.Level,
+		arg.Round,
+		arg.ClusterID,
+		arg.Confidence,
+		arg.DocumentCount,
+		arg.ConclusionCount,
+		arg.GoalVersionID,
+		arg.DerivedFrom,
+		arg.MergedFrom,
+		arg.SupersededBy,
+		arg.RestartOf,
+		arg.InvalidatedBy,
+		arg.Payload,
+	)
+	var i ResearchGraphNode
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.NodeType,
+		&i.Title,
+		&i.Summary,
+		&i.Status,
+		&i.ActorAgentID,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RunEventID,
+		&i.Level,
+		&i.Round,
+		&i.ClusterID,
+		&i.Confidence,
+		&i.DocumentCount,
+		&i.ConclusionCount,
+		&i.GoalVersionID,
+		&i.DerivedFrom,
+		&i.MergedFrom,
+		&i.SupersededBy,
+		&i.RestartOf,
+		&i.InvalidatedBy,
+		&i.SupersededAt,
+		&i.InvalidatedAt,
+	)
+	return i, err
+}
+
+const getResearchGraphCluster = `-- name: GetResearchGraphCluster :one
+SELECT id, workspace_id, session_id, name, label, level, cluster_type, goal_version_id, payload, created_at, updated_at FROM research_graph_cluster
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetResearchGraphClusterParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetResearchGraphCluster(ctx context.Context, arg GetResearchGraphClusterParams) (ResearchGraphCluster, error) {
+	row := q.db.QueryRow(ctx, getResearchGraphCluster, arg.ID, arg.WorkspaceID)
+	var i ResearchGraphCluster
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.Name,
+		&i.Label,
+		&i.Level,
+		&i.ClusterType,
+		&i.GoalVersionID,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getResearchGraphCommandByKey = `-- name: GetResearchGraphCommandByKey :one
+SELECT id, workspace_id, session_id, op, idempotency_key, result_node_id, input_node_ids, reason, actor_type, actor_id, meta, created_at FROM research_graph_command
+WHERE workspace_id = $1 AND session_id = $2 AND idempotency_key = $3
+`
+
+type GetResearchGraphCommandByKeyParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	SessionID      pgtype.UUID `json:"session_id"`
+	IdempotencyKey string      `json:"idempotency_key"`
+}
+
+func (q *Queries) GetResearchGraphCommandByKey(ctx context.Context, arg GetResearchGraphCommandByKeyParams) (ResearchGraphCommand, error) {
+	row := q.db.QueryRow(ctx, getResearchGraphCommandByKey, arg.WorkspaceID, arg.SessionID, arg.IdempotencyKey)
+	var i ResearchGraphCommand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.Op,
+		&i.IdempotencyKey,
+		&i.ResultNodeID,
+		&i.InputNodeIds,
+		&i.Reason,
+		&i.ActorType,
+		&i.ActorID,
+		&i.Meta,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getResearchSessionGraphVersion = `-- name: GetResearchSessionGraphVersion :one
+SELECT graph_version FROM research_session
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetResearchSessionGraphVersionParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetResearchSessionGraphVersion(ctx context.Context, arg GetResearchSessionGraphVersionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getResearchSessionGraphVersion, arg.ID, arg.WorkspaceID)
+	var graph_version int64
+	err := row.Scan(&graph_version)
+	return graph_version, err
+}
+
+const listResearchGraphClusters = `-- name: ListResearchGraphClusters :many
+SELECT id, workspace_id, session_id, name, label, level, cluster_type, goal_version_id, payload, created_at, updated_at FROM research_graph_cluster
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+`
+
+type ListResearchGraphClustersParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchGraphClusters(ctx context.Context, arg ListResearchGraphClustersParams) ([]ResearchGraphCluster, error) {
+	rows, err := q.db.Query(ctx, listResearchGraphClusters, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchGraphCluster{}
+	for rows.Next() {
+		var i ResearchGraphCluster
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.Name,
+			&i.Label,
+			&i.Level,
+			&i.ClusterType,
+			&i.GoalVersionID,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listResearchGraphCommands = `-- name: ListResearchGraphCommands :many
+SELECT id, workspace_id, session_id, op, idempotency_key, result_node_id, input_node_ids, reason, actor_type, actor_id, meta, created_at FROM research_graph_command
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at DESC
+`
+
+type ListResearchGraphCommandsParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchGraphCommands(ctx context.Context, arg ListResearchGraphCommandsParams) ([]ResearchGraphCommand, error) {
+	rows, err := q.db.Query(ctx, listResearchGraphCommands, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResearchGraphCommand{}
+	for rows.Next() {
+		var i ResearchGraphCommand
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.Op,
+			&i.IdempotencyKey,
+			&i.ResultNodeID,
+			&i.InputNodeIds,
+			&i.Reason,
+			&i.ActorType,
+			&i.ActorID,
+			&i.Meta,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const researchGraphCommandExists = `-- name: ResearchGraphCommandExists :one
+SELECT EXISTS(
+  SELECT 1 FROM research_graph_command
+  WHERE workspace_id = $1 AND session_id = $2 AND idempotency_key = $3
+) AS exists
+`
+
+type ResearchGraphCommandExistsParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	SessionID      pgtype.UUID `json:"session_id"`
+	IdempotencyKey string      `json:"idempotency_key"`
+}
+
+func (q *Queries) ResearchGraphCommandExists(ctx context.Context, arg ResearchGraphCommandExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, researchGraphCommandExists, arg.WorkspaceID, arg.SessionID, arg.IdempotencyKey)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const updateResearchGraphNodeTyped = `-- name: UpdateResearchGraphNodeTyped :one
+UPDATE research_graph_node SET
+  status = COALESCE($3, status),
+  level = COALESCE($4, level),
+  cluster_id = COALESCE($5, cluster_id),
+  confidence = COALESCE($6, confidence),
+  title = COALESCE($7, title),
+  summary = COALESCE($8, summary),
+  superseded_by = COALESCE($9, superseded_by),
+  superseded_at = COALESCE($10, superseded_at),
+  merged_from = COALESCE($11, merged_from),
+  restart_of = COALESCE($12, restart_of),
+  invalidated_by = COALESCE($13, invalidated_by),
+  updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id, payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence, document_count, conclusion_count, goal_version_id, derived_from, merged_from, superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+`
+
+type UpdateResearchGraphNodeTypedParams struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	Status        pgtype.Text        `json:"status"`
+	Level         pgtype.Text        `json:"level"`
+	ClusterID     pgtype.UUID        `json:"cluster_id"`
+	Confidence    pgtype.Float8      `json:"confidence"`
+	Title         pgtype.Text        `json:"title"`
+	Summary       pgtype.Text        `json:"summary"`
+	SupersededBy  pgtype.UUID        `json:"superseded_by"`
+	SupersededAt  pgtype.Timestamptz `json:"superseded_at"`
+	MergedFrom    []pgtype.UUID      `json:"merged_from"`
+	RestartOf     pgtype.UUID        `json:"restart_of"`
+	InvalidatedBy pgtype.UUID        `json:"invalidated_by"`
+}
+
+func (q *Queries) UpdateResearchGraphNodeTyped(ctx context.Context, arg UpdateResearchGraphNodeTypedParams) (ResearchGraphNode, error) {
+	row := q.db.QueryRow(ctx, updateResearchGraphNodeTyped,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Status,
+		arg.Level,
+		arg.ClusterID,
+		arg.Confidence,
+		arg.Title,
+		arg.Summary,
+		arg.SupersededBy,
+		arg.SupersededAt,
+		arg.MergedFrom,
+		arg.RestartOf,
+		arg.InvalidatedBy,
+	)
+	var i ResearchGraphNode
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.NodeType,
+		&i.Title,
+		&i.Summary,
+		&i.Status,
+		&i.ActorAgentID,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RunEventID,
+		&i.Level,
+		&i.Round,
+		&i.ClusterID,
+		&i.Confidence,
+		&i.DocumentCount,
+		&i.ConclusionCount,
+		&i.GoalVersionID,
+		&i.DerivedFrom,
+		&i.MergedFrom,
+		&i.SupersededBy,
+		&i.RestartOf,
+		&i.InvalidatedBy,
+		&i.SupersededAt,
+		&i.InvalidatedAt,
+	)
+	return i, err
+}
+
+const listResearchGraphNodesTyped = `-- name: ListResearchGraphNodesTyped :many
+SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id,
+       payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence,
+       document_count, conclusion_count, goal_version_id, derived_from, merged_from,
+       superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+`
+
+type ListResearchGraphNodesTypedParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListResearchGraphNodesTyped(ctx context.Context, arg ListResearchGraphNodesTypedParams) ([]ResearchGraphNode, error) {
+	rows, err := q.db.Query(ctx, listResearchGraphNodesTyped, arg.SessionID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ResearchGraphNode
+	for rows.Next() {
+		var i ResearchGraphNode
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.NodeType,
+			&i.Title,
+			&i.Summary,
+			&i.Status,
+			&i.ActorAgentID,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RunEventID,
+			&i.Level,
+			&i.Round,
+			&i.ClusterID,
+			&i.Confidence,
+			&i.DocumentCount,
+			&i.ConclusionCount,
+			&i.GoalVersionID,
+			&i.DerivedFrom,
+			&i.MergedFrom,
+			&i.SupersededBy,
+			&i.RestartOf,
+			&i.InvalidatedBy,
+			&i.SupersededAt,
+			&i.InvalidatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -1040,6 +1040,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/steer", h.SteerResearchRun)
 					r.Post("/stop", h.StopResearchSession)
 					r.Post("/graph/nodes", h.AppendResearchGraphNode)
+					r.Get("/graph/typed", h.GetResearchGraphTyped)
+					r.Post("/graph/merge", h.PostResearchGraphMerge)
 					r.Post("/nodes/{nodeId}/commands", h.PostResearchNodeCommand)
 					r.Post("/sources", h.UpsertResearchSourceHandler)
 					r.Post("/report", h.PatchResearchReport)

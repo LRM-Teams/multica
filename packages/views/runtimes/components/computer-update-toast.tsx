@@ -11,18 +11,6 @@ export type ComputerUpdateToastPhase =
   | "success"
   | "failed";
 
-export const computerUpdateToastOptions = {
-  duration: Infinity,
-  position: "top-right" as const,
-  unstyled: true,
-};
-
-export const computerUpdateSuccessToastOptions = {
-  duration: 4000,
-  position: "top-right" as const,
-  unstyled: true,
-};
-
 export function ComputerUpdateToast({
   phase,
   title,

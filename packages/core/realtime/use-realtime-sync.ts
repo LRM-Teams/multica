@@ -20,8 +20,10 @@ import {
   agentActivityKeys,
   agentRunCountsKeys,
   agentTasksKeys,
+  runnerActivityKeys,
 } from "../agents/queries";
 import { patchAgentTaskSnapshotStatus } from "../agents/task-snapshot-updaters";
+import { applyRunnerActivityRealtime } from "../agents/runner-activity-updaters";
 import { githubKeys } from "../github/queries";
 import { larkKeys } from "../lark/queries";
 import {
@@ -464,6 +466,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentActivityKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: runnerActivityKeys.root(wsId) });
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: voiceCallKeys.all(wsId) });
@@ -499,10 +502,11 @@ export interface RealtimeSyncStores {
 /**
  * Centralized WS -> store sync. Called once from WSProvider.
  *
- * Uses the "WS as invalidation signal + refetch" pattern:
- * - onAny handler extracts event prefix and calls the matching store refresh
+ * Uses invalidation by default, with dedicated cache patches for authoritative
+ * realtime projections:
+ * - onAny handler extracts event prefix and invalidates matching Query caches
  * - Debounce per-prefix prevents rapid-fire refetches (e.g. bulk issue updates)
- * - Precise handlers only for side effects (toast, navigation, self-check)
+ * - Precise handlers patch complete/delta payloads or perform side effects
  *
  * Per-issue events (comments, activity, reactions, subscribers) are handled
  * both here (invalidation fallback) and by per-page useWSEvent hooks (granular
@@ -703,6 +707,10 @@ export function useRealtimeSync(
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
+      // Full server projection: patch the Query cache below. Reconnect is the
+      // bounded REST reconciliation path; normal events must not fan out into
+      // agents, fleet rankings, or runner-activity refetches.
+      "agent:activity",
       "reaction:added", "reaction:removed",
       "issue_reaction:added", "issue_reaction:removed",
       "subscriber:added", "subscriber:removed",
@@ -736,6 +744,10 @@ export function useRealtimeSync(
     // No self-event filtering: actor_id identifies the USER, not the TAB.
     // Filtering by actor_id would block other tabs of the same user.
     // Instead, both mutations and WS handlers use dedup checks to be idempotent.
+
+    const unsubAgentActivity = ws.on("agent:activity", (payload) => {
+      applyRunnerActivityRealtime(qc, getCurrentWsId() ?? undefined, payload);
+    });
 
     const unsubIssueUpdated = ws.on("issue:updated", (p) => {
       const { issue } = p as IssueUpdatedPayload;
@@ -1359,6 +1371,7 @@ export function useRealtimeSync(
 
     return () => {
       unsubAny();
+      unsubAgentActivity();
       unsubIssueUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();

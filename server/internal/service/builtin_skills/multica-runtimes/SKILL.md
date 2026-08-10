@@ -78,6 +78,11 @@ multica config use test
 multica config use production
 ```
 
+On `multica setup`, `--server-url` and `--app-url` are the supported Test
+environment origins. They are not the retired lifecycle URL override:
+`multica computer start|restart` still reject a command-local `--server-url`,
+while Test setup must accept both explicit origins together.
+
 Workspace connections are keyed locally by `(environment, workspace_id)`, so
 the same Computer can retain connections from both databases. One resident
 generation serves only the currently selected environment. `config use`

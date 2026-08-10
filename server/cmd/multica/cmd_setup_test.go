@@ -85,6 +85,50 @@ func TestSetupEnvironmentFlagsExposeOnlyProductionOrExplicitTestOrigin(t *testin
 	}
 }
 
+func TestResolveSetupServiceTargetAcceptsExplicitTestOrigins(t *testing.T) {
+	cmd := &cobra.Command{Use: "setup"}
+	cmd.Flags().String("environment", "production", "")
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("app-url", "", "")
+	cmd.Flags().String("workspace", "", "")
+	if err := cmd.Flags().Set("environment", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("server-url", "https://82.157.184.89"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("app-url", "https://82.157.184.89"); err != nil {
+		t.Fatal(err)
+	}
+
+	target, err := resolveSetupServiceTarget(cmd, []string{"/lrm-team-test"})
+	if err != nil {
+		t.Fatalf("resolve setup target: %v", err)
+	}
+	if target.Environment != cli.ServiceEnvironmentTest || target.Origin != "https://82.157.184.89" || target.AppOrigin != "https://82.157.184.89" {
+		t.Fatalf("target = %+v, want explicit test origins", target)
+	}
+	if workspace, _ := cmd.Flags().GetString("workspace"); workspace != "lrm-team-test" {
+		t.Fatalf("workspace = %q, want lrm-team-test", workspace)
+	}
+}
+
+func TestResolveSetupServiceTargetStillRejectsLegacyProfile(t *testing.T) {
+	cmd := &cobra.Command{Use: "setup"}
+	cmd.Flags().String("environment", "production", "")
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("app-url", "", "")
+	cmd.Flags().String("workspace", "", "")
+	cmd.Flags().String("profile", "", "")
+	if err := cmd.Flags().Set("profile", "legacy"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := resolveSetupServiceTarget(cmd, []string{"/lrm-team"}); err == nil || err.Error() != "--profile is not supported by the machine-wide Cloud Computer" {
+		t.Fatalf("legacy profile error = %v", err)
+	}
+}
+
 func TestResidentMatchesSetupTargetRequiresEnvironmentOriginAndChannel(t *testing.T) {
 	cfg := cli.CLIConfig{
 		Environment: "test",

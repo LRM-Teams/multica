@@ -424,45 +424,6 @@ jobs:
             caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
-      # Publish immutable preset objects before migration 314 can make database
-      # rows reference them. Rollbacks reuse the already-published versioned
-      # objects and may target images that predate this publisher binary.
-      - name: Publish Agent avatar presets to OSS
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.image_tag == ''
-        run: |
-          set -euo pipefail
-          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
-          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
-          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
-          export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
-          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
-          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
-          compose() {
-            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
-              docker compose \
-              --project-name multica \
-              --project-directory "${DEPLOY_DIR}" \
-              --env-file "${DEPLOY_DIR}/.env" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
-              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" "$@"
-          }
-          compose pull backend
-          compose run --rm --no-deps \
-            --entrypoint ./publish_agent_avatar_presets backend
-          for url in \
-            https://cdn.leagent.me/agent-avatars/v1/human-01.jpg \
-            https://cdn.leagent.me/agent-avatars/v2/agent-01.png; do
-            curl -fsS \
-              --retry 5 \
-              --retry-all-errors \
-              --retry-delay 2 \
-              --retry-max-time 120 \
-              --connect-timeout 10 \
-              --max-time 30 \
-              "$url" >/dev/null
-          done
-
       # Run the new image's migration binary before changing any runtime
       # container or the live Caddyfile. A failure is therefore reported as a
       # migration failure and leaves the currently served stack untouched.

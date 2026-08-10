@@ -989,6 +989,18 @@ function MachineDetailView({
           <section>
             <SectionTitle>{t(($) => $.machine.basics_section)}</SectionTitle>
             <div className="overflow-hidden rounded-xl border bg-card">
+              {/*
+                Labeled form field for display_name. Title above is also
+                editable (always-visible pencil) so rename is discoverable
+                without hunting this row. List rows stay display-only.
+              */}
+              <InfoRow label={t(($) => $.machine.basics_display_name)}>
+                <MachineNameEditor
+                  machine={machine}
+                  wsId={wsId}
+                  variant="basics"
+                />
+              </InfoRow>
               {ownerMember && (
                 <InfoRow label={t(($) => $.machine.basics_owner)}>
                   <span className="truncate text-sm">

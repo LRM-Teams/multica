@@ -547,13 +547,17 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     if (isRuntimeManagedOrigin(origin)) {
       if (origin.type === "runtime_shared") {
         return originRuntime
-          ? t(($) => $.detail.subline.origin_runtime_shared_named, { name: originRuntime.name })
+          ? t(($) => $.detail.subline.origin_runtime_shared_named, {
+              name: runtimeDisplayLabel(originRuntime),
+            })
           : origin.provider
             ? t(($) => $.detail.subline.origin_runtime_shared_provider, { provider: origin.provider })
             : t(($) => $.detail.subline.origin_runtime_shared_unknown);
       }
       return originRuntime
-        ? t(($) => $.detail.subline.origin_runtime_named, { name: originRuntime.name })
+        ? t(($) => $.detail.subline.origin_runtime_named, {
+            name: runtimeDisplayLabel(originRuntime),
+          })
         : origin.provider
           ? t(($) => $.detail.subline.origin_runtime_provider, { provider: origin.provider })
           : t(($) => $.detail.subline.origin_runtime_unknown);

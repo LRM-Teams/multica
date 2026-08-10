@@ -73,6 +73,8 @@
     "last_seen_active_now": "Active now",
     "basics_section": "Basics",
     "basics_display_name": "Display name",
+    "rename_aria": "Rename computer: {{name}}",
+    "rename_hint": "Rename this computer",
     "basics_hostname": "Hostname",
     "basics_os": "OS",
     "basics_daemon": "Computer",

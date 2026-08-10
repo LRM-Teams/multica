@@ -29,20 +29,13 @@ import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { isSelfHealingRuntime } from "../utils";
 import { knownProviderLabel } from "./provider-logo";
-import { splitRuntimeName } from "./runtime-machines";
+import { runtimeComputerLabel } from "./runtime-machines";
 
-// The "device" shown in the stop-daemon step should be the actual machine
-// identity, not the runtime's (often provider-branded, e.g. "Claude")
-// display name. Prefer the resolved hostname suffix ("Claude (build-01)" →
-// "build-01"), then the daemon-reported device_info's leading segment
-// ("host.local · 2.1.121" → "host.local"), and only fall back to the raw
-// runtime name when neither is available.
+// Machine identity for the stop-daemon step (and related device copy):
+// user-set display_name → hostname parenthetical → structured device fields.
+// Never use the provider-branded runtime.name alone ("Claude (host)").
 function resolveDeviceLabel(runtime: AgentRuntime): string {
-  const { hostname } = splitRuntimeName(runtime.name);
-  if (hostname) return hostname;
-  const infoHost = runtime.device_info.split(" · ")[0]?.trim();
-  if (infoHost) return infoHost;
-  return runtime.name;
+  return runtimeComputerLabel(runtime);
 }
 
 // DeleteRuntimeDialog is the single confirmation surface for runtime
@@ -341,7 +334,7 @@ function StopDaemonBody({
         </AlertDialogTitle>
         <AlertDialogDescription className="mt-1 text-sm leading-5 text-muted-foreground">
           {t(($) => $.detail.delete_dialog.blocked_by_online_daemon.description, {
-            name: runtime.name,
+            name: deviceLabel,
           })}
         </AlertDialogDescription>
 

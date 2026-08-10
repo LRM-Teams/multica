@@ -1030,18 +1030,36 @@ describe("ChannelMessageBubble", () => {
     expect(onOpenMember).toHaveBeenCalledWith("user-9");
   });
 
-  it("renders the author avatar straight from the message payload (#453), not a viewer-scoped lookup", () => {
+  it("uses the message avatar as a fallback while the identity directory is unavailable", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({ author_avatar_url: "/uploads/agent-avatar.png" })}
         currentUserId="user-1"
       />,
     );
-    // The avatar image comes from the payload's `author_avatar_url` (aggregated
-    // by the BE for every viewer, #574). Directory fallback is only used when
-    // payload + sticky cache both miss.
     const img = screen.getByRole("img", { name: /Research Agent/i });
     expect(img).toHaveAttribute("src", "/uploads/agent-avatar.png");
+  });
+
+  it("renders the current directory avatar over a stale historical message hint", () => {
+    getActorAvatarUrlMock.mockImplementation((type, id) =>
+      type === "agent" && id === "agent-1"
+        ? "https://cdn.leagent.me/workspaces/ws-1/current.png"
+        : null,
+    );
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          author_avatar_url: "https://cdn.leagent.me/workspaces/ws-1/old.png",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "https://cdn.leagent.me/workspaces/ws-1/current.png",
+    );
   });
 
   it("LRM-202: reuses a prior same-author avatar when a later message omits author_avatar_url", () => {

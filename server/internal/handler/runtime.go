@@ -1293,7 +1293,7 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	qtx := h.Queries.WithTx(tx)
 
-	// Shared teardown with computer bulk-delete (DeleteRuntimesByDaemon):
+	// Shared teardown with Computer deletion (DeleteComputer):
 	// pause autopilots → drop archived agents → fail memory curation → delete
 	// the runtime row.
 	if err := teardownRuntimeWithoutActiveAgents(r.Context(), qtx, tx, rt.ID); err != nil {

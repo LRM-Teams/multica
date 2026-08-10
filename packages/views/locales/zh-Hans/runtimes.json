@@ -113,51 +113,33 @@
     "back_to_list": "返回机器列表",
     "delete_computer": {
       "button": "删除电脑",
-      "toast_deleted": "已将「{{name}}」从当前工作区永久移除。",
-      "toast_deleted_cloud": "已删除云端电脑「{{name}}」及其容器。",
+      "toast_deleted": "已将 \"{{name}}\" 从当前工作区永久移除。",
+      "toast_deleted_cloud": "已删除云端电脑 \"{{name}}\" 及其容器。",
       "operation_failed": {
         "title": "操作失败，没有任何改动。",
-        "description": "「{{name}}」未被删除，agent 保持原样。请稍后重试。"
+        "description": "\"{{name}}\" 未被删除，智能体保持原样。请稍后重试。"
       },
       "confirm": {
         "title": "从当前工作区删除这台电脑？",
-        "description": "已删除的服务端数据无法恢复。「{{name}}」、其运行时、以及上面已归档的全部 agent（共 {{count}} 个）及其服务端历史和消息，将从当前工作区永久删除。本机文件和其他工作区不受影响；以后可将这台电脑作为新连接重新接入。",
-        "description_cloud": "此操作不可撤销。「{{name}}」及其云端容器将被永久删除，其上已归档 agent（共 {{count}} 个）与历史也会一并清除。",
-        "type_to_confirm": "请输入电脑名「{{name}}」以确认。",
+        "description": "已删除的服务端数据无法恢复。\"{{name}}\"、其运行时、以及上面已归档的全部智能体（共 {{count}} 个）及其服务端历史和消息，将从当前工作区永久删除。本机文件和其他工作区不受影响；以后可将这台电脑作为新连接重新接入。",
+        "description_cloud": "此操作不可撤销。\"{{name}}\" 及其云端容器将被永久删除，其上已归档智能体（共 {{count}} 个）与历史也会一并清除。",
+        "type_to_confirm": "请输入电脑名 \"{{name}}\" 以确认。",
         "cancel": "取消",
         "confirm": "永久删除",
-        "submitting": "正在永久删除…"
+        "submitting": "正在永久删除..."
       },
       "blocked_by_agents": {
-        "title_one": "「{{name}}」还有 {{count}} 个 agent",
-        "title_other": "「{{name}}」还有 {{count}} 个 agent",
-        "description": "需要先移除这台电脑上的全部 agent，才能删除它。",
-        "view_agent": "查看 agent",
-        "remove_all": "移除全部 agent"
-      },
-      "plan_changed": {
-        "title": "「{{name}}」的状态有变化",
-        "description": "确认前，这台电脑上的 agent 列表发生了变化。请重新核对。",
-        "review": "重新核对"
-      },
-      "remove_agents": {
-        "title": "移除「{{name}}」上的全部 agent？",
-        "description_one": "这个 agent 将被停用并归档、移出这台电脑。",
-        "description_other": "这 {{count}} 个 agent 将被停用并归档、移出这台电脑。",
-        "restore_hint": "永久删除电脑前，你仍可在 Agents 的 Archived 视图恢复这些 agent。",
-        "confirm": "移除全部 agent",
-        "submitting_one": "正在移除 {{count}} 个 agent…",
-        "submitting_other": "正在移除 {{count}} 个 agent…",
-        "toast_removed_one": "已移除 {{count}} 个 agent。",
-        "toast_removed_other": "已移除 {{count}} 个 agent。"
+        "title": "无法删除这台电脑",
+        "description": "请先删除这台电脑上的全部智能体，然后重试。",
+        "view_agent": "查看智能体"
       },
       "blocked_missing_daemon": {
         "title": "无法删除这台电脑",
-        "description": "「{{name}}」缺少电脑标识，无法永久删除。"
+        "description": "\"{{name}}\" 缺少电脑标识，无法永久删除。"
       },
       "blocked_missing_sandbox": {
         "title": "无法删除这台云端电脑",
-        "description": "「{{name}}」缺少沙箱标识，无法从这里删除云端容器。"
+        "description": "\"{{name}}\" 缺少沙箱标识，无法从这里删除云端容器。"
       }
     },
     "daemon_version_chip": "Computer v{{version}}",
@@ -169,7 +151,7 @@
       "local_only": "仅本机",
       "more_aria": "更多电脑操作",
       "restart_menu": "重启…",
-      "delete_menu": "删除电脑…",
+      "delete_menu": "删除电脑...",
       "upgrade": "升级",
       "upgrade_to": "升级到 {{version}}",
       "updating": "升级中…",

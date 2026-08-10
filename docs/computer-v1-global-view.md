@@ -135,11 +135,13 @@ flowchart LR
 
 界面只提供一个 `Delete Computer` 动作。它删除的是当前工作区里的 Computer 挂载，不是物理电脑或本机文件。
 
+canonical API 是 `DELETE /api/computers/{computerId}`。旧客户端使用的 `DELETE /api/runtimes/by-daemon/{computerId}` 只调用同一个 handler，不提供另一套删除语义；旧 `runtime_mode` query 也不能把一次 Computer 删除缩小成部分 runtime 删除。产品不暴露独立 connection revoke 或 Computer 级批量删除 Agent 的接口。
+
 ### 前置条件
 
 - 当前 Computer 仍有 active Agent 时，后端返回 `409 computer_has_active_agents`。
 - 拒绝时 runtime、Workspace connection、credential 和本机数据全部保持不变。
-- 用户必须先移除全部 Agent，再确认删除 Computer。
+- 用户必须通过正常 Agent 删除流程移除全部 Agent，再确认删除 Computer；Computer 删除本身不级联删除 active Agent。
 
 ### 确认后实际发生
 

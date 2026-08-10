@@ -129,30 +129,12 @@
         "type_to_confirm": "Type the computer name \"{{name}}\" to confirm.",
         "cancel": "Cancel",
         "confirm": "Permanently delete",
-        "submitting": "Permanently deleting…"
+        "submitting": "Permanently deleting..."
       },
       "blocked_by_agents": {
-        "title_one": "\"{{name}}\" still has {{count}} agent",
-        "title_other": "\"{{name}}\" still has {{count}} agents",
-        "description": "Remove every agent from this computer before deleting it.",
-        "view_agent": "View agent",
-        "remove_all": "Remove all agents"
-      },
-      "plan_changed": {
-        "title": "\"{{name}}\" changed",
-        "description": "The agents on this computer changed before confirmation. Review the current list again.",
-        "review": "Review again"
-      },
-      "remove_agents": {
-        "title": "Remove all agents from \"{{name}}\"?",
-        "description_one": "This agent will be stopped, archived, and removed from this computer.",
-        "description_other": "These {{count}} agents will be stopped, archived, and removed from this computer.",
-        "restore_hint": "Before deleting the computer, you can still restore these agents from Agents → Archived.",
-        "confirm": "Remove all agents",
-        "submitting_one": "Removing {{count}} agent…",
-        "submitting_other": "Removing {{count}} agents…",
-        "toast_removed_one": "Removed {{count}} agent.",
-        "toast_removed_other": "Removed {{count}} agents."
+        "title": "Cannot delete this computer",
+        "description": "Delete every agent on this computer first, then try again.",
+        "view_agent": "View agent"
       },
       "blocked_missing_daemon": {
         "title": "Cannot delete this computer",
@@ -172,7 +154,7 @@
       "local_only": "Local only",
       "more_aria": "More computer actions",
       "restart_menu": "Restart…",
-      "delete_menu": "Delete computer…",
+      "delete_menu": "Delete computer...",
       "upgrade": "Upgrade",
       "upgrade_to": "Upgrade to {{version}}",
       "updating": "Updating…",

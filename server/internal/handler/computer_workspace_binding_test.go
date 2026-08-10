@@ -75,23 +75,6 @@ func TestComputerWorkspaceBinding_OneOwnerCanConnectMultipleWorkspaces(t *testin
 		t.Fatalf("owners/connections = %d/%d, want 1/2", owners, activeConnections)
 	}
 
-	req := newRequestAs(testUserID, http.MethodDelete, "/api/computers/"+computerID+"/workspace-connections/"+testWorkspaceID, nil)
-	req.SetPathValue("daemonId", computerID)
-	req.SetPathValue("workspaceId", testWorkspaceID)
-	w := httptest.NewRecorder()
-	testHandler.RevokeComputerWorkspaceBinding(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("remove one connection: got %d: %s", w.Code, w.Body.String())
-	}
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM computer_workspace_bindings
-		WHERE daemon_id=$1 AND workspace_id=$2 AND active
-	`, computerID, siblingWorkspaceID).Scan(&activeConnections); err != nil {
-		t.Fatal(err)
-	}
-	if activeConnections != 1 {
-		t.Fatalf("active sibling connections = %d, want 1", activeConnections)
-	}
 }
 
 func TestComputerWorkspaceBinding_ExplicitReconnectClearsDeletionFence(t *testing.T) {
@@ -165,13 +148,12 @@ func TestComputerWorkspaceBinding_RejectsCrossUserComputerTakeover(t *testing.T)
 		t.Fatalf("cross-user takeover: got %d, want 403: %s", w.Code, w.Body.String())
 	}
 
-	removeReq := newRequestAs(foreignUserID, http.MethodDelete, "/api/computers/"+computerID+"/workspace-connections/"+testWorkspaceID, nil)
-	removeReq.SetPathValue("daemonId", computerID)
-	removeReq.SetPathValue("workspaceId", testWorkspaceID)
-	removeResponse := httptest.NewRecorder()
-	testHandler.RevokeComputerWorkspaceBinding(removeResponse, removeReq)
-	if removeResponse.Code != http.StatusForbidden {
-		t.Fatalf("cross-user removal: got %d, want 403: %s", removeResponse.Code, removeResponse.Body.String())
+	deleteReq := newRequestAs(foreignUserID, http.MethodDelete, "/api/computers/"+computerID, nil)
+	deleteReq = withURLParam(deleteReq, "daemonId", computerID)
+	deleteResponse := httptest.NewRecorder()
+	testHandler.DeleteComputer(deleteResponse, deleteReq)
+	if deleteResponse.Code != http.StatusForbidden {
+		t.Fatalf("cross-user delete: got %d, want 403: %s", deleteResponse.Code, deleteResponse.Body.String())
 	}
 
 	var ownerUserID string
@@ -191,7 +173,7 @@ func TestComputerWorkspaceBinding_RejectsCrossUserComputerTakeover(t *testing.T)
 		t.Fatal(err)
 	}
 	if originalActive != 1 || foreignConnections != 0 || foreignTokens != 0 {
-		t.Fatalf("rejected takeover/removal left original/connections/tokens = %d/%d/%d, want 1/0/0", originalActive, foreignConnections, foreignTokens)
+		t.Fatalf("rejected takeover left original/connections/tokens = %d/%d/%d, want 1/0/0", originalActive, foreignConnections, foreignTokens)
 	}
 }
 

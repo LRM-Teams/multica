@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -18,152 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-type removeAgentsByDaemonRequest struct {
-	ExpectedActiveAgentIDs []string `json:"expected_active_agent_ids"`
-}
-
-// RemoveAgentsByDaemon archives every active agent bound to the selected
-// computer after comparing the exact list the user confirmed. It deliberately
-// leaves the runtime rows in place: the user must review the now-empty computer
-// and confirm permanent deletion as a separate action.
-func (h *Handler) RemoveAgentsByDaemon(w http.ResponseWriter, r *http.Request) {
-	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
-	if daemonID == "" {
-		writeError(w, http.StatusBadRequest, "daemon_id is required")
-		return
-	}
-	runtimeMode := strings.TrimSpace(r.URL.Query().Get("runtime_mode"))
-
-	var req removeAgentsByDaemonRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	expected, ok := parseExpectedActiveAgentIDs(req.ExpectedActiveAgentIDs)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "expected_active_agent_ids must be a list of valid UUIDs")
-		return
-	}
-
-	workspaceID := h.resolveWorkspaceID(r)
-	if workspaceID == "" {
-		writeError(w, http.StatusBadRequest, "workspace required")
-		return
-	}
-	member, ok := h.requireWorkspaceMember(w, r, workspaceID, "runtime not found")
-	if !ok {
-		return
-	}
-	userID := uuidToString(member.UserID)
-
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to remove computer agents")
-		return
-	}
-	defer tx.Rollback(context.Background())
-	if err := lockDaemonRegistration(r.Context(), tx, workspaceID, daemonID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to lock computer registration")
-		return
-	}
-	qtx := h.Queries.WithTx(tx)
-
-	runtimes, err := qtx.ListAgentRuntimesByDaemonID(r.Context(), db.ListAgentRuntimesByDaemonIDParams{
-		WorkspaceID: parseUUID(workspaceID),
-		DaemonID:    daemonID,
-		RuntimeMode: runtimeMode,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list runtimes for daemon")
-		return
-	}
-	if len(runtimes) == 0 {
-		writeError(w, http.StatusNotFound, "no runtimes found for daemon")
-		return
-	}
-	for _, rt := range runtimes {
-		if !canDeleteRuntime(member, rt) {
-			writeError(w, http.StatusForbidden, "you can only delete your own runtimes")
-			return
-		}
-	}
-
-	runtimeIDs := sortedRuntimeIDs(runtimes)
-	for _, runtimeID := range runtimeIDs {
-		if _, err := qtx.LockAgentRuntime(r.Context(), runtimeID); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to lock runtime")
-			return
-		}
-	}
-
-	currentActive, err := qtx.ListActiveAgentsByRuntimesForUpdate(r.Context(), runtimeIDs)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to enumerate active agents")
-		return
-	}
-	if !activeAgentSetMatches(currentActive, expected) {
-		body := runtimeHasActiveAgentsResponse(currentActive)
-		body["code"] = "computer_agent_plan_changed"
-		body["error"] = "the active agent set changed; please review and confirm again."
-		body["daemon_id"] = daemonID
-		writeJSON(w, http.StatusConflict, body)
-		return
-	}
-
-	activeAgentIDs := make([]pgtype.UUID, len(currentActive))
-	for i, agent := range currentActive {
-		activeAgentIDs[i] = agent.ID
-	}
-	archivedAgents, err := qtx.ArchiveAgentsByIDs(r.Context(), db.ArchiveAgentsByIDsParams{
-		ArchivedBy: member.UserID,
-		AgentIds:   activeAgentIDs,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to remove agents")
-		return
-	}
-	cancelledTasks, err := qtx.CancelAgentTasksByRuntimeOrAgent(r.Context(), db.CancelAgentTasksByRuntimeOrAgentParams{
-		RuntimeIds: []pgtype.UUID{},
-		AgentIds:   activeAgentIDs,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to cancel agent work")
-		return
-	}
-	if len(activeAgentIDs) > 0 {
-		if err := qtx.CancelRunningAgentExecutionsByAgentIDs(r.Context(), db.CancelRunningAgentExecutionsByAgentIDsParams{
-			FailureReason: "agent removed from computer",
-			AgentIds:      activeAgentIDs,
-		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to stop agent executions")
-			return
-		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to remove computer agents")
-		return
-	}
-
-	if h.TaskService != nil && len(cancelledTasks) > 0 {
-		h.TaskService.BroadcastCancelledTasks(r.Context(), cancelledTasks)
-	}
-	for _, agent := range archivedAgents {
-		h.publish(protocol.EventAgentArchived, workspaceID, "member", userID, map[string]any{
-			"agent": agentToResponse(agent),
-		})
-		if agent.RuntimeID.Valid {
-			h.projectReminderOwnerStop(r.Context(), uuidToString(agent.ID), uuidToString(agent.RuntimeID))
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":          "ok",
-		"daemon_id":       daemonID,
-		"agents_archived": len(archivedAgents),
-		"tasks_cancelled": len(cancelledTasks),
-	})
-}
-
-// DeleteRuntimesByDaemon permanently removes a Computer from one Workspace.
+// DeleteComputer permanently removes a Computer from one Workspace.
 // It deletes that Workspace's runtime projection and revokes the matching
 // Computer Binding in one transaction. Sibling Workspace Bindings and local
 // files are outside this operation. Local computers receive a durable
@@ -176,15 +30,13 @@ func (h *Handler) RemoveAgentsByDaemon(w http.ResponseWriter, r *http.Request) {
 // provider-runtime deletion happen atomically. A Binding-only Computer with no
 // runtime rows follows the same operation and disappears without a ghost row.
 //
-// Route: DELETE /api/runtimes/by-daemon/{daemonId}?runtime_mode=
-func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request) {
+// Route: DELETE /api/computers/{daemonId}
+func (h *Handler) DeleteComputer(w http.ResponseWriter, r *http.Request) {
 	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
 	if daemonID == "" {
 		writeError(w, http.StatusBadRequest, "daemon_id is required")
 		return
 	}
-	runtimeMode := strings.TrimSpace(r.URL.Query().Get("runtime_mode"))
-
 	workspaceID := h.resolveWorkspaceID(r)
 	if workspaceID == "" {
 		writeError(w, http.StatusBadRequest, "workspace required")
@@ -211,7 +63,7 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 	runtimes, err := qtx.ListAgentRuntimesByDaemonID(r.Context(), db.ListAgentRuntimesByDaemonIDParams{
 		WorkspaceID: parseUUID(workspaceID),
 		DaemonID:    daemonID,
-		RuntimeMode: runtimeMode,
+		RuntimeMode: "",
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list runtimes for daemon")
@@ -293,13 +145,11 @@ func (h *Handler) DeleteRuntimesByDaemon(w http.ResponseWriter, r *http.Request)
 	}
 
 	normalizedDaemonID := strings.ToLower(daemonID)
-	shouldTombstone := runtimeMode == "local" || (len(runtimes) == 0 && hasWorkspaceBinding)
-	if runtimeMode == "" {
-		for _, rt := range runtimes {
-			if rt.RuntimeMode == "local" {
-				shouldTombstone = true
-				break
-			}
+	shouldTombstone := len(runtimes) == 0 && hasWorkspaceBinding
+	for _, rt := range runtimes {
+		if rt.RuntimeMode == "local" {
+			shouldTombstone = true
+			break
 		}
 	}
 	if shouldTombstone {

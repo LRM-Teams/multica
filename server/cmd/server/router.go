@@ -1179,17 +1179,17 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/runtime/daily", h.GetDashboardRunTimeDaily)
 			})
 
-			// Runtimes
+			// Computers
 			r.Get("/api/computers", h.ListComputers)
+			r.Delete("/api/computers/{daemonId}", h.DeleteComputer)
+
+			// Runtimes
 			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
-				// Workspace-scoped Computer one-click delete (LRM-438). Must be
-				// registered before /{runtimeId} so "by-daemon" is not
-				// captured as a runtime UUID. This also revokes the matching
-				// Computer Workspace Binding; local files and sibling Bindings
-				// remain outside the operation.
-				r.Delete("/by-daemon/{daemonId}", h.DeleteRuntimesByDaemon)
-				r.Post("/by-daemon/{daemonId}/remove-agents", h.RemoveAgentsByDaemon)
+				// Compatibility alias for installed clients that predate the
+				// canonical Computer endpoint. It executes the exact same delete
+				// operation and must not grow independent semantics.
+				r.Delete("/by-daemon/{daemonId}", h.DeleteComputer)
 				r.Route("/{runtimeId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateAgentRuntime)
 					r.Get("/usage", h.GetRuntimeUsage)
@@ -1231,12 +1231,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/{upgradeId}", h.CancelMachineUpgrade)
 			})
 
-			// Public Computer Workspace-connection lifecycle. Establishment is
-			// idempotent (#2489/#2490); removal revokes exactly one connection
-			// and never touches local Agent data (#2493).
+			// Public Computer Workspace-connection establishment. Deletion is
+			// exposed only through DELETE /api/computers/{daemonId}, which
+			// atomically enforces the active-Agent precondition and removes the
+			// current Workspace's complete server-side Computer projection.
 			r.Route("/api/computers/{daemonId}/workspace-connections", func(r chi.Router) {
 				r.Post("/", h.CreateComputerWorkspaceBinding)
-				r.Delete("/{workspaceId}", h.RevokeComputerWorkspaceBinding)
 			})
 
 			// Compatibility path for clients shipped before the public Computer
@@ -1244,7 +1244,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// all new callers use /api/computers/.../workspace-connections.
 			r.Route("/api/daemons/{daemonId}/bindings", func(r chi.Router) {
 				r.Post("/", h.CreateComputerWorkspaceBinding)
-				r.Delete("/{workspaceId}", h.RevokeComputerWorkspaceBinding)
 			})
 
 			// Cloud Runtime fleet proxy. The remote service URL is configured

@@ -108,21 +108,12 @@ func TestRuntimeDeleteEndpointsRequireRuntimeOwner(t *testing.T) {
 			handle:   testHandler.ArchiveAgentsAndDeleteRuntime,
 		},
 		{
-			name:     "remove computer agents",
-			method:   http.MethodPost,
-			path:     "/api/runtimes/by-daemon/" + daemonID + "/remove-agents?runtime_mode=local",
-			paramKey: "daemonId",
-			paramVal: daemonID,
-			body:     map[string]any{"expected_active_agent_ids": []string{}},
-			handle:   testHandler.RemoveAgentsByDaemon,
-		},
-		{
 			name:     "delete computer",
 			method:   http.MethodDelete,
-			path:     "/api/runtimes/by-daemon/" + daemonID + "?runtime_mode=local",
+			path:     "/api/computers/" + daemonID,
 			paramKey: "daemonId",
 			paramVal: daemonID,
-			handle:   testHandler.DeleteRuntimesByDaemon,
+			handle:   testHandler.DeleteComputer,
 		},
 	}
 

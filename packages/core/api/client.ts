@@ -4468,6 +4468,29 @@ export class ApiClient {
     return { ...parsed, session_id: parsed.session_id || id };
   }
 
+  /**
+   * GET the LRM-1505 typed research star graph (nodes/edges/clusters/lineage)
+   * for one render pass. Validated against the real typed-graph contract — no
+   * fabricated topology. Returns the normalized response or the empty fallback
+   * when the endpoint reports an empty/drop-graph state.
+   */
+  async getResearchGraphTyped(
+    id: string,
+  ): Promise<import("../research/graph-typed").TypedGraphResponse> {
+    const {
+      TypedGraphResponseSchema,
+      EMPTY_TYPED_GRAPH,
+    } = await import("../research/graph-typed");
+    const raw = await this.fetch(`/api/research/sessions/${id}/graph/typed`);
+    const parsed = parseWithFallback(
+      raw,
+      TypedGraphResponseSchema,
+      EMPTY_TYPED_GRAPH,
+      { endpoint: "GET /api/research/sessions/:id/graph/typed" },
+    );
+    return { ...parsed, ...(parsed.session_id ? {} : { session_id: id }) };
+  }
+
   async postResearchNodeCommand(
     sessionId: string,
     nodeId: string,

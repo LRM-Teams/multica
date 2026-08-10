@@ -1,17 +1,28 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Camera, Loader2 } from "lucide-react";
+import { Camera, Check, Loader2, Upload } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import type { Agent } from "@multica/core/types";
+import type { Agent, AgentAvatarSelection } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { agentDetailKeys } from "@multica/core/agents";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolveActorDisplayName } from "@multica/core/identity";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import {
+  AGENT_AVATAR_PRESETS,
+  resolvePublicFileUrl,
+} from "@multica/core/workspace/avatar-url";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { Button } from "@multica/ui/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@multica/ui/components/ui/dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { initialsOf } from "../../common/initials";
 import { AgentPresenceOverlay } from "../../common/actor-avatar";
@@ -48,10 +59,9 @@ interface AgentProfileAvatarEditorProps {
  *
  * - Read-only viewers (`!canEdit`): renders the standard presence + XP-burst
  *   avatar, identical to before, so nothing else changes for them.
- * - Editors (`canEdit`): the avatar becomes a button. Hover/focus dims it with
- *   a camera affordance (desktop); on touch (`hover: none`) the same overlay
- *   stays visible as a persistent "edit" badge. Click → pick a PNG/JPG →
- *   circular crop dialog (512² output) → upload → `avatar_selection`.
+ * - Editors (`canEdit`): the avatar becomes a button. Click opens the canonical
+ *   system preset grid plus a custom-upload action. Uploads still flow through
+ *   the circular 512² crop dialog before `avatar_selection` is committed.
  *
  * Mirrors the affordance language of `AvatarEditor` in
  * `agent-detail-inspector.tsx` (camera overlay + `useFileUpload`), but adds
@@ -73,6 +83,8 @@ export function AgentProfileAvatarEditor({
   const { upload, uploading } = useFileUpload(api);
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [savingPreset, setSavingPreset] = useState(false);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const lastObjectUrlRef = useRef<string | null>(null);
 
@@ -80,6 +92,7 @@ export function AgentProfileAvatarEditor({
   const initials = initialsOf(displayName);
   const avatarUrl = resolvePublicFileUrl(agent.avatar_url);
   const archived = !!agent.archived_at;
+  const busy = uploading || savingPreset;
 
   // Revoke the last object URL when it is no longer needed (dialog closed or
   // a new one staged) so we don't leak the raw selected file. Revoke happens
@@ -89,8 +102,33 @@ export function AgentProfileAvatarEditor({
   // without adding real safety.
 
   const openPicker = () => {
-    if (uploading) return;
-    fileInputRef.current?.click();
+    if (busy) return;
+    setPickerOpen(true);
+  };
+
+  const commitAvatarSelection = async (selection: AgentAvatarSelection) => {
+    try {
+      await onUpdate(agent.id, { avatar_selection: selection });
+    } catch {
+      // useUpdateAgent already toasted a generic failure and rolled back.
+      return false;
+    }
+    await qc.invalidateQueries({
+      queryKey: agentDetailKeys.detail(agent.workspace_id, agent.id),
+    });
+    toast.success(t(($) => $.side_panel.avatar_updated_toast));
+    return true;
+  };
+
+  const handlePresetSelect = async (presetUrl: string) => {
+    if (busy) return;
+    setSavingPreset(true);
+    const updated = await commitAvatarSelection({
+      kind: "picked",
+      preset_url: presetUrl,
+    });
+    setSavingPreset(false);
+    if (updated) setPickerOpen(false);
   };
 
   const validateSelection = (file: File): string | null => {
@@ -160,22 +198,10 @@ export function AgentProfileAvatarEditor({
       return;
     }
     if (!result) return;
-    try {
-      await onUpdate(agent.id, {
-        avatar_selection: { kind: "uploaded", attachment_id: result.id },
-      });
-    } catch {
-      // useUpdateAgent already toasted a generic failure and rolled back;
-      // swallow so we don't double-toast.
-      return;
-    }
-    // useUpdateAgent only patches the touched request key (`avatar_selection`),
-    // but the rendered avatar reads `agent.avatar_url` (server-derived).
-    // Refetch detail so the new face flips in the panel + directory.
-    await qc.invalidateQueries({
-      queryKey: agentDetailKeys.detail(agent.workspace_id, agent.id),
+    await commitAvatarSelection({
+      kind: "uploaded",
+      attachment_id: result.id,
     });
-    toast.success(t(($) => $.side_panel.avatar_updated_toast));
   };
 
   const avatar = (
@@ -198,57 +224,126 @@ export function AgentProfileAvatarEditor({
   );
 
   return (
-    <div className="relative inline-flex shrink-0" data-testid="agent-profile-avatar" data-can-edit={String(canEdit)}>
-      {canEdit ? (
-        <button
-          type="button"
-          onClick={openPicker}
-          disabled={uploading}
-          aria-label={t(($) => $.side_panel.change_avatar_aria)}
-          className="group relative inline-flex size-14 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-progress"
-        >
-          {readPresence}
-          {/* Camera affordance. Hover/focus on pointer devices; on touch
-              (hover:none) the overlay stays visible as a persistent badge so
-              the avatar reads as editable without a hover cycle. */}
-          <span
-            aria-hidden
-            className={cn(
-              "pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-100 transition-opacity",
-              " [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-visible:opacity-100",
-            )}
+    <>
+      <div
+        className="relative inline-flex shrink-0"
+        data-testid="agent-profile-avatar"
+        data-can-edit={String(canEdit)}
+      >
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={openPicker}
+            disabled={busy}
+            aria-label={t(($) => $.side_panel.change_avatar_aria)}
+            className="group relative inline-flex size-14 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-progress"
           >
-            {uploading ? (
-              <Loader2 className="size-4 animate-spin text-white" />
-            ) : (
-              <Camera className="size-4 text-white" />
-            )}
-          </span>
-        </button>
-      ) : (
-        readPresence
-      )}
+            {readPresence}
+            {/* Camera affordance. Hover/focus on pointer devices; on touch
+                (hover:none) the overlay stays visible as a persistent badge so
+                the avatar reads as editable without a hover cycle. */}
+            <span
+              aria-hidden
+              className={cn(
+                "pointer-events-none absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-100 transition-opacity",
+                " [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-visible:opacity-100",
+              )}
+            >
+              {busy ? (
+                <Loader2 className="size-4 animate-spin text-white" />
+              ) : (
+                <Camera className="size-4 text-white" />
+              )}
+            </span>
+          </button>
+        ) : (
+          readPresence
+        )}
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept={AVATAR_ACCEPT}
-        className="hidden"
-        aria-label={t(($) => $.side_panel.change_avatar_aria)}
-        tabIndex={-1}
-        onChange={handleFileChange}
-      />
-
-      {cropSrc ? (
-        <AvatarCropDialog
-          key={cropSrc}
-          src={cropSrc}
-          busy={uploading}
-          onCancel={handleCropCancel}
-          onConfirm={handleCropConfirm}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={AVATAR_ACCEPT}
+          className="hidden"
+          aria-label={t(($) => $.side_panel.change_avatar_aria)}
+          tabIndex={-1}
+          onChange={handleFileChange}
         />
-      ) : null}
-    </div>
+
+        {cropSrc ? (
+          <AvatarCropDialog
+            key={cropSrc}
+            src={cropSrc}
+            busy={uploading}
+            onCancel={handleCropCancel}
+            onConfirm={handleCropConfirm}
+          />
+        ) : null}
+      </div>
+
+      <Dialog
+        open={pickerOpen}
+        onOpenChange={(open) => {
+          if (!busy) setPickerOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.side_panel.avatar_picker_title)}</DialogTitle>
+            <DialogDescription>
+              {t(($) => $.side_panel.avatar_picker_description)}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div
+            className="grid grid-cols-4 gap-2 sm:grid-cols-5"
+            aria-label={t(($) => $.side_panel.avatar_system_choices_aria)}
+          >
+            {AGENT_AVATAR_PRESETS.map((presetUrl, index) => {
+              const selected = agent.avatar_url === presetUrl;
+              return (
+                <button
+                  key={presetUrl}
+                  type="button"
+                  aria-label={`${t(($) => $.side_panel.avatar_system_choice_aria)} ${index + 1}`}
+                  aria-pressed={selected}
+                  disabled={busy}
+                  onClick={() => void handlePresetSelect(presetUrl)}
+                  className={cn(
+                    "relative aspect-square overflow-hidden rounded-full border-2 bg-muted outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-60",
+                    selected ? "border-primary" : "border-transparent",
+                  )}
+                >
+                  <img
+                    src={presetUrl}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                  {selected ? (
+                    <span className="absolute bottom-0.5 right-0.5 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground ring-2 ring-background">
+                      <Check className="size-3" aria-hidden />
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setPickerOpen(false);
+              fileInputRef.current?.click();
+            }}
+          >
+            <Upload aria-hidden />
+            {t(($) => $.side_panel.avatar_upload_custom)}
+          </Button>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

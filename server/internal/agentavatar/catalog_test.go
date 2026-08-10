@@ -1,6 +1,11 @@
 package agentavatar
 
-import "testing"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestCanonicalizeSelection(t *testing.T) {
 	t.Parallel()
@@ -36,8 +41,8 @@ func TestAssetsMatchCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(assets) != LegacyPresetCount+PresetCount {
-		t.Fatalf("asset count = %d, want %d", len(assets), LegacyPresetCount+PresetCount)
+	if len(assets) != PresetCount {
+		t.Fatalf("asset count = %d, want %d", len(assets), PresetCount)
 	}
 	for index, asset := range assets {
 		if len(asset.Data) == 0 {
@@ -47,16 +52,32 @@ func TestAssetsMatchCatalog(t *testing.T) {
 			t.Fatalf("asset %d has no content type", index)
 		}
 	}
-	if assets[0].URL != LegacyURL(1) || assets[LegacyPresetCount-1].URL != LegacyURL(LegacyPresetCount) {
-		t.Fatalf("legacy catalog bounds = %q .. %q", assets[0].URL, assets[LegacyPresetCount-1].URL)
-	}
-	if assets[0].ContentType != "image/jpeg" || assets[LegacyPresetCount].ContentType != "image/png" {
-		t.Fatalf("catalog content types = %q, %q", assets[0].ContentType, assets[LegacyPresetCount].ContentType)
+	if assets[0].ContentType != "image/png" {
+		t.Fatalf("catalog content type = %q", assets[0].ContentType)
 	}
 	urls := URLs()
 	for index, want := range urls {
-		if got := assets[LegacyPresetCount+index].URL; got != want {
+		if got := assets[index].URL; got != want {
 			t.Fatalf("current asset %d URL = %q, want %q", index, got, want)
+		}
+	}
+}
+
+func TestLegacyAssetManifestMatchesWebFallback(t *testing.T) {
+	t.Parallel()
+
+	for number := 1; number <= LegacyPresetCount; number++ {
+		name := filepath.Join("..", "..", "..", "apps", "web", "public", "agent-avatars", fmt.Sprintf("human-%02d.jpg", number))
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read legacy avatar %02d: %v", number, err)
+		}
+		asset, err := LegacyAsset(number, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if asset.URL != LegacyURL(number) || asset.ContentType != "image/jpeg" {
+			t.Fatalf("legacy asset %02d metadata = %#v", number, asset)
 		}
 	}
 }

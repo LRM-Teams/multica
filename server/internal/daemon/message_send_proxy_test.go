@@ -299,6 +299,66 @@ func TestPrepareMessageSendDraftNormalSendReusesKeyOnSameIntent(t *testing.T) {
 	}
 }
 
+// TestPrepareMessageSendDraftFillsTurnIdentityFromActiveInboxTurn is ① for the
+// v0.4.24 gap: when the CLI omits MULTICA_TURN_* but the agent has an in-flight
+// inbox turn, the proxy must fill ConversationID/Seq* from the live lease and
+// stamp a batch client_message_id (no silent uuid). Non-turn agents still get
+// the legacy UUID path (Alice scoping).
+func TestPrepareMessageSendDraftFillsTurnIdentityFromActiveInboxTurn(t *testing.T) {
+	d, proxy := newDraftReuseTestDaemon(t)
+	now := time.Now()
+
+	// No active turn → UUID path (non-turn/proactive send).
+	noTurn := credentialProxyMessageSendRequest{
+		AgentID: "agent-1", WorkspaceID: "workspace-1", Target: "#test", Content: "hello",
+	}
+	draft, status, err := d.prepareMessageSendDraft(context.Background(), proxy, cachedAgentCredential{}, noTurn, now)
+	if err != nil {
+		t.Fatalf("no-turn prepare: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("no-turn status = %d", status)
+	}
+	if draft.ClientMessageID == "" || draft.ClientMessageID[0] == 'b' {
+		// uuid.NewString() never starts with 'b' + 31 hex of batch form; batch ids start with 'b'.
+		// Accept either form only if we can tell: batch is "b" + 31 hex chars.
+	}
+	noTurnID := draft.ClientMessageID
+	if len(noTurnID) == 32 && noTurnID[0] == 'b' {
+		t.Fatalf("non-turn send must not use batch client_message_id, got %q", noTurnID)
+	}
+
+	// Register an active inbox turn for the same agent.
+	d.registerActiveInboxTurn("agent-1", AgentInboxLease{
+		ID: "event-1", ConversationID: "conv-A", SeqFrom: 10, SeqTo: 20,
+	})
+	defer d.clearActiveInboxTurn("agent-1")
+
+	// Same request shape (no ConversationID/Seq*) must now fill from the lease.
+	withTurn := credentialProxyMessageSendRequest{
+		AgentID: "agent-1", WorkspaceID: "workspace-1", Target: "#test", Content: "hello",
+	}
+	filled, status, err := d.prepareMessageSendDraft(context.Background(), proxy, cachedAgentCredential{}, withTurn, now)
+	if err != nil {
+		t.Fatalf("with-turn prepare: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("with-turn status = %d", status)
+	}
+	want := batchClientMessageID("conv-A", 10, 20, "hello", nil)
+	if filled.ClientMessageID != want {
+		t.Fatalf("active-turn fill: client_message_id = %q, want batch %q", filled.ClientMessageID, want)
+	}
+	// Same content again → same batch id (at-most-once).
+	retry, _, err := d.prepareMessageSendDraft(context.Background(), proxy, cachedAgentCredential{}, withTurn, now)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if retry.ClientMessageID != want {
+		t.Fatalf("retry id = %q, want %q", retry.ClientMessageID, want)
+	}
+}
+
 // TestPrepareMessageSendDraftBatchDistinctContentMintsDistinctIDs exercises the
 // LRM-1530 boundary through the REAL draft path (not just the pure batch id
 // function): when the send carries a batch identity

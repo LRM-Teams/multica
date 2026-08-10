@@ -207,6 +207,12 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		// identity, so the server dedup collapses an accidental re-delivery (the
 		// "same message sent twice" regression). Different batches derive
 		// different ids, so genuinely distinct messages are never folded together.
+		//
+		// Fill missing turn identity from the daemon's in-flight inbox lease when
+		// the CLI omitted MULTICA_TURN_* (mixed batch/uuid was the v0.4.24 gap).
+		// Only when an inbox turn is active — draft/--send-draft/proactive non-turn
+		// sends keep the legacy UUID path (Alice fail-closed scoping).
+		_ = d.fillTurnIdentityFromActiveInboxTurn(&request)
 		clientMessageID := ""
 		if request.ConversationID != "" && request.SeqFrom > 0 && request.SeqTo >= request.SeqFrom {
 			clientMessageID = batchClientMessageID(request.ConversationID, request.SeqFrom, request.SeqTo, request.Content, request.AttachmentIDs)

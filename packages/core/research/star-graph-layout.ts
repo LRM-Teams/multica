@@ -1,0 +1,737 @@
+/**
+ * LRM-1514 — D5 调研星图 稳定增量布局引擎（核心几何层）.
+ *
+ * A pure, deterministic, incremental layout engine for the D5 five-tier star
+ * graph. It turns a flat list of tiered nodes + relations into concrete
+ * circle positions, cluster boundaries and edge endpoints — WITHOUT fixed
+ * example coordinates and WITHOUT any React / canvas dependency.
+ *
+ * Spatial semantics implemented (D5 spec):
+ *   - Goal (xxl, or the root when no xxl) is the origin.
+ *   - Stable tiers (xl/l/m) form a focal field around the goal, grouped into
+ *     contiguous angular sectors by `clusterId` so members of the same cluster
+ *     sit together and different clusters keep clear space.
+ *   - S agents orbit their parent result on a small exploration radius.
+ *   - New / unrelated directions sit outside existing clusters and only link
+ *     back to the goal via `challenge` / `newdir` relation semantics.
+ *
+ * Quantitative hard gates target:
+ *   - node-circle collision = 0
+ *   - core label collision      = 0
+ *   - edge endpoint-to-circle error <= 2px
+ *   - cluster boundary contains every member + label
+ *   - refresh stability (same input -> same output; incremental runs keep
+ *     unaffected nodes in place)
+ *
+ * Design properties:
+ *   - PURE: no side effects, no Date.now(), no global randomness. All RNG goes
+ *     through a seeded barrier (`mulberry32`), so identical input + seed always
+ *     yields identical output.
+ *   - INCREMENTAL: pass `options.previous` and the engine reuses the position
+ *     of every node whose cluster membership and parent are unchanged. Only the
+ *     affected region moves.
+ *   - DETERMINISTIC: fixed-order input sorting and fixed iteration counts; no
+ *     ordering decision depends on float noise.
+ *
+ * Framework-agnostic: a higher layer (canvas / adapter) maps real data into
+ * `StarGraphLayoutNode` / relations and maps the result back to positions.
+ */
+
+/** The five D5 tiers (matches `@multica/ui/components/star-graph` tier order). */
+export type StarGraphLayoutTier = "xxl" | "xl" | "l" | "m" | "s";
+
+/** Fixed exact circle radius (px) for each tier — single source of geometry. */
+export const STAR_GRAPH_RADIUS: Record<StarGraphLayoutTier, number> = {
+  xxl: 124, // 248px diameter
+  xl: 110, // 220px
+  l: 84, // 168px
+  m: 48, // 96px
+  s: 29, // 58px
+};
+
+/** Label box model (half extents). Core labels never spill the circle. */
+export interface StarGraphLabelBox {
+  /** Half width of the label text region, px. */
+  halfWidth: number;
+  /** Half height of the label text region, px. */
+  halfHeight: number;
+}
+
+/** Default label box for a node when no explicit geometry is given. */
+export function defaultLabelBox(tier: StarGraphLayoutTier): StarGraphLabelBox {
+  const r = STAR_GRAPH_RADIUS[tier];
+  return { halfWidth: r * 0.6, halfHeight: r * 0.28 };
+}
+
+/** A node the layout engine understands. */
+export interface StarGraphLayoutNode {
+  id: string;
+  tier: StarGraphLayoutTier;
+  /** Cluster (theme/成果) grouping key. Null = unclustered / free direction. */
+  clusterId?: string | null;
+  /** Parent result id for S-tier exploration orbit. Other tiers ignore this. */
+  parentId?: string | null;
+  /** Optional custom label box; defaults to `defaultLabelBox(tier)`. */
+  label?: StarGraphLabelBox;
+  /** Kept verbatim through the layout (opaque passthrough for callers). */
+  ref?: unknown;
+}
+
+/** A typed relation between two nodes. Order is significant (source -> target). */
+export interface StarGraphLayoutRelation {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  /** decompose | support | challenge | newdir. */
+  kind: "decompose" | "support" | "challenge" | "newdir";
+}
+
+/** Result geometry for one node. */
+export interface StarGraphLayoutNodePosition {
+  id: string;
+  tier: StarGraphLayoutTier;
+  /** Circle centre x, px (axis origin = goal centre). */
+  x: number;
+  /** Circle centre y, px. */
+  y: number;
+  radius: number;
+  label: StarGraphLabelBox;
+  /** Cluster key for grouping; null = ungrouped. */
+  clusterId: string | null;
+  /** Angle (radians) of the node around its anchor (goal or S-orbit parent). */
+  angle: number;
+  /** Radial distance from anchor centre (px). */
+  radiusOffset: number;
+  parentId: string | null;
+}
+
+/** Positioned edge with endpoints snapped onto each circle's perimeter. */
+export interface StarGraphLayoutEdge {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  kind: StarGraphLayoutRelation["kind"];
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+}
+
+/** A cluster boundary circle that contains all members + their labels. */
+export interface StarGraphLayoutCluster {
+  clusterId: string;
+  x: number;
+  y: number;
+  radius: number;
+  memberIds: string[];
+}
+
+export interface StarGraphLayoutOptions {
+  /**
+   * Previous layout result for incremental stability. Nodes whose cluster and
+   * parent are unchanged keep their previous position.
+   */
+  previous?: StarGraphLayoutResult;
+  /** PRNG seed — same (nodes, seed, version) -> same output. Default 1. */
+  seed?: number;
+  /** Stable layout version for determinism bookkeeping. Default "d5-1". */
+  version?: string;
+  /** Extra padding between node circles after collision resolution (px). */
+  padding?: number;
+}
+
+export interface StarGraphLayoutResult {
+  nodes: StarGraphLayoutNodePosition[];
+  edges: StarGraphLayoutEdge[];
+  clusters: StarGraphLayoutCluster[];
+  /** Goal (origin) node id, if any. */
+  rootId: string | null;
+  /** The stable layout version that produced this geometry. */
+  version: string;
+  /** Bookkeeping: how many nodes re-used the previous position vs moved. */
+  stats: { reused: number; moved: number; total: number };
+  /** Node id -> stable signature for incremental reuse. */
+  keyByNode: Map<string, string>;
+}
+
+/* ------------------------------------------------------------------ *
+ * Deterministic PRNG (mulberry32) — no global randomness.
+ * ------------------------------------------------------------------ */
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hashStr(input: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * Geometry helpers.
+ * ------------------------------------------------------------------ */
+
+function dist(ax: number, ay: number, bx: number, by: number): number {
+  const dx = ax - bx;
+  const dy = ay - by;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/** Edge endpoints snapped exactly onto each circle's perimeter. */
+export function circleEdgeEndpoints(
+  ax: number, ay: number, ar: number,
+  bx: number, by: number, br: number,
+): { from: { x: number; y: number }; to: { x: number; y: number } } {
+  const dxb = bx - ax;
+  const dyb = by - ay;
+  const d = Math.sqrt(dxb * dxb + dyb * dyb);
+  if (d === 0) {
+    return {
+      from: { x: ax, y: ay - ar },
+      to: { x: bx + br, y: by },
+    };
+  }
+  const ux = dxb / d;
+  const uy = dyb / d;
+  return {
+    from: { x: ax + ux * ar, y: ay + uy * ar },
+    to: { x: bx - ux * br, y: by - uy * br },
+  };
+}
+
+function circleEdgeError(
+  cx: number, cy: number, r: number,
+  px: number, py: number,
+): number {
+  return Math.abs(dist(cx, cy, px, py) - r);
+}
+
+/** Axis-aligned label rectangles must not intersect. */
+export function labelBoxesOverlap(
+  ax: number, ay: number, ahw: number, ahh: number,
+  bx: number, by: number, bhw: number, bhh: number,
+): boolean {
+  return (
+    Math.abs(ax - bx) < ahw + bhw &&
+    Math.abs(ay - by) < ahh + bhh
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Diagnostics (quantitative hard-gate report).
+ * ------------------------------------------------------------------ */
+
+export interface StarGraphLayoutIssue {
+  kind:
+    | "circle_collision"
+    | "label_collision"
+    | "endpoint_error"
+    | "cluster_containment"
+    | "root_occlusion";
+  aId: string;
+  bId: string;
+  detail: number;
+}
+
+export interface StarGraphDiagnosticReport {
+  nodeCollisions: number;
+  labelCollisions: number;
+  maxEndpointError: number;
+  clusterContainmentFailures: number;
+  /** Max distance any node moved vs `previous` (px); null when no previous. */
+  maxDisplacement: number | null;
+  hasRootOcclusion: boolean;
+  issues: StarGraphLayoutIssue[];
+}
+
+/** Public gate evaluator. Used by tests and a future diagnostics overlay. */
+export function diagnoseStarGraphLayout(
+  result: StarGraphLayoutResult,
+  options: { padding?: number; previous?: StarGraphLayoutResult } = {},
+): StarGraphDiagnosticReport {
+  const padding = options.padding ?? 0;
+  const issues: StarGraphLayoutIssue[] = [];
+  const byPos = new Map(result.nodes.map((n) => [n.id, n]));
+
+  for (let i = 0; i < result.nodes.length; i += 1) {
+    for (let j = i + 1; j < result.nodes.length; j += 1) {
+      const a = result.nodes[i]!;
+      const b = result.nodes[j]!;
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      const overlap = a.radius + b.radius + padding - d;
+      if (overlap > 0.5) {
+        issues.push({ kind: "circle_collision", aId: a.id, bId: b.id, detail: overlap });
+      }
+      if (labelBoxesOverlap(
+        a.x, a.y, a.label.halfWidth, a.label.halfHeight,
+        b.x, b.y, b.label.halfWidth, b.label.halfHeight,
+      )) {
+        issues.push({ kind: "label_collision", aId: a.id, bId: b.id, detail: 0 });
+      }
+    }
+  }
+
+  let maxEndpointError = 0;
+  for (const e of result.edges) {
+    const from = byPos.get(e.fromNodeId);
+    const to = byPos.get(e.toNodeId);
+    if (!from || !to) continue;
+    const err = Math.max(
+      circleEdgeError(from.x, from.y, from.radius, e.from.x, e.from.y),
+      circleEdgeError(to.x, to.y, to.radius, e.to.x, e.to.y),
+    );
+    if (err > maxEndpointError) maxEndpointError = err;
+    if (err > 2) {
+      issues.push({ kind: "endpoint_error", aId: e.id, bId: e.id, detail: err });
+    }
+  }
+
+  let clusterContainmentFailures = 0;
+  for (const cluster of result.clusters) {
+    for (const memberId of cluster.memberIds) {
+      const node = byPos.get(memberId);
+      if (!node) continue;
+      const d = dist(cluster.x, cluster.y, node.x, node.y);
+      const need = node.radius + node.label.halfWidth * 0.5 + 8;
+      if (d > cluster.radius - need) {
+        clusterContainmentFailures += 1;
+      }
+    }
+  }
+
+  let hasRootOcclusion = false;
+  const rootId = result.rootId;
+  const root = rootId != null ? byPos.get(rootId) : undefined;
+  if (root) {
+    for (const n of result.nodes) {
+      if (n.id === root.id) continue;
+      if (dist(n.x, n.y, root.x, root.y) < n.radius + root.radius) {
+        hasRootOcclusion = true;
+        issues.push({ kind: "root_occlusion", aId: n.id, bId: root.id, detail: 0 });
+      }
+    }
+  }
+
+  let maxDisplacement: number | null = null;
+  if (options.previous) {
+    const prevMap = new Map(options.previous.nodes.map((n) => [n.id, n]));
+    for (const n of result.nodes) {
+      const p = prevMap.get(n.id);
+      if (p) {
+        const d = dist(n.x, n.y, p.x, p.y);
+        if (maxDisplacement == null || d > maxDisplacement) maxDisplacement = d;
+      }
+    }
+  }
+
+  return {
+    nodeCollisions: issues.filter((i) => i.kind === "circle_collision").length,
+    labelCollisions: issues.filter((i) => i.kind === "label_collision").length,
+    maxEndpointError,
+    clusterContainmentFailures,
+    maxDisplacement,
+    hasRootOcclusion,
+    issues,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Core engine.
+ * ------------------------------------------------------------------ */
+
+interface EngineNode extends StarGraphLayoutNode {
+  label: StarGraphLabelBox;
+}
+
+function nodeSignature(node: StarGraphLayoutNode): string {
+  return `${node.id}|${node.tier}|${node.clusterId ?? ""}|${node.parentId ?? ""}`;
+}
+
+/**
+ * Adaptive S-orbit ring radius: large enough to hold `count` agent circles of
+ * diameter `2*S_RADIUS` without the agents colliding on the ring, never below
+ * the natural ring that clears the parent disc.
+ */
+function orbitRadiusFor(
+  parentRadius: number,
+  count: number,
+  sRadius: number = STAR_GRAPH_RADIUS.s,
+  gap = 12,
+): number {
+  const minRing = parentRadius + sRadius + 14;
+  if (count <= 1) return minRing;
+  const need = ((2 * sRadius + gap) * count) / (2 * Math.PI);
+  return Math.max(minRing, need);
+}
+
+export function layoutStarGraph(
+  input: readonly StarGraphLayoutNode[],
+  relations: readonly StarGraphLayoutRelation[] = [],
+  options: StarGraphLayoutOptions = {},
+): StarGraphLayoutResult {
+  const seed = options.seed ?? 1;
+  const version = options.version ?? "d5-1";
+  const padding = options.padding ?? 10;
+
+  if (input.length === 0) {
+    return {
+      nodes: [],
+      edges: [],
+      clusters: [],
+      rootId: null,
+      version,
+      keyByNode: new Map(),
+      stats: { reused: 0, moved: 0, total: 0 },
+    };
+  }
+
+  const nodes: EngineNode[] = input.map((n) => ({
+    ...n,
+    label: n.label ?? defaultLabelBox(n.tier),
+  }));
+  nodes.sort((a, b) => a.id.localeCompare(b.id));
+  const total = nodes.length;
+
+  const root =
+    nodes.find((n) => n.tier === "xxl") ??
+    nodes.find((n) => n.clusterId == null && n.parentId == null) ??
+    nodes[0]!;
+  const rootId = root.id;
+
+  const stable = nodes.filter((n) => n.tier !== "s" && n.id !== rootId);
+  const orbit = nodes.filter((n) => n.tier === "s");
+
+  /* ---- Incremental reuse: same signature + version -> keep previous pos. ---- */
+  const prevUsable =
+    options.previous != null && options.previous.version === version;
+  const previousPos = prevUsable
+    ? new Map(options.previous!.nodes.map((n) => [n.id, n]))
+    : new Map<string, StarGraphLayoutNodePosition>();
+
+  /* Deterministic per-node signatures for incremental reuse decisions. */
+  const signatureNow = new Map<string, string>();
+  for (const node of nodes) signatureNow.set(node.id, nodeSignature(node));
+
+  /* Seeded RNG for deterministic placement variety (S-orbit jitter). */
+  const rng = mulberry32((seed ^ hashStr(version)) >>> 0);
+
+  /* (x, y) by node id. */
+  const pos = new Map<string, { x: number; y: number }>();
+  const angleOf = new Map<string, number>();
+  const offsetOf = new Map<string, number>();
+
+  /* ---- Group stable nodes into clusters (theme/成果 sectors). ---- */
+  const byCluster = new Map<string, EngineNode[]>();
+  const freeStable: EngineNode[] = [];
+  for (const n of stable) {
+    if (n.clusterId == null || n.clusterId === "") {
+      freeStable.push(n);
+    } else {
+      const list = byCluster.get(n.clusterId) ?? [];
+      list.push(n);
+      byCluster.set(n.clusterId, list);
+    }
+  }
+  const clusterKeys = [...byCluster.keys()].sort();
+  const sectorCount = clusterKeys.length + (freeStable.length > 0 ? 1 : 0);
+
+  /* ---- Angular sector per cluster group; deterministic (sorted keys). ---- */
+  const sectorStart = new Map<string | "__free__", number>();
+  const sectorSpan = new Map<string | "__free__", number>();
+  {
+    const gap = 0.22; // radians of clear space between adjacent groups
+    const usable = 2 * Math.PI - gap * sectorCount;
+    const slot = sectorCount > 0 ? usable / sectorCount : 0;
+    let cursor = 0;
+    const orderedGroups: (string | "__free__")[] = [...clusterKeys, "__free__"];
+    for (const g of orderedGroups) {
+      sectorStart.set(g, cursor + gap / 2);
+      sectorSpan.set(g, slot);
+      cursor += gap + slot;
+    }
+  }
+
+  /* ---- Radial band: place each cluster's members outward from the root. ---- */
+  // Each stable node gets an angle inside its group sector and a radial offset
+  // that grows so big tiers sit further out and clear the root's own disc.
+  const rootRadius = STAR_GRAPH_RADIUS[root.tier];
+  const reused = new Set<string>();
+
+  const placeStableCluster = (nodesInGroup: EngineNode[], group: string | "__free__") => {
+    const start = sectorStart.get(group) ?? 0;
+    const span = sectorSpan.get(group) ?? 0;
+    // Sort members largest-first so big nodes anchor the innermost radius.
+    const members = [...nodesInGroup].sort(
+      (a, b) =>
+        STAR_GRAPH_RADIUS[b.tier] - STAR_GRAPH_RADIUS[a.tier] ||
+        a.id.localeCompare(b.id),
+    );
+    let radial = rootRadius + members[0]!.label.halfWidth * 0.5 + 46;
+    for (let i = 0; i < members.length; i += 1) {
+      const n = members[i]!;
+      // Reuse previous position when signature is stable.
+      const sig = signatureNow.get(n.id)!;
+      const prev = previousPos.get(n.id);
+      if (prev && nodeSignatureCompat(prev, sig)) {
+        pos.set(n.id, { x: prev.x, y: prev.y });
+        angleOf.set(n.id, prev.angle);
+        offsetOf.set(n.id, prev.radiusOffset);
+        reused.add(n.id);
+        continue;
+      }
+      const count = members.length;
+      const fraction = count === 1 ? 0.5 : (i + 0.5) / count;
+      const angle = start + fraction * span;
+      // Push the radial offset out enough to avoid the previous member's disc.
+      const r = STAR_GRAPH_RADIUS[n.tier];
+      const prevRadius = i > 0 ? STAR_GRAPH_RADIUS[members[i - 1]!.tier] : 0;
+      const minGap = r + prevRadius + padding;
+      if (radial < rootRadius + minGap * 0.4) {
+        radial = rootRadius + minGap * 0.4;
+      }
+      pos.set(n.id, { x: Math.cos(angle) * radial, y: Math.sin(angle) * radial });
+      angleOf.set(n.id, angle);
+      offsetOf.set(n.id, radial);
+    }
+  };
+
+  for (const key of clusterKeys) {
+    placeStableCluster(byCluster.get(key)!, key);
+  }
+  if (freeStable.length > 0) {
+    placeStableCluster(freeStable, "__free__");
+  }
+
+  /* ---- S-tier: orbit their parent result on a small exploration radius. ---- */
+  const sByParent = new Map<string, EngineNode[]>();
+  for (const n of orbit) {
+    const parentId = n.parentId ?? rootId;
+    const list = sByParent.get(parentId) ?? [];
+    list.push(n);
+    sByParent.set(parentId, list);
+  }
+  for (const [parentId, children] of sByParent) {
+    const parentCenter = pos.get(parentId) ?? { x: 0, y: 0 };
+    const parent = nodes.find((n) => n.id === parentId);
+    const parentRadius = parent ? STAR_GRAPH_RADIUS[parent.tier] : STAR_GRAPH_RADIUS.m;
+    const childrenSorted = [...children].sort((a, b) => a.id.localeCompare(b.id));
+    // Adaptive ring: wide enough that all children sit on the ring without
+    // colliding, so the exploration orbit is dense but collision-free.
+    const orbitRadius = orbitRadiusFor(parentRadius, childrenSorted.length);
+    const step =
+      childrenSorted.length > 1 ? (2 * Math.PI) / childrenSorted.length : 0;
+    const startOff = rng();
+    childrenSorted.forEach((child, i) => {
+      const prev = previousPos.get(child.id);
+      const sig = signatureNow.get(child.id)!;
+      if (prev && nodeSignatureCompat(prev, sig)) {
+        pos.set(child.id, { x: prev.x, y: prev.y });
+        angleOf.set(child.id, prev.angle);
+        offsetOf.set(child.id, prev.radiusOffset);
+        reused.add(child.id);
+        return;
+      }
+      const angle = startOff * 2 * Math.PI + step * i;
+      const px = parentCenter.x + Math.cos(angle) * orbitRadius;
+      const py = parentCenter.y + Math.sin(angle) * orbitRadius;
+      pos.set(child.id, { x: px, y: py });
+      angleOf.set(child.id, angle);
+      offsetOf.set(child.id, orbitRadius);
+    });
+  }
+
+  /* ---- Root pinned. ---- */
+  pos.set(rootId, { x: 0, y: 0 });
+  angleOf.set(rootId, 0);
+  offsetOf.set(rootId, 0);
+
+  /* ---- Collision relaxation (deterministic, fixed iterations). ---- */
+  const allOrdered = [root, ...nodes.filter((n) => n.id !== rootId)].sort((a, b) =>
+    a.id.localeCompare(b.id),
+  );
+  const ITERATIONS = 48;
+  for (let iter = 0; iter < ITERATIONS; iter += 1) {
+    for (let i = 0; i < allOrdered.length; i += 1) {
+      const a = allOrdered[i]!;
+      for (let j = i + 1; j < allOrdered.length; j += 1) {
+        const b = allOrdered[j]!;
+        const pa = pos.get(a.id)!;
+        const pb = pos.get(b.id)!;
+        const dx = pb.x - pa.x;
+        const dy = pb.y - pa.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+        const ar = STAR_GRAPH_RADIUS[a.tier];
+        const br = STAR_GRAPH_RADIUS[b.tier];
+        const want = ar + br + padding;
+        if (d < want) {
+          // Incremental stability: reused/root nodes are anchors. New content
+          // flows AROUND unchanged clusters rather than shoving them aside, so
+          // an unrelated cluster does not visibly jump when another grows.
+          const aAnchor = a.id === rootId || reused.has(a.id);
+          const bAnchor = b.id === rootId || reused.has(b.id);
+          const ux = dx / d;
+          const uy = dy / d;
+          const overlap = want - d;
+          if (aAnchor && bAnchor) {
+            // Both previously placed — they should already be resolved; nudge
+            // each by half to converge any residual drift deterministically.
+            pa.x -= ux * overlap * 0.25;
+            pa.y -= uy * overlap * 0.25;
+            pb.x += ux * overlap * 0.25;
+            pb.y += uy * overlap * 0.25;
+          } else if (bAnchor) {
+            // Only a is free: push a away fully around the anchor b.
+            pa.x -= ux * overlap;
+            pa.y -= uy * overlap;
+          } else if (aAnchor) {
+            // Only b is free: push b away fully around the anchor a.
+            pb.x += ux * overlap;
+            pb.y += uy * overlap;
+          } else {
+            // Both free: share the displacement.
+            pa.x -= ux * overlap * 0.5;
+            pa.y -= uy * overlap * 0.5;
+            pb.x += ux * overlap * 0.5;
+            pb.y += uy * overlap * 0.5;
+          }
+        }
+      }
+    }
+    // Softly re-bind S agents back toward their parent orbit so the
+    // exploration ring reads as a ring while still letting separation win:
+    // pull halfway to the target radius each pass instead of snapping rigidly
+    // (a rigid snap can undo the collision separation and oscillate).
+    // Softly re-bind S agents back toward their parent orbit for the first few
+    // iterations (keeps the exploration ring aesthetic), then stop so later
+    // passes can fully separate S agents of different parents without the ring
+    // pull re-introducing overlap.
+    if (iter < 12) {
+      for (const [parentId, children] of sByParent) {
+        const parentCenter = pos.get(parentId);
+        if (!parentCenter) continue;
+        const parent = nodes.find((n) => n.id === parentId);
+        const parentRadius = parent ? STAR_GRAPH_RADIUS[parent.tier] : STAR_GRAPH_RADIUS.m;
+        const orbitRadius = orbitRadiusFor(parentRadius, children.length);
+        for (const child of children) {
+          if (reused.has(child.id)) continue;
+          const pc = pos.get(child.id)!;
+          const dx = pc.x - parentCenter.x;
+          const dy = pc.y - parentCenter.y;
+          const d = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+          if (d < orbitRadius * 0.5 || d > orbitRadius * 1.5) {
+            const scale = orbitRadius / d;
+            const tx = parentCenter.x + dx * scale;
+            const ty = parentCenter.y + dy * scale;
+            pc.x += (tx - pc.x) * 0.5;
+            pc.y += (ty - pc.y) * 0.5;
+          }
+        }
+      }
+    }
+  }
+
+  /* ---- Build final result records. ---- */
+  let moved = 0;
+  const nodeResults: StarGraphLayoutNodePosition[] = [];
+  for (const n of nodes) {
+    const p = pos.get(n.id)!;
+    const prev = previousPos.get(n.id);
+    const isReused = reused.has(n.id);
+    if (!isReused) moved += 1;
+    nodeResults.push({
+      id: n.id,
+      tier: n.tier,
+      x: Math.round(p.x * 100) / 100,
+      y: Math.round(p.y * 100) / 100,
+      radius: STAR_GRAPH_RADIUS[n.tier],
+      label: n.label,
+      clusterId: n.clusterId ?? null,
+      angle: angleOf.get(n.id) ?? 0,
+      radiusOffset: offsetOf.get(n.id) ?? 0,
+      parentId: n.parentId ?? null,
+    });
+    void prev;
+  }
+
+  /* ---- Cluster boundaries (bounding circle around members). ---- */
+  const clusters: StarGraphLayoutCluster[] = [];
+  for (const key of clusterKeys) {
+    const members = byCluster.get(key)!;
+    const memberIds = members.map((n) => n.id).sort();
+    let cx = 0;
+    let cy = 0;
+    for (const m of members) {
+      const p = pos.get(m.id)!;
+      cx += p.x;
+      cy += p.y;
+    }
+    cx /= members.length;
+    cy /= members.length;
+    let maxR = 0;
+    for (const m of members) {
+      const p = pos.get(m.id)!;
+      const d = dist(cx, cy, p.x, p.y);
+      const ext = d + STAR_GRAPH_RADIUS[m.tier] + m.label.halfWidth * 0.5 + 12;
+      if (ext > maxR) maxR = ext;
+    }
+    clusters.push({
+      clusterId: key,
+      x: Math.round(cx * 100) / 100,
+      y: Math.round(cy * 100) / 100,
+      radius: Math.ceil(maxR),
+      memberIds,
+    });
+  }
+
+  /* ---- Edges: endpoints snapped to each circle's perimeter. ---- */
+  const byPosResult = new Map(nodeResults.map((n) => [n.id, n]));
+  const edges: StarGraphLayoutEdge[] = [];
+  for (const rel of relations) {
+    const from = byPosResult.get(rel.fromNodeId);
+    const to = byPosResult.get(rel.toNodeId);
+    if (!from || !to) continue;
+    const ep = circleEdgeEndpoints(
+      from.x, from.y, from.radius,
+      to.x, to.y, to.radius,
+    );
+    edges.push({
+      id: rel.id,
+      fromNodeId: rel.fromNodeId,
+      toNodeId: rel.toNodeId,
+      kind: rel.kind,
+      from: ep.from,
+      to: ep.to,
+    });
+  }
+
+  return {
+    nodes: nodeResults,
+    edges,
+    clusters,
+    rootId,
+    version,
+    keyByNode: signatureNow,
+    stats: { reused: reused.size, moved, total },
+  };
+}
+
+/** Whether a previous node position is reusable for the current signature. */
+function nodeSignatureCompat(
+  prev: StarGraphLayoutNodePosition,
+  currentSig: string,
+): boolean {
+  const prevSig = `${prev.id}|${prev.tier}|${prev.clusterId ?? ""}|${prev.parentId ?? ""}`;
+  return prevSig === currentSig;
+}
+

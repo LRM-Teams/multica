@@ -7,8 +7,8 @@
 # Install CLI + provision self-host server:
 #   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 #
-# Install the current prerelease:
-#   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha
+# Install the release recommended by the test environment:
+#   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version test
 #
 # Install one exact immutable release:
 #   curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.5.0-alpha.3
@@ -31,6 +31,7 @@ REPO_WEB_URL="https://github.com/LRM-Teams/multica"
 MANIFEST_BASE_URL="${MULTICA_RELEASE_MANIFEST_BASE_URL:-https://cdn.leagent.me/computer}"
 RELEASE_SELECTOR="${MULTICA_VERSION:-latest}"
 RELEASE_VERSION=""
+RELEASE_ENVIRONMENT=""
 RELEASE_MANIFEST_PATH=""
 INSTALL_SCRIPT_URL="${MANIFEST_BASE_URL}/install.sh"
 POWERSHELL_INSTALL_SCRIPT_URL="${MANIFEST_BASE_URL}/install.ps1"
@@ -62,23 +63,24 @@ command_exists() { command -v "$1" >/dev/null 2>&1; }
 
 configure_release_selector() {
   case "$RELEASE_SELECTOR" in
-    latest|alpha)
+    latest|test)
       RELEASE_VERSION=""
       if [ "$RELEASE_SELECTOR" = "latest" ]; then
-        RELEASE_MANIFEST_PATH="manifest.json"
+        RELEASE_ENVIRONMENT="production"
       else
-        RELEASE_MANIFEST_PATH="alpha.json"
+        RELEASE_ENVIRONMENT="test"
       fi
+      RELEASE_MANIFEST_PATH="metainfo.json"
       ;;
     v[0-9]*.[0-9]*.[0-9]*)
       if [[ ! "$RELEASE_SELECTOR" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
-        fail "Invalid --version '$RELEASE_SELECTOR'; use latest, alpha, or vX.Y.Z[-(alpha|beta|rc).N]."
+        fail "Invalid --version '$RELEASE_SELECTOR'; use latest, test, or vX.Y.Z[-(alpha|beta|rc).N]."
       fi
       RELEASE_VERSION="$RELEASE_SELECTOR"
       RELEASE_MANIFEST_PATH="${RELEASE_VERSION#v}/manifest.json"
       ;;
     *)
-      fail "Invalid --version '$RELEASE_SELECTOR'; use latest, alpha, or vX.Y.Z[-(alpha|beta|rc).N]."
+      fail "Invalid --version '$RELEASE_SELECTOR'; use latest, test, or vX.Y.Z[-(alpha|beta|rc).N]."
       ;;
   esac
 }
@@ -151,6 +153,49 @@ print(data.get("tag") or "")' "$file" ;;
   esac
 }
 
+select_environment_manifest() {
+  local source_file="$1" destination_file="$2" environment="$3" tool
+  tool="$(json_tool)"
+  case "$tool" in
+    jq)
+      jq -e --arg environment "$environment" \
+        'if .schema_version != 1 then error("unsupported release metainfo schema") else .environments[$environment] // error("missing release environment") end' \
+        "$source_file" >"$destination_file"
+      ;;
+    python3)
+      python3 -c 'import json,sys
+data = json.load(open(sys.argv[1]))
+if data.get("schema_version") != 1:
+    raise SystemExit("unsupported release metainfo schema")
+environment = data.get("environments", {}).get(sys.argv[3])
+if not environment:
+    raise SystemExit("missing release environment")
+json.dump(environment, open(sys.argv[2], "w"))' \
+        "$source_file" "$destination_file" "$environment"
+      ;;
+    *) fail "Parsing release metainfo requires jq or python3 to be installed." ;;
+  esac
+}
+
+download_selected_manifest() {
+  local destination_file="$1" source_file
+  if [ -z "$RELEASE_ENVIRONMENT" ]; then
+    curl -fsSL "$MANIFEST_BASE_URL/$RELEASE_MANIFEST_PATH" -o "$destination_file"
+    return
+  fi
+
+  source_file="$(mktemp)"
+  if ! curl -fsSL "$MANIFEST_BASE_URL/metainfo.json" -o "$source_file"; then
+    rm -f "$source_file"
+    return 1
+  fi
+  if ! select_environment_manifest "$source_file" "$destination_file" "$RELEASE_ENVIRONMENT"; then
+    rm -f "$source_file" "$destination_file"
+    return 1
+  fi
+  rm -f "$source_file"
+}
+
 validate_selected_manifest_tag() {
   local tag="$1"
   case "$RELEASE_SELECTOR" in
@@ -158,9 +203,9 @@ validate_selected_manifest_tag() {
       [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
         fail "The latest manifest must point to a stable vX.Y.Z release, got '$tag'."
       ;;
-    alpha)
+    test|alpha)
       [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]] ||
-        fail "The alpha channel manifest must point to an alpha.N, beta.N, or rc.N release, got '$tag'."
+        fail "The test environment must point to an alpha.N, beta.N, or rc.N release, got '$tag'."
       ;;
     *)
       [ "$tag" = "$RELEASE_VERSION" ] ||
@@ -227,9 +272,9 @@ install_cli_binary() {
 
   local manifest_file
   manifest_file=$(mktemp)
-  if ! curl -fsSL "$MANIFEST_BASE_URL/$RELEASE_MANIFEST_PATH" -o "$manifest_file"; then
+  if ! download_selected_manifest "$manifest_file"; then
 		rm -f "$manifest_file"
-		fail "Could not fetch the release manifest from ${MANIFEST_BASE_URL}/${RELEASE_MANIFEST_PATH}. Check your network connection."
+		fail "Could not resolve the selected release from ${MANIFEST_BASE_URL}/${RELEASE_MANIFEST_PATH}. Check your network connection and release metadata."
   fi
 
   local latest platform url sha256
@@ -385,7 +430,7 @@ print_daemon_adoption_guidance() {
 get_latest_version() {
   local manifest_file tag
   manifest_file=$(mktemp)
-	if ! curl -fsSL "$MANIFEST_BASE_URL/$RELEASE_MANIFEST_PATH" -o "$manifest_file" 2>/dev/null; then
+	if ! download_selected_manifest "$manifest_file" 2>/dev/null; then
     rm -f "$manifest_file"
     return
   fi

@@ -60,10 +60,10 @@ flowchart LR
 
 | 环境 | 服务 | 包 | 清单 |
 | --- | --- | --- | --- |
-| Production | `api.leagent.me` / `www.leagent.me` | stable | `/computer/manifest.json` |
-| Test | `https://82.157.184.89`；以后可通过部署配置切到 `test.leagent.me` | preview | `/computer/alpha.json` |
+| Production | `api.leagent.me` / `www.leagent.me` | stable | `/computer/metainfo.json` → `environments.production` |
+| Test | `https://82.157.184.89`；以后可通过部署配置切到 `test.leagent.me` | preview | `/computer/metainfo.json` → `environments.test` |
 
-Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url`、`daemon_app_url` 分别填入 Test API/Web origin。两个值今天可以相同，但协议允许以后拆成不同域名。页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令，Test 自动显示带完整环境和 origin 的命令。
+Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url`、`daemon_app_url` 分别填入 Test API/Web origin。两个值今天可以相同，但协议允许以后拆成不同域名。页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令；Test Web 在构建时从 `metainfo.json` 锁定精确 Computer tag，并显示精确安装版本及完整环境/origin 命令。部署回滚到旧 Web 镜像时，页面推荐版本也一起回滚。
 
 第一次连接环境：
 
@@ -171,25 +171,60 @@ canonical API 是 `DELETE /api/computers/{computerId}`。旧客户端使用的 `
 
 | 用户输入 | 读取路径 | 允许指向 | 用途 |
 | --- | --- | --- | --- |
-| Production / 省略 / `--version latest` | `/computer/manifest.json` | stable `vX.Y.Z` | 正式环境和全新安装默认值 |
-| Test / `--version alpha` | `/computer/alpha.json` | `alpha.N` / `beta.N` / `rc.N` | 测试环境和滚动预发布 |
+| Production / 省略 / `--version latest` | `/computer/metainfo.json` → `environments.production` | stable `vX.Y.Z` | 正式环境和全新安装默认值 |
+| Test / `--version test` | `/computer/metainfo.json` → `environments.test` | `alpha.N` / `beta.N` / `rc.N` | 手工跟随测试环境推荐版本 |
 | `--version v0.5.0-rc.2` | `/computer/0.5.0-rc.2/manifest.json` | 精确版本 | 复现、恢复和排障 |
-| 旧客户端 | `/computer/latest.json` | 根 manifest 的兼容别名 | 迁移期兼容；新安装器不走此主路径 |
+
+为什么不是“一个 JSON 包含所有东西”？因为两个文件回答的是两个不同问题：
+
+- `/computer/metainfo.json` 回答“Production 和 Test **现在推荐哪一版**”，所以它会变，但它是唯一会移动的版本目录。
+- `/computer/{version}/manifest.json` 回答“**这一版具体下载什么、SHA-256 是多少**”，所以它一旦发布就永远不能变。
+
+```mermaid
+flowchart LR
+  E["选择环境<br/>production / test"] --> M["读取唯一 metainfo.json"]
+  M -->|production| S["稳定 tag，例如 v0.4.23"]
+  M -->|test| A["预发布 tag，例如 v0.4.24-alpha.3"]
+  S --> I["读取 /{version}/manifest.json"]
+  A --> I
+  I --> V["按平台下载并校验 SHA-256"]
+```
+
+不再发布根目录 `manifest.json`、`latest.json`、`alpha.json`、`test.json`，也不再发布 `/vX.Y.Z/release.json`。`metainfo.json` 缺失或损坏时明确失败，不偷偷读取可能已经过期的第二套指针。
 
 ```bash
 # 默认稳定版
 curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 
-# 滚动预发布
-curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha
+# 手工跟随测试环境推荐版本
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version test
 
 # 精确版本
 curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.5.0-rc.2
 ```
 
-`--version` 只用于安装、恢复和排障。Computer 正常运行后，由当前环境固定选择 stable 或 preview。
+Test 页面默认展示部署时锁定的精确版本，而不是可移动的 `test` selector；这样复制命令和部署产物是同一代。`--version latest|test` 只用于手工跟随环境推荐，精确 tag 用于页面安装、复现、恢复和排障。不存在 `alpha` selector 或根目录 channel JSON fallback。
 
 ## 8. 升级契约
+
+### VersionStore 是什么
+
+`version_store.go` 管的是**这台电脑本地怎么安全保存和切换 Computer 版本**。它既不决定连 Production 还是 Test，也不保存 Workspace connection。大白话说，它是一个“小型本机版本仓库 + 原子换班器”：
+
+```text
+~/.local/share/multica/
+├── versions/
+│   ├── v0.4.23/
+│   │   ├── multica
+│   │   └── version.json       # 记录这份 binary 的 SHA-256
+│   └── v0.4.24-alpha.3/
+│       ├── multica
+│       └── version.json
+├── activation.json            # Active、Previous、generation
+└── activation.lock            # 防止两个升级同时切到一半
+```
+
+稳定的 launcher 路径不变，真正的版本放在 `versions/`。切换时使用 CAS 更新 `Active`，保留 `Previous`，所以安装新版本失败不会把原来能工作的 launcher 覆盖掉。
 
 升级不是覆盖一个文件，而是“验货 → 入库 → 接班 → 可回退”：
 
@@ -201,6 +236,16 @@ curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.
 6. 验证目标版本、successor 和全部 runtime 收敛；失败时切回 `Previous`。
 
 generation 是 resident 的任期号。新进程接班后，服务端会拒绝旧任期的迟到心跳和结果。
+
+### s144 为什么会报 `staged binary integrity mismatch`
+
+当时 `versions/v0.4.23/version.json` 记录的是正式 `v0.4.23` 的 SHA-256，但一次本机热修复直接覆盖了同名目录里的 `multica` binary，实际 SHA 已经不同。也就是说，“版本目录发布后不可变”这个前提被破坏了；VersionStore 拒绝拿一份身份写着 `v0.4.23`、内容却不是正式 `v0.4.23` 的文件当回滚点，这是正确的保护。
+
+现在的恢复路径是：只有新下载候选已经完整通过 archive 和 binary 校验时，安装器才能越过这份历史脏 Active；旧 `v0.4.23` 会被标记为不可回滚，新版本成为 Active。普通在线升级仍然失败关闭，不能把任何校验错误吞掉。
+
+### Raft 有没有 VersionStore
+
+Raft 没有同名的 `version_store.go` 或完全相同的目录模型，但它也有持久升级标记、程序替换、新进程接班证明和失败 rollback。两边解决的是同一个问题：**升级不能切一半，旧进程和新进程不能同时冒充 Active**。Multica 把这组职责集中成 VersionStore；Raft 把它分散在升级交接流程里。
 
 ## 9. 部署目标和当前事实
 

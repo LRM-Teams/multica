@@ -169,10 +169,16 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
   const environment = useConfigStore((state) => state.environment);
   const daemonServerUrl = useConfigStore((state) => state.daemonServerUrl);
   const daemonAppUrl = useConfigStore((state) => state.daemonAppUrl);
+  const computerVersion = useConfigStore((state) => state.computerVersion);
   const { installCmd, setupCmd } = daemonSetupCommands(
     mode,
     useWorkspaceSlug() ?? undefined,
-    { environment, serverUrl: daemonServerUrl, appUrl: daemonAppUrl },
+    {
+      environment,
+      serverUrl: daemonServerUrl,
+      appUrl: daemonAppUrl,
+      computerVersion,
+    },
   );
   return (
     <>

@@ -26,6 +26,8 @@ export interface CoreProviderProps {
   appUrl?: string;
   /** Service environment selected by the host application's build/runtime config. */
   environment?: ServiceEnvironment;
+  /** Exact Computer release recommended by this deployed environment. */
+  computerVersion?: string;
   /** WebSocket URL. Default: "ws://localhost:8080/ws". */
   wsUrl?: string;
   /** Storage adapter. Default: SSR-safe localStorage wrapper. */

@@ -16,16 +16,17 @@ describe("landingCLICommands", () => {
     });
   });
 
-  it("uses alpha and explicit endpoints in test", () => {
+  it("uses the deployment-pinned Computer release and explicit endpoints in test", () => {
     expect(
       landingCLICommands({
         environment: "test",
         appUrl: "https://82.157.184.89/",
         apiUrl: "https://82.157.184.89/",
+        computerVersion: "v0.4.24-alpha.2",
       }),
     ).toEqual({
       installCmd:
-        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha",
+        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.4.24-alpha.2",
       setupCmd:
         "multica setup --environment test --server-url https://82.157.184.89 --app-url https://82.157.184.89 /<workspace-slug>",
     });

@@ -23,14 +23,19 @@ func TestCachedRuntimeReleaseSourceUsesServerDispatchedBaseURL(t *testing.T) {
 		},
 	}
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/manifest.json" {
-			t.Errorf("release feed path = %q, want /manifest.json", r.URL.Path)
+		if r.URL.Path != "/metainfo.json" {
+			t.Errorf("release feed path = %q, want /metainfo.json", r.URL.Path)
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(manifest); err != nil {
-			t.Errorf("encode release manifest: %v", err)
+		if err := json.NewEncoder(w).Encode(cli.ReleaseMetainfo{
+			SchemaVersion: 1,
+			Environments: map[string]cli.ReleaseManifest{
+				"production": manifest,
+			},
+		}); err != nil {
+			t.Errorf("encode release metainfo: %v", err)
 		}
 	}))
 	defer feed.Close()

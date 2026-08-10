@@ -67,11 +67,12 @@ describe("CliInstallInstructions", () => {
     ).toBeTruthy();
   });
 
-  it("uses the alpha installer and explicit endpoints in test", () => {
+  it("uses the deployment-pinned installer and explicit endpoints in test", () => {
     configStore.getState().setDaemonConfig({
       environment: "test",
       daemonServerUrl: "https://82.157.184.89/",
       daemonAppUrl: "https://82.157.184.89/",
+      computerVersion: "v0.4.24-alpha.2",
     });
 
     render(
@@ -82,7 +83,7 @@ describe("CliInstallInstructions", () => {
 
     expect(
       screen.getByText(
-        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha",
+        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.4.24-alpha.2",
       ),
     ).toBeTruthy();
     expect(
@@ -92,8 +93,11 @@ describe("CliInstallInstructions", () => {
     ).toBeTruthy();
   });
 
-  it("uses the alpha PowerShell installer in test", () => {
-    configStore.getState().setDaemonConfig({ environment: "test" });
+  it("uses the deployment-pinned PowerShell installer in test", () => {
+    configStore.getState().setDaemonConfig({
+      environment: "test",
+      computerVersion: "v0.4.24-alpha.2",
+    });
 
     render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
@@ -104,7 +108,7 @@ describe("CliInstallInstructions", () => {
 
     expect(
       screen.getByText(
-        "& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version alpha",
+        "& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version v0.4.24-alpha.2",
       ),
     ).toBeTruthy();
   });

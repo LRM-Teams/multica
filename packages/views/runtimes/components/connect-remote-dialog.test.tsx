@@ -43,6 +43,7 @@ function resetConfigStore() {
     googleClientId: "",
     daemonServerUrl: "",
     daemonAppUrl: "",
+    computerVersion: "",
     workspaceCreationDisabled: false,
   });
 }
@@ -51,6 +52,7 @@ function renderDialog(config?: {
   environment?: "production" | "test";
   daemonServerUrl?: string;
   daemonAppUrl?: string;
+  computerVersion?: string;
 }) {
   resetConfigStore();
   if (config) {
@@ -101,10 +103,11 @@ describe("ConnectRemoteDialog", () => {
       environment: "test",
       daemonServerUrl: "https://api.test.leagent.me/",
       daemonAppUrl: "https://test.leagent.me/",
+      computerVersion: "v0.4.24-alpha.2",
     });
 
     expect(baseElement).toHaveTextContent(
-      "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version alpha",
+      "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.4.24-alpha.2",
     );
     expect(baseElement).toHaveTextContent(
       "multica setup --environment test --server-url https://api.test.leagent.me --app-url https://test.leagent.me /workspace-test",

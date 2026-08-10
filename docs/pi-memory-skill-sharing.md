@@ -163,7 +163,7 @@ The daemon runs local memory curation for workspaces that have an online Pi runt
 These paths are local Agent state. They are not direct upload sources and are not written by the evolution downflow in the current implementation:
 
 - `<agent_root>/memory/MEMORY.md`
-- `<agent_root>/memory/USER.md`
+- `<agent_root>/users/<member-id>/USER.md`
 - `<agent_root>/memory/STATE.md`
 - `<agent_root>/memory/REVIEW.md`
 - `<agent_root>/memory/daily/`

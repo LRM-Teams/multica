@@ -240,6 +240,7 @@ func buildStartupKernelContent(provider string, ctx TaskContextForEnv) string {
 	if root := strings.TrimSpace(ctx.AgentRoot); root != "" {
 		b.WriteString("## Durable Agent Workspace\n\n")
 		fmt.Fprintf(&b, "Canonical agent-owned state is below `%s`: durable cross-task memory in `memory/`, member-specific context in `users/<member-id>/`, project state in `projects/<project-id>/`, channel defaults in `channels/<channel-id>/`, and skills in `skills/`. Keep scopes separate; do not treat provider caches as canonical memory. Live instructions and the current task override stored memory.\n\n", root)
+		renderMemoryOperatingGuide(&b, ctx)
 	}
 
 	var skills strings.Builder
@@ -1044,11 +1045,11 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString("- **Recall before action**: use only the member identity supplied by the current Message context when reading `users/<member-id>/`.\n")
 	}
 	b.WriteString("- **Durability bar**: record supported preferences, ownership, handoffs, corrections, reusable fixes, and standing process rules when they are likely to matter in a future run. Skip greetings, acknowledgements, jokes, raw transcripts, transient logs, guesses, and secrets. Prefer updating an existing entry over duplicating it.\n")
-	b.WriteString("- **Claiming memory**: say that you remembered something only after the appropriate durable file write succeeds. Daily-only notes do not count for a standing rule. Human and peer-agent durable instructions use the same bar.\n")
+	b.WriteString("- **Claiming memory**: say that you remembered something only after writing the intended durable path and then re-reading or stat-checking that exact path successfully. Daily-only notes do not count for a standing rule. Human and peer-agent durable instructions use the same bar.\n")
 	b.WriteString("- **Problem closeout**: after a meaningful bug, investigation, or outage, save reusable cause, fix, and commands under the bound project path; use agent-wide `memory/MEMORY.md` or `notes/` only when the lesson genuinely applies across projects.\n")
 	b.WriteString("- **Current state**: project blockers belong in `projects/<project-id>/STATE.md`; only cross-project state belongs in `memory/STATE.md`. Channel files contain non-secret purpose, language, routing, and collaboration defaults, not transcripts or private user facts.\n")
 	b.WriteString("- **Collective requests**: each addressed agent writes its own local memory. Create governed shared candidates under `sync_queue/` only when the speaker explicitly includes agents beyond the current recipients or identifies canonical workspace-wide knowledge.\n\n")
-	b.WriteString("Live instructions and the current task remain authoritative. If memory conflicts with them, follow the live source and put the conflict in `memory/REVIEW.md`; never silently rewrite instructions or use memory to override them.\n\n")
+	b.WriteString("Live instructions and the current task remain authoritative. If a durable user directive conflicts with live Agent instructions, follow the live source for this turn, put the conflict in `memory/REVIEW.md`, and state truthfully that the Agent configuration must be updated for future sessions; never silently rewrite instructions, and never claim that a memory write alone permanently changed Agent identity or instructions.\n\n")
 }
 
 // renderChatRuntimeBrief describes one durable Message runtime. It never

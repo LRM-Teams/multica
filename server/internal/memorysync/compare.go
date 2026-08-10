@@ -285,17 +285,17 @@ func ScopeFromRelPath(relPath string) (scope, subjectID, kind string) {
 	parts := strings.Split(rel, "/")
 	base := path.Base(rel)
 	switch {
-	case strings.HasPrefix(rel, "users/") && len(parts) >= 3 && base == "USER.md":
+	case len(parts) == 3 && parts[0] == "users" && parts[1] != "" && base == "USER.md":
 		return "user", parts[1], KindPreference
-	case strings.HasPrefix(rel, "users/") && len(parts) >= 3 && base == "RELATIONSHIP.md":
+	case len(parts) == 3 && parts[0] == "users" && parts[1] != "" && base == "RELATIONSHIP.md":
 		return "user", parts[1], KindRelationship
-	case strings.HasPrefix(rel, "projects/") && len(parts) >= 3 && base == "MEMORY.md":
+	case len(parts) == 3 && parts[0] == "projects" && parts[1] != "" && base == "MEMORY.md":
 		return "project", parts[1], KindFact
-	case strings.HasPrefix(rel, "projects/") && len(parts) >= 3 && base == "DECISIONS.md":
+	case len(parts) == 3 && parts[0] == "projects" && parts[1] != "" && base == "DECISIONS.md":
 		return "project", parts[1], KindDecision
-	case strings.HasPrefix(rel, "projects/") && len(parts) >= 3 && base == "STATE.md":
+	case len(parts) == 3 && parts[0] == "projects" && parts[1] != "" && base == "STATE.md":
 		return "project", parts[1], KindState
-	case strings.HasPrefix(rel, "channels/") && len(parts) >= 3 && base == "CONTEXT.md":
+	case len(parts) == 3 && parts[0] == "channels" && parts[1] != "" && base == "CONTEXT.md":
 		return "channel", parts[1], KindContext
 	case rel == "memory/MEMORY.md":
 		return "agent", "", KindFact

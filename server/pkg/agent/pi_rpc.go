@@ -437,11 +437,12 @@ func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCI
 
 func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
 	type residentMessageInput struct {
-		ID      string          `json:"id"`
-		Target  string          `json:"target"`
-		Seq     int64           `json:"seq"`
-		Content string          `json:"content"`
-		Parts   json.RawMessage `json:"parts,omitempty"`
+		ID             string          `json:"id"`
+		Target         string          `json:"target"`
+		Seq            int64           `json:"seq"`
+		Content        string          `json:"content"`
+		Parts          json.RawMessage `json:"parts,omitempty"`
+		RuntimeContext string          `json:"runtime_context,omitempty"`
 	}
 	payload := make([]residentMessageInput, 0, len(messages))
 	for _, message := range messages {
@@ -456,14 +457,14 @@ func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
 			return "", errors.New("resident Message parts are invalid JSON")
 		}
 		payload = append(payload, residentMessageInput{
-			ID: message.ID, Target: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON,
+			ID: message.ID, Target: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON, RuntimeContext: message.RuntimeContext,
 		})
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal resident Message batch: %w", err)
 	}
-	return "Canonical Messages received while the runtime was idle. Treat these as Message context in target sequence order. " +
+	return "Canonical Messages received while the runtime was idle. Treat these as Message context in target sequence order. Each runtime_context is scoped only to its own Message; never carry a member's personal memory into another item in the batch. " +
 		"Reply visibly with `multica message send --target <target>` using each message's explicit target, or use `multica message react --message-id <id> --emoji \"...\"` for a pure acknowledgement. " +
 		"Final assistant output is not delivered. Do not run Issue commands unless a message asks for Issue or project work.\n" + string(raw), nil
 }

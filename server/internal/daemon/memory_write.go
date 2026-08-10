@@ -77,6 +77,7 @@ func hashFileContent(data []byte) string {
 func classifyMemoryWritePath(rel string) (scopeType, fileKey string, ok bool) {
 	rel = filepath.ToSlash(filepath.Clean(rel))
 	base := filepath.Base(rel)
+	parts := strings.Split(rel, "/")
 	switch {
 	case rel == "memory/MEMORY.md":
 		return "agent_global", "MEMORY", true
@@ -84,19 +85,17 @@ func classifyMemoryWritePath(rel string) (scopeType, fileKey string, ok bool) {
 		return "agent_state", "STATE", true
 	case strings.HasPrefix(rel, "memory/daily/") && strings.HasSuffix(base, ".md"):
 		return "agent_daily", "DAILY", true
-	case rel == "memory/USER.md":
+	case len(parts) == 3 && parts[0] == "users" && parts[1] != "" && base == "USER.md":
 		return "user", "USER", true
-	case strings.HasPrefix(rel, "users/") && base == "USER.md":
-		return "user", "USER", true
-	case strings.HasPrefix(rel, "users/") && base == "RELATIONSHIP.md":
+	case len(parts) == 3 && parts[0] == "users" && parts[1] != "" && base == "RELATIONSHIP.md":
 		return "user", "RELATIONSHIP", true
-	case strings.HasPrefix(rel, "channels/") && base == "CONTEXT.md":
+	case len(parts) == 3 && parts[0] == "channels" && parts[1] != "" && base == "CONTEXT.md":
 		return "channel", "CONTEXT", true
-	case strings.HasPrefix(rel, "projects/") && base == "MEMORY.md":
+	case len(parts) == 3 && parts[0] == "projects" && parts[1] != "" && base == "MEMORY.md":
 		return "project", "MEMORY", true
-	case strings.HasPrefix(rel, "projects/") && base == "STATE.md":
+	case len(parts) == 3 && parts[0] == "projects" && parts[1] != "" && base == "STATE.md":
 		return "project", "STATE", true
-	case strings.HasPrefix(rel, "projects/") && base == "DECISIONS.md":
+	case len(parts) == 3 && parts[0] == "projects" && parts[1] != "" && base == "DECISIONS.md":
 		return "project", "DECISIONS", true
 	case rel == "notes/agents.md":
 		return "agent_notes", "AGENTS", true

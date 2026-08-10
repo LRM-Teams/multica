@@ -18,6 +18,7 @@ func TestClassifyMemoryWritePath(t *testing.T) {
 		{"memory/STATE.md", "agent_state", "STATE", true, false},
 		{"memory/daily/2026-07-22.md", "agent_daily", "DAILY", true, false},
 		{"memory/REVIEW.md", "", "", false, true},
+		{"memory/USER.md", "", "", false, false},
 		{"users/u1/USER.md", "user", "USER", true, false},
 		{"users/u1/RELATIONSHIP.md", "user", "RELATIONSHIP", true, false},
 		{"channels/c1/CONTEXT.md", "channel", "CONTEXT", true, false},

@@ -23,7 +23,9 @@ func (d *Daemon) syncAgentMemoryCenter(ctx context.Context, task Task, _ []memor
 	}
 	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := d.reconcileAgentMemoryCenter(ctx, workspaceID, agentID, task.RuntimeID, task.ID, agentRoot); err != nil {
-		d.logger.Warn("memory center sync deferred", "agent_id", agentID, "runtime_id", task.RuntimeID, "error", err)
+		if d.logger != nil {
+			d.logger.Warn("memory center sync deferred", "agent_id", agentID, "runtime_id", task.RuntimeID, "error", err)
+		}
 	}
 }
 
@@ -34,7 +36,9 @@ func (d *Daemon) hydrateAgentMemoryCenter(ctx context.Context, workspaceID, agen
 		return
 	}
 	if err := d.reconcileAgentMemoryCenter(ctx, workspaceID, agentID, runtimeID, "", agentRoot); err != nil {
-		d.logger.Warn("memory center hydrate deferred", "agent_id", agentID, "runtime_id", runtimeID, "error", err)
+		if d.logger != nil {
+			d.logger.Warn("memory center hydrate deferred", "agent_id", agentID, "runtime_id", runtimeID, "error", err)
+		}
 	}
 }
 
@@ -116,7 +120,7 @@ func mergeBulletFile(existing string, bullets []string, header string) string {
 
 func defaultHeaderForRel(rel string) string {
 	switch {
-	case strings.HasSuffix(rel, "/USER.md") || rel == "memory/USER.md":
+	case strings.HasPrefix(rel, "users/") && strings.HasSuffix(rel, "/USER.md"):
 		return "# User Preferences\n\nDurable user preferences relevant to this Multica agent.\n"
 	case strings.HasSuffix(rel, "/RELATIONSHIP.md"):
 		return "# Relationship\n\nDurable collaboration preferences and relationship context.\n"

@@ -648,7 +648,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 			return fmt.Errorf("marshal resident Message parts: %w", err)
 		}
 		batch = append(batch, agent.ResidentMessage{
-			ID: message.ID, Target: message.Target, ReplyTarget: message.ReplyTarget, Seq: message.Seq, Content: message.Content, PartsJSON: partsJSON,
+			ID: message.ID, Target: message.Target, ReplyTarget: message.ReplyTarget, Seq: message.Seq, Content: message.Content, PartsJSON: partsJSON, RuntimeContext: message.RuntimeContext,
 		})
 	}
 	// Starting native acceptance is itself an admission state. Publish it

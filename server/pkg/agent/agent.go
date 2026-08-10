@@ -84,6 +84,9 @@ type ResidentMessage struct {
 	Seq         int64
 	Content     string
 	PartsJSON   json.RawMessage
+	// RuntimeContext is the current-turn identity and scoped-memory overlay
+	// rendered by the daemon for this specific canonical Message.
+	RuntimeContext string
 }
 
 // ResidentMessageInput is an optional capability for resident backends that

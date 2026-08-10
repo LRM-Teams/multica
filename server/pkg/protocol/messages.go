@@ -184,13 +184,34 @@ type TaskAvailablePayload struct {
 // ReplyTarget is the recipient-relative CLI target exposed to the runtime.
 // The projection deliberately has no delivery or read-state fields.
 type AgentMessageProjection struct {
-	ID          string        `json:"id"`
-	ChannelID   string        `json:"channel_id,omitempty"`
-	Target      string        `json:"target"`
-	ReplyTarget string        `json:"reply_target,omitempty"`
-	Seq         int64         `json:"seq"`
-	Content     string        `json:"content"`
-	Parts       []MessagePart `json:"parts,omitempty"`
+	ID            string                         `json:"id"`
+	ChannelID     string                         `json:"channel_id,omitempty"`
+	Target        string                         `json:"target"`
+	ReplyTarget   string                         `json:"reply_target,omitempty"`
+	Seq           int64                          `json:"seq"`
+	Content       string                         `json:"content"`
+	Parts         []MessagePart                  `json:"parts,omitempty"`
+	ChannelKind   string                         `json:"channel_kind,omitempty"`
+	ProjectID     string                         `json:"project_id,omitempty"`
+	InitiatorType string                         `json:"initiator_type,omitempty"`
+	InitiatorID   string                         `json:"initiator_id,omitempty"`
+	InitiatorName string                         `json:"initiator_name,omitempty"`
+	Memories      []AgentMessageMemoryProjection `json:"memories,omitempty"`
+	// RuntimeContext is daemon-local, freshly rendered immediately before a
+	// resident turn. It must never be persisted in coordinator state or sent
+	// by the Server because it may contain scoped memory.
+	RuntimeContext string `json:"-"`
+}
+
+// AgentMessageMemoryProjection is a server-filtered memory item applicable to
+// one canonical Message. In particular, user scope is selected against that
+// Message's attested member identity before it reaches the daemon.
+type AgentMessageMemoryProjection struct {
+	Name        string `json:"name"`
+	Content     string `json:"content"`
+	Scope       string `json:"scope"`
+	SubjectType string `json:"subject_type,omitempty"`
+	SubjectID   string `json:"subject_id,omitempty"`
 }
 
 // AgentDeliverPayload is an at-least-once transfer attempt to a single local

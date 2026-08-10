@@ -117,6 +117,45 @@ func TestClient_RuntimeScopedCallsUseRuntimeDaemonToken(t *testing.T) {
 	}
 }
 
+func TestClient_MemoryCenterCallsUseRuntimeDaemonToken(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if got := r.Header.Get("Authorization"); got != "Bearer mdt-runtime" {
+			t.Fatalf("Authorization for %s = %q, want runtime daemon token", r.URL.Path, got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/daemon/agent-memory-center/sync":
+			_, _ = w.Write([]byte(`{"accepted":0}`))
+		case "/api/daemon/agent-memory-center/hydrate":
+			_, _ = w.Write([]byte(`{"active":[],"conflicts":[],"deleted":[]}`))
+		case "/api/daemon/agent-memory-writes":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetToken("mul-profile")
+	c.SetRuntimeDaemonToken("rt-1", "mdt-runtime", time.Now().Add(time.Hour))
+	ctx := context.Background()
+	if _, err := c.SyncAgentMemoryCenter(ctx, AgentMemoryCenterSyncReport{AgentID: "agent-1", RuntimeID: "rt-1"}); err != nil {
+		t.Fatalf("SyncAgentMemoryCenter: %v", err)
+	}
+	if _, err := c.HydrateAgentMemoryCenter(ctx, AgentMemoryHydrateRequest{AgentID: "agent-1", RuntimeID: "rt-1"}); err != nil {
+		t.Fatalf("HydrateAgentMemoryCenter: %v", err)
+	}
+	if err := c.ReportAgentMemoryWrites(ctx, AgentMemoryWriteReport{AgentID: "agent-1", RuntimeID: "rt-1"}); err != nil {
+		t.Fatalf("ReportAgentMemoryWrites: %v", err)
+	}
+	if len(paths) != 3 {
+		t.Fatalf("memory endpoint calls = %v, want 3 calls", paths)
+	}
+}
+
 func TestClient_ResetAgentRuntimeSessionUsesRuntimeTokenAndOperationID(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

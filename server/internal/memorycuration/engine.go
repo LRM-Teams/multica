@@ -393,7 +393,6 @@ func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResul
 		"memory/daily/"+formatDate(opts.Until)+".md",
 		"memory/REVIEW.md",
 		"memory/MEMORY.md",
-		"memory/USER.md",
 		"memory/STATE.md",
 		"memory/SCRATCHPAD.md",
 		"sync_queue/memory-candidates.jsonl",
@@ -427,7 +426,6 @@ func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResul
 		files := stageFilesWithScoped(root.Root,
 			"memory/REVIEW.md",
 			"memory/MEMORY.md",
-			"memory/USER.md",
 			"memory/STATE.md",
 			"notes/relationship-map.md",
 			"notes/decisions.md",
@@ -594,7 +592,7 @@ func (e *Engine) runL1(root agentRoot, opts Options) (AgentRunResult, error) {
 		}
 		ar.EvidenceCollected += len(evidence)
 		content := dailyContent(root, d, workLog, scratch, evidence, opts.Now, opts.Timezone)
-		if out, agentErr := runStageAgent(opts, root, StageL1, stageLocalFiles(root.Root, "notes/work-log.md", "memory/SCRATCHPAD.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md"), evidence, nil); agentErr != nil {
+		if out, agentErr := runStageAgent(opts, root, StageL1, stageFilesWithScoped(root.Root, "notes/work-log.md", "memory/SCRATCHPAD.md", "memory/MEMORY.md", "memory/STATE.md"), evidence, nil); agentErr != nil {
 			return ar, agentErr
 		} else if strings.HasPrefix(strings.TrimSpace(out.Content), "#") {
 			content = strings.TrimSpace(out.Content) + "\n"
@@ -724,7 +722,7 @@ func (e *Engine) runL2(root agentRoot, opts Options) (AgentRunResult, error) {
 			continue
 		}
 		candidates := candidatesFromDaily(content, d)
-		if out, agentErr := runStageAgent(opts, root, StageL2, stageLocalFiles(root.Root, "memory/daily/"+formatDate(d)+".md", "notes/work-log.md", "memory/SCRATCHPAD.md", "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md"), nil, nil); agentErr != nil {
+		if out, agentErr := runStageAgent(opts, root, StageL2, stageFilesWithScoped(root.Root, "memory/daily/"+formatDate(d)+".md", "notes/work-log.md", "memory/SCRATCHPAD.md", "memory/REVIEW.md", "memory/MEMORY.md", "memory/STATE.md"), nil, nil); agentErr != nil {
 			return ar, agentErr
 		} else if agentCandidates := parseAgentL2Candidates(out.Content, d); len(agentCandidates) > 0 {
 			candidates = agentCandidates
@@ -828,7 +826,7 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			evidence, _ := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
-			if _, agentErr := runStageAgent(opts, root, StageL3, stageLocalFiles(root.Root, "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "notes/decisions.md"), evidence, nil); agentErr != nil {
+			if _, agentErr := runStageAgent(opts, root, StageL3, stageFilesWithScoped(root.Root, "memory/MEMORY.md", "memory/STATE.md", "notes/decisions.md"), evidence, nil); agentErr != nil {
 				return ar, agentErr
 			}
 			return ar, nil
@@ -891,7 +889,7 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 	var reviewErr error
 	if opts.StageAgent != nil {
 		evidence, _ := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
-		stageOut, err := runStageAgent(opts, root, StageL3, stageLocalFiles(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "notes/decisions.md"), evidence, inputs)
+		stageOut, err := runStageAgent(opts, root, StageL3, stageFilesWithScoped(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/STATE.md", "notes/decisions.md"), evidence, inputs)
 		if err != nil {
 			reviewErr = err
 		} else {
@@ -1146,6 +1144,12 @@ func (e *Engine) applyL3Decision(root agentRoot, opts Options, original reviewEn
 		if memoryEntry.ProposedDestination == "" {
 			return false, false, fmt.Errorf("reviewed memory has no destination")
 		}
+		// A legacy USER.md candidate has no stable member ID in this schema, so
+		// it cannot be placed safely. Keep it in REVIEW until a scoped self-review
+		// writes users/<member-id>/USER.md with attested provenance.
+		if filepath.Base(memoryEntry.ProposedDestination) == "USER.md" {
+			return false, false, nil
+		}
 		destPath := filepath.Join(root.Root, "memory", filepath.Base(memoryEntry.ProposedDestination))
 		mutation, promoted, duplicate, err := preparePromoteEntry(destPath, memoryEntry)
 		if err != nil {
@@ -1301,7 +1305,7 @@ func inferExpiresAt(body, sourceDate string) string {
 func (e *Engine) runL4(root agentRoot, opts Options) (AgentRunResult, error) {
 	ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
 	evidence, _ := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
-	if _, agentErr := runStageAgent(opts, root, StageL4, stageFilesWithScoped(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "notes/decisions.md"), evidence, nil); agentErr != nil {
+	if _, agentErr := runStageAgent(opts, root, StageL4, stageFilesWithScoped(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/STATE.md", "notes/decisions.md"), evidence, nil); agentErr != nil {
 		return ar, agentErr
 	}
 	reviewChanged, archived, err := sweepReview(filepath.Join(root.Root, "memory", "REVIEW.md"), opts.Now, opts.DryRun)
@@ -1316,7 +1320,7 @@ func (e *Engine) runL4(root agentRoot, opts Options) (AgentRunResult, error) {
 	}
 	ar.Changed = ar.Changed || stateChanged
 	ar.EntriesArchived += stateArchived
-	for _, name := range []string{"USER.md", "MEMORY.md", "STATE.md"} {
+	for _, name := range []string{"MEMORY.md", "STATE.md"} {
 		merged, err := dedupeBulletBlocks(filepath.Join(root.Root, "memory", name), opts.DryRun)
 		if err != nil {
 			return ar, err

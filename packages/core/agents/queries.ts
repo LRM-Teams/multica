@@ -63,8 +63,9 @@ export function agentTaskSnapshotOptions(wsId: string) {
 // Agent. It intentionally does not share a cache with the historical raw fact
 // timeline, so the hard cut can delete the latter without a compatibility path.
 export const runnerActivityKeys = {
+  root: (wsId: string) => ["workspaces", wsId, "runner-activity"] as const,
   all: (wsId: string, agentId: string) =>
-    ["workspaces", wsId, "runner-activity", agentId] as const,
+    [...runnerActivityKeys.root(wsId), agentId] as const,
 };
 
 export function runnerActivityOptions(wsId: string, agentId: string) {

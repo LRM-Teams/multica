@@ -7,9 +7,15 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
 import { channelKeys } from "../channels/queries";
+import { runnerActivityKeys } from "../agents/queries";
 import { researchKeys } from "../research/queries";
 import { voiceCallKeys } from "../voice-calls/queries";
-import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage } from "../types";
+import type {
+  ChannelMessage,
+  ChannelMessagesPage,
+  ChannelThreadMessagesPage,
+  RunnerActivityResponse,
+} from "../types";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
 vi.mock("../platform/workspace-storage", () => ({
@@ -106,10 +112,10 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (14 workspace-scoped + 6 per-issue prefixes + 1 channel-issues prefix
-    // (#562) + 1 session-scoped chat predicate + 1 workspaceKeys.list() = 23
+    // (15 workspace-scoped + 6 per-issue prefixes + 1 channel-issues prefix
+    // (#562) + 1 session-scoped chat predicate + 1 workspaceKeys.list() = 24
     // calls; squads key removed in LRM-582; autopilot key removed in LRM-1050)
-    expect(invalidateSpy).toHaveBeenCalledTimes(23);
+    expect(invalidateSpy).toHaveBeenCalledTimes(24);
 
     // Assert the KEY, not just the count (Ronan): the reconnect resync must
     // invalidate the channel Tasks board prefix (#562) so tasks changed while
@@ -120,6 +126,7 @@ describe("useRealtimeSync — ws instance change", () => {
       (call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey,
     );
     expect(invalidatedKeys).toContainEqual(channelKeys.issuesRoot());
+    expect(invalidatedKeys).toContainEqual(runnerActivityKeys.root("ws-1"));
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -134,6 +141,52 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws1 });
 
     expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("patches runner activity without invalidating agent queries", () => {
+    vi.useFakeTimers();
+    try {
+      const ws = createMockWs();
+      renderHook(() => useRealtimeSync(ws, stores), {
+        wrapper: createWrapper(qc),
+      });
+      const activity: RunnerActivityResponse = {
+        summary: { label: "Running command...", tone: "info", visibility: "visible" },
+        timeline: [{
+          id: "entry-1",
+          occurred_at: "2026-08-10T00:00:00Z",
+          title: "Running command...",
+          tone: "info",
+          body_kind: "text",
+          body: "Safe narrative",
+        }],
+      };
+      const key = runnerActivityKeys.all("ws-1", "agent-1");
+      qc.setQueryData(key, { summary: null, timeline: [] });
+
+      const activityRegistrations = (ws.on as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([eventName]) => eventName === "agent:activity",
+      );
+      const activityHandler = activityRegistrations[0]?.[1] as
+        | ((payload: unknown) => void)
+        | undefined;
+      const anyHandler = (ws.onAny as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        | ((message: { type: string; payload: unknown }) => void)
+        | undefined;
+
+      expect(activityRegistrations).toHaveLength(1);
+      expect(activityHandler).toBeDefined();
+      invalidateSpy.mockClear();
+      activityHandler?.({ agent_id: "agent-1", activity });
+      anyHandler?.({ type: "agent:activity", payload: { agent_id: "agent-1", activity } });
+      vi.advanceTimersByTime(100);
+
+      expect(qc.getQueryData(key)).toEqual(activity);
+      expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
+      expect(invalidateSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("invalidates chat, pins, labels, invitations, and session-scoped chat queries on ws instance change", () => {

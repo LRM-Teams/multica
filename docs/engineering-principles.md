@@ -149,6 +149,12 @@
 **为什么不能更强（被否的替代案要留档）**：按 href 抑制（任何内部 issue URL 都不弹 URL 卡）看似真③，**但手打的 markdown issue 链接没有 peek 卡，按 href 抑制会让它一个 hover 都不剩**——判据必须是"我自带卡"（组件属性），不是"我指向 issue"（href）。**档位停在哪，有时是语义正确性决定的，不是偷懒。**
 **「天花板」和「欠债」要分开标**：能升未升=欠债（照"能上一档就上一档"推进）；**再升会误伤=天花板**（记下被排除的更强方案和它误伤什么）——否则后人照着升档规则改它，正好踩进已排除过的坑。
 
+### 2.6 Runner Activity 完整投影实时写 Query cache，异常恢复才 REST — `可执行`（③⑤，owner: @Codex）
+- 服务端持久化后，`agent:activity` 事件会携带完整 `RunnerActivityResponse`（现有 wire field 为 `payload.activity`）；正常事件由 `useRealtimeSync` 的唯一订阅直接写对应 React Query cache，禁止再落入 `agent` 通用前缀失效，也禁止写后立即 invalidate。`useRunnerActivity` 只读 Query cache，不各自订阅 WS。
+- 断线恢复由中央 reconnect 对 `runnerActivityKeys.root(wsId)` 做一次前缀失效；TanStack Query 只立即 refetch active queries，未打开页面只标 stale。非法 payload 不覆盖已有 cache。
+- **为什么**：旧路径每条事件同时触发 agents、fleet rankings、runner-activity 三路 REST，并按页面/标签数量放大；WS 已携带同一服务端完整投影，正常事件再次 REST 没有新增权威性。
+- **物**：`runner-activity-updaters.ts`、`use-realtime-sync.ts` 的单一订阅/reconnect 前缀、`use-runner-activity.test.ts` 与 `use-realtime-sync-ws-instance.test.tsx`。两条回归均已先见红：一条捕获写后 invalidate，另一条捕获缺少专用 handler 导致的 `agent` 前缀失效。
+
 ## 3. 属性显示（跨面）
 
 ### 3.1 本家属性语法 — `可执行`（task #518）

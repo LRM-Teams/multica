@@ -19,6 +19,13 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
+vi.mock("@multica/core/agents", () => ({
+  useWorkspacePresenceMap: () => ({ byAgent: new Map() }),
+  useAgentPresenceDetail: () => ({ availability: "offline" }),
+  useRunnerActivity: () => ({ data: null }),
+  useRunnerActivitySummary: () => ({ data: null }),
+}));
+
 vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => ({
     queryKey: ["members"],

@@ -7,7 +7,7 @@ import { AppLink } from "../navigation/app-link";
 import { useNavigation } from "../navigation/context";
 import { HelpLauncher } from "./help-launcher";
 import { InboxNavIcon } from "./inbox-nav-icon";
-import { RuntimeAttentionAlert } from "./runtime-attention-alert";
+
 import {
   DndContext,
   PointerSensor,
@@ -57,7 +57,6 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
@@ -738,12 +737,6 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
                       </SidebarMenuButton>
-                      {item.key === "computers" && (
-                        <RuntimeAttentionAlert
-                          wsId={wsId}
-                          trigger={<SidebarMenuAction />}
-                        />
-                      )}
                     </SidebarMenuItem>
                   );
                 })}

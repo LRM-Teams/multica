@@ -10,6 +10,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUp, Loader2, Sparkles } from "lucide-react";
 import { useT } from "../i18n";
+import { NoteAIDiffPreview } from "./note-ai-diff";
 
 const PAGE_AI_CONTEXT_CHARS = 2400;
 const PROMPT_MAX_HEIGHT_PX = 96;
@@ -346,26 +347,22 @@ function EmptyLineAiMenu({
             </div>
           )}
           {reviewResult.action === "patch" && reviewResult.target ? (
-            <div className="grid max-h-72 gap-2 overflow-y-auto p-3.5 md:grid-cols-2">
-              <div>
-                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.page_ai.current_fragment)}</div>
-                <div className="whitespace-pre-wrap rounded-lg bg-muted/60 p-2.5 text-xs leading-5 text-muted-foreground">{reviewResult.target}</div>
-              </div>
-              <div>
-                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.page_ai.replacement_fragment)}</div>
-                <div className="whitespace-pre-wrap rounded-lg bg-primary/10 p-2.5 text-xs leading-5">{reviewResult.markdown}</div>
-              </div>
+            <div className="p-3.5">
+              <NoteAIDiffPreview
+                before={reviewResult.target}
+                after={reviewResult.markdown}
+                beforeLabel={t(($) => $.page_ai.current_fragment)}
+                afterLabel={t(($) => $.page_ai.replacement_fragment)}
+              />
             </div>
           ) : reviewResult.action === "replace_page" ? (
-            <div className="grid max-h-72 gap-2 overflow-y-auto p-3.5 md:grid-cols-2">
-              <div>
-                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.page_ai.current_page)}</div>
-                <div className="whitespace-pre-wrap rounded-lg bg-muted/60 p-2.5 text-xs leading-5 text-muted-foreground">{currentMarkdown || "(empty)"}</div>
-              </div>
-              <div>
-                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.page_ai.proposed_page)}</div>
-                <div className="whitespace-pre-wrap rounded-lg bg-primary/10 p-2.5 text-xs leading-5">{reviewResult.markdown}</div>
-              </div>
+            <div className="p-3.5">
+              <NoteAIDiffPreview
+                before={currentMarkdown}
+                after={reviewResult.markdown}
+                beforeLabel={t(($) => $.page_ai.current_page)}
+                afterLabel={t(($) => $.page_ai.proposed_page)}
+              />
             </div>
           ) : (
             <div className="max-h-64 overflow-y-auto whitespace-pre-wrap px-3.5 py-3 text-sm leading-6">

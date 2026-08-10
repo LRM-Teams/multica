@@ -8,6 +8,8 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   clearComputerUpdateDismiss,
+  computerUpdateCandidatesFingerprint,
+  computerUpdateToastContentKey,
   computerUpdateToastId,
   dismissComputerUpdate,
   isComputerUpdateDismissed,
@@ -107,9 +109,12 @@ function getOrCreateMap<K, V>(
  * Watches owned local runtimes and shows one sticky toast per machine that
  * can self-update. Mount once under the dashboard shell (web + desktop).
  *
- * Phase for in-flight upgrades is held in refs (not React state): toast
- * content is pushed imperatively via sonner, so component re-renders are not
- * required for progress updates.
+ * Performance notes:
+ * - In-flight phase lives in refs (no React state churn).
+ * - Candidate-list identity churn is ignored via fingerprint.
+ * - toast.custom is skipped when the content key for a toast id is unchanged
+ *   (runtime list refresh while a sticky prompt is already correct).
+ * - Upgrade poll only re-syncs when the polled status actually changes.
  */
 export function ComputerUpdateToastListener() {
   const wsId = useWorkspaceId();
@@ -126,7 +131,12 @@ export function ComputerUpdateToastListener() {
     string,
     ReturnType<typeof setInterval>
   > | null>(null);
-  const shownIdsRef = useRef<Set<string> | null>(null);
+  /** toastId → last published content key (skip identical re-push). */
+  const publishedContentRef = useRef<Map<string, string> | null>(null);
+  /** machineKey → last polled RuntimeUpdateStatus (skip identical poll ticks). */
+  const lastPollStatusRef = useRef<Map<string, RuntimeUpdateStatus> | null>(
+    null,
+  );
   const startUpdateRef = useRef<
     ((candidate: ComputerUpdateCandidate) => void) | null
   >(null);
@@ -139,6 +149,10 @@ export function ComputerUpdateToastListener() {
   const candidates = useMemo(
     () => listComputerUpdateCandidates(runtimes, userId),
     [runtimes, userId],
+  );
+  const candidatesFingerprint = useMemo(
+    () => computerUpdateCandidatesFingerprint(candidates),
+    [candidates],
   );
 
   const copy = useMemo<ToastCopy>(
@@ -178,10 +192,9 @@ export function ComputerUpdateToastListener() {
       clearInterval(timer);
       timers.delete(machineKey);
     }
+    lastPollStatusRef.current?.delete(machineKey);
   }, []);
 
-  // Cleanup all poll timers on unmount; capture the map so the cleanup
-  // does not read a mutated ref after unmount races.
   useEffect(() => {
     const timers = getOrCreateMap(pollTimersRef);
     return () => {
@@ -201,13 +214,11 @@ export function ComputerUpdateToastListener() {
       if (!wsId || !userId) return;
       const storage = browserStorage();
       const localByMachine = getOrCreateMap(localByMachineRef);
-      if (!shownIdsRef.current) shownIdsRef.current = new Set();
-      const shown = shownIdsRef.current;
-
-      const nextShown = new Set<string>();
+      const published = getOrCreateMap(publishedContentRef);
+      const nextPublished = new Map<string, string>();
       const c = copyRef.current;
 
-      const renderToast = (
+      const upsertToast = (
         machineKey: string,
         phase: ComputerUpdateToastPhase,
         opts: {
@@ -220,10 +231,33 @@ export function ComputerUpdateToastListener() {
         },
       ) => {
         const toastId = computerUpdateToastId(machineKey);
-        nextShown.add(toastId);
         const busy = phase === "updating";
         const laterTarget =
-          opts.candidate?.targetVersion ?? opts.local?.targetVersion;
+          opts.candidate?.targetVersion ?? opts.local?.targetVersion ?? null;
+        const actionRuntimeId =
+          opts.candidate?.runtimeId ?? opts.local?.runtimeId ?? null;
+        const actionDaemonId =
+          opts.candidate?.daemonId ?? opts.local?.daemonId ?? null;
+
+        const contentKey = computerUpdateToastContentKey({
+          phase,
+          title: opts.title,
+          versionLine: opts.versionLine,
+          progressLabel: opts.progressLabel,
+          errorLabel: opts.errorLabel,
+          updateLabel: c.update,
+          laterLabel: c.later,
+          retryLabel: c.retry,
+          dismissLabel: c.dismiss,
+          busy,
+          laterTarget,
+          actionRuntimeId,
+          actionDaemonId,
+        });
+        nextPublished.set(toastId, contentKey);
+
+        // Same id + same content already on screen — do not re-mount toast.
+        if (published.get(toastId) === contentKey) return;
 
         toast.custom(
           (id) => (
@@ -300,7 +334,7 @@ export function ComputerUpdateToastListener() {
 
       for (const [machineKey, local] of localByMachine.entries()) {
         if (local.phase === "updating" || local.phase === "failed") {
-          renderToast(machineKey, local.phase, {
+          upsertToast(machineKey, local.phase, {
             title:
               local.phase === "updating"
                 ? c.updatingTitle(local.machineTitle)
@@ -326,17 +360,19 @@ export function ComputerUpdateToastListener() {
           continue;
         }
         const current = candidate.currentVersion ?? c.versionUnknown;
-        renderToast(candidate.machineKey, "prompt", {
+        upsertToast(candidate.machineKey, "prompt", {
           title: c.promptTitle(candidate.machineTitle),
           versionLine: c.versionLine(current, candidate.targetVersion),
           candidate,
         });
       }
 
-      for (const id of shown) {
-        if (!nextShown.has(id)) toast.dismiss(id);
+      for (const id of published.keys()) {
+        if (!nextPublished.has(id)) {
+          toast.dismiss(id);
+        }
       }
-      shownIdsRef.current = nextShown;
+      publishedContentRef.current = nextPublished;
     },
     [userId, wsId],
   );
@@ -357,8 +393,9 @@ export function ComputerUpdateToastListener() {
     }
     clearPoll(candidate.machineKey);
     getOrCreateMap(localByMachineRef).delete(candidate.machineKey);
-    toast.dismiss(computerUpdateToastId(candidate.machineKey));
-    shownIdsRef.current?.delete(computerUpdateToastId(candidate.machineKey));
+    const toastId = computerUpdateToastId(candidate.machineKey);
+    toast.dismiss(toastId);
+    publishedContentRef.current?.delete(toastId);
     syncToasts(candidatesRef.current);
   };
 
@@ -376,6 +413,8 @@ export function ComputerUpdateToastListener() {
       daemonId: candidate.daemonId,
       runtimeId: candidate.runtimeId,
     });
+    // Force re-publish even if a prompt was showing for the same id.
+    publishedContentRef.current?.delete(toastId);
     syncToasts(candidatesRef.current);
 
     void (async () => {
@@ -391,6 +430,7 @@ export function ComputerUpdateToastListener() {
         }
 
         const timers = getOrCreateMap(pollTimersRef);
+        const lastStatus = getOrCreateMap(lastPollStatusRef);
         const timer = setInterval(() => {
           void (async () => {
             try {
@@ -399,6 +439,14 @@ export function ComputerUpdateToastListener() {
                 update.id,
               );
               const status = phaseToUpdateStatus(result.phase);
+              if (status == null) return;
+
+              // Skip no-op poll ticks (still "queued" / still "running").
+              if (lastStatus.get(candidate.machineKey) === status) {
+                if (!isTerminalMachineStatus(status)) return;
+              }
+              lastStatus.set(candidate.machineKey, status);
+
               if (status === "queued") {
                 localByMachine.set(candidate.machineKey, {
                   phase: "updating",
@@ -438,6 +486,7 @@ export function ComputerUpdateToastListener() {
                   daemonId: candidate.daemonId,
                   runtimeId: candidate.runtimeId,
                 });
+                publishedContentRef.current?.delete(toastId);
                 syncToasts(candidatesRef.current);
                 return;
               }
@@ -451,6 +500,7 @@ export function ComputerUpdateToastListener() {
                 );
               }
               localByMachine.delete(candidate.machineKey);
+              publishedContentRef.current?.delete(toastId);
               toast.custom(
                 (id) => (
                   <ComputerUpdateToast
@@ -469,7 +519,8 @@ export function ComputerUpdateToastListener() {
                   id: toastId,
                 },
               );
-              shownIdsRef.current?.delete(toastId);
+              // Success is auto-dismiss; do not keep it in the sticky published map.
+              publishedContentRef.current?.delete(toastId);
               syncToasts(candidatesRef.current);
             } catch {
               // ignore poll errors; next tick retries
@@ -498,15 +549,17 @@ export function ComputerUpdateToastListener() {
           daemonId: candidate.daemonId,
           runtimeId: candidate.runtimeId,
         });
+        publishedContentRef.current?.delete(toastId);
         syncToasts(candidatesRef.current);
       }
     })();
   };
 
-  // Re-sync when the candidate list or copy language changes.
+  // Only re-sync when eligibility fingerprint or locale copy changes —
+  // not on every runtime-list array identity churn.
   useEffect(() => {
-    syncToasts(candidates);
-  }, [candidates, copy, syncToasts]);
+    syncToasts(candidatesRef.current);
+  }, [candidatesFingerprint, copy, syncToasts]);
 
   return null;
 }

@@ -9,6 +9,7 @@ export * from "./use-runtime-health";
 export * from "./runtime-health-state";
 export * from "./update-status";
 export * from "./computer-update";
+export * from "./computer-update-sync";
 export * from "./cli-version";
 export * from "./channel-output-actions";
 export * from "./custom-pricing-store";

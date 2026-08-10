@@ -181,6 +181,10 @@ if grep -Fq -- 'Ensure release feed directory' .github/workflows/deploy.yml .git
 fi
 
 goreleaser_config="$(<.goreleaser.yml)"
+if ! grep -Fq -- 'prerelease: auto' <<<"$goreleaser_config"; then
+    echo ".goreleaser.yml must mark semantic prereleases automatically" >&2
+    exit 1
+fi
 if ! perl -0ne 'exit(!/- id: multica-darwin-arm64\n.*?goos:\s*\n\s*- darwin.*?goarch:\s*\n\s*- arm64/s)' <<<"$goreleaser_config"; then
   echo "Darwin arm64 daemon CLI target must stay enabled"
   exit 1

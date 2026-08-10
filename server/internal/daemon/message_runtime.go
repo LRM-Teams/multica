@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -93,11 +94,15 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
-	err := d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, func() {
+	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
+	if err != nil {
+		return err
+	}
+	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
 		d.emitMessageLifecycleActivity(agentID, runtimeID, protocol.ActivityKindWorking, "starting", "Starting")
 	}, func() {
-		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "runtime_handoff_accepted", "accepted", "")
-		d.emitMessageReceivedActivity(agentID, runtimeID, messages)
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
+		d.emitMessageReceivedActivity(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
 		d.emitResidentMessageRuntimeActivity(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64) {
@@ -105,7 +110,12 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		if turnErr != nil {
 			outcome, reasonCode = "failed", "provider_turn_failed"
 		}
-		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, messages, "provider_finished", outcome, reasonCode)
+		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "provider_finished", outcome, reasonCode)
+		if turnErr == nil && d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
+			reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			d.reportAgentMemoryWrites(reportCtx, memoryTask)
+			cancel()
+		}
 		// Raft-aligned turn end: never auto body-handoff Pending solely because
 		// the prior turn finished. If Pending remains, schedule a content-free
 		// Notice; body handoff waits for idle Accept→Flush, recovery Flush, or
@@ -135,6 +145,84 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		d.emitMessageTurnCompletionActivity(agentID, runtimeID, err)
 	}
 	return err
+}
+
+// prepareResidentMessageBatch hydrates the portable memory center once, then
+// renders identity and memory independently for every Message. Keeping the
+// overlay per item prevents a mixed-user batch from sharing personal memory.
+func (d *Daemon) prepareResidentMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) ([]protocol.AgentMessageProjection, Task, error) {
+	d.mu.Lock()
+	workspaceID := strings.TrimSpace(d.runtimeIndex[runtimeID].WorkspaceID)
+	d.mu.Unlock()
+	if workspaceID == "" {
+		return nil, Task{}, errors.New("runtime workspace is unavailable for resident Message memory")
+	}
+	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
+	if d.client != nil && strings.TrimSpace(d.client.baseURL) != "" {
+		d.hydrateAgentMemoryCenter(ctx, workspaceID, agentID, runtimeID, agentRoot)
+	}
+
+	prepared := make([]protocol.AgentMessageProjection, 0, len(messages))
+	for _, message := range messages {
+		messageTask := residentMessageMemoryTask(workspaceID, agentID, runtimeID, []protocol.AgentMessageProjection{message})
+		memories, _ := prepareExecutionMemory(agentRoot, messageTask, convertResidentMessageMemoriesForEnv(message.Memories))
+		message.RuntimeContext = execenv.RenderTurnContext(execenv.TaskContextForEnv{
+			MessageDelivery: true,
+			AgentID:         agentID,
+			AgentRoot:       agentRoot,
+			AgentMemories:   memories,
+			ChannelID:       message.ChannelID,
+			ProjectID:       message.ProjectID,
+			InitiatorType:   message.InitiatorType,
+			InitiatorID:     message.InitiatorID,
+			InitiatorName:   message.InitiatorName,
+		})
+		prepared = append(prepared, message)
+	}
+	return prepared, residentMessageMemoryTask(workspaceID, agentID, runtimeID, messages), nil
+}
+
+func residentMessageMemoryTask(workspaceID, agentID, runtimeID string, messages []protocol.AgentMessageProjection) Task {
+	task := Task{WorkspaceID: workspaceID, AgentID: agentID, RuntimeID: runtimeID}
+	var trigger strings.Builder
+	var initiatorType, initiatorID, initiatorName string
+	for i, message := range messages {
+		if i == 0 {
+			task.ID = message.ID
+			task.ChannelID = message.ChannelID
+			task.ChannelKind = message.ChannelKind
+			task.ProjectID = message.ProjectID
+			initiatorType, initiatorID, initiatorName = message.InitiatorType, message.InitiatorID, message.InitiatorName
+		} else if message.InitiatorType != initiatorType || message.InitiatorID != initiatorID {
+			initiatorType, initiatorID, initiatorName = "", "", ""
+		}
+		if trigger.Len() > 0 {
+			trigger.WriteByte('\n')
+		}
+		trigger.WriteString(message.Content)
+	}
+	task.ChatMessage = trigger.String()
+	task.InitiatorType, task.InitiatorID, task.InitiatorName = initiatorType, initiatorID, initiatorName
+	// The memory gate identifies group chat by a non-empty chat session. A
+	// canonical Message target is the stable surface boundary for this path.
+	if strings.EqualFold(task.ChannelKind, "group") && len(messages) > 0 {
+		task.ChatSessionID = messages[0].Target
+	}
+	return task
+}
+
+func convertResidentMessageMemoriesForEnv(memories []protocol.AgentMessageMemoryProjection) []execenv.MemoryContextForEnv {
+	if len(memories) == 0 {
+		return nil
+	}
+	result := make([]execenv.MemoryContextForEnv, 0, len(memories))
+	for _, memory := range memories {
+		result = append(result, execenv.MemoryContextForEnv{
+			Name: memory.Name, Content: memory.Content, Scope: memory.Scope,
+			SubjectType: memory.SubjectType, SubjectID: memory.SubjectID,
+		})
+	}
+	return result
 }
 
 func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID, activityKind, detailKind, narrative string) {

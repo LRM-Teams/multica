@@ -77,7 +77,7 @@ This plan adds a platform-owned Memory Curation Pipeline so memory becomes autom
 |---|---|---|
 | `memory/daily/YYYY-MM-DD.md` | Daily activity journal and evidence summary. | L1 Daily Recorder. |
 | `memory/REVIEW.md` | Candidate facts/preferences/statuses requiring promotion or conflict handling. | L2 Review Extractor and manual review tools. |
-| `memory/USER.md` | Durable user preferences and profile facts relevant to the agent. | L3 Promotion and L4 Curator. |
+| `users/<member-id>/USER.md` | Durable user preferences and profile facts, isolated by stable workspace member ID. | Scoped self-review and L4 Curator. |
 | `memory/MEMORY.md` | Durable agent/project/team decisions, stable operating knowledge, and role-specific facts. | L3 Promotion and L4 Curator. |
 | `memory/STATE.md` | Current dated state, temporary facts, quotas, future tasks, active initiatives. | L3 Promotion and L4 Curator. |
 | `memory/audit/*.jsonl` | Append-only run metadata, evidence IDs, hashes, and stage results. | All stages. |
@@ -430,7 +430,7 @@ Responsibilities:
 - summarize bounded evidence into daily files;
 - parse and update managed markdown sections safely;
 - generate candidate entries and promotion decisions;
-- mirror canonical memory documents into `agent_memory` with stable sync keys such as `memory/USER.md`;
+- mirror canonical memory documents into `agent_memory` with stable sync keys such as `users/<member-id>/USER.md`;
 - write JSONL audit rows;
 - emit `agent_activity_event` lifecycle events.
 

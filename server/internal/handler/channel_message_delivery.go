@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -66,6 +67,7 @@ func (h *Handler) deliverCanonicalMessageToChannelAgents(ctx context.Context, ch
 			continue
 		}
 		if ok {
+			h.attachCanonicalMessageMemories(ctx, ch.WorkspaceID, recipient.ID, &delivery.Message)
 			h.notifyCanonicalMessageDelivery(ctx, ch, recipient, delivery)
 		}
 	}
@@ -106,8 +108,55 @@ func persistCanonicalMessageDelivery(ctx context.Context, exec dbExecutor, ch Ch
 		DeliveryID: "message:" + message.ID + ":agent:" + agentID,
 		Message: protocol.AgentMessageProjection{
 			ID: message.ID, ChannelID: ch.ID, Target: target, ReplyTarget: replyTarget, Seq: message.Seq, Content: message.Content, Parts: message.Parts,
+			ChannelKind: ch.Kind, ProjectID: stringValue(ch.ProjectID),
+			InitiatorType: canonicalMessageInitiatorType(message.Type), InitiatorID: stringValue(message.AuthorID), InitiatorName: message.AuthorName,
 		},
 	}, true, nil
+}
+
+func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceID string, agentID pgtype.UUID, message *protocol.AgentMessageProjection) {
+	if h == nil || h.TaskService == nil || message == nil {
+		return
+	}
+	chatSessionID := ""
+	if strings.EqualFold(message.ChannelKind, "group") {
+		chatSessionID = message.Target
+	}
+	memories := h.TaskService.LoadAgentMemoriesForExecution(ctx, agentID, parseUUID(workspaceID), service.MemoryExecutionScope{
+		InitiatorType: message.InitiatorType,
+		InitiatorID:   message.InitiatorID,
+		ProjectID:     message.ProjectID,
+		ChannelID:     message.ChannelID,
+		ChannelKind:   message.ChannelKind,
+		ChatSessionID: chatSessionID,
+		MessageTexts:  []string{message.Content},
+		TaskType:      "channel_message",
+	})
+	message.Memories = make([]protocol.AgentMessageMemoryProjection, 0, len(memories))
+	for _, memory := range memories {
+		message.Memories = append(message.Memories, protocol.AgentMessageMemoryProjection{
+			Name: memory.Name, Content: memory.Content, Scope: memory.Scope,
+			SubjectType: memory.SubjectType, SubjectID: memory.SubjectID,
+		})
+	}
+}
+
+func canonicalMessageInitiatorType(authorType string) string {
+	switch strings.TrimSpace(authorType) {
+	case "user":
+		return "member"
+	case "agent":
+		return "agent"
+	default:
+		return ""
+	}
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func canonicalMessageDeliveryTarget(ch ChannelResponse, message ChannelMessageResponse) string {

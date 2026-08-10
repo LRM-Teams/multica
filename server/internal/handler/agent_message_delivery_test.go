@@ -117,6 +117,9 @@ func TestAgentMessageRecoveryPagesStableSequenceFenceAcrossTargets(t *testing.T)
 		if !strings.HasPrefix(message.ReplyTarget, "#message-recovery-") {
 			t.Fatalf("recovery Message reply target = %q, want reusable channel target", message.ReplyTarget)
 		}
+		if message.ChannelID == "" || message.ChannelKind != "group" || message.InitiatorType != "member" || message.InitiatorID != testUserID || message.InitiatorName != "Handler Test User" {
+			t.Fatalf("recovery Message lost attested scope/initiator: %+v", message)
+		}
 		gotIDs[message.ID] = true
 	}
 	for _, message := range before {
@@ -261,9 +264,9 @@ func TestCanonicalMessageProjectsAgentDeliveryEnvelope(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &message); err != nil {
 		t.Fatalf("decode canonical Message: %v", err)
 	}
-	want := protocol.AgentMessageProjection{ID: message.ID, Target: "channel:" + channelID, ReplyTarget: "#" + channelName, Seq: message.Seq, Content: "canonical body", Parts: message.Parts}
+	want := protocol.AgentMessageProjection{ID: message.ID, Target: "channel:" + channelID, ReplyTarget: "#" + channelName, Seq: message.Seq, Content: "canonical body", Parts: message.Parts, ChannelID: channelID, ChannelKind: "group", InitiatorType: "member", InitiatorID: testUserID}
 	got := notifier.payload.Message
-	if notifier.workspaceID != testWorkspaceID || notifier.daemonID != daemonID || notifier.payload.AgentID != agentID || notifier.payload.DeliveryID == "" || got.ID != want.ID || got.Target != want.Target || got.ReplyTarget != want.ReplyTarget || got.Seq != want.Seq || got.Content != want.Content || len(got.Parts) != len(want.Parts) {
+	if notifier.workspaceID != testWorkspaceID || notifier.daemonID != daemonID || notifier.payload.AgentID != agentID || notifier.payload.DeliveryID == "" || got.ID != want.ID || got.Target != want.Target || got.ReplyTarget != want.ReplyTarget || got.Seq != want.Seq || got.Content != want.Content || len(got.Parts) != len(want.Parts) || got.ChannelID != want.ChannelID || got.ChannelKind != want.ChannelKind || got.InitiatorType != want.InitiatorType || got.InitiatorID != want.InitiatorID {
 		t.Fatalf("delivery workspace=%q daemon=%q payload=%+v, want workspace=%q daemon=%q Message=%+v", notifier.workspaceID, notifier.daemonID, notifier.payload, testWorkspaceID, daemonID, want)
 	}
 	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))

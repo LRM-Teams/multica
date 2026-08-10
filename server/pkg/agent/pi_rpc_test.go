@@ -67,7 +67,7 @@ func fakePiRPCProcessScript() string {
 
 func TestFormatResidentMessageBatchCarriesDeliveryContract(t *testing.T) {
 	prompt, err := formatResidentMessageBatch([]ResidentMessage{{
-		ID: "message-1", Target: "dm:@alice", Seq: 1, Content: "hello",
+		ID: "message-1", Target: "dm:@alice", Seq: 1, Content: "hello", RuntimeContext: "## Current Task Initiator\n\nAlice",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +78,8 @@ func TestFormatResidentMessageBatchCarriesDeliveryContract(t *testing.T) {
 		"Final assistant output is not delivered",
 		"Do not run Issue commands unless",
 		`"target":"dm:@alice"`,
+		`"runtime_context":"## Current Task Initiator\n\nAlice"`,
+		"scoped only to its own Message",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("resident Message prompt missing %q\n--- prompt ---\n%s", want, prompt)

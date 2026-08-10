@@ -128,6 +128,8 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 	rows, err := h.DB.Query(ctx, `
 		WITH eligible AS (
 			SELECT m.id, m.channel_id, delivery.seq, m.content, m.parts, delivery.target,
+			       c.kind AS channel_kind, c.project_id, m.author_type, m.author_id,
+			       COALESCE(NULLIF(author_user.name, ''), NULLIF(author_agent.name, ''), '') AS author_name,
 			       CASE c.kind
 			         WHEN 'group' THEN '#' || c.name
 			         WHEN 'dm' THEN 'dm:@' || COALESCE(peer.handle, '')
@@ -139,6 +141,8 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 			FROM agent_message_delivery delivery
 			JOIN channel_message m ON m.id = delivery.message_id
 			JOIN channel c ON c.id = m.channel_id AND c.workspace_id = delivery.workspace_id
+			LEFT JOIN "user" author_user ON m.author_type = 'user' AND author_user.id = m.author_id
+			LEFT JOIN agent author_agent ON m.author_type = 'agent' AND author_agent.id = m.author_id
 			LEFT JOIN LATERAL (
 				SELECT COALESCE(NULLIF(u.name, ''), NULLIF(a.name, ''), '') AS handle
 				FROM channel_member cm
@@ -154,7 +158,7 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 			  AND delivery.agent_id = $2
 			  AND m.deleted_at IS NULL
 		)
-		SELECT id, channel_id, seq, content, parts, target, reply_target
+		SELECT id, channel_id, seq, content, parts, target, channel_kind, project_id, author_type, author_id, author_name, reply_target
 		FROM eligible
 		WHERE seq > COALESCE(($3::jsonb ->> target)::bigint, 0)
 		  AND seq <= COALESCE(($4::jsonb ->> target)::bigint, 0)
@@ -169,11 +173,11 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 
 	items := make([]protocol.AgentMessageProjection, 0, limit+1)
 	for rows.Next() {
-		var id, channelID pgtype.UUID
+		var id, channelID, projectID, authorID pgtype.UUID
 		var seq int64
-		var content, target, replyTarget string
+		var content, target, channelKind, authorType, authorName, replyTarget string
 		var rawParts []byte
-		if err := rows.Scan(&id, &channelID, &seq, &content, &rawParts, &target, &replyTarget); err != nil {
+		if err := rows.Scan(&id, &channelID, &seq, &content, &rawParts, &target, &channelKind, &projectID, &authorType, &authorID, &authorName, &replyTarget); err != nil {
 			return protocol.AgentRecoveryPage{}, err
 		}
 		if strings.TrimSpace(replyTarget) == "" {
@@ -185,9 +189,13 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 				return protocol.AgentRecoveryPage{}, fmt.Errorf("decode canonical Message parts: %w", err)
 			}
 		}
-		items = append(items, protocol.AgentMessageProjection{
+		projection := protocol.AgentMessageProjection{
 			ID: uuidToString(id), ChannelID: uuidToString(channelID), Target: target, ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
-		})
+			ChannelKind: channelKind, ProjectID: uuidToString(projectID),
+			InitiatorType: canonicalMessageInitiatorType(authorType), InitiatorID: uuidToString(authorID), InitiatorName: authorName,
+		}
+		h.attachCanonicalMessageMemories(ctx, identity.WorkspaceID, parseUUID(request.AgentID), &projection)
+		items = append(items, projection)
 	}
 	if err := rows.Err(); err != nil {
 		return protocol.AgentRecoveryPage{}, err

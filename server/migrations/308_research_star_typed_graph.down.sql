@@ -3,6 +3,20 @@
 DROP TABLE IF EXISTS research_graph_command;
 ALTER TABLE research_session DROP COLUMN IF EXISTS graph_version;
 
+-- 收敛前先把持有被移除取值的行重映射到仍保留的取值，否则真库回滚会因
+-- CHECK 约束变窄而失败（lint：check_constraint_lint_test 强制）。
+UPDATE research_graph_edge
+SET edge_type = 'supports'
+WHERE edge_type IN ('deepens', 'derived_from', 'merged_from', 'superseded_by', 'restart_of', 'invalidated_by');
+
+UPDATE research_graph_node
+SET status = 'abandoned'
+WHERE status IN ('superseded', 'invalidated', 'restarted', 'deprecated');
+
+UPDATE research_graph_node
+SET node_type = 'finding'
+WHERE node_type = 'conclusion';
+
 ALTER TABLE research_graph_edge DROP CONSTRAINT IF EXISTS research_graph_edge_edge_type_check;
 ALTER TABLE research_graph_edge ADD CONSTRAINT research_graph_edge_edge_type_check
   CHECK (edge_type IN ('leads_to', 'supports', 'contradicts', 'supersedes', 'abandons'));

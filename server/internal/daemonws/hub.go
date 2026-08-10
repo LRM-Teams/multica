@@ -103,6 +103,7 @@ type AgentMessageHandoffHandler func(ctx context.Context, identity ClientIdentit
 // connection for one daemon and Workspace. It owns no Activity semantics;
 // later intake tickets install typed handlers behind this fenced boundary.
 type WorkspaceRunnerHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID, eventType string, payload json.RawMessage) error
+type WorkspaceRunnerDisconnectHandler func(ctx context.Context, identity ClientIdentity, daemonInstanceID string) error
 
 type ReminderOwnerGoneError struct {
 	AgentID             string
@@ -130,21 +131,22 @@ type Hub struct {
 	byRuntime map[string]map[*client]bool
 	byRunner  map[workspaceRunnerKey]*client
 
-	hbMu                    sync.RWMutex
-	onHeartbeat             HeartbeatHandler
-	reminderMu              sync.RWMutex
-	onReminderSnapshot      ReminderSnapshotHandler
-	onReminderFire          ReminderFireAttemptHandler
-	onReminderLifecycle     ReminderOwnerLifecycleHandler
-	onReminderLifecycleAck  ReminderOwnerLifecycleAckHandler
-	onReminderProjection    ReminderProjectionHandler
-	onReminderProjectionAck ReminderProjectionAckHandler
-	deliveryMu              sync.RWMutex
-	onAgentDeliveryAck      AgentDeliveryAckHandler
-	onAgentRecovery         AgentRecoveryHandler
-	onAgentMessageHandoff   AgentMessageHandoffHandler
-	runnerMu                sync.RWMutex
-	onWorkspaceRunner       WorkspaceRunnerHandler
+	hbMu                        sync.RWMutex
+	onHeartbeat                 HeartbeatHandler
+	reminderMu                  sync.RWMutex
+	onReminderSnapshot          ReminderSnapshotHandler
+	onReminderFire              ReminderFireAttemptHandler
+	onReminderLifecycle         ReminderOwnerLifecycleHandler
+	onReminderLifecycleAck      ReminderOwnerLifecycleAckHandler
+	onReminderProjection        ReminderProjectionHandler
+	onReminderProjectionAck     ReminderProjectionAckHandler
+	deliveryMu                  sync.RWMutex
+	onAgentDeliveryAck          AgentDeliveryAckHandler
+	onAgentRecovery             AgentRecoveryHandler
+	onAgentMessageHandoff       AgentMessageHandoffHandler
+	runnerMu                    sync.RWMutex
+	onWorkspaceRunner           WorkspaceRunnerHandler
+	onWorkspaceRunnerDisconnect WorkspaceRunnerDisconnectHandler
 
 	agentDeliveryMu            sync.Mutex
 	pendingAgentDeliveries     map[string]*pendingAgentDelivery
@@ -215,6 +217,18 @@ func (h *Hub) SetWorkspaceRunnerHandler(fn WorkspaceRunnerHandler) {
 	h.runnerMu.Unlock()
 }
 
+// SetWorkspaceRunnerDisconnectHandler installs the lifecycle boundary used by
+// server-owned Agent Presence. The callback fires only when the disconnected
+// socket still owns the current ready daemon/workspace Runner slot.
+func (h *Hub) SetWorkspaceRunnerDisconnectHandler(fn WorkspaceRunnerDisconnectHandler) {
+	if h == nil {
+		return
+	}
+	h.runnerMu.Lock()
+	h.onWorkspaceRunnerDisconnect = fn
+	h.runnerMu.Unlock()
+}
+
 func (h *Hub) workspaceRunnerHandler() WorkspaceRunnerHandler {
 	if h == nil {
 		return nil
@@ -222,6 +236,15 @@ func (h *Hub) workspaceRunnerHandler() WorkspaceRunnerHandler {
 	h.runnerMu.RLock()
 	defer h.runnerMu.RUnlock()
 	return h.onWorkspaceRunner
+}
+
+func (h *Hub) workspaceRunnerDisconnectHandler() WorkspaceRunnerDisconnectHandler {
+	if h == nil {
+		return nil
+	}
+	h.runnerMu.RLock()
+	defer h.runnerMu.RUnlock()
+	return h.onWorkspaceRunnerDisconnect
 }
 
 func (h *Hub) agentDeliveryAckHandler() AgentDeliveryAckHandler {
@@ -851,6 +874,19 @@ func (h *Hub) WorkspaceRunnerConnectionCount(daemonID, workspaceID string) int {
 	return 1
 }
 
+// IsCurrentWorkspaceRunner is the live connection half of Agent Presence.
+// Matching the daemon instance prevents a launch owned by a replaced process
+// from borrowing the replacement socket's liveness.
+func (h *Hub) IsCurrentWorkspaceRunner(daemonID, workspaceID, daemonInstanceID string) bool {
+	if h == nil || daemonID == "" || workspaceID == "" || daemonInstanceID == "" {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
+	return c != nil && c.runnerDaemonInstanceID == daemonInstanceID
+}
+
 // NotifyWorkspaceRunner routes a command only to the current ready connection
 // for the exact daemon and Workspace. It is deliberately separate from the
 // legacy runtime fan-out route and remains dormant until the hard cut.
@@ -1070,15 +1106,25 @@ func (h *Hub) unregister(c *client) {
 			}
 		}
 	}
+	wasCurrentRunner := false
 	if c.runnerDaemonInstanceID != "" {
 		key := workspaceRunnerKey{daemonID: c.identity.DaemonID, workspaceID: c.identity.WorkspaceID}
 		if h.byRunner[key] == c {
+			wasCurrentRunner = true
 			delete(h.byRunner, key)
 		}
 	}
 	close(c.done)
 	total := len(h.clients)
 	h.mu.Unlock()
+
+	if wasCurrentRunner {
+		if handler := h.workspaceRunnerDisconnectHandler(); handler != nil {
+			if err := handler(context.Background(), c.identity, c.runnerDaemonInstanceID); err != nil {
+				slog.Warn("workspace runner disconnect rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "daemon_instance_id", c.runnerDaemonInstanceID)
+			}
+		}
+	}
 
 	M.DisconnectsTotal.Add(1)
 	M.ActiveConnections.Add(-1)

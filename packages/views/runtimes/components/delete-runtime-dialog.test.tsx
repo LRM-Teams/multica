@@ -69,15 +69,10 @@ vi.mock("@tanstack/react-query", async () => {
 vi.mock("@multica/core/agents", () => ({
   // Empty presence map keeps the cell renderers honest without dragging in
   // the full presence pipeline.
-  useWorkspacePresenceMap: () => ({ byAgent: new Map(), loading: false }),
-  useAgentPresenceDetail: () => ({
-    availability: "online",
-    workload: "idle",
-    runningCount: 0,
-    queuedCount: 0,
-    capacity: 1,
-  }),
+  useWorkspaceAgentPresence: () => ({ byAgent: new Map(), loading: false }),
+  useAgentPresence: () => "online",
   useRunnerActivity: () => ({ data: undefined }),
+  useRunnerActivitySummary: () => ({ data: undefined }),
 }));
 
 vi.mock("@multica/core/hooks", () => ({
@@ -118,8 +113,8 @@ vi.mock("./provider-logo", () => ({
 }));
 vi.mock("../../agents/presence", () => ({
   toLiveAvailability: (availability: string) => availability,
-  formatPresenceStatus: (presence: { availability: string }) =>
-    presence.availability === "online" ? "Online" : "Offline",
+  formatPresenceStatus: (presence: string) =>
+    presence === "online" ? "Online" : "Offline",
   presenceStatusVisual: () => ({ textClass: "" }),
   presenceStatusDotClass: () => "bg-success",
   availabilityConfig: {

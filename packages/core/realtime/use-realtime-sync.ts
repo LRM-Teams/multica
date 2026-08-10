@@ -21,9 +21,12 @@ import {
   agentRunCountsKeys,
   agentTasksKeys,
   runnerActivityKeys,
+  runnerActivitySummaryKeys,
 } from "../agents/queries";
 import { patchAgentTaskSnapshotStatus } from "../agents/task-snapshot-updaters";
 import { applyRunnerActivityRealtime } from "../agents/runner-activity-updaters";
+import { agentPresenceKeys } from "../agents/agent-presence";
+import { applyAgentPresenceRealtime } from "../agents/agent-presence-updaters";
 import { githubKeys } from "../github/queries";
 import { larkKeys } from "../lark/queries";
 import {
@@ -467,7 +470,9 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentActivityKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: runnerActivitySummaryKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: runnerActivityKeys.root(wsId) });
+    qc.invalidateQueries({ queryKey: agentPresenceKeys.workspace(wsId) });
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: voiceCallKeys.all(wsId) });
@@ -536,6 +541,10 @@ export function useRealtimeSync(
   // Main sync: onAny -> refreshMap with debounce
   useEffect(() => {
     if (!ws) return;
+    // Bind Presence events to the Workspace that owned this WS subscription.
+    // A late event from a client being torn down during Workspace switching
+    // must never be applied to the newly selected Workspace cache.
+    const presenceWorkspaceId = getCurrentWsId() ?? undefined;
 
     const refreshMap: Record<string, () => void> = {
       inbox: () => {
@@ -607,11 +616,8 @@ export function useRealtimeSync(
         // PR queries — the open issue detail page will refetch its own list.
         qc.invalidateQueries({ queryKey: ["github", "pull-requests"] });
       },
-      // Powers the agent presence cache: any task lifecycle change
-      // (dispatch / completed / failed / cancelled) refreshes the
-      // workspace-wide agent-task-snapshot query so per-agent presence
-      // reflects the change. task:message is NOT in this prefix path — it
-      // stays in specificEvents to avoid an invalidate storm during long runs.
+      // Task lifecycle changes update Workload/task projections only.
+      // Agent Presence is patched exclusively by `agent:presence` below.
       task: () => {
         const wsId = getCurrentWsId();
         if (!wsId) return;
@@ -629,8 +635,7 @@ export function useRealtimeSync(
         // (bounded resync); a just-completed run shows in the histogram within
         // that window or on focus, which is the correct latency budget for a
         // 30-day chart. This directly cuts the per-event refetch pressure on the
-        // activity query (the p95 target); presence stays live via the snapshot
-        // in-place patch above.
+        // activity query (the p95 target).
         // Per-agent task list (Activity tab "Recent work"). Prefix match
         // catches every agent's list — the per-agent detail key sits
         // under agentTasks/<wsId>/<agentId>.
@@ -660,8 +665,8 @@ export function useRealtimeSync(
     // lifecycle event. With many concurrent agents (and every connected client
     // doing the same), a 100ms window still let sustained task activity storm
     // those endpoints (agent-task-snapshot ran ~2.7s under that load). Coalesce
-    // `task` over a longer window so a burst collapses to one refetch; presence
-    // is not latency-critical to ~2s. Other prefixes stay snappy at 100ms.
+    // `task` over a longer window so a burst collapses to one refetch. Other
+    // prefixes stay snappy at 100ms.
     // (Immediate mitigation; the durable fix is WS-delta in-place snapshot
     // updates instead of event→full-refetch.)
     // `task-snapshot-newrow`: step② coalesces the single snapshot refetch that
@@ -712,6 +717,7 @@ export function useRealtimeSync(
       // bounded REST reconciliation path; normal events must not fan out into
       // agents, fleet rankings, or runner-activity refetches.
       "agent:activity",
+      "agent:presence",
       "reaction:added", "reaction:removed",
       "issue_reaction:added", "issue_reaction:removed",
       "subscriber:added", "subscriber:removed",
@@ -736,6 +742,17 @@ export function useRealtimeSync(
 
     const unsubAny = ws.onAny((msg) => {
       if (specificEvents.has(msg.type)) return;
+      if (
+        msg.type === "agent:created" ||
+        msg.type === "agent:archived" ||
+        msg.type === "agent:restored" ||
+        msg.type === "agent:deleted"
+      ) {
+        const wsId = getCurrentWsId();
+        if (wsId) {
+          qc.invalidateQueries({ queryKey: agentPresenceKeys.workspace(wsId) });
+        }
+      }
       const prefix = msg.type.split(":")[0] ?? "";
       const refresh = refreshMap[prefix];
       if (refresh) debouncedRefresh(prefix, refresh);
@@ -748,6 +765,10 @@ export function useRealtimeSync(
 
     const unsubAgentActivity = ws.on("agent:activity", (payload) => {
       applyRunnerActivityRealtime(qc, getCurrentWsId() ?? undefined, payload);
+    });
+
+    const unsubAgentPresence = ws.on("agent:presence", (payload) => {
+      applyAgentPresenceRealtime(qc, presenceWorkspaceId, payload);
     });
 
     const unsubIssueUpdated = ws.on("issue:updated", (p) => {
@@ -1383,6 +1404,7 @@ export function useRealtimeSync(
     return () => {
       unsubAny();
       unsubAgentActivity();
+      unsubAgentPresence();
       unsubIssueUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();

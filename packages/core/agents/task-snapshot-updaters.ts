@@ -14,7 +14,7 @@ const TERMINAL_STATUSES: ReadonlySet<AgentTask["status"]> = new Set([
  *
  * Replaces the previous amplifier where EVERY task event invalidated the whole
  * query and triggered a full-workspace refetch (×every connected client). The
- * snapshot is a raw `AgentTask[]` over which presence counts are derived
+ * snapshot is a raw `AgentTask[]` over which Workload counts are derived
  * client-side — `deriveWorkloadDetail` reads only `t.status` — so updating the
  * matching row's status is sufficient and O(1), with zero network traffic.
  *

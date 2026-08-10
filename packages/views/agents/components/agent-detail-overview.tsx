@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import type { Agent, AgentRuntime, AgentTask, AgentFleetRank } from "@multica/core/types";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
-import { agentTasksOptions } from "@multica/core/agents";
+import { agentTasksOptions, type AgentPresence } from "@multica/core/agents";
 import { resolveActorDisplayName, resolveActorHandle } from "@multica/core/identity";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -286,6 +286,7 @@ export function AgentDetailOverview({
   runtime,
   metric,
   fleet,
+  presence,
   canManage,
   canLifecycle,
   onHonor,
@@ -296,6 +297,7 @@ export function AgentDetailOverview({
   runtime: AgentRuntime | null;
   metric: AgentMetric;
   fleet?: AgentFleetRank;
+  presence: AgentPresence | "loading";
   canManage: boolean;
   canLifecycle: boolean;
   onHonor: () => void;
@@ -341,6 +343,7 @@ export function AgentDetailOverview({
             size={40}
             className={cn("shrink-0", isArchived && "opacity-50 grayscale")}
             showStatusDot={!isArchived}
+            agentPresence={presence}
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2">

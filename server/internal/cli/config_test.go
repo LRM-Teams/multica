@@ -252,14 +252,14 @@ func TestCLIConfig_EnvironmentSwitchRestoresIndependentSessions(t *testing.T) {
 	t.Setenv("HOME", tmp)
 
 	cfg := CLIConfig{}
-	production, err := NewServiceTarget("production", "")
+	production, err := NewServiceTarget("production", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.PutServiceEnvironment(production)
 	cfg.Token = "prod-session"
 	cfg.WorkspaceID = "ws-prod"
-	testTarget, err := NewServiceTarget("test", "https://test.leagent.me")
+	testTarget, err := NewServiceTarget("test", "https://api.test.leagent.me", "https://test.leagent.me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestCLIConfig_EnvironmentSwitchRestoresIndependentSessions(t *testing.T) {
 
 func TestCLIConfig_ActivateRequiresConfiguredEnvironment(t *testing.T) {
 	cfg := CLIConfig{}
-	production, err := NewServiceTarget("production", "")
+	production, err := NewServiceTarget("production", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

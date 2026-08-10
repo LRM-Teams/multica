@@ -18,6 +18,7 @@ import { AuthInitializer } from "./auth-initializer";
 import { HonorPresenceHeartbeat } from "./honor-presence-heartbeat";
 import type { CoreProviderProps, ClientIdentity } from "./types";
 import type { StorageAdapter } from "../types/storage";
+import { configStore, type ServiceEnvironment } from "../config";
 
 // Module-level singletons — created once at first render, never recreated.
 // Vite HMR preserves module-level state, so these survive hot reloads.
@@ -26,6 +27,8 @@ let authStore: ReturnType<typeof createAuthStore>;
 let chatStore: ReturnType<typeof createChatStore>;
 function initCore(
   apiBaseUrl: string,
+  appUrl: string,
+  environment: ServiceEnvironment,
   storage: StorageAdapter,
   onLogin?: () => void,
   onLogout?: () => void,
@@ -33,6 +36,13 @@ function initCore(
   identity?: ClientIdentity,
 ) {
   if (initialized) return;
+
+  configStore.setState({
+    environment,
+    ...(appUrl.trim()
+      ? { daemonAppUrl: appUrl.trim().replace(/\/+$/, "") }
+      : {}),
+  });
 
   const api = new ApiClient(apiBaseUrl, {
     logger: createLogger("api"),
@@ -66,6 +76,8 @@ function initCore(
 export function CoreProvider({
   children,
   apiBaseUrl = "",
+  appUrl = "",
+  environment = "production",
   wsUrl = "ws://localhost:8080/ws",
   storage = defaultStorage,
   cookieAuth,
@@ -76,10 +88,31 @@ export function CoreProvider({
   resources,
   localeAdapter,
 }: CoreProviderProps) {
-  // Initialize singletons on first render only. Dependencies are read-once:
-  // apiBaseUrl, storage, and callbacks are set at app boot and never change at runtime.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useMemo(() => initCore(apiBaseUrl, storage, onLogin, onLogout, cookieAuth, identity), []);
+  // Initialize singletons on first render only. initCore's guard makes later
+  // calls no-ops if a host recreates one of these boot-time values.
+  useMemo(
+    () =>
+      initCore(
+        apiBaseUrl,
+        appUrl,
+        environment,
+        storage,
+        onLogin,
+        onLogout,
+        cookieAuth,
+        identity,
+      ),
+    [
+      apiBaseUrl,
+      appUrl,
+      environment,
+      storage,
+      onLogin,
+      onLogout,
+      cookieAuth,
+      identity,
+    ],
+  );
 
   // I18nProvider wraps everything else: server and client must use the same
   // (locale, resources) to avoid hydration mismatch. Language switching goes

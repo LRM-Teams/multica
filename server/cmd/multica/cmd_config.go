@@ -93,7 +93,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	// Keep this lower-level setting for server administration and older clients,
 	// but do not advertise the retired profile/self-host Computer lifecycle.
 	if key == "server_url" && cfg.ServerURL == "" && value != "" {
-		fmt.Fprintln(os.Stderr, "Note: the supported Computer flow is `multica setup /<workspace>` for production, or `multica setup --environment test --test-url <origin> /<workspace>` for test. `config set server_url` does not create a Workspace connection or start the Computer.")
+		fmt.Fprintln(os.Stderr, "Note: the supported Computer flow is `multica setup /<workspace>` for production, or `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>` for test. `config set server_url` does not create a Workspace connection or start the Computer.")
 	}
 
 	switch key {

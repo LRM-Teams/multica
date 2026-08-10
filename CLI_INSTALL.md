@@ -241,7 +241,7 @@ Expected output should show the authenticated user and server URL.
   and enter the printed device code.
 - Production is fixed to the leagent.me service. For an operator-controlled
   test service, rerun setup with
-  `--environment test --test-url <http(s)-origin>`; arbitrary custom production
+  `--environment test --server-url <api-origin> --app-url <app-origin>`; arbitrary custom production
   origins are not supported.
 
 ---

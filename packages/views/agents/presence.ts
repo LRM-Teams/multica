@@ -8,8 +8,7 @@ import {
 } from "lucide-react";
 import type { TFunction } from "i18next";
 import type {
-  AgentAvailability,
-  AgentPresenceDetail,
+  AgentPresence,
   Workload,
 } from "@multica/core/agents";
 
@@ -38,13 +37,13 @@ export type LiveAvailability = "online" | "offline";
  * Normalize optional availability into the live Online/Offline axis.
  */
 export function toLiveAvailability(
-  availability: AgentAvailability | null | undefined,
+  presence: AgentPresence | null | undefined,
 ): LiveAvailability | null {
-  if (!availability) return null;
-  return availability;
+  if (!presence) return null;
+  return presence;
 }
 
-export const availabilityConfig: Record<AgentAvailability, AvailabilityVisual> = {
+export const availabilityConfig: Record<AgentPresence, AvailabilityVisual> = {
   online: {
     label: "Online",
     dotClass: "bg-success",
@@ -97,10 +96,10 @@ export const workloadOrder: Workload[] = ["working", "queued", "idle"];
 export type PresenceStatusToken = { kind: "availability"; value: LiveAvailability };
 
 export function presenceStatusToken(
-  presence: AgentPresenceDetail | "loading" | null | undefined,
+  presence: AgentPresence | "loading" | null | undefined,
 ): PresenceStatusToken | null {
   if (!presence || presence === "loading") return null;
-  const live = toLiveAvailability(presence.availability);
+  const live = toLiveAvailability(presence);
   if (!live) return null;
   return { kind: "availability", value: live };
 }
@@ -110,7 +109,7 @@ export function presenceStatusToken(
  * Returns null while loading or unknown.
  */
 export function formatPresenceStatus(
-  presence: AgentPresenceDetail | "loading" | null | undefined,
+  presence: AgentPresence | "loading" | null | undefined,
   t: TFunction<"agents">,
 ): string | null {
   const token = presenceStatusToken(presence);
@@ -120,7 +119,7 @@ export function formatPresenceStatus(
 
 /** Visual config for the live Online/Offline token. */
 export function presenceStatusVisual(
-  presence: AgentPresenceDetail | "loading" | null | undefined,
+  presence: AgentPresence | "loading" | null | undefined,
 ): AvailabilityVisual | null {
   const token = presenceStatusToken(presence);
   if (!token) return null;
@@ -129,7 +128,7 @@ export function presenceStatusVisual(
 
 /** Compact status-dot fill for live Online/Offline. */
 export function presenceStatusDotClass(
-  presence: AgentPresenceDetail | "loading" | null | undefined,
+  presence: AgentPresence | "loading" | null | undefined,
 ): string | null {
   const token = presenceStatusToken(presence);
   if (!token) return null;
@@ -141,8 +140,8 @@ export function presenceStatusDotClass(
  * Presence filters use the same binary availability contract.
  */
 export function matchesLiveAvailabilityFilter(
-  availability: AgentAvailability | null | undefined,
+  presence: AgentPresence | null | undefined,
   filter: LiveAvailability,
 ): boolean {
-  return toLiveAvailability(availability) === filter;
+  return toLiveAvailability(presence) === filter;
 }

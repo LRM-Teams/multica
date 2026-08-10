@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { CommentTriggerPreviewAgent } from "@multica/core/types";
 import { resolveActorDisplayName, resolveActorIdentityPresentation } from "@multica/core/identity";
-import { useAgentPresenceDetail } from "@multica/core/agents";
+import { useAgentPresence } from "@multica/core/agents";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
@@ -65,9 +65,9 @@ function sourceReason(agent: CommentTriggerPreviewAgent, t: IssuesT): string {
 // backend preview. Online agents start right away; offline ones queue.
 function useTriggerPresenceLine(agentId: string, t: IssuesT): string | null {
   const ws = useCurrentWorkspace();
-  const detail = useAgentPresenceDetail(ws?.id, agentId);
+  const detail = useAgentPresence(ws?.id, agentId);
   if (detail === "loading") return null;
-  return detail.availability === "online"
+  return detail === "online"
     ? t(($) => $.comment.trigger_starts_now)
     : t(($) => $.comment.trigger_starts_when_online);
 }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   Agent,
+  AgentPresenceResponse,
   AgentFileContentResponse,
   AgentFilesResponse,
   AgentTemplate,
@@ -280,31 +281,6 @@ export interface DeleteComputerResponse {
   tasks_cancelled: number;
 }
 
-export interface RemoveComputerAgentsResponse {
-  status: string;
-  daemon_id: string;
-  agents_archived: number;
-  tasks_cancelled: number;
-}
-
-export interface RemoveComputerWorkspaceBindingResponse {
-  ok: boolean;
-  workspace_id: string;
-  kept_local_data: boolean;
-}
-
-export const RemoveComputerWorkspaceBindingResponseSchema = z.object({
-  ok: z.literal(true),
-  workspace_id: z.string().min(1),
-  kept_local_data: z.literal(true),
-}).loose();
-
-export const EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE: RemoveComputerWorkspaceBindingResponse = {
-  ok: false,
-  workspace_id: "",
-  kept_local_data: true,
-};
-
 export const DeleteComputerResponseSchema = z.object({
   status: z.string(),
   daemon_id: z.string(),
@@ -318,20 +294,6 @@ export const EMPTY_DELETE_COMPUTER_RESPONSE: DeleteComputerResponse = {
   daemon_id: "",
   deleted_count: 0,
   deleted_runtime_ids: [],
-  tasks_cancelled: 0,
-};
-
-export const RemoveComputerAgentsResponseSchema = z.object({
-  status: z.string(),
-  daemon_id: z.string(),
-  agents_archived: z.number(),
-  tasks_cancelled: z.number().default(0),
-}).loose();
-
-export const EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE: RemoveComputerAgentsResponse = {
-  status: "invalid_response",
-  daemon_id: "",
-  agents_archived: 0,
   tasks_cancelled: 0,
 };
 
@@ -1992,6 +1954,40 @@ export const RunnerActivityResponseSchema = z.object({
 }).loose();
 
 export const EMPTY_RUNNER_ACTIVITY_RESPONSE = { summary: null, timeline: [] };
+
+const RunnerActivitySummaryItemSchema = z.object({
+  agent_id: z.string().min(1),
+  summary: RunnerActivitySummarySchema,
+}).loose();
+
+export const RunnerActivitySummariesResponseSchema = z.object({
+  items: z.array(RunnerActivitySummaryItemSchema).default([]),
+}).loose();
+
+export const EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE = { items: [] };
+
+const AgentPresenceItemSchema = z.object({
+  agent_id: z.string().min(1),
+  presence: z.enum(["online", "offline"]),
+}).loose();
+
+export const AgentPresenceResponseSchema: z.ZodType<AgentPresenceResponse> = z.object({
+  items: z.array(AgentPresenceItemSchema),
+}).loose().superRefine((value, ctx) => {
+  const seen = new Set<string>();
+  for (const [index, item] of value.items.entries()) {
+    if (seen.has(item.agent_id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["items", index, "agent_id"],
+        message: "duplicate Agent Presence row",
+      });
+    }
+    seen.add(item.agent_id);
+  }
+});
+
+export const EMPTY_AGENT_PRESENCE_RESPONSE: AgentPresenceResponse = { items: [] };
 
 const AgentFileNodeSchema = z.object({
   path: z.string(),

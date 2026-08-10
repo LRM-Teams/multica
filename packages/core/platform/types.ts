@@ -4,6 +4,7 @@ import type {
   SupportedLocale,
 } from "../i18n";
 import type { StorageAdapter } from "../types/storage";
+import type { ServiceEnvironment } from "../config";
 
 /** Identifies the calling client to the server. Threaded through to
  *  ApiClient and WSClient so all HTTP requests and WS connections from
@@ -21,6 +22,10 @@ export interface CoreProviderProps {
   children: React.ReactNode;
   /** API base URL. Default: "" (same-origin). */
   apiBaseUrl?: string;
+  /** Public app URL used by browser-facing workspace links. */
+  appUrl?: string;
+  /** Service environment selected by the host application's build/runtime config. */
+  environment?: ServiceEnvironment;
   /** WebSocket URL. Default: "ws://localhost:8080/ws". */
   wsUrl?: string;
   /** Storage adapter. Default: SSR-safe localStorage wrapper. */

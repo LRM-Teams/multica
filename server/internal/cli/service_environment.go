@@ -18,33 +18,37 @@ const (
 
 // ServiceTarget is the validated app/API coordinate for one explicit
 // environment. Production uses the leagent.me product family with dedicated
-// app and API hosts; test accepts one caller-supplied origin (for example a
-// Tencent Cloud IP or test.leagent.me) for both surfaces.
+// app and API hosts; test accepts caller-supplied API and app origins so it can
+// use one host today without making same-origin a permanent contract.
 type ServiceTarget struct {
 	Environment ServiceEnvironment
 	Origin      string // API/auth/WebSocket origin
 	AppOrigin   string // human-facing browser origin
 }
 
-// NewServiceTarget validates the public setup choice. testOrigin must be
-// empty for production and is required for test.
-func NewServiceTarget(environment, testOrigin string) (ServiceTarget, error) {
+// NewServiceTarget validates the public setup choice. serverOrigin and
+// appOrigin must be empty for fixed production and are both required for test.
+func NewServiceTarget(environment, serverOrigin, appOrigin string) (ServiceTarget, error) {
 	env := ServiceEnvironment(strings.ToLower(strings.TrimSpace(environment)))
 	if env == "" {
 		env = ServiceEnvironmentProduction
 	}
 	switch env {
 	case ServiceEnvironmentProduction:
-		if strings.TrimSpace(testOrigin) != "" {
-			return ServiceTarget{}, fmt.Errorf("--test-url is only valid with --environment test")
+		if strings.TrimSpace(serverOrigin) != "" || strings.TrimSpace(appOrigin) != "" {
+			return ServiceTarget{}, fmt.Errorf("--server-url and --app-url are only valid with --environment test")
 		}
 		return ServiceTarget{Environment: env, Origin: OfficialCloudAPIURL, AppOrigin: OfficialCloudAppURL}, nil
 	case ServiceEnvironmentTest:
-		origin, err := NormalizeTestServiceOrigin(testOrigin)
+		origin, err := normalizeTestServiceOrigin(serverOrigin, "--server-url")
 		if err != nil {
 			return ServiceTarget{}, err
 		}
-		return ServiceTarget{Environment: env, Origin: origin, AppOrigin: origin}, nil
+		app, err := normalizeTestServiceOrigin(appOrigin, "--app-url")
+		if err != nil {
+			return ServiceTarget{}, err
+		}
+		return ServiceTarget{Environment: env, Origin: origin, AppOrigin: app}, nil
 	default:
 		return ServiceTarget{}, fmt.Errorf("unsupported environment %q: use production or test", environment)
 	}
@@ -62,7 +66,7 @@ func ResolveServiceTarget(cfg CLIConfig) (ServiceTarget, error) {
 		if serverURL == "" || CanonicalizeOfficialCloudAPIURL(serverURL) == OfficialCloudAPIURL {
 			env = ServiceEnvironmentProduction
 		} else {
-			return ServiceTarget{}, fmt.Errorf("legacy custom server %q is not a Computer environment; run `multica setup --environment test --test-url <url> /<workspace>` explicitly", serverURL)
+			return ServiceTarget{}, fmt.Errorf("legacy custom server %q is not a Computer environment; run `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>` explicitly", serverURL)
 		}
 	}
 	switch env {
@@ -75,27 +79,28 @@ func ResolveServiceTarget(cfg CLIConfig) (ServiceTarget, error) {
 		}
 		return ServiceTarget{Environment: env, Origin: OfficialCloudAPIURL, AppOrigin: OfficialCloudAppURL}, nil
 	case ServiceEnvironmentTest:
-		origin, err := NormalizeTestServiceOrigin(serverURL)
+		origin, err := normalizeTestServiceOrigin(serverURL, "test server_url")
 		if err != nil {
 			return ServiceTarget{}, err
 		}
-		if appURL != "" && appURL != origin {
-			return ServiceTarget{}, fmt.Errorf("test app_url must use the same origin as server_url")
+		app, err := normalizeTestServiceOrigin(appURL, "test app_url")
+		if err != nil {
+			return ServiceTarget{}, err
 		}
-		return ServiceTarget{Environment: env, Origin: origin, AppOrigin: origin}, nil
+		return ServiceTarget{Environment: env, Origin: origin, AppOrigin: app}, nil
 	default:
 		return ServiceTarget{}, fmt.Errorf("unsupported environment %q: use production or test", cfg.Environment)
 	}
 }
 
-// NormalizeTestServiceOrigin accepts an HTTP(S) origin only. A bare IP is
+// normalizeTestServiceOrigin accepts an HTTP(S) origin only. A bare IP is
 // deliberately rejected so users must state whether the Tencent Cloud stage
 // is using TLS. Paths, query strings, fragments, and embedded credentials are
 // forbidden because a Computer environment is an origin, not an endpoint.
-func NormalizeTestServiceOrigin(raw string) (string, error) {
+func normalizeTestServiceOrigin(raw, field string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", fmt.Errorf("--test-url is required with --environment test")
+		return "", fmt.Errorf("%s is required with --environment test", field)
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" {

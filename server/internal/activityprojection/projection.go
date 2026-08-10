@@ -103,11 +103,9 @@ func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {
 	case protocol.ActivityKindError:
 		return Summary{Label: "Error", Tone: "error", Visibility: "visible"}
 	case protocol.ActivityKindOffline:
-		if snapshot.DetailKind == "stopped" {
-			return Summary{Label: "Stopped", Tone: "neutral", Visibility: "visible"}
-		}
-		// A disconnected Computer makes its Agents offline. "Disconnected" is
-		// Computer connectivity vocabulary and must not leak into Agent state.
+		// Lifecycle reasons remain Timeline/diagnostic facts. Compact Agent
+		// Activity uses the same Offline word for stop, crash, disconnect, and
+		// every future offline detail.
 		return Summary{Label: "Offline", Tone: "neutral", Visibility: "visible"}
 	case protocol.ActivityKindWorking:
 		if label, ok := workingDetailLabels[snapshot.DetailKind]; ok {

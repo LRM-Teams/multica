@@ -19,7 +19,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { canAssignAgent } from "@multica/views/issues/components";
 import { api } from "@multica/core/api";
-import { useAgentPresenceDetail, useWorkspaceAgentAvailability } from "@multica/core/agents";
+import { useAgentPresence, useWorkspaceAgentAvailability } from "@multica/core/agents";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { excludeChannelShellSessions } from "../lib/exclude-channel-shell-sessions";
@@ -350,13 +350,13 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
     : agentAvailability === "none";
 
   // Presence drives both the avatar status dot (via ActorAvatar) and the
-  // TaskStatusPill availability copy. `useAgentPresenceDetail` returns
+  // TaskStatusPill availability copy. `useAgentPresence` returns
   // "loading" while queries are still resolving — pass `undefined`
   // downstream so pill copy stays silent during loading rather than flash
   // speculative offline text.
-  const presenceDetail = useAgentPresenceDetail(wsId, activeAgent?.id);
+  const presenceDetail = useAgentPresence(wsId, activeAgent?.id);
   const availability =
-    presenceDetail === "loading" ? undefined : presenceDetail.availability;
+    presenceDetail === "loading" ? undefined : presenceDetail;
 
   // Mount / unmount logging. ChatWindow lives in DashboardLayout, so this
   // fires on layout mount (login / workspace switch / fresh page load).

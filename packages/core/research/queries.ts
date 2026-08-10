@@ -57,6 +57,8 @@ export const researchKeys = {
     ["research", wsId, "presence", sessionId] as const,
   productRounds: (wsId: string, sessionId: string) =>
     ["research", wsId, "product-rounds", sessionId] as const,
+  graphTyped: (wsId: string, sessionId: string) =>
+    ["research", wsId, "graph-typed", sessionId] as const,
 };
 
 /** Normalize GET /presence wire map (snake updated_at) → ResearchPresenceMap. */
@@ -142,5 +144,19 @@ export function researchProductRoundsOptions(wsId: string, sessionId: string) {
     enabled: !!wsId && !!sessionId,
     // Endpoint lands with LRM-911 migration 255; empty is fine until then.
     retry: false,
+  });
+}
+
+/**
+ * LRM-1497 · typed star graph (fed by LRM-1505). Server state stays in React
+ * Query; the canvas renders FROM this canonical data — it never fabricates
+ * topology. `graph_updated`/`research_session` WS invalidations refresh the
+ * same key (see `ws-updaters`).
+ */
+export function researchGraphTypedOptions(wsId: string, sessionId: string) {
+  return queryOptions({
+    queryKey: researchKeys.graphTyped(wsId, sessionId),
+    queryFn: () => api.getResearchGraphTyped(sessionId),
+    enabled: !!wsId && !!sessionId,
   });
 }

@@ -30,7 +30,7 @@ cat ~/.multica/config.json        # 看 api_token 是否存在
 multica workspace list            # 确认你是目标工作区成员
 ```
 
-**怎么修**：正式环境重新执行 `multica setup /<workspace>`；腾讯测试环境执行 `multica setup --environment test --test-url <origin> /<workspace>`。登录失效时先 `multica auth logout`，再 setup。
+**怎么修**：正式环境重新执行 `multica setup /<workspace>`；腾讯测试环境执行 `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>`。登录失效时先 `multica auth logout`，再 setup。
 
 ## 任务一直卡在 queued
 

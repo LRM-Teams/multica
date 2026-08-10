@@ -160,6 +160,12 @@
 - 服务端 Message/list/reply/thread/search/quote/transport 响应不返回 `author_avatar_url`；对应查询也不得 JOIN Profile 头像。Web/desktop 的 `ChannelMessage` 类型中不存在该字段（①②）；HTTP schema 与 realtime cache seam 会剥离旧服务端输入，乐观消息也不复制登录用户头像。所有消息头像只走共享 `ActorAvatar → useResolvedActorIdentity`（③）。
 - **物**：`ChannelMessageResponse`/reply/search/quote snapshot 与 TS 对应类型；`stripLegacyMessageAvatar`；`withoutLegacyMessageAvatar`；`normalizeChannelMessages`；server/HTTP/WS/optimistic/bubble 回归（均已先见红）。
 
+### 2.8 Agent Presence 只有一个服务端真相源 — `可执行`（①②③⑤，owner: @Codex）
+- Agent Presence 只有 `online|offline`：服务端由当前 ready Workspace Runner 连接与该实例持有的 active managed launch 共同投影。Runtime heartbeat、Task workload、Runner Activity、Health、provider quota、crash reason 都不能覆盖这个结果；加载或坏响应不造第三态，也不冒充 Online。
+- Web 只读一个 Workspace 级 `agentPresenceKeys.workspace(wsId)` Query。`GET /api/agents/presence` 提供全量快照，中央 `agent:presence` handler 只 patch 该 cache；正常事件不 invalidate，WS 重连只做一次 reconcile。大型列表在页面边界读 Map 并传给行/头像，不挂 N 个 Presence Query 或订阅。
+- Avatar/Profile/列表/筛选只显示绿色 Online、灰色或空心 Offline；加载时省略。Working/Thinking/Error 属于独立 Activity 槽，不能把头像点染黄或加 pulse。Disconnected 是 Computer 词汇；Stopped/Blocked/Crashed 只进诊断、Timeline 或 recovery，不进紧凑 Agent Presence。
+- **物**：服务端 `internal/handler/agent_presence.go`、`daemonws.Hub` current-Runner disconnect fence、`agent_presence_test.go`；Web `agents/agent-presence.ts`、`agent-presence-updaters.ts`、`use-realtime-sync.ts`；`actor-avatar.tsx` 与 `agents/presence-contract.test.ts`。结构守卫会阻止 Runtime/Task/Health 推导、per-avatar Activity 染色和旧 hook 回流。
+
 ## 3. 属性显示（跨面）
 
 ### 3.1 本家属性语法 — `可执行`（task #518）
@@ -194,9 +200,14 @@
 - **服务环境**：`production` 是 leagent.me 正式服务，browser/API 的 canonical origin 分别是 `https://www.leagent.me` 与 `https://api.leagent.me`；`test` 是腾讯云测试服务，首版以 `https://82.157.184.89` 同时承担 app/API，之后可只改部署配置切到 `https://test.leagent.me`。服务端用 `APP_ENV=production|test` 声明身份，并通过公共 `/api/config.environment` 明确告诉页面，禁止根据域名或 IP 猜环境。旧服务缺字段或字段非法时，前端保守降级为 production。
 - **Computer 本机模型**：同一 OS 用户只有一个 Computer root/identity/resident；每个环境分别保存登录和 Workspace connection，本地键为 `(environment, workspace_id)`。两边连接可以同时保留，但单个 resident generation 同一时刻只服务当前环境；切换必须 drain、重启、验收，不能并发连接 production/test。
 - **包源随环境固定**：production 只用稳定 manifest；test 只用 preview/alpha manifest。没有独立 `release_channel` 让用户制造“test 连稳定包”或“production 连预发布包”的组合。带版本 archive/checksum/manifest 不可变，可移动 manifest 只负责各自环境内的当前版本。
-- **页面引导**：Computer 页面用 `/api/config.environment` 决定命令类型，用 `daemon_server_url` 填 test origin。production 显示 `multica setup /<workspace>`；test 显示 `multica setup --environment test --test-url <origin> /<workspace>`。页面不能读取本机 `~/.multica`，所以首次连接必须把目标写进命令；完成后本机配置保存 active environment。
+- **页面引导**：Computer 页面用 `/api/config.environment` 决定命令类型，用 `daemon_server_url` 和 `daemon_app_url` 分别填 test API/Web origin。production 显示 `multica setup /<workspace>`；test 显示 `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>`。两个值当前可以相同，但协议不强制同源。页面不能读取本机 `~/.multica`，所以首次连接必须把目标写进命令；完成后本机配置保存 active environment。
 - **部署拓扑**：workflow 结构固定为 `dev → GitHub Environment test → Tencent s89`、`main → legacy-named GitHub Environment aliyun-dev → Aliyun/leagent.me production`。`aliyun-dev` 只因现有 secrets 无法导出而保留旧名字，不代表 dev。部署验收仍必须分别证明 workflow、目标 runner、served origin、镜像 SHA 与数据库迁移；workflow 合并本身不等于已上线。
 - **客户端产物**：CLI/Computer 使用同一份签名二进制，环境在运行时选择，不为 test/production 各编一份。Desktop 不在 Computer v1 交付范围。预发布 tag 更新 `alpha.json`，稳定 tag 只更新 `manifest.json` / `latest.json`。
+
+### 4.0.b Computer 删除只有一个产品语义 — `可执行`（②③⑤，Computer v1）
+- **唯一入口**：产品只暴露 `Delete Computer`，canonical API 是 `DELETE /api/computers/{computerId}`。已安装客户端使用的 `DELETE /api/runtimes/by-daemon/{computerId}` 只能是同一 handler 的兼容别名；旧 `runtime_mode` query 不得缩小 Computer 删除范围。禁止再暴露独立 Workspace connection revoke 或 Computer 级批量删除 Agent 的旁路。
+- **前置条件**：只要当前工作区内该 Computer 仍绑定 active Agent，就以 `409 computer_has_active_agents` 整体拒绝，runtime、connection、credential 和本机数据都不变。用户必须通过正常 Agent 删除流程清空后重试；Computer 删除不替用户级联删除 Agent。
+- **事务语义**：成功删除会在一个事务内清除当前工作区的 runtime 投影和已归档 Agent 服务端数据、撤销当前 Workspace connection/credential，并写 registration tombstone；零 runtime 的 binding-only Computer 也能删除。其他工作区和全部本机文件均不在操作范围内。完整契约见 [`docs/computer-v1-global-view.md`](computer-v1-global-view.md#6-delete-computer)。
 
 ### 4.0.a 当前 Aliyun deployment ownership — `可执行`（③单一部署链 + ⑤ workflow/host gate；owner: @Barry；切换前事实）
 - **当前事实**：在腾讯 test 与 `main` production workflow 真正上线前，现有 `dev` 仍只部署到 Aliyun `101.200.210.144`；公开 Web/API origin 由部署环境变量提供，production 默认是 `https://www.leagent.me` / `https://api.leagent.me`；`:8090` 只保留 Computer 兼容与部署探针。腾讯 s89 已退出当前正式 release path、只保留离线回滚资料。不要把“目标分环境”误报为“线上已分环境”。

@@ -73,8 +73,11 @@ func TestCloudCLIConfigUsesLeAgentOrigins(t *testing.T) {
 
 func TestSetupEnvironmentFlagsExposeOnlyProductionOrExplicitTestOrigin(t *testing.T) {
 	for _, command := range []*cobra.Command{setupCmd, setupCloudCmd} {
-		if command.Flags().Lookup("environment") == nil || command.Flags().Lookup("test-url") == nil {
-			t.Fatalf("%s must expose --environment and --test-url", command.Use)
+		if command.Flags().Lookup("environment") == nil || command.Flags().Lookup("server-url") == nil || command.Flags().Lookup("app-url") == nil {
+			t.Fatalf("%s must expose --environment, --server-url, and --app-url", command.Use)
+		}
+		if command.Flags().Lookup("test-url") != nil || command.Flags().Lookup("url") != nil {
+			t.Fatalf("%s must not expose an ambiguous combined URL flag", command.Use)
 		}
 		if command.Flags().Lookup("channel") != nil {
 			t.Fatalf("%s must not expose an independently selectable release channel", command.Use)

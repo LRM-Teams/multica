@@ -11,25 +11,22 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@multica/core/agents", () => ({
-  useAgentPresenceDetail: () => ({
-    availability: state.availability,
-    workload: "idle",
-    runningCount: 0,
-    queuedCount: 0,
-    capacity: 1,
-  }),
-  useRunnerActivity: () => ({ data: { summary: state.summary, timeline: [] } }),
+  useAgentPresence: () => state.availability,
+  useRunnerActivitySummary: () => ({ data: state.summary }),
+  useRunnerActivity: () => {
+    throw new Error("list Activity must not mount the per-Agent Timeline query");
+  },
 }));
 
 vi.mock("@multica/core/paths", () => ({
   useCurrentWorkspace: () => ({ id: "workspace-1" }),
 }));
 
-vi.mock("../use-agent-live-status", () => ({
-  useAgentLiveStatus: () =>
-    state.availability === "online"
-      ? { label: "Online", dotClass: "bg-success", textClass: "text-success" }
-      : { label: "Offline", dotClass: "bg-muted", textClass: "text-muted" },
+vi.mock("../../i18n", () => ({
+  useT: () => ({
+    t: (selector: (resources: { availability: Record<string, string> }) => string) =>
+      selector({ availability: { online: "Online", offline: "Offline" } }),
+  }),
 }));
 
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));

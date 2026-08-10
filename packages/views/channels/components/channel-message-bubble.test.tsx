@@ -101,21 +101,15 @@ vi.mock("../../common/markdown", () => ({
 
 
 // Agent avatars now overlay the shared presence dot (AgentStatusDot), which
-// reads presence via useAgentPresenceDetail and the current workspace via
-// useCurrentWorkspace. Default to a concrete "online + idle" detail so the
-// dot renders in most tests; the dedicated presence test below overrides it
-// per-case via the mock's return value.
-const presenceDetailMock = vi.fn(() => ({
-  availability: "online" as const,
-  workload: "idle" as const,
-  runningCount: 0,
-  queuedCount: 0,
-  capacity: 1,
-}));
+// reads presence via useAgentPresence and the current workspace via
+// useCurrentWorkspace. Default to a concrete Online snapshot so the dot
+// renders in most tests.
+const presenceDetailMock = vi.fn(() => "online" as const);
 
 vi.mock("@multica/core/agents", () => ({
-  useAgentPresenceDetail: () => presenceDetailMock(),
+  useAgentPresence: () => presenceDetailMock(),
   useRunnerActivity: () => ({ data: undefined }),
+  useRunnerActivitySummary: () => ({ data: undefined }),
 }));
 
 vi.mock("@multica/core/paths", () => ({

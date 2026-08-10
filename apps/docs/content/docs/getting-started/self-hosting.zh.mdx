@@ -28,7 +28,7 @@ Two commands to set up everything:
 curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 
 # After creating a Workspace in the Web app, connect through one same-origin endpoint
-multica setup --environment test --test-url https://multica.example.com /<workspace-slug>
+multica setup --environment test --server-url https://multica.example.com --app-url https://multica.example.com /<workspace-slug>
 ```
 
 This installs the CLI, checks out the latest self-host assets, pulls the official Multica images from GHCR, and configures everything for localhost. Then open http://localhost:3000 and pick a login method: configure `RESEND_API_KEY` in `.env` for email-based codes (recommended), or leave Resend unset and copy the generated code from backend logs. See [Step 2 — Log In](#step-2--log-in) for details.
@@ -101,7 +101,7 @@ You also need at least one AI agent CLI:
 ### b) Connect one Workspace
 
 ```bash
-multica setup --environment test --test-url https://multica.example.com /<workspace-slug>
+multica setup --environment test --server-url https://multica.example.com --app-url https://multica.example.com /<workspace-slug>
 ```
 
 This automatically:
@@ -121,7 +121,7 @@ multica computer status
 ```
 
 <Callout>
-The retired `multica setup self-host`, profile selector, and custom `config set server_url` lifecycle do not create a supported Computer. Put a reverse proxy in front of split frontend/backend ports and pass its one final origin with `--environment test --test-url`.
+The retired `multica setup self-host`, profile selector, and custom `config set server_url` lifecycle do not create a supported Computer. Pass the API and Web origins explicitly with `--environment test --server-url <api-origin> --app-url <app-origin>`; they may be the same reverse-proxy origin.
 </Callout>
 
 ### Step 4 — Verify & Start Using

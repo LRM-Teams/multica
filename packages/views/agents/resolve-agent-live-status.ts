@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import type { AgentPresenceDetail } from "@multica/core/agents";
+import type { AgentPresence } from "@multica/core/agents";
 import {
   formatPresenceStatus,
   presenceStatusDotClass,
@@ -22,14 +22,14 @@ export type AgentLiveStatusView = {
  * Entity lifecycle is handled by callers.
  */
 export function resolveAgentLiveStatus(args: {
-  presence: AgentPresenceDetail | "loading" | null | undefined;
+  presence: AgentPresence | "loading" | null | undefined;
   tAgents: TFunction<"agents">;
   /** @deprecated Unused for live Online/Offline. */
   tChat?: TFunction<"chat">;
 }): AgentLiveStatusView | null {
   const { presence, tAgents } = args;
   if (!presence || presence === "loading") return null;
-  if (toLiveAvailability(presence.availability) === null) return null;
+  if (toLiveAvailability(presence) === null) return null;
 
   const label = formatPresenceStatus(presence, tAgents);
   const visual = presenceStatusVisual(presence);

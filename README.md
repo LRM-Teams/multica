@@ -91,7 +91,7 @@ multica setup /my-workspace
 >
 > This pulls the official Multica images from GHCR (latest stable by default).
 > Create a Workspace in that Web app, expose one same-origin HTTP(S) endpoint,
-> then connect with `multica setup --environment test --test-url <origin> /<workspace>`.
+> then connect with `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>`.
 > Requires Docker. See the [Self-Hosting Guide](SELF_HOSTING.md) for details.
 > If the selected GHCR tag has not been published yet, fall back to `make selfhost-build` from a checkout.
 
@@ -133,7 +133,7 @@ Workspace connections, and runs the resident.
 | Command | Description |
 |---------|-------------|
 | `multica setup /<workspace>` | Connect one production Workspace and start the Computer |
-| `multica setup --environment test --test-url <origin> /<workspace>` | Connect one Workspace in the explicit test environment |
+| `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>` | Connect one Workspace in the explicit test environment |
 | `multica config use <production\|test>` | Safely switch environment and its fixed stable/preview package |
 | `multica computer start` | Start the one machine-wide resident |
 | `multica computer status` | Show identity, environment, fixed package source, resident, and Workspace connections |

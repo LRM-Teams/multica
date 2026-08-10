@@ -1,13 +1,14 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
-import type { AgentPresenceDetail } from "@multica/core/agents";
-import { useAgentPresenceDetail, useRunnerActivity } from "@multica/core/agents";
+import type { AgentPresence } from "@multica/core/agents";
+import { useAgentPresence, useRunnerActivitySummary } from "@multica/core/agents";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
-import { useAgentLiveStatus } from "../use-agent-live-status";
+import { useT } from "../../i18n";
+import { resolveAgentLiveStatus } from "../resolve-agent-live-status";
 
 const activityToneDotClass: Record<string, string> = {
   neutral: "bg-muted-foreground/40",
@@ -27,6 +28,7 @@ export function AgentActivityStatus({
   alignEnd = false,
   unknownLabel,
   testId = "agent-activity-status",
+  presence,
 }: {
   agentId: string;
   className?: string;
@@ -35,21 +37,86 @@ export function AgentActivityStatus({
   /** When presence is missing — callers that need a localized unknown string. */
   unknownLabel?: string;
   testId?: string;
+  /** Page-level snapshot avoids one Presence Query observer per list row. */
+  presence?: AgentPresence | "loading";
 }) {
   const workspaceId = useCurrentWorkspace()?.id;
-  const { data } = useRunnerActivity(workspaceId, agentId);
-  const summary = data?.summary;
-  const presenceDetail = useAgentPresenceDetail(workspaceId, agentId);
-  const presence = useAgentLiveStatus(workspaceId, agentId);
-  const isOnline =
-    presenceDetail !== "loading" && presenceDetail.availability === "online";
+  if (presence !== undefined) {
+    return (
+      <AgentActivityStatusView
+        workspaceId={workspaceId}
+        agentId={agentId}
+        className={className}
+        alignEnd={alignEnd}
+        unknownLabel={unknownLabel}
+        testId={testId}
+        presence={presence}
+      />
+    );
+  }
+  return (
+    <QueriedAgentActivityStatus
+      workspaceId={workspaceId}
+      agentId={agentId}
+      className={className}
+      alignEnd={alignEnd}
+      unknownLabel={unknownLabel}
+      testId={testId}
+    />
+  );
+}
+
+function QueriedAgentActivityStatus({
+  workspaceId,
+  agentId,
+  ...props
+}: {
+  workspaceId: string | undefined;
+  agentId: string;
+  className?: string;
+  alignEnd: boolean;
+  unknownLabel?: string;
+  testId: string;
+}) {
+  const presence = useAgentPresence(workspaceId, agentId);
+  return (
+    <AgentActivityStatusView
+      {...props}
+      workspaceId={workspaceId}
+      agentId={agentId}
+      presence={presence}
+    />
+  );
+}
+
+function AgentActivityStatusView({
+  workspaceId,
+  agentId,
+  className,
+  alignEnd,
+  unknownLabel,
+  testId,
+  presence,
+}: {
+  workspaceId: string | undefined;
+  agentId: string;
+  className?: string;
+  alignEnd: boolean;
+  unknownLabel?: string;
+  testId: string;
+  presence: AgentPresence | "loading";
+}) {
+  const { t: tAgents } = useT("agents");
+  const { data: summary } = useRunnerActivitySummary(workspaceId, agentId);
+  const liveStatus = resolveAgentLiveStatus({ presence, tAgents });
+  const isOnline = presence === "online";
   const hasDynamicActivity =
     isOnline &&
     summary?.visibility === "visible" &&
     summary.tone !== "success" &&
     summary.tone !== "neutral";
   if (!hasDynamicActivity) {
-    if (presence) {
+    if (liveStatus) {
       return (
         <span
           className={cn(
@@ -60,8 +127,8 @@ export function AgentActivityStatus({
           data-testid={testId}
           data-activity-tone="success"
         >
-          <span className={cn("size-1.5 shrink-0 rounded-full", presence.dotClass)} aria-hidden />
-          <span className="truncate text-[13px]">{presence.label}</span>
+          <span className={cn("size-1.5 shrink-0 rounded-full", liveStatus.dotClass)} aria-hidden />
+          <span className="truncate text-[13px]">{liveStatus.label}</span>
         </span>
       );
     }
@@ -132,7 +199,7 @@ export function AgentActivityListItem({
   displayName: string;
   provider?: string | null;
   runtimeLabel?: string | null;
-  presence?: AgentPresenceDetail | null;
+  presence?: AgentPresence | null;
   onClick?: () => void;
   /** inline = single line (desktop); stacked = name + meta (mobile). */
   layout?: "inline" | "stacked";
@@ -146,7 +213,7 @@ export function AgentActivityListItem({
   /** Optional trailing text (e.g. "View agent" in delete dialogs). */
   trailingLabel?: string;
 }) {
-  void presence;
+  const resolvedPresence = presence === null ? "loading" : presence;
   const size = avatarSize ?? (layout === "stacked" ? 28 : 22);
   const trailing = trailingLabel ? (
     <span className="shrink-0 text-primary">{trailingLabel}</span>
@@ -158,6 +225,7 @@ export function AgentActivityListItem({
       alignEnd={layout === "inline"}
       className={layout === "inline" ? undefined : "max-w-none"}
       testId="agent-activity-list-item-activity"
+      presence={resolvedPresence}
     />
   );
 
@@ -199,6 +267,7 @@ export function AgentActivityListItem({
           actorId={agentId}
           size={size}
           showStatusDot
+          agentPresence={resolvedPresence}
           profileLink={false}
         />
         <span className="min-w-0 flex-1">
@@ -240,6 +309,7 @@ export function AgentActivityListItem({
         actorId={agentId}
         size={size}
         showStatusDot
+        agentPresence={resolvedPresence}
         profileLink={false}
       />
       <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">

@@ -14,7 +14,7 @@ import { Eye, EyeOff, Save, X } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
-import { useAgentPresenceDetail } from "@multica/core/agents";
+import { useAgentPresence } from "@multica/core/agents";
 import type { Agent, AgentFileContentResponse, MemberWithUser } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -295,7 +295,7 @@ export function AgentFilesPanel({
   // Reuse the shared #288 presence token → localized word so the Status row
   // agrees with the agent's presence dot everywhere else, instead of leaking
   // the raw `agent.status` enum ("idle"/"offline"/…) as hardcoded English.
-  const presence = useAgentPresenceDetail(agent.workspace_id, agent.id);
+  const presence = useAgentPresence(agent.workspace_id, agent.id);
   const statusLabel = formatPresenceStatus(presence, t) ?? "—";
   const [includeHidden, setIncludeHidden] = useState(false);
   // Start with a quiet Files tab: directories reveal their contents only when

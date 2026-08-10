@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -88,20 +89,21 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 // A Computer may already be connected while none of its prior Agent processes
 // have restarted; those Agents stay Offline until a new launch is reported.
 func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string) error {
-	workspaceID, err := util.ParseUUID(identity.WorkspaceID)
-	if err != nil {
-		return errors.New("invalid Runner workspace identity")
-	}
-	if h.TxStarter == nil {
-		return errors.New("Runner transaction store is unavailable")
-	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin Runner ready fence: %w", err)
-	}
-	defer tx.Rollback(ctx)
+	return h.runnerPresenceLocked(func() error {
+		workspaceID, err := util.ParseUUID(identity.WorkspaceID)
+		if err != nil {
+			return errors.New("invalid Runner workspace identity")
+		}
+		if h.TxStarter == nil {
+			return errors.New("Runner transaction store is unavailable")
+		}
+		tx, err := h.TxStarter.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin Runner ready fence: %w", err)
+		}
+		defer tx.Rollback(ctx)
 
-	rows, err := tx.Query(ctx, `
+		rows, err := tx.Query(ctx, `
 		UPDATE agent_activity_snapshot s
 		SET activity_kind = 'offline', detail_kind = 'computer_restarted',
 			observed_at = now(), received_at = now()
@@ -110,78 +112,112 @@ func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemo
 		  AND l.workspace_id = $1 AND l.daemon_id = $2
 		  AND l.daemon_instance_id <> $3 AND l.status = 'active'
 		RETURNING s.agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
-	if err != nil {
-		return fmt.Errorf("fence prior Runner snapshots: %w", err)
-	}
-	var agentIDs []pgtype.UUID
-	for rows.Next() {
-		var agentID pgtype.UUID
-		if err := rows.Scan(&agentID); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan fenced Runner Agent: %w", err)
+		if err != nil {
+			return fmt.Errorf("fence prior Runner snapshots: %w", err)
 		}
-		agentIDs = append(agentIDs, agentID)
-	}
-	if err := rows.Err(); err != nil {
+		var activityAgentIDs []pgtype.UUID
+		for rows.Next() {
+			var agentID pgtype.UUID
+			if err := rows.Scan(&agentID); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan fenced Runner Agent: %w", err)
+			}
+			activityAgentIDs = append(activityAgentIDs, agentID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterate fenced Runner Agents: %w", err)
+		}
 		rows.Close()
-		return fmt.Errorf("iterate fenced Runner Agents: %w", err)
-	}
-	rows.Close()
-	if _, err := tx.Exec(ctx, `
+		rows, err = tx.Query(ctx, `
 		UPDATE agent_activity_launch
 		SET status = 'inactive', updated_at = now()
 		WHERE workspace_id = $1 AND daemon_id = $2
-		  AND daemon_instance_id <> $3 AND status = 'active'`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
-		return fmt.Errorf("fence prior Runner launches: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM agent_activity_probe
-		WHERE workspace_id = $1 AND daemon_id = $2 AND daemon_instance_id <> $3`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
-		return fmt.Errorf("clear prior Runner probes: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit Runner ready fence: %w", err)
-	}
-
-	if h.Bus != nil {
-		for _, agentID := range agentIDs {
-			projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
-			if err != nil {
-				return err
-			}
-			h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
-				AgentID: util.UUIDToString(agentID), Activity: projected,
-			})
+		  AND daemon_instance_id <> $3 AND status = 'active'
+		RETURNING agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
+		if err != nil {
+			return fmt.Errorf("fence prior Runner launches: %w", err)
 		}
-	}
-	return nil
+		var presenceAgentIDs []pgtype.UUID
+		for rows.Next() {
+			var agentID pgtype.UUID
+			if err := rows.Scan(&agentID); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan fenced Runner launch: %w", err)
+			}
+			presenceAgentIDs = append(presenceAgentIDs, agentID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterate fenced Runner launches: %w", err)
+		}
+		rows.Close()
+		if _, err := tx.Exec(ctx, `DELETE FROM agent_activity_probe
+		WHERE workspace_id = $1 AND daemon_id = $2 AND daemon_instance_id <> $3`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
+			return fmt.Errorf("clear prior Runner probes: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit Runner ready fence: %w", err)
+		}
+		for _, agentID := range presenceAgentIDs {
+			h.publishAgentPresence(identity.WorkspaceID, util.UUIDToString(agentID), AgentPresenceOffline)
+		}
+
+		if h.Bus != nil {
+			for _, agentID := range activityAgentIDs {
+				projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
+				if err != nil {
+					return err
+				}
+				h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
+					AgentID: util.UUIDToString(agentID), Activity: projected,
+				})
+			}
+		}
+		return nil
+	})
 }
 
 func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, status protocol.AgentStatusPayload) error {
 	if err := status.Validate(); err != nil {
 		return err
 	}
-	workspaceID, agentID, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, status.AgentID)
-	if err != nil {
-		return err
-	}
-	_, err = h.DB.Exec(ctx, `
-		INSERT INTO agent_activity_launch (
-			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
-			runtime_id = EXCLUDED.runtime_id,
-			daemon_id = EXCLUDED.daemon_id,
-			daemon_instance_id = EXCLUDED.daemon_instance_id,
-			launch_id = EXCLUDED.launch_id,
-		status = EXCLUDED.status,
-		last_client_sequence = 0,
-		last_producer_fact_id = '',
-		last_activity_fingerprint = '',
-		updated_at = now()`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
-	if err != nil {
-		return fmt.Errorf("upsert Runner launch: %w", err)
-	}
-	return nil
+	return h.runnerPresenceLocked(func() error {
+		source := h.currentRunnerPresenceSource()
+		if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+			return errors.New("stale Workspace Runner status")
+		}
+		workspaceID, agentID, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, status.AgentID)
+		if err != nil {
+			return err
+		}
+		beforeLaunch, err := h.loadRunnerLaunchPresence(ctx, workspaceID, agentID)
+		if err != nil {
+			return err
+		}
+		before := h.projectRunnerLaunchPresence(identity.WorkspaceID, beforeLaunch)
+		_, err = h.DB.Exec(ctx, `
+			INSERT INTO agent_activity_launch (
+				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
+				runtime_id = EXCLUDED.runtime_id,
+				daemon_id = EXCLUDED.daemon_id,
+				daemon_instance_id = EXCLUDED.daemon_instance_id,
+				launch_id = EXCLUDED.launch_id,
+				status = EXCLUDED.status,
+				last_client_sequence = 0,
+				last_producer_fact_id = '',
+				last_activity_fingerprint = '',
+				updated_at = now()`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
+		if err != nil {
+			return fmt.Errorf("upsert Runner launch: %w", err)
+		}
+		afterLaunch := &runnerLaunchPresence{daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, status: status.Status}
+		after := h.projectRunnerLaunchPresence(identity.WorkspaceID, afterLaunch)
+		h.publishAgentPresenceChange(identity.WorkspaceID, status.AgentID, before, after)
+		return nil
+	})
 }
 
 func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, activity protocol.AgentActivityPayload) error {
@@ -396,26 +432,122 @@ func (h *Handler) timeoutRunnerActivityProbes(ctx context.Context, now time.Time
 	return nil
 }
 
-func (h *Handler) markRunnerActivityOfflineForComputerDisconnect(ctx context.Context, workspaceID, agentID pgtype.UUID, daemonID, daemonInstanceID, launchID string) error {
-	if _, err := h.DB.Exec(ctx, `UPDATE agent_activity_launch SET status = 'inactive', updated_at = now()
-		WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
-		return fmt.Errorf("deactivate stale Runner launch: %w", err)
-	}
-	if _, err := h.DB.Exec(ctx, `UPDATE agent_activity_snapshot SET activity_kind = 'offline', detail_kind = 'machine_disconnected', received_at = now()
-		WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
-		return fmt.Errorf("project Runner disconnect: %w", err)
-	}
-	if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
-		return fmt.Errorf("clear stale Runner Activity probe: %w", err)
-	}
-	if h.Bus != nil {
-		projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
+// HandleWorkspaceRunnerDisconnect is invoked only for the socket that still
+// owns the current ready Runner slot. Exact daemon-instance fencing prevents a
+// late teardown from deactivating a replacement Runner's launches.
+func (h *Handler) HandleWorkspaceRunnerDisconnect(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string) error {
+	return h.runnerPresenceLocked(func() error {
+		workspaceID, err := util.ParseUUID(identity.WorkspaceID)
 		if err != nil {
-			return err
+			return errors.New("invalid Runner workspace identity")
 		}
-		h.publish(protocol.EventAgentActivity, util.UUIDToString(workspaceID), "system", "", RunnerActivityRealtimePayload{AgentID: util.UUIDToString(agentID), Activity: projected})
-	}
-	return nil
+		if h.TxStarter == nil {
+			return errors.New("Runner transaction store is unavailable")
+		}
+		tx, err := h.TxStarter.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin Runner disconnect fence: %w", err)
+		}
+		defer tx.Rollback(ctx)
+
+		presenceAgentIDs := make([]pgtype.UUID, 0)
+		rows, err := tx.Query(ctx, `
+			UPDATE agent_activity_launch
+			SET status = 'inactive', updated_at = now()
+			WHERE workspace_id = $1 AND daemon_id = $2 AND daemon_instance_id = $3
+			  AND status = 'active'
+			RETURNING agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
+		if err != nil {
+			return fmt.Errorf("deactivate disconnected Runner launches: %w", err)
+		}
+		for rows.Next() {
+			var agentID pgtype.UUID
+			if err := rows.Scan(&agentID); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan disconnected Runner launch: %w", err)
+			}
+			presenceAgentIDs = append(presenceAgentIDs, agentID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterate disconnected Runner launches: %w", err)
+		}
+		rows.Close()
+
+		activityAgentIDs := make([]pgtype.UUID, 0)
+		rows, err = tx.Query(ctx, `
+			UPDATE agent_activity_snapshot
+			SET activity_kind = 'offline', detail_kind = 'machine_disconnected', received_at = now()
+			WHERE workspace_id = $1 AND daemon_id = $2 AND daemon_instance_id = $3
+			RETURNING agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
+		if err != nil {
+			return fmt.Errorf("project disconnected Runner Activity: %w", err)
+		}
+		for rows.Next() {
+			var agentID pgtype.UUID
+			if err := rows.Scan(&agentID); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan disconnected Runner Activity: %w", err)
+			}
+			activityAgentIDs = append(activityAgentIDs, agentID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterate disconnected Runner Activity: %w", err)
+		}
+		rows.Close()
+		if _, err := tx.Exec(ctx, `DELETE FROM agent_activity_probe
+			WHERE workspace_id = $1 AND daemon_id = $2 AND daemon_instance_id = $3`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
+			return fmt.Errorf("clear disconnected Runner probes: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit Runner disconnect fence: %w", err)
+		}
+
+		for _, agentID := range presenceAgentIDs {
+			h.publishAgentPresence(identity.WorkspaceID, util.UUIDToString(agentID), AgentPresenceOffline)
+		}
+		if h.Bus != nil {
+			for _, agentID := range activityAgentIDs {
+				projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
+				if err != nil {
+					return err
+				}
+				h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
+					AgentID: util.UUIDToString(agentID), Activity: projected,
+				})
+			}
+		}
+		return nil
+	})
+}
+
+func (h *Handler) markRunnerActivityOfflineForComputerDisconnect(ctx context.Context, workspaceID, agentID pgtype.UUID, daemonID, daemonInstanceID, launchID string) error {
+	return h.runnerPresenceLocked(func() error {
+		command, err := h.DB.Exec(ctx, `UPDATE agent_activity_launch SET status = 'inactive', updated_at = now()
+			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5 AND status = 'active'`, workspaceID, agentID, daemonID, daemonInstanceID, launchID)
+		if err != nil {
+			return fmt.Errorf("deactivate stale Runner launch: %w", err)
+		}
+		if _, err := h.DB.Exec(ctx, `UPDATE agent_activity_snapshot SET activity_kind = 'offline', detail_kind = 'machine_disconnected', received_at = now()
+			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+			return fmt.Errorf("project Runner disconnect: %w", err)
+		}
+		if _, err := h.DB.Exec(ctx, `DELETE FROM agent_activity_probe WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5`, workspaceID, agentID, daemonID, daemonInstanceID, launchID); err != nil {
+			return fmt.Errorf("clear stale Runner Activity probe: %w", err)
+		}
+		if command.RowsAffected() == 1 {
+			h.publishAgentPresence(util.UUIDToString(workspaceID), util.UUIDToString(agentID), AgentPresenceOffline)
+		}
+		if h.Bus != nil {
+			projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
+			if err != nil {
+				return err
+			}
+			h.publish(protocol.EventAgentActivity, util.UUIDToString(workspaceID), "system", "", RunnerActivityRealtimePayload{AgentID: util.UUIDToString(agentID), Activity: projected})
+		}
+		return nil
+	})
 }
 
 func runnerActivityFingerprint(activity protocol.AgentActivityPayload) (string, error) {
@@ -545,12 +677,20 @@ func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, a
 	if summary.Tone == "error" {
 		for _, row := range response.Timeline {
 			if row.Title == "Error" && row.Subtext != "" {
-				summary.Label = "Error: " + truncateRunnerActivitySummary(row.Subtext, 240)
+				summary = runnerActivitySummaryWithError(summary, row.Subtext)
 				break
 			}
 		}
 	}
 	return response, nil
+}
+
+func runnerActivitySummaryWithError(summary activityprojection.Summary, errorText string) activityprojection.Summary {
+	errorText = strings.TrimSpace(errorText)
+	if summary.Tone == "error" && errorText != "" {
+		summary.Label = "Error: " + truncateRunnerActivitySummary(errorText, 240)
+	}
+	return summary
 }
 
 func truncateRunnerActivitySummary(value string, maxRunes int) string {

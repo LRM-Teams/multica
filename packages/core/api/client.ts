@@ -14,6 +14,7 @@ import type {
   ListIssuesParams,
   ListGroupedIssuesParams,
   Agent,
+  AgentPresenceResponse,
   ComputerConnection,
   AgentFileContentResponse,
   AgentFilesResponse,
@@ -63,6 +64,7 @@ import type {
   UpdateAgentFileContentResponse,
   AgentTask,
   RunnerActivityResponse,
+  RunnerActivitySummariesResponse,
   AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
@@ -304,6 +306,10 @@ import {
   AgentHealthResponseSchema,
   RunnerActivityResponseSchema,
   EMPTY_RUNNER_ACTIVITY_RESPONSE,
+  RunnerActivitySummariesResponseSchema,
+  EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
+  AgentPresenceResponseSchema,
+  EMPTY_AGENT_PRESENCE_RESPONSE,
   AgentRuntimeListSchema,
   ComputerConnectionListSchema,
   ChannelMessagesPageSchema,
@@ -415,13 +421,7 @@ import {
   WebPushTestSchema,
   DeleteComputerResponseSchema,
   EMPTY_DELETE_COMPUTER_RESPONSE,
-  RemoveComputerAgentsResponseSchema,
-  EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
   type DeleteComputerResponse,
-  type RemoveComputerAgentsResponse,
-  RemoveComputerWorkspaceBindingResponseSchema,
-  EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE,
-  type RemoveComputerWorkspaceBindingResponse,
   MachineUpgradeSchema,
   EMPTY_MACHINE_UPGRADE,
   NotePageSchema,
@@ -1455,6 +1455,26 @@ export class ApiClient {
     });
   }
 
+  async getRunnerActivitySummaries(): Promise<RunnerActivitySummariesResponse> {
+    const raw = await this.fetch<unknown>("/api/agents/runner-activity-summaries");
+    return parseWithFallback(
+      raw,
+      RunnerActivitySummariesResponseSchema,
+      EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
+      { endpoint: "GET /api/agents/runner-activity-summaries" },
+    );
+  }
+
+  async getAgentPresence(): Promise<AgentPresenceResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/presence`);
+    return parseWithFallback(
+      raw,
+      AgentPresenceResponseSchema,
+      EMPTY_AGENT_PRESENCE_RESPONSE,
+      { endpoint: "GET /api/agents/presence" },
+    );
+  }
+
   /**
    * Returns the plaintext `custom_env` map for an agent. Owner/admin
    * only; calls from agent-actor sessions get a 403. Every successful
@@ -1755,63 +1775,19 @@ export class ApiClient {
     await this.fetch(`/api/runtimes/${runtimeId}`, { method: "DELETE" });
   }
 
-  async removeComputerWorkspaceBinding(
-    daemonId: string,
-    workspaceId: string,
-  ): Promise<RemoveComputerWorkspaceBindingResponse> {
+  // Permanently removes the current Workspace's server-side Computer
+  // projection. Active agents return a structured 409 and must be deleted
+  // through the normal Agent flow first.
+  async deleteComputer(daemonId: string): Promise<DeleteComputerResponse> {
     const raw = await this.fetch<unknown>(
-      `/api/computers/${encodeURIComponent(daemonId)}/workspace-connections/${encodeURIComponent(workspaceId)}`,
-      { method: "DELETE" },
-    );
-    return parseWithFallback(
-      raw,
-      RemoveComputerWorkspaceBindingResponseSchema,
-      EMPTY_REMOVE_COMPUTER_WORKSPACE_BINDING_RESPONSE,
-      { endpoint: "DELETE /api/computers/{computerId}/workspace-connections/{workspaceId}" },
-    );
-  }
-
-  // Permanently deletes an empty Computer. Active agents return a structured
-  // 409 and must be explicitly removed through removeAgentsByDaemon first.
-  async deleteRuntimesByDaemon(
-    daemonId: string,
-    opts?: { runtimeMode?: string },
-  ): Promise<DeleteComputerResponse> {
-    const search = new URLSearchParams();
-    if (opts?.runtimeMode) search.set("runtime_mode", opts.runtimeMode);
-    const qs = search.toString();
-    const raw = await this.fetch<unknown>(
-      `/api/runtimes/by-daemon/${encodeURIComponent(daemonId)}${qs ? `?${qs}` : ""}`,
+      `/api/computers/${encodeURIComponent(daemonId)}`,
       { method: "DELETE" },
     );
     return parseWithFallback(
       raw,
       DeleteComputerResponseSchema,
       EMPTY_DELETE_COMPUTER_RESPONSE,
-      { endpoint: "DELETE /api/runtimes/by-daemon/{daemonId}" },
-    );
-  }
-
-  async removeAgentsByDaemon(
-    daemonId: string,
-    expectedActiveAgentIds: string[],
-    opts?: { runtimeMode?: string },
-  ): Promise<RemoveComputerAgentsResponse> {
-    const search = new URLSearchParams();
-    if (opts?.runtimeMode) search.set("runtime_mode", opts.runtimeMode);
-    const qs = search.toString();
-    const raw = await this.fetch<unknown>(
-      `/api/runtimes/by-daemon/${encodeURIComponent(daemonId)}/remove-agents${qs ? `?${qs}` : ""}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ expected_active_agent_ids: expectedActiveAgentIds }),
-      },
-    );
-    return parseWithFallback(
-      raw,
-      RemoveComputerAgentsResponseSchema,
-      EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
-      { endpoint: "POST /api/runtimes/by-daemon/{daemonId}/remove-agents" },
+      { endpoint: "DELETE /api/computers/{daemonId}" },
     );
   }
 
@@ -4516,6 +4492,29 @@ export class ApiClient {
       { endpoint: "GET /api/research/sessions/:id/presence" },
     );
     return { ...parsed, session_id: parsed.session_id || id };
+  }
+
+  /**
+   * GET the LRM-1505 typed research star graph (nodes/edges/clusters/lineage)
+   * for one render pass. Validated against the real typed-graph contract — no
+   * fabricated topology. Returns the normalized response or the empty fallback
+   * when the endpoint reports an empty/drop-graph state.
+   */
+  async getResearchGraphTyped(
+    id: string,
+  ): Promise<import("../research/graph-typed").TypedGraphResponse> {
+    const {
+      TypedGraphResponseSchema,
+      EMPTY_TYPED_GRAPH,
+    } = await import("../research/graph-typed");
+    const raw = await this.fetch(`/api/research/sessions/${id}/graph/typed`);
+    const parsed = parseWithFallback(
+      raw,
+      TypedGraphResponseSchema,
+      EMPTY_TYPED_GRAPH,
+      { endpoint: "GET /api/research/sessions/:id/graph/typed" },
+    );
+    return { ...parsed, ...(parsed.session_id ? {} : { session_id: id }) };
   }
 
   async postResearchNodeCommand(

@@ -64,7 +64,8 @@ Examples:
 func init() {
 	for _, command := range []*cobra.Command{setupCmd, setupCloudCmd} {
 		command.Flags().String("environment", string(cli.ServiceEnvironmentProduction), "Service environment: production or test")
-		command.Flags().String("test-url", "", "Tencent test environment origin, for example https://test.leagent.me or http://203.0.113.8:8080")
+		command.Flags().String("server-url", "", "Test API, auth, and WebSocket origin (required with --environment test)")
+		command.Flags().String("app-url", "", "Test Web app origin (required with --environment test)")
 	}
 	setupCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
@@ -177,8 +178,9 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	environment, _ := cmd.Flags().GetString("environment")
-	testURL, _ := cmd.Flags().GetString("test-url")
-	target, err := cli.NewServiceTarget(environment, testURL)
+	serverURL, _ := cmd.Flags().GetString("server-url")
+	appURL, _ := cmd.Flags().GetString("app-url")
+	target, err := cli.NewServiceTarget(environment, serverURL, appURL)
 	if err != nil {
 		return err
 	}
@@ -222,7 +224,7 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 
 func cloudCLIConfig() cli.CLIConfig {
 	cfg := cli.CLIConfig{}
-	target, _ := cli.NewServiceTarget(string(cli.ServiceEnvironmentProduction), "")
+	target, _ := cli.NewServiceTarget(string(cli.ServiceEnvironmentProduction), "", "")
 	cfg.PutServiceEnvironment(target)
 	return cfg
 }

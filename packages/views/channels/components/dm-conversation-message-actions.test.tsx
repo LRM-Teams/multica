@@ -178,7 +178,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getAgentHonorLevel: () => undefined,
   }),
 }));
-vi.mock("@multica/core/agents", () => ({ useAgentPresenceDetail: () => "loading" }));
+vi.mock("@multica/core/agents", () => ({ useAgentPresence: () => "loading" }));
 vi.mock("@multica/core/paths", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/paths")>()),
   useCurrentWorkspace: () => ({ id: "ws-1" }),

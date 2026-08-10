@@ -254,7 +254,7 @@ func diagnosticLevel(outcome string) diagnosticlog.Level {
 	switch outcome {
 	case "failed", "rejected":
 		return diagnosticlog.LevelError
-	case "deferred", "held", "degraded":
+	case "deferred", "held", "degraded", "discarded", "cancelled":
 		return diagnosticlog.LevelWarn
 	default:
 		return diagnosticlog.LevelInfo

@@ -32,17 +32,7 @@
   "availability": {
     "all": "全部",
     "online": "在线",
-    "unstable": "不稳定",
-    "offline": "离线",
-    "archived": "已归档"
-  },
-  "lifecycle_status": {
-    "starting": "启动中",
-    "disconnected": "断线",
-    "offline": "离线",
-    "stopped": "已停止",
-    "crashed": "已崩溃",
-    "blocked": "额度封锁"
+    "offline": "离线"
   },
   "workload": {
     "working": "处理中",

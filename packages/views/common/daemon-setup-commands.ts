@@ -1,6 +1,6 @@
 import {
-  MULTICA_INSTALL_COMMAND,
   MULTICA_POWERSHELL_INSTALL_COMMAND,
+  multicaInstallCommand,
 } from "@multica/core/constants/repository";
 import type { ServiceEnvironment } from "@multica/core/config";
 
@@ -18,6 +18,7 @@ export interface DaemonSetupCommands {
 export interface DaemonSetupTarget {
   environment?: ServiceEnvironment;
   serverUrl?: string;
+  appUrl?: string;
 }
 
 export function defaultDaemonSetupMode(): DaemonSetupMode {
@@ -41,15 +42,13 @@ export function daemonSetupCommands(
   workspaceSlug?: string,
   target: DaemonSetupTarget = {},
 ): DaemonSetupCommands {
-  const installCmd =
-    mode === "windows-powershell"
-      ? POWERSHELL_INSTALL_COMMAND
-      : MULTICA_INSTALL_COMMAND;
+  const isTest = target.environment === "test";
+  const installCmd = multicaInstallCommand(mode, target.environment);
 
   const workspace = `/${workspaceSlug || "<workspace-slug>"}`;
   const setupCmd =
-    target.environment === "test"
-      ? `multica setup --environment test --test-url ${normalizeCommandURL(target.serverUrl) || "<test-url>"} ${workspace}`
+    isTest
+      ? `multica setup --environment test --server-url ${normalizeCommandURL(target.serverUrl) || "<server-url>"} --app-url ${normalizeCommandURL(target.appUrl) || "<app-url>"} ${workspace}`
       : `multica setup ${workspace}`;
 
   return {

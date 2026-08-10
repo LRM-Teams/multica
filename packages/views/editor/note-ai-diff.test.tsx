@@ -3,7 +3,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
-import { buildNoteAILineDiff, NoteAIDiffPreview } from "./note-ai-diff";
+import { NoteAIDiffPreview } from "./note-ai-diff";
+import { buildNoteAILineDiff } from "./note-ai-diff-utils";
 
 describe("NoteAIDiffPreview", () => {
   it("builds a line diff with removed and added lines", () => {

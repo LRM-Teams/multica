@@ -1,5 +1,6 @@
 export * from "./dispute-ui-store";
 export * from "./fleet-members";
+export * from "./graph-typed";
 export * from "./mocks";
 export * from "./queries";
 export * from "./report-structured";

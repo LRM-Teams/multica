@@ -40,6 +40,7 @@ export function MessagePartsRenderer({
               key={key}
               highlightQuery={highlightQuery}
               enableStickerShortcodes={false}
+              mentionVariant="plain"
             >
               {part.text}
             </MemoizedMarkdown>

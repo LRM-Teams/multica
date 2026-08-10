@@ -18,6 +18,19 @@ import { cn } from "@multica/ui/lib/utils";
 export type MentionTokenKind = "default" | "all" | "self";
 
 /**
+ * Surface variant for {@link mentionTokenClassName}.
+ * - `default`/pill  → the Slack soft-bg token (brand ink + rest fill shell).
+ * - `plain`         → bare brand-ink text with **no** pill shell (no bg, no
+ *                     px padding, no rounded corners). Used on chat surfaces
+ *                     (LRM-1386: Frank product lock removes the @mention capsule
+ *                     in chat composer + message bubbles, keeping issue comments
+ *                     and Activity on the pill). Still bold + focus-visible ring
+ *                     for a11y, and still resolves the same hover/click profile
+ *                     card.
+ */
+export type MentionTokenVariant = "default" | "plain";
+
+/**
  * Resolve the visual kind for a mention:// token.
  * - `all` → same token as default (broadcast uses weight+fill already shared)
  * - member id matching the viewer → self emphasis (yellow token + row wash)
@@ -42,8 +55,21 @@ export function resolveMentionTokenKind(
 export function mentionTokenClassName(
   kind: MentionTokenKind = "default",
   className?: string,
+  variant: MentionTokenVariant = "default",
 ): string {
   const isSelf = kind === "self";
+  if (variant === "plain") {
+    // Chat surfaces (LRM-1386): bare brand-ink mention text, no pill shell.
+    // Keep bold + focus ring (a11y); drop all bg / px / radius. Unresolved
+    // mentions still downgrade via the passed className (bg-muted text).
+    return cn(
+      "mention not-prose inline",
+      "font-bold box-decoration-clone",
+      "transition-colors duration-100 text-brand",
+      "hover:text-brand/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30",
+      className,
+    );
+  }
   return cn(
     "mention not-prose inline rounded-sm px-0.5",
     "font-bold box-decoration-clone",

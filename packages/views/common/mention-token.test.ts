@@ -68,6 +68,28 @@ describe("mentionTokenClassName", () => {
     expect(cls).not.toContain("dark:bg-[#faf0c8]");
     expect(cls).not.toContain("dark:text-foreground");
   });
+
+  it("plain variant drops the pill shell but keeps brand ink + bold (LRM-1386)", () => {
+    const cls = mentionTokenClassName("default", undefined, "plain");
+    expect(cls).toContain("mention");
+    expect(cls).toContain("text-brand");
+    expect(cls).toContain("font-bold");
+    // No capsule shell:
+    expect(cls).not.toContain("bg-brand");
+    expect(cls).not.toContain("rounded-sm");
+    expect(cls).not.toContain("px-");
+    // Unresolved overrides and focus ring still apply:
+    expect(cls).toContain("focus-visible:ring-1");
+  });
+
+  it("plain variant also removes the @self warm-yellow pill shell", () => {
+    const cls = mentionTokenClassName("self", undefined, "plain");
+    expect(cls).not.toContain("bg-[#faf0c8]");
+    expect(cls).not.toContain("dark:bg-brand/[0.14]");
+    expect(cls).not.toContain("rounded-sm");
+    expect(cls).not.toContain("px-");
+    expect(cls).toContain("text-brand");
+  });
 });
 
 describe("SELF_MENTION_ROW_CLASS", () => {

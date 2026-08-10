@@ -3513,6 +3513,7 @@ export function ChannelsPage({
             onExternalFiles={threadPending.addFiles}
             submitOnEnter
             showBubbleMenu={false}
+            editorMentionVariant="plain"
             mentionAllowedActorIds={mentionAllowedActorIds}
             scopedMentionAgents={channelAgentCandidates}
             mentionChannelMemberIds={
@@ -4264,6 +4265,7 @@ export function ChannelsPage({
                         submitOnEnter
                         showBubbleMenu={false}
                         enableChannelReferences
+                        editorMentionVariant="plain"
                         mentionAllowedActorIds={mentionAllowedActorIds}
                         scopedMentionAgents={channelAgentCandidates}
                         mentionChannelMemberIds={

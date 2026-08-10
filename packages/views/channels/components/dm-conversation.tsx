@@ -1505,6 +1505,7 @@ function DmChannelConversation({
               onExternalFiles={threadPending.addFiles}
               submitOnEnter
               showBubbleMenu={false}
+              editorMentionVariant="plain"
               mentionAllowedActorIds={mentionAllowedActorIds}
             />
           }
@@ -1765,6 +1766,7 @@ function DmChannelConversation({
               enableChannelReferences
               submitOnEnter
               showBubbleMenu={false}
+              editorMentionVariant="plain"
             />
         }
         leadingActions={

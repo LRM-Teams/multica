@@ -408,7 +408,9 @@ function MessageBubble({
               fadeVariant="muted"
             >
               <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                <Markdown attachments={message.attachments}>{message.content}</Markdown>
+                <Markdown attachments={message.attachments} mentionVariant="plain">
+                  {message.content}
+                </Markdown>
               </div>
             </ChatCollapsibleBody>
             <AttachmentList
@@ -743,7 +745,9 @@ function MessageProse({
   return (
     <ChatCollapsibleBody contentKey={contentKey}>
       <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
-        <Markdown attachments={attachments}>{unwrapped ?? content}</Markdown>
+        <Markdown attachments={attachments} mentionVariant="plain">
+          {unwrapped ?? content}
+        </Markdown>
       </div>
     </ChatCollapsibleBody>
   );
@@ -805,7 +809,7 @@ function TimelineView({
           contentKey={`preface:${preface.map((t) => t.content ?? "").join("\n\n").length}`}
         >
           <div className={cn("text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none", selectableMessageTextClass)}>
-            <Markdown attachments={attachments}>
+            <Markdown attachments={attachments} mentionVariant="plain">
               {preface.map((t) => t.content ?? "").join("\n\n")}
             </Markdown>
           </div>
@@ -948,7 +952,9 @@ function MiddleTextRow({
 }) {
   return (
     <div className={cn("py-0.5 text-xs text-muted-foreground prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", selectableMessageTextClass)}>
-      <Markdown attachments={attachments}>{item.content ?? ""}</Markdown>
+      <Markdown attachments={attachments} mentionVariant="plain">
+        {item.content ?? ""}
+      </Markdown>
     </div>
   );
 }

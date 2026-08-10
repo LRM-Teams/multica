@@ -56,6 +56,7 @@ import {
 import type { MentionAgentCandidate, MentionItem } from "./extensions/mention-suggestion";
 import { createEditorExtensions } from "./extensions";
 import { uploadAndInsertFile } from "./extensions/file-upload";
+import { MentionVariantProvider } from "./extensions/mention-variant-context";
 import { preprocessMarkdown } from "./utils/preprocess";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { EditorBubbleMenu, type TextOptimizationRequest } from "./bubble-menu";
@@ -117,6 +118,9 @@ interface ContentEditorProps {
   disableMentions?: boolean;
   /** Chat can surface current/recent issue/project suggestions. Other editors use default mention behavior. */
   mentionMode?: "default" | "context";
+  /** LRM-1386 — chat composers pass `"plain"` so inserted @mentions render as
+   *  shell-less brand-ink text (no pill); issue-comment editors keep "default". */
+  editorMentionVariant?: "default" | "plain";
   mentionContextItems?: MentionItem[];
   /** Enable a channel reference `#` inline picker. */
   enableChannelReferences?: boolean;
@@ -221,6 +225,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       currentIssueId,
       disableMentions = false,
       mentionMode = "default",
+      editorMentionVariant = "default",
       mentionContextItems,
       enableChannelReferences = false,
       mentionAllowedActorIds,
@@ -638,6 +643,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     if (!editor) return null;
 
     return (
+      <MentionVariantProvider value={editorMentionVariant}>
       <AttachmentDownloadProvider attachments={providerAttachments}>
         <div
           ref={wrapperRef}
@@ -664,6 +670,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           <LinkHoverCard {...hover} />
         </div>
       </AttachmentDownloadProvider>
+      </MentionVariantProvider>
     );
   },
 );

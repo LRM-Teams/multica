@@ -34,8 +34,13 @@ import {
   resolveMentionTokenKind,
 } from "../../common/mention-token";
 
+import { useMentionVariant } from "./mention-variant-context";
+
 export function MentionView({ node }: NodeViewProps) {
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
+  // LRM-1386 — the host editor (chat composer vs issue-comment) sets the
+  // surface variant via React context; chat = "plain", everything else "default".
+  const mentionVariant = useMentionVariant();
   // Same context-or-global-store fallback as ActorAvatarPanelTrigger, so an
   // @mention opens the panel whether it renders inside channels/DM (context)
   // or anywhere else an editor can render one (issue comments, etc.).
@@ -80,6 +85,7 @@ export function MentionView({ node }: NodeViewProps) {
         openAgentPanel={openAgentPanel}
         openMemberPanel={openMemberPanel}
         closeAgentPanel={closeAgentPanel}
+        mentionVariant={mentionVariant}
       />
     </NodeViewWrapper>
   );
@@ -93,6 +99,7 @@ function ActorMentionEditorChip({
   openAgentPanel,
   openMemberPanel,
   closeAgentPanel,
+  mentionVariant = "default",
 }: {
   type: string;
   id: string;
@@ -101,6 +108,7 @@ function ActorMentionEditorChip({
   openAgentPanel: ((id: string) => void) | null | undefined;
   openMemberPanel: ((id: string) => void) | null | undefined;
   closeAgentPanel: () => void;
+  mentionVariant?: "default" | "plain";
 }): ReactNode {
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
@@ -111,6 +119,7 @@ function ActorMentionEditorChip({
         unresolved
           ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
           : undefined,
+        mentionVariant,
       )}
       data-mention-kind={kind}
       data-mention-type={type}

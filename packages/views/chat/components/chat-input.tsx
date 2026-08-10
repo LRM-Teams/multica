@@ -319,6 +319,7 @@ export function ChatInput({
             // Chat is short-form — the floating formatting toolbar is
             // more distraction than feature here.
             showBubbleMenu={false}
+            editorMentionVariant="plain"
             // Chat / FAB bubble: bare Enter sends (same as channel/DM
             // composers). Shift+Enter still inserts a newline via Tiptap's
             // default; code blocks keep Enter for a new line inside the fence.

@@ -17,7 +17,7 @@ func TestLooksLikeDurableFeedback(t *testing.T) {
 		{"pipeline也有错，以后都得记住", true}, // 以后都
 		{"hello", false},
 		{"帮我看一下这个 bug", false},
-		{"那你为什么又犯错了", false}, // agent judges in-prompt; not a rigid platform phrase
+		{"那你为什么又犯错了", false},                // agent judges in-prompt; not a rigid platform phrase
 		{"先 rebase/merge dev，再建 MR", false}, // soft lesson — agent judges; platform only catches explicit remember / clear standing cues
 		{"from now on always report progress first", true},
 		{"remember this for later", true},
@@ -51,8 +51,12 @@ func TestNotesAndMemoryCountAsDurableWrite(t *testing.T) {
 	if !HasDurableWrite(mem) {
 		t.Fatal("MEMORY.md should count as remembered")
 	}
-	if _, ok := DetectMissedWrite("记住到 memory", nil, notes, "m1"); ok {
-		t.Fatal("notes write should clear missed-write")
+	if _, ok := DetectMissedWrite("记住到 memory", nil, notes, "m1"); !ok {
+		t.Fatal("agent notes must not clear a user-scoped missed-write")
+	}
+	agentSignal := []Signal{{Action: ActionWrite, Scope: "agent", Summary: "standing agent rule"}}
+	if _, ok := DetectMissedWrite("记住到 memory", agentSignal, notes, "m1"); ok {
+		t.Fatal("agent notes should clear an agent-scoped missed-write")
 	}
 }
 
@@ -85,6 +89,10 @@ func TestDetectMissedWrite(t *testing.T) {
 	writes := []WriteEntry{{RelPath: "users/member-1/USER.md", ScopeType: "user", FileKey: "USER"}}
 	if _, ok := DetectMissedWrite("以后都要先反馈进度", nil, writes, "member-1"); ok {
 		t.Fatal("durable write should clear miss")
+	}
+	wrongUser := []WriteEntry{{RelPath: "users/member-2/USER.md", ScopeType: "user", FileKey: "USER"}}
+	if _, ok := DetectMissedWrite("以后都要先反馈进度", nil, wrongUser, "member-1"); !ok {
+		t.Fatal("a different user's file must not clear this user's missed-write")
 	}
 
 	dailyOnly := []WriteEntry{{RelPath: "memory/daily/2026-07-29.md", ScopeType: "agent_daily", FileKey: "DAILY"}}

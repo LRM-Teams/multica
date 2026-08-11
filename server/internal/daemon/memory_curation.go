@@ -69,7 +69,10 @@ func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending P
 		items := make([]memorycuration.EvidenceItem, 0, len(bundle.Items))
 		for _, item := range bundle.Items {
 			createdAt, _ := time.Parse(time.RFC3339, item.CreatedAt)
-			items = append(items, memorycuration.EvidenceItem{Kind: item.Kind, ID: item.ID, Title: item.Title, Snippet: item.Snippet, CreatedAt: createdAt})
+			items = append(items, memorycuration.EvidenceItem{
+				Kind: item.Kind, ID: item.ID, Title: item.Title, Snippet: item.Snippet,
+				Scope: item.Scope, SubjectID: item.SubjectID, Metadata: append([]byte(nil), item.Metadata...), CreatedAt: createdAt,
+			})
 		}
 		dbEvidence[bundle.AgentID] = items
 	}

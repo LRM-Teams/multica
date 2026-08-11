@@ -96,11 +96,18 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 			resp.Skipped++
 			continue
 		}
+		// Keep every valid write in the current-task evidence, including an
+		// event deduplicated from persistence. Otherwise the missed-write guard
+		// can enqueue a false miss for a write that really landed on disk.
+		writeEntries = append(writeEntries, memorysignal.WriteEntry{
+			RelPath: rel, ScopeType: scopeType, FileKey: fileKey,
+		})
 
 		recent, err := h.Queries.HasRecentAgentMemoryWrite(r.Context(), db.HasRecentAgentMemoryWriteParams{
-			AgentID:   agentID,
-			RelPath:   rel,
-			CreatedAt: dedupSince,
+			AgentID:     agentID,
+			RelPath:     rel,
+			ContentHash: write.ContentHash,
+			CreatedAt:   dedupSince,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "dedup check failed")
@@ -141,11 +148,6 @@ func (h *Handler) ReportAgentMemoryWrites(w http.ResponseWriter, r *http.Request
 			Count:     1,
 		})
 		resp.Accepted++
-		writeEntries = append(writeEntries, memorysignal.WriteEntry{
-			RelPath:   rel,
-			ScopeType: scopeType,
-			FileKey:   fileKey,
-		})
 	}
 
 	signals := make([]memorysignal.Signal, 0, len(req.Signals))

@@ -60,9 +60,15 @@ func TestMemoryCurationPlanDateUsesBeijingYesterday(t *testing.T) {
 		t.Fatal(err)
 	}
 	planLocal := time.Date(2026, 7, 10, 1, 0, 0, 0, loc)
-	planDate := time.Date(planLocal.Year(), planLocal.Month(), planLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	planDate, windowStart, windowEnd := priorLocalCurationDay(planLocal)
 	if got := planDate.Format("2006-01-02"); got != "2026-07-09" {
 		t.Fatalf("planDate = %s, want 2026-07-09", got)
+	}
+	if got := windowStart.Format(time.RFC3339); got != "2026-07-08T16:00:00Z" {
+		t.Fatalf("windowStart = %s, want Beijing midnight in UTC", got)
+	}
+	if got := windowEnd.Format(time.RFC3339); got != "2026-07-09T16:00:00Z" {
+		t.Fatalf("windowEnd = %s, want next Beijing midnight in UTC", got)
 	}
 }
 

@@ -29,6 +29,7 @@ import {
 } from "../lib/research-create-params";
 import { ResearchSessionGoalCard } from "./research-session-goal-card";
 import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
+import { ResearchStageTimeline } from "./research-stage-timeline";
 
 type StatusTone = { text: string; dot: string; pill: string };
 
@@ -61,33 +62,6 @@ const DEFAULT_TONE: StatusTone = {
 // render — an inline `= []` default breaks memo comparison downstream.
 const EMPTY_MEMBERS: ResearchFleetMember[] = [];
 const EMPTY_SOURCES: ResearchSource[] = [];
-
-function ContextChip({
-  label,
-  className,
-  interactive,
-  onClick,
-}: {
-  label: string;
-  className?: string;
-  interactive?: boolean;
-  onClick?: () => void;
-}) {
-  const base = cn(
-    "shrink-0 rounded-md border border-border/70 bg-muted/35 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-muted-foreground uppercase",
-    interactive &&
-      "cursor-pointer transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
-    className,
-  );
-  if (interactive && onClick) {
-    return (
-      <button type="button" onClick={onClick} className={base}>
-        {label}
-      </button>
-    );
-  }
-  return <span className={base}>{label}</span>;
-}
 
 export function ResearchSessionChrome({
   session,
@@ -150,9 +124,6 @@ export function ResearchSessionChrome({
   const status = session.status;
   const tone = STATUS_TONES[status] ?? DEFAULT_TONE;
   const statusLabel = t(($) => $.status[status as keyof typeof $.status] ?? status);
-  const stageLabel = t(
-    ($) => $.stage[session.current_stage as keyof typeof $.stage] ?? session.current_stage,
-  );
   const createParams = resolveSessionCreateParams({
     goal: session.goal,
     depth_tier: session.depth_tier,
@@ -183,29 +154,20 @@ export function ResearchSessionChrome({
 
   const primaryClass = "bg-brand text-brand-foreground hover:bg-brand/90";
 
-  const roundChip =
+  const roundLabel =
     typeof session.product_round === "number" &&
     typeof session.product_round_budget === "number" &&
-    session.product_round_budget > 0 ? (
-      <span
-        className={cn(
-          "shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] tracking-wide",
-          session.product_round >= session.product_round_budget
-            ? "border-warning/40 bg-warning/10 text-warning"
-            : "border-border/70 bg-muted/35 text-muted-foreground",
-        )}
-        title={t(($) => $.round.subtitle)}
-      >
-        {t(($) => $.round.budget_chip, {
+    session.product_round_budget > 0
+      ? `${t(($) => $.round.budget_chip, {
           used: session.product_round,
           budget: session.product_round_budget,
-        })}
-        {session.status === "completed" &&
-        session.product_round >= session.product_round_budget
-          ? ` · ${t(($) => $.round.budget_capped)}`
-          : ""}
-      </span>
-    ) : null;
+        })}${
+          session.status === "completed" &&
+          session.product_round >= session.product_round_budget
+            ? ` · ${t(($) => $.round.budget_capped)}`
+            : ""
+        }`
+      : null;
 
   return (
     <header
@@ -218,24 +180,37 @@ export function ResearchSessionChrome({
         className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-brand/45 to-transparent"
       />
 
-      {/* Identity: title + status (primary visual) */}
+      {/* L1 — session identity is the only primary visual level. */}
       <div
         data-testid="research-session-identity"
-        className="flex items-center gap-2.5 px-4 pt-2.5 pb-1"
+        className="flex min-w-0 items-start gap-2.5 px-4 pt-2.5"
       >
         <span
-          className="hidden size-7 shrink-0 items-center justify-center rounded-[8px] bg-brand/12 text-brand md:flex"
+          className="mt-0.5 hidden size-7 shrink-0 items-center justify-center rounded-[8px] bg-brand/12 text-brand md:flex"
           aria-hidden
         >
           <Compass className="size-3.5" strokeWidth={2} />
         </span>
-        <h1 className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight">
-          {session.title}
-        </h1>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-base font-semibold tracking-tight">
+            {session.title}
+          </h1>
+          {showDepthChip || roundLabel ? (
+            <div
+              data-testid="research-session-meta"
+              className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground"
+            >
+              {showDepthChip ? (
+                <span>{t(($) => $.create_params.chip_depth, { label: depthTierLabel })}</span>
+              ) : null}
+              {roundLabel ? <span title={t(($) => $.round.subtitle)}>{roundLabel}</span> : null}
+            </div>
+          ) : null}
+        </div>
         <span
           data-testid="research-session-status"
           className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+            "mt-0.5 inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
             tone.pill,
           )}
         >
@@ -250,35 +225,18 @@ export function ResearchSessionChrome({
         </span>
       </div>
 
-      {/* Context + actions: stage/goal secondary; one primary CTA; secondary folded on narrow */}
+      {/* L2 + L3 — timeline and secondary actions share this header surface. */}
       <div
-        data-testid="research-session-toolbar"
-        className="flex min-w-0 items-center justify-between gap-2 px-3 pb-2.5 sm:gap-3 sm:px-4"
+        data-testid="research-session-actions"
+        className="flex flex-wrap items-center gap-x-2 gap-y-2 px-4 pt-2 pb-2.5"
       >
-        <div
-          data-testid="research-session-context"
-          className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden"
-        >
-          <ContextChip
-            label={stageLabel}
-            interactive={Boolean(onSelectStage)}
-            onClick={onSelectStage ? () => onSelectStage(session.current_stage) : undefined}
-          />
-          {showDepthChip ? (
-            <ContextChip
-              label={t(($) => $.create_params.chip_depth, { label: depthTierLabel })}
-            />
-          ) : null}
-          {roundChip}
-        </div>
-        <div
-          data-testid="research-session-actions"
-          className={cn(
-            "flex shrink-0 items-center gap-2",
-            hasPrimary && "pl-1",
-          )}
-        >
-          {/* LRM-1008 / LRM-898 D — compact Goal Card (toolbar right, before CTAs). */}
+        <ResearchStageTimeline
+          currentStage={session.current_stage}
+          sessionStatus={session.status}
+          onSelectStage={onSelectStage}
+        />
+        <div className={cn("ml-auto flex shrink-0 items-center gap-2", hasPrimary && "pl-1")}>
+          {/* LRM-1008 / LRM-898 D — compact Goal Card: GOAL stays an icon even on desktop. */}
           <ResearchSessionGoalCard
             sessionId={session.id}
             goal={session.goal}
@@ -287,6 +245,7 @@ export function ResearchSessionChrome({
             loading={goalLoading}
             error={goalError}
             onRetry={onGoalRetry}
+            compact
           />
           {showConfirm ? (
             <Button

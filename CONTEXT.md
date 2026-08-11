@@ -70,6 +70,15 @@ one Workspace Runner is active for a binding, while the same Workspace may have
 other Workspace Runners on other machines.
 _Avoid_: Workspace owner, global Workspace runner
 
+### Agent Attachment
+
+The durable fact that one Machine Service handles one Agent in one Workspace
+through one Runtime. Attachment is fenced by its own generation and survives
+process exit or Machine Service restart. It does not mean that a provider
+process is running, and detaching it does not delete the Agent Root, Inbox,
+Message Draft, or other durable Agent data.
+_Avoid_: Agent process, launch, session, Reminder owner, Workspace attachment
+
 ### Agent Workspace (Agent Root)
 
 The canonical persistent local working directory for one Agent in one

@@ -112,10 +112,45 @@ type AgentAttachmentRecoveryCursor struct {
 }
 
 func (cursor AgentAttachmentRecoveryCursor) Validate() error {
-	if strings.TrimSpace(cursor.RuntimeID) == "" || cursor.LifecycleSeq < 1 {
-		return errors.New("Agent Attachment recovery Runtime and lifecycle sequence are required")
+	if strings.TrimSpace(cursor.RuntimeID) == "" || cursor.LifecycleSeq < 0 {
+		return errors.New("Agent Attachment recovery Runtime is required and lifecycle sequence cannot be negative")
 	}
 	return nil
+}
+
+// AgentAttachmentRuntimeSet fixes recovery and reconciliation to one
+// authenticated Workspace and its explicitly allowed Runtime identities. An
+// empty Runtime set is valid and means that Workspace currently allows no
+// local Runtime.
+type AgentAttachmentRuntimeSet struct {
+	WorkspaceID string
+	RuntimeIDs  []string
+}
+
+func (runtimeSet AgentAttachmentRuntimeSet) Validate() error {
+	if strings.TrimSpace(runtimeSet.WorkspaceID) == "" {
+		return errors.New("Agent Attachment Runtime set Workspace is required")
+	}
+	seen := make(map[string]struct{}, len(runtimeSet.RuntimeIDs))
+	for _, runtimeID := range runtimeSet.RuntimeIDs {
+		runtimeID = strings.TrimSpace(runtimeID)
+		if runtimeID == "" {
+			return errors.New("Agent Attachment Runtime set contains an empty Runtime identity")
+		}
+		if _, exists := seen[runtimeID]; exists {
+			return fmt.Errorf("Agent Attachment Runtime set contains duplicate Runtime %q", runtimeID)
+		}
+		seen[runtimeID] = struct{}{}
+	}
+	return nil
+}
+
+func (runtimeSet AgentAttachmentRuntimeSet) runtimeIDs() map[string]struct{} {
+	result := make(map[string]struct{}, len(runtimeSet.RuntimeIDs))
+	for _, runtimeID := range runtimeSet.RuntimeIDs {
+		result[strings.TrimSpace(runtimeID)] = struct{}{}
+	}
+	return result
 }
 
 // AgentAttachmentRecoveryState is a value snapshot. Implementations must not
@@ -131,5 +166,7 @@ type AgentAttachmentRegistry interface {
 	Apply(workspaceID string, event AgentAttachmentEvent) (AgentAttachmentChange, error)
 	Resolve(workspaceID, agentID string) (AgentAttachment, bool)
 	List(workspaceID string) []AgentAttachment
-	RecoveryState(workspaceID string) AgentAttachmentRecoveryState
+	RecoveryState(runtimeSet AgentAttachmentRuntimeSet) (AgentAttachmentRecoveryState, error)
+	AdvanceRecovery(runtimeSet AgentAttachmentRuntimeSet, cursors []AgentAttachmentRecoveryCursor) error
+	Reconcile(runtimeSet AgentAttachmentRuntimeSet) ([]AgentAttachmentChange, error)
 }

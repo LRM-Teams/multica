@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -67,6 +68,443 @@ func newLocalAgentAttachmentRegistry(workspacesRoot string, logger *slog.Logger)
 	return registry
 }
 
+type agentAttachmentApplyResult struct {
+	change   AgentAttachmentChange
+	accepted bool
+	reason   string
+}
+
+func (r *localAgentAttachmentRegistry) Apply(workspaceID string, event AgentAttachmentEvent) (AgentAttachmentChange, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return AgentAttachmentChange{}, errors.New("Agent Attachment Workspace scope is required")
+	}
+	if err := event.Validate(); err != nil {
+		return AgentAttachmentChange{}, err
+	}
+	result, err := r.applyEvent(workspaceID, event, true, true)
+	return result.change, err
+}
+
+// applyEvent is the one generation and tombstone implementation used by both
+// the formal registry and the temporary legacy lifecycle facade. Formal events
+// durably advance their per-Runtime cursor in the same write; legacy events use
+// lifecycle sequence zero and retain replay-end cursor commits.
+func (r *localAgentAttachmentRegistry) applyEvent(
+	workspaceID string,
+	event AgentAttachmentEvent,
+	trackLifecycle bool,
+	strictWorkspace bool,
+) (agentAttachmentApplyResult, error) {
+	result := agentAttachmentApplyResult{
+		change: AgentAttachmentChange{Kind: AgentAttachmentUnchanged},
+		reason: "unchanged",
+	}
+	if r == nil {
+		return result, nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	previousCursor := r.runtimeLifecycleCursors[event.RuntimeID]
+	if trackLifecycle && int64(event.LifecycleSeq) <= previousCursor {
+		result.accepted = true
+		result.reason = "duplicate_lifecycle_sequence"
+		r.logApplyLocked(workspaceID, event, result, nil)
+		return result, nil
+	}
+
+	entry, existed := r.agents[event.AgentID]
+	if strictWorkspace && existed && entry.WorkspaceID != workspaceID {
+		err := fmt.Errorf("Agent Attachment %s belongs to Workspace %s, not %s", event.AgentID, entry.WorkspaceID, workspaceID)
+		result.reason = "workspace_conflict"
+		r.logApplyLocked(workspaceID, event, result, err)
+		return result, err
+	}
+
+	previousEntry := entry
+	previousGeneration, hadGeneration := r.placementHighWatermarks[event.AgentID]
+	stateChanged := false
+	generation := int64(event.AttachmentGeneration)
+	highWatermark := previousGeneration
+	current := residencyAttachment(entry)
+
+	switch event.Kind {
+	case AgentAttachmentEventAttach:
+		switch {
+		case generation < highWatermark:
+			result.reason = "stale_generation"
+		case generation == highWatermark && existed:
+			if entry.RuntimeID != event.RuntimeID || entry.WorkspaceID != workspaceID || entry.PlacementGeneration != generation {
+				result.reason = "generation_conflict"
+			} else {
+				result.accepted = true
+				result.reason = "idempotent_attach"
+				result.change.Current = current
+			}
+		default:
+			result.accepted = true
+			result.change.Previous = current
+			result.change.Current = AgentAttachment{
+				WorkspaceID: workspaceID, AgentID: event.AgentID, RuntimeID: event.RuntimeID,
+				AttachmentGeneration: event.AttachmentGeneration,
+			}
+			if existed {
+				result.change.Kind = AgentAttachmentMoved
+				result.reason = "moved"
+			} else if generation == highWatermark {
+				result.change.Kind = AgentAttachmentAttached
+				result.reason = "same_generation_move_attach"
+			} else {
+				result.change.Kind = AgentAttachmentAttached
+				result.reason = "attached"
+			}
+			r.agents[event.AgentID] = reminderAgentResidency{
+				AgentID: event.AgentID, RuntimeID: event.RuntimeID, WorkspaceID: workspaceID,
+				PlacementGeneration: generation,
+			}
+			r.placementHighWatermarks[event.AgentID] = generation
+			stateChanged = true
+		}
+
+	case AgentAttachmentEventDetach:
+		switch {
+		case generation < highWatermark:
+			result.reason = "stale_generation"
+		case generation == highWatermark && !existed:
+			result.accepted = true
+			result.reason = "idempotent_detach"
+		case generation == highWatermark && entry.RuntimeID != event.RuntimeID:
+			result.accepted = true
+			result.reason = "different_runtime"
+			result.change.Current = current
+		default:
+			result.accepted = true
+			if generation > highWatermark {
+				r.placementHighWatermarks[event.AgentID] = generation
+				stateChanged = true
+			}
+			if existed && entry.RuntimeID == event.RuntimeID && entry.WorkspaceID == workspaceID && entry.PlacementGeneration <= generation {
+				delete(r.agents, event.AgentID)
+				result.change.Kind = AgentAttachmentDetached
+				result.change.Previous = current
+				result.reason = "detached"
+				stateChanged = true
+			} else {
+				result.change.Current = current
+				result.reason = "different_runtime"
+			}
+		}
+	}
+
+	cursorChanged := false
+	if trackLifecycle {
+		r.runtimeLifecycleCursors[event.RuntimeID] = int64(event.LifecycleSeq)
+		cursorChanged = true
+	}
+	if !stateChanged && !cursorChanged {
+		r.logApplyLocked(workspaceID, event, result, nil)
+		return result, nil
+	}
+	if err := r.persistLocked(); err != nil {
+		if existed {
+			r.agents[event.AgentID] = previousEntry
+		} else {
+			delete(r.agents, event.AgentID)
+		}
+		if hadGeneration {
+			r.placementHighWatermarks[event.AgentID] = previousGeneration
+		} else {
+			delete(r.placementHighWatermarks, event.AgentID)
+		}
+		if trackLifecycle {
+			if previousCursor > 0 {
+				r.runtimeLifecycleCursors[event.RuntimeID] = previousCursor
+			} else {
+				delete(r.runtimeLifecycleCursors, event.RuntimeID)
+			}
+		}
+		result.reason = "persist_failed"
+		r.logApplyLocked(workspaceID, event, result, err)
+		return agentAttachmentApplyResult{change: AgentAttachmentChange{Kind: AgentAttachmentUnchanged}, reason: result.reason}, err
+	}
+	r.logApplyLocked(workspaceID, event, result, nil)
+	return result, nil
+}
+
+func (r *localAgentAttachmentRegistry) Resolve(workspaceID, agentID string) (AgentAttachment, bool) {
+	if r == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(agentID) == "" {
+		return AgentAttachment{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, found := r.agents[agentID]
+	if !found || entry.WorkspaceID != workspaceID || entry.PlacementGeneration < 1 {
+		return AgentAttachment{}, false
+	}
+	return residencyAttachment(entry), true
+}
+
+func (r *localAgentAttachmentRegistry) List(workspaceID string) []AgentAttachment {
+	if r == nil || strings.TrimSpace(workspaceID) == "" {
+		return nil
+	}
+	r.mu.Lock()
+	attachments := make([]AgentAttachment, 0)
+	for _, entry := range r.agents {
+		if entry.WorkspaceID == workspaceID && entry.PlacementGeneration > 0 {
+			attachments = append(attachments, residencyAttachment(entry))
+		}
+	}
+	r.mu.Unlock()
+	sort.Slice(attachments, func(i, j int) bool { return attachments[i].AgentID < attachments[j].AgentID })
+	return attachments
+}
+
+func (r *localAgentAttachmentRegistry) RecoveryState(runtimeSet AgentAttachmentRuntimeSet) (AgentAttachmentRecoveryState, error) {
+	if err := runtimeSet.Validate(); err != nil {
+		return AgentAttachmentRecoveryState{}, err
+	}
+	if r == nil {
+		return AgentAttachmentRecoveryState{WorkspaceID: runtimeSet.WorkspaceID}, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.validateRuntimeSetWorkspaceLocked(runtimeSet); err != nil {
+		return AgentAttachmentRecoveryState{}, err
+	}
+	runtimeIDs := append([]string(nil), runtimeSet.RuntimeIDs...)
+	sort.Strings(runtimeIDs)
+	state := AgentAttachmentRecoveryState{WorkspaceID: runtimeSet.WorkspaceID, Cursors: make([]AgentAttachmentRecoveryCursor, 0, len(runtimeIDs))}
+	for _, runtimeID := range runtimeIDs {
+		state.Cursors = append(state.Cursors, AgentAttachmentRecoveryCursor{
+			RuntimeID: runtimeID, LifecycleSeq: AttachmentLifecycleSequence(r.runtimeLifecycleCursors[runtimeID]),
+		})
+	}
+	return state, nil
+}
+
+func (r *localAgentAttachmentRegistry) AdvanceRecovery(runtimeSet AgentAttachmentRuntimeSet, cursors []AgentAttachmentRecoveryCursor) error {
+	if err := runtimeSet.Validate(); err != nil {
+		return err
+	}
+	allowed := runtimeSet.runtimeIDs()
+	for _, cursor := range cursors {
+		if err := cursor.Validate(); err != nil {
+			return err
+		}
+		if _, ok := allowed[cursor.RuntimeID]; !ok {
+			return fmt.Errorf("Agent Attachment recovery Runtime %s is outside Workspace %s Runtime set", cursor.RuntimeID, runtimeSet.WorkspaceID)
+		}
+	}
+	cursorMap := make(map[string]int64, len(cursors))
+	for _, cursor := range cursors {
+		cursorMap[cursor.RuntimeID] = int64(cursor.LifecycleSeq)
+	}
+	return r.advanceRecovery(&runtimeSet, cursorMap)
+}
+
+func (r *localAgentAttachmentRegistry) advanceRecovery(runtimeSet *AgentAttachmentRuntimeSet, cursors map[string]int64) error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if runtimeSet != nil {
+		if err := r.validateRuntimeSetWorkspaceLocked(*runtimeSet); err != nil {
+			return err
+		}
+	}
+	previous := cloneInt64Map(r.runtimeLifecycleCursors)
+	changed := false
+	advanced := make([]AgentAttachmentRecoveryCursor, 0, len(cursors))
+	for runtimeID, seq := range cursors {
+		if strings.TrimSpace(runtimeID) != "" && seq > r.runtimeLifecycleCursors[runtimeID] {
+			r.runtimeLifecycleCursors[runtimeID] = seq
+			changed = true
+			advanced = append(advanced, AgentAttachmentRecoveryCursor{RuntimeID: runtimeID, LifecycleSeq: AttachmentLifecycleSequence(seq)})
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := r.persistLocked(); err != nil {
+		r.runtimeLifecycleCursors = previous
+		if r.logger != nil {
+			r.logger.Error("Agent Attachment recovery cursor persist failed", "reason", "persist_failed", "error", err)
+		}
+		return err
+	}
+	if r.logger != nil {
+		sort.Slice(advanced, func(i, j int) bool { return advanced[i].RuntimeID < advanced[j].RuntimeID })
+		workspaceID := ""
+		if runtimeSet != nil {
+			workspaceID = runtimeSet.WorkspaceID
+		}
+		for _, cursor := range advanced {
+			r.logger.Debug("Agent Attachment recovery cursor advanced", "workspace_id", workspaceID, "runtime_id", cursor.RuntimeID, "lifecycle_seq", cursor.LifecycleSeq, "outcome", "advanced", "reason", "replay_committed")
+		}
+	}
+	return nil
+}
+
+func (r *localAgentAttachmentRegistry) Reconcile(runtimeSet AgentAttachmentRuntimeSet) ([]AgentAttachmentChange, error) {
+	if err := runtimeSet.Validate(); err != nil {
+		return nil, err
+	}
+	allowed := runtimeSet.runtimeIDs()
+	changes, _, err := r.reconcile(&runtimeSet, allowed, false)
+	return changes, err
+}
+
+func (r *localAgentAttachmentRegistry) reconcile(
+	runtimeSet *AgentAttachmentRuntimeSet,
+	allowed map[string]struct{},
+	removeAllDisallowedCursors bool,
+) ([]AgentAttachmentChange, bool, error) {
+	if r == nil {
+		return nil, false, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if runtimeSet != nil {
+		if err := r.validateRuntimeSetWorkspaceLocked(*runtimeSet); err != nil {
+			return nil, false, err
+		}
+	}
+	previousAgents := cloneResidencyMap(r.agents)
+	previousHighWatermarks := cloneInt64Map(r.placementHighWatermarks)
+	previousCursors := cloneInt64Map(r.runtimeLifecycleCursors)
+	changes := make([]AgentAttachmentChange, 0)
+	removedRuntimeIDs := make(map[string]struct{})
+	for agentID, entry := range r.agents {
+		if runtimeSet != nil && entry.WorkspaceID != runtimeSet.WorkspaceID {
+			continue
+		}
+		if _, ok := allowed[entry.RuntimeID]; ok {
+			continue
+		}
+		delete(r.agents, agentID)
+		generation := entry.PlacementGeneration
+		if generation < 1 {
+			generation = 1
+		}
+		if generation > r.placementHighWatermarks[agentID] {
+			r.placementHighWatermarks[agentID] = generation
+		}
+		removedRuntimeIDs[entry.RuntimeID] = struct{}{}
+		previous := residencyAttachment(entry)
+		previous.AttachmentGeneration = AttachmentGeneration(generation)
+		changes = append(changes, AgentAttachmentChange{
+			Kind: AgentAttachmentDetached, Previous: previous,
+		})
+	}
+	cursorChanged := false
+	if removeAllDisallowedCursors {
+		for runtimeID := range r.runtimeLifecycleCursors {
+			if _, ok := allowed[runtimeID]; !ok {
+				delete(r.runtimeLifecycleCursors, runtimeID)
+				cursorChanged = true
+			}
+		}
+	} else {
+		for runtimeID := range removedRuntimeIDs {
+			if _, exists := r.runtimeLifecycleCursors[runtimeID]; exists {
+				delete(r.runtimeLifecycleCursors, runtimeID)
+				cursorChanged = true
+			}
+		}
+	}
+	changed := len(changes) > 0 || cursorChanged
+	if !changed {
+		return nil, false, nil
+	}
+	sort.Slice(changes, func(i, j int) bool { return changes[i].Previous.AgentID < changes[j].Previous.AgentID })
+	if err := r.persistLocked(); err != nil {
+		r.agents = previousAgents
+		r.placementHighWatermarks = previousHighWatermarks
+		r.runtimeLifecycleCursors = previousCursors
+		if r.logger != nil {
+			workspaceID := ""
+			if runtimeSet != nil {
+				workspaceID = runtimeSet.WorkspaceID
+			}
+			r.logger.Error("Agent Attachment reconcile persist failed", "workspace_id", workspaceID, "outcome", "failed", "reason", "persist_failed", "error", err)
+		}
+		return nil, false, err
+	}
+	if r.logger != nil {
+		for _, change := range changes {
+			workspaceID := change.Previous.WorkspaceID
+			if runtimeSet != nil {
+				workspaceID = runtimeSet.WorkspaceID
+			}
+			r.logger.Info("Agent Attachment reconciled", "workspace_id", workspaceID, "agent_id", change.Previous.AgentID, "runtime_id", change.Previous.RuntimeID, "attachment_generation", change.Previous.AttachmentGeneration, "outcome", change.Kind, "reason", "runtime_not_allowed")
+		}
+	}
+	return changes, true, nil
+}
+
+func (r *localAgentAttachmentRegistry) validateRuntimeSetWorkspaceLocked(runtimeSet AgentAttachmentRuntimeSet) error {
+	allowed := runtimeSet.runtimeIDs()
+	for _, entry := range r.agents {
+		if _, ok := allowed[entry.RuntimeID]; ok && entry.WorkspaceID != runtimeSet.WorkspaceID {
+			return fmt.Errorf("Agent Attachment Runtime %s belongs to Workspace %s, not %s", entry.RuntimeID, entry.WorkspaceID, runtimeSet.WorkspaceID)
+		}
+	}
+	return nil
+}
+
+func (r *localAgentAttachmentRegistry) logApplyLocked(workspaceID string, event AgentAttachmentEvent, result agentAttachmentApplyResult, applyErr error) {
+	if r.logger == nil {
+		return
+	}
+	args := []any{
+		"workspace_id", workspaceID,
+		"agent_id", event.AgentID,
+		"runtime_id", event.RuntimeID,
+		"event_kind", event.Kind,
+		"attachment_generation", event.AttachmentGeneration,
+		"lifecycle_seq", event.LifecycleSeq,
+		"outcome", result.change.Kind,
+		"reason", result.reason,
+	}
+	if applyErr != nil {
+		args = append(args, "error", applyErr)
+		r.logger.Error("Agent Attachment apply failed", args...)
+		return
+	}
+	if result.change.Kind == AgentAttachmentUnchanged {
+		r.logger.Debug("Agent Attachment apply unchanged", args...)
+		return
+	}
+	r.logger.Info("Agent Attachment applied", args...)
+}
+
+func residencyAttachment(entry reminderAgentResidency) AgentAttachment {
+	return AgentAttachment{
+		WorkspaceID: entry.WorkspaceID, AgentID: entry.AgentID, RuntimeID: entry.RuntimeID,
+		AttachmentGeneration: AttachmentGeneration(entry.PlacementGeneration),
+	}
+}
+
+func cloneResidencyMap(source map[string]reminderAgentResidency) map[string]reminderAgentResidency {
+	clone := make(map[string]reminderAgentResidency, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func cloneInt64Map(source map[string]int64) map[string]int64 {
+	clone := make(map[string]int64, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
 func (r *localAgentAttachmentRegistry) load() {
 	raw, err := os.ReadFile(r.path)
 	if err != nil {
@@ -88,6 +526,9 @@ func (r *localAgentAttachmentRegistry) load() {
 		}
 		entry.Running = 0
 		r.agents[entry.AgentID] = entry
+		if entry.PlacementGeneration > r.placementHighWatermarks[entry.AgentID] {
+			r.placementHighWatermarks[entry.AgentID] = entry.PlacementGeneration
+		}
 	}
 	for _, agentID := range state.RemovedAgentIDs {
 		if agentID != "" {

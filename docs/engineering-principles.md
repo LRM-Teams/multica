@@ -473,6 +473,12 @@
 - 完整术语、状态、Activity 时机、bounded held context、Draft 和命令契约见 [`docs/adr/0010-direct-message-delivery-lifecycle.md`](adr/0010-direct-message-delivery-lifecycle.md)。该 ADR 落地后取代 4.2 等旧 task/lease 消息路径；切换前不得把目标态写成已完成能力。
 - Agent Proxy credential 只证明固定 Workspace/Agent/runtime 身份，不是 command allowlist。Agent Command Policy 必须按 [`ADR-0014`](adr/0014-roll-out-agent-command-policy-additively.md) 增量上线：单一 `state` 为 `legacy_passthrough|allowed|denied|unavailable`，缺失/未知项不得解释为 deny，现有 Agent CLI 基线在分类完成前继续原 transport + Server authorization。禁止注入或信任 `MULTICA_AGENT_ACTIVE_CAPABILITIES`；只有完整 command inventory、权威 policy derivation、shadow 无意外 denial 与 mixed-version 回归全部通过后才能 enforcement。
 
+### 4.19.1 Agent Attachment 是机器责任，不是进程状态 — `可执行`（② registry interface + ③单一 apply core + ⑤ generation/restart 回归；caller migration 进行中）
+- `AgentAttachmentRegistry` 是本机 Agent placement generation、detach tombstone、Runtime lifecycle cursor 与 Runtime-set reconciliation 的唯一实现；调用方只消费 `attached|moved|detached|unchanged`，不得读 map 或自行比较 generation。Attachment 不代表 provider process 已启动；detach 不删除 Agent Root、Inbox 或 Message Draft。
+- 所有正式操作固定 authenticated Workspace scope，event payload 不携带 `WorkspaceID`。Runtime reconciliation 必须提供该 Workspace 明确允许的 Runtime IDs，只能 detach，禁止猜测或静默 move。Attachment generation 与 per-Runtime lifecycle sequence 是两套身份；状态/tombstone 与 cursor 在一次 `Apply` 中原子持久化，失败共同回滚。
+- 迁移期继续读写现有 `.daemon/reminder_agents.json` 字段和路径；旧 `applyStart/applyStop/replay-end` 只作为同一 registry core 的 adapter，不建第二份状态、不让旧 lifecycle 失效。完整决策见 [`ADR-0013`](adr/0013-use-agent-attachment-for-durable-machine-responsibility.md)。
+- **物**：`agent_attachment.go` 的 Workspace-scoped interface、`agent_attachment_registry.go` 的单一 generation/tombstone/cursor/reconcile 实现、`agent_attachment_registry_test.go` 与原 Reminder lifecycle/restart 回归。
+
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。
 - **物**：`CreateSandboxInstance` 写入 `metadata.docker_container_name` / job `docker_container_name`；`sandboxd` 使用该字段作为 `--name`，旧 payload 只回退到 instance-id 名称。

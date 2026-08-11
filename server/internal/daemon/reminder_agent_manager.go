@@ -78,39 +78,12 @@ func (m *reminderAgentManager) applyStart(agentID, runtimeID, workspaceID string
 	if m == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(runtimeID) == "" || strings.TrimSpace(workspaceID) == "" || generation < 1 {
 		return false, false, nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if generation < m.placementHighWatermarks[agentID] {
-		return false, false, nil
-	}
-	entry, existed := m.agents[agentID]
-	if existed && generation == m.placementHighWatermarks[agentID] && entry.PlacementGeneration == generation && (entry.RuntimeID != runtimeID || entry.WorkspaceID != workspaceID) {
-		return false, false, nil
-	}
-	previousEntry := entry
-	previousGeneration, hadGeneration := m.placementHighWatermarks[agentID]
-	changed := !existed || entry.RuntimeID != runtimeID || entry.WorkspaceID != workspaceID || entry.PlacementGeneration != generation
-	entry.AgentID = agentID
-	entry.RuntimeID = runtimeID
-	entry.WorkspaceID = workspaceID
-	entry.PlacementGeneration = generation
-	entry.Running = 0
-	m.agents[agentID] = entry
-	m.placementHighWatermarks[agentID] = generation
-	if err := m.persistLocked(); err != nil {
-		if existed {
-			m.agents[agentID] = previousEntry
-		} else {
-			delete(m.agents, agentID)
-		}
-		if hadGeneration {
-			m.placementHighWatermarks[agentID] = previousGeneration
-		} else {
-			delete(m.placementHighWatermarks, agentID)
-		}
-		return false, false, err
-	}
-	return changed, true, nil
+	result, err := m.applyEvent(workspaceID, AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID,
+		AttachmentGeneration: AttachmentGeneration(generation),
+	}, false, true)
+	changed := result.change.Kind == AgentAttachmentAttached || result.change.Kind == AgentAttachmentMoved
+	return changed, result.accepted, err
 }
 
 func (m *reminderAgentManager) residentAgentIDs() []string {
@@ -165,29 +138,17 @@ func (m *reminderAgentManager) applyStop(agentID, runtimeID string, generation i
 		return false, false, nil
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if generation < m.placementHighWatermarks[agentID] {
-		return false, false, nil
-	}
 	entry, ok := m.agents[agentID]
-	previousGeneration, hadGeneration := m.placementHighWatermarks[agentID]
-	removed := ok && entry.RuntimeID == runtimeID && entry.PlacementGeneration <= generation
-	if removed {
-		delete(m.agents, agentID)
+	m.mu.Unlock()
+	workspaceID := ""
+	if ok {
+		workspaceID = entry.WorkspaceID
 	}
-	m.placementHighWatermarks[agentID] = generation
-	if err := m.persistLocked(); err != nil {
-		if ok {
-			m.agents[agentID] = entry
-		}
-		if hadGeneration {
-			m.placementHighWatermarks[agentID] = previousGeneration
-		} else {
-			delete(m.placementHighWatermarks, agentID)
-		}
-		return false, false, err
-	}
-	return removed, true, nil
+	result, err := m.applyEvent(workspaceID, AgentAttachmentEvent{
+		Kind: AgentAttachmentEventDetach, AgentID: agentID, RuntimeID: runtimeID,
+		AttachmentGeneration: AttachmentGeneration(generation),
+	}, false, false)
+	return result.change.Kind == AgentAttachmentDetached, result.accepted, err
 }
 
 func (m *reminderAgentManager) lifecycleCursors() map[string]int64 {
@@ -207,51 +168,14 @@ func (m *reminderAgentManager) reconcileRuntimeSet(allowed map[string]bool) (boo
 	if m == nil {
 		return false, nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	previousAgents := make(map[string]reminderAgentResidency, len(m.agents))
-	for agentID, entry := range m.agents {
-		previousAgents[agentID] = entry
-	}
-	previousHighWatermarks := make(map[string]int64, len(m.placementHighWatermarks))
-	for agentID, generation := range m.placementHighWatermarks {
-		previousHighWatermarks[agentID] = generation
-	}
-	previousCursors := make(map[string]int64, len(m.runtimeLifecycleCursors))
-	for runtimeID, seq := range m.runtimeLifecycleCursors {
-		previousCursors[runtimeID] = seq
-	}
-	changed := false
-	for agentID, entry := range m.agents {
-		if allowed[entry.RuntimeID] {
-			continue
-		}
-		delete(m.agents, agentID)
-		generation := entry.PlacementGeneration
-		if generation < 1 {
-			generation = 1
-		}
-		if generation > m.placementHighWatermarks[agentID] {
-			m.placementHighWatermarks[agentID] = generation
-		}
-		changed = true
-	}
-	for runtimeID := range m.runtimeLifecycleCursors {
-		if !allowed[runtimeID] {
-			delete(m.runtimeLifecycleCursors, runtimeID)
-			changed = true
+	allowedRuntimeIDs := make(map[string]struct{}, len(allowed))
+	for runtimeID, isAllowed := range allowed {
+		if isAllowed {
+			allowedRuntimeIDs[runtimeID] = struct{}{}
 		}
 	}
-	if !changed {
-		return false, nil
-	}
-	if err := m.persistLocked(); err != nil {
-		m.agents = previousAgents
-		m.placementHighWatermarks = previousHighWatermarks
-		m.runtimeLifecycleCursors = previousCursors
-		return false, err
-	}
-	return true, nil
+	_, changed, err := m.reconcile(nil, allowedRuntimeIDs, true)
+	return changed, err
 }
 
 func (m *reminderAgentManager) retiredAgentIDs() []string {
@@ -271,23 +195,5 @@ func (m *reminderAgentManager) retiredAgentIDs() []string {
 }
 
 func (m *reminderAgentManager) advanceLifecycleCursors(cursors map[string]int64) error {
-	if m == nil {
-		return nil
-	}
-	m.mu.Lock()
-	previous := make(map[string]int64, len(m.runtimeLifecycleCursors))
-	for runtimeID, seq := range m.runtimeLifecycleCursors {
-		previous[runtimeID] = seq
-	}
-	for runtimeID, seq := range cursors {
-		if runtimeID != "" && seq > m.runtimeLifecycleCursors[runtimeID] {
-			m.runtimeLifecycleCursors[runtimeID] = seq
-		}
-	}
-	err := m.persistLocked()
-	if err != nil {
-		m.runtimeLifecycleCursors = previous
-	}
-	m.mu.Unlock()
-	return err
+	return m.advanceRecovery(nil, cursors)
 }

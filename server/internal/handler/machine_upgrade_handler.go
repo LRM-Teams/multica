@@ -40,6 +40,7 @@ type attestComputerMachineUpgradeRequest struct {
 	DaemonID     string   `json:"daemon_id"`
 	GenerationID string   `json:"generation_id"`
 	CLIVersion   string   `json:"cli_version"`
+	RuntimeIDs   []string `json:"runtime_ids"`
 	WorkspaceIDs []string `json:"workspace_ids"`
 }
 
@@ -76,13 +77,15 @@ func (h *Handler) AttestComputerMachineUpgrade(w http.ResponseWriter, r *http.Re
 	if !h.requireCurrentComputerGeneration(w, r, req.DaemonID) {
 		return
 	}
-	for _, workspaceID := range req.WorkspaceIDs {
-		if _, err := util.ParseUUID(workspaceID); err != nil {
-			writeError(w, http.StatusBadRequest, "workspace_ids must contain immutable UUIDs")
-			return
+	for field, ids := range map[string][]string{"runtime_ids": req.RuntimeIDs, "workspace_ids": req.WorkspaceIDs} {
+		for _, id := range ids {
+			if _, err := util.ParseUUID(id); err != nil {
+				writeError(w, http.StatusBadRequest, field+" must contain immutable UUIDs")
+				return
+			}
 		}
 	}
-	op, err := h.MachineUpgradeStore.AttestComputer(r.Context(), req.DaemonID, chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion, req.WorkspaceIDs)
+	op, err := h.MachineUpgradeStore.AttestComputer(r.Context(), req.DaemonID, chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion, req.RuntimeIDs, req.WorkspaceIDs)
 	if err != nil {
 		h.writeMachineUpgradeDaemonError(w, err)
 		return

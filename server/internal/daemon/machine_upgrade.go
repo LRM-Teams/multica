@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,16 +23,20 @@ var fetchMachineUpgradeRelease = cli.FetchReleaseForChannelWithOverride
 // request id: the successor reads the same value after handoff and therefore
 // cannot satisfy convergence with a newly-minted process identity.
 type machineUpgradeJournal struct {
-	ID                  string   `json:"id"`
-	Generation          string   `json:"generation"`
-	SourceVersion       string   `json:"source_version"`
-	TargetVersion       string   `json:"target_version"`
-	IncumbentGeneration uint64   `json:"incumbent_generation"`
-	RollbackGeneration  string   `json:"rollback_generation,omitempty"`
-	RuntimeIDs          []string `json:"runtime_ids"`
-	WorkspaceIDs        []string `json:"workspace_ids"`
-	Phase               string   `json:"phase"`
-	UpdatedAt           string   `json:"updated_at"`
+	ID                  string `json:"id"`
+	Generation          string `json:"generation"`
+	SourceVersion       string `json:"source_version"`
+	TargetVersion       string `json:"target_version"`
+	IncumbentGeneration uint64 `json:"incumbent_generation"`
+	// PredecessorComputerGeneration identifies the exact resident process
+	// generation that committed the handoff. It is separate from
+	// IncumbentGeneration, which is the VersionStore activation generation.
+	PredecessorComputerGeneration int64    `json:"predecessor_computer_generation"`
+	RollbackGeneration            string   `json:"rollback_generation,omitempty"`
+	RuntimeIDs                    []string `json:"runtime_ids"`
+	WorkspaceIDs                  []string `json:"workspace_ids"`
+	Phase                         string   `json:"phase"`
+	UpdatedAt                     string   `json:"updated_at"`
 }
 
 func (d *Daemon) machineUpgradeGenerationID() string {
@@ -406,6 +411,7 @@ func (d *Daemon) attestAlreadyCurrentMachineUpgrade(ctx context.Context, receipt
 		receipt.ID,
 		strings.TrimSpace(*receipt.AcceptedGeneration),
 		d.cfg.CLIVersion,
+		d.allRuntimeIDs(),
 		workspaceIDs,
 	)
 }
@@ -430,7 +436,20 @@ func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs 
 	if len(journal.WorkspaceIDs) > 0 && !sameStringSet(journal.WorkspaceIDs, workspaceIDs) {
 		return fmt.Errorf("successor Workspace connection set does not match accepted complete set")
 	}
-	if err := d.client.AttestComputerUpgrade(ctx, d.cfg.DaemonID, journal.ID, journal.Generation, d.cfg.CLIVersion, workspaceIDs); err != nil {
+	runtimeIDs := d.allRuntimeIDs()
+	sort.Strings(runtimeIDs)
+	if !sameStringSet(journal.RuntimeIDs, runtimeIDs) {
+		return fmt.Errorf("successor Runtime set does not match accepted complete set")
+	}
+	// A detached candidate must first let the incumbent validate its exact
+	// local process proof. The authenticated takeover commit endpoint performs
+	// the remote attestation only after that local proof is accepted. A
+	// supervisor already owns the process handoff and keeps the existing direct
+	// attestation behavior.
+	if d.cfg.DetachedMachineUpgradeCandidate {
+		return nil
+	}
+	if err := d.client.AttestComputerUpgrade(ctx, d.cfg.DaemonID, journal.ID, journal.Generation, d.cfg.CLIVersion, runtimeIDs, workspaceIDs); err != nil {
 		return err
 	}
 	journal.Phase = "candidate_ready"
@@ -505,7 +524,7 @@ func (d *Daemon) createMachineUpgradeJournal(receipt *MachineUpgradeReceipt, sou
 			}
 		}
 	}
-	journal := &machineUpgradeJournal{ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target, IncumbentGeneration: incumbent, RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...), Phase: "accepted"}
+	journal := &machineUpgradeJournal{ID: receipt.ID, Generation: *receipt.AcceptedGeneration, SourceVersion: source, TargetVersion: target, IncumbentGeneration: incumbent, PredecessorComputerGeneration: d.cfg.ComputerGeneration, RuntimeIDs: append([]string(nil), receipt.AcceptedRuntimeIDs...), WorkspaceIDs: append([]string(nil), receipt.AcceptedWorkspaceIDs...), Phase: "accepted"}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		return nil, err
 	}

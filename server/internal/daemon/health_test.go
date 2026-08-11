@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -118,6 +119,141 @@ func TestLocalMachineUpgradeControlRequiresProfileSecretAndUsesCanonicalOperatio
 	if upstreamRequest["request_id"] != "same-request" || upstreamRequest["target_version"] != "v10.0.0" {
 		t.Fatalf("canonical request = %#v", upstreamRequest)
 	}
+}
+
+func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	attestations := 0
+	var upstreamProof map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-1/attest" {
+			t.Fatalf("upstream path = %s", r.URL.Path)
+		}
+		attestations++
+		if err := json.NewDecoder(r.Body).Decode(&upstreamProof); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"phase": "completed"})
+	}))
+	defer upstream.Close()
+
+	client := NewClient(upstream.URL)
+	d := New(Config{
+		CLIVersion:                      "v10.0.0",
+		DaemonID:                        "daemon-1",
+		ComputerGeneration:              12,
+		LocalControlToken:               "profile-secret",
+		DetachedMachineUpgradeCandidate: true,
+	}, slog.Default())
+	d.client = client
+	d.workspaces = map[string]*workspaceState{
+		"11111111-1111-1111-1111-111111111111": newWorkspaceState(
+			"11111111-1111-1111-1111-111111111111",
+			[]string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
+		),
+	}
+	if !d.pauseClaims {
+		t.Fatal("detached candidate did not start behind claim barrier")
+	}
+	d.ready.Store(true)
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		IncumbentGeneration: 7, PredecessorComputerGeneration: 11,
+		RuntimeIDs:   []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
+		WorkspaceIDs: []string{"11111111-1111-1111-1111-111111111111"}, Phase: "handoff",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := MachineUpgradeTakeoverProof{
+		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
+		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 7,
+		CandidateComputerGeneration: 12, CandidatePID: os.Getpid(), TargetVersion: "v10.0.0",
+		RuntimeIDs:   []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
+		WorkspaceIDs: []string{"11111111-1111-1111-1111-111111111111"}, Phase: "handoff",
+	}
+	handler := d.localMachineUpgradeTakeoverHandler()
+	readHealthProof := func() MachineUpgradeTakeoverProof {
+		rec := httptest.NewRecorder()
+		d.healthHandler(time.Now()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+		var health HealthResponse
+		if err := json.NewDecoder(rec.Body).Decode(&health); err != nil || health.MachineUpgradeTakeover == nil {
+			t.Fatalf("health takeover proof = %+v err=%v", health.MachineUpgradeTakeover, err)
+		}
+		return *health.MachineUpgradeTakeover
+	}
+	if proof := readHealthProof(); proof.Phase != "handoff" || proof.CandidatePID != os.Getpid() {
+		t.Fatalf("candidate proposal health proof = %+v", proof)
+	}
+	request := func(proof MachineUpgradeTakeoverProof, token string) *httptest.ResponseRecorder {
+		body, err := json.Marshal(proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/machine-upgrade-takeover/commit", bytes.NewReader(body))
+		if token != "" {
+			req.Header.Set("X-Multica-Control-Token", token)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := request(expected, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated takeover status = %d, want 401", rec.Code)
+	}
+	wrong := expected
+	wrong.DaemonID = "daemon-stale"
+	if rec := request(wrong, "profile-secret"); rec.Code != http.StatusConflict {
+		t.Fatalf("wrong-daemon takeover status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	if attestations != 0 {
+		t.Fatalf("mismatched local proof reached server %d times", attestations)
+	}
+	if !d.pauseClaims {
+		t.Fatal("mismatched local proof released candidate claim barrier")
+	}
+
+	rec := request(expected, "profile-secret")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exact takeover status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if attestations != 1 {
+		t.Fatalf("server attestations = %d, want 1", attestations)
+	}
+	if d.pauseClaims {
+		t.Fatal("committed takeover did not release candidate claim barrier")
+	}
+	if got := stringSetFromAny(upstreamProof["runtime_ids"]); !sameStringSet(got, expected.RuntimeIDs) {
+		t.Fatalf("upstream runtime proof = %#v, want %#v", got, expected.RuntimeIDs)
+	}
+	if got := stringSetFromAny(upstreamProof["workspace_ids"]); !sameStringSet(got, expected.WorkspaceIDs) {
+		t.Fatalf("upstream Workspace proof = %#v, want %#v", got, expected.WorkspaceIDs)
+	}
+	stored, err := d.currentMachineUpgradeJournal()
+	if err != nil || stored == nil || stored.Phase != "candidate_ready" {
+		t.Fatalf("durable takeover journal = %+v err=%v", stored, err)
+	}
+	if replay := request(expected, "profile-secret"); replay.Code != http.StatusOK || attestations != 1 {
+		t.Fatalf("takeover replay status=%d attestations=%d body=%s", replay.Code, attestations, replay.Body.String())
+	}
+	if proof := readHealthProof(); proof.Phase != "candidate_ready" {
+		t.Fatalf("committed health proof = %+v", proof)
+	}
+}
+
+func stringSetFromAny(value any) []string {
+	items, _ := value.([]any)
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		result = append(result, fmt.Sprint(item))
+	}
+	return result
 }
 
 // TestHealthHandlerReportsStartingUntilReady pins the liveness/readiness split:

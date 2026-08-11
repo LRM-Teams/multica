@@ -28,18 +28,19 @@ type HealthResponse struct {
 	// lifecycle CLI (`daemon start/stop`) acts on the host process namespace,
 	// so a foreign-OS daemon can't be started/stopped by the app even though
 	// /health is reachable. See #3916.
-	OS              string            `json:"os"`
-	Uptime          string            `json:"uptime"`
-	DaemonID        string            `json:"daemon_id"`
-	DeviceName      string            `json:"device_name"`
-	ServerURL       string            `json:"server_url"`
-	Environment     string            `json:"environment,omitempty"`
-	ReleaseChannel  string            `json:"release_channel,omitempty"`
-	CLIVersion      string            `json:"cli_version"`
-	Connected       bool              `json:"connected"`
-	ActiveTaskCount int64             `json:"active_task_count"`
-	Agents          []string          `json:"agents"`
-	Workspaces      []healthWorkspace `json:"workspaces"`
+	OS                     string                       `json:"os"`
+	Uptime                 string                       `json:"uptime"`
+	DaemonID               string                       `json:"daemon_id"`
+	DeviceName             string                       `json:"device_name"`
+	ServerURL              string                       `json:"server_url"`
+	Environment            string                       `json:"environment,omitempty"`
+	ReleaseChannel         string                       `json:"release_channel,omitempty"`
+	CLIVersion             string                       `json:"cli_version"`
+	Connected              bool                         `json:"connected"`
+	ActiveTaskCount        int64                        `json:"active_task_count"`
+	Agents                 []string                     `json:"agents"`
+	Workspaces             []healthWorkspace            `json:"workspaces"`
+	MachineUpgradeTakeover *MachineUpgradeTakeoverProof `json:"machine_upgrade_takeover,omitempty"`
 }
 
 type healthWorkspace struct {
@@ -103,6 +104,9 @@ func (d *Daemon) healthHandler(startedAt time.Time) http.HandlerFunc {
 			ActiveTaskCount: d.activeTasks.Load(),
 			Agents:          agents,
 			Workspaces:      wsList,
+		}
+		if proof, err := d.machineUpgradeTakeoverProof(); err == nil {
+			resp.MachineUpgradeTakeover = &proof
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -559,6 +563,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/environment-switch/prepare", d.localEnvironmentSwitchPrepareHandler())
 	mux.HandleFunc("/environment-switch/release", d.localEnvironmentSwitchReleaseHandler())
 	mux.HandleFunc("/machine-upgrades", d.localMachineUpgradeHandler())
+	mux.HandleFunc("/machine-upgrade-takeover/commit", d.localMachineUpgradeTakeoverHandler())
 	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
 	mux.HandleFunc("/credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
 	mux.HandleFunc("/credential-proxy/messages/send", d.credentialProxyMessageSendHandler())

@@ -103,19 +103,20 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
-	messageDraftStore      *MessageDraftStore
-	agentProxyCredentialMu sync.RWMutex
-	agentProxyCredentials  map[[32]byte]authenticatedAgentProxy
-	messageSendMu          sync.Mutex
-	messageSends           map[string]int
-	workspaceRunnerMu      sync.RWMutex
-	workspaceRunners       map[string]*WorkspaceRunner
-	workspaceRunnerCancels map[string]context.CancelFunc
-	workspaceRunnerRun     func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
-	lifecycleDiagnostics   *lifecycleDiagnosticWriter
-	machineUpgradeLog      *machineUpgradeEventLog
-	runnerInstanceID       string
-	runnerDiagnostics      *runnerDiagnosticRegistry
+	messageDraftStore        *MessageDraftStore
+	agentProxyCredentialMu   sync.RWMutex
+	agentProxyCredentials    map[[32]byte]authenticatedAgentProxy
+	messageSendMu            sync.Mutex
+	messageSends             map[string]int
+	workspaceRunnerMu        sync.RWMutex
+	workspaceRunners         map[string]*WorkspaceRunner
+	workspaceRunnerCancels   map[string]context.CancelFunc
+	workspaceRunnerRun       func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
+	lifecycleDiagnostics     *lifecycleDiagnosticWriter
+	machineUpgradeLog        *machineUpgradeEventLog
+	machineUpgradeTakeoverMu sync.Mutex
+	runnerInstanceID         string
+	runnerDiagnostics        *runnerDiagnosticRegistry
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -292,6 +293,12 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		workspaceRunnerCancels:    make(map[string]context.CancelFunc),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		runnerInstanceID:          uuid.NewString(),
+	}
+	// A standalone replacement may bind the exclusive control port and finish
+	// registration so the incumbent can inspect it, but it must not claim work
+	// until that incumbent commits the exact takeover proof.
+	if cfg.DetachedMachineUpgradeCandidate {
+		d.pauseClaims = true
 	}
 	d.canonicalRuntimes.setMaxAgentProcesses(cfg.MaxAgentProcesses)
 	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
@@ -820,12 +827,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.restoreResidentAgents(); err != nil {
 		return fmt.Errorf("restore resident Agents: %w", err)
 	}
-	// A target successor records local readiness only after it has completed
-	// normal authenticated registration/preflight. This is durable recovery
-	// evidence, not remote completion: the server still requires the exact
-	// accepted sibling set to attest before it marks the operation completed.
-	if err := d.markMachineUpgradeCandidateReady(); err != nil {
-		d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)
+	// A supervised target records local readiness after normal authenticated
+	// registration/preflight. A detached candidate deliberately remains in
+	// handoff until the incumbent validates its local process proof through the
+	// authenticated takeover endpoint; that endpoint then owns remote
+	// attestation and the durable candidate_ready transition.
+	if !d.cfg.DetachedMachineUpgradeCandidate {
+		if err := d.markMachineUpgradeCandidateReady(); err != nil {
+			d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)
+		}
 	}
 
 	// Deregister runtimes on shutdown (uses a fresh context since ctx will be cancelled).

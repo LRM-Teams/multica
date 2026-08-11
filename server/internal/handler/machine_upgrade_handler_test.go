@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -248,6 +249,45 @@ func TestMachineUpgrade_CapableHeartbeatAcceptsAndRequiresEverySiblingAttestatio
 	op, _ = testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
 	if op.Phase != MachineUpgradeCompleted || op.Result == nil || *op.Result != "completed" || !sameMachineRuntimeSet(op.AttestedRuntimeIDs, []string{firstRuntimeID, secondRuntimeID}) {
 		t.Fatalf("full sibling convergence = %+v", op)
+	}
+}
+
+func TestMachineUpgrade_ComputerAttestationRequiresExactAcceptedRuntimeSet(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
+	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := testHandler.MachineUpgradeStore.Accept(
+		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9", "v9.9.9",
+		[]string{firstRuntimeID, secondRuntimeID},
+	)
+	if err != nil {
+		t.Fatalf("accept machine upgrade: %v", err)
+	}
+
+	if _, err := testHandler.MachineUpgradeStore.AttestComputer(
+		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9",
+		[]string{firstRuntimeID}, accepted.AcceptedWorkspaceIDs,
+	); !errors.Is(err, errMachineUpgradeAttestationRejected) {
+		t.Fatalf("incomplete Computer runtime proof error = %v, want attestation rejection", err)
+	}
+	stored, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || stored.Phase == MachineUpgradeCompleted {
+		t.Fatalf("incomplete Computer proof completed operation: %+v err=%v", stored, err)
+	}
+
+	completed, err := testHandler.MachineUpgradeStore.AttestComputer(
+		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9",
+		[]string{firstRuntimeID, secondRuntimeID}, accepted.AcceptedWorkspaceIDs,
+	)
+	if err != nil || completed.Phase != MachineUpgradeCompleted ||
+		!sameMachineRuntimeSet(completed.AttestedRuntimeIDs, []string{firstRuntimeID, secondRuntimeID}) {
+		t.Fatalf("exact Computer proof = %+v err=%v", completed, err)
 	}
 }
 

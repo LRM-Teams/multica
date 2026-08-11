@@ -136,6 +136,78 @@ func TestOfflineActivateStagedAlreadyActiveIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRecoverActivationAttemptResumesPreparedWithoutDuplicateCompletedPhase(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	for _, tag := range []string{"v0.3.77", "v0.3.78"} {
+		binary := []byte("binary-" + tag)
+		if _, err := store.StageBinary(context.Background(), tag, binary, testBinaryDigest(binary), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.77"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PrepareActivationAttempt("upgrade-1", 1, "v0.3.77", "v0.3.78"); err != nil {
+		t.Fatal(err)
+	}
+	previousProbe := probeStagedCandidate
+	probeCalls := 0
+	probeStagedCandidate = func(context.Context, string, string, string) error {
+		probeCalls++
+		return nil
+	}
+	t.Cleanup(func() { probeStagedCandidate = previousProbe })
+
+	state, _, err := store.RecoverActivationAttempt(context.Background(), "upgrade-1")
+	if err != nil || state.Generation != 2 || state.ActiveVersion != "v0.3.78" || probeCalls != 1 {
+		t.Fatalf("recovered activation state=%+v probes=%d err=%v", state, probeCalls, err)
+	}
+	state, _, err = store.RecoverActivationAttempt(context.Background(), "upgrade-1")
+	if err != nil || state.Generation != 2 || probeCalls != 1 {
+		t.Fatalf("replayed recovery state=%+v probes=%d err=%v", state, probeCalls, err)
+	}
+}
+
+func TestRecoverActivationAttemptRepairsJournalAfterCASWithoutAnotherProbeOrCAS(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	for _, tag := range []string{"v0.3.77", "v0.3.78"} {
+		binary := []byte("binary-" + tag)
+		if _, err := store.StageBinary(context.Background(), tag, binary, testBinaryDigest(binary), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.77"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PrepareActivationAttempt("upgrade-1", 1, "v0.3.77", "v0.3.78"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdvanceActivationPhase("upgrade-1", ActivationPhaseCandidateRunning, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdvanceActivationPhase("upgrade-1", ActivationPhaseCandidateHealthy, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 1, "v0.3.78"); err != nil {
+		t.Fatal(err)
+	}
+	previousProbe := probeStagedCandidate
+	probeStagedCandidate = func(context.Context, string, string, string) error {
+		t.Fatal("post-CAS recovery must not probe candidate again")
+		return nil
+	}
+	t.Cleanup(func() { probeStagedCandidate = previousProbe })
+
+	state, _, err := store.RecoverActivationAttempt(context.Background(), "upgrade-1")
+	if err != nil || state.Generation != 2 || state.ActiveVersion != "v0.3.78" {
+		t.Fatalf("post-CAS recovery state=%+v err=%v", state, err)
+	}
+	attempt, err := store.ReadActivationJournal()
+	if err != nil || attempt.Phase != ActivationPhaseCommitted {
+		t.Fatalf("repaired activation journal=%+v err=%v", attempt, err)
+	}
+}
+
 func TestRollbackToPreviousActiveUsesVerifiedCASPath(t *testing.T) {
 	previousProbe := probeStagedCandidate
 	probeStagedCandidate = func(context.Context, string, string, string) error { return nil }
@@ -149,5 +221,42 @@ func TestRollbackToPreviousActiveUsesVerifiedCASPath(t *testing.T) {
 	}
 	if rolledBack.ActiveVersion != "v0.3.77" || rolledBack.PreviousVersion != "v0.3.78" {
 		t.Fatalf("rollback activation = %+v", rolledBack)
+	}
+}
+
+func TestRestoreMachineUpgradeSourceIsExactAndIdempotent(t *testing.T) {
+	previousProbe := probeStagedCandidate
+	probeCalls := 0
+	probeStagedCandidate = func(context.Context, string, string, string) error {
+		probeCalls++
+		return nil
+	}
+	t.Cleanup(func() { probeStagedCandidate = previousProbe })
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	stageAndActivate(t, store, "v0.3.77")
+	stageAndActivate(t, store, "v0.3.78")
+
+	restored, _, err := store.RestoreMachineUpgradeSource(context.Background(), 1, "v0.3.77", "v0.3.78", "rollback-upgrade-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Generation != 3 || restored.ActiveVersion != "v0.3.77" || restored.PreviousVersion != "v0.3.78" || probeCalls != 1 {
+		t.Fatalf("restored state=%+v probes=%d", restored, probeCalls)
+	}
+
+	replayed, _, err := store.RestoreMachineUpgradeSource(context.Background(), 1, "v0.3.77", "v0.3.78", "rollback-upgrade-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed != restored || probeCalls != 1 {
+		t.Fatalf("replayed state=%+v probes=%d, want unchanged %+v", replayed, probeCalls, restored)
+	}
+
+	if _, _, err := store.RestoreMachineUpgradeSource(context.Background(), 1, "v0.3.78", "v0.3.77", "stale-rollback"); err == nil {
+		t.Fatal("stale rollback identity must not mutate Active")
+	}
+	current, err := store.ReadActivationState()
+	if err != nil || current != restored {
+		t.Fatalf("state after stale rollback=%+v err=%v", current, err)
 	}
 }

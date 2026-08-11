@@ -130,6 +130,31 @@ func (h *Handler) AcceptMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, op)
 }
 
+// GetDaemonMachineUpgrade returns the canonical server receipt to one of the
+// operation's daemon runtimes. Successors use it only to compare-and-clear an
+// exact local recovery marker after terminal server proof.
+func (h *Handler) GetDaemonMachineUpgrade(w http.ResponseWriter, r *http.Request) {
+	if h.MachineUpgradeStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
+		return
+	}
+	runtimeID := strings.TrimSpace(chi.URLParam(r, "runtimeId"))
+	rt, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	op, err := h.MachineUpgradeStore.Get(r.Context(), runtimeDaemonKey(rt), chi.URLParam(r, "upgradeId"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load machine upgrade")
+		return
+	}
+	if op == nil {
+		writeError(w, http.StatusNotFound, "machine upgrade not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
+}
+
 // ReportMachineUpgradeProgress projects durable daemon execution phases.
 // Completion is deliberately absent: only full successor registration can
 // complete a machine upgrade.

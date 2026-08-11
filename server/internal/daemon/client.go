@@ -655,7 +655,21 @@ type MachineUpgradeReceipt struct {
 	Phase                string   `json:"phase"`
 	AcceptedGeneration   *string  `json:"accepted_generation,omitempty"`
 	AcceptedRuntimeIDs   []string `json:"accepted_runtime_ids,omitempty"`
+	AttestedRuntimeIDs   []string `json:"attested_runtime_ids,omitempty"`
 	AcceptedWorkspaceIDs []string `json:"accepted_workspace_ids,omitempty"`
+	AttestedWorkspaceIDs []string `json:"attested_workspace_ids,omitempty"`
+	SourceVersion        *string  `json:"source_version,omitempty"`
+	RollbackGeneration   *string  `json:"rollback_generation,omitempty"`
+	RollbackRuntimeIDs   []string `json:"rollback_runtime_ids,omitempty"`
+}
+
+func (c *Client) GetMachineUpgradeReceipt(ctx context.Context, runtimeID, upgradeID string) (*MachineUpgradeReceipt, error) {
+	var receipt MachineUpgradeReceipt
+	err := c.getJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/machine-upgrades/%s", runtimeID, upgradeID), &receipt, c.tokenForRuntime(runtimeID))
+	if err != nil {
+		return nil, err
+	}
+	return &receipt, nil
 }
 
 func (c *Client) AttestComputerUpgrade(ctx context.Context, daemonID, upgradeID, generationID, cliVersion string, runtimeIDs, workspaceIDs []string) error {

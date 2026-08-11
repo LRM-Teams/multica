@@ -227,13 +227,21 @@ export function ModelDropdown({
           data-testid="model-dropdown-trigger"
           className={executionTriggerClass}
           aria-busy={isFetchingCatalog || undefined}
+          title={
+            !isInitialScan && value
+              ? modelLabel(models, value)
+              : undefined
+          }
         >
           {isInitialScan ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
           ) : (
             <Cpu className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           )}
-          <span className="min-w-0 flex-1 truncate">
+          <span
+            data-testid="model-dropdown-trigger-label"
+            className="min-w-0 flex-1 truncate"
+          >
             {isInitialScan
               ? t(($) => $.model_dropdown.scanning_on_computer)
               : value

@@ -64,7 +64,10 @@ export function ExecutionConfigFields({
   }, [runtimeId, queryClient]);
 
   return (
-    <div className="flex flex-col gap-2.5" data-testid="execution-config-fields">
+    <div
+      className="flex min-w-0 flex-col gap-2.5"
+      data-testid="execution-config-fields"
+    >
       <ComputerPicker
         runtimes={runtimes}
         runtimesLoading={runtimesLoading}

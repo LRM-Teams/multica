@@ -190,6 +190,7 @@ describe("CreateAgentDialog workspace runtime selection", () => {
       name: "Teammate Runtime",
       provider: "cursor",
       owner_id: OTHER,
+      visibility: "public",
     });
     renderDialog([mine, teammate]);
 

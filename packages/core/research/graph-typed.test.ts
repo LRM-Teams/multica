@@ -268,3 +268,17 @@ describe("indexTypedGraphNodes", () => {
     expect(indexTypedGraphNodes([]).size).toBe(0);
   });
 });
+
+describe("typed graph strict client boundary", () => {
+  it("rejects malformed graph_version so GET /graph/typed can surface query errors", () => {
+    const result = TypedGraphResponseSchema.safeParse({
+      session_id: "s1",
+      graph_version: "bad",
+      nodes: [],
+      edges: [],
+      clusters: [],
+      lineage: {},
+    });
+    expect(result.success).toBe(false);
+  });
+});

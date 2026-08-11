@@ -18,7 +18,7 @@ This file is the decision table for implementation. It is not a task plan.
 | 8 | Desktop / mobile | **Web UI in scope**; desktop not special-cased (shared packages); **mobile UI out**; mobile may keep old API via alias |
 | 9 | Graph | **v1: no** |
 | 10 | Old Agents pages | **Delete** list page + `AgentDetailPage`; right pane = existing **Side Panels** only |
-| 11 | AGENTS grouping | By **computer** via same **`buildRuntimeMachines`** as Runtimes; no-runtime → **No computer** group last |
+| 11 | AGENTS grouping | By **computer** via same **`buildRuntimeMachines`** as Runtimes; **no “No computer” group**; create requires computer; agents without runtime **omitted** from the rail |
 | 12 | HUMANS `+` | **Invite dialog**: single email + role (`createMember`); no multi-email, no join link |
 | 13 | AGENTS `+` | Existing **CreateAgentDialog** |
 | 14 | Archived agents | **Not** in left rail |
@@ -26,20 +26,30 @@ This file is the decision table for implementation. It is not a task plan.
 | 16 | Hire/draft deep links | **Drop** (`?action_card=`, `?draft=` auto-create) |
 | 17 | Agent detail deep links | `/agents/:id` → directory with that agent selected |
 
-## Layout (desktop)
+## Layout (desktop) — page draft (PD)
 
 ```
 Members
-▾ AGENTS  n                    [+]  → CreateAgentDialog
-  💻 <machine title>
-     · agent…
+▾ AGENTS  n                    [+]  → CreateAgentDialog (computer required)
+  💻 <machine title>             (header only: not clickable, not collapsible)
+     · avatar + name [+ optional truncated description]
   💻 …
-  (No computer)
-     · …
-▾ HUMANS  m                    [+]  → Invite human (email + role)
-  · human… (you)
+▾ HUMANS  m                    [+]  → Invite (owner/admin only; single email + role)
+  · avatar + name [(you)]
   · …
 ```
+
+Page draft locks (2026-08-11):
+
+| PD | Decision |
+|----|----------|
+| PD1 | No “No computer” group; computer **required** at agent create |
+| PD2 | Computer rows = **labels only** (no click, no collapse) |
+| PD3 | **No** left-rail search in v1 |
+| PD4 | Selection in **URL query** (share/refresh) |
+| PD5 | Row = **avatar + display name**; agent may show truncated description subtitle; human may show `(you)` |
+| PD6 | HUMANS `+` visible to **owner/admin only** |
+| PD7 | Profile page variant **hides ✕/Done**; change selection via left rail |
 
 Right:
 

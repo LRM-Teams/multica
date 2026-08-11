@@ -214,6 +214,8 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		return Attempt{}, RunEvent{}, fmt.Errorf("%w: prior attempt cancellation is not acknowledged", ErrInvalidTransition)
 	}
 	attemptNumber := attemptCount + 1
+	var manifestPlan dispatchManifestPlan
+	var manifestBound bool
 	var attempt Attempt
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_task_attempt (
@@ -264,20 +266,27 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		if err = ensureSessionPolicyStateTx(ctx, tx, workspaceID, in.SessionID); err != nil {
 			return Attempt{}, RunEvent{}, err
 		}
+		expectedWatermark, wmErr := readPolicyWatermarkTx(ctx, tx, workspaceID, in.SessionID)
+		if wmErr != nil {
+			return Attempt{}, RunEvent{}, wmErr
+		}
 		manifestModule := NewArtifactContextModule()
 		manifestPlan, planErr := manifestModule.PlanDispatchManifest(ctx, tx, workspaceID, in.SessionID, stateVersion)
 		if planErr != nil {
 			return Attempt{}, RunEvent{}, planErr
 		}
-		if err = persistDispatchManifestTx(ctx, tx, persistDispatchManifestInput{
-			WorkspaceID: workspaceID,
-			SessionID:   in.SessionID,
-			AttemptID:   attempt.ID,
-			TaskID:      in.TaskID,
-			Plan:        manifestPlan,
-		}); err != nil {
+		manifestPlan, err = persistDispatchManifestTx(ctx, tx, persistDispatchManifestInput{
+			WorkspaceID:       workspaceID,
+			SessionID:         in.SessionID,
+			AttemptID:         attempt.ID,
+			TaskID:            in.TaskID,
+			Plan:              manifestPlan,
+			ExpectedWatermark: expectedWatermark,
+		})
+		if err != nil {
 			return Attempt{}, RunEvent{}, err
 		}
+		manifestBound = true
 	}
 	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
 	probeTargets, err := normalizeAttemptProbeTargets(target, in.ProbeTargets)
@@ -289,7 +298,17 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 			return Attempt{}, RunEvent{}, err
 		}
 	}
-	if _, err = tx.Exec(ctx, `
+	if manifestBound {
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO research_dispatch_outbox (
+				workspace_id, session_id, task_id, attempt_id, dispatch_key,
+				request_payload, request_hash, manifest_id, manifest_hash
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6::jsonb, $7, $8::uuid, $9)
+		`, workspaceID, in.SessionID, in.TaskID, in.AttemptID, in.Request.Key, encodedRequest, requestHash,
+			manifestPlan.ManifestID, manifestPlan.ManifestHash); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
+	} else if _, err = tx.Exec(ctx, `
 		INSERT INTO research_dispatch_outbox (
 			workspace_id, session_id, task_id, attempt_id, dispatch_key,
 			request_payload, request_hash

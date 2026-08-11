@@ -1766,3 +1766,132 @@ func TestResearchResultArtifactBackfill329RoundTrips(t *testing.T) {
 		t.Fatalf("reapply 329 up: %v", err)
 	}
 }
+
+const researchArtifact330TestDDL = `
+CREATE TABLE IF NOT EXISTS research_dispatch_outbox (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL REFERENCES research_session(id) ON DELETE CASCADE,
+  task_id UUID NOT NULL REFERENCES research_task(id) ON DELETE CASCADE,
+  attempt_id UUID NOT NULL REFERENCES research_task_attempt(id) ON DELETE CASCADE,
+  dispatch_key TEXT NOT NULL,
+  request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  request_hash TEXT NOT NULL DEFAULT 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  status TEXT NOT NULL DEFAULT 'pending',
+  UNIQUE (attempt_id)
+);
+`
+
+func TestResearchDispatchManifestBinding330RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_d330_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifact330TestDDL); err != nil {
+		t.Fatalf("extend 330 schema: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifact328TestDDL); err != nil {
+		t.Fatalf("extend 328 schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	taskID := "30000000-0000-4000-8000-000000000003"
+	attemptID := "40000000-0000-4000-8000-000000000004"
+
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO research_session (id, workspace_id) VALUES ($1::uuid, $2::uuid)`, sessionID, workspaceID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'task', 1, 1)
+	`, taskID, workspaceID, sessionID); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task_attempt (id, workspace_id, session_id, task_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid)
+	`, attemptID, workspaceID, sessionID, taskID); err != nil {
+		t.Fatalf("seed attempt: %v", err)
+	}
+
+	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
+	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
+	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
+	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
+	up322, _ := readMigrationPair(t, "322_research_artifact_policy_ledger_guards")
+	up323, _ := readMigrationPair(t, "323_research_artifact_integrity_guards")
+	up324, _ := readMigrationPair(t, "324_research_artifact_link_policy_guards")
+	up325, _ := readMigrationPair(t, "325_research_artifact_migration_diagnostics")
+	up327, _ := readMigrationPair(t, "327_research_artifact_canonicalization_registry")
+	up328, _ := readMigrationPair(t, "328_research_artifact_passport_d_completion")
+	for _, upSQL := range []string{up318, up319, up320, up321, up322, up323, up324, up325, up327, up328} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+
+	up330, down330 := readMigrationPair(t, "330_research_dispatch_manifest_binding")
+	if _, err = conn.Exec(ctx, up330); err != nil {
+		t.Fatalf("apply 330 up: %v", err)
+	}
+
+	var manifestColumnExists bool
+	if err = conn.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1 FROM information_schema.columns
+		  WHERE table_schema = current_schema()
+		    AND table_name = 'research_dispatch_outbox'
+		    AND column_name = 'manifest_id'
+		)
+	`).Scan(&manifestColumnExists); err != nil {
+		t.Fatalf("check manifest_id column: %v", err)
+	}
+	if !manifestColumnExists {
+		t.Fatal("expected research_dispatch_outbox.manifest_id column")
+	}
+
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_dispatch_outbox (
+		  workspace_id, session_id, task_id, attempt_id, dispatch_key,
+		  request_payload, request_hash, manifest_hash
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'dispatch-key',
+		  '{}'::jsonb, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+		  'not-a-hash'
+		)
+	`, workspaceID, sessionID, taskID, attemptID); err == nil {
+		t.Fatal("expected manifest_hash check constraint violation")
+	}
+
+	if _, err = conn.Exec(ctx, down330); err != nil {
+		t.Fatalf("apply 330 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up330); err != nil {
+		t.Fatalf("reapply 330 up: %v", err)
+	}
+}

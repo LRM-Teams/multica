@@ -50,7 +50,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	}
 	var acceptancePolicyWatermark int64
 	if artifactPassportEnabled {
-		acceptancePolicyWatermark, err = verifyAcceptanceManifestPolicyTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID)
+		_, acceptancePolicyWatermark, err = verifyAcceptanceManifestPolicyTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID)
 		if err != nil {
 			return AcceptResultOutcome{}, err
 		}
@@ -163,10 +163,18 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	if artifactPassportEnabled {
-		if err = persistAcceptedResultArtifactTx(
+		resultID, persistErr := persistAcceptedResultArtifactTx(
 			ctx, tx, state.workspaceID, in.SessionID, in.AttemptID,
 			state.run.OrchestratorVersion, in.Result, resultJSON, in.Hash, acceptancePolicyWatermark,
-		); err != nil {
+		)
+		if persistErr != nil {
+			return AcceptResultOutcome{}, classifyResultConstraint(persistErr)
+		}
+		resultVersionRowID, versionErr := loadManifestVersionRowIDTx(ctx, tx, state.workspaceID, in.SessionID, resultID)
+		if versionErr != nil {
+			return AcceptResultOutcome{}, versionErr
+		}
+		if err = persistResultArtifactInputReferencesTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID, resultVersionRowID); err != nil {
 			return AcceptResultOutcome{}, classifyResultConstraint(err)
 		}
 	}

@@ -169,3 +169,10 @@ SELECT research_artifact_backfill_registered(
 FROM research_artifact_passport p
 JOIN research_session s ON s.id = p.id AND s.workspace_id = p.workspace_id
 WHERE p.entity_kind = 'run_session' AND p.current_version IS NULL;
+
+-- Version rows are content-immutable, but session/workspace CASCADE cleanup must
+-- be able to delete them. Block UPDATE only.
+DROP TRIGGER IF EXISTS research_artifact_version_immutable_guard ON research_artifact_version;
+CREATE TRIGGER research_artifact_version_immutable_guard
+BEFORE UPDATE ON research_artifact_version
+FOR EACH ROW EXECUTE FUNCTION research_artifact_version_immutable_guard();

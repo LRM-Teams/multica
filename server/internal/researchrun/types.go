@@ -498,4 +498,14 @@ type RunSnapshot struct {
 	Observations []Observation        `json:"observations"`
 	Claims       []Claim              `json:"claims"`
 	Gate         GateResult           `json:"gate"`
+	AttemptContext *AttemptArtifactContext `json:"attempt_context,omitempty"`
+}
+
+// AttemptArtifactContext is a bounded passport summary for task-bound reads.
+type AttemptArtifactContext struct {
+	AttemptID        string `json:"attempt_id"`
+	ManifestID       string `json:"manifest_id,omitempty"`
+	ManifestHash     string `json:"manifest_hash,omitempty"`
+	PolicyWatermark  int64  `json:"policy_watermark,omitempty"`
+	ManifestFiltered bool   `json:"manifest_filtered"`
 }

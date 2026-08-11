@@ -12,6 +12,7 @@ import (
 type ResearchRun interface {
 	Create(context.Context, StartInput) (Run, error)
 	Snapshot(context.Context, string, string) (RunSnapshot, error)
+	SnapshotForAttempt(context.Context, string, string, string) (RunSnapshot, error)
 	ListFleetMembers(context.Context, string, string) ([]FleetMember, error)
 
 	Pause(context.Context, string, string, string) (Run, error)

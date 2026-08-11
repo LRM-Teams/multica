@@ -372,8 +372,20 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	}, nil
 }
 
-// ListFleetMembers returns the session-bound research fleet roster used for
-// presence/dispatch (LRM-1377 follow-up).
+func (e *Engine) SnapshotForAttempt(ctx context.Context, sessionID, workspaceID, attemptID string) (RunSnapshot, error) {
+	if e == nil || e.store == nil {
+		return RunSnapshot{}, errors.New("research run engine is unavailable")
+	}
+	snapshot, err := e.store.TaskContextForAttempt(ctx, attemptID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	if snapshot.Run.SessionID != sessionID {
+		return RunSnapshot{}, ErrRunNotFound
+	}
+	return snapshot, nil
+}
+
 func (e *Engine) ListFleetMembers(ctx context.Context, sessionID, workspaceID string) ([]FleetMember, error) {
 	return e.store.ListFleetMembers(ctx, sessionID, workspaceID)
 }

@@ -122,6 +122,7 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
   return (
     <div
       {...dropZoneProps}
+      data-testid="issue-comment-composer"
       className="relative flex flex-col rounded-lg bg-card pb-8 ring-1 ring-border"
     >
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2">

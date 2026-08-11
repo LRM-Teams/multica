@@ -488,7 +488,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                           <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-brand ring-1 ring-sidebar" />
                         )}
                       </span>
-                      <span className="flex-1 truncate font-medium">
+                      <span data-testid="workspace-switcher-name" className="flex-1 truncate font-medium">
                         {workspace?.name ?? "Multica"}
                       </span>
                       <ChevronDown className="size-3 text-muted-foreground" />

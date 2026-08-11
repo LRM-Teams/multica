@@ -36,13 +36,7 @@ async function setupD5Workspace(label: string, slugPrefix: string) {
   await api.login(email, label);
   const workspace = await api.ensureWorkspace(label, `${slugPrefix}-${stamp}`);
 
-  await db(
-    `UPDATE "user"
-     SET onboarded_at = now(),
-         onboarding_questionnaire = '{"source":["other"],"source_skipped":false}'::jsonb
-     WHERE email = $1`,
-    [email],
-  );
+  await api.ensureWorkspaceReady(workspace);
   await db(
     `INSERT INTO agent_runtime (
        workspace_id, daemon_id, name, runtime_mode, provider, status,

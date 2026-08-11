@@ -28,16 +28,15 @@ test.describe("Comments", () => {
 
     // Type a comment
     const commentText = "E2E comment " + Date.now();
-    const commentInput = page.locator(
-      'input[placeholder="Leave a comment..."]',
-    );
-    await commentInput.fill(commentText);
+    const composer = page.getByTestId("issue-comment-composer");
+    const deferredEditor = composer.getByTestId("content-editor-deferred");
+    if (await deferredEditor.isVisible()) await deferredEditor.click();
+    await composer.locator('[contenteditable="true"]').fill(commentText);
 
-    // Submit the comment
-    await page.locator('form button[type="submit"]').last().click();
+    await composer.locator("button").last().click();
 
     // Comment should appear in the activity section
-    await expect(page.locator(`text=${commentText}`)).toBeVisible({
+    await expect(page.getByTestId("virtuoso-item-list").getByText(commentText)).toBeVisible({
       timeout: 5000,
     });
   });
@@ -50,8 +49,7 @@ test.describe("Comments", () => {
 
     await expect(page.locator("text=Properties")).toBeVisible();
 
-    // Submit button should be disabled when input is empty
-    const submitBtn = page.locator('form button[type="submit"]').last();
+    const submitBtn = page.getByTestId("issue-comment-composer").locator("button").last();
     await expect(submitBtn).toBeDisabled();
   });
 });

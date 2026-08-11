@@ -59,14 +59,13 @@ func drainChannelOnboardingForTest(t *testing.T, runtimeID string) DrainAgentInb
 	return response
 }
 
-func completeChannelOnboardingForTest(t *testing.T, event AgentInboxEventResponse, output, decision string, wantStatus int) {
+func completeChannelOnboardingForTest(t *testing.T, event AgentInboxEventResponse, output string, wantStatus int) {
 	t.Helper()
 	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/complete", CompleteAgentInboxEventRequest{
 		DeliveryID: event.DeliveryID,
 		LeaseToken: event.LeaseToken,
 		TaskCompleteRequest: TaskCompleteRequest{
-			Output:                    output,
-			ChannelOnboardingDecision: decision,
+			Output: output,
 		},
 	}, testWorkspaceID, "channel-onboarding-test-daemon")
 	req = withURLParam(req, "eventId", event.ID)
@@ -77,19 +76,12 @@ func completeChannelOnboardingForTest(t *testing.T, event AgentInboxEventRespons
 	}
 }
 
-func sendChannelOnboardingMessageForTest(t *testing.T, event AgentInboxEventResponse, agentID, target, content string) AgentTransportSendResponse {
+func sendChannelOnboardingMessageForTest(t *testing.T, agentID, target, content, clientMessageID string) AgentTransportSendResponse {
 	t.Helper()
-	var onboardingID string
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT channel_onboarding_id::text
-		FROM agent_inbox_event
-		WHERE id = $1`, event.ID).Scan(&onboardingID); err != nil {
-		t.Fatalf("load onboarding message identity: %v", err)
-	}
 	req := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
 		"target":            target,
 		"content":           content,
-		"client_message_id": channelOnboardingClientMessageID(parseUUID(onboardingID)),
+		"client_message_id": clientMessageID,
 	})
 	req = withChatTestWorkspaceCtx(t, req)
 	req.Header.Set("X-Actor-Source", "agent_credential")
@@ -201,8 +193,11 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 	if event.SourceMessageID != systemMessageID || event.SeqFrom != systemSeq || event.SeqTo != systemSeq {
 		t.Fatalf("drained onboarding source = message:%q seq:%d..%d, want %s/%d", event.SourceMessageID, event.SeqFrom, event.SeqTo, systemMessageID, systemSeq)
 	}
-	if !strings.Contains(event.Task.ChatMessage, "Exact message target: #"+channelName) || !strings.Contains(event.Task.ChatMessage, protocol.ChannelOnboardingSkipReceipt) {
-		t.Fatalf("onboarding prompt does not bind exact target and typed skip: %q", event.Task.ChatMessage)
+	if !strings.Contains(event.Task.ChatMessage, "Exact message target: #"+channelName) || !strings.Contains(event.Task.ChatMessage, "finish without sending a message") {
+		t.Fatalf("onboarding prompt does not bind exact target and quiet completion: %q", event.Task.ChatMessage)
+	}
+	if strings.Contains(event.Task.ChatMessage, "channel-onboarding:") || strings.Contains(event.Task.ChatMessage, "channel_onboarding_skipped") {
+		t.Fatalf("onboarding prompt exposes a special receipt or client id: %q", event.Task.ChatMessage)
 	}
 
 	for _, invalid := range []map[string]any{
@@ -219,11 +214,12 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 		}
 	}
 
-	first := sendChannelOnboardingMessageForTest(t, event, agentID, "#"+channelName, "Hello from the joined agent")
+	clientID := "onboarding-turn-" + uuid.NewString()
+	first := sendChannelOnboardingMessageForTest(t, agentID, "#"+channelName, "Hello from the joined agent", clientID)
 	if !first.Created {
 		t.Fatalf("first onboarding send created=false: %+v", first)
 	}
-	second := sendChannelOnboardingMessageForTest(t, event, agentID, "#"+channelName, "Hello from the joined agent")
+	second := sendChannelOnboardingMessageForTest(t, agentID, "#"+channelName, "Hello from the joined agent", clientID)
 	if second.Created || second.Message.ID != first.Message.ID {
 		t.Fatalf("retry onboarding send = created:%v message:%s, want existing %s", second.Created, second.Message.ID, first.Message.ID)
 	}
@@ -243,12 +239,12 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 		WHERE onboarding.channel_id = $1 AND inbox.agent_id <> $2`, channelID, agentID).Scan(&otherAgentInboxes); err != nil {
 		t.Fatalf("count non-target onboarding inboxes: %v", err)
 	}
-	if visibleAgentMessages != 1 || otherAgentInboxes != 0 || clientMessageID != "channel-onboarding:"+onboardingID {
+	if visibleAgentMessages != 1 || otherAgentInboxes != 0 || clientMessageID != clientID {
 		t.Fatalf("send ledger = messages:%d other_inboxes:%d client_id:%q", visibleAgentMessages, otherAgentInboxes, clientMessageID)
 	}
 
 	finalProse := "ordinary final text must not become a second greeting"
-	completeChannelOnboardingForTest(t, event, finalProse, "", http.StatusOK)
+	completeChannelOnboardingForTest(t, event, finalProse, http.StatusOK)
 	var onboardingStatus, inboxOutcome string
 	if err := testPool.QueryRow(ctx, `
 		SELECT onboarding.status, COALESCE(inbox.terminal_outcome, '')
@@ -257,8 +253,8 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 		WHERE onboarding.id = $1`, onboardingID).Scan(&onboardingStatus, &inboxOutcome); err != nil {
 		t.Fatalf("load sent onboarding terminal state: %v", err)
 	}
-	if onboardingStatus != "sent" || inboxOutcome != "sent" {
-		t.Fatalf("sent onboarding terminal state = onboarding:%q inbox:%q", onboardingStatus, inboxOutcome)
+	if onboardingStatus != "completed" || inboxOutcome != "completed" {
+		t.Fatalf("completed onboarding terminal state = onboarding:%q inbox:%q", onboardingStatus, inboxOutcome)
 	}
 	assertChannelMessageContentCount(t, channelID, finalProse, 0)
 }
@@ -318,10 +314,10 @@ func TestChannelOnboardingBatchAgentAddUsesCanonicalGeneration(t *testing.T) {
 	if len(drain.Events) != 1 || drain.Events[0].AgentID != agentID || drain.Events[0].ChannelID != channelID {
 		t.Fatalf("batch onboarding drain = %+v", drain.Events)
 	}
-	completeChannelOnboardingForTest(t, drain.Events[0], "", protocol.ChannelOnboardingDecisionSkipped, http.StatusOK)
+	completeChannelOnboardingForTest(t, drain.Events[0], "", http.StatusOK)
 }
 
-func TestChannelOnboardingRequiresTypedSkipReceipt(t *testing.T) {
+func TestChannelOnboardingCompletesWithoutSpecialReceipt(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -336,23 +332,10 @@ func TestChannelOnboardingRequiresTypedSkipReceipt(t *testing.T) {
 	}
 	event := drain.Events[0]
 
-	completeChannelOnboardingForTest(t, event, "I think no introduction is needed", "", http.StatusConflict)
-	var eventStatus, deliveryStatus, onboardingStatus string
-	if err := testPool.QueryRow(ctx, `
-		SELECT inbox.status, delivery.status, onboarding.status
-		FROM agent_inbox_event inbox
-		JOIN agent_event_delivery delivery ON delivery.inbox_event_id = inbox.id
-		JOIN channel_agent_onboarding onboarding ON onboarding.id = inbox.channel_onboarding_id
-		WHERE inbox.id = $1 AND delivery.id = $2`, event.ID, event.DeliveryID).Scan(&eventStatus, &deliveryStatus, &onboardingStatus); err != nil {
-		t.Fatalf("load retryable onboarding decision state: %v", err)
-	}
-	if eventStatus != "draining" || deliveryStatus != "leased" || onboardingStatus != "claimed" {
-		t.Fatalf("untyped skip mutated state = inbox:%q delivery:%q onboarding:%q", eventStatus, deliveryStatus, onboardingStatus)
-	}
-
-	completeChannelOnboardingForTest(t, event, "", protocol.ChannelOnboardingDecisionSkipped, http.StatusOK)
+	completeChannelOnboardingForTest(t, event, "I think no introduction is needed", http.StatusOK)
 	var terminalOutcome string
 	var agentMessages int
+	var onboardingStatus string
 	if err := testPool.QueryRow(ctx, `
 		SELECT onboarding.status, COALESCE(inbox.terminal_outcome, '')
 		FROM channel_agent_onboarding onboarding
@@ -363,12 +346,12 @@ func TestChannelOnboardingRequiresTypedSkipReceipt(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE channel_id = $1 AND author_type = 'agent'`, channelID).Scan(&agentMessages); err != nil {
 		t.Fatalf("count skipped onboarding messages: %v", err)
 	}
-	if onboardingStatus != "skipped" || terminalOutcome != "skipped" || agentMessages != 0 {
-		t.Fatalf("typed skip state = onboarding:%q inbox:%q agent_messages:%d", onboardingStatus, terminalOutcome, agentMessages)
+	if onboardingStatus != "completed" || terminalOutcome != "completed" || agentMessages != 0 {
+		t.Fatalf("receipt-free completion state = onboarding:%q inbox:%q agent_messages:%d", onboardingStatus, terminalOutcome, agentMessages)
 	}
 }
 
-func TestChannelOnboardingRemoveReaddExpiresOldGenerationAndSend(t *testing.T) {
+func TestChannelOnboardingRemoveReaddExpiresOldGeneration(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -376,7 +359,6 @@ func TestChannelOnboardingRemoveReaddExpiresOldGenerationAndSend(t *testing.T) {
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "Onboarding Readd "+uuid.NewString()[:8], nil)
 	channelID := seedChannelForTest(t, "onboarding-readd-"+uuid.NewString(), testUserID)
-	channelName := channelNameForTransportTest(t, channelID)
 	addChannelAgentForOnboardingTest(t, channelID, agentID)
 	var oldGeneration string
 	if err := testPool.QueryRow(ctx, `SELECT membership_generation_id FROM channel_agent_onboarding WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&oldGeneration); err != nil {
@@ -407,30 +389,23 @@ func TestChannelOnboardingRemoveReaddExpiresOldGenerationAndSend(t *testing.T) {
 	}
 	event := drain.Events[0]
 	removeChannelAgentForOnboardingTest(t, channelID, agentID)
-	var onboardingID string
-	if err := testPool.QueryRow(ctx, `SELECT channel_onboarding_id::text FROM agent_inbox_event WHERE id = $1`, event.ID).Scan(&onboardingID); err != nil {
-		t.Fatalf("load removed onboarding identity: %v", err)
-	}
-
-	req := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":            "#" + channelName,
-		"content":           "must not send after removal",
-		"client_message_id": channelOnboardingClientMessageID(parseUUID(onboardingID)),
-	})
-	req = withChatTestWorkspaceCtx(t, req)
-	req.Header.Set("X-Actor-Source", "agent_credential")
-	req.Header.Set("X-Agent-ID", agentID)
-	rec := httptest.NewRecorder()
-	testHandler.AgentTransportSendMessage(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("send after onboarding removal: status=%d body=%s, want 409", rec.Code, rec.Body.String())
-	}
 	var visible int
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2`, channelID, agentID).Scan(&visible); err != nil {
 		t.Fatalf("count post-removal onboarding messages: %v", err)
 	}
 	if visible != 0 {
 		t.Fatalf("post-removal onboarding visible messages = %d, want 0", visible)
+	}
+	var onboardingStatus, inboxOutcome string
+	if err := testPool.QueryRow(ctx, `
+		SELECT onboarding.status, COALESCE(inbox.terminal_outcome, '')
+		FROM channel_agent_onboarding onboarding
+		JOIN agent_inbox_event inbox ON inbox.channel_onboarding_id = onboarding.id
+		WHERE inbox.id = $1`, event.ID).Scan(&onboardingStatus, &inboxOutcome); err != nil {
+		t.Fatalf("load removed onboarding terminal state: %v", err)
+	}
+	if onboardingStatus != "expired" || inboxOutcome != "expired" {
+		t.Fatalf("removed onboarding terminal state = onboarding:%q inbox:%q", onboardingStatus, inboxOutcome)
 	}
 }
 
@@ -442,34 +417,17 @@ func TestChannelOnboardingArchiveAfterDrainExpiresWithoutVisibleSend(t *testing.
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "Onboarding Archive "+uuid.NewString()[:8], nil)
 	channelID := seedChannelForTest(t, "onboarding-archive-"+uuid.NewString(), testUserID)
-	channelName := channelNameForTransportTest(t, channelID)
 	addChannelAgentForOnboardingTest(t, channelID, agentID)
 	drain := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t))
 	if len(drain.Events) != 1 {
 		t.Fatalf("drained archive onboarding events = %d, want 1", len(drain.Events))
 	}
 	event := drain.Events[0]
-	var onboardingID string
-	if err := testPool.QueryRow(ctx, `SELECT channel_onboarding_id::text FROM agent_inbox_event WHERE id = $1`, event.ID).Scan(&onboardingID); err != nil {
-		t.Fatalf("load archived onboarding identity: %v", err)
-	}
 
 	if _, err := testPool.Exec(ctx, `UPDATE channel SET archived_at = now() WHERE id = $1`, channelID); err != nil {
 		t.Fatalf("archive onboarding channel: %v", err)
 	}
-	req := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target":            "#" + channelName,
-		"content":           "must not send after archive",
-		"client_message_id": channelOnboardingClientMessageID(parseUUID(onboardingID)),
-	})
-	req = withChatTestWorkspaceCtx(t, req)
-	req.Header.Set("X-Actor-Source", "agent_credential")
-	req.Header.Set("X-Agent-ID", agentID)
-	rec := httptest.NewRecorder()
-	testHandler.AgentTransportSendMessage(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("send after onboarding channel archive: status=%d body=%s, want 409", rec.Code, rec.Body.String())
-	}
+	completeChannelOnboardingForTest(t, event, "", http.StatusOK)
 
 	var onboardingStatus, inboxOutcome string
 	var visible int
@@ -527,7 +485,7 @@ func TestChannelOnboardingSystemGeneralWaitsForDurablePublication(t *testing.T) 
 	if len(after.Events) != 1 || after.Events[0].AgentID != agentID || after.Events[0].ChannelID != channelID || after.Events[0].Reason != protocol.ChannelOnboardingReason {
 		t.Fatalf("system-general onboarding after publication = %+v", after.Events)
 	}
-	completeChannelOnboardingForTest(t, after.Events[0], "", protocol.ChannelOnboardingDecisionSkipped, http.StatusOK)
+	completeChannelOnboardingForTest(t, after.Events[0], "", http.StatusOK)
 }
 
 func TestChannelOnboardingPublicationFailureStaysRetryableAndBlocksLease(t *testing.T) {
@@ -608,7 +566,7 @@ func TestChannelOnboardingPublicationFailureStaysRetryableAndBlocksLease(t *test
 	if len(drain.Events) != 1 || drain.Events[0].AgentID != agentID {
 		t.Fatalf("confirmed publication drain = %+v", drain.Events)
 	}
-	completeChannelOnboardingForTest(t, drain.Events[0], "", protocol.ChannelOnboardingDecisionSkipped, http.StatusOK)
+	completeChannelOnboardingForTest(t, drain.Events[0], "", http.StatusOK)
 }
 
 func assertChannelOnboardingPublicationRetryable(t *testing.T, onboardingID string, wantAttempt int) {

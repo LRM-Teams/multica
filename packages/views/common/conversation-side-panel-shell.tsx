@@ -37,6 +37,11 @@ export function ConversationSidePanelShell({
   doneLabel,
   /** Optional controls before Close (e.g. Message on human profile — LRM-619). */
   actions,
+  /**
+   * Members Directory (ADR 0013): embed panel as a page column without
+   * dock Close/Done — selection changes via the left rail.
+   */
+  hideDismiss = false,
   children,
 }: {
   leading?: ReactNode;
@@ -47,10 +52,10 @@ export function ConversationSidePanelShell({
   /** When set with `variant="page"`, renders a text Done control. */
   doneLabel?: string;
   actions?: ReactNode;
+  hideDismiss?: boolean;
   children: ReactNode;
 }) {
-  const closeControl =
-    variant === "panel" ? (
+  const closeControl = hideDismiss ? null : variant === "panel" ? (
       <Button
         type="button"
         variant="ghost"

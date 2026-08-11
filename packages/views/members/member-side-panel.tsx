@@ -56,6 +56,8 @@ interface MemberSidePanelProps {
   variant?: "panel" | "page";
   /** LRM-877 — conversation Sheet trailing control (「回消息」). */
   doneLabel?: string;
+  /** Members Directory: hide dock Close/Done. */
+  hideDismiss?: boolean;
 }
 
 /**
@@ -69,6 +71,7 @@ export function MemberSidePanel({
   onMessage,
   variant = "panel",
   doneLabel,
+  hideDismiss = false,
 }: MemberSidePanelProps) {
   const { t } = useT("members");
   const { t: tChannels } = useT("channels");
@@ -90,6 +93,7 @@ export function MemberSidePanel({
     return (
       <ConversationSidePanelShell
         variant={variant}
+        hideDismiss={hideDismiss}
         onClose={onClose}
         closeAriaLabel={closeAriaLabel}
         leading={MEMBER_PANEL_LOADING_LEADING}
@@ -107,6 +111,7 @@ export function MemberSidePanel({
     return (
       <MemberUnavailablePanel
         variant={variant}
+        hideDismiss={hideDismiss}
         onClose={onClose}
         closeAriaLabel={closeAriaLabel}
         label={unavailableLabel}
@@ -124,6 +129,7 @@ export function MemberSidePanel({
       onMessage={onMessage}
       variant={variant}
       doneLabel={doneLabel}
+      hideDismiss={hideDismiss}
       closeAriaLabel={closeAriaLabel}
     />
   );
@@ -134,11 +140,13 @@ function MemberUnavailablePanel({
   onClose,
   closeAriaLabel,
   label,
+  hideDismiss = false,
 }: {
   variant: "panel" | "page";
   onClose: () => void;
   closeAriaLabel: string;
   label: string;
+  hideDismiss?: boolean;
 }) {
   const leading = useMemo(
     () => <span className="text-sm text-muted-foreground">{label}</span>,
@@ -147,6 +155,7 @@ function MemberUnavailablePanel({
   return (
     <ConversationSidePanelShell
       variant={variant}
+      hideDismiss={hideDismiss}
       onClose={onClose}
       closeAriaLabel={closeAriaLabel}
       leading={leading}
@@ -165,6 +174,7 @@ function MemberSidePanelReady({
   onMessage,
   variant,
   doneLabel,
+  hideDismiss = false,
   closeAriaLabel,
 }: {
   userId: string;
@@ -173,6 +183,7 @@ function MemberSidePanelReady({
   isSelf: boolean;
   onClose: () => void;
   onMessage?: (userId: string) => void;
+  hideDismiss?: boolean;
   variant: "panel" | "page";
   doneLabel?: string;
   closeAriaLabel: string;
@@ -350,6 +361,7 @@ function MemberSidePanelReady({
   return (
     <ConversationSidePanelShell
       variant={variant}
+      hideDismiss={hideDismiss}
       onClose={onClose}
       closeAriaLabel={closeAriaLabel}
       doneLabel={doneLabel}

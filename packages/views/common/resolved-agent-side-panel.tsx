@@ -58,6 +58,7 @@ export function ResolvedAgentSidePanel({
   onBack,
   backLabel,
   doneLabel,
+  hideDismiss = false,
 }: {
   agentId: string;
   /** Optional row-level identity for optimistic chrome while GetAgent loads. */
@@ -70,6 +71,7 @@ export function ResolvedAgentSidePanel({
   onBack?: () => void;
   backLabel?: string;
   doneLabel?: string;
+  hideDismiss?: boolean;
 }) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
@@ -128,6 +130,7 @@ export function ResolvedAgentSidePanel({
         onBack={onBack}
         backLabel={backLabel}
         doneLabel={doneLabel}
+        hideDismiss={hideDismiss}
       />
     );
   }
@@ -137,6 +140,7 @@ export function ResolvedAgentSidePanel({
     return (
       <ConversationSidePanelShell
         variant={variant}
+        hideDismiss={hideDismiss}
         onClose={onClose}
         closeAriaLabel={t(($) => $.profile_popover.close_aria)}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot; optimistic name or skeleton
@@ -159,6 +163,7 @@ export function ResolvedAgentSidePanel({
     return (
       <ConversationSidePanelShell
         variant={variant}
+        hideDismiss={hideDismiss}
         onClose={onClose}
         closeAriaLabel={t(($) => $.profile_popover.close_aria)}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot; name is a string leaf
@@ -179,6 +184,7 @@ export function ResolvedAgentSidePanel({
     return (
       <ConversationSidePanelShell
         variant={variant}
+        hideDismiss={hideDismiss}
         onClose={onClose}
         closeAriaLabel={t(($) => $.profile_popover.close_aria)}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot; static error title

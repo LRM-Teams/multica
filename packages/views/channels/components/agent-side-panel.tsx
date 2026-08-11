@@ -66,6 +66,7 @@ interface AgentSidePanelProps {
   backLabel?: string;
   /** Mobile page trailing control (「回消息」). Defaults to channels Done. */
   doneLabel?: string;
+  hideDismiss?: boolean;
 }
 
 /**
@@ -88,6 +89,7 @@ export function AgentSidePanel({
   onBack,
   backLabel,
   doneLabel,
+  hideDismiss = false,
 }: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
@@ -174,6 +176,7 @@ export function AgentSidePanel({
     <ConversationSidePanelShell
       variant={variant}
       header={stackedBack ? "bar" : "floating"}
+      hideDismiss={hideDismiss}
       onClose={onClose}
       closeAriaLabel={t(($) => $.side_panel.close_aria)}
       doneLabel={pageDoneLabel}

@@ -511,13 +511,14 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 		    AND m.session_id = $2::uuid
 		    AND m.attempt_id = $3::uuid
 		    AND e.eligibility_revision <> p.eligibility_revision
+		    OR p.lifecycle_status NOT IN ('registered', 'accepted')
 		)
 	`, workspaceID, sessionID, attemptID).Scan(&stale)
 	if err != nil {
 		return err
 	}
 	if stale {
-		return fmt.Errorf("%w: acceptance manifest entry eligibility stale", ErrInvalidTransition)
+		return fmt.Errorf("%w: acceptance manifest entry stale", ErrInvalidTransition)
 	}
 	return nil
 }

@@ -198,6 +198,83 @@ func TestHistoricalTaskContextAdvancesWhileFrozenManifestStable(t *testing.T) {
 	}
 }
 
+func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Stable attempt context", Title: "Stable attempt context",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+
+	readContext := func() AttemptArtifactContext {
+		t.Helper()
+		snapshot, readErr := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+		if readErr != nil {
+			t.Fatalf("TaskContextForAttempt: %v", readErr)
+		}
+		if snapshot.AttemptContext == nil {
+			t.Fatal("expected attempt_context")
+		}
+		return *snapshot.AttemptContext
+	}
+
+	before := readContext()
+	replayed := readContext()
+	if before.ManifestID != replayed.ManifestID || before.ManifestHash != replayed.ManifestHash {
+		t.Fatalf("replay drift before=%+v replayed=%+v", before, replayed)
+	}
+
+	sourceID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_source_snapshot (
+		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
+		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
+		  verification_status
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'https://example.test/post-live', 'Post live', 'example.test',
+		  'primary', '{}'::text[], 'example.test', now(), 'sha256:post-live', 'post live snapshot', '{}'::jsonb,
+		  'verified'
+		)
+	`, sourceID, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+
+	afterLive := readContext()
+	if afterLive.ManifestID != before.ManifestID || afterLive.ManifestHash != before.ManifestHash {
+		t.Fatalf("live mutation changed manifest metadata before=%+v after=%+v", before, afterLive)
+	}
+	if !afterLive.ManifestFiltered {
+		t.Fatal("expected manifest-filtered attempt context after live mutation")
+	}
+}
+
 func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {

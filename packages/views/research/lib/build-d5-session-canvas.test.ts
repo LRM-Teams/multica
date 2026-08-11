@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TypedGraphResponse } from "@multica/core/research";
 import { buildD5SessionCanvasModel } from "./build-d5-session-canvas";
+import { testTypedNode } from "./test-typed-graph-node";
 import { extractLayoutResultFromViewModel } from "../star-graph/lib/star-canvas-view-model";
 
 const emptyLineage = {
@@ -49,7 +50,16 @@ describe("buildD5SessionCanvasModel", () => {
   it("stores pre-rebase layout for incremental reuse", () => {
     const first = buildD5SessionCanvasModel(fixture(), viewport, { rightPanelWidth: 0 })!;
     const second = buildD5SessionCanvasModel(
-      fixture([{ id: "probe", level: "s", node_type: "probe", title: "Probe", status: "running", parent_id: "stable" }]),
+      fixture([
+        testTypedNode({
+          id: "probe",
+          level: "s",
+          node_type: "probe",
+          title: "Probe",
+          status: "running",
+          parent_id: "stable",
+        }),
+      ]),
       viewport,
       { rightPanelWidth: 0, previousLayout: first.layoutForNext },
     )!;

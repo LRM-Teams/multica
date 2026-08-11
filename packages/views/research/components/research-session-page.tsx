@@ -168,7 +168,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const isMobile = useIsMobile();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
-  const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
   const d5Lens = useResearchUiStore((s) => s.d5Lens);
   const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).

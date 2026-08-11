@@ -264,8 +264,7 @@ export function ResearchConstellationWorkspace({
   }, [canvasModel?.rootId, selectedNode?.id, typedGraph]);
 
   const motionDirectives = useMemo(() => {
-    if (!canvasModel) return undefined;
-    const queueSize = motion.queueSize;
+    if (!canvasModel || motion.queueSize < 0) return undefined;
     const visibleIds = selectVisibleEntityIds(canvasModel.entities, {
       rootId: canvasModel.rootId,
       selectedNodeId: selectedNode?.id ?? null,

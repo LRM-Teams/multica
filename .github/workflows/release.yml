@@ -186,19 +186,26 @@ jobs:
         run: |
           set -euo pipefail
           current="${RUNNER_TEMP}/current-metainfo.json"
-          status="$(curl --retry 4 --retry-all-errors --connect-timeout 10 --max-time 30 \
-            -sS -o "$current" -w '%{http_code}' "${PUBLIC_BASE_URL}/metainfo.json" || true)"
-          if [ "$status" = "200" ]; then
+          metainfo_key="${RELEASE_PREFIX}/metainfo.json"
+          head_error="${RUNNER_TEMP}/metainfo-head-error.txt"
+          if aws --endpoint-url "$OSS_ENDPOINT_URL" s3api head-object \
+            --bucket "$OSS_BUCKET" \
+            --key "$metainfo_key" \
+            >/dev/null 2>"$head_error"; then
+            aws --endpoint-url "$OSS_ENDPOINT_URL" s3 cp \
+              "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/metainfo.json" \
+              "$current" \
+              --only-show-errors
             jq -e '
               .schema_version == 1 and
               (.environments.production | type == "object") and
               (.environments.test | type == "object")
             ' "$current" >/dev/null
-          elif [ "$status" = "404" ]; then
+          elif grep -Eq '(\(404\)|Not Found|NoSuchKey)' "$head_error"; then
             # One-time/bootstrap recovery: derive the opposite environment
             # from the newest published GitHub release, then read only that
-            # release's canonical immutable manifest. No channel-file alias is
-            # created or consumed.
+            # release's canonical immutable manifest directly from OSS. No
+            # public CDN or channel-file alias participates in generation.
             releases="$(gh api --paginate --slurp "repos/${{ github.repository }}/releases?per_page=100")"
             if [ "$IS_STABLE" = "true" ]; then
               other_tag="$(jq -r --arg current "$TAG_NAME" '
@@ -220,8 +227,10 @@ jobs:
             fi
             [[ "$other_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]
             other_manifest="${RUNNER_TEMP}/bootstrap-${other_environment}.json"
-            curl --retry 4 --retry-all-errors --connect-timeout 10 --max-time 30 \
-              -fsSL "${PUBLIC_BASE_URL}/${other_tag#v}/manifest.json" -o "$other_manifest"
+            aws --endpoint-url "$OSS_ENDPOINT_URL" s3 cp \
+              "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/${other_tag#v}/manifest.json" \
+              "$other_manifest" \
+              --only-show-errors
             jq -n \
               --arg environment "$other_environment" \
               --slurpfile other "$other_manifest" \
@@ -231,7 +240,8 @@ jobs:
               .environments[(if $environment == "production" then "test" else "production" end)] = $current[0]' \
               >"$current"
           else
-            echo "::error title=Could not read canonical Computer metainfo::HTTP ${status}"
+            cat "$head_error" >&2
+            echo "::error title=Could not read canonical Computer metainfo from OSS"
             exit 1
           fi
 

@@ -89,6 +89,7 @@ import {
 } from "./runtime-machines";
 import { MachineNameEditor } from "./machine-name-editor";
 import {
+  ComputerIcon,
   HealthDot,
   MachineConnectedStatus,
 } from "./shared";
@@ -600,8 +601,19 @@ export function MachineListView({
           onClick={() => onSelect(machine.id)}
           className="absolute inset-0 z-0 rounded-[inherit]"
         />
-        <span className="relative z-10 shrink-0 pointer-events-none" aria-hidden>
-          <HealthDot health={machine.health} />
+        {/* Computer kind icon (Monitor vs Cloud) + corner connectivity dot.
+            Kind is the primary local/cloud read; health stays as the small
+            corner signal so LRM-1094's non-text connectivity cue remains
+            without a second leading column. */}
+        <span
+          className="relative z-10 flex size-5 shrink-0 items-center justify-center text-muted-foreground pointer-events-none"
+          aria-hidden
+        >
+          <ComputerIcon kind={machine.mode} className="size-4" />
+          <HealthDot
+            health={machine.health}
+            className="absolute -bottom-0.5 -right-0.5"
+          />
         </span>
         <div className="relative z-10 min-w-0 flex-1 pointer-events-none">
           <div className="flex min-w-0 items-center">

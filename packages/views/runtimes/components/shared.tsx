@@ -5,11 +5,26 @@ import type { RuntimeHealth, RuntimeHealthPresentation } from "@multica/core/run
 import { ProviderLogo } from "./provider-logo";
 import { useT } from "../../i18n/use-t";
 
-export function RuntimeModeIcon({ mode }: { mode: string }) {
-  return mode === "cloud" ? (
-    <Cloud className="h-3.5 w-3.5" />
-  ) : (
-    <Monitor className="h-3.5 w-3.5" />
+/**
+ * Computers list leading glyph: Monitor for a local/remote machine, Cloud for
+ * a cloud computer. One-glance local-vs-cloud distinction on the Computers page.
+ */
+export function ComputerIcon({
+  kind,
+  className,
+}: {
+  /** `cloud` → cloud computer; anything else → regular computer (Monitor). */
+  kind: "local" | "cloud" | string;
+  className?: string;
+}) {
+  const isCloud = kind === "cloud";
+  const Icon = isCloud ? Cloud : Monitor;
+  return (
+    <Icon
+      className={cn("h-3.5 w-3.5", className)}
+      data-testid={isCloud ? "computer-icon-cloud" : "computer-icon-local"}
+      aria-hidden
+    />
   );
 }
 

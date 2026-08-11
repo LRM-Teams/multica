@@ -46,14 +46,21 @@ function makeMachine(
   id: string,
   title: string,
   ownerId: string,
-  opts: { isCurrent?: boolean; cliVersion?: string | null; health?: "online" | "offline" } = {},
+  opts: {
+    isCurrent?: boolean;
+    cliVersion?: string | null;
+    health?: "online" | "offline";
+    /** Computer kind: local machine vs cloud computer. */
+    mode?: "local" | "cloud";
+  } = {},
 ): RuntimeMachine {
+  const mode = opts.mode ?? "local";
   const runtime: AgentRuntime = {
     id: `${id}-rt`,
     workspace_id: "ws-1",
     daemon_id: `${id}-daemon`,
     name: title,
-    runtime_mode: "local",
+    runtime_mode: mode,
     provider: "claude",
     launch_header: "",
     status: "online",
@@ -75,8 +82,8 @@ function makeMachine(
     deviceInfo: null,
     deviceName: null,
     cliVersion: opts.cliVersion === undefined ? "1.0.15" : opts.cliVersion,
-    mode: "local",
-    section: "local",
+    mode,
+    section: mode === "cloud" ? "cloud" : "local",
     isCurrent: opts.isCurrent ?? false,
     health: opts.health ?? "online",
     runtimeHealth: "ok",
@@ -183,6 +190,23 @@ describe("MachineListView — LRM-1094 row info", () => {
       "aria-label",
       expect.stringMatching(/My box/),
     );
+  });
+});
+
+describe("MachineListView — computer kind icons", () => {
+  it("shows a local computer icon for local machines", () => {
+    renderList([makeMachine("m1", "My box", "user-mine", { mode: "local" })], "user-mine");
+    expect(screen.getByTestId("computer-icon-local")).toBeInTheDocument();
+    expect(screen.queryByTestId("computer-icon-cloud")).toBeNull();
+  });
+
+  it("shows a cloud computer icon for cloud computers", () => {
+    renderList(
+      [makeMachine("cloud-1", "Cloud box", "user-mine", { mode: "cloud" })],
+      "user-mine",
+    );
+    expect(screen.getByTestId("computer-icon-cloud")).toBeInTheDocument();
+    expect(screen.queryByTestId("computer-icon-local")).toBeNull();
   });
 });
 

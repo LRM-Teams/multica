@@ -23,6 +23,7 @@ import { useT } from "../../i18n/use-t";
 import { buildD5SessionCanvasModel } from "../lib/build-d5-session-canvas";
 import { buildTypedGraphMotionEvents } from "../lib/build-typed-graph-motion-events";
 import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
+import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
 import type { CanvasBodyMode } from "../lib/canvas-body-mode";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
@@ -213,6 +214,14 @@ export function ResearchConstellationWorkspace({
     stopped: summary.stoppedDirections,
   });
 
+  const nodeAccessibleNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const node of snapshotNodes) {
+      map.set(node.id, buildNodeAccessibleName(node));
+    }
+    return map;
+  }, [snapshotNodes]);
+
   const inspectorRow =
     inspectorAgentId != null
       ? executionRows.find((row) => row.id === inspectorAgentId) ?? null
@@ -295,6 +304,8 @@ export function ResearchConstellationWorkspace({
             lensHints={lensHints}
             motionDirectives={motionDirectives}
             showMapKey
+            rightPanelWidth={effectiveRailWidth}
+            nodeAccessibleNames={nodeAccessibleNames}
             keyboardNav={{
               nodes: snapshotNodes,
               edges: (typedGraph?.edges ?? []).map((edge) => ({

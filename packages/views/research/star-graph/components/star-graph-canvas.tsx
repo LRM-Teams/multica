@@ -26,6 +26,7 @@ import type { MotionDirective } from "../../motion/directives";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import {
+  centerCameraOnPoint,
   computeEntityBounds,
   fitCameraToBounds,
   zoomCamera,
@@ -55,6 +56,8 @@ export interface StarGraphCanvasProps {
     overlay?: CanvasOverlayLayer;
     onCloseOverlay?: (layer: "ring" | "detail") => void;
   };
+  rightPanelWidth?: number;
+  nodeAccessibleNames?: ReadonlyMap<string, string>;
   className?: string;
 }
 
@@ -73,6 +76,8 @@ export function StarGraphCanvas({
   motionDirectives,
   onHelp,
   keyboardNav,
+  rightPanelWidth = 0,
+  nodeAccessibleNames,
   className,
 }: StarGraphCanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -132,6 +137,29 @@ export function StarGraphCanvas({
     setCamera(fitCameraToBounds(bounds, viewport));
     initialCameraRef.current = true;
   }, [bounds, setCamera, storedViewport, viewport.height, viewport.width]);
+
+  const focusSelectedEntity = useCallback(
+    (nodeId: string | null) => {
+      if (!nodeId || viewport.width <= 0 || viewport.height <= 0) return;
+      const entity = model.entities.find((candidate) => candidate.id === nodeId);
+      if (!entity) return;
+      setCamera((current) =>
+        centerCameraOnPoint(
+          { x: entity.x, y: entity.y },
+          viewport,
+          current,
+          { rightPanelWidth },
+        ),
+      );
+      rootRef.current?.focus();
+    },
+    [model.entities, rightPanelWidth, setCamera, viewport],
+  );
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    focusSelectedEntity(selectedNodeId);
+  }, [focusSelectedEntity, rightPanelWidth, selectedNodeId]);
 
   const handleZoomIn = useCallback(() => {
     setCamera((current) =>
@@ -234,6 +262,13 @@ export function StarGraphCanvas({
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (!keyboardNav) return;
       const focusId = selectedNodeId ?? null;
+      if ((event.key === "f" || event.key === "F") && focusId) {
+        event.preventDefault();
+        focusSelectedEntity(focusId);
+        const node = keyboardNav.nodes.find((candidate) => candidate.id === focusId);
+        if (node) setLiveText(buildNodeAccessibleName(node));
+        return;
+      }
       const action = resolveCanvasKeyEvent(event, {
         focusId,
         nodes: keyboardNav.nodes,
@@ -244,7 +279,7 @@ export function StarGraphCanvas({
       event.preventDefault();
       applyKeyboardAction(action, focusId);
     },
-    [applyKeyboardAction, keyboardNav, selectedNodeId],
+    [applyKeyboardAction, focusSelectedEntity, keyboardNav, selectedNodeId],
   );
 
   const worldSize = useMemo(() => {
@@ -308,6 +343,7 @@ export function StarGraphCanvas({
         <StarGraphEntityLayer
           entities={model.entities}
           selectedNodeId={selectedNodeId}
+          nodeAccessibleNames={nodeAccessibleNames}
           lensHints={lensHints}
           motionDirectives={motionDirectives}
           onSelectNode={onSelectNode}

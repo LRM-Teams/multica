@@ -9,6 +9,7 @@ import type { StarEntityView } from "../lib/star-canvas-view-model";
 export function StarGraphEntityLayer({
   entities,
   selectedNodeId,
+  nodeAccessibleNames,
   lensHints,
   motionDirectives,
   onSelectNode,
@@ -16,6 +17,7 @@ export function StarGraphEntityLayer({
 }: {
   entities: readonly StarEntityView[];
   selectedNodeId?: string | null;
+  nodeAccessibleNames?: ReadonlyMap<string, string>;
   lensHints?: D5LensDisplayHints;
   motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
   onSelectNode?: (nodeId: string) => void;
@@ -42,6 +44,7 @@ export function StarGraphEntityLayer({
             agentBadge={entity.view.agentBadge}
             metrics={entity.view.metrics}
             busy={entity.view.state === "run"}
+            accessibleName={nodeAccessibleNames?.get(entity.id)}
             className={cn(
               dimmed && "sg-lens-dim",
               emphasized && "sg-lens-emphasis",

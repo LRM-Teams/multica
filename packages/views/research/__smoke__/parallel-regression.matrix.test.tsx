@@ -14,7 +14,7 @@
  * - 1105 helpers (#1952) + role=application (1091) + Home/End via resolveCanvasKeyEvent — hard
  * - 1109 meta-menu md: (#1947) — hard; template chip-row sm: still `it.fails`
  * - 1091 planar layout + arrow/Enter/Esc/F10 + retry status gate — hard;
- *   dedicated --branch-* tokens + destructive confirm/undo — hard
+ *   legacy planar session canvas removed (D5 star-graph is canonical).
  */
 // @vitest-environment jsdom
 import fs from "node:fs";
@@ -726,21 +726,6 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
       ).toBe(false);
     }
   });
-
-  // Dedicated --branch-* chrome still missing on graph-node after #1956.
-  it.fails(
-    `${SMOKE_ISSUES.canvasPlanar}: research-graph-node exposes dedicated --branch-* tokens`,
-    () => {
-      const graphNodeSrc = readResearchSource("components/research-graph-node.tsx");
-      expect(
-        BRANCH_VS_STATUS_COLOR_CONTRACT.branchTokens.some((t) => graphNodeSrc.includes(t)),
-        failHint(
-          SMOKE_ISSUES.canvasPlanar,
-          "research-graph-node.tsx missing dedicated branch token (--branch-*)",
-        ),
-      ).toBe(true);
-    },
-  );
 
   // LRM-1091 planar keyboard wiring shipped — hard gate now.
   // LRM-1105 slice3: key literals live in canvas-keyboard-nav; canvas only wires resolveCanvasKeyEvent.

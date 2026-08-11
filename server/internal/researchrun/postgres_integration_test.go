@@ -2411,6 +2411,10 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 		SessionID: fixture.sessionID, AttemptID: attempt.ID, AgentID: agentID,
 		InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
 	}); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			t.Fatalf("accept %s: %v (constraint=%s detail=%s)", clientKey, err, pgErr.ConstraintName, pgErr.Detail)
+		}
 		t.Fatalf("accept %s: %v", clientKey, err)
 	}
 }
@@ -2714,7 +2718,53 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit fixture tx: %v", err)
 	}
+	databaseURL := pool.Config().ConnString()
+	t.Cleanup(func() {
+		cleanupResearchRunFixture(t, databaseURL, fixture)
+	})
 	return fixture
+}
+
+func cleanupResearchRunFixture(t *testing.T, databaseURL string, fixture researchRunFixture) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Errorf("open research fixture cleanup pool: %v", err)
+		return
+	}
+	defer pool.Close()
+	for _, statement := range []string{
+		`ALTER TABLE research_artifact_policy_mutation DISABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
+		`ALTER TABLE research_artifact_lifecycle_event DISABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
+	} {
+		if _, err = pool.Exec(ctx, statement); err != nil {
+			t.Errorf("disable research append-only cleanup guard: %v", err)
+			return
+		}
+	}
+	cleanupErr := error(nil)
+	if _, err = pool.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID); err != nil {
+		cleanupErr = fmt.Errorf("delete research fixture workspace: %w", err)
+	}
+	if cleanupErr == nil {
+		if _, err = pool.Exec(ctx, `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID); err != nil {
+			cleanupErr = fmt.Errorf("delete research fixture user: %w", err)
+		}
+	}
+	for _, statement := range []string{
+		`ALTER TABLE research_artifact_policy_mutation ENABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
+		`ALTER TABLE research_artifact_lifecycle_event ENABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
+	} {
+		if _, err = pool.Exec(ctx, statement); err != nil {
+			t.Errorf("restore research append-only cleanup guard: %v", err)
+			return
+		}
+	}
+	if cleanupErr != nil {
+		t.Error(cleanupErr)
+	}
 }
 
 func backfillIntegrationArtifactPassport(

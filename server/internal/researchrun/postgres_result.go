@@ -828,6 +828,9 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 				return nil, 0, err
 			}
 		}
+		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
+			return nil, 0, err
+		}
 		payload, _ := json.Marshal(map[string]any{
 			"snapshot_id": id, "publisher": source.Publisher,
 			"independence_key": source.IndependenceKey, "retrieved_at": source.RetrievedAt,
@@ -910,6 +913,9 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindObservation, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil); err != nil {
 				return nil, 0, err
 			}
+		}
+		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
+			return nil, 0, err
 		}
 	}
 	return ids, created, nil
@@ -1015,6 +1021,9 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				return nil, 0, err
 			}
 			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID, evidenceID, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+				return nil, 0, err
+			}
+			if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, evidenceID); err != nil {
 				return nil, 0, err
 			}
 		}

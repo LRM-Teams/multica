@@ -173,9 +173,14 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			return err
 		}
 	}
-	runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
-		return writeFrame(protocol.EventAgentRecoveryRequest, request)
-	})
+	attachmentReplay, err := runner.attachmentReplayRequest()
+	if err != nil {
+		return err
+	}
+	if err := writeFrame(protocol.EventAgentAttachmentReplayReq, attachmentReplay); err != nil {
+		return err
+	}
+	attachmentReplayComplete := false
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -246,6 +251,11 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentAttached, receipt); err != nil {
 				return err
 			}
+			if attachmentReplayComplete {
+				runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
+					return writeFrame(protocol.EventAgentRecoveryRequest, request)
+				})
+			}
 		case protocol.EventAgentDetach:
 			var detach protocol.WorkspaceRunnerAgentDetachPayload
 			if json.Unmarshal(message.Payload, &detach) != nil {
@@ -261,6 +271,25 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentDetached, receipt); err != nil {
 				return err
 			}
+		case protocol.EventAgentAttachmentReplayEnd:
+			var end protocol.WorkspaceRunnerAttachmentReplayEnd
+			if json.Unmarshal(message.Payload, &end) != nil {
+				continue
+			}
+			ack, err := runner.completeAttachmentReplay(end)
+			if err != nil {
+				if d.logger != nil {
+					d.logger.Warn("Workspace Runner Attachment replay rejected", "workspace_id", workspaceID, "reason", "invalid_replay_end", "error", err)
+				}
+				continue
+			}
+			if err := writeFrame(protocol.EventAgentAttachmentReplayAck, ack); err != nil {
+				return err
+			}
+			attachmentReplayComplete = true
+			runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
+				return writeFrame(protocol.EventAgentRecoveryRequest, request)
+			})
 		case protocol.EventAgentDeliver:
 			var delivery protocol.AgentDeliverPayload
 			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {

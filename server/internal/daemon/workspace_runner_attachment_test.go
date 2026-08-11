@@ -2,11 +2,97 @@ package daemon
 
 import (
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestWorkspaceRunnerAttachmentReplayUsesExactWorkspaceRuntimeSet(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.runtimeIndex["runtime-2"] = Runtime{ID: "runtime-2", WorkspaceID: "workspace-1"}
+	d.runtimeIndex["runtime-other"] = Runtime{ID: "runtime-other", WorkspaceID: "workspace-other"}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 3, CorrelationID: "attach-1",
+	}); err != nil {
+		t.Fatalf("seed Attachment replay cursor: %v", err)
+	}
+
+	request, err := runner.attachmentReplayRequest()
+	if err != nil {
+		t.Fatalf("attachmentReplayRequest(): %v", err)
+	}
+	if want := map[string]int64{"runtime-1": 3, "runtime-2": 0}; !reflect.DeepEqual(request.RuntimeCursors, want) {
+		t.Fatalf("Attachment replay request cursors = %v, want %v", request.RuntimeCursors, want)
+	}
+
+	end := protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: map[string]int64{"runtime-1": 5, "runtime-2": 7}}
+	ack, err := runner.completeAttachmentReplay(end)
+	if err != nil {
+		t.Fatalf("completeAttachmentReplay(): %v", err)
+	}
+	if !reflect.DeepEqual(ack.RuntimeCursors, end.RuntimeCursors) {
+		t.Fatalf("Attachment replay ack cursors = %v, want %v", ack.RuntimeCursors, end.RuntimeCursors)
+	}
+	request, err = runner.attachmentReplayRequest()
+	if err != nil {
+		t.Fatalf("attachmentReplayRequest() after completion: %v", err)
+	}
+	if !reflect.DeepEqual(request.RuntimeCursors, end.RuntimeCursors) {
+		t.Fatalf("persisted Attachment replay cursors = %v, want %v", request.RuntimeCursors, end.RuntimeCursors)
+	}
+}
+
+func TestWorkspaceRunnerAttachmentReplayRejectsIncompleteOrCrossWorkspaceEnd(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.runtimeIndex["runtime-2"] = Runtime{ID: "runtime-2", WorkspaceID: "workspace-1"}
+	d.runtimeIndex["runtime-other"] = Runtime{ID: "runtime-other", WorkspaceID: "workspace-other"}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+
+	invalid := []protocol.WorkspaceRunnerAttachmentReplayEnd{
+		{RuntimeCursors: map[string]int64{"runtime-1": 1}},
+		{RuntimeCursors: map[string]int64{"runtime-1": 1, "runtime-other": 1}},
+	}
+	for _, end := range invalid {
+		if _, err := runner.completeAttachmentReplay(end); err == nil {
+			t.Fatalf("accepted invalid Attachment replay end: %+v", end)
+		}
+	}
+	request, err := runner.attachmentReplayRequest()
+	if err != nil {
+		t.Fatalf("attachmentReplayRequest(): %v", err)
+	}
+	if want := map[string]int64{"runtime-1": 0, "runtime-2": 0}; !reflect.DeepEqual(request.RuntimeCursors, want) {
+		t.Fatalf("invalid replay end changed cursors = %v, want %v", request.RuntimeCursors, want)
+	}
+}
+
+func TestWorkspaceRunnerAttachmentReplaySupportsWorkspaceWithoutRuntimes(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-empty", nil)
+	request, err := runner.attachmentReplayRequest()
+	if err != nil {
+		t.Fatalf("attachmentReplayRequest(): %v", err)
+	}
+	if len(request.RuntimeCursors) != 0 {
+		t.Fatalf("zero-Runtime replay request cursors = %v", request.RuntimeCursors)
+	}
+	ack, err := runner.completeAttachmentReplay(protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: map[string]int64{}})
+	if err != nil {
+		t.Fatalf("complete zero-Runtime replay: %v", err)
+	}
+	if len(ack.RuntimeCursors) != 0 {
+		t.Fatalf("zero-Runtime replay ack cursors = %v", ack.RuntimeCursors)
+	}
+}
 
 func TestWorkspaceRunnerAttachmentAttachPersistsInboxWithoutLaunchingProcess(t *testing.T) {
 	root := t.TempDir()

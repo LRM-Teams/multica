@@ -55,6 +55,10 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			t.Errorf("invalid ready frame: %+v", readyFrame)
 			return
 		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			t.Error(err)
+			return
+		}
 		ping, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerPing, Payload: marshalRaw(protocol.WorkspaceRunnerPingPayload{PingID: "ping-1"})})
 		if err := conn.WriteMessage(websocket.TextMessage, ping); err != nil {
 			t.Error(err)
@@ -149,13 +153,17 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		frames <- ready
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			t.Error(err)
+			return
+		}
 		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"})})
 		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
 			t.Error(err)
 			return
 		}
 		var accepted protocol.AgentStartAckPayload
-		for responses := 0; responses < 4; {
+		for responses := 0; responses < 3; {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -183,7 +191,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			t.Error(err)
 			return
 		}
-		for i := 0; i < 2; i++ {
+		for i := 0; i < 1; i++ {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -221,8 +229,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		runner.inboxes.Close()
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()
-	var ready, ack, status, inactive, session, initialActivity, stoppedActivity protocol.Message
-	for i := 0; i < 7; i++ {
+	var ready, ack, status, inactive, session protocol.Message
+	for i := 0; i < 5; i++ {
 		select {
 		case msg := <-frames:
 			switch msg.Type {
@@ -243,15 +251,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			case protocol.EventAgentSession:
 				session = msg
 			case protocol.EventAgentActivity:
-				var candidate protocol.AgentActivityPayload
-				if err := json.Unmarshal(msg.Payload, &candidate); err != nil {
-					t.Fatal(err)
-				}
-				if candidate.Snapshot.DetailKind == "stopped" {
-					stoppedActivity = msg
-				} else {
-					initialActivity = msg
-				}
+				t.Fatalf("managed start/stop invented lifecycle Activity: %+v", msg)
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for Runner frames")
@@ -275,19 +275,6 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive || reportedSession.LaunchID != accepted.LaunchID {
 		t.Fatalf("ack=%+v status=%+v session=%+v", accepted, active, reportedSession)
 	}
-	var snapshot protocol.AgentActivityPayload
-	if err := json.Unmarshal(initialActivity.Payload, &snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Snapshot.AgentID != accepted.AgentID || snapshot.Snapshot.LaunchID != accepted.LaunchID || snapshot.Snapshot.ActivityKind != protocol.ActivityKindOnline || snapshot.Snapshot.ClientSequence != 1 {
-		t.Fatalf("initial Activity = %+v, want online snapshot for launch %q", snapshot.Snapshot, accepted.LaunchID)
-	}
-	if err := json.Unmarshal(stoppedActivity.Payload, &snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Snapshot.ActivityKind != protocol.ActivityKindOffline || snapshot.Snapshot.DetailKind != "stopped" || snapshot.Snapshot.ClientSequence != 2 {
-		t.Fatalf("stopped Activity = %+v", snapshot.Snapshot)
-	}
 	var stopped protocol.AgentStatusPayload
 	if err := json.Unmarshal(inactive.Payload, &stopped); err != nil {
 		t.Fatal(err)
@@ -309,6 +296,10 @@ func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *te
 		}
 		defer conn.Close()
 		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
 			t.Error(err)
 			return
 		}

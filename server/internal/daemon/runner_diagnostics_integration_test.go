@@ -44,6 +44,10 @@ func TestWorkspaceRunnerCanonicalMessageDiagnosticsFollowRealDeliveryPath(t *tes
 			t.Error(err)
 			return
 		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			t.Error(err)
+			return
+		}
 		var recovery protocol.AgentRecoveryRequest
 		for recovery.RecoveryID == "" {
 			_, raw, err := conn.ReadMessage()

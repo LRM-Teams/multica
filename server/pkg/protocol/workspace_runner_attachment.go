@@ -62,6 +62,10 @@ func (payload WorkspaceRunnerAttachmentReplayRequest) Validate() error {
 	return validateAttachmentReplayCursors(payload.RuntimeCursors)
 }
 
+func (payload WorkspaceRunnerAttachmentReplayEnd) Validate() error {
+	return validateAttachmentReplayCursors(payload.RuntimeCursors)
+}
+
 func (payload WorkspaceRunnerAttachmentReplayAck) Validate() error {
 	return validateAttachmentReplayCursors(payload.RuntimeCursors)
 }

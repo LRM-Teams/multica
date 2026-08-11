@@ -8,6 +8,61 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func (runner *WorkspaceRunner) attachmentReplayRequest() (protocol.WorkspaceRunnerAttachmentReplayRequest, error) {
+	if runner == nil || runner.daemon == nil || runner.attachments == nil {
+		return protocol.WorkspaceRunnerAttachmentReplayRequest{}, errors.New("Workspace Runner Attachment replay dependencies are unavailable")
+	}
+	runtimeSet := runner.attachmentRuntimeSet()
+	state, err := runner.attachments.RecoveryState(runtimeSet)
+	if err != nil {
+		return protocol.WorkspaceRunnerAttachmentReplayRequest{}, fmt.Errorf("read Attachment replay cursors: %w", err)
+	}
+	cursors := make(map[string]int64, len(state.Cursors))
+	for _, cursor := range state.Cursors {
+		cursors[cursor.RuntimeID] = int64(cursor.LifecycleSeq)
+	}
+	return protocol.WorkspaceRunnerAttachmentReplayRequest{RuntimeCursors: cursors}, nil
+}
+
+func (runner *WorkspaceRunner) completeAttachmentReplay(end protocol.WorkspaceRunnerAttachmentReplayEnd) (protocol.WorkspaceRunnerAttachmentReplayAck, error) {
+	if runner == nil || runner.attachments == nil {
+		return protocol.WorkspaceRunnerAttachmentReplayAck{}, errors.New("Workspace Runner Attachment replay dependencies are unavailable")
+	}
+	if err := end.Validate(); err != nil {
+		return protocol.WorkspaceRunnerAttachmentReplayAck{}, fmt.Errorf("validate Attachment replay end: %w", err)
+	}
+	runtimeSet := runner.attachmentRuntimeSet()
+	allowed := runtimeSet.runtimeIDs()
+	if len(end.RuntimeCursors) != len(allowed) {
+		return protocol.WorkspaceRunnerAttachmentReplayAck{}, errors.New("Attachment replay end omitted a Runtime cursor")
+	}
+	cursors := make([]AgentAttachmentRecoveryCursor, 0, len(end.RuntimeCursors))
+	ack := make(map[string]int64, len(end.RuntimeCursors))
+	for runtimeID, lifecycleSeq := range end.RuntimeCursors {
+		if _, ok := allowed[runtimeID]; !ok {
+			return protocol.WorkspaceRunnerAttachmentReplayAck{}, fmt.Errorf("Attachment replay Runtime %s is outside Workspace Runner scope", runtimeID)
+		}
+		cursors = append(cursors, AgentAttachmentRecoveryCursor{RuntimeID: runtimeID, LifecycleSeq: AttachmentLifecycleSequence(lifecycleSeq)})
+		ack[runtimeID] = lifecycleSeq
+	}
+	if err := runner.attachments.AdvanceRecovery(runtimeSet, cursors); err != nil {
+		return protocol.WorkspaceRunnerAttachmentReplayAck{}, fmt.Errorf("advance Attachment replay cursors: %w", err)
+	}
+	return protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: ack}, nil
+}
+
+func (runner *WorkspaceRunner) attachmentRuntimeSet() AgentAttachmentRuntimeSet {
+	if runner == nil || runner.daemon == nil {
+		return AgentAttachmentRuntimeSet{}
+	}
+	for _, runtimeSet := range runner.daemon.attachmentRuntimeSets() {
+		if runtimeSet.WorkspaceID == runner.config.WorkspaceID {
+			return runtimeSet
+		}
+	}
+	return AgentAttachmentRuntimeSet{WorkspaceID: runner.config.WorkspaceID}
+}
+
 // startManagedAgent is deliberately stricter than process manager admission:
 // an Agent can run only when this Workspace Runner has already durably accepted
 // its exact Attachment. A stale or cross-Runtime start must not revive an Agent

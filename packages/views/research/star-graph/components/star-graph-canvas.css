@@ -32,6 +32,10 @@
 }
 .sg-edge-layer {
   z-index: 1;
+  /* Gradient endpoints for the merge edge (LRM-1208: colors flow through
+     CSS variables so the TSX never inlines raw #rrggbb). */
+  --sg-merge-start: #48d3e4;
+  --sg-merge-end: #58d69a;
 }
 .sg-edge-decompose,
 .sg-edge-support,

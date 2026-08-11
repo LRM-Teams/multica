@@ -3,11 +3,12 @@
 import { cn } from "@multica/ui/lib/utils";
 import { buildNoteAILineDiff } from "./note-ai-diff-utils";
 
-type DiffLineKind = "same" | "remove" | "add";
+type DiffLineKind = "same" | "remove" | "add" | "omitted";
 
 function lineMarker(kind: DiffLineKind) {
   if (kind === "add") return "+";
   if (kind === "remove") return "-";
+  if (kind === "omitted") return "...";
   return " ";
 }
 
@@ -17,6 +18,7 @@ export function NoteAIDiffPreview({
   beforeLabel,
   afterLabel,
   emptyLabel,
+  omittedLabel,
   className,
 }: {
   before: string;
@@ -24,10 +26,11 @@ export function NoteAIDiffPreview({
   beforeLabel: string;
   afterLabel: string;
   emptyLabel: string;
+  omittedLabel: string;
   className?: string;
 }) {
-  const lines = buildNoteAILineDiff(before, after);
-  const changed = lines.some((line) => line.kind !== "same");
+  const lines = buildNoteAILineDiff(before, after, { compact: true });
+  const changed = lines.some((line) => line.kind === "add" || line.kind === "remove");
   return (
     <div className={cn("overflow-hidden rounded-lg border bg-muted/30", className)} data-testid="note-ai-diff-preview">
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -44,12 +47,13 @@ export function NoteAIDiffPreview({
               line.kind === "add" && "bg-emerald-500/10 text-emerald-950 dark:text-emerald-100",
               line.kind === "remove" && "bg-red-500/10 text-red-950 dark:text-red-100",
               line.kind === "same" && "text-muted-foreground",
+              line.kind === "omitted" && "bg-muted/60 text-muted-foreground/80",
             )}
           >
             <span className="select-none text-right text-muted-foreground/60">{line.oldLine ?? ""}</span>
             <span className="select-none text-right text-muted-foreground/60">{line.newLine ?? ""}</span>
             <span className="select-none text-center text-muted-foreground/70">{lineMarker(line.kind)}</span>
-            <span className="whitespace-pre-wrap break-words">{line.text || " "}</span>
+            <span className="whitespace-pre-wrap break-words">{line.kind === "omitted" ? omittedLabel : line.text || " "}</span>
           </div>
         )) : (
           <div className="px-3 py-4 text-sm text-muted-foreground">{emptyLabel}</div>

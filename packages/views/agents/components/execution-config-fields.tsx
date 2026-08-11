@@ -29,7 +29,6 @@ export function ExecutionConfigFields({
   machineRuntimes,
   runtimeId,
   onRuntimeSelect,
-  runtimeOnline,
   model,
   onModelChange,
   thinkingLevel,
@@ -48,7 +47,6 @@ export function ExecutionConfigFields({
   machineRuntimes: RuntimeDevice[];
   runtimeId: string;
   onRuntimeSelect: (runtimeId: string) => void;
-  runtimeOnline: boolean;
   model: string;
   onModelChange: (model: string) => void;
   thinkingLevel: string;
@@ -61,9 +59,9 @@ export function ExecutionConfigFields({
 
   // Kick off list-models as soon as Runtime is chosen (not on Model open).
   useEffect(() => {
-    if (!runtimeId || !runtimeOnline) return;
+    if (!runtimeId) return;
     void queryClient.prefetchQuery(runtimeModelsOptions(runtimeId));
-  }, [runtimeId, runtimeOnline, queryClient]);
+  }, [runtimeId, queryClient]);
 
   return (
     <div className="flex flex-col gap-2.5" data-testid="execution-config-fields">
@@ -86,7 +84,6 @@ export function ExecutionConfigFields({
       />
       <ModelDropdown
         runtimeId={runtimeId || null}
-        runtimeOnline={runtimeOnline && !!runtimeId}
         value={model}
         onChange={onModelChange}
         disabled={disabled || !runtimeId}
@@ -95,7 +92,6 @@ export function ExecutionConfigFields({
       />
       <ThinkingDropdown
         runtimeId={runtimeId || null}
-        runtimeOnline={runtimeOnline && !!runtimeId}
         model={model}
         value={thinkingLevel}
         onChange={onThinkingChange}

@@ -9,7 +9,6 @@ import { Camera, Loader2, Pencil, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
-import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type {
   Agent,
   AgentRuntime,
@@ -107,10 +106,6 @@ export function AgentDetailInspector({
   const { t } = useT("agents");
   const timeAgo = useTimeAgo();
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
-  // Derived, staleness-aware health instead of the raw `status` column
-  // (#10 — "runtime online status" had two divergent sources across the
-  // app).
-  const isOnline = !!runtime && deriveRuntimeHealth(runtime, Date.now()) === "online";
   const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
 
   return (
@@ -192,7 +187,6 @@ export function AgentDetailInspector({
             />
             <ModelPicker
               runtimeId={agent.runtime_id}
-              runtimeOnline={!!isOnline}
               value={agent.model ?? ""}
               canEdit={false}
               onChange={() => {}}
@@ -212,7 +206,6 @@ export function AgentDetailInspector({
         </PropRow>
         <ThinkingPropRow
           runtimeId={agent.runtime_id}
-          runtimeOnline={!!isOnline}
           model={agent.model ?? ""}
           value={agent.thinking_level ?? ""}
           canEdit={false}

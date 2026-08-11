@@ -6,7 +6,6 @@ import { ExecutionConfigFields } from "./execution-config-fields";
 import {
   firstRuntimeMachine,
   firstRuntimeIdOnMachine,
-  firstOnlineRuntimeIdOnMachine,
   machineForRuntime,
 } from "./computer-picker-utils";
 import { InstructionsEditor } from "./instructions-editor";
@@ -16,7 +15,6 @@ import { api } from "@multica/core/api";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
 } from "@multica/core/agents";
-import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -237,7 +235,7 @@ export function CreateAgentDialog({
     if (machineId === effectiveMachineId) return;
     setSelectedMachineId(machineId);
     const next = machines.find((m) => m.id === machineId) ?? null;
-    setSelectedRuntimeId(firstOnlineRuntimeIdOnMachine(next));
+    setSelectedRuntimeId(firstRuntimeIdOnMachine(next));
     setModel("");
     setThinkingLevel("");
   };
@@ -250,11 +248,6 @@ export function CreateAgentDialog({
   };
 
   const selectedRuntime = runtimes.find((d) => d.id === effectiveRuntimeId) ?? null;
-  // Derived, staleness-aware health instead of the raw `status` column
-  // (#10 — "runtime online status" had two divergent sources across the
-  // app). Computed once so both dropdowns below agree.
-  const selectedRuntimeOnline =
-    !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
   const nameError = validateAgentName(
     name,
     t(($) => $.create_dialog.name_invalid),
@@ -423,7 +416,6 @@ export function CreateAgentDialog({
               machineRuntimes={machineRuntimes}
               runtimeId={effectiveRuntimeId}
               onRuntimeSelect={handleRuntimeSelect}
-              runtimeOnline={selectedRuntimeOnline}
               model={model}
               onModelChange={(next) => {
                 if (next === model) return;

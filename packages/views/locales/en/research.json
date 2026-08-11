@@ -996,6 +996,19 @@
       "updating": "Constellation reorganizing (v{{version}})…",
       "updated": "Constellation updated to v{{version}}"
     },
+    "filter": {
+      "trigger": "Filter",
+      "active": "Filtered",
+      "clear": "Clear filter",
+      "status": "Status",
+      "tier": "Level",
+      "round": "Round",
+      "cluster": "Cluster",
+      "query": "Search",
+      "query_placeholder": "Title, agent, or summary…",
+      "all": "All",
+      "hidden_count": "{{count}} hidden by filter"
+    },
     "new_frontier_label": "NEW FRONTIERS",
     "canvas": {
       "loading": "Loading constellation…",

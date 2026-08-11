@@ -26,6 +26,50 @@ func TestHashManifestEntriesDeterministic(t *testing.T) {
 	}
 }
 
+func TestLegacyManifestVisibleArtifactIDsMatchPlan(t *testing.T) {
+	module := NewArtifactContextModule()
+	candidates := []artifactVersionCandidate{
+		{
+			ArtifactID: "30000000-0000-4000-8000-000000000001",
+			Kind:       ArtifactKindClaim,
+			Lifecycle:  ArtifactLifecycleRegistered,
+			Provenance: ArtifactProvenancePartial,
+			AccessLevel: ArtifactAccessRaw,
+		},
+		{
+			ArtifactID: "30000000-0000-4000-8000-000000000002",
+			Kind:       ArtifactKindSourceSnapshot,
+			Lifecycle:  ArtifactLifecycleWithdrawn,
+			Provenance: ArtifactProvenancePartial,
+			AccessLevel: ArtifactAccessRaw,
+		},
+	}
+	clearance := defaultTaskExecutionClearance()
+	purpose := manifestPurposeForTask()
+	liveIDs := make(map[string]struct{})
+	for _, candidate := range candidates {
+		admitted, _ := module.policy.LegacyAdmissionAllowed(
+			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
+		)
+		if !admitted {
+			continue
+		}
+		allowed, _ := module.policy.CanReadNormal(
+			clearance, candidate.AccessLevel, purpose, false,
+		)
+		if !allowed {
+			continue
+		}
+		liveIDs[candidate.ArtifactID] = struct{}{}
+	}
+	if _, ok := liveIDs["30000000-0000-4000-8000-000000000001"]; !ok {
+		t.Fatal("expected claim in legacy visible set")
+	}
+	if _, ok := liveIDs["30000000-0000-4000-8000-000000000002"]; ok {
+		t.Fatal("withdrawn artifact must not appear in legacy visible set")
+	}
+}
+
 func TestFilterRunSnapshotByManifest(t *testing.T) {
 	allowed := map[string]struct{}{
 		"claim-1": {},

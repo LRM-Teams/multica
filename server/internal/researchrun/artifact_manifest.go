@@ -328,6 +328,62 @@ func collectLiveTaskContextArtifactIDs(snapshot RunSnapshot) map[string]struct{}
 	return ids
 }
 
+func verifyShadowEquivalenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	stateVersion int64,
+) error {
+	module := NewArtifactContextModule()
+	plan, err := module.PlanDispatchManifest(ctx, tx, workspaceID, sessionID, stateVersion)
+	if err != nil {
+		return err
+	}
+	liveIDs, err := loadLegacyManifestVisibleArtifactIDsTx(ctx, tx, workspaceID, sessionID)
+	if err != nil {
+		return err
+	}
+	manifestIDs := make(map[string]struct{}, len(plan.Entries))
+	for _, entry := range plan.Entries {
+		manifestIDs[entry.ArtifactID] = struct{}{}
+	}
+	return compareShadowManifestError(liveIDs, manifestArtifactSet{
+		ArtifactIDs: manifestIDs,
+		Hash:        plan.ManifestHash,
+	})
+}
+
+func loadLegacyManifestVisibleArtifactIDsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+) (map[string]struct{}, error) {
+	candidates, err := loadArtifactVersionCandidates(ctx, tx, workspaceID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	module := NewArtifactContextModule()
+	clearance := defaultTaskExecutionClearance()
+	purpose := manifestPurposeForTask()
+	ids := make(map[string]struct{})
+	for _, candidate := range candidates {
+		admitted, _ := module.policy.LegacyAdmissionAllowed(
+			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
+		)
+		if !admitted {
+			continue
+		}
+		allowed, _ := module.policy.CanReadNormal(
+			clearance, candidate.AccessLevel, purpose, false,
+		)
+		if !allowed {
+			continue
+		}
+		ids[candidate.ArtifactID] = struct{}{}
+	}
+	return ids, nil
+}
+
 func verifyAcceptanceManifestPolicyTx(
 	ctx context.Context,
 	tx pgx.Tx,

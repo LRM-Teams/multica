@@ -437,8 +437,22 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusServiceUnavailable, "research run engine is unavailable")
 			return
 		}
-		snapshot, runErr := h.ResearchRun.Snapshot(r.Context(), uuidToString(sessionID), workspaceID)
+		attemptID := strings.TrimSpace(r.URL.Query().Get("attempt_id"))
+		var snapshot researchrun.RunSnapshot
+		var runErr error
+		if attemptID != "" {
+			if _, ok := parseUUIDOrBadRequest(w, attemptID, "attempt_id"); !ok {
+				return
+			}
+			snapshot, runErr = h.ResearchRun.SnapshotForAttempt(r.Context(), uuidToString(sessionID), workspaceID, attemptID)
+		} else {
+			snapshot, runErr = h.ResearchRun.Snapshot(r.Context(), uuidToString(sessionID), workspaceID)
+		}
 		if runErr != nil {
+			if errors.Is(runErr, researchrun.ErrRunNotFound) {
+				writeError(w, http.StatusNotFound, "research session not found")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "failed to load research run state")
 			return
 		}

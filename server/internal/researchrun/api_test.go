@@ -18,6 +18,7 @@ func TestResearchRunInterfaceIsFixedUseCaseBoundary(t *testing.T) {
 		"ReconcileDue",
 		"Resume",
 		"Snapshot",
+		"SnapshotForAttempt",
 		"Steer",
 		"SubmitResult",
 	}

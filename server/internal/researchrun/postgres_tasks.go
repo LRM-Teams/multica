@@ -287,6 +287,9 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 			return Attempt{}, RunEvent{}, err
 		}
 		manifestBound = true
+		if err = verifyShadowEquivalenceTx(ctx, tx, workspaceID, in.SessionID, stateVersion); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
 	}
 	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
 	probeTargets, err := normalizeAttemptProbeTargets(target, in.ProbeTargets)

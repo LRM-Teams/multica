@@ -7,6 +7,7 @@ export * from "./report-structured";
 export * from "./semantic-aggregation";
 export * from "./semantic-aggregation-visible-window";
 export * from "./schemas";
+export * from "./star-graph-filter";
 export * from "./star-graph-layout";
 export * from "./star-graph-viewport";
 export * from "./trajectory-lane-layout";

@@ -24,6 +24,7 @@ type acceptedResultState struct {
 }
 
 func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) (AcceptResultOutcome, error) {
+	in.Hash = normalizeArtifactContentHash(in.Hash)
 	tx, err := s.beginResearchTx(ctx, txOpResultAccept, pgx.TxOptions{})
 	if err != nil {
 		return AcceptResultOutcome{}, err
@@ -1137,9 +1138,12 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			}
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO research_report_claim (report_id, claim_id, section_id, anchor_quote)
-			VALUES ($1::uuid, $2::uuid, $3, $4) ON CONFLICT DO NOTHING
-		`, reportID, claimID, truncateBytes(link.SectionID, 160), truncateBytes(link.AnchorQuote, 8192)); err != nil {
+			INSERT INTO research_report_claim (
+				workspace_id, session_id, report_id, claim_id, section_id, anchor_quote
+			)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6) ON CONFLICT DO NOTHING
+		`, state.workspaceID, state.run.SessionID, reportID, claimID,
+			truncateBytes(link.SectionID, 160), truncateBytes(link.AnchorQuote, 8192)); err != nil {
 			return "", err
 		}
 	}

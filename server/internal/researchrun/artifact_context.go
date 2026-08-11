@@ -26,19 +26,19 @@ func NewArtifactContextModule() ArtifactContextModule {
 }
 
 type artifactVersionCandidate struct {
-	VersionRowID       string
-	ArtifactID         string
-	Kind               ArtifactEntityKind
-	Version            int32
+	VersionRowID        string
+	ArtifactID          string
+	Kind                ArtifactEntityKind
+	Version             int32
 	EligibilityRevision int64
-	AccessLevel        ArtifactAccessLevel
-	Lifecycle          ArtifactLifecycleStatus
-	Provenance         ArtifactProvenanceCompleteness
-	ContentHash        string
-	Representation     string
+	AccessLevel         ArtifactAccessLevel
+	Lifecycle           ArtifactLifecycleStatus
+	Provenance          ArtifactProvenanceCompleteness
+	ContentHash         string
+	Representation      string
 	RepresentationBytes []byte
-	RepresentationHash string
-	OmissionReason     string
+	RepresentationHash  string
+	OmissionReason      string
 }
 
 type dispatchManifestPlan struct {
@@ -423,6 +423,13 @@ func persistAcceptedResultArtifactTx(
 		return "", err
 	}
 	return resultID, nil
+}
+
+func normalizeArtifactContentHash(contentHash string) string {
+	if strings.HasPrefix(contentHash, "sha256:") {
+		return contentHash
+	}
+	return "sha256:" + contentHash
 }
 
 func insertResultArtifactRowTx(

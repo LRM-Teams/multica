@@ -502,9 +502,10 @@ func TestAttemptProbeFailureIsScopedAndConcurrentClaimRollsBackAttempt(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := DispatchRequest{Run: run, Task: tasks[3], AttemptID: failedAttemptID, AgentID: fixture.agentID,
-		Target: target, Prompt: "must roll back", Key: "research-circuit:" + failedAttemptID}
-	request.RequestHash, _ = HashDispatchRequest(request)
+	request := testDispatchRequestForTarget(
+		t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[3], fixture.agentID,
+		target, failedAttemptID, "research-circuit:"+failedAttemptID,
+	)
 	_, _, err = store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
 		AttemptID: failedAttemptID, SessionID: fixture.sessionID, TaskID: tasks[3].ID,
 		AgentID: fixture.agentID, Target: target, ProbeTargets: probes, ProbeLeaseDuration: time.Hour,
@@ -769,14 +770,10 @@ func createCircuitAttempt(t *testing.T, ctx context.Context, store *PostgresStor
 		t.Fatal(err)
 	}
 	attemptID := uuid.NewString()
-	request := DispatchRequest{
-		Run: run, Task: task, AttemptID: attemptID, AgentID: fixture.agentID,
-		Target: target, Prompt: "test circuit", Key: "research-circuit:" + attemptID,
-	}
-	request.RequestHash, err = HashDispatchRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := testDispatchRequestForTarget(
+		t, ctx, store, fixture.sessionID, fixture.workspaceID, task, fixture.agentID,
+		target, attemptID, "research-circuit:"+attemptID,
+	)
 	attempt, _, err := store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
 		AttemptID: attemptID, SessionID: fixture.sessionID, TaskID: task.ID,
 		AgentID: fixture.agentID, Target: target, ExpectedStateVersion: run.StateVersion, Request: request,
@@ -794,14 +791,10 @@ func createCircuitProbeAttempt(t *testing.T, ctx context.Context, store *Postgre
 		t.Fatal(err)
 	}
 	attemptID := uuid.NewString()
-	request := DispatchRequest{
-		Run: run, Task: task, AttemptID: attemptID, AgentID: fixture.agentID,
-		Target: target, Prompt: "test bound probe", Key: "research-circuit-probe:" + attemptID,
-	}
-	request.RequestHash, err = HashDispatchRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := testDispatchRequestForTarget(
+		t, ctx, store, fixture.sessionID, fixture.workspaceID, task, fixture.agentID,
+		target, attemptID, "research-circuit-probe:"+attemptID,
+	)
 	attempt, _, err := store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
 		AttemptID: attemptID, SessionID: fixture.sessionID, TaskID: task.ID,
 		AgentID: fixture.agentID, Target: target, ProbeTargets: probes, ProbeLeaseDuration: time.Hour,

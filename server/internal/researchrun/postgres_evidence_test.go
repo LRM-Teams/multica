@@ -35,8 +35,13 @@ func TestListClaimsOrdersEvidenceByRelationAndID(t *testing.T) {
 	evidenceLowID := uuid.NewString()
 	evidenceHighID := uuid.NewString()
 	tieTime := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
 
-	_, err = pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO research_source_snapshot (
 		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
 		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
@@ -50,19 +55,19 @@ func TestListClaimsOrdersEvidenceByRelationAndID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert source snapshot: %v", err)
 	}
-	_, err = pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO research_observation (
 		  id, workspace_id, session_id, source_snapshot_id, quote, datum, locator,
-		  interpretation, verification_status, created_at
+		  interpretation, content_hash, verification_status, created_at
 		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'quote text', 'datum', 'loc',
-		  '', 'verified', $5
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'quote text', '{}'::jsonb, 'loc',
+		  '', repeat('a', 64), 'verified', $5
 		)
 	`, observationID, fixture.workspaceID, fixture.sessionID, sourceID, tieTime)
 	if err != nil {
 		t.Fatalf("insert observation: %v", err)
 	}
-	_, err = pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO research_claim (
 		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
 		  significance, confidence, status, goal_version, plan_version, resolution,
@@ -76,7 +81,7 @@ func TestListClaimsOrdersEvidenceByRelationAndID(t *testing.T) {
 		t.Fatalf("insert claim: %v", err)
 	}
 	// Same created_at, claim, observation; order breaks on relation then id.
-	_, err = pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO research_claim_evidence (
 		  id, workspace_id, session_id, claim_id, observation_id, relation, strength,
 		  directness, method_fit, verification_status, rationale, created_at
@@ -87,6 +92,15 @@ func TestListClaimsOrdersEvidenceByRelationAndID(t *testing.T) {
 		evidenceLowID)
 	if err != nil {
 		t.Fatalf("insert claim evidence: %v", err)
+	}
+	goalVersion, planVersion := 1, 1
+	backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, observationID, string(ArtifactKindObservation), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, claimID, string(ArtifactKindClaim), &goalVersion, &planVersion)
+	backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, evidenceLowID, string(ArtifactKindEvidenceLink), &goalVersion, &planVersion)
+	backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, evidenceHighID, string(ArtifactKindEvidenceLink), &goalVersion, &planVersion)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit evidence fixture: %v", err)
 	}
 
 	store := NewPostgresStore(pool)

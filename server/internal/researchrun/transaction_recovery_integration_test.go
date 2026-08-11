@@ -867,7 +867,7 @@ func TestAcceptResultTransactionRecovery(t *testing.T) {
 			}
 			want := resultAcceptanceRecoveryCounts{
 				decisions: 1, questions: 2, tasks: 6, acceptedEvents: 1,
-				attemptStatus: string(AttemptStatusSucceeded), resultHash: hash,
+				attemptStatus: string(AttemptStatusSucceeded), resultHash: normalizeArtifactContentHash(hash),
 			}
 			if counts != want {
 				t.Fatalf("committed result state=%+v want=%+v", counts, want)

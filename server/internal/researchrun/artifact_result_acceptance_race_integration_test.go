@@ -178,6 +178,43 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 				return nil
 			},
 		},
+		{
+			name: "stale_run_state_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := fx.pool.Exec(ctx, `
+					UPDATE research_session
+					SET state_version = state_version + 1, updated_at = now()
+					WHERE workspace_id = $1::uuid AND id = $2::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID)
+				return err
+			},
+		},
+		{
+			name: "manifest_entry_representation_bytes",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := fx.pool.Exec(ctx, `
+					UPDATE research_artifact_context_entry e
+					SET representation_bytes = convert_to('sha256:mutated-after-accept-preflight', 'UTF8')
+					FROM research_artifact_context_manifest m
+					WHERE e.manifest_id = m.id
+					  AND m.workspace_id = $1::uuid
+					  AND m.session_id = $2::uuid
+					  AND m.attempt_id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID)
+				return err
+			},
+		},
+		{
+			name: "manifest_policy_watermark_ahead",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := fx.pool.Exec(ctx, `
+					UPDATE research_artifact_context_manifest
+					SET policy_watermark = policy_watermark + 5
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID)
+				return err
+			},
+		},
 	}
 
 	for _, tc := range cases {

@@ -439,6 +439,9 @@ func loadLegacyManifestVisibleArtifactIDsTx(
 	purpose := manifestPurposeForTask()
 	ids := make(map[string]struct{})
 	for _, candidate := range candidates {
+		if module.policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
+			continue
+		}
 		admitted, _ := module.policy.LegacyAdmissionAllowed(
 			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
 		)

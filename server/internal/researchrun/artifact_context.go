@@ -64,6 +64,11 @@ func (m ArtifactContextModule) PlanDispatchManifest(
 	var entries []artifactVersionCandidate
 	var omissions []artifactVersionCandidate
 	for _, candidate := range candidates {
+		if m.policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
+			candidate.OmissionReason = m.policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
+			omissions = append(omissions, candidate)
+			continue
+		}
 		admitted, deny := m.policy.LegacyAdmissionAllowed(
 			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
 		)
@@ -85,6 +90,7 @@ func (m ArtifactContextModule) PlanDispatchManifest(
 		candidate.RepresentationHash = contentHashFromPayload(candidate.RepresentationBytes)
 		entries = append(entries, candidate)
 	}
+	sortManifestEntryCandidates(entries)
 
 	var watermark int64
 	if err = tx.QueryRow(ctx, `
@@ -105,6 +111,15 @@ func (m ArtifactContextModule) PlanDispatchManifest(
 		ThroughStateVersion: stateVersion,
 		ManifestHash:        manifestHash,
 	}, nil
+}
+
+func sortManifestEntryCandidates(entries []artifactVersionCandidate) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Kind != entries[j].Kind {
+			return entries[i].Kind < entries[j].Kind
+		}
+		return entries[i].ArtifactID < entries[j].ArtifactID
+	})
 }
 
 func hashManifestEntries(entries []artifactVersionCandidate) string {

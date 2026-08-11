@@ -302,8 +302,17 @@ func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t 
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode message check: %v", err)
 	}
-	if len(result.Messages) != messageCheckDefaultLimit || !result.HasMore || result.Remaining != 1 {
+	if len(result.Messages) != messageCheckDefaultLimit || !result.HasMore || result.Remaining != 1 || result.CoverageReceipt == "" {
 		t.Fatalf("message check result = %+v", result)
+	}
+	if got := coordinator.Boundaries(); len(got) != 0 {
+		t.Fatalf("message check advanced boundary before CLI output: %+v", got)
+	}
+	if err := coordinator.CommitCoverage(result.CoverageReceipt); err != nil {
+		t.Fatalf("commit checked coverage: %v", err)
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != messageCheckDefaultLimit {
+		t.Fatalf("committed check boundary = %d, want %d", got, messageCheckDefaultLimit)
 	}
 }
 

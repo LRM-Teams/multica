@@ -54,7 +54,7 @@ func TestMessageCoordinatorCoverageReceiptPrepareCommitAndDuplicateLifecycle(t *
 	if err != nil {
 		t.Fatalf("PrepareCoverage: %v", err)
 	}
-	if offer.ReceiptID == "" || !offer.HasMore || !reflect.DeepEqual(offer.Messages, []protocol.AgentMessageProjection{first}) {
+	if offer.ReceiptID == "" || !offer.HasMore || offer.Remaining != 1 || !reflect.DeepEqual(offer.Messages, []protocol.AgentMessageProjection{first}) {
 		t.Fatalf("Coverage offer = %+v, want first Message with has_more", offer)
 	}
 	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
@@ -81,6 +81,30 @@ func TestMessageCoordinatorCoverageReceiptPrepareCommitAndDuplicateLifecycle(t *
 	coordinator.mu.Unlock()
 	if !reflect.DeepEqual(pendingAfterCommit, []protocol.AgentMessageProjection{second}) {
 		t.Fatalf("commit removed non-covered Pending: %+v", pendingAfterCommit)
+	}
+}
+
+func TestMessageCoordinatorCoverageCheckKeepsDeliveryAcceptedBeforeCommit(t *testing.T) {
+	coordinator := newCoverageTestCoordinator(t, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"})
+	first := acceptCoverageTestMessage(t, coordinator, "message-1", "channel:one", 1)
+	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 3})
+	if err != nil {
+		t.Fatalf("PrepareCoverage: %v", err)
+	}
+	if offer.HasMore || offer.Remaining != 0 || !reflect.DeepEqual(offer.Messages, []protocol.AgentMessageProjection{first}) {
+		t.Fatalf("initial coverage offer = %+v", offer)
+	}
+	second := acceptCoverageTestMessage(t, coordinator, "message-2", "channel:one", 2)
+
+	if err := coordinator.CommitCoverage(offer.ReceiptID); err != nil {
+		t.Fatalf("CommitCoverage: %v", err)
+	}
+	next, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 3})
+	if err != nil {
+		t.Fatalf("next PrepareCoverage: %v", err)
+	}
+	if !reflect.DeepEqual(next.Messages, []protocol.AgentMessageProjection{second}) {
+		t.Fatalf("Delivery accepted before commit was not reoffered: %+v", next)
 	}
 }
 

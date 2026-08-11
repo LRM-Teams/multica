@@ -52,6 +52,7 @@ type CoverageOffer struct {
 	ReceiptID string
 	Messages  []protocol.AgentMessageProjection
 	HasMore   bool
+	Remaining int
 }
 
 type coverageReceiptPhase uint8
@@ -114,6 +115,10 @@ func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageO
 	if len(covered) == 0 {
 		return CoverageOffer{Messages: []protocol.AgentMessageProjection{}}, nil
 	}
+	remaining := 0
+	if request.Kind == CoverageCheck {
+		remaining = c.pendingCountLocked() - len(covered)
+	}
 	coveredIdentities, proposedBoundaries, err := buildCoverageIdentity(covered, request)
 	if err != nil {
 		return CoverageOffer{}, err
@@ -135,7 +140,9 @@ func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageO
 		expiresAt:          now.Add(c.coverageTTL),
 		phase:              coverageReceiptPrepared,
 	}
-	return CoverageOffer{ReceiptID: id, Messages: cloneCoverageMessages(presented), HasMore: hasMore}, nil
+	return CoverageOffer{
+		ReceiptID: id, Messages: cloneCoverageMessages(presented), HasMore: hasMore, Remaining: remaining,
+	}, nil
 }
 
 func (c *MessageCoordinator) prepareCoverageMessagesLocked(request CoverageRequest) ([]protocol.AgentMessageProjection, []protocol.AgentMessageProjection, bool, error) {

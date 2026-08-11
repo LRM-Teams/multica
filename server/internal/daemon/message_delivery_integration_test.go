@@ -285,8 +285,17 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if len(checked.Messages) != 1 || checked.Messages[0].ID != busyCreated.ID || checked.Messages[0].Content != "busy secret" || checked.HasMore {
 		t.Fatalf("checked Messages = %+v", checked)
 	}
+	if checked.CoverageReceipt == "" {
+		t.Fatal("message check did not return a local coverage receipt")
+	}
+	if got := d.messageCoordinators[agentID].Boundaries()[target]; got != created.Seq {
+		t.Fatalf("boundary before check output commit = %d, want prior %d", got, created.Seq)
+	}
+	if err := d.messageCoordinators[agentID].CommitCoverage(checked.CoverageReceipt); err != nil {
+		t.Fatalf("commit checked coverage: %v", err)
+	}
 	if got := d.messageCoordinators[agentID].Boundaries()[target]; got != busyCreated.Seq {
-		t.Fatalf("boundary after check = %d, want %d", got, busyCreated.Seq)
+		t.Fatalf("boundary after check output commit = %d, want %d", got, busyCreated.Seq)
 	}
 	if seq, err := d.CredentialProxy().SeenUpToSeq(agentID, target); err != nil || seq != busyCreated.Seq {
 		t.Fatalf("Credential Proxy boundary after check = %d, %v", seq, err)

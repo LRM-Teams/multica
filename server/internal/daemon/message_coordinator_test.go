@@ -760,15 +760,15 @@ func TestClosedMessageCoordinatorRejectsPendingWork(t *testing.T) {
 	if err := coordinator.Flush(context.Background()); err == nil {
 		t.Fatal("Flush succeeded after Close")
 	}
-	if result, err := coordinator.Check(0); err == nil {
-		t.Fatalf("Check succeeded after Close: %+v", result)
+	if offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck}); err == nil {
+		t.Fatalf("PrepareCoverage succeeded after Close: %+v", offer)
 	}
 	if handoffs != 0 {
 		t.Fatalf("runtime handoffs after Close = %d", handoffs)
 	}
 }
 
-func TestMessageCoordinatorCheckReturnsBoundedPendingAndAdvancesOnlyReturnedBoundaries(t *testing.T) {
+func TestMessageCoordinatorCoverageCheckAdvancesOnlyAfterCommit(t *testing.T) {
 	root := t.TempDir()
 	activityCount := 0
 	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
@@ -791,36 +791,45 @@ func TestMessageCoordinatorCheckReturnsBoundedPendingAndAdvancesOnlyReturnedBoun
 		}
 	}
 
-	result, err := coordinator.Check(2)
+	first, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 2})
 	if err != nil {
-		t.Fatalf("Check: %v", err)
+		t.Fatalf("PrepareCoverage: %v", err)
 	}
-	if got := []string{result.Messages[0].ID, result.Messages[1].ID}; !reflect.DeepEqual(got, []string{"message-1", "message-2"}) {
+	if got := []string{first.Messages[0].ID, first.Messages[1].ID}; !reflect.DeepEqual(got, []string{"message-1", "message-2"}) {
 		t.Fatalf("checked Messages = %v", got)
 	}
-	if !result.HasMore || result.Remaining != 1 || result.Status != messageCheckStatusMore {
-		t.Fatalf("first Check result = %+v", result)
+	if !first.HasMore || first.Remaining != 1 || first.ReceiptID == "" {
+		t.Fatalf("first coverage offer = %+v", first)
+	}
+	if got := coordinator.Boundaries(); len(got) != 0 {
+		t.Fatalf("boundaries advanced before output commit: %+v", got)
+	}
+	if err := coordinator.CommitCoverage(first.ReceiptID); err != nil {
+		t.Fatalf("CommitCoverage: %v", err)
 	}
 	if got := coordinator.Boundaries(); !reflect.DeepEqual(got, map[string]int64{"channel:one": 2}) {
-		t.Fatalf("boundaries after bounded Check = %+v", got)
+		t.Fatalf("boundaries after first commit = %+v", got)
 	}
 	if activityCount != 0 {
 		t.Fatalf("Message received Activity count = %d, want 0", activityCount)
 	}
 
-	result, err = coordinator.Check(2)
+	second, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 2})
 	if err != nil {
-		t.Fatalf("second Check: %v", err)
+		t.Fatalf("second PrepareCoverage: %v", err)
 	}
-	if len(result.Messages) != 1 || result.Messages[0].ID != "message-3" || result.HasMore || result.Remaining != 0 || result.Status != messageCheckStatusComplete {
-		t.Fatalf("second Check result = %+v", result)
+	if len(second.Messages) != 1 || second.Messages[0].ID != "message-3" || second.HasMore || second.Remaining != 0 {
+		t.Fatalf("second coverage offer = %+v", second)
+	}
+	if err := coordinator.CommitCoverage(second.ReceiptID); err != nil {
+		t.Fatalf("second CommitCoverage: %v", err)
 	}
 	if got := coordinator.Boundaries(); !reflect.DeepEqual(got, map[string]int64{"channel:one": 2, "dm:two": 1}) {
 		t.Fatalf("final boundaries = %+v", got)
 	}
 }
 
-func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.T) {
+func TestMessageCoordinatorCoverageCheckRetainsPendingWhenCommitWriteFails(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "agent-root")
 	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
@@ -833,13 +842,17 @@ func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.
 	if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
+	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck})
+	if err != nil {
+		t.Fatalf("PrepareCoverage: %v", err)
+	}
 	if err := os.WriteFile(root, []byte("blocks agent root directory"), 0o600); err != nil {
 		t.Fatalf("block agent root: %v", err)
 	}
 
-	result, err := coordinator.Check(0)
+	err = coordinator.CommitCoverage(offer.ReceiptID)
 	if err == nil {
-		t.Fatalf("Check result = %+v, want boundary failure", result)
+		t.Fatal("CommitCoverage succeeded despite boundary failure")
 	}
 	coordinator.mu.Lock()
 	pending := coordinator.pendingBatchLocked()
@@ -854,12 +867,8 @@ func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.
 	if err := os.Remove(root); err != nil {
 		t.Fatalf("unblock agent root: %v", err)
 	}
-	result, err = coordinator.Check(0)
-	if err != nil {
-		t.Fatalf("retry Check: %v", err)
-	}
-	if len(result.Messages) != 1 || result.Messages[0].ID != delivery.Message.ID {
-		t.Fatalf("retry result = %+v", result)
+	if err := coordinator.CommitCoverage(offer.ReceiptID); err != nil {
+		t.Fatalf("retry CommitCoverage: %v", err)
 	}
 	coordinator.mu.Lock()
 	pending = coordinator.pendingBatchLocked()

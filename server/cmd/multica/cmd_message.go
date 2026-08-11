@@ -105,6 +105,10 @@ func newMessageCheckCmd() *cobra.Command {
 }
 
 func runAgentMessageCheck(_ *cobra.Command, _ []string) error {
+	return runAgentMessageCheckWithWriter(os.Stdout)
+}
+
+func runAgentMessageCheckWithWriter(output io.Writer) error {
 	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
 	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
 	if agentID == "" {
@@ -136,11 +140,17 @@ func runAgentMessageCheck(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("message check through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
 	}
 	var result messageCheckCLIResponse
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
-	if err := decoder.Decode(&result); err != nil {
-		return fmt.Errorf("decode message check response: %w", err)
+	if err := consumeMessageCoverageResponse(
+		ctx,
+		response.Body,
+		output,
+		&result,
+		func(w io.Writer) error { return printMessageCheckResult(w, result) },
+		commitLocalMessageCoverage,
+	); err != nil {
+		return fmt.Errorf("consume message check response: %w", err)
 	}
-	return printMessageCheckResult(os.Stdout, result)
+	return nil
 }
 
 func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse) error {

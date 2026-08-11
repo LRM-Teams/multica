@@ -453,7 +453,18 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if coordinator == nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
-	return coordinator.Check(messageCheckDefaultLimit)
+	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: messageCheckDefaultLimit})
+	if err != nil {
+		return MessageCheckResult{}, err
+	}
+	status := messageCheckStatusComplete
+	if offer.HasMore {
+		status = messageCheckStatusMore
+	}
+	return MessageCheckResult{
+		Messages: offer.Messages, HasMore: offer.HasMore, Remaining: offer.Remaining,
+		Status: status, CoverageReceipt: offer.ReceiptID,
+	}, nil
 }
 
 // RecordMessageRead consumes successful canonical history through one target's

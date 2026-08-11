@@ -35,10 +35,11 @@ const (
 // MessageCheckResult is the bounded concrete-body projection returned through
 // the machine-local Credential Proxy.
 type MessageCheckResult struct {
-	Messages  []protocol.AgentMessageProjection `json:"messages"`
-	HasMore   bool                              `json:"has_more"`
-	Remaining int                               `json:"remaining"`
-	Status    string                            `json:"status"`
+	Messages        []protocol.AgentMessageProjection `json:"messages"`
+	HasMore         bool                              `json:"has_more"`
+	Remaining       int                               `json:"remaining"`
+	Status          string                            `json:"status"`
+	CoverageReceipt string                            `json:"_coverage_receipt,omitempty"`
 }
 
 // RuntimeMessageHandoff is the explicit boundary at which concrete Message
@@ -477,67 +478,6 @@ func (c *MessageCoordinator) NotifyPendingAfterTurn() {
 		return
 	}
 	c.schedulePendingNoticeLocked(c.noticeCoalesce)
-}
-
-// Check non-blockingly moves one bounded Pending window into the current
-// Agent turn. It persists the Context Boundary before removing Pending and
-// never emits the daemon-to-runtime Message received Activity.
-func (c *MessageCoordinator) Check(limit int) (MessageCheckResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return MessageCheckResult{}, errors.New("Message coordinator is closed")
-	}
-	if c.recovery.status != messageRecoveryReady {
-		return MessageCheckResult{}, errors.New("Message freshness is unknown until recovery completes")
-	}
-	if c.activeHandoff != nil {
-		return MessageCheckResult{}, errors.New("runtime Message handoff boundary is unsettled")
-	}
-	if limit <= 0 {
-		limit = messageCheckDefaultLimit
-	}
-	if limit > messageCheckMaxLimit {
-		limit = messageCheckMaxLimit
-	}
-	batch := c.pendingBatchLocked()
-	if len(batch) > limit {
-		batch = batch[:limit]
-	}
-	if batch == nil {
-		batch = []protocol.AgentMessageProjection{}
-	}
-	remaining := c.pendingCountLocked() - len(batch)
-	result := MessageCheckResult{
-		Messages: batch, HasMore: remaining > 0, Remaining: remaining, Status: messageCheckStatusComplete,
-	}
-	if result.HasMore {
-		result.Status = messageCheckStatusMore
-	}
-	if len(batch) == 0 {
-		return result, nil
-	}
-	next := cloneBoundaries(c.boundaries)
-	for _, message := range batch {
-		if message.Seq > next[message.Target] {
-			next[message.Target] = message.Seq
-		}
-	}
-	if err := c.writeBoundaries(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
-		c.boundaryHealthy = false
-		return MessageCheckResult{}, fmt.Errorf("persist Context Boundary after message check: %w", err)
-	}
-	c.boundaries = next
-	c.boundaryHealthy = true
-	for _, message := range batch {
-		delete(c.pending[message.Target], message.Seq)
-		delete(c.accepted, messageIdentityKey(message))
-		if len(c.pending[message.Target]) == 0 {
-			delete(c.pending, message.Target)
-		}
-	}
-	c.pendingGeneration++
-	return result, nil
 }
 
 // MarkRead advances exactly one target's Context Boundary after the Credential

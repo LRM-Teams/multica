@@ -261,7 +261,12 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	}
 
 	sourceID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_source_snapshot (
 		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
 		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
@@ -274,7 +279,10 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	`, sourceID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert source: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit live source and passport: %v", err)
+	}
 
 	afterLive := readContext()
 	if afterLive.ManifestID != before.ManifestID || afterLive.ManifestHash != before.ManifestHash {
@@ -460,7 +468,7 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	}
 
 	extraTaskID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	insertIntegrationTasksWithPassports(t, ctx, pool, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion, `
 		INSERT INTO research_task (
 		  id, workspace_id, session_id, client_key, kind, objective,
 		  required_capability, expected_result, status, goal_version, plan_version,
@@ -469,9 +477,7 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 		  $1::uuid, $2::uuid, $3::uuid, 'post-dispatch-extra', 'discover', 'extra task',
 		  'lead', 'research_evidence_v1', 'pending', $4, $5, 1, 300, NULL
 		)
-	`, extraTaskID, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion); err != nil {
-		t.Fatalf("insert extra task: %v", err)
-	}
+	`, []any{extraTaskID, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion}, []string{extraTaskID})
 
 	liveGate, err := store.EvaluateGate(ctx, run.SessionID)
 	if err != nil {

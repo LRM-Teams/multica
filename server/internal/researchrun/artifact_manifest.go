@@ -519,6 +519,7 @@ func loadManifestEntryCandidatesForAttemptTx(
 		  v.version,
 		  e.eligibility_revision,
 		  v.content_hash,
+		  e.representation,
 		  e.representation_hash,
 		  m.manifest_hash
 		FROM research_artifact_context_entry e
@@ -546,11 +547,10 @@ func loadManifestEntryCandidatesForAttemptTx(
 		var entry artifactVersionCandidate
 		if err = rows.Scan(
 			&entry.ArtifactID, &entry.Version, &entry.EligibilityRevision,
-			&entry.ContentHash, &entry.RepresentationHash, &storedHash,
+			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash, &storedHash,
 		); err != nil {
 			return nil, "", err
 		}
-		entry.Representation = "raw"
 		entries = append(entries, entry)
 	}
 	if err = rows.Err(); err != nil {

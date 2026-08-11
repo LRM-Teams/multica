@@ -214,25 +214,12 @@ func TestDispatchFailsWhenPassportLifecycleWithdrawnBeforeDispatch(t *testing.T)
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
 	claimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-		  significance, confidence, status, goal_version, plan_version, resolution
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'withdraw-dispatch-claim', '', 'withdrawn before dispatch',
-		  0.5, 0.5, 'proposed', 1, 1, ''
-		)
-	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatalf("insert claim: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
-	if _, err = pool.Exec(ctx, `
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "withdraw-dispatch-claim", "withdrawn before dispatch")
+	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
 		UPDATE research_artifact_passport
 		SET lifecycle_status = 'withdrawn'
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
-		t.Fatalf("withdraw passport: %v", err)
-	}
+	`, fixture.workspaceID, run.SessionID, claimID)
 
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
 	attempt, _, err := store.CreateDispatchIntent(ctx, input)

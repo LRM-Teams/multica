@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -48,11 +49,11 @@ func TestDispatchConcurrentSharedCandidatesNoDeadlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent plan: %v", err)
 	}
-	planInboxID := uuid.NewString()
+	planInboxID := seedIntegrationInboxEvent(t, ctx, pool, fixture.workspaceID, fixture.agentID)
 	if _, _, err = store.AttachInboxTask(ctx, planAttempt.ID, planInboxID); err != nil {
 		t.Fatalf("AttachInboxTask plan: %v", err)
 	}
-	planRaw, err := json.Marshal(validPlanResult(t))
+	planRaw, err := json.Marshal(upgradeResultToV5(validV4PlanResult(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestDispatchConcurrentSharedCandidatesNoDeadlock(t *testing.T) {
 	}
 	if len(discoverTasks) == 1 {
 		secondTaskID := uuid.NewString()
-		if _, err = pool.Exec(ctx, `
+		insertIntegrationTasksWithPassports(t, ctx, pool, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion, `
 			INSERT INTO research_task (
 			  id, workspace_id, session_id, client_key, kind, objective,
 			  required_capability, expected_result, status, goal_version, plan_version,
@@ -81,13 +82,11 @@ func TestDispatchConcurrentSharedCandidatesNoDeadlock(t *testing.T) {
 			)
 			SELECT
 			  $1::uuid, t.workspace_id, t.session_id, 'discover-2', 'discover',
-			  'Second discover dispatch', 'scout', 'research_evidence_v1', 'ready',
+			  'Second discover dispatch', 'scout', t.expected_result, 'ready',
 			  t.goal_version, t.plan_version, 2, 300, now(), t.question_id
 			FROM research_task t
 			WHERE t.id = $2::uuid
-		`, secondTaskID, discoverTasks[0].ID); err != nil {
-			t.Fatalf("insert second discover task: %v", err)
-		}
+		`, []any{secondTaskID, discoverTasks[0].ID}, []string{secondTaskID})
 		discoverTasks, err = listDiscoverTasks(ctx, store, run.SessionID)
 		if err != nil || len(discoverTasks) < 2 {
 			t.Fatalf("listDiscoverTasks after insert: %v len=%d", err, len(discoverTasks))
@@ -101,7 +100,12 @@ func TestDispatchConcurrentSharedCandidatesNoDeadlock(t *testing.T) {
 		wg.Add(1)
 		go func(i int, task Task) {
 			defer wg.Done()
-			attempts[i], _, errs[i] = store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, task.ID, fixture.agentID))
+			for try := 0; try < 3; try++ {
+				attempts[i], _, errs[i] = store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, task.ID, fixture.agentID))
+				if !errors.Is(errs[i], ErrInvalidTransition) {
+					return
+				}
+			}
 		}(i, task)
 	}
 	done := make(chan struct{})

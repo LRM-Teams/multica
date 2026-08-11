@@ -37,7 +37,7 @@ function processMessage(op: string): ResearchMessage {
     meta: { op, title: "Merged conclusion" },
     created_at: "",
     updated_at: "",
-  } as ResearchMessage;
+  } as unknown as ResearchMessage;
 }
 
 describe("ResearchCanvasChangeCard (Slice F)", () => {

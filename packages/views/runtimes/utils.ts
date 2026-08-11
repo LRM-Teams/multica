@@ -70,6 +70,13 @@ export function formatDeviceInfo(raw: string | null): string | null {
     .join(" · ");
 }
 
+/** Turns daemon GOOS values into the labels used by the computer Basics UI. */
+export function formatOperatingSystem(os: string | null | undefined): string | null {
+  const normalized = os?.trim().toLowerCase();
+  if (!normalized) return null;
+  return OS_LABEL[normalized] ?? normalized;
+}
+
 function prettifyOsArch(part: string): string {
   const lower = part.toLowerCase();
   // Pattern: <os>-<arch>; e.g. darwin-amd64, linux-arm64, windows-amd64.

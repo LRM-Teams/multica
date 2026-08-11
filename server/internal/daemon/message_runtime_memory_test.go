@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,6 +63,7 @@ func TestPrepareResidentMessageBatchScopesIdentityAndUserMemoryPerMessage(t *tes
 
 func TestResidentMessageSuccessReportsAndSyncsMemoryWrites(t *testing.T) {
 	reported := make(chan struct{}, 1)
+	var memorySynced atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer runtime-token" {
 			t.Errorf("Authorization for %s = %q", r.URL.Path, got)
@@ -69,8 +71,13 @@ func TestResidentMessageSuccessReportsAndSyncsMemoryWrites(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/daemon/agent-memory-center/hydrate":
-			_, _ = w.Write([]byte(`{"active":[],"conflicts":[],"deleted":[],"cursor":0}`))
+			if memorySynced.Load() {
+				_, _ = w.Write([]byte(`{"active":[],"conflicts":[],"deleted":[],"cursor":1}`))
+			} else {
+				_, _ = w.Write([]byte(`{"active":[],"conflicts":[],"deleted":[],"cursor":0}`))
+			}
 		case "/api/daemon/agent-memory-center/sync":
+			memorySynced.Store(true)
 			_, _ = w.Write([]byte(`{"accepted":1}`))
 		case "/api/daemon/agent-memory-writes":
 			var report AgentMemoryWriteReport
@@ -120,14 +127,18 @@ func TestResidentMessageSuccessReportsAndSyncsMemoryWrites(t *testing.T) {
 		t.Fatal("resident Message completion did not report memory writes")
 	}
 	snapshotPath := filepath.Join(agentRoot, ".multica", "memory-write-hashes.json")
+	syncStatePath := filepath.Join(agentRoot, ".multica", "memory-sync-state.json")
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		data, err := os.ReadFile(snapshotPath)
-		if err == nil && strings.Contains(string(data), "memory/MEMORY.md") {
+		snapshot, snapshotErr := os.ReadFile(snapshotPath)
+		syncState, syncStateErr := os.ReadFile(syncStatePath)
+		if snapshotErr == nil && syncStateErr == nil &&
+			strings.Contains(string(snapshot), "memory/MEMORY.md") &&
+			strings.Contains(string(syncState), `"cursor":1`) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("resident memory snapshot was not persisted: %v", err)
+			t.Fatalf("resident memory state was not persisted: snapshot=%v sync=%v", snapshotErr, syncStateErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

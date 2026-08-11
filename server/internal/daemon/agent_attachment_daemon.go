@@ -2,20 +2,16 @@ package daemon
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (d *Daemon) attachmentRegistry() AgentAttachmentRegistry {
+func (d *Daemon) attachmentRegistry() *localAgentAttachmentRegistry {
 	if d == nil {
 		return nil
 	}
 	return d.agentAttachments
-}
-
-func (d *Daemon) localAttachmentRegistry() *localAgentAttachmentRegistry {
-	registry, _ := d.attachmentRegistry().(*localAgentAttachmentRegistry)
-	return registry
 }
 
 func (d *Daemon) attachmentRuntimeSets() []AgentAttachmentRuntimeSet {
@@ -53,6 +49,23 @@ func (d *Daemon) attachmentRuntimeSets() []AgentAttachmentRuntimeSet {
 		result = append(result, AgentAttachmentRuntimeSet{WorkspaceID: workspaceID, RuntimeIDs: runtimeIDs})
 	}
 	return result
+}
+
+func (d *Daemon) attachmentRuntimeSet(workspaceID string) AgentAttachmentRuntimeSet {
+	workspaceID = strings.TrimSpace(workspaceID)
+	runtimeSet := AgentAttachmentRuntimeSet{WorkspaceID: workspaceID}
+	if d == nil || workspaceID == "" {
+		return runtimeSet
+	}
+	d.mu.Lock()
+	for runtimeID, runtime := range d.runtimeIndex {
+		if runtime.WorkspaceID == workspaceID {
+			runtimeSet.RuntimeIDs = append(runtimeSet.RuntimeIDs, runtimeID)
+		}
+	}
+	d.mu.Unlock()
+	sort.Strings(runtimeSet.RuntimeIDs)
+	return runtimeSet
 }
 
 func (d *Daemon) currentAttachments() []AgentAttachment {

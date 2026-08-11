@@ -10,10 +10,10 @@ import (
 // wake-socket lifecycle authority is absent. They apply directly to the native
 // Attachment registry and must never be linked into a daemon binary.
 func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload) error {
-	if d == nil || d.localAttachmentRegistry() == nil {
+	if d == nil || d.attachmentRegistry() == nil {
 		return nil
 	}
-	result, err := d.localAttachmentRegistry().applyEvent(payload.WorkspaceID, AgentAttachmentEvent{
+	result, err := d.attachmentRegistry().applyEvent(payload.WorkspaceID, AgentAttachmentEvent{
 		Kind: AgentAttachmentEventAttach, AgentID: payload.AgentID, RuntimeID: payload.RuntimeID,
 		AttachmentGeneration: AttachmentGeneration(payload.PlacementGeneration), LifecycleSeq: AttachmentLifecycleSequence(payload.LifecycleSeq),
 	}, payload.LifecycleSeq > 0, true)
@@ -33,10 +33,10 @@ func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload
 }
 
 func (d *Daemon) handleDaemonAgentStop(payload protocol.DaemonAgentStopPayload) error {
-	if d == nil || d.localAttachmentRegistry() == nil {
+	if d == nil || d.attachmentRegistry() == nil {
 		return nil
 	}
-	result, err := d.localAttachmentRegistry().applyEvent("", AgentAttachmentEvent{
+	result, err := d.attachmentRegistry().applyEvent("", AgentAttachmentEvent{
 		Kind: AgentAttachmentEventDetach, AgentID: payload.AgentID, RuntimeID: payload.RuntimeID,
 		AttachmentGeneration: AttachmentGeneration(payload.PlacementGeneration), LifecycleSeq: AttachmentLifecycleSequence(payload.LifecycleSeq),
 	}, payload.LifecycleSeq > 0, false)
@@ -54,10 +54,10 @@ func (d *Daemon) handleDaemonAgentStartFrame(payload protocol.DaemonAgentStartPa
 }
 
 func (d *Daemon) handleDaemonAgentLifecycleReplayEnd(payload protocol.DaemonAgentLifecycleReplayEndPayload) error {
-	if d == nil || d.localAttachmentRegistry() == nil {
+	if d == nil || d.attachmentRegistry() == nil {
 		return nil
 	}
-	if err := d.localAttachmentRegistry().advanceRecovery(nil, payload.RuntimeCursors); err != nil {
+	if err := d.attachmentRegistry().advanceRecovery(nil, payload.RuntimeCursors); err != nil {
 		return err
 	}
 	if !d.queueReminderFrame(protocol.EventDaemonAgentLifecycleAck, protocol.DaemonAgentLifecycleAckPayload{RuntimeCursors: payload.RuntimeCursors}) {

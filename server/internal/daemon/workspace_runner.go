@@ -125,7 +125,6 @@ func (d *Daemon) workspaceRunnerWorkspaceIDs() []string {
 }
 
 func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnection, conn *websocket.Conn) error {
-	d := runner.daemon
 	workspaceID := connection.workspaceID
 	writeFrame := func(eventType string, payload any) error {
 		return runner.sendOnConnection(connection, eventType, payload)
@@ -134,13 +133,13 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 		if err == nil {
 			return
 		}
-		if d.logger != nil {
-			d.logger.Debug("workspace Runner delivery writer failed", "workspace_id", workspaceID, "error", err)
+		if runner.logger != nil {
+			runner.logger.Debug("workspace Runner delivery writer failed", "workspace_id", workspaceID, "error", err)
 		}
 		connection.Close()
 	}
 	connection.deliveries = newWorkspaceRunnerDeliveryDispatcher(connection.ctx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
-		if err := d.handleWorkspaceRunnerDelivery(deliveryCtx, workspaceID, delivery, writeFrame); err != nil {
+		if err := runner.handleMessageDelivery(deliveryCtx, delivery, writeFrame); err != nil {
 			failConnection(err)
 		}
 	})
@@ -149,8 +148,8 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 		return errors.New("workspace Runner lifecycle owners are unavailable")
 	}
 	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
-		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && d.logger != nil {
-			d.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
+		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && runner.logger != nil {
+			runner.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
 		}
 	})
 	defer producer.DetachTransport(transportGeneration)
@@ -207,8 +206,8 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			ack, status, session, err := runner.startManagedAgent(start)
 			if err != nil {
-				if d.logger != nil {
-					d.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "start_rejected", "error", err)
+				if runner.logger != nil {
+					runner.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "start_rejected", "error", err)
 				}
 				continue
 			}
@@ -244,17 +243,19 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			receipt, err := runner.applyAttachmentAttach(attach)
 			if err != nil {
-				if d.logger != nil {
-					d.logger.Warn("Workspace Runner Attachment attach rejected", "workspace_id", workspaceID, "agent_id", attach.AgentID, "runtime_id", attach.RuntimeID, "reason", "attach_rejected", "error", err)
+				if runner.logger != nil {
+					runner.logger.Warn("Workspace Runner Attachment attach rejected", "workspace_id", workspaceID, "agent_id", attach.AgentID, "runtime_id", attach.RuntimeID, "reason", "attach_rejected", "error", err)
 				}
 				continue
 			}
 			if err := writeFrame(protocol.EventAgentAttached, receipt); err != nil {
 				return err
 			}
-			d.requestReminderSnapshot(workspaceID, attach.AgentID)
+			if runner.requestReminderSnapshot != nil {
+				runner.requestReminderSnapshot(attach.AgentID)
+			}
 			if attachmentReplayComplete {
-				runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
+				runner.beginMessageRecoveryForAll(func(request protocol.AgentRecoveryRequest) error {
 					return writeFrame(protocol.EventAgentRecoveryRequest, request)
 				})
 			}
@@ -265,16 +266,18 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			receipt, err := runner.applyAttachmentDetach(detach)
 			if err != nil {
-				if d.logger != nil {
-					d.logger.Warn("Workspace Runner Attachment detach rejected", "workspace_id", workspaceID, "agent_id", detach.AgentID, "runtime_id", detach.RuntimeID, "reason", "detach_rejected", "error", err)
+				if runner.logger != nil {
+					runner.logger.Warn("Workspace Runner Attachment detach rejected", "workspace_id", workspaceID, "agent_id", detach.AgentID, "runtime_id", detach.RuntimeID, "reason", "detach_rejected", "error", err)
 				}
 				continue
 			}
 			if err := writeFrame(protocol.EventAgentDetached, receipt); err != nil {
 				return err
 			}
-			if err := d.removeDetachedReminderAgent(detach.AgentID); err != nil {
-				return err
+			if runner.removeDetachedReminderAgent != nil {
+				if err := runner.removeDetachedReminderAgent(detach.AgentID); err != nil {
+					return err
+				}
 			}
 		case protocol.EventAgentAttachmentReplayEnd:
 			var end protocol.WorkspaceRunnerAttachmentReplayEnd
@@ -283,8 +286,8 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			ack, err := runner.completeAttachmentReplay(attachmentRuntimeSet, end)
 			if err != nil {
-				if d.logger != nil {
-					d.logger.Warn("Workspace Runner Attachment replay rejected", "workspace_id", workspaceID, "reason", "invalid_replay_end", "error", err)
+				if runner.logger != nil {
+					runner.logger.Warn("Workspace Runner Attachment replay rejected", "workspace_id", workspaceID, "reason", "invalid_replay_end", "error", err)
 				}
 				continue
 			}
@@ -292,19 +295,21 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				return err
 			}
 			attachmentReplayComplete = true
-			runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
+			runner.beginMessageRecoveryForAll(func(request protocol.AgentRecoveryRequest) error {
 				return writeFrame(protocol.EventAgentRecoveryRequest, request)
 			})
 		case protocol.EventAgentDeliver:
 			var transient protocol.AgentTransientDeliverPayload
 			if json.Unmarshal(message.Payload, &transient) == nil && transient.Kind != "" {
 				if transient.Kind != protocol.AgentTransientDeliverKindReminder || !transient.Transient || transient.Reminder.WorkspaceID != workspaceID {
-					if d.logger != nil {
-						d.logger.Warn("transient Agent delivery rejected", "workspace_id", workspaceID, "kind", transient.Kind, "reason_code", "invalid_transient_input")
+					if runner.logger != nil {
+						runner.logger.Warn("transient Agent delivery rejected", "workspace_id", workspaceID, "kind", transient.Kind, "reason_code", "invalid_transient_input")
 					}
 					continue
 				}
-				d.handleReminderOwnerInput(connection.ctx, transient.Reminder)
+				if runner.handleReminderInput != nil {
+					runner.handleReminderInput(connection.ctx, transient.Reminder)
+				}
 				continue
 			}
 			var delivery protocol.AgentDeliverPayload
@@ -317,10 +322,10 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &page) != nil {
 				continue
 			}
-			if err := d.handleMessageRecoveryPageWithSend(context.Background(), workspaceID, page, func(request protocol.AgentRecoveryRequest) error {
+			if err := runner.mergeMessageRecoveryPage(page, func(request protocol.AgentRecoveryRequest) error {
 				return writeFrame(protocol.EventAgentRecoveryRequest, request)
-			}); err != nil && d.logger != nil {
-				d.logger.Warn("workspace Runner agent Message recovery failed", "error", err, "workspace_id", workspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
+			}); err != nil && runner.logger != nil {
+				runner.logger.Warn("workspace Runner Agent Message recovery failed", "error", err, "workspace_id", workspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
 			}
 		case protocol.EventAgentActivityProbe:
 			var probe protocol.AgentActivityProbePayload
@@ -336,87 +341,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 		}
 	}
-}
-
-// handleWorkspaceRunnerDelivery accepts or deduplicates a Delivery, attempts
-// its transport ACK, and only then performs the best-effort Runtime handoff.
-// The sole returned error is an ACK writer failure, which requires the caller
-// to tear down the connection so canonical redelivery can retry safely.
-func (d *Daemon) handleWorkspaceRunnerDelivery(
-	ctx context.Context,
-	workspaceID string,
-	delivery protocol.AgentDeliverPayload,
-	writeFrame func(string, any) error,
-) error {
-	runtimeID := ""
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil && runner.inboxes != nil {
-		_, runtimeID, _ = runner.inboxes.Resolve(delivery.AgentID)
-	}
-	d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-		workspaceID, runtimeID, delivery, "runner_received", "accepted", "",
-	))
-	ack, err := d.acceptIdleAgentDelivery(ctx, workspaceID, delivery)
-	// Restart-time delivery may recreate the coordinator and discover its
-	// durable runtime during acceptance. Re-read routing identity so every
-	// later checkpoint joins the same runtime even when runner_received could
-	// only identify the Workspace and Agent.
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil && runner.inboxes != nil {
-		_, runtimeID, _ = runner.inboxes.Resolve(delivery.AgentID)
-	}
-	if err != nil {
-		d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-			workspaceID, runtimeID, delivery, "coordinator_accepted", "rejected", canonicalMessageFailureReason(err),
-		))
-		if d.logger != nil {
-			d.logger.Warn("workspace Runner agent delivery not acknowledged", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-		}
-		return nil
-	}
-	d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-		workspaceID, runtimeID, delivery, "ack_attempted", "attempted", "",
-	))
-	if err := writeFrame(protocol.EventAgentDeliverAck, ack); err != nil {
-		d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-			workspaceID, runtimeID, delivery, "ack_sent", "failed", "runner_connection_write_failed",
-		))
-		return err
-	}
-	d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-		workspaceID, runtimeID, delivery, "ack_sent", "accepted", "",
-	))
-	if err := d.ensureResidentMessageRuntime(ctx, delivery.AgentID, runtimeID); err != nil {
-		d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-			workspaceID, runtimeID, delivery, "runtime_handoff_attempted", "failed", canonicalMessageFailureReason(err),
-		))
-		if d.logger != nil {
-			d.logger.Warn("workspace Runner resident Message runtime unavailable after delivery acknowledgement", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-		}
-		return nil
-	}
-	if err := d.flushIdleAgentDelivery(ctx, workspaceID, delivery.AgentID); err != nil {
-		outcome := "failed"
-		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown") {
-			outcome = "deferred"
-		}
-		d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-			workspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
-		))
-		if d.logger != nil {
-			d.logger.Warn("workspace Runner idle agent Message handoff failed after delivery acknowledgement", "error", err, "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-		}
-		return nil
-	}
-	d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-		workspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
-	))
-	return nil
-}
-
-func (d *Daemon) ownsWorkspaceRunnerRuntime(workspaceID, runtimeID string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	runtime, ok := d.runtimeIndex[runtimeID]
-	return ok && runtime.WorkspaceID == workspaceID
 }
 
 func writeWorkspaceRunnerFrame(conn *websocket.Conn, eventType string, payload any) error {

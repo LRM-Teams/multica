@@ -11,9 +11,17 @@ The Runner is a state-owning object whose immutable identity is the stable
 Daemon, current daemon process instance, and Workspace. Runtime membership is
 mutable input and is never part of Runner identity. Each Runner owns its local
 Process Manager, Activity producer, and Workspace-scoped Inbox registry state.
-Machine-wide Agent Attachment, Runtime capacity, Credential Proxy, and
-diagnostic registries are injected references; constructing a Runner must not
-copy those owners or create another global singleton.
+Machine-wide Agent Attachment, Runtime capacity, and diagnostic registries are
+injected references; constructing a Runner must not copy those owners or create
+another global singleton. Credential Proxy callers resolve the unique Runner
+and invoke its Message operations without receiving Inbox internals.
+
+The Runner never retains `*Daemon`. Construction wires explicit machine-wide
+owners and narrow callbacks only. `Daemon` owns Runner creation, teardown, and
+lookup; Message delivery/recovery, coverage, Activity observation, and
+Attachment lifecycle transitions stay behind Runner methods. Machine-local
+callers may resolve an unambiguous Runner, but never receive its Inbox,
+Process Manager, Activity producer, or Attachment internals.
 
 `WorkspaceRunner.Run(ctx)` owns Workspace authentication, dial/reconnect
 backoff, ready identity, connection cancellation, ping/pong, and the single
@@ -31,7 +39,7 @@ Runner by Workspace, but it does not keep a parallel transport or generation
 map.
 
 `InboxRegistry` is Runner-owned in-memory state with one immutable Workspace
-scope. It derives an Inbox's Runtime from `AgentAttachmentRegistry` and refuses
+scope. It derives an Inbox's Runtime from the shared durable Attachment owner and refuses
 creation unless that Attachment and Runtime both belong to the Runner's
 Workspace. Delivery, recovery pages, reconnect recovery, and scoped close all
 route through this registry. A Runner reconnect retains its registry; a Runner

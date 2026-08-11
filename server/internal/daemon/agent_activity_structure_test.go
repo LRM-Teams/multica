@@ -26,8 +26,7 @@ func TestAgentActivityProductionUsesOnlyTypedMessageObservationSeams(t *testing.
 	}
 
 	allowed := map[string]bool{
-		"message_runtime.go":    true,
-		"message_send_proxy.go": true,
+		"workspace_runner_activity.go": true,
 	}
 	err = filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

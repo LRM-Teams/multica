@@ -5,36 +5,6 @@ import (
 	"testing"
 )
 
-type fakeAgentAttachmentRegistry struct{}
-
-func (*fakeAgentAttachmentRegistry) Apply(string, AgentAttachmentEvent) (AgentAttachmentChange, error) {
-	return AgentAttachmentChange{Kind: AgentAttachmentUnchanged}, nil
-}
-
-func (*fakeAgentAttachmentRegistry) Resolve(string, string) (AgentAttachment, bool) {
-	return AgentAttachment{}, false
-}
-
-func (*fakeAgentAttachmentRegistry) List(string) []AgentAttachment { return nil }
-
-func (*fakeAgentAttachmentRegistry) WorkspaceIDs() []string { return nil }
-
-func (*fakeAgentAttachmentRegistry) DetachedAgentIDs() []string { return nil }
-
-func (*fakeAgentAttachmentRegistry) RecoveryState(AgentAttachmentRuntimeSet) (AgentAttachmentRecoveryState, error) {
-	return AgentAttachmentRecoveryState{}, nil
-}
-
-func (*fakeAgentAttachmentRegistry) AdvanceRecovery(AgentAttachmentRuntimeSet, []AgentAttachmentRecoveryCursor) error {
-	return nil
-}
-
-func (*fakeAgentAttachmentRegistry) Reconcile(AgentAttachmentRuntimeSet) ([]AgentAttachmentChange, error) {
-	return nil, nil
-}
-
-var _ AgentAttachmentRegistry = (*fakeAgentAttachmentRegistry)(nil)
-
 func TestAgentAttachmentEventValidation(t *testing.T) {
 	valid := AgentAttachmentEvent{
 		Kind: AgentAttachmentEventAttach, AgentID: "agent-1", RuntimeID: "runtime-1",

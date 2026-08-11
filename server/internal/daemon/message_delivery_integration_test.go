@@ -101,26 +101,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := d.newWorkspaceRunner(workspaceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.attachWorkspaceRunner(runner)
-	t.Cleanup(func() {
-		d.detachWorkspaceRunner(runner)
-		runner.inboxes.Close()
-	})
-	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: fakeRuntime,
-	}
-	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
-		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
-	}
-	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
-	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
-		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
-	}, 20*time.Millisecond, 30*time.Millisecond)
-
 	hub := daemonws.NewHub()
 	eventBus := events.New()
 	eventBus.SubscribeAll(func(event events.Event) {
@@ -158,6 +138,25 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner(workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	})
+	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: fakeRuntime,
+	}
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
+		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
+	}
+	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
+	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
+	}, 20*time.Millisecond, 30*time.Millisecond)
 	teardownRunner := startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
 	defer teardownRunner()
 
@@ -326,7 +325,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
 		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
 	}
-	d.beginAgentMessageRecovery(workspaceID, agentID)
+	runner.beginMessageRecovery(agentID)
 	select {
 	case request := <-recoveryRequests:
 		if request.AgentID != agentID || request.RecoveryID == "" || request.Boundaries[target] != busyCreated.Seq {

@@ -231,7 +231,7 @@ func TestMessageHandoffWithoutManagedLaunchDoesNotInventActivityIdentity(t *test
 		t.Fatal(err)
 	}
 	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	d.emitMessageReceivedActivity("agent-1", "runtime-1", []protocol.AgentMessageProjection{{
+	runner.observeMessageAccepted("agent-1", "runtime-1", []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:agent-1", Seq: 1,
 	}})
 
@@ -273,7 +273,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 		{Type: agent.MessageDiagnostic, Title: "Codex config warning", Level: "warning", Diagnostic: "configWarning", Content: "User namespaces are unavailable"},
 		{Type: agent.MessageError, Content: "sensitive provider text"},
 	} {
-		d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", message)
+		runner.observeResidentMessageRuntime("agent-a", "runtime-1", message)
 	}
 	wantKinds := []string{protocol.ActivityKindThinking, protocol.ActivityKindWorking, protocol.ActivityKindWorking, protocol.ActivityKindError}
 	wantDetails := []string{"", "running_command", "running_command", "runtime_error"}
@@ -331,7 +331,7 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 	}
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
 	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.DetailKind != "compacting_context" || len(activities[0].Entries) != 1 {
 		t.Fatalf("compaction start Activity = %+v", activities)
 	}
@@ -351,7 +351,7 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 		t.Fatalf("post-stale heartbeat = %+v, want Snapshot-only heartbeat", activities)
 	}
 
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
 	if len(activities) != 5 {
 		t.Fatalf("Activity count after resumed output = %d, want inferred finish plus thinking", len(activities))
 	}
@@ -363,13 +363,13 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 		t.Fatalf("resumed thinking Activity = %+v", thinking)
 	}
 
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
 	if len(activities) != 6 || activities[5].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[5].Snapshot.DetailKind != "compaction_finished" {
 		t.Fatalf("late explicit provider finish Activity = %+v", activities)
 	}
 
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
 	if len(activities) != 8 {
 		t.Fatalf("explicit compaction lifecycle Activity count = %d, want 8", len(activities))
 	}
@@ -378,15 +378,15 @@ func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(
 		t.Fatalf("explicit compaction finish = %+v", explicitFinish)
 	}
 
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageError, Content: "compaction failed"})
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageError, Content: "compaction failed"})
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
 	if len(activities) != 11 || activities[9].Snapshot.ActivityKind != protocol.ActivityKindError || activities[10].Snapshot.ActivityKind != protocol.ActivityKindThinking {
 		t.Fatalf("interrupted compaction Activity = %+v", activities[8:])
 	}
 
-	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
-	d.emitMessageTurnCompletionActivity("agent-a", "runtime-1", nil)
+	runner.observeResidentMessageRuntime("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	runner.observeMessageTurnCompletion("agent-a", "runtime-1", nil)
 	if len(activities) != 14 || activities[12].Snapshot.DetailKind != "compaction_finished" || activities[13].Snapshot.ActivityKind != protocol.ActivityKindOnline || activities[13].Snapshot.DetailKind != "idle" {
 		t.Fatalf("turn-end compaction completion Activity = %+v", activities[11:])
 	}

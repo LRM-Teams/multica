@@ -12,11 +12,15 @@ delete the Agent Root, Inbox state, Message Drafts, or other durable Agent data.
 
 ## Decision
 
-The machine-wide `AgentAttachmentRegistry` is the only implementation that may
+The machine-wide durable Attachment owner is the only implementation that may
 compare Attachment generations, retain detach tombstones, advance lifecycle
 replay cursors, reconcile Runtime sets, or persist those facts. Callers receive
 semantic `attached`, `moved`, `detached`, or `unchanged` results and must not
 inspect registry maps or reproduce generation comparisons.
+
+The owner is intentionally a concrete internal dependency. There is no broad
+registry interface or fake adapter: Runner construction shares the one
+machine-wide instance, while behavior remains behind Workspace Runner methods.
 
 Every public operation has a fixed authenticated Workspace scope. Attachment
 events deliberately omit `WorkspaceID`; a payload cannot select or change its

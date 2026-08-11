@@ -106,7 +106,7 @@ func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlo
 	return logger.Record(event)
 }
 
-func (d *Daemon) canonicalMessageDiagnosticEvent(
+func canonicalMessageDiagnosticEvent(
 	workspaceID, runtimeID string,
 	delivery protocol.AgentDeliverPayload,
 	phase, outcome, reasonCode string,
@@ -139,7 +139,7 @@ func (d *Daemon) recordResidentMessageBatch(
 	phase, outcome, reasonCode string,
 ) {
 	for _, message := range messages {
-		event := d.canonicalMessageDiagnosticEvent(workspaceID, runtimeID, protocol.AgentDeliverPayload{
+		event := canonicalMessageDiagnosticEvent(workspaceID, runtimeID, protocol.AgentDeliverPayload{
 			AgentID: agentID,
 			Target:  message.Target,
 			Seq:     message.Seq,
@@ -159,8 +159,8 @@ func (d *Daemon) recordAgentMessageResponse(
 		return
 	}
 	runtimeID := ""
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil && runner.inboxes != nil {
-		_, runtimeID, _ = runner.inboxes.Resolve(agentID)
+	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+		runtimeID = runner.messageRuntimeID(agentID)
 	}
 	messageID, channelID := responseMessageIdentity(response)
 	if channelID == "" {

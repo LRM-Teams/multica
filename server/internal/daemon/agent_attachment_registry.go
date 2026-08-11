@@ -149,7 +149,7 @@ func (r *localAgentAttachmentRegistry) Apply(workspaceID string, event AgentAtta
 // applyEvent is the single generation, tombstone, and lifecycle cursor
 // implementation behind the formal registry. Test fixtures may disable cursor
 // tracking when seeding historical local state, but production callers always
-// use the scoped AgentAttachmentRegistry contract.
+// use the scoped registry contract.
 func (r *localAgentAttachmentRegistry) applyEvent(
 	workspaceID string,
 	event AgentAttachmentEvent,

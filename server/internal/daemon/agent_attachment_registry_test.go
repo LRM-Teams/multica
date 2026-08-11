@@ -7,7 +7,7 @@ import (
 )
 
 func TestAgentAttachmentRegistryGenerationMatrix(t *testing.T) {
-	registry := AgentAttachmentRegistry(newLocalAgentAttachmentRegistry(t.TempDir(), nil))
+	registry := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
 	workspaceID := "workspace-a"
 
 	assertApply := func(want AgentAttachmentChangeKind, event AgentAttachmentEvent) {
@@ -46,7 +46,7 @@ func TestAgentAttachmentRegistryGenerationMatrix(t *testing.T) {
 
 func TestAgentAttachmentRegistryTombstoneSurvivesRestart(t *testing.T) {
 	root := t.TempDir()
-	registry := AgentAttachmentRegistry(newLocalAgentAttachmentRegistry(root, nil))
+	registry := newLocalAgentAttachmentRegistry(root, nil)
 	workspaceID := "workspace-a"
 	apply := func(kind AgentAttachmentEventKind, generation, seq int64) AgentAttachmentChange {
 		t.Helper()
@@ -83,7 +83,7 @@ func TestAgentAttachmentRegistryTombstoneSurvivesRestart(t *testing.T) {
 }
 
 func TestAgentAttachmentRegistryAcceptsSameGenerationMoveAfterDetach(t *testing.T) {
-	registry := AgentAttachmentRegistry(newLocalAgentAttachmentRegistry(t.TempDir(), nil))
+	registry := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
 	workspaceID := "workspace-a"
 	apply := func(kind AgentAttachmentEventKind, runtimeID string, generation, seq int64) AgentAttachmentChange {
 		t.Helper()
@@ -112,7 +112,7 @@ func TestAgentAttachmentRegistryAcceptsSameGenerationMoveAfterDetach(t *testing.
 }
 
 func TestAgentAttachmentRegistryRejectsCrossWorkspaceApply(t *testing.T) {
-	registry := AgentAttachmentRegistry(newLocalAgentAttachmentRegistry(t.TempDir(), nil))
+	registry := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
 	event := AgentAttachmentEvent{
 		Kind: AgentAttachmentEventAttach, AgentID: "agent-a", RuntimeID: "runtime-a",
 		AttachmentGeneration: 1, LifecycleSeq: 1,
@@ -152,7 +152,7 @@ func TestTaskObservationCannotRewriteGenerationBearingAttachment(t *testing.T) {
 }
 
 func TestAgentAttachmentRegistryReconcilesOnlyExplicitWorkspaceRuntimeSet(t *testing.T) {
-	registry := AgentAttachmentRegistry(newLocalAgentAttachmentRegistry(t.TempDir(), nil))
+	registry := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
 	attach := func(workspaceID, agentID, runtimeID string) {
 		t.Helper()
 		if _, err := registry.Apply(workspaceID, AgentAttachmentEvent{
@@ -189,7 +189,7 @@ func TestAgentAttachmentRegistryReconcilesOnlyExplicitWorkspaceRuntimeSet(t *tes
 func TestAgentAttachmentRegistryRecoveryCursorIsScopedMonotonicAndDurable(t *testing.T) {
 	root := t.TempDir()
 	scope := AgentAttachmentRuntimeSet{WorkspaceID: "workspace-a", RuntimeIDs: []string{"runtime-a", "runtime-b"}}
-	registry := AgentAttachmentRegistry(newLocalAgentAttachmentRegistry(root, nil))
+	registry := newLocalAgentAttachmentRegistry(root, nil)
 
 	if err := registry.AdvanceRecovery(scope, []AgentAttachmentRecoveryCursor{
 		{RuntimeID: "runtime-a", LifecycleSeq: 7},
@@ -230,7 +230,7 @@ func TestAgentAttachmentRegistryApplyRollsBackStateAndCursorTogether(t *testing.
 	root := t.TempDir()
 	concrete := newLocalAgentAttachmentRegistry(root, nil)
 	concrete.writeState = func(string, []byte) error { return errors.New("injected Attachment state failure") }
-	registry := AgentAttachmentRegistry(concrete)
+	registry := concrete
 	event := AgentAttachmentEvent{
 		Kind: AgentAttachmentEventAttach, AgentID: "agent-a", RuntimeID: "runtime-a",
 		AttachmentGeneration: 1, LifecycleSeq: 5,
@@ -248,7 +248,7 @@ func TestAgentAttachmentRegistryApplyRollsBackStateAndCursorTogether(t *testing.
 	if len(state.Cursors) != 1 || state.Cursors[0].LifecycleSeq != 0 {
 		t.Fatalf("failed Apply leaked cursor: %+v", state)
 	}
-	reloaded := AgentAttachmentRegistry(newLocalAgentAttachmentRegistry(root, nil))
+	reloaded := newLocalAgentAttachmentRegistry(root, nil)
 	if _, found := reloaded.Resolve("workspace-a", "agent-a"); found {
 		t.Fatal("failed Apply leaked durable Attachment")
 	}

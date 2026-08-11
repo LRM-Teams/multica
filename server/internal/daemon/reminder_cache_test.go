@@ -1020,22 +1020,22 @@ func TestDaemonAgentStopClearsOwnerResidencyAndReminderCache(t *testing.T) {
 		agentAttachments: newLocalAgentAttachmentRegistry(t.TempDir(), nil),
 		reminderCache:    newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.ReminderTimerJob) {}),
 	}
-	d.localAttachmentRegistry().observeTaskStarted("agent-a", "runtime-a", "workspace-a")
-	d.localAttachmentRegistry().observeTaskFinished("agent-a")
-	d.localAttachmentRegistry().observeTaskStarted("agent-b", "runtime-a", "workspace-a")
-	d.localAttachmentRegistry().observeTaskFinished("agent-b")
+	d.attachmentRegistry().observeTaskStarted("agent-a", "runtime-a", "workspace-a")
+	d.attachmentRegistry().observeTaskFinished("agent-a")
+	d.attachmentRegistry().observeTaskStarted("agent-b", "runtime-a", "workspace-a")
+	d.attachmentRegistry().observeTaskFinished("agent-b")
 	d.reminderCache.upsert(reminderJob("reminder-a", "agent-a", 1, clock.now.Add(time.Hour)))
 	d.reminderCache.upsert(reminderJob("reminder-b", "agent-b", 1, clock.now.Add(time.Hour)))
 
 	d.handleDaemonAgentStop(protocol.DaemonAgentStopPayload{AgentID: "agent-a", RuntimeID: "runtime-a", PlacementGeneration: 1})
 
-	if _, ok := d.localAttachmentRegistry().localRecord("agent-a"); ok {
+	if _, ok := d.attachmentRegistry().localRecord("agent-a"); ok {
 		t.Fatal("stopped owner remains resident")
 	}
 	if _, ok := d.reminderCache.get("reminder-a"); ok {
 		t.Fatal("stopped owner reminder remains cached")
 	}
-	if _, ok := d.localAttachmentRegistry().localRecord("agent-b"); !ok {
+	if _, ok := d.attachmentRegistry().localRecord("agent-b"); !ok {
 		t.Fatal("unrelated Agent Attachment was removed")
 	}
 	if _, ok := d.reminderCache.get("reminder-b"); !ok {

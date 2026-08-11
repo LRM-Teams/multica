@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { TypedGraphNode, TypedGraphResponse } from "@multica/core/research";
+import type { TypedGraphResponse } from "@multica/core/research";
 import { buildD5SessionCanvasModel } from "./build-d5-session-canvas";
+import { testTypedNode } from "./test-typed-graph-node";
 import { extractLayoutResultFromViewModel } from "../star-graph/lib/star-canvas-view-model";
 
 const emptyLineage = {
@@ -12,9 +13,7 @@ const emptyLineage = {
   supersedes: {},
 };
 
-function fixture(
-  extraNodes: Array<Pick<TypedGraphNode, "id"> & Partial<TypedGraphNode>> = [],
-): TypedGraphResponse {
+function fixture(extraNodes: TypedGraphResponse["nodes"] = []): TypedGraphResponse {
   return {
     session_id: "s1",
     graph_version: 1,
@@ -52,14 +51,14 @@ describe("buildD5SessionCanvasModel", () => {
     const first = buildD5SessionCanvasModel(fixture(), viewport, { rightPanelWidth: 0 })!;
     const second = buildD5SessionCanvasModel(
       fixture([
-        {
+        testTypedNode({
           id: "probe",
           level: "s",
           node_type: "probe",
-	          title: "Probe",
-	          status: "running",
-	          parent_id: "stable",
-	        },
+          title: "Probe",
+          status: "running",
+          parent_id: "stable",
+        }),
       ]),
       viewport,
       { rightPanelWidth: 0, previousLayout: first.layoutForNext },

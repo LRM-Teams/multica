@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { InfiniteData } from "@tanstack/react-query";
+import { parseWithFallback } from "../api/schema";
+import {
+  EMPTY_TYPED_GRAPH,
+  TypedGraphResponseSchema,
+} from "./graph-typed";
+import type { TypedGraphResponse } from "./graph-typed";
 import {
   normalizeWsGraphNode,
   patchTypedGraphInfiniteData,
 } from "./typed-graph-cache";
-import { TypedGraphNodeSchema, type TypedGraphResponse } from "./graph-typed";
 
 const emptyLineage = {
   derived: {},
@@ -14,6 +19,22 @@ const emptyLineage = {
   invalidated: {},
   supersedes: {},
 };
+
+function makePage(partial: Record<string, unknown>): TypedGraphResponse {
+  return parseWithFallback(
+    {
+      total_node_count: null,
+      nodes: [],
+      edges: [],
+      clusters: [],
+      lineage: emptyLineage,
+      ...partial,
+    },
+    TypedGraphResponseSchema,
+    EMPTY_TYPED_GRAPH,
+    { endpoint: "test" },
+  ) as TypedGraphResponse;
+}
 
 function makeInfinite(pages: TypedGraphResponse[]): InfiniteData<TypedGraphResponse> {
   return {
@@ -42,18 +63,15 @@ describe("typed-graph-cache", () => {
 
   it("upserts nodes without duplicating ids", () => {
     const data = makeInfinite([
-      {
+      makePage({
         session_id: "s1",
         graph_version: 3,
         total_node_count: 1,
-        nodes: [TypedGraphNodeSchema.parse({ id: "n1", title: "Old", node_type: "finding" })],
-        edges: [],
-        clusters: [],
-        lineage: emptyLineage,
-      },
+        nodes: [{ id: "n1", title: "Old", node_type: "finding" }],
+      }),
     ]);
     const result = patchTypedGraphInfiniteData(data, {
-      node: { id: "n1", title: "New", node_type: "finding", payload: { details: { x: 1 } } },
+      node: { id: "n1", title: "New", node_type: "finding", payload: { details: { x: 1 } } } as never,
       graphVersion: 4,
     });
     expect(result.patched).toBe(true);
@@ -64,18 +82,15 @@ describe("typed-graph-cache", () => {
 
   it("signals resync when graph_version skips a frame", () => {
     const data = makeInfinite([
-      {
+      makePage({
         session_id: "s1",
         graph_version: 3,
         total_node_count: 0,
         nodes: [],
-        edges: [],
-        clusters: [],
-        lineage: emptyLineage,
-      },
+      }),
     ]);
     const result = patchTypedGraphInfiniteData(data, {
-      node: { id: "n2", title: "Late", node_type: "probe" },
+      node: { id: "n2", title: "Late", node_type: "probe" } as never,
       graphVersion: 10,
     });
     expect(result.needsResync).toBe(true);

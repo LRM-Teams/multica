@@ -65,6 +65,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID); err != nil {
 		capabilities := []string{
 			protocol.DaemonCapabilityRestrictedExecution,
 			protocol.DaemonCapabilityReminderVersionedCache,
+			protocol.DaemonCapabilityReminderTransientInput,
 		}
 		if spec.omitCapability {
 			capabilities = []string{}

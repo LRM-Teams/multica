@@ -96,6 +96,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	d := New(Config{DaemonID: daemonID, WorkspacesRoot: workspacesRoot}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.workspaces[workspaceID] = newWorkspaceState(workspaceID, []string{runtimeID})
 	d.mu.Unlock()
 	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
 		t.Fatal(err)
@@ -131,6 +132,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		db.New(pool), pool, realtime.NewHub(), eventBus, service.NewEmailService(), nil, nil,
 		analytics.NoopClient{}, serverhandler.Config{}, hub,
 	)
+	installWorkspaceRunnerAttachmentReplayEcho(hub)
 	serverHandler.AgentDeliveryNotifier = hub
 	acks := make(chan protocol.AgentDeliverAckPayload, 2)
 	handoffs := make(chan protocol.AgentMessageHandoffPayload, 2)
@@ -411,6 +413,22 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 	}
 }
 
+func installWorkspaceRunnerAttachmentReplayEcho(hub *daemonws.Hub) {
+	hub.SetWorkspaceRunnerHandler(func(_ context.Context, identity daemonws.ClientIdentity, _ string, eventType string, raw json.RawMessage) error {
+		if eventType != protocol.EventAgentAttachmentReplayReq {
+			return nil
+		}
+		var request protocol.WorkspaceRunnerAttachmentReplayRequest
+		if err := json.Unmarshal(raw, &request); err != nil {
+			return err
+		}
+		if !hub.NotifyWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, protocol.EventAgentAttachmentReplayEnd, protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: request.RuntimeCursors}) {
+			return errors.New("send test Attachment replay end")
+		}
+		return nil
+	})
+}
+
 func seedIdleMessageAcceptanceBoundaries(ctx context.Context, pool *pgxpool.Pool, root, workspaceID, agentID string) error {
 	rows, err := pool.Query(ctx, `
 		SELECT CASE WHEN message.thread_root_message_id IS NULL
@@ -520,6 +538,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		db.New(pool), pool, realtime.NewHub(), eventBus, service.NewEmailService(), nil, nil,
 		analytics.NoopClient{}, serverhandler.Config{}, hub,
 	)
+	installWorkspaceRunnerAttachmentReplayEcho(hub)
 	serverHandler.AgentDeliveryNotifier = hub
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: workspaceID})
@@ -554,6 +573,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		d.client.SetWorkspaceDaemonToken(workspaceID, "workspace-token", time.Now().Add(time.Hour))
 		d.mu.Lock()
 		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+		d.workspaces[workspaceID] = newWorkspaceState(workspaceID, []string{runtimeID})
 		d.mu.Unlock()
 		if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
 			t.Fatal(err)

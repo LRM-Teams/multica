@@ -27,7 +27,11 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { buildD5SessionCanvasModel } from "../lib/build-d5-session-canvas";
-import { buildTypedGraphMotionEvents, shouldSkipTypedGraphMotionCatchUp } from "../lib/build-typed-graph-motion-events";
+import {
+  buildTypedGraphMotionEvents,
+  shouldSkipTypedGraphMotionCatchUp,
+} from "../lib/build-typed-graph-motion-events";
+import { diffTypedGraphLayout, scopeMotionEventsToLayoutDiff } from "../lib/diff-typed-graph-layout";
 import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
 import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
@@ -43,7 +47,7 @@ import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
 import { StarGraphCanvas } from "../star-graph";
-import { STAR_GRAPH_MOBILE_DOM_BUDGET } from "../star-graph/lib/star-graph-visible-budget";
+import { STAR_GRAPH_DOM_BUDGET, STAR_GRAPH_MOBILE_DOM_BUDGET, selectVisibleEntityIds } from "../star-graph/lib/star-graph-visible-budget";
 import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
@@ -185,6 +189,7 @@ export function ResearchConstellationWorkspace({
     return () => observer.disconnect();
   }, []);
 
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- typed graph arrives from query/WS, not a user event; motion enqueue must react to server graph_version deltas.
   useEffect(() => {
     if (!typedGraph) return;
     if (
@@ -201,7 +206,11 @@ export function ResearchConstellationWorkspace({
       return;
     }
     const previous = prevGraphRef.current;
-    const events = buildTypedGraphMotionEvents(previous, typedGraph);
+    const layoutDiff = diffTypedGraphLayout(previous, typedGraph);
+    const events = scopeMotionEventsToLayoutDiff(
+      buildTypedGraphMotionEvents(previous, typedGraph),
+      layoutDiff,
+    );
     const skipMotion = shouldSkipTypedGraphMotionCatchUp(previous, typedGraph, events);
 
     if (events.length > 0 && !skipMotion) {
@@ -232,6 +241,7 @@ export function ResearchConstellationWorkspace({
   );
   const canvasModel = canvasBuild?.model ?? null;
 
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- incremental layout seed is derived from canvas build output, not a click/key handler.
   useEffect(() => {
     if (canvasBuild?.layoutForNext) {
       previousLayoutRef.current = canvasBuild.layoutForNext;
@@ -246,17 +256,33 @@ export function ResearchConstellationWorkspace({
     [activeLens, typedGraph, canvasModel, canvasFilter.round],
   );
 
+  const relatedNodeIds = useMemo(() => {
+    if (!typedGraph) return undefined;
+    const focusId = selectedNode?.id ?? canvasModel?.rootId ?? null;
+    if (!focusId) return undefined;
+    return firstOrderNeighborIds(typedGraph, focusId);
+  }, [canvasModel?.rootId, selectedNode?.id, typedGraph]);
+
   const motionDirectives = useMemo(() => {
-    if (!canvasModel) return undefined;
+    if (!canvasModel || motion.queueSize < 0) return undefined;
+    const visibleIds = selectVisibleEntityIds(canvasModel.entities, {
+      rootId: canvasModel.rootId,
+      selectedNodeId: selectedNode?.id ?? null,
+      relatedNodeIds,
+      budget: isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : STAR_GRAPH_DOM_BUDGET,
+    });
     const map = new Map<
       string,
       ReturnType<typeof motion.directiveFor>
     >();
     for (const entity of canvasModel.entities) {
-      const directive = motion.directiveFor(entity.id);
-      if (directive) {
-        map.set(entity.id, directive);
-        continue;
+      const onScreen = visibleIds.has(entity.id);
+      if (onScreen) {
+        const directive = motion.directiveFor(entity.id);
+        if (directive) {
+          map.set(entity.id, directive);
+          continue;
+        }
       }
       const marker = motion.markerFor(entity.id);
       if (marker) {
@@ -270,7 +296,16 @@ export function ResearchConstellationWorkspace({
       }
     }
     return capTransitionGlowDirectives(map);
-  }, [canvasModel, motion.queueSize, motion.directiveFor, motion.markerFor, motion.profile.lowPerformance]);
+  }, [
+    canvasModel,
+    isMobile,
+    motion.directiveFor,
+    motion.markerFor,
+    motion.profile.lowPerformance,
+    motion.queueSize,
+    relatedNodeIds,
+    selectedNode?.id,
+  ]);
 
   const canvasNodes = useMemo(
     () => mergeResearchCanvasNodes(snapshotNodes, typedGraph),
@@ -328,13 +363,6 @@ export function ResearchConstellationWorkspace({
     }
     return map;
   }, [canvasNodes]);
-
-  const relatedNodeIds = useMemo(() => {
-    if (!typedGraph) return undefined;
-    const focusId = selectedNode?.id ?? canvasModel?.rootId ?? null;
-    if (!focusId) return undefined;
-    return firstOrderNeighborIds(typedGraph, focusId);
-  }, [canvasModel?.rootId, selectedNode?.id, typedGraph]);
 
   const mobileNeighborhoodIdList = useMemo((): string[] | undefined => {
     if (!isMobile || !typedGraph) return undefined;

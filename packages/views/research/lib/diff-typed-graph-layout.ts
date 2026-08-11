@@ -1,4 +1,5 @@
 import type { TypedGraphNode, TypedGraphResponse } from "@multica/core/research";
+import type { ProjectionTransitionEvent } from "../motion/transition-queue";
 
 /** Fields that change star-graph layout signatures (cluster/parent/tier band). */
 export function typedGraphNodeLayoutSignature(node: TypedGraphNode): string {
@@ -63,4 +64,31 @@ export function diffTypedGraphLayout(
     changedNodeIds,
     affectedRootIds: [...affectedRootIds],
   };
+}
+
+/** Keep motion events whose related ids touch the layout-affected subgraph. */
+export function scopeMotionEventsToLayoutDiff(
+  events: readonly ProjectionTransitionEvent[],
+  diff: TypedGraphLayoutDiff,
+): ProjectionTransitionEvent[] {
+  if (events.length === 0) return [];
+  if (diff.affectedRootIds.length === 0) return [...events];
+
+  const affected = new Set(diff.affectedRootIds);
+  const scoped: ProjectionTransitionEvent[] = [];
+
+  for (const event of events) {
+    const related = event.related_ids.filter((id) => affected.has(id));
+    if (related.length === 0) continue;
+    scoped.push({
+      ...event,
+      related_ids: related,
+      anchor_id:
+        event.anchor_id && affected.has(event.anchor_id)
+          ? event.anchor_id
+          : related[0] ?? null,
+    });
+  }
+
+  return scoped;
 }

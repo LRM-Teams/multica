@@ -537,6 +537,13 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 			if err := d.handleReminderProjection(payload.Projection); err != nil {
 				return err
 			}
+		case protocol.EventReminderOwnerInput:
+			var payload protocol.ReminderOwnerInputPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				d.logger.Warn("transient Reminder owner input", "outcome", string(reminderOwnerInputRejected), "reason_code", "invalid_json")
+				continue
+			}
+			d.handleReminderOwnerInput(context.Background(), payload)
 		case protocol.EventReminderSnapshot:
 			var payload protocol.ReminderSnapshotPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {

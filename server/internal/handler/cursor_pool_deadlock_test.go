@@ -224,9 +224,9 @@ func TestListAgentReminders_FiredLoop_SingleConnPoolDoesNotDeadlock(t *testing.T
 	var occurrenceID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_reminder_occurrence (
-			reminder_id, workspace_id, agent_id, cadence_scheduled_for, due_at,
+			reminder_id, workspace_id, agent_id, fire_version, cadence_scheduled_for, due_at,
 			status, title_snapshot, fired_at
-		) VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '1 hour',
+		) VALUES ($1, $2, $3, 1, now() - interval '1 hour', now() - interval '1 hour',
 		          'fired', 'fired deadlock test reminder', now() - interval '1 hour')
 		RETURNING id
 	`, reminderID, testWorkspaceID, fixture.agentIDs[0]).Scan(&occurrenceID); err != nil {

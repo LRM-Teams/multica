@@ -159,6 +159,7 @@ const (
 	EventReminderSnapshot         = "reminder.snapshot"
 	EventReminderFireAttempt      = "reminder.fire_attempt"
 	EventReminderFireResult       = "reminder.fire_result"
+	EventReminderOwnerInput       = "reminder.owner_input"
 	EventReminderProjection       = "reminder.projection"
 	EventReminderProjectionReq    = "reminder.projection.request"
 	EventReminderProjectionEnd    = "reminder.projection.replay_end"

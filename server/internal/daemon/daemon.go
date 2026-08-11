@@ -1080,6 +1080,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityMemoryCrossDeviceSync,
 		protocol.DaemonCapabilityRestrictedExecution,
 		protocol.DaemonCapabilityReminderVersionedCache,
+		protocol.DaemonCapabilityReminderTransientInput,
 		protocol.DaemonCapabilityAgentLifecycleActions,
 		protocol.DaemonCapabilityMachineUpgrade,
 		protocol.DaemonCapabilityAgentSessionReset,

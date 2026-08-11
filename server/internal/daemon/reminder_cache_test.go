@@ -1153,130 +1153,26 @@ func TestReminderProjectionReplaySnapshotBurstWaitsForWriterCapacity(t *testing.
 	}
 }
 
-func TestReminderLifecycleHeartbeatCatchupRecoversLostMoveWithoutReconnect(t *testing.T) {
-	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
-	clock := &fakeReminderClock{now: now}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	root := t.TempDir()
-	mgr := newLocalAgentAttachmentRegistry(root, logger)
-	if _, _, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil {
-		t.Fatal(err)
-	}
-	cache := newReminderCache(clock, logger, nil)
-	writes := make(chan []byte, 16)
-	closed := 0
+func TestReminderHeartbeatDoesNotOwnAttachmentRecovery(t *testing.T) {
+	writes := make(chan []byte, 4)
 	d := &Daemon{
-		logger: logger,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a", "runtime-b"}, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}),
 		},
-		runtimeIndex: map[string]Runtime{
-			"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"},
-			"runtime-b": {ID: "runtime-b", WorkspaceID: "workspace-a"},
-		},
-		agentAttachments: mgr,
-		reminderCache:    cache,
+		runtimeIndex: map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 	}
-	prepareHeadlessWorkspaceRunnerTestDaemon(d, root)
-	d.setReminderWS(writes, make(chan struct{}), func() error { closed++; return nil })
-	d.reminderGateMu.Lock()
-	d.reminderReplayComplete = true
-	d.reminderGateMu.Unlock()
-	cache.resume()
-	if !cache.upsert(reminderJob("old-a", "agent-a", 1, now.Add(time.Hour))) {
-		t.Fatal("seed old-runtime timer")
-	}
+	d.sendWSHeartbeats(context.Background(), []string{"runtime-a"}, writes)
 
-	d.sendWSHeartbeats(context.Background(), []string{"runtime-a", "runtime-b"}, writes)
-	d.sendWSHeartbeats(context.Background(), []string{"runtime-a", "runtime-b"}, writes)
-	lifecycleRequests := 0
-	for len(writes) > 0 {
-		var frame protocol.Message
-		if err := json.Unmarshal(<-writes, &frame); err != nil {
-			t.Fatal(err)
-		}
-		if frame.Type == protocol.EventDaemonAgentLifecycleReq {
-			lifecycleRequests++
-			var request protocol.DaemonAgentLifecycleRequestPayload
-			if err := json.Unmarshal(frame.Payload, &request); err != nil {
-				t.Fatal(err)
-			}
-			if _, ok := request.RuntimeCursors["runtime-a"]; !ok {
-				t.Fatalf("lifecycle request omitted runtime-a: %+v", request)
-			}
-			if _, ok := request.RuntimeCursors["runtime-b"]; !ok {
-				t.Fatalf("lifecycle request omitted runtime-b: %+v", request)
-			}
-		}
-	}
-	if lifecycleRequests != 1 {
-		t.Fatalf("heartbeat lifecycle requests=%d want one in-flight request", lifecycleRequests)
-	}
-
-	if err := d.handleDaemonAgentStop(protocol.DaemonAgentStopPayload{AgentID: "agent-a", RuntimeID: "runtime-a", PlacementGeneration: 2, LifecycleSeq: 2, Replay: true}); err != nil {
+	var frame protocol.Message
+	if err := json.Unmarshal(<-writes, &frame); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{AgentID: "agent-a", RuntimeID: "runtime-b", WorkspaceID: "workspace-a", PlacementGeneration: 2, LifecycleSeq: 1, Replay: true}); err != nil {
-		t.Fatal(err)
+	if frame.Type != protocol.EventDaemonHeartbeat {
+		t.Fatalf("heartbeat emitted non-heartbeat frame %q", frame.Type)
 	}
-	if _, ok := cache.get("old-a"); ok {
-		t.Fatal("replayed old-runtime stop retained timer")
-	}
-	if err := d.handleDaemonAgentLifecycleReplayEnd(protocol.DaemonAgentLifecycleReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 2, "runtime-b": 1}}); err != nil {
-		t.Fatal(err)
-	}
-	var lifecycleAck, projectionRequest protocol.Message
-	if err := json.Unmarshal(<-writes, &lifecycleAck); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(<-writes, &projectionRequest); err != nil {
-		t.Fatal(err)
-	}
-	if lifecycleAck.Type != protocol.EventDaemonAgentLifecycleAck || projectionRequest.Type != protocol.EventReminderProjectionReq || len(writes) != 0 {
-		t.Fatalf("catch-up order=%q then %q remaining=%d", lifecycleAck.Type, projectionRequest.Type, len(writes))
-	}
-	if err := d.handleReminderProjectionReplayEnd(protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 0, "runtime-b": 0}}); err != nil {
-		t.Fatal(err)
-	}
-	var projectionAck, snapshotRequest protocol.Message
-	if err := json.Unmarshal(<-writes, &projectionAck); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(<-writes, &snapshotRequest); err != nil {
-		t.Fatal(err)
-	}
-	if projectionAck.Type != protocol.EventReminderProjectionAck || snapshotRequest.Type != protocol.EventReminderSnapshotRequest {
-		t.Fatalf("post-catch-up order=%q then %q", projectionAck.Type, snapshotRequest.Type)
-	}
-	var snapshot protocol.ReminderSnapshotRequestPayload
-	if err := json.Unmarshal(snapshotRequest.Payload, &snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.AgentID != "agent-a" || snapshot.RuntimeID != "runtime-b" || snapshot.PlacementGeneration != 2 {
-		t.Fatalf("target snapshot=%+v", snapshot)
-	}
-	canonical := reminderJob("canonical-b", "agent-a", 3, now.Add(2*time.Hour))
-	if err := d.handleReminderSnapshot(protocol.ReminderSnapshotPayload{
-		AgentID: "agent-a", RuntimeID: "runtime-b", PlacementGeneration: 2, ProjectionWatermark: 0,
-		Reminders: []protocol.ReminderTimerJob{canonical},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	owner, ok := mgr.localRecord("agent-a")
-	if !ok || owner.RuntimeID != "runtime-b" || owner.PlacementGeneration != 2 {
-		t.Fatalf("recovered owner=%+v present=%v", owner, ok)
-	}
-	if got, ok := cache.get("canonical-b"); !ok || got.Version != 3 {
-		t.Fatalf("recovered timer=%+v present=%v", got, ok)
-	}
-	activeTimers := 0
-	for _, timer := range clock.timers {
-		if !timer.stopped {
-			activeTimers++
-		}
-	}
-	if activeTimers != 1 || closed != 0 {
-		t.Fatalf("recovery active timers=%d reconnects=%d", activeTimers, closed)
+	if len(writes) != 0 {
+		t.Fatalf("heartbeat emitted %d extra ownership frames", len(writes))
 	}
 }
 
@@ -1842,58 +1738,15 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	}
 }
 
-func TestReminderLifecycleProbeAgainstOldServerStaysFailClosedWithoutReconnect(t *testing.T) {
-	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
-	clock := &fakeReminderClock{now: now}
-	var fired []protocol.ReminderTimerJob
-	cache := newReminderCache(clock, nil, func(job protocol.ReminderTimerJob) { fired = append(fired, job) })
-	if !cache.upsert(reminderJob("pre-connect", "agent-a", 1, now.Add(time.Minute))) {
-		t.Fatal("seed pre-connect timer")
-	}
-	writes := make(chan []byte, 4)
-	closed := 0
-	d := &Daemon{
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}),
-		},
-		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		agentAttachments: newLocalAgentAttachmentRegistry(t.TempDir(), nil),
-		reminderCache:    cache,
-	}
-	d.setReminderWS(writes, make(chan struct{}), func() error { closed++; return nil })
-	if !d.requestAgentLifecycleReplay() {
-		t.Fatal("queue lifecycle protocol probe")
-	}
-	var probe protocol.Message
-	if err := json.Unmarshal(<-writes, &probe); err != nil {
-		t.Fatal(err)
-	}
-	if probe.Type != protocol.EventDaemonAgentLifecycleReq {
-		t.Fatalf("old-server protocol probe=%q", probe.Type)
-	}
-
-	// An old server ignores the unknown application frame. A later heartbeat
-	// must not queue duplicate probes while this connection remains attached,
-	// and the cache stays suspended with no timer or fire side effect.
-	d.requestAgentLifecycleReplay()
-	clock.fire(0)
-	if len(writes) != 0 || closed != 0 || len(fired) != 0 {
-		t.Fatalf("old-server probe frames/reconnects/fires=%d/%d/%d", len(writes), closed, len(fired))
-	}
-	cache.mu.Lock()
-	suspended := cache.suspended
-	entries := len(cache.entries)
-	cache.mu.Unlock()
-	if !suspended || entries != 0 {
-		t.Fatalf("old-server cache suspended=%v entries=%d", suspended, entries)
-	}
-	d.reminderGateMu.Lock()
-	inFlight := false
-	replayComplete := d.reminderReplayComplete
-	d.reminderGateMu.Unlock()
-	if !inFlight || replayComplete {
-		t.Fatalf("old-server lifecycle in_flight=%v replay_complete=%v", inFlight, replayComplete)
+func TestReminderProductionDoesNotProbeLegacyLifecycleProtocol(t *testing.T) {
+	for _, name := range []string{"daemon.go", "wakeup.go", "workspace_runner.go"} {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "EventDaemonAgentLifecycleReq") || strings.Contains(string(raw), "requestAgentLifecycleReplay") {
+			t.Fatalf("production file %s still probes legacy Agent lifecycle protocol", name)
+		}
 	}
 }
 

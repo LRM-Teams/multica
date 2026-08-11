@@ -326,6 +326,10 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 		observationKind = AgentObservationRuntimeCompacted
 	case agent.MessageError:
 		observationKind = AgentObservationError
+	case agent.MessageToolUse:
+		if message.CallID != "" {
+			observationKind = AgentObservationRuntimeTool
+		}
 	}
 	if observationKind != "" {
 		d.mu.Lock()
@@ -337,6 +341,8 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 				var data AgentObservationData = AgentRuntimeObservationData{RuntimeID: runtimeID}
 				if observationKind == AgentObservationError {
 					data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
+				} else if observationKind == AgentObservationRuntimeTool {
+					data = AgentRuntimeObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID}
 				}
 				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: observationKind, Data: data, At: time.Now().UTC()}); err != nil && d.logger != nil {
 					d.logger.Debug("workspace Runner runtime Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)

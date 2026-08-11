@@ -271,7 +271,7 @@ func TestResolveWorkspacesRootDefaultsToMulticaHome(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_AutoUpdateDefaultIsExplicitOnlyNoOp(t *testing.T) {
+func TestLoadConfig_ReleaseDetectionDefaultsOn(t *testing.T) {
 	stageFakeAgent(t)
 	cfg, err := LoadConfig(Overrides{
 		ServerURL:      "http://localhost:8080",
@@ -280,18 +280,14 @@ func TestLoadConfig_AutoUpdateDefaultIsExplicitOnlyNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.AutoUpdateEnabled {
-		t.Fatal("AutoUpdateEnabled must be false: upgrades are explicit-only")
-	}
-	if cfg.AutoUpdateConfigSource != "auto_detect" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
+	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
+		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
 	}
 }
 
-// TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost confirms
-// MULTICA_DAEMON_AUTO_UPDATE still overrides the self-host default, same as
-// it already overrides the cloud default.
-func TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost(t *testing.T) {
+// Legacy enable/disable environment values remain parseable but cannot disable
+// release detection or re-enable automatic installation.
+func TestLoadConfig_AutoUpdateLegacyEnvKeepsSelfHostDetectOnly(t *testing.T) {
 	stageFakeAgent(t)
 	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "false")
 	cfg, err := LoadConfig(Overrides{
@@ -301,20 +297,14 @@ func TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost(t *testing
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.AutoUpdateEnabled {
-		t.Fatalf("AutoUpdateEnabled = true for self-host with explicit MULTICA_DAEMON_AUTO_UPDATE=false, want false")
-	}
-	if cfg.AutoUpdateConfigSource != "auto_detect" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
+	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
+		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
 	}
 }
 
-// TestLoadConfig_AutoUpdateDefault_CloudOn confirms the symmetric case: a
-// daemon pointed at Multica's hosted cloud keeps the historical opt-in
-// auto-update default. We pass the WSS form of the URL to also exercise that
-// NormalizeServerBaseURL maps it through to the http host the detector
-// inspects.
-func TestLoadConfig_AutoUpdateDefault_CloudIsAlsoNoOp(t *testing.T) {
+// Hosted cloud uses the same detect-only contract. The WSS form also exercises
+// NormalizeServerBaseURL before detection configuration is resolved.
+func TestLoadConfig_ReleaseDetectionUsesSameCloudContract(t *testing.T) {
 	stageFakeAgent(t)
 	cfg, err := LoadConfig(Overrides{
 		ServerURL:      "wss://leagent.me/ws",
@@ -323,17 +313,12 @@ func TestLoadConfig_AutoUpdateDefault_CloudIsAlsoNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.AutoUpdateEnabled {
-		t.Fatal("AutoUpdateEnabled must be false for Multica Cloud too")
-	}
-	if cfg.AutoUpdateConfigSource != "auto_detect" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
+	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
+		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
 	}
 }
 
-// Environment compatibility values parse successfully but cannot re-enable a
-// periodic mutation path.
-func TestLoadConfig_AutoUpdateEnv_ForcesOnForSelfHost(t *testing.T) {
+func TestLoadConfig_AutoUpdateTrueEnvCannotEnableInstallation(t *testing.T) {
 	stageFakeAgent(t)
 	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "true")
 	cfg, err := LoadConfig(Overrides{
@@ -343,17 +328,12 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOnForSelfHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.AutoUpdateEnabled {
-		t.Fatal("MULTICA_DAEMON_AUTO_UPDATE=true re-enabled a retired loop")
-	}
-	if cfg.AutoUpdateConfigSource != "auto_detect" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
+	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
+		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
 	}
 }
 
-// TestLoadConfig_AutoUpdateEnv_ForcesOffForCloud covers the inverse: a cloud
-// user can still opt out via env var.
-func TestLoadConfig_AutoUpdateEnv_ForcesOffForCloud(t *testing.T) {
+func TestLoadConfig_AutoUpdateFalseEnvCannotDisableDetection(t *testing.T) {
 	stageFakeAgent(t)
 	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "false")
 	cfg, err := LoadConfig(Overrides{
@@ -363,18 +343,14 @@ func TestLoadConfig_AutoUpdateEnv_ForcesOffForCloud(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.AutoUpdateEnabled {
-		t.Fatalf("AutoUpdateEnabled = true after explicit MULTICA_DAEMON_AUTO_UPDATE=false, want false")
-	}
-	if cfg.AutoUpdateConfigSource != "auto_detect" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
+	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
+		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
 	}
 }
 
-// TestLoadConfig_AutoUpdate_NoFlagWinsOverCloudDefault keeps the legacy CLI
-// flag working: --no-auto-update (translated into overrides.DisableAutoUpdate)
-// forces auto-update off even when the cloud default and env var would enable.
-func TestLoadConfig_AutoUpdate_NoFlagWinsOverCloudDefault(t *testing.T) {
+// The legacy --no-auto-update flag remains accepted but cannot disable release
+// detection or change the explicit-only installation contract.
+func TestLoadConfig_AutoUpdateNoFlagIsCompatibilityNoOp(t *testing.T) {
 	stageFakeAgent(t)
 	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "true")
 	cfg, err := LoadConfig(Overrides{
@@ -385,11 +361,8 @@ func TestLoadConfig_AutoUpdate_NoFlagWinsOverCloudDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.AutoUpdateEnabled {
-		t.Fatalf("AutoUpdateEnabled = true with --no-auto-update set; flag must win")
-	}
-	if cfg.AutoUpdateConfigSource != "auto_detect" {
-		t.Fatalf("AutoUpdateConfigSource = %q, want deprecated_noop", cfg.AutoUpdateConfigSource)
+	if cfg.ReleaseDetectionConfigSource != "auto_detect" {
+		t.Fatalf("ReleaseDetectionConfigSource = %q, want auto_detect", cfg.ReleaseDetectionConfigSource)
 	}
 }
 
@@ -1099,7 +1072,7 @@ func TestLoadConfig_PinnedVersion_Invalid(t *testing.T) {
 }
 
 // TestLoadConfig_PinnedVersion_EmptyIsNoop verifies that without the env var,
-// PinnedVersion is empty (no pin, normal auto-update behavior).
+// PinnedVersion is empty (no pin, normal explicit-upgrade behavior).
 func TestLoadConfig_PinnedVersion_EmptyIsNoop(t *testing.T) {
 	stageFakeAgent(t)
 	cfg, err := LoadConfig(Overrides{

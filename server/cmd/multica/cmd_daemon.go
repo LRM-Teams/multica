@@ -73,8 +73,8 @@ func init() {
 	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	f.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	f.Bool("no-auto-update", false, "Deprecated no-op; upgrades are explicit Machine Upgrade operations")
-	f.Duration("auto-update-interval", 0, "Deprecated no-op; periodic release polling is disabled")
+	f.Bool("no-auto-update", false, "Deprecated no-op; automatic installation is disabled and release detection remains active")
+	f.Duration("auto-update-interval", 0, "Release detection interval (default 5m; detection never installs automatically)")
 	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
 	_ = f.MarkHidden("computer-generation")
 
@@ -92,8 +92,8 @@ func init() {
 	rf.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	rf.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
 	rf.Duration("codex-semantic-inactivity-timeout", 0, "Codex semantic inactivity timeout (env: MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT)")
-	rf.Bool("no-auto-update", false, "Deprecated no-op; upgrades are explicit Machine Upgrade operations")
-	rf.Duration("auto-update-interval", 0, "Deprecated no-op; periodic release polling is disabled")
+	rf.Bool("no-auto-update", false, "Deprecated no-op; automatic installation is disabled and release detection remains active")
+	rf.Duration("auto-update-interval", 0, "Release detection interval (default 5m; detection never installs automatically)")
 
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
@@ -324,7 +324,7 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		overrides.DisableAutoUpdate = true
 	}
 	if d, _ := cmd.Flags().GetDuration("auto-update-interval"); d > 0 {
-		overrides.AutoUpdateCheckInterval = d
+		overrides.ReleaseDetectionInterval = d
 	}
 
 	cfg, err := daemon.LoadConfig(overrides)

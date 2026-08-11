@@ -3,6 +3,7 @@ import {
   DashboardAgentRunTimeListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
+  AgentRuntimeSchema,
   ChannelCreateErrorBodySchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
@@ -65,6 +66,56 @@ const baseIssue = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
+
+describe("AgentRuntimeSchema detect-only update status", () => {
+  it("accepts the current auto-detection source and available outcome", () => {
+    const parsed = AgentRuntimeSchema.parse({
+      id: "runtime-1",
+      workspace_id: "workspace-1",
+      daemon_id: "daemon-1",
+      name: "Codex",
+      runtime_mode: "local",
+      provider: "codex",
+      status: "online",
+      device_info: "",
+      metadata: {},
+      current_version: "0.4.24-alpha.9",
+      update_state: "idle",
+      runtime_health: "update_available",
+      auto_update: {
+        session_id: "session-1",
+        revision: 2,
+        observed_at: "2026-08-11T13:17:49Z",
+        auto_update_effective_enabled: false,
+        config_source: "auto_detect",
+        ineligible_reason: null,
+        check_interval_seconds: 300,
+        phase: "waiting",
+        attempt_source: "auto",
+        last_attempt_at: "2026-08-11T13:17:49Z",
+        last_outcome: "update_available",
+        target_version: "v0.4.24-alpha.11",
+        error_code: null,
+        error_message: null,
+        staged_version: null,
+        activation_generation: null,
+        received_at: "2026-08-11T13:17:50Z",
+        updated_at: "2026-08-11T13:17:50Z",
+      },
+      owner_id: "user-1",
+      last_seen_at: "2026-08-11T13:17:50Z",
+      created_at: "2026-08-11T07:33:19Z",
+      updated_at: "2026-08-11T13:17:50Z",
+    });
+
+    expect(parsed.auto_update).toMatchObject({
+      auto_update_effective_enabled: false,
+      config_source: "auto_detect",
+      last_outcome: "update_available",
+      target_version: "v0.4.24-alpha.11",
+    });
+  });
+});
 
 describe("VoiceTranscriptResponseSchema", () => {
   it("accepts only the bounded transcript envelope", () => {

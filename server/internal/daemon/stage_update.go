@@ -47,7 +47,7 @@ func (d *Daemon) runStageUpdate(targetVersion string) (string, error) {
 	}
 
 	d.logger.Info("staging CLI release into VersionStore (no self-replace)", "target_version", targetVersion)
-	// Same override the auto-update loop's "check for a new version" step
+	// Same override the release-detection loop already uses
 	// already uses (see releaseManifestBaseURLOverride) — without threading
 	// it through here too, a machine relying purely on server-dispatch
 	// (no local env var set) could see a new version at check time and then

@@ -16,7 +16,7 @@ import type { Agent, MemberWithUser, NoteAIEditResult, NoteAIJob, NoteAIJobStatu
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@multica/ui/components/ui/dropdown-menu";
 import { Separator } from "@multica/ui/components/ui/separator";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -25,6 +25,7 @@ import { ContentEditor, type ContentEditorRef, type PageEditAIRequest, type Text
 import { useNavigation } from "../navigation";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
+import { NoteShareSummary } from "./note-share-summary";
 import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
 
 type NoteTreeNode = NotePage & { children: NoteTreeNode[] };
@@ -1042,23 +1043,12 @@ function NoteEditor({
               <span>{t(($) => $.notes_page.visibility_shared_by_suffix)}</span>
             </span>
           ) : shareNames.length > 0 ? (
-            <span className="inline-flex min-w-0 items-center gap-1">
-              <span className="text-muted-foreground">{t(($) => $.notes_page.visibility_shared_to_prefix)}</span>
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<button type="button" aria-label={t(($) => $.notes_page.current_shares)} />} className="inline-flex max-w-36 items-center truncate rounded-sm font-medium text-foreground/70 underline decoration-muted-foreground/50 underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                  <span className="truncate">{shareNames[0]}</span>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="min-w-48">
-                  <DropdownMenuLabel>{t(($) => $.notes_page.current_shares)}</DropdownMenuLabel>
-                  {shareNames.map((name, index) => (
-                    <DropdownMenuItem key={`${name}:${index}`} disabled className="text-muted-foreground opacity-100">
-                      <span className="truncate">{name}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              {shareNames.length > 1 && <span className="text-muted-foreground/70">{t(($) => $.notes_page.visibility_shared_etc)}</span>}
-            </span>
+            <NoteShareSummary
+              shareNames={shareNames}
+              sharedToPrefix={t(($) => $.notes_page.visibility_shared_to_prefix)}
+              currentSharesLabel={t(($) => $.notes_page.current_shares)}
+              sharedEtcLabel={t(($) => $.notes_page.visibility_shared_etc)}
+            />
           ) : (
             <span>{t(($) => $.notes_page.visibility_private)}</span>
           )}

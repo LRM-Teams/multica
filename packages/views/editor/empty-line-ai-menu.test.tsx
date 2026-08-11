@@ -378,9 +378,16 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
   it("aborts the in-flight edit when the stop button is clicked", () => {
     const onChange = vi.fn();
     let capturedSignal: AbortSignal | undefined;
-    const onEditPageWithAI = vi.fn((_request, options?: { signal?: AbortSignal }) => {
+    const onEditPageWithAI = vi.fn(async (_request, options?: { signal?: AbortSignal }) => {
       capturedSignal = options?.signal;
-      return new Promise(() => undefined);
+      await new Promise<never>(() => undefined);
+      return {
+        action: "insert" as const,
+        markdown: "unreachable",
+        target: null,
+        title: null,
+        rationale: null,
+      };
     });
 
     const { rerender } = render(
@@ -396,7 +403,8 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ status: "loading" }));
 
-    const loadingState = onChange.mock.calls[0][0] as EmptyLineAiState;
+    const loadingState = onChange.mock.calls[0]?.[0] as EmptyLineAiState | undefined;
+    if (!loadingState) throw new Error("expected loading state from onChange");
     rerender(
       <EmptyLineAiMenu
         editor={makeEditor()}

@@ -126,6 +126,38 @@ describe("listComputerUpdateCandidates", () => {
     expect(list).toHaveLength(1);
     expect(list[0]?.targetVersion).toBe("v0.4.24-alpha.11");
   });
+
+  it("uses the newer daemon target after a completed upgrade caught up", () => {
+    const list = listComputerUpdateCandidates(
+      [
+        makeRuntime({
+          id: "0ad7ac57-7c84-45b4-a69c-d6591116230b",
+          daemon_id: "1298b34b-b7de-4309-bdfb-71043265052d",
+          display_name: "s143",
+          current_version: "0.4.24-alpha.11",
+          target_version: "v0.4.24-alpha.12",
+          daemon_target_version: "v0.4.24-alpha.12",
+          update_state: "idle",
+          runtime_health: "update_available",
+          machine_upgrade: {
+            id: "machine-upgrade-alpha-11",
+            daemon_id: "1298b34b-b7de-4309-bdfb-71043265052d",
+            request_id: "request-alpha-11",
+            requested_target: "v0.4.24-alpha.11",
+            resolved_target: "v0.4.24-alpha.11",
+            phase: "completed",
+            result: "completed",
+            created_at: "2026-08-11T13:00:00Z",
+            updated_at: "2026-08-11T13:05:00Z",
+          },
+        }),
+      ],
+      "user-1",
+    );
+
+    expect(list).toHaveLength(1);
+    expect(list[0]?.targetVersion).toBe("v0.4.24-alpha.12");
+  });
 });
 
 describe("machineTitleFromRuntime", () => {

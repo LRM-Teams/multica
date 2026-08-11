@@ -442,10 +442,8 @@ const (
 )
 
 const (
-	ChannelOnboardingReason          = "channel_onboarding"
-	ChannelRoleChangedReason         = "channel_role_changed"
-	ChannelOnboardingSkipReceipt     = "channel_onboarding_skipped"
-	ChannelOnboardingDecisionSkipped = "skipped"
+	ChannelOnboardingReason  = "channel_onboarding"
+	ChannelRoleChangedReason = "channel_role_changed"
 )
 
 const (

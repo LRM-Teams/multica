@@ -11,10 +11,18 @@ import (
 	"time"
 )
 
+func TestNewPiRPCBackendImplementsResidentMessagePreparation(t *testing.T) {
+	backend := NewPiRPCBackend(Config{})
+	if _, ok := backend.(ResidentMessagePreparation); !ok {
+		t.Fatal("PiRPCBackend must prepare context outside native Message acceptance")
+	}
+}
+
 func fakePiRPCProcessScript() string {
 	return `#!/bin/sh
 	printf x >> "$PI_RPC_TEST_STARTS"
 	turn=0
+	context_percent="${PI_RPC_TEST_CONTEXT_PERCENT:-44.8}"
 	while IFS= read -r line; do
 	  case "$line" in
 	    *'"id":"multica-message-notice"'*)
@@ -55,7 +63,7 @@ func fakePiRPCProcessScript() string {
 	      printf '{"id":"multica-autocompact","type":"response","command":"set_auto_compaction","success":true}\n'
 	      ;;
 	    *'"type":"get_session_stats"'*)
-	      printf '{"id":"multica-stats","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"input":349000,"output":10000,"cacheRead":2600000,"total":2959000},"cost":3.348,"contextUsage":{"tokens":272000,"contextWindow":607000,"percent":44.8}}}\n'
+	      printf '{"id":"multica-stats","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"input":349000,"output":10000,"cacheRead":2600000,"total":2959000},"cost":3.348,"contextUsage":{"tokens":272000,"contextWindow":607000,"percent":%s}}}\n' "$context_percent"
 	      ;;
 	    *'"type":"get_state"'*)
 	      printf '{"id":"multica-state","type":"response","command":"get_state","success":true,"data":{"autoCompactionEnabled":true}}\n'
@@ -414,6 +422,35 @@ func TestPiRPCBackendCompact(t *testing.T) {
 	got := <-session2.Result
 	if got.Status != "completed" {
 		t.Fatalf("second turn status = %q", got.Status)
+	}
+}
+
+func TestPiRPCBackendPreparesMessageInputWithVisibleCompactionLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	b := newPiRPCBackend(Config{ExecutablePath: path, Env: map[string]string{
+		"PI_RPC_TEST_STARTS":          filepath.Join(dir, "starts"),
+		"PI_RPC_TEST_CONTEXT_PERCENT": "61.0",
+	}})
+	t.Cleanup(b.Close)
+
+	session, err := b.Execute(context.Background(), "initialize", ExecOptions{Cwd: dir, ResumeSessionID: filepath.Join(dir, "session.jsonl")})
+	if err != nil {
+		t.Fatalf("initialize Pi RPC: %v", err)
+	}
+	if result := <-session.Result; result.Status != "completed" {
+		t.Fatalf("initialize result = %+v", result)
+	}
+
+	var lifecycle []Message
+	if err := b.PrepareMessageInput(context.Background(), func(message Message) {
+		lifecycle = append(lifecycle, message)
+	}); err != nil {
+		t.Fatalf("PrepareMessageInput: %v", err)
+	}
+	if len(lifecycle) != 2 || lifecycle[0].Type != MessageCompactionStarted || lifecycle[1].Type != MessageCompactionFinished || lifecycle[1].Content != "compacted summary" {
+		t.Fatalf("preparation lifecycle = %+v, want started then finished with summary", lifecycle)
 	}
 }
 

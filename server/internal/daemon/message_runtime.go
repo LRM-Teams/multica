@@ -294,6 +294,30 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 		d.emitResidentRuntimeDiagnostic(agentID, runtimeID, message)
 		return
 	}
+	d.mu.Lock()
+	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+	d.mu.Unlock()
+	if workspaceID == "" {
+		return
+	}
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
+		return
+	}
+	launch, found := runner.processes.Snapshot(agentID)
+	if !found || launch.RuntimeID != runtimeID {
+		return
+	}
+
+	at := time.Now().UTC()
+	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
+	switch message.Type {
+	case agent.MessageThinking, agent.MessageText, agent.MessageToolUse:
+		_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
+	case agent.MessageError:
+		runner.activity.InterruptCompactionIfActive(agentID, launch.LaunchID)
+	}
+
 	var observationKind AgentObservationKind
 	switch message.Type {
 	case agent.MessageThinking:
@@ -307,28 +331,19 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 	case agent.MessageToolUse:
 		observationKind = AgentObservationRuntimeTool
 	}
-	if observationKind != "" {
-		d.mu.Lock()
-		workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-		d.mu.Unlock()
-		runner, err := d.ensureWorkspaceRunner(workspaceID)
-		if err == nil && runner.activity != nil {
-			if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
-				var data AgentObservationData = AgentRuntimeStageObservationData{RuntimeID: runtimeID}
-				if observationKind == AgentObservationError {
-					data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
-				} else if observationKind == AgentObservationRuntimeTool {
-					data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID, ToolInput: message.Input}
-				}
-				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: observationKind, Data: data, At: time.Now().UTC()}); err != nil && d.logger != nil {
-					d.logger.Debug("workspace Runner runtime Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
-				}
-			}
-		}
+	if observationKind == "" {
 		return
 	}
+	var data AgentObservationData = stage
+	if observationKind == AgentObservationError {
+		data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
+	} else if observationKind == AgentObservationRuntimeTool {
+		data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID, ToolInput: message.Input}
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: observationKind, Data: data, At: at}); err != nil && d.logger != nil {
+		d.logger.Debug("workspace Runner runtime Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+	}
 }
-
 func (d *Daemon) emitResidentRuntimeDiagnostic(agentID, runtimeID string, message agent.Message) {
 	if message.Level != "warning" || strings.TrimSpace(message.Title) == "" || strings.TrimSpace(message.Content) == "" {
 		return
@@ -367,15 +382,20 @@ func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, tu
 	if !found || launch.RuntimeID != runtimeID {
 		return
 	}
-	kind, data := AgentObservationRuntimeIdle, AgentObservationData(AgentRuntimeStageObservationData{RuntimeID: runtimeID})
+
+	at := time.Now().UTC()
+	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
+	kind, data := AgentObservationRuntimeIdle, AgentObservationData(stage)
 	if turnErr != nil {
+		runner.activity.InterruptCompactionIfActive(agentID, launch.LaunchID)
 		kind, data = AgentObservationError, AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_turn_failed"}
+	} else {
+		_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
 	}
-	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: kind, Data: data, At: time.Now().UTC()}); err != nil && d.logger != nil {
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: kind, Data: data, At: at}); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner Message completion Activity publish deferred", "error", err, "agent_id", agentID)
 	}
 }
-
 func runtimeErrorNarrative(reason string) string {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {

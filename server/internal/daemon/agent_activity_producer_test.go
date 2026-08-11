@@ -27,10 +27,10 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 	}{
 		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
 		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at}, kind: protocol.ActivityKindWorking, entryKind: "narrative", entryText: "Working", processID: "process-1"},
-		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, entryKind: "narrative", entryText: "Thinking"},
+		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking},
 		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "ls -la"},
 		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
-		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Context compaction finished"},
+		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compaction_finished", entryKind: "narrative", entryText: "Context compaction finished"},
 		{name: "runtime idle", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Idle"},
 		{name: "runtime diagnostic", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeDiagnostic, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "Provider reported a warning"},
 		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "narrative", entryText: "Message received"},
@@ -52,6 +52,12 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 			payload := sent[0]
 			if payload.Snapshot.ActivityKind != test.kind || payload.Snapshot.DetailKind != test.detail || payload.Snapshot.ProcessInstanceID != test.processID || !payload.Snapshot.ObservedAt.Equal(at) {
 				t.Fatalf("Snapshot = %+v", payload.Snapshot)
+			}
+			if test.entryKind == "" {
+				if len(payload.Entries) != 0 {
+					t.Fatalf("Entries = %+v, want none", payload.Entries)
+				}
+				return
 			}
 			if len(payload.Entries) != 1 || payload.Entries[0].Kind != test.entryKind {
 				t.Fatalf("Entries = %+v", payload.Entries)
@@ -299,6 +305,90 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	}
 	if errorBody.Text != "Agent execution failed" || errorBody.ActivityKind != protocol.ActivityKindError || errorBody.DetailKind != "runtime_error" {
 		t.Fatalf("runtime error Activity = %+v, want producer-owned safe narrative", errorBody)
+	}
+}
+
+func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(t *testing.T) {
+	now := time.Date(2026, time.August, 11, 6, 0, 0, 0, time.UTC)
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer("daemon-1", func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	var staleDelay time.Duration
+	var fireStale func()
+	producer.schedule = func(delay time.Duration, callback func()) func() {
+		staleDelay = delay
+		fireStale = callback
+		return func() { fireStale = nil }
+	}
+	installActivityProducerAgent(t, producer)
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	runner.processes.newID = func() string { return "launch-a" }
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"}); err != nil {
+		t.Fatal(err)
+	}
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.DetailKind != "compacting_context" || len(activities[0].Entries) != 1 {
+		t.Fatalf("compaction start Activity = %+v", activities)
+	}
+	if staleDelay != 5*time.Minute || fireStale == nil {
+		t.Fatalf("compaction watchdog = %v callback_present=%v, want one five-minute timer", staleDelay, fireStale != nil)
+	}
+
+	now = now.Add(5 * time.Minute)
+	fireStale()
+	if len(activities) != 2 || activities[1].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[1].Snapshot.DetailKind != "compaction_stale" || len(activities[1].Entries) != 1 {
+		t.Fatalf("stale compaction Activity = %+v, want one Timeline entry after five minutes", activities)
+	}
+
+	now = now.Add(time.Minute)
+	producer.Tick()
+	if len(activities) != 3 || activities[2].Snapshot.DetailKind != "compaction_stale" || len(activities[2].Entries) != 0 {
+		t.Fatalf("post-stale heartbeat = %+v, want Snapshot-only heartbeat", activities)
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
+	if len(activities) != 5 {
+		t.Fatalf("Activity count after resumed output = %d, want inferred finish plus thinking", len(activities))
+	}
+	finish := activities[3]
+	if finish.Snapshot.ActivityKind != protocol.ActivityKindWorking || finish.Snapshot.DetailKind != "compaction_finished" || len(finish.Entries) != 1 {
+		t.Fatalf("inferred compaction finish = %+v", finish)
+	}
+	if thinking := activities[4]; thinking.Snapshot.ActivityKind != protocol.ActivityKindThinking || len(thinking.Entries) != 0 {
+		t.Fatalf("resumed thinking Activity = %+v", thinking)
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
+	if len(activities) != 6 || activities[5].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[5].Snapshot.DetailKind != "compaction_finished" {
+		t.Fatalf("late explicit provider finish Activity = %+v", activities)
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
+	if len(activities) != 8 {
+		t.Fatalf("explicit compaction lifecycle Activity count = %d, want 8", len(activities))
+	}
+	explicitFinish := activities[7]
+	if explicitFinish.Snapshot.ActivityKind != protocol.ActivityKindWorking || explicitFinish.Snapshot.DetailKind != "compaction_finished" || len(explicitFinish.Entries) != 1 {
+		t.Fatalf("explicit compaction finish = %+v", explicitFinish)
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageError, Content: "compaction failed"})
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
+	if len(activities) != 11 || activities[9].Snapshot.ActivityKind != protocol.ActivityKindError || activities[10].Snapshot.ActivityKind != protocol.ActivityKindThinking {
+		t.Fatalf("interrupted compaction Activity = %+v", activities[8:])
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	d.emitMessageTurnCompletionActivity("agent-a", "runtime-1", nil)
+	if len(activities) != 14 || activities[12].Snapshot.DetailKind != "compaction_finished" || activities[13].Snapshot.ActivityKind != protocol.ActivityKindOnline || activities[13].Snapshot.DetailKind != "idle" {
+		t.Fatalf("turn-end compaction completion Activity = %+v", activities[11:])
 	}
 }
 

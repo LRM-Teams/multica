@@ -77,9 +77,9 @@
 - **唯一事实边界**：未来每次 active group channel 的 agent membership generation 都在同一 DB 事务里创建 membership、结构化 `channel_member_added` system row 与 durable onboarding record；system general 使用 system invariant actor/source，普通手动加群保留真实 actor/source。DM、archived channel、human membership 不创建 onboarding；迁移既有 roster 不回填、不唤醒。
 - **先让人看见，再让 agent 决策**：system row 必须先以其 message UUID 作为稳定 realtime event id 发布成功，publication fence 才允许生成 target-only onboarding inbox lease。system row 本身不唤醒 agent；除新加入的目标 agent 外，其他 agent inbox 必须为 0。在线路径的可见顺序固定为 `joined system event → Agent intro`。
 - **generation 是隔离单位**：remove 立即令旧 generation 过期，re-add 创建新 generation；drain、send、complete 三处都重验 membership + generation。失效 generation 只能 terminal `expired`，可见 agent message 为 0。
-- **显式终态**：只有 canonical send 或 typed receipt `channel_onboarding_skipped` 能完成决策；空输出、final prose、timeout、同字符串的普通事件都不能伪装 skip，必须让同一 event retry。send 使用 `channel-onboarding:<inbox_event_id>` deterministic client id，保证 crash/retry 后可见消息 1、transport audit 1。
-- **物**：migration `207_channel_agent_onboarding` 的 generation/trigger/check constraints；`server/internal/handler/channel_onboarding.go` 的 publication fence、target-only materialization、三段 revalidation 与 terminal transaction；`channel_onboarding_publisher.go` 的 crash-replay publisher；daemon/protocol typed decision；`channel_onboarding_test.go`、agent transport/daemon/realtime listener regressions。
-- **已见红**：首轮 crash retry 回归暴露 duplicate transport audit（2，修成复用原 audit 后为 1）；publication gate 在 system row 尚未发布时拒绝 lease；旧 handler tests 因把 channel 当成“只有业务消息”而被新增 canonical membership row 打红，消费者改为按目标消息/语义断言；draft freshness 回归也证明 joined row 会进入真实 recent context，不能继续沿用旧消息数量假设。
+- **回合终态**：active generation 的正常 provider turn 完成即 terminal `completed`，无论 agent 通过普通 Credential Proxy 发出至多一条消息，还是选择静默完成；不得要求 agent 回显特殊 receipt，也不得把 event-derived client id 暴露给 agent。消息幂等只走普通 transport 的 `client_message_id`。remove/archive 后的失效 generation 仍只能 terminal `expired`；真正的 provider/transport failure 继续按普通失败语义处理，不能靠 409 lease retry 制造重复 onboarding turn。
+- **物**：migration `207_channel_agent_onboarding` 的 generation/trigger/check constraints与 `321_channel_onboarding_turn_completion` 的 `completed` 终态；`server/internal/handler/channel_onboarding.go` 的 publication fence、target-only materialization、generation revalidation 与 terminal transaction；`channel_onboarding_publisher.go` 的 crash-replay publisher；`channel_onboarding_test.go`、agent transport/daemon/realtime listener regressions。
+- **已见红**：测试环境 alpha.7 daemon 的普通消息使用随机 `client_message_id`，server 随后以“requires an explicit send or typed skip receipt”返回 409，使同一 onboarding event 反复 lease，最终出现 Aria 3 次、Orion 5 次重复自我介绍；receipt-free completion 回归在旧实现上也稳定返回 409。此前首轮 crash retry 回归还暴露 duplicate transport audit（2，修成复用原 audit 后为 1）；publication gate 在 system row 尚未发布时拒绝 lease；旧 handler tests 因把 channel 当成“只有业务消息”而被新增 canonical membership row 打红，消费者改为按目标消息/语义断言；draft freshness 回归也证明 joined row 会进入真实 recent context，不能继续沿用旧消息数量假设。
 
 ### 1.5 Standalone chat 与 channel transport 不得混路由 — `可执行`（⑤，owner: @AIhpJ ✅ 已签）
 - **判据**：`chat_session` 有 `channel_agent_session` / claim `channel_id` → 可见回复只走 task-scoped `multica message send|react`；没有 `channel_id` → final assistant output 自动写回当前 standalone session。DM 页面上的 isolated agent bubble 仍属于后者，页面位置不构成 DM transport target。
@@ -507,6 +507,12 @@
 - `agent:create` Hiring Proposal 由 Wendy 准备，由 Owner/Admin 最终提交；卡片消费与 Agent 创建同事务且仅能成功一次。structured card 存在时当前 UI 不显示协议 fallback 文本。
 - Agent 创建时 `name` 必填，使用 1–32 位小写字母、数字或连字符，并在创建后保持不变；`display_name` 创建时可省略，默认显示 `name`，后续只编辑 `display_name`。Wendy 的 Proposal `name` 与创建弹窗使用同一契约。
 - 完整契约、迁移矩阵与负向控制见 `docs/superpowers/specs/2026-08-06-workspace-onboarding-agent-boundary.md` 与 ADR-0012。
+
+### 4.22 Context compaction 是可见 Activity，不是 Message acceptance 或进程生命周期 — `可执行`（②统一 lifecycle event + ③单一 gate/投影 + ⑤状态机回归；owner: @Codex）
+- Provider 原生事件先归一成 `MessageCompactionStarted` / `MessageCompactionFinished`；resident runtime 的主动压缩必须在独立 `ResidentMessagePreparation` gate 完成，不能共享 20 秒 native Message acceptance timeout，也不能把压缩超时解释成进程重启。
+- Activity 必须按 Raft 阶段投影：开始写一次 `Working/compacting_context`，显式或推断完成写一次 `Working/compaction_finished`，5 分钟未见完成只写一次 `Working/compaction_stale`；之后每分钟 heartbeat 只更新 Snapshot、不追加 Timeline。只有 provider turn 完成才投影 `Online/idle`。
+- `thinking`、`text`、`tool_use` 与无错误 turn end 可推断遗漏的 finish；runtime error/失败 preparation 中断 active compaction 并向被阻塞的 Message turn 传播。compaction active 时 busy Notice 继续留在 Pending/retry，不得跨上下文重写边界注入。
+- **物**：`ResidentMessagePreparation`、`agentActivityCompactionState`、`TestRuntimePoolPreparesResidentInputOutsideNativeAcceptanceTimeout`、`TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput`、`TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary`。
 
 ---
 

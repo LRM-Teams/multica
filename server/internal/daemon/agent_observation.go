@@ -12,18 +12,19 @@ import (
 type AgentObservationKind string
 
 const (
-	AgentObservationRuntimeReady        AgentObservationKind = "runtime_ready"
-	AgentObservationRuntimeStarting     AgentObservationKind = "runtime_starting"
-	AgentObservationRuntimeWorking      AgentObservationKind = "runtime_working"
-	AgentObservationRuntimeThinking     AgentObservationKind = "runtime_thinking"
-	AgentObservationRuntimeTool         AgentObservationKind = "runtime_tool"
-	AgentObservationRuntimeCompacting   AgentObservationKind = "runtime_compacting"
-	AgentObservationRuntimeCompacted    AgentObservationKind = "runtime_compacted"
-	AgentObservationRuntimeIdle         AgentObservationKind = "runtime_idle"
-	AgentObservationRuntimeDiagnostic   AgentObservationKind = "runtime_diagnostic"
-	AgentObservationMessageBodyAccepted AgentObservationKind = "message_body_accepted"
-	AgentObservationFreshnessHeld       AgentObservationKind = "freshness_held"
-	AgentObservationError               AgentObservationKind = "error"
+	AgentObservationRuntimeReady           AgentObservationKind = "runtime_ready"
+	AgentObservationRuntimeStarting        AgentObservationKind = "runtime_starting"
+	AgentObservationRuntimeWorking         AgentObservationKind = "runtime_working"
+	AgentObservationRuntimeThinking        AgentObservationKind = "runtime_thinking"
+	AgentObservationRuntimeTool            AgentObservationKind = "runtime_tool"
+	AgentObservationRuntimeCompacting      AgentObservationKind = "runtime_compacting"
+	AgentObservationRuntimeCompacted       AgentObservationKind = "runtime_compacted"
+	AgentObservationRuntimeCompactionStale AgentObservationKind = "runtime_compaction_stale"
+	AgentObservationRuntimeIdle            AgentObservationKind = "runtime_idle"
+	AgentObservationRuntimeDiagnostic      AgentObservationKind = "runtime_diagnostic"
+	AgentObservationMessageBodyAccepted    AgentObservationKind = "message_body_accepted"
+	AgentObservationFreshnessHeld          AgentObservationKind = "freshness_held"
+	AgentObservationError                  AgentObservationKind = "error"
 )
 
 // AgentObservationData seals the observation taxonomy to the execution facts
@@ -118,7 +119,7 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationRuntimeStarting, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
+	case AgentObservationRuntimeStarting, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeCompactionStale, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}

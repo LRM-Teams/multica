@@ -501,9 +501,6 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	if result.OutputSuppressedReason != "" {
 		body["output_suppressed_reason"] = result.OutputSuppressedReason
 	}
-	if result.ChannelOnboardingDecision != "" {
-		body["channel_onboarding_decision"] = result.ChannelOnboardingDecision
-	}
 	if result.TransportAttempted {
 		body["transport_attempted"] = true
 	}

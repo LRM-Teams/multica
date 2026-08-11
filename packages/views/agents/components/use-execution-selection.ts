@@ -49,7 +49,7 @@ export function useExecutionSelection({
       return machineForRuntime(initialRuntime, machines)?.id ?? "";
     }
     if (!autoSeedMachine) return "";
-    return firstRuntimeMachine(machines)?.id ?? "";
+    return firstRuntimeMachine(machines, currentUserId)?.id ?? "";
   });
 
   const [pickedRuntimeId, setPickedRuntimeId] = useState(initialRuntimeId);
@@ -66,7 +66,7 @@ export function useExecutionSelection({
       machines,
     ) ??
     (autoSeedMachine && !pickedMachineId && !pickedRuntimeId
-      ? firstRuntimeMachine(machines)
+      ? firstRuntimeMachine(machines, currentUserId)
       : null) ??
     null;
   const machineId = selectedMachine?.id ?? pickedMachineId;
@@ -76,7 +76,7 @@ export function useExecutionSelection({
     ? pickedRuntimeId
     : pickedRuntimeId && !selectedMachine
       ? pickedRuntimeId
-      : firstRuntimeIdOnMachine(selectedMachine);
+      : firstRuntimeIdOnMachine(selectedMachine, currentUserId);
 
   const selectedRuntime =
     (runtimes.find((r) => r.id === runtimeId) as RuntimeDevice | undefined) ??
@@ -95,7 +95,7 @@ export function useExecutionSelection({
     if (nextMachineId === machineId) return;
     setPickedMachineId(nextMachineId);
     const next = machines.find((m) => m.id === nextMachineId) ?? null;
-    const nextRuntimeId = firstRuntimeIdOnMachine(next);
+    const nextRuntimeId = firstRuntimeIdOnMachine(next, currentUserId);
     setPickedRuntimeId(nextRuntimeId);
     setModelScope({
       runtimeId: nextRuntimeId,

@@ -5,136 +5,216 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// runtimeVisibilityRetirementFixture creates a runtime that still carries the
-// legacy private storage value plus two ordinary members. The column remains
-// during the compatibility window, but no API or authorization path may use it.
-func runtimeVisibilityRetirementFixture(t *testing.T) (runtimeID, runtimeOwnerID, plainMemberID string) {
+// TestCanUseRuntimeForAgent_Pure exercises the pure predicate behind the
+// CreateAgent / UpdateAgent runtime gate. The truth table mirrors the issue
+// (MUL-2062) acceptance criteria: workspace owner / admin can use any
+// runtime, runtime owners can use their own runtime regardless of
+// visibility, and any member can use a public runtime; everyone else gets
+// denied for a private runtime owned by someone else.
+func TestCanUseRuntimeForAgent_Pure(t *testing.T) {
+	ownerUserID := "11111111-1111-1111-1111-111111111111"
+	otherUserID := "22222222-2222-2222-2222-222222222222"
+
+	privateRT := db.AgentRuntime{
+		OwnerID:    util.MustParseUUID(ownerUserID),
+		Visibility: "private",
+	}
+	publicRT := db.AgentRuntime{
+		OwnerID:    util.MustParseUUID(ownerUserID),
+		Visibility: "public",
+	}
+
+	cases := []struct {
+		name   string
+		userID string
+		role   string
+		rt     db.AgentRuntime
+		want   bool
+	}{
+		// workspace owner / admin override
+		{"workspace owner on private runtime owned by another", otherUserID, "owner", privateRT, true},
+		{"workspace admin on private runtime owned by another", otherUserID, "admin", privateRT, true},
+		// runtime owner
+		{"runtime owner on own private runtime", ownerUserID, "member", privateRT, true},
+		{"runtime owner on own public runtime", ownerUserID, "member", publicRT, true},
+		// public runtime allows anyone in workspace
+		{"plain member on someone else's public runtime", otherUserID, "member", publicRT, true},
+		// the hole the issue closes
+		{"plain member on someone else's private runtime", otherUserID, "member", privateRT, false},
+		{"plain member with empty role on private runtime", otherUserID, "", privateRT, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			member := db.Member{
+				UserID: util.MustParseUUID(tc.userID),
+				Role:   tc.role,
+			}
+			got := canUseRuntimeForAgent(member, tc.rt)
+			if got != tc.want {
+				t.Fatalf("canUseRuntimeForAgent(role=%s, visibility=%s, owner=%s, caller=%s) = %v; want %v",
+					tc.role, tc.rt.Visibility, ownerUserID, tc.userID, got, tc.want)
+			}
+		})
+	}
+}
+
+// runtimeVisibilityFixture builds the three-actor world the gate needs to
+// exercise: a private runtime owned by a non-admin member, a separate plain
+// member in the same workspace, and the workspace owner (testUserID). The
+// runtime is registered through agent_runtime directly so the test doesn't
+// depend on the daemon-registration code path. Returns runtime id, runtime
+// owner user id, and the plain member's user id.
+func runtimeVisibilityFixture(t *testing.T) (runtimeID, runtimeOwnerID, plainMemberID string) {
 	t.Helper()
 	ctx := context.Background()
-	suffix := uuid.NewString()
-	runtimeOwnerID = createWorkspaceMemberUser(t, "Runtime Owner "+suffix, "runtime-owner-"+suffix+"@multica.test")
-	plainMemberID = createWorkspaceMemberUser(t, "Plain Runtime Member "+suffix, "runtime-member-"+suffix+"@multica.test")
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Runtime Owner', 'runtime-owner@multica.test')
+		RETURNING id
+	`).Scan(&runtimeOwnerID); err != nil {
+		t.Fatalf("create runtime owner user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM "user" WHERE email = 'runtime-owner@multica.test'`)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, runtimeOwnerID); err != nil {
+		t.Fatalf("add runtime owner as member: %v", err)
+	}
+
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Plain Runtime Member', 'plain-runtime-member@multica.test')
+		RETURNING id
+	`).Scan(&plainMemberID); err != nil {
+		t.Fatalf("create plain member user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM "user" WHERE email = 'plain-runtime-member@multica.test'`)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, plainMemberID); err != nil {
+		t.Fatalf("add plain member: %v", err)
+	}
 
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status,
 			device_info, metadata, owner_id, visibility, last_seen_at
 		)
-		VALUES ($1, NULL, 'Legacy Private Runtime', 'cloud', 'visibility_retirement', 'online',
-		        'visibility retirement', '{}'::jsonb, $2, 'private', now())
+		VALUES ($1, NULL, 'Visibility Test Runtime', 'cloud', 'visibility_test_provider', 'online', 'visibility test', '{}'::jsonb, $2, 'private', now())
 		RETURNING id
 	`, testWorkspaceID, runtimeOwnerID).Scan(&runtimeID); err != nil {
-		t.Fatalf("create legacy private runtime: %v", err)
+		t.Fatalf("create runtime: %v", err)
 	}
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		testPool.Exec(context.Background(),
+			`DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 	})
+
 	return runtimeID, runtimeOwnerID, plainMemberID
 }
 
-func foreignRuntimeForVisibilityRetirement(t *testing.T) string {
-	t.Helper()
-	ctx := context.Background()
-	raw := strings.ReplaceAll(uuid.NewString(), "-", "")
-	slug := "runtime-list-isolation-" + raw[:10]
-	prefix := "R" + strings.ToUpper(raw[:6])
-
-	var workspaceID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO workspace (name, slug, description, issue_prefix)
-		VALUES ('Runtime List Isolation', $1, 'LRM-1421 cross-workspace regression', $2)
-		RETURNING id
-	`, slug, prefix).Scan(&workspaceID); err != nil {
-		t.Fatalf("create foreign workspace: %v", err)
+// TestCreateAgent_RejectsPrivateRuntimeForNonOwner walks the gate end-to-end:
+// the runtime is private and owned by a non-admin member, so a workspace
+// owner and the runtime owner can both create agents on it, but a plain
+// workspace member cannot.
+func TestCreateAgent_RejectsPrivateRuntimeForNonOwner(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
 	}
+
+	runtimeID, runtimeOwnerID, plainMemberID := runtimeVisibilityFixture(t)
+
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		testPool.Exec(context.Background(), `
+			DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (
+			       name LIKE 'vis-test-%'
+			       OR display_name LIKE 'vis-test-%'
+			   )
+		`, testWorkspaceID)
 	})
 
-	var runtimeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, visibility, last_seen_at
-		)
-		VALUES ($1, NULL, 'Foreign Legacy Private Runtime', 'cloud', 'visibility_retirement',
-		        'online', 'foreign runtime', '{}'::jsonb, 'private', now())
-		RETURNING id
-	`, workspaceID).Scan(&runtimeID); err != nil {
-		t.Fatalf("create foreign runtime: %v", err)
-	}
-	return runtimeID
-}
-
-func TestListAgentRuntimes_ReturnsAllWorkspaceRuntimesWithoutVisibility(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
+	body := func(name string) map[string]any {
+		return map[string]any{
+			"display_name":         name,
+			"description":          "",
+			"runtime_id":           runtimeID,
+			"model":                "composer-1.5",
+			"visibility":           "private",
+			"max_concurrent_tasks": 1,
+		}
 	}
 
-	workspaceRuntimeID, _, plainMemberID := runtimeVisibilityRetirementFixture(t)
-	foreignRuntimeID := foreignRuntimeForVisibilityRetirement(t)
-
+	// Workspace owner (testUserID): allowed via admin override even though
+	// the runtime is private and owned by someone else.
 	w := httptest.NewRecorder()
-	testHandler.ListAgentRuntimes(w, newRequestAs(plainMemberID, http.MethodGet, "/api/runtimes", nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("ListAgentRuntimes: expected 200, got %d: %s", w.Code, w.Body.String())
+	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body("vis-test-admin")))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent as workspace owner: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var rows []map[string]json.RawMessage
-	if err := json.NewDecoder(w.Body).Decode(&rows); err != nil {
-		t.Fatalf("decode runtimes: %v", err)
+	// Runtime owner: allowed because they own the runtime.
+	w = httptest.NewRecorder()
+	testHandler.CreateAgent(w, newRequestAs(runtimeOwnerID, http.MethodPost, "/api/agents", body("vis-test-runtime-owner")))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent as runtime owner: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
-	foundWorkspaceRuntime := false
-	for _, row := range rows {
-		var id string
-		if err := json.Unmarshal(row["id"], &id); err != nil {
-			t.Fatalf("decode runtime id: %v", err)
-		}
-		if _, present := row["visibility"]; present {
-			t.Fatalf("retired visibility field leaked in runtime %s", id)
-		}
-		if id == workspaceRuntimeID {
-			foundWorkspaceRuntime = true
-		}
-		if id == foreignRuntimeID {
-			t.Fatalf("foreign workspace runtime %s leaked into response", id)
-		}
-	}
-	if !foundWorkspaceRuntime {
-		t.Fatalf("same-workspace runtime %s was filtered by legacy visibility", workspaceRuntimeID)
+
+	// Plain member: this is the hole MUL-2062 closes — must be 403.
+	w = httptest.NewRecorder()
+	testHandler.CreateAgent(w, newRequestAs(plainMemberID, http.MethodPost, "/api/agents", body("vis-test-plain-member")))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("CreateAgent as plain member on private runtime: expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestCreateAgent_AllowsAnyWorkspaceRuntime(t *testing.T) {
-	if testHandler == nil || testPool == nil {
+// TestCreateAgent_AllowsPublicRuntimeForPlainMember verifies the "public"
+// half of the visibility predicate: once the runtime owner flips it to
+// public, any workspace member can create agents on it.
+func TestCreateAgent_AllowsPublicRuntimeForPlainMember(t *testing.T) {
+	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
-	runtimeID, _, plainMemberID := runtimeVisibilityRetirementFixture(t)
-	// LRM-2343: agent creation is gated behind the unified `manageAgents`
-	// capability (workspace owner/admin). Promote the actor to admin so the
-	// test keeps exercising the original runtime-visibility intent: creating an
-	// agent on a teammate runtime is never blocked by the retired `visibility`
-	// column. A plain member is covered by TestCreateAgent_RequiresManageAgents.
-	if _, err := testPool.Exec(context.Background(),
-		`UPDATE member SET role = 'admin' WHERE workspace_id = $1 AND user_id = $2`,
-		testWorkspaceID, plainMemberID); err != nil {
-		t.Fatalf("promote create actor to owner: %v", err)
+	runtimeID, _, plainMemberID := runtimeVisibilityFixture(t)
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx,
+		`UPDATE agent_runtime SET visibility = 'public' WHERE id = $1`, runtimeID,
+	); err != nil {
+		t.Fatalf("flip runtime to public: %v", err)
 	}
-	name := "visibility-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+
 	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, name)
+		testPool.Exec(context.Background(), `
+			DELETE FROM agent
+			 WHERE workspace_id = $1
+			   AND (
+			       name = 'vis-test-public-runtime'
+			       OR display_name = 'vis-test-public-runtime'
+			   )
+		`, testWorkspaceID)
 	})
 
 	body := map[string]any{
-		"name":                 name,
-		"display_name":         name,
+		"display_name":         "vis-test-public-runtime",
 		"description":          "",
 		"runtime_id":           runtimeID,
 		"model":                "composer-1.5",
@@ -144,16 +224,73 @@ func TestCreateAgent_AllowsAnyWorkspaceRuntime(t *testing.T) {
 	w := httptest.NewRecorder()
 	testHandler.CreateAgent(w, newRequestAs(plainMemberID, http.MethodPost, "/api/agents", body))
 	if w.Code != http.StatusCreated {
-		t.Fatalf("CreateAgent on teammate runtime: expected 201, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("CreateAgent as plain member on public runtime: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestUpdateAgentRuntime_IgnoresRetiredVisibilityAndOmitsItFromResponse(t *testing.T) {
-	if testHandler == nil || testPool == nil {
+// TestUpdateAgent_RejectsRebindToPrivateRuntime is the regression for the
+// "update can bypass create" backdoor — without this gate a plain member
+// could create an agent on a public runtime, then re-bind it onto someone
+// else's private runtime via UpdateAgent.
+func TestUpdateAgent_RejectsRebindToPrivateRuntime(t *testing.T) {
+	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
-	runtimeID, runtimeOwnerID, _ := runtimeVisibilityRetirementFixture(t)
+	privateRuntimeID, _, plainMemberID := runtimeVisibilityFixture(t)
+
+	ctx := context.Background()
+	// Create a public runtime that the plain member can legitimately own
+	// an agent on, then we try to move the agent onto the private runtime.
+	var publicRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, owner_id, visibility, last_seen_at
+		)
+		VALUES ($1, NULL, 'Public Runtime', 'cloud', 'visibility_test_public_provider', 'online', 'public', '{}'::jsonb, $2, 'public', now())
+		RETURNING id
+	`, testWorkspaceID, plainMemberID).Scan(&publicRuntimeID); err != nil {
+		t.Fatalf("create public runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, publicRuntimeID)
+	})
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
+		, model) VALUES ($1, 'rebind-test-agent', '', 'cloud', '{}'::jsonb, $2, 1, $3, '', '{}'::jsonb, '[]'::jsonb, 'composer-1.5')
+		RETURNING id
+	`, testWorkspaceID, publicRuntimeID, plainMemberID).Scan(&agentID); err != nil {
+		t.Fatalf("create agent on public runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+
+	body := map[string]any{
+		"runtime_id": privateRuntimeID,
+	}
+	w := httptest.NewRecorder()
+	req := newRequestAs(plainMemberID, http.MethodPut, "/api/agents/"+agentID, body)
+	req = withURLParam(req, "id", agentID)
+	testHandler.UpdateAgent(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("UpdateAgent rebinding to private runtime: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestUpdateAgentRuntime_VisibilityPatchApplies pins the invariant that
+// a PATCH carrying `visibility` correctly updates the runtime.
+func TestUpdateAgentRuntime_VisibilityPatchApplies(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID, runtimeOwnerID, _ := runtimeVisibilityFixture(t)
+
 	w := httptest.NewRecorder()
 	req := newRequestAs(runtimeOwnerID, http.MethodPatch, "/api/runtimes/"+runtimeID, map[string]any{
 		"visibility": "public",
@@ -161,22 +298,127 @@ func TestUpdateAgentRuntime_IgnoresRetiredVisibilityAndOmitsItFromResponse(t *te
 	req = withURLParam(req, "runtimeId", runtimeID)
 	testHandler.UpdateAgentRuntime(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("PATCH retired visibility: expected 200 compatibility no-op, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("PATCH visibility: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp AgentRuntimeResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Visibility != "public" {
+		t.Fatalf("visibility patch: got %q, want public", resp.Visibility)
+	}
+}
+
+// TestUpdateAgentRuntime_IgnoresTimezoneField guards the RFC migration that
+// dropped `timezone` from UpdateAgentRuntimeRequest: a PATCH body still
+// carrying `timezone` must not error, must not echo a `timezone` key back,
+// and must still apply the recognised `visibility` field. Timezone is now a
+// user-level preference, not a per-runtime one.
+func TestUpdateAgentRuntime_IgnoresTimezoneField(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
 	}
 
+	runtimeID, runtimeOwnerID, _ := runtimeVisibilityFixture(t)
+
+	w := httptest.NewRecorder()
+	// NOTE: visibility is "public" (not "workspace"): the runtime visibility
+	// enum is private|public — "workspace" would 400 before any mutation,
+	// which would not exercise the "visibility still applied" assertion.
+	req := newRequestAs(runtimeOwnerID, http.MethodPatch, "/api/runtimes/"+runtimeID, map[string]any{
+		"timezone":   "Asia/Tokyo",
+		"visibility": "public",
+	})
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.UpdateAgentRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PATCH with stray timezone: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The response must carry no `timezone` key — runtimes have no such field.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if _, present := raw["visibility"]; present {
-		t.Fatalf("response unexpectedly contains retired visibility: %s", w.Body.String())
+	if _, present := raw["timezone"]; present {
+		t.Errorf("response unexpectedly contains a timezone key: %s", w.Body.String())
 	}
 
-	var stored string
-	if err := testPool.QueryRow(context.Background(), `SELECT visibility FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&stored); err != nil {
-		t.Fatalf("read compatibility column: %v", err)
+	// `visibility` was still applied.
+	var resp AgentRuntimeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
 	}
-	if stored != "private" {
-		t.Fatalf("retired visibility patch mutated compatibility column: got %q", stored)
+	if resp.Visibility != "public" {
+		t.Errorf("visibility patch: got %q, want public", resp.Visibility)
+	}
+}
+
+// TestUpdateAgentRuntime_InvalidVisibilityReturns400 verifies that an invalid
+// visibility value is rejected with 400 before any mutation runs.
+func TestUpdateAgentRuntime_InvalidVisibilityReturns400(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID, runtimeOwnerID, _ := runtimeVisibilityFixture(t)
+
+	w := httptest.NewRecorder()
+	req := newRequestAs(runtimeOwnerID, http.MethodPatch, "/api/runtimes/"+runtimeID, map[string]any{
+		"visibility": "everyone",
+	})
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.UpdateAgentRuntime(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH with invalid visibility: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestUpdateAgentRuntime_VisibilityToggle covers the PATCH endpoint:
+// runtime owner / workspace admin can flip private↔public; plain members
+// cannot; an unknown value is rejected with 400.
+func TestUpdateAgentRuntime_VisibilityToggle(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID, runtimeOwnerID, plainMemberID := runtimeVisibilityFixture(t)
+
+	patch := func(actorID string, visibility string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := newRequestAs(actorID, http.MethodPatch, "/api/runtimes/"+runtimeID, map[string]any{
+			"visibility": visibility,
+		})
+		req = withURLParam(req, "runtimeId", runtimeID)
+		testHandler.UpdateAgentRuntime(w, req)
+		return w
+	}
+
+	// Runtime owner flips private → public.
+	if w := patch(runtimeOwnerID, "public"); w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgentRuntime as runtime owner → public: expected 200, got %d: %s", w.Code, w.Body.String())
+	} else {
+		var resp AgentRuntimeResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if resp.Visibility != "public" {
+			t.Fatalf("expected visibility=public, got %q", resp.Visibility)
+		}
+	}
+
+	// Workspace owner (testUserID) flips it back.
+	if w := patch(testUserID, "private"); w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgentRuntime as workspace owner → private: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Plain member: forbidden, regardless of intent.
+	if w := patch(plainMemberID, "public"); w.Code != http.StatusForbidden {
+		t.Fatalf("UpdateAgentRuntime as plain member: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Bad value from the owner: 400.
+	if w := patch(runtimeOwnerID, "everyone"); w.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateAgentRuntime with invalid visibility: expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }

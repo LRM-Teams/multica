@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -33,6 +34,10 @@ func (p *agentActivityProducer) Observe(observation AgentObservation) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.observeLocked(observation)
+}
+
+func (p *agentActivityProducer) observeLocked(observation AgentObservation) error {
 	key, state, err := p.observationStateLocked(observation)
 	if err != nil {
 		return err
@@ -67,7 +72,80 @@ func (p *agentActivityProducer) Observe(observation AgentObservation) error {
 		state.session.TurnID = data.TurnID
 		state.session.RuntimeGeneration = data.RuntimeGeneration
 	}
+	switch observation.Kind {
+	case AgentObservationRuntimeCompacting:
+		clearAgentActivityCompaction(state)
+		startedAt := observation.At.UTC()
+		state.compaction = agentActivityCompactionState{
+			active:    true,
+			startedAt: startedAt,
+			runtime:   observation.Data.(AgentRuntimeStageObservationData),
+		}
+		state.compaction.cancelStale = p.schedule(compactionStaleTimeout, func() {
+			p.markCompactionStale(key, startedAt)
+		})
+	case AgentObservationRuntimeCompacted, AgentObservationError:
+		clearAgentActivityCompaction(state)
+	}
 	return nil
+}
+
+// CompleteCompactionIfActive emits the missing provider finish before the first
+// resumed Message-runtime observation. It is scoped to one concrete launch so
+// a replacement process cannot inherit stale compaction state.
+func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, launchID string, data AgentRuntimeStageObservationData, at time.Time) (bool, error) {
+	if p == nil {
+		return false, errors.New("Activity producer is not configured")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state := p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}]
+	if state == nil || !state.compaction.active {
+		return false, nil
+	}
+	observation := AgentObservation{AgentID: agentID, LaunchID: launchID, Kind: AgentObservationRuntimeCompacted, Data: data, At: at}
+	if err := observation.Validate(); err != nil {
+		return false, err
+	}
+	if err := p.observeLocked(observation); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (p *agentActivityProducer) InterruptCompactionIfActive(agentID, launchID string) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state := p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}]
+	if state == nil || !state.compaction.active {
+		return false
+	}
+	clearAgentActivityCompaction(state)
+	return true
+}
+
+func (p *agentActivityProducer) markCompactionStale(key agentActivityProducerKey, startedAt time.Time) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state := p.states[key]
+	if state == nil || !state.compaction.active || state.compaction.stale || !state.compaction.startedAt.Equal(startedAt) {
+		return
+	}
+	state.compaction.cancelStale = nil
+	observation := AgentObservation{
+		AgentID: key.agentID, LaunchID: key.launchID,
+		Kind: AgentObservationRuntimeCompactionStale, Data: state.compaction.runtime,
+		At: p.now().UTC(),
+	}
+	if observation.Validate() == nil && p.observeLocked(observation) == nil {
+		state.compaction.stale = true
+	}
 }
 
 func (p *agentActivityProducer) observationStateLocked(observation AgentObservation) (agentActivityProducerKey, *agentActivityProducerState, error) {
@@ -98,7 +176,6 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Working")
 	case AgentObservationRuntimeThinking:
 		projection.activityKind = protocol.ActivityKindThinking
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Thinking")
 	case AgentObservationRuntimeTool:
 		data := observation.Data.(AgentRuntimeStageObservationData)
 		projection.activityKind = protocol.ActivityKindWorking
@@ -111,8 +188,11 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compacting_context"
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Compacting context")
 	case AgentObservationRuntimeCompacted:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
+		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_finished"
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Context compaction finished")
+	case AgentObservationRuntimeCompactionStale:
+		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compaction_stale"
+		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Context compaction still running; no finish event observed")
 	case AgentObservationRuntimeIdle:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Idle")

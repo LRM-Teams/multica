@@ -16,7 +16,7 @@ func TestUpdateAgentRuntime_DisplayNamePatchAndClear(t *testing.T) {
 		t.Skip("database not available")
 	}
 
-	runtimeID, runtimeOwnerID, plainMemberID := runtimeVisibilityRetirementFixture(t)
+	runtimeID, runtimeOwnerID, plainMemberID := runtimeVisibilityFixture(t)
 
 	// Owner sets a custom display_name.
 	w := httptest.NewRecorder()

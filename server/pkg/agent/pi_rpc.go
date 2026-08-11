@@ -27,6 +27,7 @@ var ErrPiRPCTurnBusy = errors.New("pi RPC turn busy")
 type PiRPCBackend interface {
 	Backend
 	ResidentMessageInput
+	ResidentMessagePreparation
 	ResidentPendingNoticeInput
 	Close()
 	// Compact explicitly compacts the Pi session context with custom instructions.
@@ -40,6 +41,33 @@ type PiRPCBackend interface {
 	// outside an active prompt turn. Returns the same RuntimeTokenStats shape
 	// that Execute attaches to Result, queryable between segment turns.
 	RuntimeStats(ctx context.Context) (*RuntimeTokenStats, error)
+}
+
+// PrepareMessageInput runs proactive compaction before the daemon starts its
+// native Message-acceptance timeout. A failed compaction remains a failed gate;
+// callers must not silently inject the Message into an overfull context.
+func (b *piRPCBackend) PrepareMessageInput(ctx context.Context, emit func(Message)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !b.hasProcess() {
+		return nil
+	}
+	p, err := b.getProcess()
+	if err != nil || !shouldProactivelyCompact(p.queryRuntimeStats(ctx, nil, b.cfg.ResidentOptions.Model)) {
+		return err
+	}
+	if emit != nil {
+		emit(Message{Type: MessageCompactionStarted})
+	}
+	compacted, err := b.Compact(ctx, proactiveContextCompactionInstructions)
+	if err != nil {
+		return err
+	}
+	if emit != nil {
+		emit(Message{Type: MessageCompactionFinished, Content: compacted.Summary})
+	}
+	return nil
 }
 
 // Compact explicitly compacts the Pi session context.

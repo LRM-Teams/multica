@@ -261,6 +261,7 @@ type canonicalAgentRuntimeSlot struct {
 	messageInputAttempt            uint64
 	invalidationGeneration         uint64
 	invalidateAfterInput           bool
+	compacting                     bool
 	lastPendingNoticeFingerprint   string
 	lastPendingTargetFingerprint   map[string]string
 	lastPendingNoticeCoordinatorID string
@@ -706,6 +707,30 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	invalidationGeneration := slot.invalidationGeneration
 	slot.mu.Unlock()
 
+	observeRuntimeMessage := func(message agent.Message) {
+		p.observeResidentRuntimeMessage(slot, message)
+		if onMessage != nil {
+			onMessage(message)
+		}
+	}
+	if preparation, ok := slot.backend.(agent.ResidentMessagePreparation); ok {
+		if err := preparation.PrepareMessageInput(ctx, observeRuntimeMessage); err != nil {
+			if p.failResidentMessageInputAttempt(slot, attempt) {
+				p.signalAgentProcessCapacityFreed()
+			}
+			return err
+		}
+		slot.mu.Lock()
+		invalidated := slot.messageInputAttempt != attempt || slot.invalidationGeneration != invalidationGeneration
+		slot.mu.Unlock()
+		if invalidated {
+			if p.failResidentMessageInputAttempt(slot, attempt) {
+				p.signalAgentProcessCapacityFreed()
+			}
+			return errors.New("canonical resident runtime was invalidated during Message input preparation")
+		}
+	}
+
 	// Bound native idle acceptance so a busy or control-unresponsive resident
 	// runtime never blocks recovery/Flush forever. On timeout or a native busy
 	// signal we fall through to the busy path below (queue + pending notice + retry),
@@ -720,18 +745,8 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	acceptance, err := input.AcceptMessageBatch(acceptCtx, batch)
 	slot.mu.Lock()
 	if err != nil {
-		freed := false
-		if slot.messageInputAttempt == attempt {
-			slot.running = false
-			slot.idleSince = time.Now()
-			if slot.invalidateAfterInput {
-				freed = slot.backend != nil
-				slot.closeBackend()
-				slot.fingerprint = ""
-				slot.mode = ""
-			}
-		}
 		slot.mu.Unlock()
+		freed := p.failResidentMessageInputAttempt(slot, attempt)
 		if isResidentAcceptBusyErr(err) {
 			// Busy / unresponsive-to-idle is a queued-and-retry condition, not a
 			// hard failure: hand it back as ErrCanonicalAgentRuntimeBusy so the
@@ -749,18 +764,8 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 		return err
 	}
 	if acceptance.Done == nil {
-		freed := false
-		if slot.messageInputAttempt == attempt {
-			slot.running = false
-			slot.idleSince = time.Now()
-			if slot.invalidateAfterInput {
-				freed = slot.backend != nil
-				slot.closeBackend()
-				slot.fingerprint = ""
-				slot.mode = ""
-			}
-		}
 		slot.mu.Unlock()
+		freed := p.failResidentMessageInputAttempt(slot, attempt)
 		if freed {
 			p.signalAgentProcessCapacityFreed()
 		}
@@ -778,16 +783,54 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	}
 	slot.mu.Unlock()
 	if invalidated {
-		activityDone := drainResidentActivity(acceptance.Messages, nil)
+		activityDone := drainResidentActivity(acceptance.Messages, func(message agent.Message) {
+			p.observeResidentRuntimeMessage(slot, message)
+		})
 		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, 0, nil)
 		return errors.New("canonical resident runtime was invalidated during Message input acceptance")
 	}
 	if onAccepted != nil {
 		onAccepted()
 	}
-	activityDone := drainResidentActivity(acceptance.Messages, onMessage)
+	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
 	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, generation, onComplete)
 	return nil
+}
+
+func (p *canonicalAgentRuntimePool) failResidentMessageInputAttempt(slot *canonicalAgentRuntimeSlot, attempt uint64) bool {
+	if slot == nil {
+		return false
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if slot.messageInputAttempt != attempt {
+		return false
+	}
+	slot.running = false
+	slot.compacting = false
+	slot.idleSince = time.Now()
+	if !slot.invalidateAfterInput {
+		return false
+	}
+	freed := slot.backend != nil
+	slot.closeBackend()
+	slot.fingerprint = ""
+	slot.mode = ""
+	return freed
+}
+
+func (p *canonicalAgentRuntimePool) observeResidentRuntimeMessage(slot *canonicalAgentRuntimeSlot, message agent.Message) {
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	switch message.Type {
+	case agent.MessageCompactionStarted:
+		slot.compacting = true
+	case agent.MessageCompactionFinished, agent.MessageThinking, agent.MessageText, agent.MessageToolUse, agent.MessageError:
+		slot.compacting = false
+	}
 }
 
 func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.Message)) <-chan struct{} {
@@ -859,6 +902,9 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 		}
 		return nil
 	}
+	if slot.compacting {
+		return ErrCanonicalAgentRuntimeBusy
+	}
 	input, ok := slot.backend.(agent.ResidentPendingNoticeInput)
 	if !ok {
 		return errors.New("canonical resident runtime does not support Pending Notice input")
@@ -899,6 +945,7 @@ func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAg
 	if slot.messageInputDone == done {
 		slot.messageInputDone = nil
 		slot.running = false
+		slot.compacting = false
 		slot.idleSince = time.Now()
 		if slot.invalidateAfterInput {
 			freed = slot.backend != nil

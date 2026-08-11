@@ -31,7 +31,10 @@ func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error
 	return protocol.AgentActivityEntry{Kind: "system", Position: 0, Body: body}, nil
 }
 
-const agentActivityHeartbeatInterval = time.Minute
+const (
+	agentActivityHeartbeatInterval = time.Minute
+	compactionStaleTimeout         = 5 * time.Minute
+)
 
 // agentActivityProducer is a best-effort daemon-side Activity publisher. It
 // intentionally has no acknowledgement, durable outbox, HTTP upload, or
@@ -41,6 +44,7 @@ type agentActivityProducer struct {
 
 	now                 func() time.Time
 	newID               func() string
+	schedule            func(time.Duration, func()) func()
 	send                func(protocol.AgentActivityPayload)
 	daemonInstanceID    string
 	transportGeneration uint64
@@ -59,6 +63,15 @@ type agentActivityProducerState struct {
 	connected          bool
 	lastHeartbeatAt    time.Time
 	lastClientSequence int64
+	compaction         agentActivityCompactionState
+}
+
+type agentActivityCompactionState struct {
+	active      bool
+	startedAt   time.Time
+	stale       bool
+	runtime     AgentRuntimeStageObservationData
+	cancelStale func()
 }
 
 type agentActivityReconnectFrame struct {
@@ -70,7 +83,17 @@ func newAgentActivityProducer(daemonInstanceID string, now func() time.Time, sen
 	if now == nil {
 		now = time.Now
 	}
-	return &agentActivityProducer{daemonInstanceID: daemonInstanceID, now: now, newID: func() string { return uuid.NewString() }, send: send, states: make(map[agentActivityProducerKey]*agentActivityProducerState)}
+	return &agentActivityProducer{
+		daemonInstanceID: daemonInstanceID,
+		now:              now,
+		newID:            func() string { return uuid.NewString() },
+		schedule: func(delay time.Duration, callback func()) func() {
+			timer := time.AfterFunc(delay, callback)
+			return func() { timer.Stop() }
+		},
+		send:   send,
+		states: make(map[agentActivityProducerKey]*agentActivityProducerState),
+	}
 }
 
 // Close releases activity sequence and managed-launch state with the owning
@@ -80,6 +103,9 @@ func (p *agentActivityProducer) Close() {
 		return
 	}
 	p.mu.Lock()
+	for _, state := range p.states {
+		clearAgentActivityCompaction(state)
+	}
 	p.send = nil
 	p.states = nil
 	p.mu.Unlock()
@@ -105,6 +131,7 @@ func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, s
 	// make launch-free observations ambiguous.
 	for existing := range p.states {
 		if existing.agentID == status.AgentID && existing.launchID != status.LaunchID {
+			clearAgentActivityCompaction(p.states[existing])
 			delete(p.states, existing)
 		}
 	}
@@ -138,7 +165,9 @@ func (p *agentActivityProducer) RemoveManaged(agentID, launchID string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.states, agentActivityProducerKey{agentID: agentID, launchID: launchID})
+	key := agentActivityProducerKey{agentID: agentID, launchID: launchID}
+	clearAgentActivityCompaction(p.states[key])
+	delete(p.states, key)
 }
 
 // AttachTransport makes a newly established Workspace Runner connection the
@@ -182,6 +211,15 @@ func (p *agentActivityProducer) DetachTransport(generation uint64) {
 	}
 }
 
+func clearAgentActivityCompaction(state *agentActivityProducerState) {
+	if state == nil {
+		return
+	}
+	if state.compaction.cancelStale != nil {
+		state.compaction.cancelStale()
+	}
+	state.compaction = agentActivityCompactionState{}
+}
 func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {
 	key := agentActivityProducerKey{agentID: snapshot.AgentID, launchID: snapshot.LaunchID}
 	state := p.states[key]

@@ -233,7 +233,6 @@ func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-instance-1"
 	d.agentActivityProducers["workspace-1"] = producer
-	d.messageRuntimeIDs["agent-1"] = "runtime-1"
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
 	var frames []string
@@ -241,6 +240,11 @@ func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing
 		frames = append(frames, eventType)
 		return nil
 	})
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	d.emitMessageReceivedActivity("agent-1", "runtime-1", []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "dm:agent-1", Seq: 1,
 	}})

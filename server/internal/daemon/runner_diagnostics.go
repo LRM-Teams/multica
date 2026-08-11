@@ -158,9 +158,10 @@ func (d *Daemon) recordAgentMessageResponse(
 	if d == nil {
 		return
 	}
-	d.messageCoordinatorMu.RLock()
-	runtimeID := d.messageRuntimeIDs[agentID]
-	d.messageCoordinatorMu.RUnlock()
+	runtimeID := ""
+	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil && runner.inboxes != nil {
+		_, runtimeID, _ = runner.inboxes.Resolve(agentID)
+	}
 	messageID, channelID := responseMessageIdentity(response)
 	if channelID == "" {
 		channelID = channelIDFromCanonicalTarget(contextTarget)

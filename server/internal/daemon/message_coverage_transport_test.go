@@ -27,9 +27,7 @@ func coverageCommitTestDaemon(t *testing.T) (*Daemon, *MessageCoordinator, Cover
 		t.Fatalf("PrepareCoverage: %v", err)
 	}
 	d := New(Config{WorkspacesRoot: root, HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.messageCoordinatorMu.Lock()
-	d.messageCoordinators = map[string]*MessageCoordinator{"agent-1": coordinator}
-	d.messageCoordinatorMu.Unlock()
+	registerTestInbox(t, d, coordinator.key, "runtime-1", coordinator)
 	token := prepareCoverageCommitCredential(t, d, coordinator.key, "runtime-1")
 	return d, coordinator, offer, token
 }
@@ -170,9 +168,8 @@ func TestCredentialProxyCommitCoverageRoutesToExactReceiptOwner(t *testing.T) {
 	}
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root, HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.messageCoordinatorMu.Lock()
-	d.messageCoordinators = map[string]*MessageCoordinator{"agent-1": first, "agent-2": second}
-	d.messageCoordinatorMu.Unlock()
+	registerTestInbox(t, d, first.key, "runtime-1", first)
+	registerTestInbox(t, d, second.key, "runtime-2", second)
 
 	token := prepareCoverageCommitCredential(t, d, second.key, "runtime-2")
 	if err := d.CredentialProxy().CommitCoverage(token, offer.ReceiptID); err != nil {
@@ -205,9 +202,7 @@ func TestCredentialProxyCoverageCommitRejectsReceiptFromAnotherAuthenticatedInbo
 	d, coordinator, offer, _ := coverageCommitTestDaemon(t)
 	wrongKey := InboxKey{WorkspaceID: "workspace-2", AgentID: "agent-2"}
 	wrongCoordinator := newCoverageTestCoordinator(t, wrongKey)
-	d.messageCoordinatorMu.Lock()
-	d.messageCoordinators[wrongKey.AgentID] = wrongCoordinator
-	d.messageCoordinatorMu.Unlock()
+	registerTestInbox(t, d, wrongKey, "runtime-2", wrongCoordinator)
 	wrongToken := prepareCoverageCommitCredential(t, d, wrongKey, "runtime-2")
 
 	recorder := coverageCommitRequest(t, d.credentialProxyMessageCoverageCommitHandler(), wrongToken, `{"receipt_id":"`+offer.ReceiptID+`"}`)
@@ -246,7 +241,7 @@ func TestCredentialProxyCoverageCommitRecordsBoundedRunnerDiagnostic(t *testing.
 		t.Fatalf("PrepareCoverage: %v", err)
 	}
 	d := New(Config{WorkspacesRoot: t.TempDir(), HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.messageCoordinators[agentID] = coordinator
+	registerTestInbox(t, d, key, runtimeID, coordinator)
 	token := prepareCoverageCommitCredential(t, d, key, runtimeID)
 	root := filepath.Join(t.TempDir(), "logs")
 	store, err := diagnosticlog.Open(diagnosticlog.Config{Root: root})

@@ -185,8 +185,6 @@ func TestMessageRecoveryMergesTerminalSnapshotBeforeCreatingResidentRuntime(t *t
 			readyAtFactory <- coordinator.FreshnessKnown()
 			return &blockingResidentMessageRuntime{done: done}, func() {}, nil
 		},
-		messageCoordinators: make(map[string]*MessageCoordinator),
-		messageRuntimeIDs:   map[string]string{agentID: runtimeID},
 	}
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
 		return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, nil, nil, nil, nil)
@@ -194,9 +192,9 @@ func TestMessageRecoveryMergesTerminalSnapshotBeforeCreatingResidentRuntime(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.messageCoordinators[agentID] = coordinator
+	registerTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, runtimeID, coordinator)
 	request := coordinator.BeginRecovery(agentID, 100)
-	err = d.handleMessageRecoveryPageWithSend(context.Background(), protocol.AgentRecoveryPage{
+	err = d.handleMessageRecoveryPageWithSend(context.Background(), workspaceID, protocol.AgentRecoveryPage{
 		AgentID: agentID, RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "snapshot-1",
 		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:user-1", Seq: 1, Content: "hello"}},
 	}, func(protocol.AgentRecoveryRequest) error { return nil })
@@ -227,10 +225,9 @@ func TestMessageRecoveryMergesTerminalSnapshotBeforeCreatingResidentRuntime(t *t
 
 func TestMessageRecoveryCompletesWithoutResidentRuntime(t *testing.T) {
 	const agentID = "33333333-3333-3333-3333-333333333333"
+	const workspaceID = "11111111-1111-1111-1111-111111111111"
 	d := &Daemon{
-		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
-		messageCoordinators: make(map[string]*MessageCoordinator),
-		messageRuntimeIDs:   map[string]string{agentID: "missing-runtime"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return errors.New("resident Runtime is unavailable")
@@ -238,9 +235,9 @@ func TestMessageRecoveryCompletesWithoutResidentRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	d.messageCoordinators[agentID] = coordinator
+	registerTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, "missing-runtime", coordinator)
 	request := coordinator.BeginRecovery(agentID, 100)
-	err = d.handleMessageRecoveryPageWithSend(context.Background(), protocol.AgentRecoveryPage{
+	err = d.handleMessageRecoveryPageWithSend(context.Background(), workspaceID, protocol.AgentRecoveryPage{
 		AgentID: agentID, RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "snapshot-1",
 		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:user-1", Seq: 1, Content: "hello"}},
 	}, func(protocol.AgentRecoveryRequest) error { return nil })

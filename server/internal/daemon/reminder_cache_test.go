@@ -432,6 +432,7 @@ func TestReminderCacheCorruptDurableStateRecoversThroughCanonicalRuntimeReset(t 
 		agentAttachments: mgr,
 		reminderCache:    cache,
 	}
+	prepareHeadlessWorkspaceRunnerTestDaemon(d, root)
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 	if len(clock.timers) != 0 {
 		t.Fatal("corrupt startup armed a timer before canonical reset")
@@ -525,6 +526,7 @@ func TestReminderCacheCorruptDurableStateResetPersistFailureKeepsTimersAndProjec
 		agentAttachments: mgr,
 		reminderCache:    cache,
 	}
+	prepareHeadlessWorkspaceRunnerTestDaemon(d, root)
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 	if err := d.handleDaemonAgentLifecycleReplayEnd(protocol.DaemonAgentLifecycleReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 9}}); err != nil {
 		t.Fatal(err)
@@ -1175,6 +1177,7 @@ func TestReminderLifecycleHeartbeatCatchupRecoversLostMoveWithoutReconnect(t *te
 		agentAttachments: mgr,
 		reminderCache:    cache,
 	}
+	prepareHeadlessWorkspaceRunnerTestDaemon(d, root)
 	d.setReminderWS(writes, make(chan struct{}), func() error { closed++; return nil })
 	d.reminderGateMu.Lock()
 	d.reminderReplayComplete = true
@@ -1309,6 +1312,7 @@ func TestReminderRuntimeSetReconcileRetiresOldStateBeforeNewLifecycleRecovery(t 
 		agentAttachments: mgr,
 		reminderCache:    cache,
 	}
+	prepareHeadlessWorkspaceRunnerTestDaemon(d, root)
 	if err := d.reconcileReminderRuntimeSet([]string{"runtime-new"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1609,6 +1613,7 @@ func TestServerOriginatedOwnerStartBypassesStaleCapabilityCacheAndSchedulesTimer
 		agentAttachments: newLocalAgentAttachmentRegistry(t.TempDir(), logger),
 		reminderCache:    newReminderCache(clock, logger, func(protocol.ReminderTimerJob) {}),
 	}
+	prepareHeadlessWorkspaceRunnerTestDaemon(d, t.TempDir())
 	d.setReminderWS(writes, done, func() error { return nil })
 	d.reminderGateMu.Lock()
 	d.reminderReplayComplete = true
@@ -1677,6 +1682,7 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 		agentAttachments: mgr,
 		reminderCache:    cache,
 	}
+	prepareHeadlessWorkspaceRunnerTestDaemon(d, root)
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 
 	jobs := make([]protocol.ReminderTimerJob, 0, 6)

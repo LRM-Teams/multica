@@ -143,7 +143,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			return err
 		}
 	}
-	d.beginMessageRecoveryWithSend(func(request protocol.AgentRecoveryRequest) error {
+	runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
 		return writeFrame(protocol.EventAgentRecoveryRequest, request)
 	})
 	for {
@@ -226,7 +226,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &page) != nil {
 				continue
 			}
-			if err := d.handleMessageRecoveryPageWithSend(context.Background(), page, func(request protocol.AgentRecoveryRequest) error {
+			if err := d.handleMessageRecoveryPageWithSend(context.Background(), workspaceID, page, func(request protocol.AgentRecoveryRequest) error {
 				return writeFrame(protocol.EventAgentRecoveryRequest, request)
 			}); err != nil && d.logger != nil {
 				d.logger.Warn("workspace Runner agent Message recovery failed", "error", err, "workspace_id", workspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
@@ -257,9 +257,10 @@ func (d *Daemon) handleWorkspaceRunnerDelivery(
 	delivery protocol.AgentDeliverPayload,
 	writeFrame func(string, any) error,
 ) error {
-	d.messageCoordinatorMu.RLock()
-	runtimeID := d.messageRuntimeIDs[delivery.AgentID]
-	d.messageCoordinatorMu.RUnlock()
+	runtimeID := ""
+	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil && runner.inboxes != nil {
+		_, runtimeID, _ = runner.inboxes.Resolve(delivery.AgentID)
+	}
 	d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
 		workspaceID, runtimeID, delivery, "runner_received", "accepted", "",
 	))
@@ -268,9 +269,9 @@ func (d *Daemon) handleWorkspaceRunnerDelivery(
 	// durable runtime during acceptance. Re-read routing identity so every
 	// later checkpoint joins the same runtime even when runner_received could
 	// only identify the Workspace and Agent.
-	d.messageCoordinatorMu.RLock()
-	runtimeID = d.messageRuntimeIDs[delivery.AgentID]
-	d.messageCoordinatorMu.RUnlock()
+	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil && runner.inboxes != nil {
+		_, runtimeID, _ = runner.inboxes.Resolve(delivery.AgentID)
+	}
 	if err != nil {
 		d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
 			workspaceID, runtimeID, delivery, "coordinator_accepted", "rejected", canonicalMessageFailureReason(err),
@@ -301,7 +302,7 @@ func (d *Daemon) handleWorkspaceRunnerDelivery(
 		}
 		return nil
 	}
-	if err := d.flushIdleAgentDelivery(ctx, delivery.AgentID); err != nil {
+	if err := d.flushIdleAgentDelivery(ctx, workspaceID, delivery.AgentID); err != nil {
 		outcome := "failed"
 		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown") {
 			outcome = "deferred"

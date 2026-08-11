@@ -91,9 +91,10 @@ func (d *Daemon) agentStartIntentReady(pending protocol.DaemonHeartbeatPendingAg
 	if _, err := os.Stat(root); err != nil {
 		return false
 	}
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[pending.AgentID]
-	runtimeID := d.messageRuntimeIDs[pending.AgentID]
-	d.messageCoordinatorMu.RUnlock()
-	return coordinator != nil && runtimeID == pending.RuntimeID
+	runner := d.currentWorkspaceRunner(pending.WorkspaceID)
+	if runner == nil || runner.inboxes == nil {
+		return false
+	}
+	_, runtimeID, ok := runner.inboxes.Resolve(pending.AgentID)
+	return ok && runtimeID == pending.RuntimeID
 }

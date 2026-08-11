@@ -317,20 +317,21 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
+	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
-	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	producer := d.workspaceAgentActivityProducer(workspaceID)
 	activities := make(chan protocol.AgentActivityPayload, 8)
 	producer.AttachTransport(func(activity protocol.AgentActivityPayload) { activities <- activity })
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
+	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	completeCoordinatorRecovery(t, coordinator)
 
 	first := testDelivery("message-1", "channel:one", 1, "delivery-1")
@@ -390,17 +391,18 @@ func TestResidentMessageTurnErrorDoesNotAutoHandoffPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
+	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
-	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
+	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	completeCoordinatorRecovery(t, coordinator)
 
 	first := testDelivery("message-1", "channel:one", 1, "delivery-1")
@@ -885,16 +887,14 @@ func TestDaemonAgentLifecycleRegistersCoordinatorAtAgentRoot(t *testing.T) {
 	root := t.TempDir()
 	daemon := New(Config{WorkspacesRoot: root}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	daemon.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	attachTestWorkspaceRunner(t, daemon, workspaceID, nil)
 
 	if err := daemon.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{
 		AgentID: agentID, RuntimeID: runtimeID, WorkspaceID: workspaceID, PlacementGeneration: 1,
 	}); err != nil {
 		t.Fatalf("handleDaemonAgentStart: %v", err)
 	}
-	daemon.messageCoordinatorMu.RLock()
-	coordinator := daemon.messageCoordinators[agentID]
-	registeredRuntimeID := daemon.messageRuntimeIDs[agentID]
-	daemon.messageCoordinatorMu.RUnlock()
+	coordinator, registeredRuntimeID := resolveTestInbox(t, daemon, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	if coordinator == nil || registeredRuntimeID != runtimeID {
 		t.Fatalf("coordinator=%v runtime_id=%q", coordinator, registeredRuntimeID)
 	}
@@ -911,11 +911,10 @@ func TestDaemonAgentLifecycleRegistersCoordinatorAtAgentRoot(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("handleDaemonAgentStop: %v", err)
 	}
-	daemon.messageCoordinatorMu.RLock()
-	coordinator = daemon.messageCoordinators[agentID]
-	daemon.messageCoordinatorMu.RUnlock()
-	if coordinator != nil {
-		t.Fatal("coordinator remained registered after accepted placement stop")
+	if runner := daemon.currentWorkspaceRunner(workspaceID); runner != nil {
+		if _, _, ok := runner.inboxes.Resolve(agentID); ok {
+			t.Fatal("coordinator remained registered after accepted placement stop")
+		}
 	}
 }
 
@@ -1419,18 +1418,13 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 		mode:    canonicalRuntimeResident,
 		backend: &canonicalRuntimeTestBackend{},
 	}
-	daemon := &Daemon{
-		canonicalRuntimes: runtimePool,
-		messageRuntimeIDs: map[string]string{"agent-1": "runtime-1"},
-	}
-	if err := daemon.registerIdleMessageCoordinator("agent-1", coordinator); err != nil {
-		t.Fatalf("registerIdleMessageCoordinator: %v", err)
-	}
+	daemon := &Daemon{canonicalRuntimes: runtimePool}
 	completeCoordinatorRecovery(t, coordinator)
 	delivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
 	daemon.mu.Lock()
 	daemon.runtimeIndex = map[string]Runtime{"runtime-1": {ID: "runtime-1", WorkspaceID: "workspace-1"}}
 	daemon.mu.Unlock()
+	registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	ack, err := daemon.acceptIdleAgentDelivery(context.Background(), "workspace-1", delivery)
 	if err != nil {
 		t.Fatalf("acceptIdleAgentDelivery: %v", err)
@@ -1444,7 +1438,7 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
 		t.Fatalf("boundary = %d, want 0 before handoff", got)
 	}
-	if err := daemon.flushIdleAgentDelivery(context.Background(), "agent-1"); err != nil {
+	if err := daemon.flushIdleAgentDelivery(context.Background(), "workspace-1", "agent-1"); err != nil {
 		t.Fatalf("flushIdleAgentDelivery: %v", err)
 	}
 	if handoffs != 1 {
@@ -1474,18 +1468,23 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 	if _, err := oldCoordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
 		t.Fatal(err)
 	}
-	daemon := &Daemon{
-		messageCoordinators: map[string]*MessageCoordinator{"agent-1": oldCoordinator},
-		messageRuntimeIDs:   map[string]string{"agent-1": "runtime-old"},
-		canonicalRuntimes:   newCanonicalAgentRuntimePool(),
+	daemon := &Daemon{canonicalRuntimes: newCanonicalAgentRuntimePool()}
+	runner := registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-1"}, "runtime-old", oldCoordinator)
+	resolver := &testInboxAttachmentResolver{attachments: map[InboxKey]AgentAttachment{}}
+	resolver.set(AgentAttachment{WorkspaceID: "workspace-test", AgentID: "agent-1", RuntimeID: "runtime-old", AttachmentGeneration: 1})
+	runner.inboxes.attachments = resolver
+	runner.inboxes.ownsRuntime = func(string) bool { return true }
+	runner.inboxes.open = func(key InboxKey, runtimeID string) (*MessageCoordinator, error) {
+		return NewMessageCoordinator(key, newRoot, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	}
 	flushDone := make(chan error, 1)
-	go func() { flushDone <- daemon.flushIdleAgentDelivery(context.Background(), "agent-1") }()
+	go func() { flushDone <- daemon.flushIdleAgentDelivery(context.Background(), "workspace-test", "agent-1") }()
 	<-handoffStarted
 
 	replacementDone := make(chan error, 1)
+	resolver.set(AgentAttachment{WorkspaceID: "workspace-test", AgentID: "agent-1", RuntimeID: "runtime-new", AttachmentGeneration: 2})
 	go func() {
-		_, err := daemon.ensureIdleMessageCoordinator("workspace-test", "agent-1", "runtime-new", newRoot)
+		_, err := runner.inboxes.Ensure("agent-1")
 		replacementDone <- err
 	}()
 	select {
@@ -1509,10 +1508,7 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 	if len(pending) != 1 || pending[0].ID != "message-1" {
 		t.Fatalf("stale handoff consumed old Pending: %+v", pending)
 	}
-	daemon.messageCoordinatorMu.RLock()
-	replacement := daemon.messageCoordinators["agent-1"]
-	runtimeID := daemon.messageRuntimeIDs["agent-1"]
-	daemon.messageCoordinatorMu.RUnlock()
+	replacement, runtimeID := resolveTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-1"})
 	if replacement == nil {
 		t.Fatal("replacement coordinator is nil")
 	}

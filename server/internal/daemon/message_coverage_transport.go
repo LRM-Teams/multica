@@ -39,26 +39,28 @@ func (p *CredentialProxy) CommitCoverage(agentProxyToken, receiptID string) erro
 		p.daemon.recordCoverageCommitDiagnostic(credential, err)
 		return err
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	coordinator := p.daemon.messageCoordinators[credential.Inbox.AgentID]
-	coordinators := make([]*MessageCoordinator, 0, len(p.daemon.messageCoordinators))
-	for _, candidate := range p.daemon.messageCoordinators {
-		if candidate != nil {
-			coordinators = append(coordinators, candidate)
-		}
+	runner := p.daemon.currentWorkspaceRunner(credential.Inbox.WorkspaceID)
+	var coordinator *MessageCoordinator
+	if runner != nil && runner.inboxes != nil {
+		coordinator, _, _ = runner.inboxes.Resolve(credential.Inbox.AgentID)
 	}
-	p.daemon.messageCoordinatorMu.RUnlock()
 	if coordinator == nil || !coordinator.hasInboxKey(credential.Inbox) {
 		err = ErrCoverageReceiptInvalid
 		p.daemon.recordCoverageCommitDiagnostic(credential, err)
 		return err
 	}
 	if !coordinator.ownsCoverageReceipt(receiptID) {
-		for _, candidate := range coordinators {
-			if candidate != coordinator && candidate.ownsCoverageReceipt(receiptID) {
-				err = ErrCoverageReceiptScope
-				p.daemon.recordCoverageCommitDiagnostic(credential, err)
-				return err
+		for _, candidateRunner := range p.daemon.currentWorkspaceRunners() {
+			if candidateRunner.inboxes == nil {
+				continue
+			}
+			for _, entry := range candidateRunner.inboxes.snapshot() {
+				candidate := entry.coordinator
+				if candidate != nil && candidate != coordinator && candidate.ownsCoverageReceipt(receiptID) {
+					err = ErrCoverageReceiptScope
+					p.daemon.recordCoverageCommitDiagnostic(credential, err)
+					return err
+				}
 			}
 		}
 		err = ErrCoverageReceiptInvalid

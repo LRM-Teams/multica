@@ -17,39 +17,54 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, agentRoot string) (bool, error) {
+func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*MessageCoordinator, error) {
+	key, err := key.normalized()
+	if err != nil {
+		return nil, err
+	}
+	runtimeID = strings.TrimSpace(runtimeID)
+	if runtimeID == "" {
+		return nil, errors.New("Message coordinator Runtime identity is required")
+	}
+	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, key.WorkspaceID, key.AgentID)
+	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+		return nil, fmt.Errorf("create Agent root for Message coordinator: %w", err)
+	}
+	coordinator, err := NewMessageCoordinator(key, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
+		return d.handoffIdleMessageBatch(ctx, key.AgentID, runtimeID, messages)
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		return d.canonicalRuntimes.handoffBusyNotice(ctx, key.AgentID, runtimeID, snapshot, commitIfCurrent)
+	}, 0, 0)
+	return coordinator, nil
+}
+
+func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID string) (bool, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	agentID = strings.TrimSpace(agentID)
 	runtimeID = strings.TrimSpace(runtimeID)
 	if d == nil || workspaceID == "" || agentID == "" || runtimeID == "" {
 		return false, errors.New("Workspace, Agent, and Runtime ids are required")
 	}
-	d.messageCoordinatorMu.Lock()
-	defer d.messageCoordinatorMu.Unlock()
-	if existing := d.messageCoordinators[agentID]; existing != nil {
-		if d.messageRuntimeIDs[agentID] == "" || d.messageRuntimeIDs[agentID] == runtimeID {
-			return false, nil
-		}
-		existing.Close()
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil {
+		return false, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
 	}
-	coordinator, err := NewMessageCoordinator(InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
-		return d.handoffIdleMessageBatch(ctx, agentID, runtimeID, messages)
-	}, nil)
+	if runner.inboxes == nil {
+		return false, fmt.Errorf("Workspace Runner %q has no Inbox registry", workspaceID)
+	}
+	created, err := runner.inboxes.Ensure(agentID)
 	if err != nil {
 		return false, err
 	}
-	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
-		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
-	}, 0, 0)
-	if d.messageCoordinators == nil {
-		d.messageCoordinators = make(map[string]*MessageCoordinator)
+	_, currentRuntimeID, ok := runner.inboxes.Resolve(agentID)
+	if !ok || currentRuntimeID != runtimeID {
+		return false, fmt.Errorf("Message Inbox for agent %q resolved Runtime %q, want %q", agentID, currentRuntimeID, runtimeID)
 	}
-	if d.messageRuntimeIDs == nil {
-		d.messageRuntimeIDs = make(map[string]string)
-	}
-	d.messageCoordinators[agentID] = coordinator
-	d.messageRuntimeIDs[agentID] = runtimeID
-	return true, nil
+	return created, nil
 }
 
 // ensureIdleMessageCoordinatorForDelivery repairs restart-time coordinator
@@ -62,14 +77,11 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	if d == nil || workspaceID == "" || agentID == "" {
 		return errors.New("workspace and agent ids are required")
 	}
-	d.messageCoordinatorMu.RLock()
-	existing := d.messageCoordinators[agentID]
-	existingRuntimeID := d.messageRuntimeIDs[agentID]
-	d.messageCoordinatorMu.RUnlock()
-	if existing != nil {
-		if !d.ownsWorkspaceRunnerRuntime(workspaceID, existingRuntimeID) {
-			return fmt.Errorf("Message coordinator for agent %q is outside Workspace %q", agentID, workspaceID)
-		}
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
+		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+	}
+	if _, _, ok := runner.inboxes.Resolve(agentID); ok {
 		return nil
 	}
 	registry := d.attachmentRegistry()
@@ -86,16 +98,12 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	if !runtimeKnown || runtime.WorkspaceID != workspaceID {
 		return fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, workspaceID)
 	}
-	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
-	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
-		return fmt.Errorf("create Agent root for Message coordinator: %w", err)
-	}
-	created, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID, agentRoot)
+	created, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID)
 	if err != nil {
 		return fmt.Errorf("repair Agent Message coordinator: %w", err)
 	}
 	if created {
-		d.beginAgentMessageRecovery(agentID)
+		d.beginAgentMessageRecovery(workspaceID, agentID)
 	}
 	return nil
 }
@@ -163,11 +171,12 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// the prior turn finished. If Pending remains, schedule a content-free
 		// Notice; body handoff waits for idle Accept→Flush, recovery Flush, or
 		// agent `message check`.
-		d.messageCoordinatorMu.RLock()
-		coordinator := d.messageCoordinators[agentID]
-		d.messageCoordinatorMu.RUnlock()
-		if coordinator != nil {
-			coordinator.NotifyPendingAfterTurn()
+		runner := d.currentWorkspaceRunner(workspaceID)
+		if runner != nil && runner.inboxes != nil {
+			coordinator, _, ok := runner.inboxes.Resolve(agentID)
+			if ok {
+				coordinator.NotifyPendingAfterTurn()
+			}
 		}
 		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
 			d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
@@ -437,10 +446,8 @@ func (p *CredentialProxy) SeenUpToSeq(agentID, target string) (int64, error) {
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	defer p.daemon.messageCoordinatorMu.RUnlock()
-	coordinator := p.daemon.messageCoordinators[agentID]
-	if coordinator == nil {
+	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
 	seq, known := coordinator.ContextBoundary(target)
@@ -454,10 +461,8 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if p == nil || p.daemon == nil {
 		return MessageCheckResult{}, errors.New("Credential Proxy is unavailable")
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	defer p.daemon.messageCoordinatorMu.RUnlock()
-	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
-	if coordinator == nil {
+	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	if err != nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
 	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: messageCheckDefaultLimit})
@@ -485,10 +490,8 @@ func (p *CredentialProxy) PrepareMessageRead(
 	if p == nil || p.daemon == nil {
 		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	defer p.daemon.messageCoordinatorMu.RUnlock()
-	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
-	if coordinator == nil {
+	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	if err != nil {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}
 	if throughSeq == 0 && len(messages) == 0 {
@@ -503,10 +506,8 @@ func (p *CredentialProxy) messageCoordinator(agentID string) (*MessageCoordinato
 	if p == nil || p.daemon == nil {
 		return nil, errors.New("Credential Proxy is unavailable")
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
-	p.daemon.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
+	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	if err != nil {
 		return nil, errors.New("Message coordinator is unavailable")
 	}
 	return coordinator, nil

@@ -104,8 +104,6 @@ func TestWorkspaceRunnerCanonicalMessageDiagnosticsFollowRealDeliveryPath(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.messageCoordinators[agentID] = coordinator
-	d.messageRuntimeIDs[agentID] = runtimeID
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: &idleMessageFakeRuntime{},
@@ -118,6 +116,12 @@ func TestWorkspaceRunnerCanonicalMessageDiagnosticsFollowRealDeliveryPath(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	registerTestRunnerInbox(t, runner, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, runtimeID, coordinator)
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	})
 	go func() { errCh <- runner.runConnection(ctx) }()
 	select {
 	case <-acknowledged:
@@ -536,11 +540,15 @@ func TestCredentialProxyResponseDiagnosticsUseBoundedOutcomes(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	d := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runnerInstanceID = "runner-generation-1"
-	d.messageRuntimeIDs[agentID] = runtimeID
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
 		store: store, environment: diagnosticlog.EnvironmentProduction, runnerGeneration: d.runnerInstanceID,
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, runtimeID, coordinator)
 
 	tests := []struct {
 		requestID string

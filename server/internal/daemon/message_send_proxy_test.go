@@ -187,10 +187,10 @@ func newDraftReuseTestDaemon(t *testing.T) (*Daemon, *CredentialProxy) {
 			ServerBaseURL:  server.URL,
 			WorkspacesRoot: root,
 		},
-		logger:              slog.Default(),
-		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
-		messageDraftStore:   NewMessageDraftStore(root),
+		logger:            slog.Default(),
+		messageDraftStore: NewMessageDraftStore(root),
 	}
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	return d, d.CredentialProxy()
 }
 

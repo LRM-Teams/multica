@@ -201,6 +201,11 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	})
 	go func() { errCh <- runner.runConnection(ctx) }()
 	var ready, ack, status, inactive, session, initialActivity, stoppedActivity protocol.Message
 	for i := 0; i < 7; i++ {
@@ -337,10 +342,6 @@ func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *te
 		t.Fatal(err)
 	}
 	completeCoordinatorRecovery(t, coordinator)
-	d.messageCoordinatorMu.Lock()
-	d.messageCoordinators["agent-1"] = coordinator
-	d.messageRuntimeIDs["agent-1"] = "runtime-1"
-	d.messageCoordinatorMu.Unlock()
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
 	d.mu.Unlock()
@@ -353,6 +354,12 @@ func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	registerTestRunnerInbox(t, runner, InboxKey{WorkspaceID: "ws-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	})
 	go func() { errCh <- runner.runConnection(ctx) }()
 	for attempt := 0; attempt < 2; attempt++ {
 		var ack protocol.AgentDeliverAckPayload

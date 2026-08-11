@@ -102,10 +102,7 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
-	messageCoordinatorMu   sync.RWMutex
-	messageCoordinators    map[string]*MessageCoordinator
 	messageDraftStore      *MessageDraftStore
-	messageRuntimeIDs      map[string]string
 	agentProxyCredentialMu sync.RWMutex
 	agentProxyCredentials  map[[32]byte]authenticatedAgentProxy
 	messageSendMu          sync.Mutex
@@ -265,60 +262,29 @@ type Daemon struct {
 	canonicalResidentFactoryOverride canonicalRuntimeBackendFactory
 }
 
-// registerIdleMessageCoordinator installs the one long-running coordinator for
-// an Agent on this Machine Service. The coordinator itself serializes delivery,
-// runtime handoff, and Context Boundary persistence.
-func (d *Daemon) registerIdleMessageCoordinator(agentID string, coordinator *MessageCoordinator) error {
-	if d == nil || agentID == "" || coordinator == nil {
-		return errors.New("agent id and Message coordinator are required")
-	}
-	d.messageCoordinatorMu.Lock()
-	defer d.messageCoordinatorMu.Unlock()
-	if d.messageCoordinators == nil {
-		d.messageCoordinators = make(map[string]*MessageCoordinator)
-	}
-	if d.messageRuntimeIDs == nil {
-		d.messageRuntimeIDs = make(map[string]string)
-	}
-	if _, exists := d.messageCoordinators[agentID]; exists {
-		return fmt.Errorf("Message coordinator already registered for agent %q", agentID)
-	}
-	d.messageCoordinators[agentID] = coordinator
-	return nil
-}
-
-func (d *Daemon) removeIdleMessageCoordinator(agentID, runtimeID string) {
-	d.messageCoordinatorMu.Lock()
-	if current := d.messageRuntimeIDs[agentID]; current != "" && current != runtimeID {
-		d.messageCoordinatorMu.Unlock()
+func (d *Daemon) removeIdleMessageCoordinator(workspaceID, agentID, runtimeID string) {
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
 		return
 	}
-	coordinator := d.messageCoordinators[agentID]
-	delete(d.messageCoordinators, agentID)
-	delete(d.messageRuntimeIDs, agentID)
-	d.messageCoordinatorMu.Unlock()
-	if coordinator != nil {
-		coordinator.Close()
-	}
+	runner.inboxes.Remove(agentID, runtimeID)
 }
 
 func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, workspaceID string, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[delivery.AgentID]
-	runtimeID := d.messageRuntimeIDs[delivery.AgentID]
-	d.messageCoordinatorMu.RUnlock()
-	if coordinator != nil && !d.ownsWorkspaceRunnerRuntime(workspaceID, runtimeID) {
-		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("Message coordinator for agent %q is outside Workspace %q", delivery.AgentID, workspaceID)
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil {
+		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
 	}
-	if coordinator == nil {
+	if runner.inboxes == nil {
+		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("Workspace Runner %q has no Inbox registry", workspaceID)
+	}
+	coordinator, runtimeID, ok := runner.inboxes.Resolve(delivery.AgentID)
+	if !ok {
 		if err := d.ensureIdleMessageCoordinatorForDelivery(workspaceID, delivery.AgentID); err != nil {
 			return protocol.AgentDeliverAckPayload{}, err
 		}
-		d.messageCoordinatorMu.RLock()
-		coordinator = d.messageCoordinators[delivery.AgentID]
-		runtimeID = d.messageRuntimeIDs[delivery.AgentID]
-		d.messageCoordinatorMu.RUnlock()
-		if coordinator == nil {
+		coordinator, runtimeID, ok = runner.inboxes.Resolve(delivery.AgentID)
+		if !ok {
 			return protocol.AgentDeliverAckPayload{}, fmt.Errorf("no idle Message coordinator for agent %q", delivery.AgentID)
 		}
 	}
@@ -336,55 +302,43 @@ func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, workspaceID string
 	return coordinator.Acknowledgement(delivery), nil
 }
 
-func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, agentID string) error {
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
+func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, workspaceID, agentID string) error {
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
+		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+	}
+	coordinator, _, ok := runner.inboxes.Resolve(agentID)
+	if !ok {
 		return fmt.Errorf("no idle Message coordinator for agent %q", agentID)
 	}
 	return coordinator.Flush(ctx)
 }
 
-func (d *Daemon) beginMessageRecoveryWithSend(send func(protocol.AgentRecoveryRequest) error) {
-	if send == nil {
+func (d *Daemon) beginAgentMessageRecovery(workspaceID, agentID string) {
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
 		return
 	}
-	d.messageCoordinatorMu.RLock()
-	coordinators := make(map[string]*MessageCoordinator, len(d.messageCoordinators))
-	for agentID, coordinator := range d.messageCoordinators {
-		coordinators[agentID] = coordinator
-	}
-	d.messageCoordinatorMu.RUnlock()
-	for agentID, coordinator := range coordinators {
-		if err := send(coordinator.BeginRecovery(agentID, 100)); err != nil && d.logger != nil {
-			d.logger.Warn("agent Message recovery request failed", "error", err, "agent_id", agentID)
-		}
-	}
-}
-
-func (d *Daemon) beginAgentMessageRecovery(agentID string) {
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
+	coordinator, _, ok := runner.inboxes.Resolve(agentID)
+	if !ok {
 		return
 	}
 	request := coordinator.BeginRecovery(agentID, 100)
-	if !d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentRecoveryRequest, request) && d.logger != nil {
-		d.logger.Warn("agent Message recovery request failed", "error", "workspace Runner Message transport unavailable", "agent_id", agentID)
+	if err := runner.sendOnCurrentConnection(protocol.EventAgentRecoveryRequest, request); err != nil && d.logger != nil {
+		d.logger.Warn("agent Message recovery request failed", "error", err, "workspace_id", workspaceID, "agent_id", agentID, "reason", "runner_connection_write_failed")
 	}
 }
 
-func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
+func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, workspaceID string, page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
 	if send == nil {
 		return errors.New("Message recovery sender is unavailable")
 	}
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[page.AgentID]
-	runtimeID := d.messageRuntimeIDs[page.AgentID]
-	d.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
+		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+	}
+	coordinator, runtimeID, ok := runner.inboxes.Resolve(page.AgentID)
+	if !ok {
 		return fmt.Errorf("no Message coordinator for recovery agent %q", page.AgentID)
 	}
 	if err := coordinator.MergeRecoveryPage(page); err != nil {
@@ -441,9 +395,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		memoryCurationRuns:        make(map[string]string),
 		activeCurationRuns:        make(map[string]string),
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
-		messageCoordinators:       make(map[string]*MessageCoordinator),
 		messageDraftStore:         NewMessageDraftStore(cfg.WorkspacesRoot),
-		messageRuntimeIDs:         make(map[string]string),
 		agentProcessManagers:      make(map[string]*agentProcessManager),
 		agentActivityProducers:    make(map[string]*agentActivityProducer),
 		workspaceRunners:          make(map[string]*WorkspaceRunner),
@@ -510,7 +462,7 @@ func (d *Daemon) removeReminderAgent(payload protocol.DaemonAgentStopPayload) er
 		}
 	}
 	if removed {
-		d.removeIdleMessageCoordinator(payload.AgentID, payload.RuntimeID)
+		d.removeIdleMessageCoordinator(result.change.Previous.WorkspaceID, payload.AgentID, payload.RuntimeID)
 		d.reminderGateMu.Lock()
 		delete(d.reminderPendingSnapshots, payload.AgentID)
 		d.reminderGateMu.Unlock()

@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -83,19 +84,39 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	t.Cleanup(pool.Close)
 	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
-	root := t.TempDir()
+	workspacesRoot := t.TempDir()
+	root := agentworkspace.Root(workspacesRoot, workspaceID, agentID)
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		t.Fatal(err)
+	}
 	if err := seedIdleMessageAcceptanceBoundaries(context.Background(), pool, root, workspaceID, agentID); err != nil {
 		t.Fatalf("seed initial Context Boundaries: %v", err)
 	}
 	fakeRuntime := &idleMessageFakeRuntime{}
-	d := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(Config{DaemonID: daemonID, WorkspacesRoot: workspacesRoot}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := d.newWorkspaceRunner(workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.attachWorkspaceRunner(runner)
+	t.Cleanup(func() {
+		d.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	})
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: fakeRuntime,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, root); err != nil {
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 	}
-	d.messageCoordinators[agentID].ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
+	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
 	}, 20*time.Millisecond, 30*time.Millisecond)
 
@@ -147,10 +168,10 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		t.Fatal("startup recovery request was not observed")
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for !d.messageCoordinators[agentID].FreshnessKnown() && time.Now().Before(deadline) {
+	for !coordinator.FreshnessKnown() && time.Now().Before(deadline) {
 		runtime.Gosched()
 	}
-	if !d.messageCoordinators[agentID].FreshnessKnown() {
+	if !coordinator.FreshnessKnown() {
 		t.Fatal("startup recovery did not complete")
 	}
 
@@ -261,7 +282,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if len(notices) != 1 || notices[0].TotalPending != 1 || len(notices[0].ChangedTargets) != 1 || notices[0].ChangedTargets[0].Target != target {
 		t.Fatalf("busy runtime Notices = %+v", notices)
 	}
-	if got := d.messageCoordinators[agentID].Boundaries()[target]; got != created.Seq {
+	if got := coordinator.Boundaries()[target]; got != created.Seq {
 		t.Fatalf("boundary after busy Notice = %d, want %d", got, created.Seq)
 	}
 	select {
@@ -288,13 +309,13 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if checked.CoverageReceipt == "" {
 		t.Fatal("message check did not return a local coverage receipt")
 	}
-	if got := d.messageCoordinators[agentID].Boundaries()[target]; got != created.Seq {
+	if got := coordinator.Boundaries()[target]; got != created.Seq {
 		t.Fatalf("boundary before check output commit = %d, want prior %d", got, created.Seq)
 	}
-	if err := d.messageCoordinators[agentID].CommitCoverage(checked.CoverageReceipt); err != nil {
+	if err := coordinator.CommitCoverage(checked.CoverageReceipt); err != nil {
 		t.Fatalf("commit checked coverage: %v", err)
 	}
-	if got := d.messageCoordinators[agentID].Boundaries()[target]; got != busyCreated.Seq {
+	if got := coordinator.Boundaries()[target]; got != busyCreated.Seq {
 		t.Fatalf("boundary after check output commit = %d, want %d", got, busyCreated.Seq)
 	}
 	if seq, err := d.CredentialProxy().SeenUpToSeq(agentID, target); err != nil || seq != busyCreated.Seq {
@@ -303,7 +324,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
 		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
 	}
-	d.beginAgentMessageRecovery(agentID)
+	d.beginAgentMessageRecovery(workspaceID, agentID)
 	select {
 	case request := <-recoveryRequests:
 		if request.AgentID != agentID || request.RecoveryID == "" || request.Boundaries[target] != busyCreated.Seq {
@@ -352,9 +373,13 @@ func seedIdleMessageAcceptanceFixture(t *testing.T, pool *pgxpool.Pool) (workspa
 func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub, workspaceID, daemonID string) func() {
 	t.Helper()
 	d.cfg.DaemonID = daemonID
-	runner, err := d.newWorkspaceRunner(workspaceID)
-	if err != nil {
-		t.Fatal(err)
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil {
+		var err error
+		runner, err = d.newWorkspaceRunner(workspaceID)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -475,7 +500,11 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	defer pool.Close()
 	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
-	root := t.TempDir()
+	workspacesRoot := t.TempDir()
+	root := agentworkspace.Root(workspacesRoot, workspaceID, agentID)
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		t.Fatal(err)
+	}
 	if err := seedIdleMessageAcceptanceBoundaries(context.Background(), pool, root, workspaceID, agentID); err != nil {
 		t.Fatalf("seed initial Context Boundaries: %v", err)
 	}
@@ -521,15 +550,23 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		teardown func(),
 	) {
 		normal := &recordingResidentMessage{Backend: backend, observed: make(chan struct{}, 1)}
-		d = New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		d = New(Config{DaemonID: daemonID, ServerBaseURL: server.URL, WorkspacesRoot: workspacesRoot}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		d.client.SetWorkspaceDaemonToken(workspaceID, "workspace-token", time.Now().Add(time.Hour))
 		d.mu.Lock()
 		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 		d.mu.Unlock()
+		if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+			t.Fatal(err)
+		}
+		runner, err := d.newWorkspaceRunner(workspaceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.attachWorkspaceRunner(runner)
 		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 			mode: canonicalRuntimeResident, backend: normal,
 		}
-		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, root); err != nil {
+		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 			t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 		}
 		acks = make(chan protocol.AgentDeliverAckPayload, 2)
@@ -552,7 +589,8 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			t.Fatal("startup recovery request was not observed")
 		}
 		deadline := time.Now().Add(2 * time.Second)
-		for !d.messageCoordinators[agentID].FreshnessKnown() && time.Now().Before(deadline) {
+		coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
+		for !coordinator.FreshnessKnown() && time.Now().Before(deadline) {
 			runtime.Gosched()
 		}
 		return d, acks, normal.snapshot, normal.observed, teardown

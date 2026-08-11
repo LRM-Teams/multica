@@ -283,9 +283,8 @@ func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t 
 			t.Fatalf("Accept: %v", err)
 		}
 	}
-	d := &Daemon{
-		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
-	}
+	d := &Daemon{}
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	handler := d.credentialProxyMessageCheckHandler()
 
 	legacy := httptest.NewRecorder()
@@ -372,10 +371,8 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
-	d := &Daemon{
-		cfg:                 cfg,
-		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
-	}
+	d := &Daemon{cfg: cfg}
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	handler := d.credentialProxyMessageReadHandler()
 
 	legacy := httptest.NewRecorder()
@@ -455,7 +452,7 @@ func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	d := &Daemon{cfg: cfg, messageCoordinators: map[string]*MessageCoordinator{}}
+	d := &Daemon{cfg: cfg}
 
 	for name, test := range map[string]struct {
 		handler http.HandlerFunc
@@ -799,11 +796,8 @@ func credentialProxySendTestDaemon(t *testing.T, root, serverURL string, coordin
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
-	d := &Daemon{
-		cfg:                 cfg,
-		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
-		messageDraftStore:   NewMessageDraftStore(root),
-	}
+	d := &Daemon{cfg: cfg, messageDraftStore: NewMessageDraftStore(root)}
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	return d
 }
 

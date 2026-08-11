@@ -29,3 +29,13 @@ connection remains current; replacement fences the old callback before the new
 writer becomes externally addressable. Daemon code may resolve the current
 Runner by Workspace, but it does not keep a parallel transport or generation
 map.
+
+`InboxRegistry` is Runner-owned in-memory state with one immutable Workspace
+scope. It derives an Inbox's Runtime from `AgentAttachmentRegistry` and refuses
+creation unless that Attachment and Runtime both belong to the Runner's
+Workspace. Delivery, recovery pages, reconnect recovery, and scoped close all
+route through this registry. A Runner reconnect retains its registry; a Runner
+shutdown detaches it from lookup and closes only that Runner's coordinators.
+Legacy machine-local callers that have only an Agent ID can resolve exactly one
+current Inbox, but an absent or ambiguous result fails closed rather than
+selecting a Workspace.

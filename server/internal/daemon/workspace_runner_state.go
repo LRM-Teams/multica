@@ -40,15 +40,9 @@ type workspaceRunnerDependencies struct {
 	runtimes     *canonicalAgentRuntimePool
 	credentials  *CredentialProxy
 	diagnostics  *runnerDiagnosticRegistry
+	openInbox    inboxCoordinatorFactory
 	now          func() time.Time
 	onTransition func(agentLifecycleTransition)
-}
-
-// workspaceRunnerInboxSlot reserves the fixed Workspace ownership point for
-// the InboxRegistry extraction. It intentionally owns no coordinator map yet;
-// Delivery and recovery remain on Daemon until the dedicated migration.
-type workspaceRunnerInboxSlot struct {
-	workspaceID string
 }
 
 // WorkspaceRunner is one long-lived orchestration boundary for an
@@ -60,7 +54,7 @@ type WorkspaceRunner struct {
 
 	processes *agentProcessManager
 	activity  *agentActivityProducer
-	inboxes   *workspaceRunnerInboxSlot
+	inboxes   *InboxRegistry
 
 	attachments AgentAttachmentRegistry
 	runtimes    *canonicalAgentRuntimePool
@@ -83,6 +77,21 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 	if now == nil {
 		now = time.Now
 	}
+	openInbox := dependencies.openInbox
+	if openInbox == nil {
+		openInbox = dependencies.daemon.openMessageCoordinator
+	}
+	inboxes, err := newInboxRegistry(config.WorkspaceID, inboxRegistryDependencies{
+		attachments: dependencies.attachments,
+		ownsRuntime: func(runtimeID string) bool {
+			return dependencies.daemon.ownsWorkspaceRunnerRuntime(config.WorkspaceID, runtimeID)
+		},
+		open:   openInbox,
+		logger: dependencies.daemon.logger,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &WorkspaceRunner{
 		config: config,
 		daemon: dependencies.daemon,
@@ -92,7 +101,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 			dependencies.onTransition,
 		),
 		activity:    newAgentActivityProducer(config.DaemonInstanceID, now, nil),
-		inboxes:     &workspaceRunnerInboxSlot{workspaceID: config.WorkspaceID},
+		inboxes:     inboxes,
 		attachments: dependencies.attachments,
 		runtimes:    dependencies.runtimes,
 		credentials: dependencies.credentials,
@@ -105,7 +114,10 @@ func (runner *WorkspaceRunner) Run(ctx context.Context) {
 		return
 	}
 	runner.daemon.attachWorkspaceRunner(runner)
-	defer runner.daemon.detachWorkspaceRunner(runner)
+	defer func() {
+		runner.daemon.detachWorkspaceRunner(runner)
+		runner.inboxes.Close()
+	}()
 	backoff := time.Second
 	for ctx.Err() == nil {
 		if err := runner.runConnection(ctx); err != nil && ctx.Err() == nil && runner.daemon.logger != nil {

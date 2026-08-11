@@ -57,8 +57,27 @@ export const researchKeys = {
     ["research", wsId, "presence", sessionId] as const,
   productRounds: (wsId: string, sessionId: string) =>
     ["research", wsId, "product-rounds", sessionId] as const,
-  graphTyped: (wsId: string, sessionId: string) =>
-    ["research", wsId, "graph-typed", sessionId] as const,
+  graphTyped: (
+    wsId: string,
+    sessionId: string,
+    pagination?: ResearchGraphTypedPagination,
+  ) =>
+    [
+      "research",
+      wsId,
+      "graph-typed",
+      sessionId,
+      pagination?.limit ?? null,
+      pagination?.offset ?? null,
+    ] as const,
+};
+
+/** Default first-screen page size for D5 constellation canvas (G8). */
+export const RESEARCH_TYPED_GRAPH_PAGE_LIMIT = 500;
+
+export type ResearchGraphTypedPagination = {
+  limit?: number;
+  offset?: number;
 };
 
 /** Normalize GET /presence wire map (snake updated_at) → ResearchPresenceMap. */
@@ -153,10 +172,18 @@ export function researchProductRoundsOptions(wsId: string, sessionId: string) {
  * topology. `graph_updated`/`research_session` WS invalidations refresh the
  * same key (see `ws-updaters`).
  */
-export function researchGraphTypedOptions(wsId: string, sessionId: string) {
+export function researchGraphTypedOptions(
+  wsId: string,
+  sessionId: string,
+  pagination?: ResearchGraphTypedPagination,
+) {
+  const page = pagination ?? {
+    limit: RESEARCH_TYPED_GRAPH_PAGE_LIMIT,
+    offset: 0,
+  };
   return queryOptions({
-    queryKey: researchKeys.graphTyped(wsId, sessionId),
-    queryFn: () => api.getResearchGraphTyped(sessionId),
+    queryKey: researchKeys.graphTyped(wsId, sessionId, page),
+    queryFn: () => api.getResearchGraphTyped(sessionId, page),
     enabled: !!wsId && !!sessionId,
   });
 }

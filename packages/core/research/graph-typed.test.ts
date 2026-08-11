@@ -115,6 +115,16 @@ describe("typed graph schema (LRM-1497 · fed by LRM-1505)", () => {
     expect(parsed.nodes).toHaveLength(0);
   });
 
+  it("parses total_node_count when the graph is paginated", () => {
+    const parsed = parseWithFallback(
+      { ...sampleTypedGraph(), total_node_count: 10_042 },
+      TypedGraphResponseSchema,
+      EMPTY_TYPED_GRAPH,
+      { endpoint: "test" },
+    ) as TypedGraphResponse;
+    expect(parsed.total_node_count).toBe(10_042);
+  });
+
   it("falls back to EMPTY_TYPED_GRAPH on a non-object response", () => {
     const parsed = parseWithFallback(
       null,

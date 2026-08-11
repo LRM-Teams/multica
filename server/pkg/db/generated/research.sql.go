@@ -2102,3 +2102,86 @@ func (q *Queries) ListResearchGraphNodesTyped(ctx context.Context, arg ListResea
 	}
 	return items, nil
 }
+
+const countResearchGraphNodes = `-- name: CountResearchGraphNodes :one
+SELECT COUNT(*)::bigint AS count
+FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+`
+
+type CountResearchGraphNodesParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CountResearchGraphNodes(ctx context.Context, arg CountResearchGraphNodesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countResearchGraphNodes, arg.SessionID, arg.WorkspaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const listResearchGraphNodesTypedPaginated = `-- name: ListResearchGraphNodesTypedPaginated :many
+SELECT id, workspace_id, session_id, node_type, title, summary, status, actor_agent_id,
+       payload, created_at, updated_at, run_event_id, level, round, cluster_id, confidence,
+       document_count, conclusion_count, goal_version_id, derived_from, merged_from,
+       superseded_by, restart_of, invalidated_by, superseded_at, invalidated_at
+FROM research_graph_node
+WHERE session_id = $1 AND workspace_id = $2
+ORDER BY created_at ASC
+LIMIT $3 OFFSET $4
+`
+
+type ListResearchGraphNodesTypedPaginatedParams struct {
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Limit       int32       `json:"limit"`
+	Offset      int32       `json:"offset"`
+}
+
+func (q *Queries) ListResearchGraphNodesTypedPaginated(ctx context.Context, arg ListResearchGraphNodesTypedPaginatedParams) ([]ResearchGraphNode, error) {
+	rows, err := q.db.Query(ctx, listResearchGraphNodesTypedPaginated, arg.SessionID, arg.WorkspaceID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ResearchGraphNode
+	for rows.Next() {
+		var i ResearchGraphNode
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SessionID,
+			&i.NodeType,
+			&i.Title,
+			&i.Summary,
+			&i.Status,
+			&i.ActorAgentID,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RunEventID,
+			&i.Level,
+			&i.Round,
+			&i.ClusterID,
+			&i.Confidence,
+			&i.DocumentCount,
+			&i.ConclusionCount,
+			&i.GoalVersionID,
+			&i.DerivedFrom,
+			&i.MergedFrom,
+			&i.SupersededBy,
+			&i.RestartOf,
+			&i.InvalidatedBy,
+			&i.SupersededAt,
+			&i.InvalidatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

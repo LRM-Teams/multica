@@ -1252,6 +1252,50 @@ func TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot(t *testing.T) {
 	}
 }
 
+func TestRecurringReminderOfflineGapCollapsesToOneOccurrenceAndFirstFutureSlot(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "every:1h", "")
+	notifier := &capturedReminderOwnerInputNotifier{}
+	fixture.handler.ReminderOwnerInputNotifier = notifier
+
+	// Five ideal hourly slots elapsed while the owner was offline. The durable
+	// definition still represents one current due version, not five occurrences.
+	missedSlot := time.Now().UTC().Add(-5*time.Hour - 10*time.Minute)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_reminder
+		SET fire_at = $2, cadence_next_at = $2
+		WHERE id = $1`, reminderID, missedSlot); err != nil {
+		t.Fatal(err)
+	}
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+		t.Fatalf("fire recovered overdue version: %v", err)
+	}
+
+	var status string
+	var nextFire, nextCadence time.Time
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status, fire_at, cadence_next_at
+		FROM agent_reminder
+		WHERE id = $1`, reminderID).Scan(&status, &nextFire, &nextCadence); err != nil {
+		t.Fatal(err)
+	}
+	want := missedSlot.Add(time.Hour)
+	for !want.After(time.Now().UTC()) {
+		want = want.Add(time.Hour)
+	}
+	if status != "scheduled" || !nextFire.Equal(nextCadence) || !nextFire.Equal(want) {
+		t.Fatalf("offline-gap advance status=%s fire=%s cadence=%s want=%s", status, nextFire, nextCadence, want)
+	}
+	occurrences, receipts, deliveries, firedEvents := reminderFireCounts(t, reminderID)
+	if occurrences != 1 || receipts != 0 || deliveries != 0 || firedEvents != 1 {
+		t.Fatalf("offline-gap counts=%d/%d/%d/%d want 1/0/0/1", occurrences, receipts, deliveries, firedEvents)
+	}
+	if calls := notifier.snapshot(); len(calls) != 1 || calls[0].payload.Version != 1 {
+		t.Fatalf("offline-gap transient attempts=%+v want one for version 1", calls)
+	}
+}
+
 func TestRecurringReminderFiresEveryOccurrenceWithoutQuota(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)

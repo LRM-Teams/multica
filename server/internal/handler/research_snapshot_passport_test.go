@@ -135,6 +135,29 @@ func seedInitializedResearchSessionForSnapshotTest(t *testing.T) pgtype.UUID {
 	return sessionID
 }
 
+func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotWithoutAttemptID(t *testing.T) {
+	sessionID := seedInitializedResearchSessionForSnapshotTest(t)
+
+	engine := &recordingResearchRunEngine{}
+	useResearchRunEngine(t, engine)
+
+	path := "/api/research/sessions/" + uuidToString(sessionID)
+	req := withURLParam(newRequest(http.MethodGet, path, nil), "id", uuidToString(sessionID))
+
+	recorder := httptest.NewRecorder()
+	testHandler.GetResearchSessionSnapshot(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !engine.snapshotCalled {
+		t.Fatal("expected Snapshot to be called when attempt_id is absent")
+	}
+	if engine.snapshotForAttemptCalled {
+		t.Fatal("SnapshotForAttempt must not be called without attempt_id")
+	}
+}
+
 func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotForAttemptWhenAttemptIDPresent(t *testing.T) {
 	sessionID := seedInitializedResearchSessionForSnapshotTest(t)
 	attemptID := uuid.NewString()

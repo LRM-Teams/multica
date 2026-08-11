@@ -111,6 +111,71 @@ func TestShadowEquivalenceFixtureMatchesLegacyVisibleSet(t *testing.T) {
 	}
 }
 
+func TestShadowEquivalencePromptHashMatchesAfterDispatch(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Shadow prompt hash", Title: "Shadow prompt",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	seedShadowEquivalenceArtifacts(t, ctx, pool, fixture.workspaceID, run.SessionID)
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	replayed, err := replayDispatchPromptFromManifest(ctx, store, fixture.workspaceID, attempt.ID)
+	if err != nil {
+		t.Fatalf("replayDispatchPromptFromManifest: %v", err)
+	}
+	var outboxPrompt string
+	if err = pool.QueryRow(ctx, `
+		SELECT request_payload->>'prompt'
+		FROM research_dispatch_outbox WHERE attempt_id = $1::uuid
+	`, attempt.ID).Scan(&outboxPrompt); err != nil {
+		t.Fatalf("load outbox prompt: %v", err)
+	}
+	if replayed != outboxPrompt {
+		t.Fatal("shadow dispatch prompt hash path: replayed prompt differs from outbox")
+	}
+	var stateVersion int64
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err = tx.QueryRow(ctx, `
+		SELECT state_version FROM research_session
+		WHERE workspace_id = $1::uuid AND id = $2::uuid
+	`, fixture.workspaceID, run.SessionID).Scan(&stateVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyShadowEquivalenceTx(ctx, tx, fixture.workspaceID, run.SessionID, stateVersion); err != nil {
+		t.Fatalf("verifyShadowEquivalenceTx after dispatch: %v", err)
+	}
+}
+
 func seedShadowEquivalenceArtifacts(
 	t *testing.T,
 	ctx context.Context,

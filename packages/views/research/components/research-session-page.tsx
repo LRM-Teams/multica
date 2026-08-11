@@ -67,6 +67,8 @@ import {
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
+import { isResearchD5Lens } from "../lib/research-d5-lens-display";
+import { buildGoalVersionHistory } from "../lib/research-d5-goal-history";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -83,6 +85,7 @@ import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import { ResearchD5Chrome } from "./research-d5-chrome";
+import { ResearchCanvasChangeCard, isCanvasChangeProcessMessage } from "./research-canvas-change-card";
 import { ResearchChatCard } from "./research-chat-card";
 import {
   ResearchChatModeBody,
@@ -192,7 +195,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     isLoading: typedGraphLoading,
     isError: typedGraphError,
   } = useQuery(researchGraphTypedOptions(wsId, sessionId));
-  const [d5Lens, setD5Lens] = useState<ResearchD5Lens>("relations");
+  const [d5Lens, setD5Lens] = useState<ResearchD5Lens>(() => {
+    const fromUrl = nav.searchParams.get("lens");
+    return isResearchD5Lens(fromUrl) ? fromUrl : "relations";
+  });
+  const handleD5LensChange = useCallback(
+    (lens: ResearchD5Lens) => {
+      setD5Lens(lens);
+      const params = new URLSearchParams(nav.searchParams.toString());
+      if (lens === "relations") params.delete("lens");
+      else params.set("lens", lens);
+      const qs = params.toString();
+      nav.replace(qs ? `${nav.pathname}?${qs}` : nav.pathname);
+    },
+    [nav],
+  );
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
@@ -461,6 +478,17 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
   const postUser = (body: string) => send.mutate(body);
 
+  const goalVersion = data.run?.run?.goal_version ?? data.run?.contract?.goal_version ?? null;
+  const goalHistory = useMemo(
+    () =>
+      buildGoalVersionHistory({
+        currentGoal: session.goal,
+        currentVersion: goalVersion,
+        messages,
+      }),
+    [session.goal, goalVersion, messages],
+  );
+
   const onClarificationOption = (
     question: ResearchClarificationQuestion,
     optionId: string,
@@ -548,7 +576,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       <ResearchShellAtmosphere heightClassName="h-[320px]" />
       <ResearchD5Chrome
         activeLens={d5Lens}
-        onLensChange={setD5Lens}
+        onLensChange={handleD5LensChange}
+        goalVersion={goalVersion}
+        goalHistory={goalHistory}
         session={session}
         contract={data.run?.contract}
         canConfirm={canConfirm}
@@ -604,6 +634,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           onOpenAgentPanel={handleOpenAgentPanel}
           canvasMode={canvasMode}
           activeLens={d5Lens}
+          sources={sources}
+          run={data.run}
+          members={fleet.members}
           formingMode={
             canvasMode === "forming" || canvasMode === "stalled" ? canvasMode : undefined
           }
@@ -758,8 +791,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                       <div
                         key={item.message.id}
                         id={stageAnchorTargetId(item.message.id)}
-                        className="scroll-mt-3"
+                        className="scroll-mt-3 space-y-2"
                       >
+                        {isCanvasChangeProcessMessage(item.message) ? (
+                          <ResearchCanvasChangeCard message={item.message} />
+                        ) : null}
                         <ResearchChatCard
                           message={item.message}
                           members={fleet.members}

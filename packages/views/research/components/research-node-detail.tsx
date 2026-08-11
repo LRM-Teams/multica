@@ -480,7 +480,7 @@ function nextStepActionLabel(
   return t(($) => $.node.next_step_actions[key]);
 }
 
-function DetailBody({
+export function ResearchNodeDetailBody({
   node,
   sources,
   run,
@@ -1038,7 +1038,7 @@ export function ResearchNodeDetail({
         data-placement="inline"
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
-        <DetailBody
+        <ResearchNodeDetailBody
           node={node}
           sources={sources}
           run={run}
@@ -1062,7 +1062,7 @@ export function ResearchNodeDetail({
         aria-label={t(($) => $.node.detail_hint)}
       >
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <DetailBody
+          <ResearchNodeDetailBody
             node={node}
             sources={sources}
             run={run}
@@ -1092,7 +1092,7 @@ export function ResearchNodeDetail({
           <SheetTitle>{node.title}</SheetTitle>
           <SheetDescription>{t(($) => $.node.detail_hint)}</SheetDescription>
         </SheetHeader>
-        <DetailBody node={node} sources={sources} run={run} members={members} onClose={onClose} />
+        <ResearchNodeDetailBody node={node} sources={sources} run={run} members={members} onClose={onClose} />
       </SheetContent>
     </Sheet>
   );

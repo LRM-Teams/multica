@@ -40,10 +40,24 @@
   font-size: 10px;
 }
 .d5-lens-group {
-  margin-left: auto;
+  margin-left: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
+  flex-shrink: 0;
+}
+.d5-goal-slot {
+  display: flex;
+  justify-content: center;
+}
+.d5-rail-collapsed {
+  transform: translateY(calc(100% - 44px));
+}
+.d5-rail-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: calc(min(72dvh, 560px) + 8px);
+  z-index: 40;
 }
 .d5-lens-btn {
   border: 1px solid #2a3a4c;

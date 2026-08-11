@@ -153,3 +153,27 @@
   color: var(--muted-foreground);
   font-size: 8px;
 }
+.sg-lens-dim {
+  opacity: 0.34;
+  filter: saturate(0.55);
+}
+.sg-lens-emphasis {
+  filter: drop-shadow(0 0 10px color-mix(in oklab, var(--brand) 35%, transparent));
+}
+.sg-edge-layer .sg-lens-dim {
+  opacity: 0.22;
+}
+.sg-edge-layer .sg-lens-emphasis {
+  opacity: 1;
+  stroke-width: 2.5px;
+}
+.research-motion-marker-tombstone {
+  opacity: 0.55;
+  filter: saturate(0.45);
+}
+.research-motion-marker-restart-relation {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand) 35%, transparent);
+}
+.research-motion-marker-regoal-highlight {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--brand) 22%, transparent);
+}

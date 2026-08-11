@@ -1019,7 +1019,7 @@ export function ResearchNodeDetail({
   open?: boolean;
   onClose?: () => void;
   /** Force placement; default: overlay-card on desktop, sheet on narrow. */
-  placement?: "overlay-card" | "sheet";
+  placement?: "overlay-card" | "sheet" | "inline";
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -1030,6 +1030,25 @@ export function ResearchNodeDetail({
   });
 
   if (!open) return null;
+
+  if (mode === "inline") {
+    return (
+      <div
+        data-testid="research-node-detail"
+        data-placement="inline"
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        <DetailBody
+          node={node}
+          sources={sources}
+          run={run}
+          members={members}
+          onClose={onClose}
+          showClose={Boolean(onClose)}
+        />
+      </div>
+    );
+  }
 
   if (mode === "overlay-card") {
     return (

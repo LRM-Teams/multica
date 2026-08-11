@@ -1,0 +1,43 @@
+"use client";
+
+import type { StarRelationView } from "../lib/star-canvas-view-model";
+import { quadraticEdgePath, relationEdgeClass } from "./star-graph-canvas-utils";
+
+export function StarGraphEdges({
+  relations,
+  width,
+  height,
+}: {
+  relations: readonly StarRelationView[];
+  width: number;
+  height: number;
+}) {
+  if (relations.length === 0 || width <= 0 || height <= 0) return null;
+
+  return (
+    <svg
+      data-testid="star-graph-edges"
+      className="sg-edge-layer pointer-events-none absolute inset-0 h-full w-full"
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id="sg-merge-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop stopColor="#48d3e4" />
+          <stop offset="1" stopColor="#58d69a" />
+        </linearGradient>
+      </defs>
+      {relations.map((relation) => (
+        <path
+          key={relation.id}
+          data-testid={`star-graph-edge-${relation.id}`}
+          data-kind={relation.kind}
+          data-edge-type={relation.edgeType}
+          className={relationEdgeClass(relation.kind, relation.edgeType)}
+          d={quadraticEdgePath(relation.from, relation.to)}
+        />
+      ))}
+    </svg>
+  );
+}

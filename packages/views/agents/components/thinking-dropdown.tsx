@@ -22,14 +22,12 @@ import {
 
 export function ThinkingDropdown({
   runtimeId,
-  runtimeOnline,
   model,
   value,
   onChange,
   disabled,
 }: {
   runtimeId: string | null;
-  runtimeOnline: boolean;
   model: string;
   value: string;
   onChange: (value: string) => void;
@@ -37,11 +35,9 @@ export function ThinkingDropdown({
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
-  const modelsQuery = useQuery(
-    runtimeModelsOptions(runtimeOnline ? runtimeId : null),
-  );
+  const { data: catalog } = useQuery(runtimeModelsOptions(runtimeId));
 
-  const models = modelsQuery.data?.models ?? [];
+  const models = catalog?.models ?? [];
   const entry = pickModelEntry(models, model);
   const levels = entry?.thinking?.supported_levels ?? [];
   if (levels.length === 0 && !value) return null;

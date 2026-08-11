@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AGENT_DESCRIPTION_MAX_LENGTH, agentDetailKeys } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
-import { deriveRuntimeHealth, deriveRuntimeHealthPresentation, runtimeListOptions, type RuntimeHealthPresentation } from "@multica/core/runtimes";
+import { deriveRuntimeHealthPresentation, runtimeListOptions, type RuntimeHealthPresentation } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -354,8 +354,6 @@ function AgentProfileTabContent({
   // Derived, staleness-aware health instead of the raw `status` column
   // (#10 — "runtime online status" had two divergent sources across the
   // app).
-  const isOnline =
-    !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
   const runtimeUpdateHealth =
     agent.runtime_mode !== "cloud" && selectedRuntime ? deriveRuntimeHealthPresentation(selectedRuntime) : "ok";
 
@@ -518,7 +516,6 @@ function AgentProfileTabContent({
                 runtimes={runtimes}
                 members={members}
                 currentUserId={currentUserId}
-                isOnline={isOnline}
                 runtimeUpdateHealth={runtimeUpdateHealth}
                 runtimeHealthLabel={runtimeHealthLabel}
               />
@@ -565,7 +562,6 @@ function RuntimeConfigSummary({
   runtimes,
   members,
   currentUserId,
-  isOnline,
   runtimeUpdateHealth,
   runtimeHealthLabel,
 }: {
@@ -573,7 +569,6 @@ function RuntimeConfigSummary({
   runtimes: import("@multica/core/types").AgentRuntime[];
   members: readonly MemberWithUser[];
   currentUserId: string | null;
-  isOnline: boolean;
   runtimeUpdateHealth: ReturnType<typeof deriveRuntimeHealthPresentation> | "ok";
   runtimeHealthLabel: (health: RuntimeHealthPresentation) => string;
 }) {
@@ -609,7 +604,6 @@ function RuntimeConfigSummary({
             )}
           <ModelPicker
             runtimeId={agent.runtime_id}
-            runtimeOnline={!!isOnline}
             value={agent.model ?? ""}
             canEdit={false}
             onChange={() => {}}
@@ -619,7 +613,6 @@ function RuntimeConfigSummary({
       <div className="mt-2 grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
         <ThinkingPropRow
           runtimeId={agent.runtime_id}
-          runtimeOnline={!!isOnline}
           model={agent.model ?? ""}
           value={agent.thinking_level ?? ""}
           canEdit={false}

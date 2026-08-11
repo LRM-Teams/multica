@@ -6,6 +6,7 @@ import type { RuntimeModel } from "@multica/core/types";
 import { ModelDropdown } from "./model-dropdown";
 
 let models: RuntimeModel[] = [];
+const runtimeModelsOptionsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({
@@ -25,7 +26,10 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@multica/core/runtimes", () => ({
   runtimeModelsKeys: { forRuntime: (id: string) => ["runtime-models", id] },
-  runtimeModelsOptions: (id: string | null) => ({ queryKey: ["runtime-models", id] }),
+  runtimeModelsOptions: (id: string | null) => {
+    runtimeModelsOptionsMock(id);
+    return { queryKey: ["runtime-models", id] };
+  },
 }));
 
 vi.mock("../../i18n", () => ({
@@ -37,6 +41,7 @@ vi.mock("../../i18n", () => ({
 describe("ModelDropdown selected model label", () => {
   beforeEach(() => {
     models = [];
+    runtimeModelsOptionsMock.mockClear();
   });
 
   it("shows the catalog model label instead of its provider", () => {
@@ -51,7 +56,6 @@ describe("ModelDropdown selected model label", () => {
     render(
       <ModelDropdown
         runtimeId="runtime-1"
-        runtimeOnline
         value="gpt-5.6-sol"
         onChange={vi.fn()}
       />,
@@ -69,7 +73,6 @@ describe("ModelDropdown selected model label", () => {
     render(
       <ModelDropdown
         runtimeId="runtime-1"
-        runtimeOnline={false}
         value="private/model-v7"
         onChange={vi.fn()}
       />,
@@ -78,5 +81,18 @@ describe("ModelDropdown selected model label", () => {
     expect(screen.getByTestId("model-dropdown-trigger")).toHaveTextContent(
       "private/model-v7",
     );
+  });
+
+  it("starts catalog discovery whenever a runtime is selected", () => {
+    render(
+      <ModelDropdown
+        runtimeId="runtime-1"
+        value=""
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(runtimeModelsOptionsMock).toHaveBeenCalledWith("runtime-1");
+    expect(screen.getByTestId("model-dropdown-rescan")).toBeEnabled();
   });
 });

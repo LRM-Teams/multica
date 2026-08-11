@@ -5,10 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { RuntimeDevice } from "@multica/core/types";
 import { useExecutionSelection } from "./use-execution-selection";
 
-vi.mock("@multica/core/runtimes", () => ({
-  deriveRuntimeHealth: () => "online",
-}));
-
 vi.mock("../../runtimes/components/runtime-machines", () => ({
   buildRuntimeMachines: (runtimes: RuntimeDevice[]) => {
     const grouped = new Map<string, RuntimeDevice[]>();

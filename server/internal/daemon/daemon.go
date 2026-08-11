@@ -3500,12 +3500,6 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 			taskLog.Error("complete task failed after retries; leaving task in running rather than falling back to fail", "error", err)
 			return
 		}
-		if task.InboxEvent != nil &&
-			task.InboxEvent.Reason == protocol.ChannelOnboardingReason &&
-			result.ChannelOnboardingDecision == "" {
-			taskLog.Error("channel onboarding completion rejected without send or typed skip; leaving delivery for lease retry", "error", err)
-			return
-		}
 		d.recordStandaloneChatCheckpoint(task, "terminal_rejected", "rejected", "running", "terminal_permanent_error", result.ExecutionID, "", 0)
 		taskLog.Error("complete task rejected by server, falling back to fail", "error", err)
 		// MUL-2946: this fallback fires when a server-side complete
@@ -3701,12 +3695,6 @@ func gateResumeToReusedWorkdir(task *Task, taskCtx *execenv.TaskContextForEnv, e
 		taskCtx.PriorSessionResumed = false
 	}
 	return reused
-}
-
-func isChannelOnboardingSkipReceipt(task Task, output string) bool {
-	return task.InboxEvent != nil &&
-		task.InboxEvent.Reason == protocol.ChannelOnboardingReason &&
-		strings.TrimSpace(output) == protocol.ChannelOnboardingSkipReceipt
 }
 
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
@@ -4355,21 +4343,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				Usage:         usageEntries,
 				RuntimeStats:  runtimeStats,
 				FailureReason: reason,
-			}, nil
-		}
-		if isChannelOnboardingSkipReceipt(task, output) {
-			taskLog.Info("agent produced typed channel onboarding skip receipt")
-			return TaskResult{
-				Status:                    "completed",
-				Comment:                   "",
-				Action:                    protocol.ChatOutputActionNoReply,
-				Type:                      protocol.ChatOutputKindNoReply,
-				ChannelOnboardingDecision: protocol.ChannelOnboardingDecisionSkipped,
-				SessionID:                 result.SessionID,
-				WorkDir:                   env.AgentRoot,
-				Usage:                     usageEntries,
-				RuntimeStats:              runtimeStats,
-				TransportAttempted:        transportAttempted,
 			}, nil
 		}
 		if output == "" && len(parts) == 0 && reaction == nil {

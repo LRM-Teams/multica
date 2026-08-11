@@ -288,8 +288,11 @@ func TestBuildChannelOnboardingPrompt(t *testing.T) {
 	if !strings.Contains(p, "产品讨论") {
 		t.Error("prompt should name the channel")
 	}
-	if !strings.Contains(p, "channel_onboarding_skipped") {
-		t.Error("prompt should define the exact typed skip receipt")
+	if !strings.Contains(p, "finish without sending a message") {
+		t.Error("prompt should allow a quiet normal completion")
+	}
+	if strings.Contains(p, "channel_onboarding_skipped") || strings.Contains(p, "channel-onboarding:") {
+		t.Error("prompt should not expose a special receipt or client id")
 	}
 	if !strings.Contains(p, "exact target") {
 		t.Error("prompt must bind any visible send to the joined channel")

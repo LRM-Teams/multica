@@ -410,23 +410,15 @@ func (d *Daemon) observeMessageSendHold(agentID, workspaceID, target string, new
 	if d.logger != nil {
 		d.logger.Info("Credential Proxy message send held", "agent_id", agentID, "workspace_id", workspaceID, "target", target, "new_message_count", newer, "reason", reason)
 	}
-	// Project a Runner Activity entry so a soft-held send is visible on the
-	// agent's Activity timeline (a "system" entry renders as a warning row with
-	// title/subtext and body_kind:none). This is intentionally fail-soft and
-	// never influences the send outcome. Unlike the managed-only publisher, the
-	// hold entry is projected for Agents that are NOT locally managed either
-	// (Raft: the daemon still reports the Activity fact with blank launch/client-
-	// seq bookkeeping); a missing transport just drops it best-effort.
-	entry, err := activitySystemEntry(messageSendHoldTitle(), messageSendHoldSubtext(newer))
-	if err != nil {
-		return
-	}
 	runner, err := d.ensureWorkspaceRunner(workspaceID)
 	if err != nil || runner.activity == nil {
 		return
 	}
-	producer := runner.activity
-	if err := producer.PublishHoldEntry(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+	launch, found := runner.processes.Snapshot(agentID)
+	if !found {
+		return
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: launch.RuntimeID, Target: target, NewMessageCount: int(newer), ReasonCode: reason}, At: time.Now().UTC()}); err != nil && d.logger != nil {
 		d.logger.Debug("send-hold Runner Activity publish deferred", "error", err, "agent_id", agentID, "target", target)
 	}
 }

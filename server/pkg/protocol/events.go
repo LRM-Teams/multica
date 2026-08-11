@@ -134,8 +134,9 @@ const (
 	EventDaemonRuntimeUpdated = "daemon:runtime_updated"
 	EventDaemonTaskAvailable  = "daemon:task_available"
 	// EventAgentDeliver is the at-least-once server-to-machine transport for a
-	// canonical Message. Its acknowledgement is strictly a coordinator receipt:
-	// neither event implies runtime handoff or Context Boundary advancement.
+	// canonical Message. Its acknowledgement is strictly a per-Agent acceptance
+	// receipt: the provider accepted the body, Pending retained it, or the local
+	// boundary deduplicated it. It is never a provider-turn completion receipt.
 	EventAgentDeliver             = "agent:deliver"
 	EventAgentDeliverAck          = "agent:deliver:ack"
 	EventAgentRecoveryRequest     = "agent:recovery:request"

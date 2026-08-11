@@ -13,7 +13,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestWorkspaceRunnerDeliveryAttemptsAckBeforeRuntimeHandoff(t *testing.T) {
+func TestWorkspaceRunnerIdleDeliveryAcknowledgesAfterRuntimeAcceptance(t *testing.T) {
 	var order []string
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
@@ -47,7 +47,7 @@ func TestWorkspaceRunnerDeliveryAttemptsAckBeforeRuntimeHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle delivery: %v", err)
 	}
-	if want := []string{"ack", "handoff"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"handoff", "ack"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("delivery order = %v, want %v", order, want)
 	}
 }
@@ -86,6 +86,60 @@ func TestWorkspaceRunnerDeliveryWriterFailureRetainsAcceptedPending(t *testing.T
 	coordinator.mu.Unlock()
 	if len(pending) != 1 || pending[0].ID != "message-1" {
 		t.Fatalf("Pending after ACK writer failure = %+v, want exactly message-1", pending)
+	}
+}
+
+func TestWorkspaceRunnerAckWriterFailureDoesNotRepeatProviderAcceptance(t *testing.T) {
+	var handoffs int
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode:    canonicalRuntimeResident,
+		backend: &idleMessageFakeRuntime{},
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+	writeErr := errors.New("injected ACK writer failure")
+
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(string, any) error {
+		return writeErr
+	}); !errors.Is(err, writeErr) {
+		t.Fatalf("first delivery error = %v, want %v", err, writeErr)
+	}
+	if handoffs != 1 {
+		t.Fatalf("provider handoffs after first acceptance = %d, want 1", handoffs)
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 1 {
+		t.Fatalf("boundary after provider acceptance = %d, want 1", got)
+	}
+
+	var acknowledgements int
+	if err := runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("retried delivery: %v", err)
+	}
+	if acknowledgements != 1 {
+		t.Fatalf("retry acknowledgements = %d, want 1", acknowledgements)
+	}
+	if handoffs != 1 {
+		t.Fatalf("provider handoffs after retry = %d, want still 1", handoffs)
 	}
 }
 
@@ -374,6 +428,55 @@ func TestAgentMessageRecoveryUsesCurrentWorkspaceRunnerConnection(t *testing.T) 
 	runner.beginMessageRecovery("agent-1")
 	if eventType != protocol.EventAgentRecoveryRequest || request.AgentID != "agent-1" || request.RecoveryID == "" {
 		t.Fatalf("recovery frame type=%q request=%+v", eventType, request)
+	}
+}
+
+func TestLateAttachmentStartsRecoveryOnlyForAttachedAgent(t *testing.T) {
+	d := New(Config{}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.runtimeIndex["runtime-2"] = Runtime{ID: "runtime-2", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
+	coordinators := make(map[string]*MessageCoordinator, 2)
+	for _, agent := range []struct {
+		id        string
+		runtimeID string
+	}{
+		{id: "agent-1", runtimeID: "runtime-1"},
+		{id: "agent-2", runtimeID: "runtime-2"},
+	} {
+		coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinators[agent.id] = coordinator
+		registerTestRunnerInbox(t, runner, InboxKey{WorkspaceID: "workspace-1", AgentID: agent.id}, agent.runtimeID, coordinator)
+	}
+
+	initialRequests := make(map[string]protocol.AgentRecoveryRequest, 2)
+	runner.beginMessageRecoveryForAll(func(request protocol.AgentRecoveryRequest) error {
+		initialRequests[request.AgentID] = request
+		return nil
+	})
+	if len(initialRequests) != 2 {
+		t.Fatalf("initial recovery requests=%+v, want both Agents", initialRequests)
+	}
+
+	var requests []protocol.AgentRecoveryRequest
+	runner.beginMessageRecoveryForAgent("agent-2", func(request protocol.AgentRecoveryRequest) error {
+		requests = append(requests, request)
+		return nil
+	})
+	if len(requests) != 1 || requests[0].AgentID != "agent-2" {
+		t.Fatalf("late Attachment recovery requests=%+v, want only agent-2", requests)
+	}
+	firstRequest := initialRequests["agent-1"]
+	if err := coordinators["agent-1"].MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: firstRequest.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "fence-1",
+	}); err != nil {
+		t.Fatalf("late Attachment invalidated unrelated Agent recovery: %v", err)
 	}
 }
 

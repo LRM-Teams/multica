@@ -84,47 +84,105 @@ func (runner *WorkspaceRunner) removeMessageInbox(agentID, runtimeID string) {
 	runner.inboxes.Remove(agentID, runtimeID)
 }
 
-func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {
+type messageDeliveryAcceptanceOutcome string
+
+const (
+	messageDeliveryProviderAccepted messageDeliveryAcceptanceOutcome = "provider_accepted"
+	messageDeliveryPendingBuffered  messageDeliveryAcceptanceOutcome = "pending_buffered"
+	messageDeliveryDeduplicated     messageDeliveryAcceptanceOutcome = "deduplicated"
+)
+
+type messageDeliveryAcceptance struct {
+	ack     protocol.AgentDeliverAckPayload
+	outcome messageDeliveryAcceptanceOutcome
+}
+
+// acceptMessageDelivery is the Raft-aligned per-Agent acceptance seam. It
+// first gives an idle resident Runtime the concrete body. When that is not
+// currently possible, the Agent's Pending projection takes responsibility.
+// Either outcome permits the transport ACK; a rejected coordinator does not.
+func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
 	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
 	if !ok {
 		if _, err := runner.ensureMessageInbox(delivery.AgentID, ""); err != nil {
-			return protocol.AgentDeliverAckPayload{}, err
+			return messageDeliveryAcceptance{}, err
 		}
 		coordinator, runtimeID, ok = runner.messageCoordinator(delivery.AgentID)
 		if !ok {
-			return protocol.AgentDeliverAckPayload{}, fmt.Errorf("no Message coordinator for Agent %q", delivery.AgentID)
+			return messageDeliveryAcceptance{}, fmt.Errorf("no Message coordinator for Agent %q", delivery.AgentID)
 		}
 	}
 	accepted, err := coordinator.Accept(ctx, delivery)
 	if err != nil {
-		return protocol.AgentDeliverAckPayload{}, err
+		return messageDeliveryAcceptance{}, err
 	}
-	outcome := "accepted"
+	result := messageDeliveryAcceptance{
+		ack:     coordinator.Acknowledgement(delivery),
+		outcome: messageDeliveryPendingBuffered,
+	}
 	if !accepted {
-		outcome = "deduplicated"
+		result.outcome = messageDeliveryDeduplicated
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", outcome, "",
+		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
 	))
-	return coordinator.Acknowledgement(delivery), nil
-}
-
-func (runner *WorkspaceRunner) flushMessageDelivery(ctx context.Context, agentID string) error {
-	coordinator, _, ok := runner.messageCoordinator(agentID)
-	if !ok {
-		return fmt.Errorf("no Message coordinator for Agent %q", agentID)
+	if !accepted {
+		return result, nil
 	}
-	return coordinator.Flush(ctx)
+
+	if err := runner.ensureResidentRuntime(ctx, delivery.AgentID, runtimeID); err != nil {
+		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "deferred", canonicalMessageFailureReason(err),
+		))
+		if runner.logger != nil {
+			runner.logger.Warn("Workspace Runner resident Message Runtime unavailable before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+		}
+		return result, nil
+	}
+
+	handedOff, err := coordinator.flushWithResult(ctx, true)
+	if handedOff {
+		result.outcome = messageDeliveryProviderAccepted
+	}
+	if err != nil {
+		outcome := "failed"
+		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown") {
+			outcome = "deferred"
+		}
+		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
+		))
+		if runner.logger != nil {
+			runner.logger.Warn("Workspace Runner Agent Message handoff incomplete before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
+		}
+		return result, nil
+	}
+	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
+	))
+	return result, nil
 }
 
 func (runner *WorkspaceRunner) beginMessageRecovery(agentID string) {
+	runner.beginMessageRecoveryForAgent(agentID, func(request protocol.AgentRecoveryRequest) error {
+		return runner.sendOnCurrentConnection(protocol.EventAgentRecoveryRequest, request)
+	})
+}
+
+func (runner *WorkspaceRunner) beginMessageRecoveryForAgent(agentID string, send func(protocol.AgentRecoveryRequest) error) {
+	if send == nil {
+		return
+	}
 	coordinator, _, ok := runner.messageCoordinator(agentID)
 	if !ok {
 		return
 	}
 	request := coordinator.BeginRecovery(agentID, 100)
-	if err := runner.sendOnCurrentConnection(protocol.EventAgentRecoveryRequest, request); err != nil && runner.logger != nil {
-		runner.logger.Warn("Agent Message recovery request failed", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "reason", "runner_connection_write_failed")
+	if runner.logger != nil {
+		runner.logger.Info("Agent Message recovery started", "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "agent_scoped_recovery")
+	}
+	if err := send(request); err != nil && runner.logger != nil {
+		runner.logger.Warn("Agent Message recovery request failed", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_connection_write_failed")
 	}
 }
 
@@ -146,8 +204,14 @@ func (runner *WorkspaceRunner) mergeMessageRecoveryPage(page protocol.AgentRecov
 	if err := coordinator.MergeRecoveryPage(page); err != nil {
 		return err
 	}
+	if runner.logger != nil {
+		runner.logger.Debug("Agent Message recovery page merged", "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "runtime_id", runtimeID, "recovery_id", page.RecoveryID, "snapshot_id", page.SnapshotID, "message_count", len(page.Messages), "has_more", page.HasMore)
+	}
 	if page.HasMore {
 		return send(coordinator.RecoveryRequest(page.AgentID, 100))
+	}
+	if runner.logger != nil {
+		runner.logger.Info("Agent Message recovery completed", "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "runtime_id", runtimeID, "recovery_id", page.RecoveryID, "snapshot_id", page.SnapshotID, "high_watermark", page.HighWatermark)
 	}
 
 	// Freshness is durable after MergeRecoveryPage. Runtime availability is a
@@ -198,8 +262,9 @@ func (runner *WorkspaceRunner) ownsMessageCoverageReceipt(receiptID string) bool
 	return false
 }
 
-// handleMessageDelivery owns the complete durable Message transition for one
-// Runner: accept/deduplicate, ACK, then best-effort resident Runtime handoff.
+// handleMessageDelivery owns the wire half of one durable Message transition.
+// The deep acceptance module above decides whether the provider or per-Agent
+// Pending projection accepted the body; only then may this caller ACK.
 func (runner *WorkspaceRunner) handleMessageDelivery(
 	ctx context.Context,
 	delivery protocol.AgentDeliverPayload,
@@ -209,7 +274,7 @@ func (runner *WorkspaceRunner) handleMessageDelivery(
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "runner_received", "accepted", "",
 	))
-	ack, err := runner.acceptMessageDelivery(ctx, delivery)
+	acceptance, err := runner.acceptMessageDelivery(ctx, delivery)
 	// Acceptance may create the Inbox and discover its durable Runtime.
 	runtimeID = runner.messageRuntimeID(delivery.AgentID)
 	if err != nil {
@@ -222,42 +287,23 @@ func (runner *WorkspaceRunner) handleMessageDelivery(
 		return nil
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-		runner.config.WorkspaceID, runtimeID, delivery, "ack_attempted", "attempted", "",
+		runner.config.WorkspaceID, runtimeID, delivery, "ack_attempted", string(acceptance.outcome), "",
 	))
-	if err := writeFrame(protocol.EventAgentDeliverAck, ack); err != nil {
+	if err := writeFrame(protocol.EventAgentDeliverAck, acceptance.ack); err != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "ack_sent", "failed", "runner_connection_write_failed",
 		))
+		if runner.logger != nil {
+			runner.logger.Warn("Workspace Runner Agent delivery acknowledgement failed", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "acceptance", acceptance.outcome)
+		}
 		return err
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-		runner.config.WorkspaceID, runtimeID, delivery, "ack_sent", "accepted", "",
+		runner.config.WorkspaceID, runtimeID, delivery, "ack_sent", string(acceptance.outcome), "",
 	))
-	if err := runner.ensureResidentRuntime(ctx, delivery.AgentID, runtimeID); err != nil {
-		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "failed", canonicalMessageFailureReason(err),
-		))
-		if runner.logger != nil {
-			runner.logger.Warn("Workspace Runner resident Message Runtime unavailable after delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-		}
-		return nil
+	if runner.logger != nil {
+		runner.logger.Info("Workspace Runner Agent delivery acknowledged", "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "message_id", delivery.Message.ID, "target", delivery.Target, "seq", delivery.Seq, "acceptance", acceptance.outcome)
 	}
-	if err := runner.flushMessageDelivery(ctx, delivery.AgentID); err != nil {
-		outcome := "failed"
-		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown") {
-			outcome = "deferred"
-		}
-		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
-		))
-		if runner.logger != nil {
-			runner.logger.Warn("Workspace Runner idle Agent Message handoff failed after delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
-		}
-		return nil
-	}
-	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
-		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
-	))
 	return nil
 }
 

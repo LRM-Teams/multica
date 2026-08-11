@@ -1549,7 +1549,7 @@ func TestMessageCoordinatorDeduplicatesDeliveryWithoutSecondHandoffOrActivity(t 
 	}
 }
 
-func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T) {
+func TestDaemonAcceptsIdleDeliveryThroughProviderBeforeAcknowledgement(t *testing.T) {
 	root := t.TempDir()
 	var handoffs int
 	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, nil)
@@ -1568,24 +1568,18 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 	daemon.runtimeIndex = map[string]Runtime{"runtime-1": {ID: "runtime-1", WorkspaceID: "workspace-1"}}
 	daemon.mu.Unlock()
 	runner := registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	ack, err := runner.acceptMessageDelivery(context.Background(), delivery)
+	acceptance, err := runner.acceptMessageDelivery(context.Background(), delivery)
 	if err != nil {
 		t.Fatalf("acceptIdleAgentDelivery: %v", err)
 	}
-	if handoffs != 0 {
-		t.Fatalf("handoffs = %d, want none before acknowledgement", handoffs)
+	if handoffs != 1 {
+		t.Fatalf("handoffs = %d, want provider acceptance before acknowledgement", handoffs)
 	}
-	if got, want := ack, (protocol.AgentDeliverAckPayload{AgentID: "agent-1", Seq: 1, DeliveryID: "delivery-1"}); !reflect.DeepEqual(got, want) {
+	if got, want := acceptance.ack, (protocol.AgentDeliverAckPayload{AgentID: "agent-1", Seq: 1, DeliveryID: "delivery-1"}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ack = %+v, want %+v", got, want)
 	}
-	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
-		t.Fatalf("boundary = %d, want 0 before handoff", got)
-	}
-	if err := runner.flushMessageDelivery(context.Background(), "agent-1"); err != nil {
-		t.Fatalf("flushIdleAgentDelivery: %v", err)
-	}
-	if handoffs != 1 {
-		t.Fatalf("handoffs = %d, want 1 after flush", handoffs)
+	if acceptance.outcome != messageDeliveryProviderAccepted {
+		t.Fatalf("acceptance = %q, want %q", acceptance.outcome, messageDeliveryProviderAccepted)
 	}
 	if got := coordinator.Boundaries()["channel-1"]; got != 1 {
 		t.Fatalf("boundary = %d, want 1", got)
@@ -1621,7 +1615,7 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 		return NewMessageCoordinator(key, newRoot, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	}
 	flushDone := make(chan error, 1)
-	go func() { flushDone <- runner.flushMessageDelivery(context.Background(), "agent-1") }()
+	go func() { flushDone <- oldCoordinator.Flush(context.Background()) }()
 	<-handoffStarted
 
 	replacementDone := make(chan error, 1)

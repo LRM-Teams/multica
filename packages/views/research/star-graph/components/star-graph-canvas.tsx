@@ -37,6 +37,7 @@ import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import {
   centerCameraOnPoint,
   computeEntityBounds,
+  computeEntityBoundsForIds,
   fitCameraToBounds,
   zoomCamera,
   zoomPercent,
@@ -69,6 +70,8 @@ export interface StarGraphCanvasProps {
   rightPanelWidth?: number;
   nodeAccessibleNames?: ReadonlyMap<string, string>;
   relatedNodeIds?: ReadonlySet<string>;
+  /** When set and no persisted viewport exists, initial camera fits these entities only. */
+  initialFitEntityIdList?: readonly string[];
   entityBudget?: number;
   hiddenCountLabel?: (count: number) => string;
   loadMoreLabel?: string;
@@ -97,6 +100,7 @@ export function StarGraphCanvas({
   rightPanelWidth = 0,
   nodeAccessibleNames,
   relatedNodeIds,
+  initialFitEntityIdList,
   entityBudget = STAR_GRAPH_DOM_BUDGET,
   hiddenCountLabel,
   loadMoreLabel,
@@ -192,37 +196,68 @@ export function StarGraphCanvas({
 
   const hiddenEntityCount = displayEntities.length - visibleEntities.length;
 
+  const initialCameraInputsRef = useRef({
+    bounds,
+    initialFitEntityIdList,
+    entities: model.entities,
+    storedViewport,
+  });
+  initialCameraInputsRef.current = {
+    bounds,
+    initialFitEntityIdList,
+    entities: model.entities,
+    storedViewport,
+  };
+
   useEffect(() => {
     const node = rootRef.current;
     if (!node) return;
+
+    const applyInitialCamera = (nextViewport: { width: number; height: number }) => {
+      if (initialCameraRef.current || nextViewport.width <= 0 || nextViewport.height <= 0) {
+        return;
+      }
+      const {
+        bounds: nextBounds,
+        initialFitEntityIdList: fitList,
+        entities,
+        storedViewport: persisted,
+      } = initialCameraInputsRef.current;
+      if (!nextBounds) return;
+      if (persisted) {
+        setCameraState(persisted);
+        initialCameraRef.current = true;
+        return;
+      }
+      const neighborhoodBounds =
+        fitList && fitList.length > 0
+          ? computeEntityBoundsForIds(entities, new Set(fitList))
+          : null;
+      const fitBounds = neighborhoodBounds ?? nextBounds;
+      setCamera(fitCameraToBounds(fitBounds, nextViewport));
+      initialCameraRef.current = true;
+    };
+
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
-      setViewport({
+      const nextViewport = {
         width: entry.contentRect.width,
         height: entry.contentRect.height,
-      });
+      };
+      setViewport(nextViewport);
+      applyInitialCamera(nextViewport);
     });
     observer.observe(node);
+    const rect = node.getBoundingClientRect();
+    applyInitialCamera({ width: rect.width, height: rect.height });
     return () => observer.disconnect();
-  }, []);
+  }, [setCamera]);
 
   const fitToContent = useCallback(() => {
     if (!bounds || viewport.width <= 0 || viewport.height <= 0) return;
     setCamera(fitCameraToBounds(bounds, viewport));
   }, [bounds, setCamera, viewport]);
-
-  useEffect(() => {
-    if (!bounds || viewport.width <= 0 || viewport.height <= 0) return;
-    if (initialCameraRef.current) return;
-    if (storedViewport) {
-      setCameraState(storedViewport);
-      initialCameraRef.current = true;
-      return;
-    }
-    setCamera(fitCameraToBounds(bounds, viewport));
-    initialCameraRef.current = true;
-  }, [bounds, setCamera, storedViewport, viewport.height, viewport.width]);
 
   const focusSelectedEntity = useCallback(
     (nodeId: string | null) => {

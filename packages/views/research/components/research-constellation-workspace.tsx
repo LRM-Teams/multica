@@ -32,6 +32,7 @@ import { buildTypedGraphMotionEvents, shouldSkipTypedGraphMotionCatchUp } from "
 import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
 import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
+import { firstOrderNeighborIds } from "../lib/typed-graph-neighborhood";
 import type { CanvasBodyMode } from "../lib/canvas-body-mode";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import type { ExecutionRow } from "../execution-overlay";
@@ -39,6 +40,7 @@ import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
 import { StarGraphCanvas } from "../star-graph";
+import { STAR_GRAPH_MOBILE_DOM_BUDGET } from "../star-graph/lib/star-graph-visible-budget";
 import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
@@ -290,23 +292,23 @@ export function ResearchConstellationWorkspace({
   }, [snapshotNodes]);
 
   const relatedNodeIds = useMemo(() => {
-    if (!selectedNode || !typedGraph) return undefined;
-    const typed = typedGraph.nodes.find((node) => node.id === selectedNode.id);
-    if (!typed) return undefined;
-    const ids = new Set<string>();
-    for (const id of typed.merged_from ?? []) {
-      if (id) ids.add(id);
-    }
-    if (typed.parent_id) ids.add(typed.parent_id);
-    for (const id of typed.child_ids ?? []) {
-      if (id) ids.add(id);
-    }
-    for (const edge of typedGraph.edges) {
-      if (edge.from_node_id === selectedNode.id) ids.add(edge.to_node_id);
-      if (edge.to_node_id === selectedNode.id) ids.add(edge.from_node_id);
-    }
-    return ids;
-  }, [selectedNode, typedGraph]);
+    if (!typedGraph) return undefined;
+    const focusId = selectedNode?.id ?? canvasModel?.rootId ?? null;
+    if (!focusId) return undefined;
+    return firstOrderNeighborIds(typedGraph, focusId);
+  }, [canvasModel?.rootId, selectedNode?.id, typedGraph]);
+
+  const mobileNeighborhoodIdList = useMemo((): string[] | undefined => {
+    if (!isMobile || !typedGraph) return undefined;
+    const focusId = selectedNode?.id ?? canvasModel?.rootId ?? null;
+    if (!focusId) return undefined;
+    return Array.from(firstOrderNeighborIds(typedGraph, focusId)).toSorted();
+  }, [canvasModel?.rootId, isMobile, selectedNode?.id, typedGraph]);
+
+  const mobileNeighborhoodIds = useMemo(
+    () => (mobileNeighborhoodIdList ? new Set(mobileNeighborhoodIdList) : undefined),
+    [mobileNeighborhoodIdList],
+  );
 
   const inspectorRow =
     inspectorAgentId != null
@@ -404,7 +406,9 @@ export function ResearchConstellationWorkspace({
             showMapKey
             rightPanelWidth={effectiveRailWidth}
             nodeAccessibleNames={nodeAccessibleNames}
-            relatedNodeIds={relatedNodeIds}
+            relatedNodeIds={isMobile ? mobileNeighborhoodIds : relatedNodeIds}
+            initialFitEntityIdList={isMobile ? mobileNeighborhoodIdList : undefined}
+            entityBudget={isMobile ? STAR_GRAPH_MOBILE_DOM_BUDGET : undefined}
             typedNodes={typedGraph?.nodes}
             hiddenCountLabel={(count) => t(($) => $.d5.cluster_hidden, { count })}
             loadMoreLabel={loadMoreLabel}

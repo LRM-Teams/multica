@@ -166,7 +166,10 @@ func TestWorkspaceRunnerRoutesOnlyWithinDaemonWorkspaceScope(t *testing.T) {
 	}
 	ready := func(conn *websocket.Conn, workspaceID string) {
 		t.Helper()
-		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: workspaceID, DaemonInstanceID: "instance-" + workspaceID})})
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{
+			WorkspaceID: workspaceID, DaemonInstanceID: "instance-" + workspaceID,
+			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+		})})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -311,7 +314,10 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	if accepted.Load() != 0 {
 		t.Fatal("unready connection mutated Runner state")
 	}
-	write(first, protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})
+	write(first, protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
 	deadline := time.Now().Add(time.Second)
@@ -323,7 +329,10 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	}
 	second := dial()
 	defer second.Close()
-	write(second, protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2"})
+	write(second, protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
 	for runnerReady.Load() != 2 {
 		if time.Now().After(deadline) {
 			t.Fatal("replacement Runner did not become ready")
@@ -393,7 +402,10 @@ func TestWorkspaceRunnerRoutesAttachmentReplayFramesOnlyAfterReady(t *testing.T)
 		t.Fatalf("unready Attachment replay was dispatched: %v", seen)
 	}
 	seenMu.Unlock()
-	write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})
+	write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 	write(protocol.EventAgentAttachmentReplayReq, protocol.WorkspaceRunnerAttachmentReplayRequest{RuntimeCursors: map[string]int64{"runtime-1": 0}})
 	write(protocol.EventAgentAttached, attachment)
@@ -486,11 +498,17 @@ func TestCloseWorkspaceRunnerFencesReplacementDaemonInstance(t *testing.T) {
 	}
 	first := dial()
 	defer first.Close()
-	write(first, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})
+	write(first, protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 	second := dial()
 	defer second.Close()
-	write(second, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2"})
+	write(second, protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
 	deadline := time.Now().Add(time.Second)
 	for readyCount.Load() != 2 {
 		if time.Now().After(deadline) {
@@ -540,6 +558,7 @@ func TestWorkspaceRunnerDisconnectCallbackOnlyObservesCurrentRunner(t *testing.T
 		t.Helper()
 		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{
 			WorkspaceID: "workspace-1", DaemonInstanceID: instanceID,
+			ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
 		})})
 		if err != nil {
 			t.Fatal(err)
@@ -619,7 +638,10 @@ func TestWorkspaceRunnerDeliveryRetriesUntilCurrentRunnerAcknowledges(t *testing
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})})
+	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1228,84 +1250,6 @@ func TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry(t *te
 		if json.Unmarshal(raw, &msg) != nil || msg.Type != protocol.EventDaemonHeartbeatAck {
 			t.Fatalf("post-failure frame = %s, want a heartbeat ack proving the connection survived", raw)
 		}
-	}
-}
-
-func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
-	t.Skip("legacy wake-socket lifecycle replay was removed by the Workspace Runner hard cut")
-	hub := NewHub()
-	const eventCount = 40
-	hub.SetReminderHandlers(nil, nil)
-	legacyHandler := func(_ context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error) {
-		if len(identity.RuntimeIDs) != 1 || identity.RuntimeIDs[0] != "runtime-1" {
-			t.Fatalf("identity runtimes = %#v", identity.RuntimeIDs)
-		}
-		if payload.RuntimeCursors["runtime-1"] != 0 {
-			t.Fatalf("request cursors = %#v", payload.RuntimeCursors)
-		}
-		events := make([]protocol.DaemonAgentLifecycleEvent, 0, eventCount)
-		for i := 1; i <= eventCount; i++ {
-			events = append(events, protocol.DaemonAgentLifecycleEvent{
-				EventType: "start", AgentID: "agent-" + strconv.Itoa(i), RuntimeID: "runtime-1", WorkspaceID: "workspace-1",
-				PlacementGeneration: int64(i), LifecycleSeq: int64(i),
-			})
-		}
-		return events, map[string]int64{"runtime-1": eventCount}, nil
-	}
-	_ = legacyHandler
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
-	}))
-	defer server.Close()
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	request, err := json.Marshal(protocol.Message{
-		Type:    protocol.EventDaemonAgentLifecycleReq,
-		Payload: mustMarshalRaw(protocol.DaemonAgentLifecycleRequestPayload{RuntimeCursors: map[string]int64{"runtime-1": 0}}),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	for i := 1; i <= eventCount; i++ {
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			t.Fatalf("read replay event %d: %v", i, err)
-		}
-		var msg protocol.Message
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			t.Fatal(err)
-		}
-		if msg.Type != protocol.EventDaemonAgentStart {
-			t.Fatalf("event %d type = %q", i, msg.Type)
-		}
-		var payload protocol.DaemonAgentStartPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload.LifecycleSeq != int64(i) || !payload.Replay {
-			t.Fatalf("event %d payload = %+v", i, payload)
-		}
-	}
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read replay end: %v", err)
-	}
-	var end protocol.Message
-	if err := json.Unmarshal(raw, &end); err != nil {
-		t.Fatal(err)
-	}
-	if end.Type != protocol.EventDaemonAgentLifecycleEnd {
-		t.Fatalf("final type = %q", end.Type)
 	}
 }
 

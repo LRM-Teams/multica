@@ -173,6 +173,9 @@ func (p WorkspaceRunnerReadyPayload) Validate() error {
 		}
 		seen[capability] = struct{}{}
 	}
+	if _, supported := seen[DaemonCapabilityWorkspaceRunnerAttachment]; !supported {
+		return fmt.Errorf("Workspace Runner Attachment capability is required")
+	}
 	return nil
 }
 

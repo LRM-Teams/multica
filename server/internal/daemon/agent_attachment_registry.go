@@ -146,10 +146,10 @@ func (r *localAgentAttachmentRegistry) Apply(workspaceID string, event AgentAtta
 	return result.change, err
 }
 
-// applyEvent is the one generation and tombstone implementation used by both
-// the formal registry and the temporary legacy lifecycle facade. Formal events
-// durably advance their per-Runtime cursor in the same write; legacy events use
-// lifecycle sequence zero and retain replay-end cursor commits.
+// applyEvent is the single generation, tombstone, and lifecycle cursor
+// implementation behind the formal registry. Test fixtures may disable cursor
+// tracking when seeding historical local state, but production callers always
+// use the scoped AgentAttachmentRegistry contract.
 func (r *localAgentAttachmentRegistry) applyEvent(
 	workspaceID string,
 	event AgentAttachmentEvent,

@@ -17,7 +17,7 @@ import (
 const workspaceRunnerWriteTimeout = 10 * time.Second
 
 // workspaceRunnerLoop owns one WebSocket per authenticated workspace. It is
-// intentionally separate from the legacy runtime-multiplexed wake socket: a
+// intentionally separate from the removed runtime-multiplexed wake socket: a
 // Runner survives a workspace with zero runtimes and can never receive another
 // workspace's commands.
 func (d *Daemon) workspaceRunnerLoop(ctx context.Context) {

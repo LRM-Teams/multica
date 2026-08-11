@@ -51,9 +51,9 @@ type runnerActivityTimelineEntry struct {
 	OccurredAt time.Time
 }
 
-// HandleWorkspaceRunnerFrame is dormant until the hard cut. The daemonws hub
-// invokes it only for a current ready Runner; this method adds durable Agent,
-// launch, daemon-instance, fact, and sequence fencing before persistence.
+// HandleWorkspaceRunnerFrame accepts frames only from the current ready Runner.
+// It adds durable Agent, launch, daemon-instance, fact, and sequence fencing
+// before persistence.
 func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID, eventType string, raw json.RawMessage) error {
 	if h == nil || h.DB == nil {
 		return errors.New("handler database is unavailable")
@@ -695,10 +695,10 @@ func runnerActivityFingerprint(activity protocol.AgentActivityPayload) (string, 
 	return fmt.Sprintf("%x", digest[:]), nil
 }
 
-// GetRunnerActivity is the dormant Workspace-authorized presentation API used
-// by the coordinated Activity cut. It intentionally has a distinct path from
-// the historical /activity endpoints so no compatibility translation or dual
-// representation is needed at activation.
+// GetRunnerActivity is the Workspace-authorized presentation API for typed
+// Runner Activity. It has a distinct path from the removed historical
+// /activity endpoints, so no compatibility translation or dual representation
+// is needed.
 func (h *Handler) GetRunnerActivity(w http.ResponseWriter, r *http.Request) {
 	workspaceID, agentID, ok := h.prepareRunnerActivityRead(w, r)
 	if !ok {

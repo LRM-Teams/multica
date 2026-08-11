@@ -46,24 +46,21 @@ duplicate sequence never re-applies state. Recovery returns the stored cursor,
 or zero when that Runtime has no durable cursor, so the server sends only the
 missing suffix.
 
-## Migration compatibility
+## Migration compatibility and hard cut
 
-The first extraction continues reading and writing the existing
+The first extraction continued reading and writing the existing
 `.daemon/reminder_agents.json` path and JSON field names. There is one durable
 state, not a new Attachment file plus a Reminder file. The obsolete
-`reminderAgentManager` facade is removed. Legacy `daemon:agent_start`,
-`daemon:agent_stop`, and replay-end frames remain supported by a protocol
-translation adapter routed directly to the registry. The adapter retains the
-existing acceptance results and cursor behavior but does not maintain parallel
-generation or tombstone maps.
+`reminderAgentManager` facade was removed. During the compatibility rollout,
+legacy `daemon:agent_start`, `daemon:agent_stop`, and replay-end frames were
+translated directly into the registry without parallel generation or tombstone
+maps.
 
-A legacy live frame may omit `lifecycle_seq`; sequence zero is accepted only by
-the legacy translation adapter and applies no invented cursor. A legacy replay
-frame with a positive sequence uses the registry Apply core and commits that
-Runtime cursor atomically with its Attachment result. The existing replay-end
-ACK remains on the wire and monotonically advances any cursor not already
-committed, preserving mixed-version Server behavior while making a partially
-applied replay resumable from its durable prefix.
+The coordinated hard cut removed that production translation adapter and the
+old lifecycle request/replay ownership. Current placement and recovery use only
+the Workspace Runner `agent:attach` / `agent:detach` command and receipt
+contract. Historical migration fixtures may still read the old database rows,
+but no daemon or server runtime path sends or accepts the retired replay wire.
 
 Local credential bootstrap remains available for an upgraded daemon. A
 bootstrapped or task-observed generation-zero record is provisional and cannot
@@ -94,5 +91,6 @@ state and its cursor before returning.
 - Process start/stop remains an explicit, independent Manager operation.
 - Workspace-scoped resolution cannot return an Agent attached in another
   Workspace.
-- Mixed old/new lifecycle frames converge through one registry core during the
-  migration; removing the protocol adapter is a later wire cutover.
+- The minimum hard-cut release line is server and daemon `0.4.24`; the current
+  Runner must also advertise `workspace_runner_attachment_v1`, which rejects
+  prerelease builds from that line that predate the cut.

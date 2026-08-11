@@ -203,8 +203,9 @@ func (h *Hub) SetAgentMessageHandoffHandler(fn AgentMessageHandoffHandler) {
 	h.deliveryMu.Unlock()
 }
 
-// SetWorkspaceRunnerHandler installs the dormant Runner inbound boundary.
-// Calling this does not activate any legacy routing or Activity contract.
+// SetWorkspaceRunnerHandler installs the active Runner inbound boundary.
+// Runner frames stay separate from the removed legacy routing and Activity
+// contracts.
 func (h *Hub) SetWorkspaceRunnerHandler(fn WorkspaceRunnerHandler) {
 	if h == nil {
 		return
@@ -767,7 +768,7 @@ func (h *Hub) DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)
 			return
 		}
 		runtimeID = payload.RuntimeID
-	case protocol.EventReminderUpsert, protocol.EventReminderCancel, protocol.EventDaemonAgentStart, protocol.EventDaemonAgentStop:
+	case protocol.EventReminderUpsert, protocol.EventReminderCancel:
 		runtimeID = scopeID
 	case protocol.EventAgentDeliver:
 		var payload protocol.AgentDeliverPayload
@@ -950,7 +951,7 @@ func (h *Hub) WorkspaceRunnerSupportsCapability(daemonID, workspaceID, capabilit
 
 // NotifyWorkspaceRunner routes a command only to the current ready connection
 // for the exact daemon and Workspace. It is deliberately separate from the
-// legacy runtime fan-out route and remains dormant until the hard cut.
+// removed legacy runtime fan-out route.
 func (h *Hub) NotifyWorkspaceRunner(daemonID, workspaceID, eventType string, payload any) bool {
 	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
 		return false

@@ -185,7 +185,7 @@ For a migration-sensitive change, also read the exact `schema_migrations` row;
 `/readyz` proves the current migration gate is healthy but is not a substitute
 for an immutable version/timestamp ledger when that exact evidence is required.
 
-### Workspace Runner Activity hard cut
+### Workspace Runner hard cut
 
 Migration `304_drop_legacy_agent_activity_event` is destructive and
 irreversible: it drops the old Activity history table and the down migration
@@ -193,6 +193,20 @@ does not restore it. Run the target server image's migration step before any
 runtime roll, then verify migrations `304` and
 `305_workspace_runner_activity_agent_fk_indexes` are recorded. Migration
 `305` adds the foreign-key indexes required to keep Agent deletion bounded as
-Workspace Runner Activity and Message-handoff rows accumulate. The connected daemon
-must report Workspace Runner protocol support (minimum CLI version `0.4.13`);
-an older daemon is rejected with `426 workspace_runner_protocol_unsupported`.
+Workspace Runner Activity and Message-handoff rows accumulate.
+
+Apply the server migrations before rolling daemons. The Attachment schema is
+introduced in order by `320_agent_attachment_projection`,
+`321_agent_attachment_projection_trigger`, `322_agent_attachment_replay_ack`,
+and `323_agent_activity_launch_accepted`; do not run a daemon that advertises
+the Attachment capability until those rows are recorded. Migration `304` is
+irreversible. Rolling back `320`-`323` removes server Attachment/launch
+projections and receipts, so rollback requires reverting the coordinated server
+and daemon release together; it does not delete machine-local AgentRoot,
+Message Draft, or Context Boundary files.
+
+The minimum coordinated server/daemon release line is `0.4.24`. The connected
+daemon must additionally advertise `workspace_runner_attachment_v1`; this
+capability check fences earlier `0.4.24-alpha.*` builds. Older CLI versions are
+rejected with `426 workspace_runner_protocol_unsupported`, and a Runner missing
+the hard-cut capability is closed before it can own the Workspace slot.

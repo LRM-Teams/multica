@@ -10,7 +10,10 @@ import (
 func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 	observedAt := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	values := []any{
-		WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "daemon-instance-1"},
+		WorkspaceRunnerReadyPayload{
+			WorkspaceID: "workspace-1", DaemonInstanceID: "daemon-instance-1",
+			ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment},
+		},
 		WorkspaceRunnerPingPayload{PingID: "ping-1"},
 		WorkspaceRunnerPongPayload{PingID: "ping-1"},
 		WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"},
@@ -55,6 +58,7 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 		value interface{ Validate() error }
 	}{
 		{name: "missing ready identity", value: WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1"}},
+		{name: "missing hard-cut capability", value: WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"}},
 		{name: "unknown start state", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: "ready"}},
 		{name: "negative queue age", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: AgentStartQueueQueued, QueueAgeMS: -1}},
 		{name: "unknown status", value: AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: "online"}},

@@ -331,8 +331,11 @@ messages`.
 - Before a send, the Proxy completes local freshness preflight and consumes any
   Server-held response. The Server returns newer counts and at most the newest
   three held bodies.
-- A held response updates the local boundary through the complete covered range,
-  saves or refreshes the Draft, returns held context to the Agent, and never
+- A held response prepares one machine-local coverage receipt for the complete
+  represented range without changing Pending or the Context Boundary, saves or
+  refreshes the Draft, and returns at most the newest three held bodies. The CLI
+  commits that receipt only after visible output succeeds; failed output keeps
+  the same Draft identity and Pending context replayable. A hold never
   automatically resends.
 - Drafts are local, target-scoped, and stored in `continue-state.json` under the
   Agent root. Each contains body, attachment IDs, stable internal idempotency
@@ -482,9 +485,10 @@ messages`.
   suppression, fifteen-second retry debt, deferred unsafe runtime states, and
   absence of bodies and attachment data.
 - Freshness tests create more than three newer Messages, attempt a send, and
-  prove the newest three are shown, full counts are reported, the complete
-  covered boundary advances, the Draft remains unsent, omitted context remains
-  readable, and no automatic retry occurs.
+  prove the newest three are shown, full counts are reported, no boundary
+  advances before output, the complete covered boundary advances after receipt
+  commit, failed output preserves Pending and the same unsent Draft identity,
+  omitted context remains readable, and no automatic retry occurs.
 - Draft tests prove save-before-network ordering, ten-minute expiry, normal-send
   replacement, explicit replay, `--anyway` validation, success cleanup, unknown
   outcome retention, same-payload idempotent replay, and different-payload

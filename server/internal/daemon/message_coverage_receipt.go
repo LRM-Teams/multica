@@ -49,10 +49,12 @@ type CoverageRequest struct {
 // CoverageOffer is returned to the machine-local Credential Proxy. ReceiptID
 // is an opaque capability and must not become a public or service cursor.
 type CoverageOffer struct {
-	ReceiptID string
-	Messages  []protocol.AgentMessageProjection
-	HasMore   bool
-	Remaining int
+	ReceiptID    string
+	Messages     []protocol.AgentMessageProjection
+	HasMore      bool
+	Remaining    int
+	CoveredCount int
+	ThroughSeq   int64
 }
 
 type coverageReceiptPhase uint8
@@ -66,7 +68,7 @@ const (
 type coverageReceipt struct {
 	id                 string
 	key                InboxKey
-	kind               CoverageKind
+	requiresPending    bool
 	coveredIdentities  map[string]map[int64]string
 	proposedBoundaries map[string]int64
 	createdAt          time.Time
@@ -133,7 +135,7 @@ func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageO
 	c.coverageReceipts[id] = &coverageReceipt{
 		id:                 id,
 		key:                c.key,
-		kind:               request.Kind,
+		requiresPending:    request.Kind != CoverageRead && !(request.Kind == CoverageHold && len(request.Messages) > 0),
 		coveredIdentities:  coveredIdentities,
 		proposedBoundaries: proposedBoundaries,
 		createdAt:          now,
@@ -141,7 +143,12 @@ func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageO
 		phase:              coverageReceiptPrepared,
 	}
 	return CoverageOffer{
-		ReceiptID: id, Messages: cloneCoverageMessages(presented), HasMore: hasMore, Remaining: remaining,
+		ReceiptID:    id,
+		Messages:     cloneCoverageMessages(presented),
+		HasMore:      hasMore,
+		Remaining:    remaining,
+		CoveredCount: len(covered),
+		ThroughSeq:   proposedBoundaries[request.Target],
 	}, nil
 }
 
@@ -163,8 +170,14 @@ func (c *MessageCoordinator) prepareCoverageMessagesLocked(request CoverageReque
 		return cloneCoverageMessages(covered), cloneCoverageMessages(covered), len(pending) > len(covered), nil
 
 	case CoverageHold:
-		if request.Target == "" || request.ThroughSeq != 0 || len(request.Messages) != 0 {
-			return nil, nil, false, fmt.Errorf("%w: hold coverage requires only one target", ErrCoverageRequestInvalid)
+		if request.Target == "" {
+			return nil, nil, false, fmt.Errorf("%w: hold coverage requires one target", ErrCoverageRequestInvalid)
+		}
+		if len(request.Messages) > 0 || request.ThroughSeq != 0 {
+			if request.ThroughSeq <= 0 || len(request.Messages) == 0 || len(request.Messages) > messageCheckMaxLimit || request.Limit != 0 {
+				return nil, nil, false, fmt.Errorf("%w: service hold coverage requires a positive through sequence and bounded Messages", ErrCoverageRequestInvalid)
+			}
+			return cloneCoverageMessages(request.Messages), cloneCoverageMessages(request.Messages), false, nil
 		}
 		covered := pendingForCoverageTarget(c.pending[request.Target])
 		if len(covered) == 0 {
@@ -284,7 +297,7 @@ func (c *MessageCoordinator) coverageReceiptContentsCurrentLocked(receipt *cover
 			if found && messageIdentityKey(message) != identity {
 				return false
 			}
-			if !found && receipt.kind != CoverageRead && c.boundaries[target] < sequence {
+			if !found && receipt.requiresPending && c.boundaries[target] < sequence {
 				return false
 			}
 		}
@@ -353,8 +366,8 @@ func buildCoverageIdentity(messages []protocol.AgentMessageProjection, request C
 			boundaries[target] = message.Seq
 		}
 	}
-	if request.Kind == CoverageRead && boundaries[request.Target] != request.ThroughSeq {
-		return nil, nil, fmt.Errorf("%w: read through sequence does not match covered Messages", ErrCoverageRequestInvalid)
+	if (request.Kind == CoverageRead || (request.Kind == CoverageHold && len(request.Messages) > 0)) && boundaries[request.Target] != request.ThroughSeq {
+		return nil, nil, fmt.Errorf("%w: through sequence does not match covered Messages", ErrCoverageRequestInvalid)
 	}
 	return covered, boundaries, nil
 }

@@ -2093,14 +2093,26 @@ func TestMessageCoordinatorPreflightHoldsCompletePendingRangeWithNewestThree(t *
 	if !result.Held || result.NewMessageCount != 5 || result.Omitted != 2 || result.LatestSeq != 5 {
 		t.Fatalf("preflight result = %+v", result)
 	}
+	if result.CoverageReceipt == "" {
+		t.Fatal("freshness hold omitted two-phase coverage receipt")
+	}
 	if got, want := []string{result.Messages[0].ID, result.Messages[1].ID, result.Messages[2].ID}, []string{"message-3", "message-4", "message-5"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("shown messages = %v, want %v", got, want)
 	}
+	if got := len(coordinator.pending["channel:one"]); got != 5 {
+		t.Fatalf("pre-commit Pending count = %d, want 5", got)
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
+		t.Fatalf("pre-commit boundary = %d, want 0", got)
+	}
+	if err := coordinator.CommitCoverage(result.CoverageReceipt); err != nil {
+		t.Fatalf("CommitCoverage: %v", err)
+	}
 	if _, found := coordinator.pending["channel:one"]; found {
-		t.Fatalf("held Pending remains: %+v", coordinator.pending)
+		t.Fatalf("committed held Pending remains: %+v", coordinator.pending)
 	}
 	if got, ok := coordinator.ContextBoundary("channel:one"); !ok || got != 5 {
-		t.Fatalf("boundary = %d, known=%v; want 5, true", got, ok)
+		t.Fatalf("committed boundary = %d, known=%v; want 5, true", got, ok)
 	}
 }
 

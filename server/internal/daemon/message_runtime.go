@@ -587,10 +587,12 @@ func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageS
 	return coordinator.PreflightMessageSend(target)
 }
 
-func (p *CredentialProxy) AcceptHeldMessageContext(agentID, target string, throughSeq int64) error {
+func (p *CredentialProxy) PrepareHeldMessageContext(agentID, target string, throughSeq int64, messages []protocol.AgentMessageProjection) (CoverageOffer, error) {
 	coordinator, err := p.messageCoordinator(agentID)
 	if err != nil {
-		return err
+		return CoverageOffer{}, err
 	}
-	return coordinator.AcceptHeldContext(target, throughSeq)
+	return coordinator.PrepareCoverage(CoverageRequest{
+		Kind: CoverageHold, Target: target, ThroughSeq: throughSeq, Messages: messages,
+	})
 }

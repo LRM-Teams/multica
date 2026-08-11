@@ -126,6 +126,7 @@ type MessageSendFreshness struct {
 	Messages        []protocol.AgentMessageProjection
 	Omitted         int64
 	Held            bool
+	CoverageReceipt string
 }
 
 type runtimeMessageHandoffToken struct {
@@ -354,76 +355,47 @@ func (c *MessageCoordinator) SendBoundarySnapshot(target string) int64 {
 }
 
 // PreflightMessageSend checks one canonical target after the caller has saved
-// its local Draft.  Pending is accepted as held context atomically: durable
-// coverage advances through every Pending Message, while only the newest three
-// concrete bodies are returned to the Agent.  This keeps omitted canonical
-// history available to an explicit read without allowing the same Draft to be
-// held forever on the same range.
+// its local Draft. Pending is represented by one two-phase coverage receipt:
+// only the newest three concrete bodies are returned, while commit advances
+// through the complete represented Pending range.
 func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFreshness, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return MessageSendFreshness{}, errors.New("canonical Message target is required")
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return MessageSendFreshness{}, errors.New("Message coordinator is closed")
 	}
 	result := MessageSendFreshness{SeenUpToSeq: c.boundaries[target]}
 	if c.recovery.status != messageRecoveryReady || !c.boundaryHealthy {
+		c.mu.Unlock()
 		return result, errors.New("Message freshness is unknown")
 	}
 	if c.activeHandoff != nil {
+		c.mu.Unlock()
 		return result, errors.New("runtime Message handoff boundary is unsettled")
 	}
-	bySequence := c.pending[target]
-	if len(bySequence) == 0 {
+	hasPending := len(c.pending[target]) > 0
+	c.mu.Unlock()
+	if !hasPending {
 		return result, nil
 	}
-
-	sequences := make([]int64, 0, len(bySequence))
-	for sequence := range bySequence {
-		sequences = append(sequences, sequence)
+	offer, err := c.PrepareCoverage(CoverageRequest{Kind: CoverageHold, Target: target, Limit: messageCheckMaxLimit})
+	if err != nil {
+		return result, err
 	}
-	sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
+	if offer.ReceiptID == "" {
+		return result, errors.New("freshness hold coverage is unavailable")
+	}
 	result.Held = true
-	result.NewMessageCount = int64(len(sequences))
-	result.LatestSeq = sequences[len(sequences)-1]
-	shownFrom := len(sequences) - messageCheckMaxLimit
-	if shownFrom < 0 {
-		shownFrom = 0
-	}
-	result.Messages = make([]protocol.AgentMessageProjection, 0, len(sequences)-shownFrom)
-	for _, sequence := range sequences[shownFrom:] {
-		result.Messages = append(result.Messages, bySequence[sequence])
-	}
-	result.Omitted = int64(shownFrom)
-
-	next := cloneBoundaries(c.boundaries)
-	if result.LatestSeq > next[target] {
-		next[target] = result.LatestSeq
-	}
-	if err := c.writeBoundaries(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
-		c.boundaryHealthy = false
-		return MessageSendFreshness{}, fmt.Errorf("persist Context Boundary after freshness hold: %w", err)
-	}
-	c.boundaries = next
-	c.boundaryHealthy = true
-	for _, sequence := range sequences {
-		message := bySequence[sequence]
-		delete(bySequence, sequence)
-		delete(c.accepted, messageIdentityKey(message))
-	}
-	delete(c.pending, target)
-	c.pendingGeneration++
+	result.NewMessageCount = int64(offer.CoveredCount)
+	result.LatestSeq = offer.ThroughSeq
+	result.Messages = offer.Messages
+	result.Omitted = int64(offer.CoveredCount - len(offer.Messages))
+	result.CoverageReceipt = offer.ReceiptID
 	return result, nil
-}
-
-// AcceptHeldContext advances local coverage after the canonical Server wins a
-// final send-race check.  The Server's latest sequence is the complete held
-// range even when its response contains only a bounded projection.
-func (c *MessageCoordinator) AcceptHeldContext(target string, throughSeq int64) error {
-	return c.MarkRead(target, throughSeq)
 }
 
 // Accept installs a Delivery into Pending. It returns false for a duplicate;

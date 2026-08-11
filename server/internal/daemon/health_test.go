@@ -621,11 +621,46 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 	if messages, _ := response["heldMessages"].([]any); len(messages) != 3 {
 		t.Fatalf("held Messages=%+v, want newest three", response["heldMessages"])
 	}
-	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 4 {
-		t.Fatalf("held boundary=%d known=%v, want 4 true", boundary, known)
+	receipt, _ := response[MessageCoverageReceiptField].(string)
+	if receipt == "" {
+		t.Fatalf("local hold omitted coverage receipt: %+v", response)
 	}
-	if draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now()); err != nil || !found || draft.SeenUpToSeq != 4 || draft.HoldCount != 1 {
-		t.Fatalf("held Draft=%+v found=%v err=%v", draft, found, err)
+	if boundary := coordinator.Boundaries()["channel:one"]; boundary != 0 {
+		t.Fatalf("pre-output held boundary=%d, want 0", boundary)
+	}
+	if got := len(coordinator.pending["channel:one"]); got != 4 {
+		t.Fatalf("pre-output Pending count=%d, want 4", got)
+	}
+	firstDraft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
+	if err != nil || !found || firstDraft.SeenUpToSeq != 4 || firstDraft.HoldCount != 1 {
+		t.Fatalf("held Draft=%+v found=%v err=%v", firstDraft, found, err)
+	}
+
+	repeated := httptest.NewRecorder()
+	d.credentialProxyMessageSendHandler().ServeHTTP(repeated, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/send", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","content":"reply"}`)))
+	if repeated.Code != http.StatusOK {
+		t.Fatalf("repeated local hold status=%d body=%s", repeated.Code, repeated.Body.String())
+	}
+	var repeatedResponse map[string]any
+	if err := json.Unmarshal(repeated.Body.Bytes(), &repeatedResponse); err != nil {
+		t.Fatalf("decode repeated local hold: %v", err)
+	}
+	repeatedReceipt, _ := repeatedResponse[MessageCoverageReceiptField].(string)
+	if repeatedReceipt == "" {
+		t.Fatalf("repeated local hold omitted coverage receipt: %+v", repeatedResponse)
+	}
+	repeatedDraft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
+	if err != nil || !found || repeatedDraft.IdempotencyKey != firstDraft.IdempotencyKey || repeatedDraft.HoldCount != 1 {
+		t.Fatalf("repeated held Draft=%+v first=%+v found=%v err=%v", repeatedDraft, firstDraft, found, err)
+	}
+	if sends != 0 || len(coordinator.pending["channel:one"]) != 4 || coordinator.Boundaries()["channel:one"] != 0 {
+		t.Fatalf("repeated hold sent=%d pending=%d boundary=%d", sends, len(coordinator.pending["channel:one"]), coordinator.Boundaries()["channel:one"])
+	}
+	if err := coordinator.CommitCoverage(repeatedReceipt); err != nil {
+		t.Fatalf("commit held coverage: %v", err)
+	}
+	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 4 {
+		t.Fatalf("committed held boundary=%d known=%v, want 4 true", boundary, known)
 	}
 }
 
@@ -669,8 +704,8 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 	if sent["seen_up_to_seq"] != float64(2) || sent["context_target"] != "channel:one" {
 		t.Fatalf("server race preflight request=%+v", sent)
 	}
-	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 5 {
-		t.Fatalf("held boundary=%d known=%v, want 5 true", boundary, known)
+	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 2 {
+		t.Fatalf("pre-output held boundary=%d known=%v, want 2 true", boundary, known)
 	}
 	draft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
 	if err != nil || !found || draft.SeenUpToSeq != 5 || draft.HoldCount != 1 {
@@ -680,10 +715,20 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode server hold: %v", err)
 	}
+	receipt, _ := response[MessageCoverageReceiptField].(string)
+	if receipt == "" {
+		t.Fatalf("server hold omitted local coverage receipt: %+v", response)
+	}
 	for _, private := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId"} {
 		if _, leaked := response[private]; leaked {
 			t.Fatalf("proxy leaked %s: %+v", private, response)
 		}
+	}
+	if err := coordinator.CommitCoverage(receipt); err != nil {
+		t.Fatalf("commit server-held coverage: %v", err)
+	}
+	if boundary, known := coordinator.ContextBoundary("channel:one"); !known || boundary != 5 {
+		t.Fatalf("committed held boundary=%d known=%v, want 5 true", boundary, known)
 	}
 }
 

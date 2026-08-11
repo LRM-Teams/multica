@@ -249,6 +249,10 @@ func requiredMessageTarget(cmd *cobra.Command) (string, error) {
 }
 
 func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
+	return runAgentMessageSendWithWriter(cmd, os.Stdout)
+}
+
+func runAgentMessageSendWithWriter(cmd *cobra.Command, output io.Writer) error {
 	target, err := requiredMessageTarget(cmd)
 	if err != nil {
 		return err
@@ -268,11 +272,10 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		if anyway {
 			body["anyway"] = true
 		}
-		var out map[string]any
-		if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
+		if err := outputAgentMessageSendThroughCredentialProxy(body, output); err != nil {
 			return fmt.Errorf("send saved Draft: %w", err)
 		}
-		return printAgentTransportOutput(out)
+		return nil
 	}
 	contentBytes, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), maxAgentMessageStdinBytes+1))
 	if err != nil {
@@ -306,11 +309,31 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	}
 	// Raft-aligned: chat send identity is minted by the Credential Proxy
 	// (independent uuid / draft reuse). CLI does not stamp turn batch keys.
-	var out map[string]any
-	if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
+	if err := outputAgentMessageSendThroughCredentialProxy(body, output); err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
-	return printAgentTransportOutput(out)
+	return nil
+}
+
+func outputAgentMessageSendThroughCredentialProxy(body map[string]any, output io.Writer) error {
+	var result map[string]any
+	err := withAgentMessageCredentialProxyResponse("send", body, func(ctx context.Context, responseBody io.Reader) error {
+		return consumeMessageCoverageResponse(
+			ctx,
+			responseBody,
+			output,
+			&result,
+			func(w io.Writer) error { return cli.PrintJSON(w, result) },
+			commitLocalMessageCoverage,
+		)
+	})
+	if err != nil {
+		return err
+	}
+	if agentTransportOutputIsHeld(result) {
+		return errAgentMessageHeld
+	}
+	return nil
 }
 
 func agentTransportOutputIsHeld(out map[string]any) bool {
@@ -381,10 +404,6 @@ func outputAgentMessageReadThroughCredentialProxy(body map[string]any, output io
 			commitLocalMessageCoverage,
 		)
 	})
-}
-
-func postAgentMessageSendThroughCredentialProxy(body map[string]any, out any) error {
-	return postAgentMessageThroughCredentialProxy("send", body, out)
 }
 
 func postAgentMessageThroughCredentialProxy(operation string, body map[string]any, out any) error {

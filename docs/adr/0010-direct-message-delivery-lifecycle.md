@@ -61,6 +61,16 @@ never before it. A post-handoff persistence failure is logged and may cause
 duplicate context after restart; it does not retract or block the successful
 handoff.
 
+Agent CLI coverage is two-phase. The coordinator prepares an opaque,
+machine-local receipt for the exact `message check`, `message read`, or
+freshness-hold context represented by one response without changing Pending or
+the Context Boundary. The CLI removes that receipt from visible output, writes
+the response, and only then commits the receipt through its launch-scoped Agent
+Proxy credential. Output failure makes no commit; commit failure after output is
+reported explicitly and may replay context. A freshness-hold receipt covers the
+complete held Pending range even when the response shows only the newest three
+Messages.
+
 While recovery is incomplete or failed, the coordinator may accept and merge
 new `agent:deliver` traffic but must not claim that inbox freshness is known.
 Agent sends whose correctness depends on freshness fail closed into the normal

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -518,6 +519,98 @@ func TestRunAgentMessageSendPostsOpaqueAttachmentIDsInOrder(t *testing.T) {
 	}
 	if len(attachmentIDs) != 2 || attachmentIDs[0] != "att-a" || attachmentIDs[1] != "att-b" {
 		t.Fatalf("attachment_ids = %#v, want ordered opaque ids", attachmentIDs)
+	}
+}
+
+func TestRunAgentMessageSendCommitsHeldCoverageAfterVisibleOutput(t *testing.T) {
+	commitCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/credential-proxy/messages/send":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"action": "message_send", "state": "held", "outcome": "held",
+				"heldMessages":      []map[string]any{{"id": "message-1", "target": "channel:one", "seq": 1, "content": "new context"}},
+				"_coverage_receipt": "receipt-hold-1",
+			})
+		case "/credential-proxy/messages/coverage/commit":
+			commitCalls++
+			if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "map_send-token" {
+				t.Errorf("coverage commit token = %q", got)
+			}
+			var commit map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&commit); err != nil {
+				t.Errorf("decode coverage commit: %v", err)
+			}
+			if commit["receipt_id"] != "receipt-hold-1" || len(commit) != 1 {
+				t.Errorf("coverage commit = %#v", commit)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	setMessageCredentialProxyEnv(t, srv.URL)
+	tokenFile := filepath.Join(t.TempDir(), "agent-proxy.token")
+	if err := os.WriteFile(tokenFile, []byte("map_send-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemon.AgentProxyURLEnv, srv.URL)
+	t.Setenv(daemon.AgentProxyTokenFileEnv, tokenFile)
+
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#one")
+	cmd.SetIn(strings.NewReader("draft reply"))
+	var output bytes.Buffer
+	err := runAgentMessageSendWithWriter(cmd, &output)
+	if !errors.Is(err, errAgentMessageHeld) {
+		t.Fatalf("send error = %v, want held result after commit", err)
+	}
+	if commitCalls != 1 {
+		t.Fatalf("coverage commit calls = %d, want 1", commitCalls)
+	}
+	var visible map[string]any
+	if err := json.Unmarshal(output.Bytes(), &visible); err != nil {
+		t.Fatalf("visible output = %q: %v", output.String(), err)
+	}
+	if visible["state"] != "held" || visible["outcome"] != "held" {
+		t.Fatalf("visible held output = %#v", visible)
+	}
+	if _, leaked := visible[messageCoverageReceiptField]; leaked {
+		t.Fatalf("visible held output leaked receipt: %#v", visible)
+	}
+}
+
+func TestRunAgentMessageSendOutputFailureLeavesHeldCoverageUncommitted(t *testing.T) {
+	commitCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/credential-proxy/messages/send":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"action": "message_send", "state": "held", "outcome": "held",
+				"heldMessages":      []map[string]any{{"id": "message-1", "target": "channel:one", "seq": 1, "content": "new context"}},
+				"_coverage_receipt": "receipt-hold-1",
+			})
+		case "/credential-proxy/messages/coverage/commit":
+			commitCalls++
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	setMessageCredentialProxyEnv(t, srv.URL)
+
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#one")
+	cmd.SetIn(strings.NewReader("draft reply"))
+	outputErr := errors.New("stdout closed")
+	err := runAgentMessageSendWithWriter(cmd, messageCoverageFailingWriter{err: outputErr})
+	if !errors.Is(err, outputErr) {
+		t.Fatalf("send error = %v, want output failure", err)
+	}
+	if commitCalls != 0 {
+		t.Fatalf("output failure attempted %d coverage commits", commitCalls)
 	}
 }
 

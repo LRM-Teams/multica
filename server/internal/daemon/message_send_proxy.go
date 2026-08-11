@@ -126,16 +126,24 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			http.Error(w, "send message through Credential Proxy: "+err.Error(), http.StatusBadGateway)
 			return
 		}
+		localCoverageReceipt := ""
 		if credentialProxyMessageOutputIsHeld(response) {
 			latestSeq, ok := jsonInteger(response["latestSeq"])
 			if !ok || latestSeq <= 0 {
 				http.Error(w, "invalid held send response from server", http.StatusBadGateway)
 				return
 			}
-			if err := proxy.AcceptHeldMessageContext(request.AgentID, draft.ContextTarget, latestSeq); err != nil {
-				http.Error(w, "persist held message Context Boundary: "+err.Error(), http.StatusConflict)
+			heldMessages, err := parseServerHeldMessageContext(response, draft.ContextTarget)
+			if err != nil {
+				http.Error(w, "invalid held send response from server", http.StatusBadGateway)
 				return
 			}
+			coverage, err := proxy.PrepareHeldMessageContext(request.AgentID, draft.ContextTarget, latestSeq, heldMessages)
+			if err != nil || coverage.ReceiptID == "" {
+				http.Error(w, "prepare held message coverage", http.StatusConflict)
+				return
+			}
+			localCoverageReceipt = coverage.ReceiptID
 			if _, err := proxy.RecordMessageDraftHold(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, draft.ContextTarget, latestSeq, time.Now()); err != nil {
 				http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 				return
@@ -156,8 +164,36 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_accepted", "accepted", "")
 		}
 		sanitizeCredentialProxyMessageSendResponse(response)
+		if localCoverageReceipt != "" {
+			response[MessageCoverageReceiptField] = localCoverageReceipt
+		}
 		writeCredentialProxyMessageJSON(w, response)
 	}
+}
+
+func parseServerHeldMessageContext(response map[string]any, target string) ([]protocol.AgentMessageProjection, error) {
+	raw, found := response["heldMessages"]
+	if !found {
+		return nil, errors.New("held Messages are required")
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var messages []protocol.AgentMessageProjection
+	if err := json.Unmarshal(encoded, &messages); err != nil || len(messages) == 0 || len(messages) > messageCheckMaxLimit {
+		return nil, errors.New("held Messages are invalid")
+	}
+	target = strings.TrimSpace(target)
+	for index := range messages {
+		if strings.TrimSpace(messages[index].Target) == "" {
+			messages[index].Target = target
+		}
+		if messages[index].Target != target || strings.TrimSpace(messages[index].ID) == "" || messages[index].Seq <= 0 {
+			return nil, errors.New("held Message identity is invalid")
+		}
+	}
+	return messages, nil
 }
 
 func (request *credentialProxyMessageSendRequest) validate() error {
@@ -277,7 +313,7 @@ func reuseClientMessageIDForIntent(existing MessageDraft, content string) (strin
 }
 
 func localMessageSendHeldResponse(target string, freshness MessageSendFreshness, reason string) map[string]any {
-	return map[string]any{
+	response := map[string]any{
 		"action":              "message_send",
 		"target":              target,
 		"state":               "held",
@@ -291,6 +327,10 @@ func localMessageSendHeldResponse(target string, freshness MessageSendFreshness,
 		"shownMessageCount":   int64(len(freshness.Messages)),
 		"omittedMessageCount": freshness.Omitted,
 	}
+	if freshness.CoverageReceipt != "" {
+		response[MessageCoverageReceiptField] = freshness.CoverageReceipt
+	}
+	return response
 }
 
 func sanitizeCredentialProxyMessageSendResponse(response map[string]any) {

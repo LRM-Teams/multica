@@ -2,33 +2,37 @@
 
 import type { ExecutionRow } from "../execution-overlay";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@multica/ui/components/ui/sheet";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 
-export function ResearchAgentInspector({
+function ResearchAgentInspectorBody({
   row,
-  open,
   onClose,
   onOpenAgentConfig,
-  className,
 }: {
-  row: ExecutionRow | null;
-  open: boolean;
+  row: ExecutionRow;
   onClose: () => void;
   onOpenAgentConfig?: () => void;
-  className?: string;
 }) {
   const { t } = useT("research");
 
-  if (!open || !row) return null;
-
   return (
-    <aside
-      data-testid="research-agent-inspector"
-      className={cn("research-agent-inspector open", className)}
-    >
+    <>
       <header className="agent-head">
-        <button type="button" className="agent-close" onClick={onClose} aria-label={t(($) => $.d5.inspector.close)}>
+        <button
+          type="button"
+          className="agent-close"
+          onClick={onClose}
+          aria-label={t(($) => $.d5.inspector.close)}
+        >
           ×
         </button>
         <div className="who">
@@ -69,6 +73,70 @@ export function ResearchAgentInspector({
           </Button>
         ) : null}
       </footer>
+    </>
+  );
+}
+
+export function ResearchAgentInspector({
+  row,
+  open,
+  onClose,
+  onOpenAgentConfig,
+  className,
+}: {
+  row: ExecutionRow | null;
+  open: boolean;
+  onClose: () => void;
+  onOpenAgentConfig?: () => void;
+  className?: string;
+}) {
+  const { t } = useT("research");
+  const isMobile = useIsMobile();
+
+  if (!open || !row) return null;
+
+  if (isMobile) {
+    return (
+      <Sheet
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) onClose();
+        }}
+      >
+        <SheetContent
+          side="bottom"
+          data-testid="research-agent-inspector"
+          data-placement="sheet"
+          className={cn(
+            "max-h-[min(72dvh,560px)] gap-0 overflow-y-auto rounded-t-2xl border-t border-border bg-[#0d1723] p-0 text-foreground",
+            className,
+          )}
+        >
+          <SheetHeader className="sr-only">
+            <SheetTitle>{row.name}</SheetTitle>
+            <SheetDescription>{t(($) => $.d5.inspector.objective)}</SheetDescription>
+          </SheetHeader>
+          <ResearchAgentInspectorBody
+            row={row}
+            onClose={onClose}
+            onOpenAgentConfig={onOpenAgentConfig}
+          />
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  return (
+    <aside
+      data-testid="research-agent-inspector"
+      data-placement="overlay"
+      className={cn("research-agent-inspector open", className)}
+    >
+      <ResearchAgentInspectorBody
+        row={row}
+        onClose={onClose}
+        onOpenAgentConfig={onOpenAgentConfig}
+      />
     </aside>
   );
 }

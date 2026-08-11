@@ -8,11 +8,15 @@ export function StarGraphClusterLayer({
   entities,
   rootId,
   newFrontierLabel,
+  hiddenCounts,
+  hiddenCountLabel,
 }: {
   clusters: readonly StarGraphLayoutCluster[];
   entities: readonly StarEntityView[];
   rootId: string | null;
   newFrontierLabel?: string;
+  hiddenCounts?: ReadonlyMap<string, number>;
+  hiddenCountLabel?: (count: number) => string;
 }) {
   const newFrontier = computeNewFrontierZone(entities, rootId);
 
@@ -31,6 +35,16 @@ export function StarGraphClusterLayer({
           }}
         >
           <span className="sg-cluster-label">{cluster.clusterId}</span>
+          {hiddenCounts?.get(cluster.clusterId) ? (
+            <span
+              data-testid={`star-graph-cluster-hidden-${cluster.clusterId}`}
+              className="sg-cluster-hidden-badge"
+            >
+              {hiddenCountLabel
+                ? hiddenCountLabel(hiddenCounts.get(cluster.clusterId)!)
+                : `+${hiddenCounts.get(cluster.clusterId)}`}
+            </span>
+          ) : null}
         </div>
       ))}
       {newFrontier && (

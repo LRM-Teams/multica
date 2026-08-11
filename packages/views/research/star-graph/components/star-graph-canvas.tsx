@@ -25,6 +25,7 @@ import {
 import type { MotionDirective } from "../../motion/directives";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import {
+  computeClusterHiddenCounts,
   filterRelationsToVisibleEntities,
   selectVisibleEntityIds,
   STAR_GRAPH_DOM_BUDGET,
@@ -65,6 +66,7 @@ export interface StarGraphCanvasProps {
   nodeAccessibleNames?: ReadonlyMap<string, string>;
   relatedNodeIds?: ReadonlySet<string>;
   entityBudget?: number;
+  hiddenCountLabel?: (count: number) => string;
   className?: string;
 }
 
@@ -87,6 +89,7 @@ export function StarGraphCanvas({
   nodeAccessibleNames,
   relatedNodeIds,
   entityBudget = STAR_GRAPH_DOM_BUDGET,
+  hiddenCountLabel,
   className,
 }: StarGraphCanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -122,8 +125,21 @@ export function StarGraphCanvas({
         selectedNodeId,
         relatedNodeIds,
         budget: entityBudget,
+        zoom: camera.zoom,
       }),
-    [entityBudget, model.entities, model.rootId, relatedNodeIds, selectedNodeId],
+    [
+      camera.zoom,
+      entityBudget,
+      model.entities,
+      model.rootId,
+      relatedNodeIds,
+      selectedNodeId,
+    ],
+  );
+
+  const clusterHiddenCounts = useMemo(
+    () => computeClusterHiddenCounts(model.entities, visibleEntityIds),
+    [model.entities, visibleEntityIds],
   );
 
   const visibleEntities = useMemo(
@@ -370,6 +386,8 @@ export function StarGraphCanvas({
           entities={visibleEntities}
           rootId={model.rootId}
           newFrontierLabel={newFrontierLabel}
+          hiddenCounts={clusterHiddenCounts}
+          hiddenCountLabel={hiddenCountLabel}
         />
         <StarGraphEdges
           relations={visibleRelations}

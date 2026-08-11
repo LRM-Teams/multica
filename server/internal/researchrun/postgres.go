@@ -679,6 +679,36 @@ func (s *PostgresStore) TaskContext(ctx context.Context, taskID, workspaceID str
 	}, nil
 }
 
+func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, workspaceID string) (RunSnapshot, error) {
+	var sessionID, taskID string
+	var passportEnabled bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT a.session_id::text, a.task_id::text, rs.artifact_passport_enabled
+		FROM research_task_attempt a
+		JOIN research_session rs
+		  ON rs.id = a.session_id AND rs.workspace_id = a.workspace_id
+		WHERE a.id = $1::uuid AND a.workspace_id = $2::uuid
+	`, attemptID, workspaceID).Scan(&sessionID, &taskID, &passportEnabled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RunSnapshot{}, ErrRunNotFound
+		}
+		return RunSnapshot{}, err
+	}
+	snapshot, err := s.TaskContext(ctx, taskID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	if !passportEnabled {
+		return snapshot, nil
+	}
+	allowed, ok, err := loadManifestAuthorizedArtifactIDsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	if err != nil || !ok {
+		return snapshot, err
+	}
+	return filterRunSnapshotByManifest(snapshot, allowed), nil
+}
+
 func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, duration time.Duration) (Run, RunLease, bool, error) {
 	if duration <= 0 {
 		return Run{}, RunLease{}, false, fmt.Errorf("%w: reconcile lease duration must be positive", ErrInvalidTransition)

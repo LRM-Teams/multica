@@ -88,9 +88,11 @@ func (m ArtifactContextModule) PlanDispatchManifest(
 
 	var watermark int64
 	if err = tx.QueryRow(ctx, `
-		SELECT research_artifact_reserve_policy_watermark($1::uuid, $2::uuid)
+		SELECT watermark
+		FROM research_artifact_policy_state
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
 	`, workspaceID, sessionID).Scan(&watermark); err != nil {
-		return dispatchManifestPlan{}, fmt.Errorf("reserve policy watermark: %w", err)
+		return dispatchManifestPlan{}, fmt.Errorf("read policy watermark: %w", err)
 	}
 
 	manifestID := uuid.NewString()
@@ -177,24 +179,32 @@ func loadArtifactVersionCandidates(
 }
 
 type persistDispatchManifestInput struct {
-	WorkspaceID string
-	SessionID   string
-	AttemptID   string
-	TaskID      string
-	Plan        dispatchManifestPlan
+	WorkspaceID       string
+	SessionID         string
+	AttemptID         string
+	TaskID            string
+	Plan              dispatchManifestPlan
+	ExpectedWatermark int64
 }
 
-func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) error {
+func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) (dispatchManifestPlan, error) {
+	reserved, err := reservePolicyWatermarkCASTx(ctx, tx, in.WorkspaceID, in.SessionID, in.ExpectedWatermark)
+	if err != nil {
+		return dispatchManifestPlan{}, err
+	}
+	plan := in.Plan
+	plan.PolicyWatermark = reserved
+
 	if err := registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            in.WorkspaceID,
 		SessionID:              in.SessionID,
-		EntityID:               in.Plan.ManifestID,
+		EntityID:               plan.ManifestID,
 		Kind:                   ArtifactKindContextManifest,
 		ProvenanceCompleteness: ArtifactProvenanceComplete,
 		AccessLevel:            ArtifactAccessRaw,
 		HashOrigin:             ArtifactHashOriginProduction,
 	}); err != nil {
-		return err
+		return dispatchManifestPlan{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO research_artifact_context_manifest (
@@ -205,13 +215,13 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
 		  'task_execution', $6, $7, $8, $9
 		)
-	`, in.Plan.ManifestID, in.WorkspaceID, in.SessionID, in.AttemptID, in.TaskID,
-		LegacyV1V5CompatPolicy, in.Plan.PolicyWatermark, in.Plan.ThroughStateVersion,
-		in.Plan.ManifestHash); err != nil {
-		return fmt.Errorf("insert context manifest: %w", err)
+	`, plan.ManifestID, in.WorkspaceID, in.SessionID, in.AttemptID, in.TaskID,
+		LegacyV1V5CompatPolicy, plan.PolicyWatermark, plan.ThroughStateVersion,
+		plan.ManifestHash); err != nil {
+		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
 	}
 
-	for ordinal, entry := range in.Plan.Entries {
+	for ordinal, entry := range plan.Entries {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO research_artifact_context_entry (
 			  workspace_id, session_id, manifest_id, ordinal,
@@ -222,23 +232,30 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 			  $5::uuid, $6,
 			  $7, $8, $9, 'input'
 			)
-		`, in.WorkspaceID, in.SessionID, in.Plan.ManifestID, ordinal,
+		`, in.WorkspaceID, in.SessionID, plan.ManifestID, ordinal,
 			entry.VersionRowID, entry.EligibilityRevision,
 			entry.Representation, entry.RepresentationBytes, entry.RepresentationHash); err != nil {
-			return fmt.Errorf("insert manifest entry ordinal=%d: %w", ordinal, err)
+			return dispatchManifestPlan{}, fmt.Errorf("insert manifest entry ordinal=%d: %w", ordinal, err)
 		}
 	}
-	for ordinal, omission := range in.Plan.Omissions {
+	for ordinal, omission := range plan.Omissions {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO research_artifact_context_omission (
 			  workspace_id, session_id, manifest_id, candidate_version_id, ordinal, reason
 			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6)
-		`, in.WorkspaceID, in.SessionID, in.Plan.ManifestID, omission.VersionRowID, ordinal,
+		`, in.WorkspaceID, in.SessionID, plan.ManifestID, omission.VersionRowID, ordinal,
 			omission.OmissionReason); err != nil {
-			return fmt.Errorf("insert manifest omission ordinal=%d: %w", ordinal, err)
+			return dispatchManifestPlan{}, fmt.Errorf("insert manifest omission ordinal=%d: %w", ordinal, err)
 		}
 	}
-	return nil
+	manifestVersionRowID, err := loadManifestVersionRowIDTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.ManifestID)
+	if err != nil {
+		return dispatchManifestPlan{}, err
+	}
+	if err = persistManifestInputReferencesTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.ManifestID, manifestVersionRowID); err != nil {
+		return dispatchManifestPlan{}, err
+	}
+	return plan, nil
 }
 
 func loadAttemptManifestSummary(
@@ -268,7 +285,7 @@ func persistAcceptedResultArtifactTx(
 	resultJSON []byte,
 	contentHash string,
 	policyWatermark int64,
-) error {
+) (string, error) {
 	resultID := uuid.NewString()
 	if err := registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:            workspaceID,
@@ -284,24 +301,26 @@ func persistAcceptedResultArtifactTx(
 		SchemaName:             string(ArtifactKindResultArtifact),
 		SchemaVersion:          "legacy-v1",
 	}); err != nil {
-		return err
+		return "", err
 	}
-	return insertResultArtifactRowTx(
-		ctx, tx, workspaceID, sessionID, attemptID, orchestratorVersion,
+	if err := insertResultArtifactRowTx(
+		ctx, tx, resultID, workspaceID, sessionID, attemptID, orchestratorVersion,
 		result, resultJSON, contentHash, policyWatermark,
-	)
+	); err != nil {
+		return "", err
+	}
+	return resultID, nil
 }
 
 func insertResultArtifactRowTx(
 	ctx context.Context,
 	tx pgx.Tx,
-	workspaceID, sessionID, attemptID, orchestratorVersion string,
+	resultID, workspaceID, sessionID, attemptID, orchestratorVersion string,
 	result ResultEnvelope,
 	resultJSON []byte,
 	contentHash string,
 	policyWatermark int64,
 ) error {
-	resultID := attemptID
 	_, err := tx.Exec(ctx, `
 		INSERT INTO research_result_artifact (
 		  id, workspace_id, session_id, attempt_id,
@@ -320,18 +339,6 @@ func insertResultArtifactRowTx(
 
 func timePtr(value time.Time) *time.Time {
 	return &value
-}
-
-func verifyAcceptanceManifestPolicyTx(
-	ctx context.Context,
-	tx pgx.Tx,
-	workspaceID, sessionID, attemptID string,
-) (int64, error) {
-	_, _, manifestWatermark, ok, err := loadAttemptManifestSummary(ctx, tx, workspaceID, sessionID, attemptID)
-	if err != nil || !ok {
-		return 0, err
-	}
-	return manifestWatermark, nil
 }
 
 func sessionArtifactPassportEnabled(

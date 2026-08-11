@@ -238,6 +238,11 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err == nil {
 		t.Fatal("stale Runner session was accepted")
 	}
+	staleStatus := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: "launch-stale", Status: protocol.AgentStatusActive}
+	raw, _ = json.Marshal(staleStatus)
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, raw); err == nil {
+		t.Fatal("stale Runner launch status was accepted")
+	}
 }
 
 func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {

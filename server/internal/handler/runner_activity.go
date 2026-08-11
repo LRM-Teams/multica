@@ -232,7 +232,7 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 			return err
 		}
 		before := h.projectRunnerLaunchPresence(identity.WorkspaceID, beforeLaunch)
-		_, err = h.DB.Exec(ctx, `
+		command, err := h.DB.Exec(ctx, `
 			INSERT INTO agent_activity_launch (
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
 			) VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -245,9 +245,17 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 				last_client_sequence = 0,
 				last_producer_fact_id = '',
 				last_activity_fingerprint = '',
-				updated_at = now()`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
+				updated_at = now()
+			WHERE agent_activity_launch.start_dispatch_id = ''
+			   OR agent_activity_launch.status = 'inactive'
+			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id)`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
 		if err != nil {
 			return fmt.Errorf("upsert Runner launch: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("stale Workspace Runner launch status")
 		}
 		afterLaunch := &runnerLaunchPresence{daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, status: status.Status}
 		after := h.projectRunnerLaunchPresence(identity.WorkspaceID, afterLaunch)

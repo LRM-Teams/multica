@@ -39,13 +39,16 @@ type AgentRuntimeResponse struct {
 	ProviderCapabilities ProviderCapabilitiesWire `json:"provider_capabilities"`
 	Status               string                   `json:"status"`
 	// DeviceInfo is the legacy composite string daemons still register
-	// (e.g. "ubuntu · codex-cli 0.146.0"). Prefer DeviceName for the OS row.
+	// (e.g. "ubuntu · codex-cli 0.146.0").
 	DeviceInfo string `json:"device_info"`
 	// DeviceName is the machine label from registration (metadata.device_name).
 	// Daemon already sends device_name separately; we persist it so clients
 	// never re-parse device_info. Empty until the daemon re-registers after
 	// this persist landed. Older servers omit the field.
-	DeviceName     string   `json:"device_name"`
+	DeviceName string `json:"device_name"`
+	// OS is the daemon-reported GOOS value from registration metadata. Older
+	// daemons omit it, in which case clients must render an unknown value.
+	OS             string   `json:"os"`
 	Metadata       any      `json:"metadata"`
 	Capabilities   []string `json:"capabilities"`
 	CurrentVersion *string  `json:"current_version"`
@@ -377,6 +380,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		Status:               rt.Status,
 		DeviceInfo:           rt.DeviceInfo,
 		DeviceName:           deviceNameFromRuntime(rt.DeviceInfo, metadata),
+		OS:                   operatingSystemFromRuntime(metadata),
 		Metadata:             metadata,
 		Capabilities:         runtimeCapabilities(metadata),
 		CurrentVersion:       currentVersion,

@@ -101,6 +101,7 @@ import { MachineHeaderOps } from "./machine-header-ops";
 import { MachineWorkspacesSection } from "./machine-workspaces-section";
 import { useT } from "../../i18n/use-t";
 import { useNavigation } from "../../navigation";
+import { formatOperatingSystem } from "../utils";
 
 interface RuntimesPageProps {
   localDaemonId?: string | null;
@@ -914,9 +915,9 @@ function MachineDetailView({
 
 
   const hostname = machineHostname(machine);
-  // Structured register field only (Alice #1723). Never parse device_info
-  // glue ("ubuntu · codex-cli …"). Missing → em dash (Parker; pending Frank).
-  const osLabel = machine.deviceName?.trim() || "—";
+  // Only the daemon-reported GOOS is an OS value. The device name is usually
+  // the hostname, so using it here would duplicate the Hostname row.
+  const osLabel = formatOperatingSystem(machine.os) ?? "—";
   // Task #81 — the daemon's locally-recorded MULTICA_PINNED_VERSION intent,
   // if any. Purely informational (server doesn't enforce it yet against a
   // server-initiated update — that's #81's still-unmade (b) half). Only

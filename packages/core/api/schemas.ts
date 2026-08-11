@@ -367,6 +367,8 @@ export const AgentRuntimeSchema = z.object({
   device_info: z.string().default(""),
   // Machine label from daemon register (metadata.device_name). Older servers omit it.
   device_name: z.string().optional(),
+  // Daemon-reported GOOS. Older servers and daemons omit it.
+  os: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).catch({}),
   capabilities: z.array(z.string()).optional(),
   current_version: z.string().nullable(),

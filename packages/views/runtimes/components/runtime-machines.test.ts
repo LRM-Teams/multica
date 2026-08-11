@@ -16,6 +16,7 @@ import {
   mergePendingCloudComputers,
   pendingCloudComputerMachineId,
   resolveCloudComputerSelectionId,
+  machineOperatingSystem,
   runtimeComputerLabel,
   runtimeDisplayLabel,
   runtimeMachineCounts,
@@ -258,9 +259,7 @@ describe("runtime machine grouping", () => {
     expect(subtitle).toMatch(/^daemon /);
   });
 
-  it("Basics OS uses structured device_name; never parses device_info glue", () => {
-    // Frank 2026-08-01: OS showed "ubuntu · codex-cli 0.146.0". Alice #1723
-    // exposes device_name; FE must not invent it by splitting device_info.
+  it("keeps the device name separate from the daemon-reported OS", () => {
     expect(
       machineDeviceName([
         makeRuntime({
@@ -290,11 +289,19 @@ describe("runtime machine grouping", () => {
     expect(withName[0]?.deviceName).toBe("ubuntu");
     expect(withName[0]?.deviceName?.toLowerCase()).not.toContain("codex");
 
+    const withOS = buildRuntimeMachines(
+      [makeRuntime({ device_name: "dev-machine.local", os: "darwin" })],
+      { now: NOW },
+    );
+    expect(withOS[0]?.os).toBe("darwin");
+    expect(machineOperatingSystem(withOS[0]?.runtimes ?? [])).toBe("darwin");
+
     const missing = buildRuntimeMachines(
       [makeRuntime({ device_info: "ubuntu · codex-cli 0.146.0" })],
       { now: NOW },
     );
     expect(missing[0]?.deviceName).toBeNull();
+    expect(missing[0]?.os).toBeNull();
   });
 
   it("synthesizes a placeholder local machine when ensureLocalMachine is set and no runtime matches", () => {

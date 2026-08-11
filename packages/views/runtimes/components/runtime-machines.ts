@@ -32,6 +32,8 @@ export interface RuntimeMachine {
    * Never derived by parsing `device_info`.
    */
   deviceName: string | null;
+  /** Daemon-reported GOOS. Absent until an updated daemon re-registers. */
+  os?: string | null;
   cliVersion: string | null;
   mode: AgentRuntime["runtime_mode"];
   section: RuntimeMachineSection;
@@ -445,6 +447,7 @@ function placeholderLocalMachine(
     subtitle: null,
     deviceInfo: null,
     deviceName: null,
+    os: null,
     cliVersion: null,
     mode: "local",
     section: "local",
@@ -543,6 +546,7 @@ function finalizeRuntimeMachine(
       : runtimeTitle;
   const deviceInfo = first ? formatDeviceInfo(first.device_info ?? null) : null;
   const deviceName = machineDeviceName(runtimes);
+  const os = machineOperatingSystem(runtimes);
   const subtitle = machineSubtitle({
     title,
     deviceInfo,
@@ -592,6 +596,7 @@ function finalizeRuntimeMachine(
     subtitle,
     deviceInfo,
     deviceName,
+    os,
     cliVersion: commonCliVersion(runtimes),
     mode: draft.mode,
     section: isCurrent ? "local" : draft.mode === "cloud" ? "cloud" : "remote",
@@ -745,6 +750,15 @@ export function runtimeDeviceName(runtime: AgentRuntime): string | null {
 export function machineDeviceName(runtimes: AgentRuntime[]): string | null {
   for (const runtime of runtimes) {
     const value = runtime.device_name?.trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+/** First daemon-reported GOOS on the machine. Device names are not OS values. */
+export function machineOperatingSystem(runtimes: AgentRuntime[]): string | null {
+  for (const runtime of runtimes) {
+    const value = runtime.os?.trim();
     if (value) return value;
   }
   return null;

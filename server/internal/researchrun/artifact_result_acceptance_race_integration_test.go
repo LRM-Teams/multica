@@ -13,15 +13,15 @@ import (
 )
 
 type acceptanceRaceFixture struct {
-	pool      *pgxpool.Pool
-	store     *PostgresStore
-	fixture   researchRunFixture
-	run       Run
-	task      Task
-	attempt   Attempt
-	inboxID   string
-	claimID   string
-	input     AcceptResultInput
+	pool    *pgxpool.Pool
+	store   *PostgresStore
+	fixture researchRunFixture
+	run     Run
+	task    Task
+	attempt Attempt
+	inboxID string
+	claimID string
+	input   AcceptResultInput
 }
 
 func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) acceptanceRaceFixture {
@@ -42,28 +42,20 @@ func setupPlanAcceptanceRaceFixture(t *testing.T, ctx context.Context, pool *pgx
 	}
 	task := tasks[0]
 	claimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-		  significance, confidence, status, goal_version, plan_version, resolution
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'accept-race-claim', '', 'claim referenced by manifest',
-		  0.5, 0.5, 'proposed', 1, 1, ''
-		)
-	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatalf("insert claim: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+	seedIntegrationClaimArtifact(
+		t, ctx, pool, fixture.workspaceID, run.SessionID,
+		claimID, "accept-race-claim", "claim referenced by manifest",
+	)
 
 	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, task.ID, fixture.agentID))
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
-	inboxID := uuid.NewString()
+	inboxID := seedIntegrationInboxEvent(t, ctx, pool, fixture.workspaceID, fixture.agentID)
 	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
-	raw, err := json.Marshal(validPlanResult(t))
+	raw, err := json.Marshal(e2eDeliveryPlan())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,45 +135,47 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 		{
 			name: "eligibility_revision",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
 					UPDATE research_artifact_passport
 					SET eligibility_revision = eligibility_revision + 1
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
-				return err
+				return nil
 			},
 		},
 		{
 			name: "withdrawn_lifecycle",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
 					UPDATE research_artifact_passport
 					SET lifecycle_status = 'withdrawn'
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
-				return err
+				return nil
 			},
 		},
 		{
 			name: "version_content_hash",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
+				mutatedHash := contentHashFromPayload([]byte("mutated after acceptance preflight"))
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
 					UPDATE research_artifact_version
-					SET content_hash = 'sha256:mutated-after-preflight'
+					SET content_hash = $4
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
-				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
-				return err
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID, mutatedHash)
+				return nil
 			},
 		},
 		{
 			name: "manifest_hash",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
+				mutatedHash := contentHashFromPayload([]byte("tampered after acceptance preflight"))
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
 					UPDATE research_artifact_context_manifest
-					SET manifest_hash = 'sha256:tampered-after-preflight'
+					SET manifest_hash = $4
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-				`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID)
-				return err
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID, mutatedHash)
+				return nil
 			},
 		},
 	}

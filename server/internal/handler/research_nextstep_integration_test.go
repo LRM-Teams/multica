@@ -86,7 +86,8 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 		SET unattended_enabled = true,
 		    unattended_auto_steps = 0,
 		    last_user_activity_at = $2,
-		    max_open_branches = 3
+		    max_open_branches = 3,
+		    updated_at = $2
 		WHERE id = $1
 	`, sessionID, quietAt); err != nil {
 		t.Fatalf("mark session quiet: %v", err)

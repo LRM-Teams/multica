@@ -9,7 +9,6 @@ import {
   Monitor,
   Plus,
   RotateCcw,
-  Server,
   Square,
   X,
 } from "lucide-react";
@@ -89,6 +88,7 @@ import {
 } from "./runtime-machines";
 import { MachineNameEditor } from "./machine-name-editor";
 import {
+  ComputerIcon,
   HealthDot,
   MachineConnectedStatus,
 } from "./shared";
@@ -367,7 +367,7 @@ export function RuntimesPage({
       <div className="flex flex-1 min-h-0 flex-col">
         <PageHeader className="justify-between px-5">
           <div className="flex items-center gap-2">
-            <Server className="h-4 w-4 text-muted-foreground" />
+            <Monitor className="h-4 w-4 text-muted-foreground" />
             <h1 className="text-sm font-medium">{t(($) => $.page.title)}</h1>
           </div>
         </PageHeader>
@@ -437,7 +437,7 @@ export function RuntimesPage({
     <main className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center px-6 text-center">
       {bootstrapping ? (
         <>
-          <Server className="h-8 w-8 animate-pulse text-muted-foreground/40" />
+          <Monitor className="h-8 w-8 animate-pulse text-muted-foreground/40" />
           <p className="mt-3 text-sm text-muted-foreground">
             {t(($) => $.page.bootstrapping.title)}
           </p>
@@ -600,8 +600,19 @@ export function MachineListView({
           onClick={() => onSelect(machine.id)}
           className="absolute inset-0 z-0 rounded-[inherit]"
         />
-        <span className="relative z-10 shrink-0 pointer-events-none" aria-hidden>
-          <HealthDot health={machine.health} />
+        {/* Computer kind icon (Monitor vs Cloud) + corner connectivity dot.
+            Kind is the primary local/cloud read; health stays as the small
+            corner signal so LRM-1094's non-text connectivity cue remains
+            without a second leading column. */}
+        <span
+          className="relative z-10 flex size-5 shrink-0 items-center justify-center text-muted-foreground pointer-events-none"
+          aria-hidden
+        >
+          <ComputerIcon kind={machine.mode} className="size-4" />
+          <HealthDot
+            health={machine.health}
+            className="absolute -bottom-0.5 -right-0.5"
+          />
         </span>
         <div className="relative z-10 min-w-0 flex-1 pointer-events-none">
           <div className="flex min-w-0 items-center">
@@ -645,7 +656,7 @@ export function MachineListView({
     <>
       <PageHeader className="justify-between gap-2 px-4">
         <div className="flex items-center gap-2">
-          <Server className="h-4 w-4 text-muted-foreground" />
+          <Monitor className="h-4 w-4 text-muted-foreground" />
           <h1 className="text-sm font-semibold">{t(($) => $.page.title)}</h1>
         </div>
         {headerActions}
@@ -1287,7 +1298,7 @@ function EmptyState({ onConnectRemote }: { onConnectRemote: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-        <Server className="h-6 w-6 text-muted-foreground" />
+        <Monitor className="h-6 w-6 text-muted-foreground" />
       </div>
       <h2 className="mt-4 text-base font-semibold text-foreground">
         {t(($) => $.page.empty.title)}

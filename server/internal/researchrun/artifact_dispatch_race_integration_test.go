@@ -157,6 +157,17 @@ func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 				return nil
 			},
 		},
+		{
+			name: "withdrawn_lifecycle",
+			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
+				_, err := fx.pool.Exec(ctx, `
+					UPDATE research_artifact_passport
+					SET lifecycle_status = 'withdrawn'
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return err
+			},
+		},
 	}
 
 	for _, tc := range cases {

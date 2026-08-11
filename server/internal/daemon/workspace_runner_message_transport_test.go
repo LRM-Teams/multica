@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"reflect"
@@ -11,6 +12,134 @@ import (
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestWorkspaceRunnerDeliveryAttemptsAckBeforeRuntimeHandoff(t *testing.T) {
+	var order []string
+	d := New(Config{}, nil)
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		order = append(order, "handoff")
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.messageCoordinatorMu.Lock()
+	d.messageCoordinators["agent-1"] = coordinator
+	d.messageRuntimeIDs["agent-1"] = "runtime-1"
+	d.messageCoordinatorMu.Unlock()
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode:    canonicalRuntimeResident,
+		backend: &idleMessageFakeRuntime{},
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+
+	err = d.handleWorkspaceRunnerDelivery(context.Background(), "workspace-1", delivery, func(eventType string, payload any) error {
+		if eventType != protocol.EventAgentDeliverAck {
+			t.Fatalf("frame type = %q, want %q", eventType, protocol.EventAgentDeliverAck)
+		}
+		order = append(order, "ack")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("handle delivery: %v", err)
+	}
+	if want := []string{"ack", "handoff"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("delivery order = %v, want %v", order, want)
+	}
+}
+
+func TestWorkspaceRunnerDeliveryWriterFailureRetainsAcceptedPending(t *testing.T) {
+	var handoffs int
+	d := New(Config{}, nil)
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.messageCoordinatorMu.Lock()
+	d.messageCoordinators["agent-1"] = coordinator
+	d.messageRuntimeIDs["agent-1"] = "runtime-1"
+	d.messageCoordinatorMu.Unlock()
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+	writeErr := errors.New("injected ACK writer failure")
+
+	err = d.handleWorkspaceRunnerDelivery(context.Background(), "workspace-1", delivery, func(string, any) error {
+		return writeErr
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("handle delivery error = %v, want %v", err, writeErr)
+	}
+	if handoffs != 0 {
+		t.Fatalf("runtime handoffs after ACK writer failure = %d, want 0", handoffs)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 1 || pending[0].ID != "message-1" {
+		t.Fatalf("Pending after ACK writer failure = %+v, want exactly message-1", pending)
+	}
+}
+
+func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
+	d := New(Config{}, nil)
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return ErrCanonicalAgentRuntimeBusy
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.messageCoordinatorMu.Lock()
+	d.messageCoordinators["agent-1"] = coordinator
+	d.messageRuntimeIDs["agent-1"] = "runtime-1"
+	d.messageCoordinatorMu.Unlock()
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode:    canonicalRuntimeResident,
+		backend: &idleMessageFakeRuntime{},
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+	var acknowledgements int
+
+	err = d.handleWorkspaceRunnerDelivery(context.Background(), "workspace-1", delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("handle delivery: %v", err)
+	}
+	if acknowledgements != 1 {
+		t.Fatalf("acknowledgements = %d, want 1", acknowledgements)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 1 || pending[0].ID != "message-1" {
+		t.Fatalf("Pending after busy Runtime = %+v, want exactly message-1", pending)
+	}
+}
 
 func TestWorkspaceRunnerDeliveryDispatcherDoesNotBlockAnotherAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

@@ -152,7 +152,7 @@ func TestWorkspaceRunnerCanonicalMessageDiagnosticsFollowRealDeliveryPath(t *tes
 		}
 	}
 	for _, phase := range []string{
-		"runner_received", "coordinator_accepted", "ack_sent",
+		"runner_received", "coordinator_accepted", "ack_attempted", "ack_sent",
 		"runtime_handoff_accepted", "context_boundary_persisted", "provider_finished",
 	} {
 		record := phases[phase]

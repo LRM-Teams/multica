@@ -316,9 +316,6 @@ func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.
 			return protocol.AgentDeliverAckPayload{}, fmt.Errorf("no idle Message coordinator for agent %q", delivery.AgentID)
 		}
 	}
-	if err := d.ensureResidentMessageRuntime(ctx, delivery.AgentID, runtimeID); err != nil {
-		return protocol.AgentDeliverAckPayload{}, err
-	}
 	accepted, err := coordinator.Accept(ctx, delivery)
 	if err != nil {
 		return protocol.AgentDeliverAckPayload{}, err

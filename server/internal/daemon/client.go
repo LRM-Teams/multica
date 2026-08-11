@@ -658,9 +658,10 @@ type MachineUpgradeReceipt struct {
 	AcceptedWorkspaceIDs []string `json:"accepted_workspace_ids,omitempty"`
 }
 
-func (c *Client) AttestComputerUpgrade(ctx context.Context, daemonID, upgradeID, generationID, cliVersion string, workspaceIDs []string) error {
+func (c *Client) AttestComputerUpgrade(ctx context.Context, daemonID, upgradeID, generationID, cliVersion string, runtimeIDs, workspaceIDs []string) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/attest", upgradeID), map[string]any{
-		"daemon_id": daemonID, "generation_id": generationID, "cli_version": cliVersion, "workspace_ids": workspaceIDs,
+		"daemon_id": daemonID, "generation_id": generationID, "cli_version": cliVersion,
+		"runtime_ids": runtimeIDs, "workspace_ids": workspaceIDs,
 	}, nil)
 }
 

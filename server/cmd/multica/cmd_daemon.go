@@ -77,6 +77,8 @@ func init() {
 	f.Duration("auto-update-interval", 0, "Release detection interval (default 5m; detection never installs automatically)")
 	f.Int64("computer-generation", 0, "Internal machine-wide Computer generation")
 	_ = f.MarkHidden("computer-generation")
+	f.Bool("machine-upgrade-detached-candidate", false, "Internal detached Machine Upgrade candidate marker")
+	_ = f.MarkHidden("machine-upgrade-detached-candidate")
 
 	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
 	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
@@ -346,6 +348,7 @@ func runDaemonForeground(cmd *cobra.Command) error {
 			return fmt.Errorf("allocate Computer generation: %w", err)
 		}
 	}
+	cfg.DetachedMachineUpgradeCandidate, _ = cmd.Flags().GetBool("machine-upgrade-detached-candidate")
 	controlToken, err := ensureMachineUpgradeControlToken(profile)
 	if err != nil {
 		return err
@@ -402,14 +405,18 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		// committed binary as a detached foreground daemon. Its startup bind is
 		// the local exclusive-ownership gate; server-side completion still waits
 		// for the same journal generation plus every accepted runtime to attest.
-		if err := spawnDetachedDaemonBinary(restartBin, profile, d.MachineUpgradeTarget()); err != nil {
-			if rollbackStateErr := d.BeginMachineUpgradeRollback(err); rollbackStateErr != nil {
+		takeoverExpectation, takeoverErr := d.MachineUpgradeTakeoverExpectation()
+		if takeoverErr == nil {
+			takeoverErr = spawnDetachedDaemonBinary(restartBin, profile, d.MachineUpgradeTarget(), &takeoverExpectation)
+		}
+		if takeoverErr != nil {
+			if rollbackStateErr := d.BeginMachineUpgradeRollback(takeoverErr); rollbackStateErr != nil {
 				return fmt.Errorf("record detached takeover rollback: %w", rollbackStateErr)
 			}
 			if recoveryErr := rollbackDetachedMachineUpgrade(profile, d); recoveryErr != nil {
-				return fmt.Errorf("start detached machine-upgrade successor: %w; rollback recovery: %v", err, recoveryErr)
+				return fmt.Errorf("start detached machine-upgrade successor: %w; rollback recovery: %v", takeoverErr, recoveryErr)
 			}
-			return fmt.Errorf("start detached machine-upgrade successor: %w; previous Active generation restored", err)
+			return fmt.Errorf("start detached machine-upgrade successor: %w; previous Active generation restored", takeoverErr)
 		}
 		logger.Info("started detached machine-upgrade successor", "path", restartBin)
 	}
@@ -447,7 +454,7 @@ func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
 	if err != nil {
 		return fmt.Errorf("resolve incumbent binary: %w", err)
 	}
-	if err := spawnDetachedDaemonBinary(incumbent, profile, state.ActiveVersion); err != nil {
+	if err := spawnDetachedDaemonBinary(incumbent, profile, state.ActiveVersion, nil); err != nil {
 		return fmt.Errorf("start restored incumbent: %w", err)
 	}
 	return nil

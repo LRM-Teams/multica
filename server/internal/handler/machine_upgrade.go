@@ -83,7 +83,7 @@ type MachineUpgradeStore interface {
 	AttestLegacy(ctx context.Context, daemonID, id, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string, runtimeIDs []string) (*MachineUpgrade, error)
 	Attest(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
-	AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, workspaceIDs []string) (*MachineUpgrade, error)
+	AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error)
 	BeginRollback(ctx context.Context, daemonID, id, generation, errorCode, errorMessage string) (*MachineUpgrade, error)
 	AttestRollback(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	Progress(ctx context.Context, daemonID, id string, phase MachineUpgradePhase, errorCode, errorMessage string) (*MachineUpgrade, error)
@@ -473,26 +473,28 @@ func (s *PostgresMachineUpgradeStore) Attest(ctx context.Context, daemonID, id, 
 // attestation it includes every explicit Workspace connection, including
 // zero-Agent Workspaces, and therefore owns completion for generation-aware
 // Computer upgrades.
-func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, workspaceIDs []string) (*MachineUpgrade, error) {
+func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error) {
 	op, err := s.Get(ctx, daemonID, id)
 	if err != nil || op == nil {
 		return op, err
 	}
+	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
 	workspaceIDs = normalizedMachineRuntimeIDs(workspaceIDs)
 	if (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) ||
 		op.AcceptedGeneration == nil || *op.AcceptedGeneration != strings.TrimSpace(generation) ||
+		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) ||
 		!sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) ||
 		op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
 		return nil, errMachineUpgradeAttestationRejected
 	}
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
-		SET attested_workspace_ids = $3::uuid[], phase='completed', result='completed',
+		SET attested_runtime_ids = $3::uuid[], attested_workspace_ids = $4::uuid[], phase='completed', result='completed',
 			completed_at=now(), updated_at=now()
 		WHERE daemon_id=$1 AND id=$2 AND phase IN ('handoff','converging')
-		  AND accepted_generation=$4
+		  AND accepted_generation=$5
 		RETURNING `+machineUpgradeColumns,
-		strings.TrimSpace(daemonID), strings.TrimSpace(id), workspaceIDs, strings.TrimSpace(generation)))
+		strings.TrimSpace(daemonID), strings.TrimSpace(id), runtimeIDs, workspaceIDs, strings.TrimSpace(generation)))
 }
 
 // BeginRollback is monotonic: only an operation that reached handoff may move

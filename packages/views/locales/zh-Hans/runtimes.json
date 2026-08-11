@@ -192,7 +192,17 @@
     "agents_bulk_stop_done": "已停止 {{count}} 个 agent 的任务。",
     "agents_bulk_stop_partial": "部分停止成功（取消 {{cancelled}}，失败 {{failed}}）。",
     "agents_bulk_restart_done": "已重启 {{count}} 个 agent。",
-    "agents_bulk_restart_partial": "重启成功 {{ok}}，失败 {{failed}}。"
+    "agents_bulk_restart_partial": "重启成功 {{ok}}，失败 {{failed}}。",
+    "sharing": {
+      "section": "共享设置",
+      "owner_only": "仅所有者可操作",
+      "switch_locked": "不可切换",
+      "switch_to": {
+        "public": "切换为公开",
+        "private": "切换为私有"
+      }
+    },
+    "section_team_public_other": "团队公开 ({{count}})"
   },
   "health": {
     "online": {
@@ -253,7 +263,17 @@
       "delete_failed_toast": "删除运行时失败"
     },
     "toast_deleted": "已删除运行时",
-    "toast_delete_failed": "删除运行时失败"
+    "toast_delete_failed": "删除运行时失败",
+    "visibility_label": {
+      "private": "私有",
+      "public": "公开"
+    },
+    "visibility_hint": {
+      "private": "仅你和工作区管理员可以在此运行时上创建智能体。",
+      "public": "工作区内任何成员都可以在此运行时上创建智能体。"
+    },
+    "visibility_toast_updated": "可见性已设为「{{visibility}}」",
+    "visibility_toast_failed": "更新可见性失败"
   },
   "running_other": "{{count}} 个运行中",
   "queued_other": "{{count}} 个排队中",

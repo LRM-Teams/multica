@@ -65,7 +65,7 @@ S4 危险区（页底 danger zone）       → 删除等不可逆；按钮贴本
 |---|---|
 | S1 头右 | Restart `outline` + ghost `⋯`；**无** Upgrade / Delete |
 | Basics · Daemon 行（S3） | 版本 mono；有更新时 `→` 目标版 + `available` + Upgrade `outline` xs |
-| Runtimes 卡脚（S3） | Make public / Make private；**删除**独立 Sharing 列表 |
+| Runtimes 卡脚（S3） | Make public / Make private（LRM-1421 曾误退，已恢复）；**删除**独立 Sharing 列表 |
 | Workspaces 头右（S2） | Scan |
 | S4 Danger Zone | Delete computer 仅此 |
 

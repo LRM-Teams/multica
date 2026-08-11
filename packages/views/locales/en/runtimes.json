@@ -195,7 +195,18 @@
     "agents_bulk_stop_done": "Stopped tasks on {{count}} agent(s).",
     "agents_bulk_stop_partial": "Stopped some tasks ({{cancelled}} cancelled, {{failed}} failed).",
     "agents_bulk_restart_done": "Restarted {{count}} agent(s).",
-    "agents_bulk_restart_partial": "Restarted {{ok}}; {{failed}} failed."
+    "agents_bulk_restart_partial": "Restarted {{ok}}; {{failed}} failed.",
+    "sharing": {
+      "section": "Sharing",
+      "owner_only": "Owner only",
+      "switch_locked": "Locked",
+      "switch_to": {
+        "public": "Make public",
+        "private": "Make private"
+      }
+    },
+    "section_team_public_one": "Team public ({{count}})",
+    "section_team_public_other": "Team public ({{count}})"
   },
   "health": {
     "online": {
@@ -257,7 +268,17 @@
       "delete_failed_toast": "Failed to delete runtime"
     },
     "toast_deleted": "Runtime deleted",
-    "toast_delete_failed": "Failed to delete runtime"
+    "toast_delete_failed": "Failed to delete runtime",
+    "visibility_label": {
+      "private": "Private",
+      "public": "Public"
+    },
+    "visibility_hint": {
+      "private": "Only you and workspace admins can create agents on this runtime.",
+      "public": "Any workspace member can create agents on this runtime."
+    },
+    "visibility_toast_updated": "Visibility set to {{visibility}}",
+    "visibility_toast_failed": "Failed to update visibility"
   },
   "running_one": "{{count}} running",
   "running_other": "{{count}} running",

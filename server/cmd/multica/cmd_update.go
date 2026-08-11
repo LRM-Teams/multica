@@ -20,6 +20,11 @@ import (
 var updateDownloadTimeout time.Duration = cli.DefaultUpdateDownloadTimeout
 var updateRequestID string
 
+// updateComputerHealthPort is the local transport boundary. Subprocess tests
+// replace only the port selector so they can exercise the real Cobra command,
+// HTTP authentication, and VersionStore behavior without claiming port 19514.
+var updateComputerHealthPort = computer.HealthPort
+
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update multica from the current environment's package source",
@@ -37,6 +42,11 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "Current version: %s (commit: %s, built: %s)\n", version, commit, date)
+	if routed, err := requestLiveMachineUpgrade(cmd, "latest"); err != nil {
+		return err
+	} else if routed {
+		return nil
+	}
 
 	// The active service environment owns the package source: production
 	// follows the stable manifest, test follows the preview manifest. There is
@@ -53,11 +63,6 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not check latest version: %v\n", err)
 	} else {
-		if routed, err := requestLiveMachineUpgrade(cmd, latest.TagName); err != nil {
-			return err
-		} else if routed {
-			return nil
-		}
 		latestVer := strings.TrimPrefix(latest.TagName, "v")
 		currentVer := strings.TrimPrefix(version, "v")
 		if currentVer == latestVer {
@@ -152,7 +157,8 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 func requestLiveMachineUpgrade(cmd *cobra.Command, targetVersion string) (bool, error) {
 	profile := resolveProfile(cmd)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
+	controlPort := updateComputerHealthPort(profile)
+	health := computer.ProbeHealth(ctx, controlPort)
 	cancel()
 	if computer.Alive(health) {
 		daemonID, _ := health["daemon_id"].(string)
@@ -175,7 +181,7 @@ func requestLiveMachineUpgrade(cmd *cobra.Command, targetVersion string) (bool, 
 			requestCancel()
 			return true, fmt.Errorf("upgrade_service_unreachable: encode owner request: %w", marshalErr)
 		}
-		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/machine-upgrades", computer.HealthPort(profile)), bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/machine-upgrades", controlPort), bytes.NewReader(body))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-Multica-Control-Token", controlToken)

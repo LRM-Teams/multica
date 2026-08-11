@@ -4503,10 +4503,7 @@ export class ApiClient {
     id: string,
     options?: { limit?: number; offset?: number },
   ): Promise<import("../research/graph-typed").TypedGraphResponse> {
-    const {
-      TypedGraphResponseSchema,
-      EMPTY_TYPED_GRAPH,
-    } = await import("../research/graph-typed");
+    const { TypedGraphResponseSchema } = await import("../research/graph-typed");
     const params = new URLSearchParams();
     if (options?.limit != null) params.set("limit", String(options.limit));
     if (options?.offset != null) params.set("offset", String(options.offset));
@@ -4514,13 +4511,14 @@ export class ApiClient {
     const raw = await this.fetch(
       `/api/research/sessions/${id}/graph/typed${qs ? `?${qs}` : ""}`,
     );
-    const parsed = parseWithFallback(
-      raw,
-      TypedGraphResponseSchema,
-      EMPTY_TYPED_GRAPH,
-      { endpoint: "GET /api/research/sessions/:id/graph/typed" },
-    );
-    return { ...parsed, ...(parsed.session_id ? {} : { session_id: id }) };
+    const parsed = TypedGraphResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(
+        `GET /api/research/sessions/:id/graph/typed response failed schema validation`,
+      );
+    }
+    const data = parsed.data;
+    return { ...data, ...(data.session_id ? {} : { session_id: id }) };
   }
 
   async postResearchNodeCommand(

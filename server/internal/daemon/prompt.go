@@ -29,7 +29,7 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 	}
 	if task.InboxEvent != nil && task.InboxEvent.Reason == protocol.ChannelRoleChangedReason {
 		return withCurrentStateOverlay(fmt.Sprintf(
-			"Your channel manager role changed for channel %s. The state above (server-claimed, this wake) is authoritative: if it lists this channel, follow those duties and patrol only this channel; if it does not, you are no longer that channel's manager.",
+			"Your channel manager role changed for channel %s. The state above (server-claimed, this wake) is authoritative: if it lists this channel, follow those duties and manage only this channel; if it does not, you are no longer that channel's manager.",
 			task.ChannelID,
 		))
 	}
@@ -104,7 +104,7 @@ func managerRoleStateSlot(task Task) string {
 	}
 	channels := task.Agent.ManagerChannels
 	if len(channels) == 0 {
-		return "Group manager this wake (server-claimed): none. Drop any manager duties/reminders from an older session or brief.\n\n"
+		return "Group manager this wake (server-claimed): none. Do no stale channel-management work from an older session or brief. Existing self-owned Reminders remain ordinary Agent Reminders; role removal does not cancel or mutate them. If one wakes, this current role list is authoritative.\n\n"
 	}
 
 	refs := make([]string, 0, len(channels))
@@ -116,7 +116,7 @@ func managerRoleStateSlot(task Task) string {
 	fmt.Fprintf(&b, "Group manager this wake (server-claimed): %s. Ignore any other session/brief for roles not listed.\n", strings.Join(refs, ", "))
 	b.WriteString("Per channel: close open loops — unanswered questions · unclaimed `todo` · stale `in_progress`/`in_review` · someone blocked on one owner. Nudge in-channel, not DM.\n")
 	b.WriteString("Adaptive Goal Mode: do not create a Goal for greetings, questions, or one-step work. When a human clearly asks you to lead sustained multi-step or multi-agent delivery, use `multica goal get --channel <id>` and create a durable Goal only if none exists; when authorization or completion standards are ambiguous, propose the Goal in-channel instead of silently activating it. You own decomposition, coordination, revision, and evidence-based completion; executors only checkpoint progress.\n")
-	b.WriteString("One anchored `multica reminder schedule` per channel; cancel any that don't match this list.\n\n")
+	b.WriteString("You may use your ordinary self-owned Reminder capability only when you judge a later follow-up is useful; the role does not own, require, or auto-schedule a Reminder. Before acting on any Reminder, re-check this current role list.\n\n")
 	return b.String()
 }
 

@@ -16,7 +16,6 @@ function makeDefinition(overrides: Partial<RawReminderDefinition> = {}): RawRemi
     cadence: "daily@09:00",
     schedule_timezone: "America/Los_Angeles",
     snooze_count: 0,
-    origin_kind: "agent",
     anchor: { available: false },
     ...overrides,
   };
@@ -66,15 +65,9 @@ describe("adaptUpcomingRow", () => {
         makeDefinition({
           status: "fired",
           next_fire_at: undefined,
-          origin_kind: "agent",
         }),
       ),
     ).toBeNull();
-  });
-
-  it("drops an unknown or malformed origin rather than hiding its source", () => {
-    expect(adaptUpcomingRow(makeDefinition({ origin_kind: "future_origin" }))).toBeNull();
-    expect(adaptUpcomingRow(makeDefinition({ origin_kind: "group_manager_auto" }))).toBeNull();
   });
 
   it("degrades bare #workspace:shortId anchor labels to unavailable", () => {

@@ -7270,8 +7270,7 @@ func (h *Handler) insertChannelMessageWithParts(ctx context.Context, channelID, 
 }
 
 type channelMessageInsertResult struct {
-	Message              ChannelMessageResponse
-	RearmedManagedPatrol *agentReminder
+	Message ChannelMessageResponse
 }
 
 // insertChannelMessageWithPartsExec mutates only transactional state.

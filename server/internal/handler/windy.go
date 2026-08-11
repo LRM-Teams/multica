@@ -731,7 +731,7 @@ func (h *Handler) agentTaskInitiatorUserID(r *http.Request, workspaceID pgtype.U
 	var target pgtype.UUID
 	// Prefer turn/human initiator; if the wake has no human author (reminder
 	// re-fire, agent-authored anchor, channel-only), fall back to the agent
-	// owner so managers can re-schedule patrols (Beckham 2026-08-04 403).
+	// owner so the Agent can use its ordinary Reminder capability.
 	err = h.DB.QueryRow(r.Context(), `
 		WITH task AS (
 			SELECT t.initiator_user_id,
@@ -774,7 +774,7 @@ func (h *Handler) agentInboxInitiatorUserID(r *http.Request, workspaceID pgtype.
 	}
 	var target pgtype.UUID
 	// Prefer human source-message author / chat creator; fall back to agent
-	// owner so channel manager patrols can schedule without a human wake
+	// owner so an ordinary Reminder can be scheduled without a human wake
 	// author (reminder re-anchor 403: "reminder initiator is not available").
 	err = h.DB.QueryRow(r.Context(), `
 		WITH inbox AS (

@@ -1481,9 +1481,8 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			thinkingLevel = config.ThinkingLevel
 		}
 		managerChannels := h.agentManagerChannels(ctx, event.WorkspaceID, agent.ID)
-		// Reminder fires are single-channel: listing every managed channel
-		// confuses the agent into posting the same patrol to all groups
-		// (Frank 2026-08-03: 3 reminders × 3 channels = 3× spam).
+		// Reminder wakes are anchored to one channel. Supply only the current
+		// role for that channel so old session context cannot broaden the work.
 		if strings.TrimSpace(event.Reason) == "reminder" && event.ChannelID.Valid {
 			managerChannels = filterManagerChannelsTo(managerChannels, uuidToString(event.ChannelID))
 		}

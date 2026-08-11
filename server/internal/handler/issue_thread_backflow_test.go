@@ -94,19 +94,18 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if unrelatedWakes != 0 {
 		t.Fatalf("unrelated agent received %d issue-event wake(s), want 0", unrelatedWakes)
 	}
-	var managedReminders int
+	var reminders int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM agent_reminder
 		WHERE workspace_id = $1
 		  AND anchor_channel_id = $2
-		  AND agent_id IN ($3, $4)
-		  AND origin_kind = 'group_manager_auto'`,
-		testWorkspaceID, channelID, creatorID, assigneeID).Scan(&managedReminders); err != nil {
-		t.Fatalf("count managed reminders created by issue delivery: %v", err)
+		  AND agent_id IN ($3, $4)`,
+		testWorkspaceID, channelID, creatorID, assigneeID).Scan(&reminders); err != nil {
+		t.Fatalf("count reminders created by issue delivery: %v", err)
 	}
-	if managedReminders != 0 {
-		t.Fatalf("issue delivery created %d managed reminder(s), want 0", managedReminders)
+	if reminders != 0 {
+		t.Fatalf("issue delivery created %d reminder(s), want 0", reminders)
 	}
 }
 

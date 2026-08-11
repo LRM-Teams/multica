@@ -10,8 +10,7 @@
  * read-page shape is locked independent of #870's fire/migration-correctness
  * blockers, per Parker):
  *   GET /api/agents/{agentId}/reminders?status=scheduled|fired|all&cursor=&limit=
- * `status=scheduled` -> only `definitions` populated (active definitions plus
- * a visible dormant managed patrol).
+ * `status=scheduled` -> only active `definitions` populated.
  * `status=fired` -> only `occurrences` populated, cursor-paginated newest-first (History section).
  */
 
@@ -91,8 +90,6 @@ export interface RawReminderDefinition {
   cadence?: string;
   schedule_timezone?: string;
   snooze_count: number;
-  origin_kind: string;
-  managed_kind?: string;
   anchor: RawReminderAnchor;
 }
 
@@ -179,11 +176,6 @@ function isKnownDefinitionStatus(status: string): status is ReminderDefinitionSt
   return KNOWN_DEFINITION_STATUSES.has(status as ReminderDefinitionStatus);
 }
 
-function adaptOrigin(originKind: string, managedKind: string | undefined): ReminderOrigin | null {
-  if (originKind === "agent" && !managedKind) return { kind: "agent" };
-  return null;
-}
-
 // `schedule_kind` arrives from the network as a plain `string` (the runtime
 // schema deliberately doesn't `z.enum()` it — see RawReminderPageSchema) so
 // an unrecognized third value still parses instead of rejecting the whole
@@ -211,8 +203,6 @@ function adaptCadence(scheduleKind: string, cadence: string | undefined, schedul
 export function adaptUpcomingRow(raw: RawReminderDefinition): ReminderDefinitionRow | null {
   const cadence = adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone);
   if (!cadence) return null;
-  const origin = adaptOrigin(raw.origin_kind, raw.managed_kind);
-  if (!origin) return null;
   if (!raw.next_fire_at) return null;
   if (!KNOWN_UPCOMING_DEFINITION_STATUSES.has(raw.status)) return null;
   return {
@@ -220,7 +210,7 @@ export function adaptUpcomingRow(raw: RawReminderDefinition): ReminderDefinition
     title: raw.title,
     cadence,
     anchor: adaptAnchor(raw.anchor),
-    origin,
+    origin: { kind: "agent" },
     nextFireAt: raw.next_fire_at,
     lastFireAt: raw.last_fire_at,
     status: raw.status as Extract<ReminderDefinitionStatus, "scheduled" | "firing">,

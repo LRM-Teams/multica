@@ -72,16 +72,6 @@ func newMessageDraftStore(workspacesRoot string, now func() time.Time) *MessageD
 	})
 }
 
-// newAgentRootMessageDraftStore is the temporary adapter used by existing
-// MessageCoordinator callers until CredentialProxy owns the Workspace/Agent
-// DraftKey directly.
-func newAgentRootMessageDraftStore(agentRoot string) *MessageDraftStore {
-	agentRoot = filepath.Clean(agentRoot)
-	return newMessageDraftStoreWithRoot(time.Now, func(DraftKey) (string, error) {
-		return agentRoot, nil
-	})
-}
-
 func newMessageDraftStoreWithRoot(now func() time.Time, rootForKey func(DraftKey) (string, error)) *MessageDraftStore {
 	if now == nil {
 		now = time.Now
@@ -125,6 +115,11 @@ func (s *MessageDraftStore) saveAt(key DraftKey, draft MessageDraft, now time.Ti
 		return MessageDraft{}, err
 	}
 	removeExpiredMessageDrafts(state.Drafts, now)
+	if existing, found := state.Drafts[key.Target]; found && existing.IdempotencyKey == draft.IdempotencyKey {
+		// Re-driving the same saved intent is not a replacement lifecycle.
+		// RecordHold remains the sole operation that increments this count.
+		draft.HoldCount = existing.HoldCount
+	}
 	state.Drafts[key.Target] = draft
 	if err := s.writeState(path, state); err != nil {
 		return MessageDraft{}, fmt.Errorf("persist local Draft: %w", err)

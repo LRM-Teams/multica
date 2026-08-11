@@ -650,7 +650,7 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 		t.Fatalf("repeated local hold omitted coverage receipt: %+v", repeatedResponse)
 	}
 	repeatedDraft, found, err := d.CredentialProxy().LoadMessageDraft("workspace-1", "agent-1", "#one", time.Now())
-	if err != nil || !found || repeatedDraft.IdempotencyKey != firstDraft.IdempotencyKey || repeatedDraft.HoldCount != 1 {
+	if err != nil || !found || repeatedDraft.IdempotencyKey != firstDraft.IdempotencyKey || repeatedDraft.HoldCount != 2 {
 		t.Fatalf("repeated held Draft=%+v first=%+v found=%v err=%v", repeatedDraft, firstDraft, found, err)
 	}
 	if sends != 0 || len(coordinator.pending["channel:one"]) != 4 || coordinator.Boundaries()["channel:one"] != 0 {

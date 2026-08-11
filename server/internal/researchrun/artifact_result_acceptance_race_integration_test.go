@@ -145,7 +145,7 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
 				_, err := fx.pool.Exec(ctx, `
 					UPDATE research_artifact_passport
-					SET eligibility_revision = eligibility_revision + 1, updated_at = now()
+					SET eligibility_revision = eligibility_revision + 1
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
 				return err
@@ -156,7 +156,7 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
 				_, err := fx.pool.Exec(ctx, `
 					UPDATE research_artifact_passport
-					SET lifecycle_status = 'withdrawn', updated_at = now()
+					SET lifecycle_status = 'withdrawn'
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
 				return err

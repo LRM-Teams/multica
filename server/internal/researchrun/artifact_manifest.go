@@ -32,7 +32,7 @@ func casPassportEligibilityRevisionTx(
 ) error {
 	tag, err := tx.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET updated_at = now()
+		SET eligibility_revision = eligibility_revision
 		WHERE workspace_id = $1::uuid
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid

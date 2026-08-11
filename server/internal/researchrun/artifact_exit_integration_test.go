@@ -321,7 +321,7 @@ func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 	// Advance eligibility revision after plan would have captured revision 1.
 	if _, err = pool.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET eligibility_revision = eligibility_revision + 1, updated_at = now()
+		SET eligibility_revision = eligibility_revision + 1
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
 		t.Fatalf("bump eligibility: %v", err)

@@ -972,6 +972,10 @@ func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHisto
 		t.Fatalf("initial lifecycle = %+v cursors=%v err=%v", initial, cursors, err)
 	}
 	initialGeneration := initial[0].PlacementGeneration
+	var initialAttachmentRuntime string
+	if err := testPool.QueryRow(context.Background(), `SELECT runtime_id::text FROM agent_attachment_projection WHERE agent_id = $1`, agentID).Scan(&initialAttachmentRuntime); err != nil || initialAttachmentRuntime != runtimeA {
+		t.Fatalf("initial attachment projection runtime=%q err=%v", initialAttachmentRuntime, err)
+	}
 	quiet, quietCursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
 		RuntimeCursors: map[string]int64{runtimeA: cursors[runtimeA]},
 	})
@@ -994,7 +998,41 @@ func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHisto
 	if err != nil || len(newRuntime) != 1 || newRuntime[0].EventType != "start" || newRuntime[0].PlacementGeneration != oldRuntime[0].PlacementGeneration {
 		t.Fatalf("new-runtime replay = %+v cursors=%v err=%v", newRuntime, newCursors, err)
 	}
-
+	var attachmentEvents []struct {
+		runtimeID  string
+		kind       string
+		generation int64
+	}
+	rows, err := testPool.Query(context.Background(), `
+		SELECT runtime_id::text, event_type, attachment_generation
+		FROM agent_attachment_projection_event
+		WHERE agent_id = $1 AND lifecycle_seq > $2
+		ORDER BY lifecycle_seq`, agentID, cursors[runtimeA])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var event struct {
+			runtimeID, kind string
+			generation      int64
+		}
+		if err := rows.Scan(&event.runtimeID, &event.kind, &event.generation); err != nil {
+			t.Fatal(err)
+		}
+		attachmentEvents = append(attachmentEvents, event)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rows.Close()
+	if len(attachmentEvents) != 2 || attachmentEvents[0].runtimeID != runtimeA || attachmentEvents[0].kind != "detach" || attachmentEvents[1].runtimeID != runtimeB || attachmentEvents[1].kind != "attach" || attachmentEvents[0].generation != attachmentEvents[1].generation || attachmentEvents[1].generation != newRuntime[0].PlacementGeneration {
+		t.Fatalf("attachment move projection = %+v", attachmentEvents)
+	}
+	var projectedRuntime string
+	var projectedGeneration int64
+	if err := testPool.QueryRow(context.Background(), `SELECT runtime_id::text, attachment_generation FROM agent_attachment_projection WHERE agent_id = $1`, agentID).Scan(&projectedRuntime, &projectedGeneration); err != nil || projectedRuntime != runtimeB || projectedGeneration != newRuntime[0].PlacementGeneration {
+		t.Fatalf("current attachment projection runtime=%q generation=%d err=%v", projectedRuntime, projectedGeneration, err)
+	}
 	_, err = fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identityA, protocol.ReminderSnapshotRequestPayload{
 		AgentID: agentID, RuntimeID: runtimeA, PlacementGeneration: initialGeneration,
 	})

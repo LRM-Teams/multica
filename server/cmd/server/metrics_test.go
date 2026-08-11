@@ -23,25 +23,29 @@ func TestMainRouterDoesNotExposePrometheusMetrics(t *testing.T) {
 	}
 }
 
-func TestMainRouterHasChannelMessageEditDeleteRoutes(t *testing.T) {
+func TestMainRouterHasChannelMessageEditRouteAndNoDeleteRoute(t *testing.T) {
 	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{}, nil)
-	want := map[string]bool{
-		http.MethodPatch + " /api/channels/{channelId}/messages/{messageId}":  false,
-		http.MethodDelete + " /api/channels/{channelId}/messages/{messageId}": false,
-	}
+	const editRoute = "PATCH /api/channels/{channelId}/messages/{messageId}"
+	const deleteRoute = "DELETE /api/channels/{channelId}/messages/{messageId}"
+	editFound := false
+	deleteFound := false
 	if err := chi.Walk(router, func(method string, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		key := method + " " + route
-		if _, ok := want[key]; ok {
-			want[key] = true
+		if key == editRoute {
+			editFound = true
+		}
+		if key == deleteRoute {
+			deleteFound = true
 		}
 		return nil
 	}); err != nil {
 		t.Fatalf("walk router: %v", err)
 	}
-	for route, found := range want {
-		if !found {
-			t.Fatalf("missing route %s", route)
-		}
+	if !editFound {
+		t.Fatalf("missing route %s", editRoute)
+	}
+	if deleteFound {
+		t.Fatalf("unexpected route %s", deleteRoute)
 	}
 }
 

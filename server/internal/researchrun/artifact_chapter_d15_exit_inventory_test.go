@@ -22,18 +22,18 @@ var chapterD15Coverage = map[int]string{
 	5:  "partial", // immutability/watermark CAS tests
 	6:  "partial", // backfill diagnostic tests in migration 319
 	7:  "partial", // artifact_policy legacy admission matrix
-	8:  "partial", // shadow fixture + prompt hash; not full family matrix
+	8:  "partial", // full-family shadow fixture + prompt hash; tie-order matrix still open
 	9:  "partial", // access matrix unit tests
 	10: "partial", // evaluation compartment integration + researcheval SubjectInput
-	11: "partial", // stale state version dispatch; not full race matrix
+	11: "partial", // stale state version + rolled-back dispatch race matrix
 	12: "partial", // dispatch normalized locks + concurrent shared-candidate test
 	13: "partial", // eligibility + representation CAS
 	14: "covered", // replay/prompt/outbox binding tests
 	15: "partial", // dispatch transaction recovery matrix
 	16: "covered", // historical live vs frozen manifest tests
 	17: "partial", // frozen gate snapshot on TaskContextForAttempt
-	18: "partial", // accept representation/hash integrity preflight
-	19: "partial", // unrelated vs affected watermark/eligibility
+	18: "partial", // accept race after rolled-back preflight + representation/hash checks
+	19: "partial", // unrelated watermark advance after rolled-back accept
 	20: "partial", // result lock-order concurrency + normalized manifest locks
 	21: "partial", // accept replay hash/lineage conflict
 	22: "partial", // result accept transaction recovery matrix

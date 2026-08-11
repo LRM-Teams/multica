@@ -141,8 +141,8 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 					continue
 				}
 			}
-			planDate := time.Date(cycleLocal.Year(), cycleLocal.Month(), cycleLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
-			agentIDs, err := activeMemoryCurationAgentIDs(ctx, pool, workspaceID, userID, targetScope, profileID, planDate)
+			planDate, windowStart, windowEnd := priorLocalCurationDay(cycleLocal)
+			agentIDs, err := activeMemoryCurationAgentIDs(ctx, pool, workspaceID, userID, targetScope, profileID, windowStart, windowEnd)
 			if err != nil {
 				return HandlerResult{}, err
 			}
@@ -218,7 +218,7 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 	if cycleLocal.Hour() != defaultAgentSelfReviewScheduleHour {
 		return HandlerResult{Result: map[string]any{"stage": "agent_self_review", "run_intents_created": int64(0), "reason": "not_default_schedule_hour"}}, nil
 	}
-	planDate := time.Date(cycleLocal.Year(), cycleLocal.Month(), cycleLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	planDate, windowStart, windowEnd := priorLocalCurationDay(cycleLocal)
 	activeSources, err := defaultSelfReviewActiveSources(ctx, pool)
 	if err != nil {
 		return HandlerResult{}, err
@@ -273,7 +273,7 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 		  RETURNING 1
 		)
 		SELECT count(*) FROM inserted
-	`, planDate, defaultAgentSelfReviewMode, defaultAgentSelfReviewConfidence, service.AgentHealthStaleThreshold.Seconds()).Scan(&created)
+	`, planDate, defaultAgentSelfReviewMode, defaultAgentSelfReviewConfidence, service.AgentHealthStaleThreshold.Seconds(), windowStart, windowEnd).Scan(&created)
 	if err != nil {
 		return HandlerResult{}, err
 	}
@@ -284,11 +284,20 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 }
 
 func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	return memoryCurationActiveSources(ctx, pool, "$5", "$6")
+}
+
+func memoryCurationActiveSources(ctx context.Context, pool *pgxpool.Pool, windowStartArg, windowEndArg string) (string, error) {
 	sources := `
 		      SELECT agent_id
 		        FROM agent_inbox_event
-		       WHERE created_at >= $1::date
-		         AND created_at < ($1::date + interval '1 day')`
+		       WHERE COALESCE(completed_at, started_at, dispatched_at, created_at) >= ` + windowStartArg + `::timestamptz
+		         AND COALESCE(completed_at, started_at, dispatched_at, created_at) < ` + windowEndArg + `::timestamptz
+		      UNION
+		      SELECT agent_id
+		        FROM agent_inbox_event
+		       WHERE created_at >= ` + windowStartArg + `::timestamptz
+		         AND created_at < ` + windowEndArg + `::timestamptz`
 	optionalSources := []struct {
 		relation string
 		query    string
@@ -299,8 +308,8 @@ func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (st
 		      UNION
 		      SELECT q.agent_id
 		        FROM agent_task_queue q
-		       WHERE COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) >= $1::date
-		         AND COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) < ($1::date + interval '1 day')`,
+		       WHERE COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) >= ` + windowStartArg + `::timestamptz
+		         AND COALESCE(q.completed_at, q.started_at, q.dispatched_at, q.created_at) < ` + windowEndArg + `::timestamptz`,
 		},
 		{
 			relation: "public.agent_memory_write_event",
@@ -308,8 +317,8 @@ func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (st
 		      UNION
 		      SELECT w.agent_id
 		        FROM agent_memory_write_event w
-		       WHERE w.created_at >= $1::date
-		         AND w.created_at < ($1::date + interval '1 day')`,
+		       WHERE w.created_at >= ` + windowStartArg + `::timestamptz
+		         AND w.created_at < ` + windowEndArg + `::timestamptz`,
 		},
 		{
 			relation: "public.agent_memory_curation_candidate",
@@ -318,8 +327,8 @@ func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (st
 		      SELECT c.source_agent_id AS agent_id
 		        FROM agent_memory_curation_candidate c
 		       WHERE c.source_agent_id IS NOT NULL
-		         AND c.created_at >= $1::date
-		         AND c.created_at < ($1::date + interval '1 day')`,
+		         AND c.created_at >= ` + windowStartArg + `::timestamptz
+		         AND c.created_at < ` + windowEndArg + `::timestamptz`,
 		},
 		{
 			relation: "public.agent_memory_sync_entry",
@@ -327,8 +336,8 @@ func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (st
 		      UNION
 		      SELECT s.agent_id
 		        FROM agent_memory_sync_entry s
-		       WHERE s.updated_at >= $1::date
-		         AND s.updated_at < ($1::date + interval '1 day')`,
+		       WHERE s.updated_at >= ` + windowStartArg + `::timestamptz
+		         AND s.updated_at < ` + windowEndArg + `::timestamptz`,
 		},
 		{
 			relation: "public.agent_skill_suggestion",
@@ -336,8 +345,8 @@ func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (st
 		      UNION
 		      SELECT ss.agent_id
 		        FROM agent_skill_suggestion ss
-		       WHERE ss.updated_at >= $1::date
-		         AND ss.updated_at < ($1::date + interval '1 day')`,
+		       WHERE ss.updated_at >= ` + windowStartArg + `::timestamptz
+		         AND ss.updated_at < ` + windowEndArg + `::timestamptz`,
 		},
 	}
 	for _, source := range optionalSources {
@@ -350,6 +359,12 @@ func defaultSelfReviewActiveSources(ctx context.Context, pool *pgxpool.Pool) (st
 		}
 	}
 	return sources, nil
+}
+
+func priorLocalCurationDay(cycleLocal time.Time) (planDate, windowStartUTC, windowEndUTC time.Time) {
+	localMidnight := time.Date(cycleLocal.Year(), cycleLocal.Month(), cycleLocal.Day(), 0, 0, 0, 0, cycleLocal.Location()).AddDate(0, 0, -1)
+	planDate = time.Date(localMidnight.Year(), localMidnight.Month(), localMidnight.Day(), 0, 0, 0, 0, time.UTC)
+	return planDate, localMidnight.UTC(), localMidnight.AddDate(0, 0, 1).UTC()
 }
 
 func memoryCurationAgentRunTableExists(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
@@ -373,33 +388,30 @@ func normalizeScheduledMemoryCurationStage(stage any) string {
 	}
 }
 
-func activeMemoryCurationAgentIDs(ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, targetScope, profileID string, day time.Time) ([]string, error) {
+func activeMemoryCurationAgentIDs(ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, targetScope, profileID string, windowStart, windowEnd time.Time) ([]string, error) {
+	activeSources, err := memoryCurationActiveSources(ctx, pool, "$3", "$4")
+	if err != nil {
+		return nil, err
+	}
 	rows, err := pool.Query(ctx, `
 		WITH targets AS (
 		  SELECT a.id, a.runtime_id
 		    FROM agent a
 		   WHERE a.workspace_id = $1
 		     AND a.archived_at IS NULL
-		     AND (($4 <> 'selected' AND a.owner_id = $2) OR ($4 = 'selected' AND EXISTS (
-		       SELECT 1 FROM memory_curator_target t WHERE t.profile_id = $5 AND t.agent_id = a.id
+		     AND (($5 <> 'selected' AND a.owner_id = $2) OR ($5 = 'selected' AND EXISTS (
+		       SELECT 1 FROM memory_curator_target t WHERE t.profile_id = $6 AND t.agent_id = a.id
 		     )))
 		), active AS (
-		  SELECT DISTINCT agent_id
-		    FROM agent_inbox_event
-		   WHERE COALESCE(completed_at, started_at, dispatched_at, created_at) >= $3::date
-		     AND COALESCE(completed_at, started_at, dispatched_at, created_at) < ($3::date + interval '1 day')
-		  UNION
-		  SELECT DISTINCT agent_id
-		    FROM agent_inbox_event
-		   WHERE created_at >= $3::date AND created_at < ($3::date + interval '1 day')
+		  `+activeSources+`
 		)
 		SELECT t.id::text
 		  FROM targets t
 		  JOIN active act ON act.agent_id = t.id
 		  JOIN agent_runtime rt ON rt.id = t.runtime_id
-		   AND rt.last_seen_at >= now() - make_interval(secs => $6::double precision)
+		   AND rt.last_seen_at >= now() - make_interval(secs => $7::double precision)
 		 ORDER BY t.id
-	`, workspaceID, userID, day, targetScope, profileID, service.AgentHealthStaleThreshold.Seconds())
+	`, workspaceID, userID, windowStart, windowEnd, targetScope, profileID, service.AgentHealthStaleThreshold.Seconds())
 	if err != nil {
 		return nil, err
 	}

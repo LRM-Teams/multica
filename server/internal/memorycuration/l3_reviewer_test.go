@@ -102,6 +102,30 @@ func TestAgentStageRunnerUsesPiToolsAndAgentRoot(t *testing.T) {
 	}
 }
 
+func TestTeamStageRunnerDoesNotDiscloseAgentRoots(t *testing.T) {
+	backend := &fakeL3Backend{result: agentpkg.Result{Status: "completed", Output: `{"team_knowledge":[],"decisions":[],"conflicts":[]}`}}
+	runner, err := NewAgentStageRunner(AgentL3ReviewerConfig{
+		Provider: "pi", Backend: backend, CuratorRoot: "/private/curator-agent-root",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunStage(context.Background(), StageAgentInput{
+		Stage: StageTeamCuration, WorkspaceID: "ws-1", AgentID: "team", AgentRoot: t.TempDir(),
+		DBEvidence: []EvidenceItem{{Kind: "curation_candidate", ID: "candidate-1", Scope: "team", Metadata: []byte(`{"shareable":true}`)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"curator_agent_root", "target_agent_root", `"agent_root"`, "/private/curator-agent-root"} {
+		if strings.Contains(backend.prompt, forbidden) {
+			t.Fatalf("team curation prompt disclosed %q: %s", forbidden, backend.prompt)
+		}
+	}
+	if !strings.Contains(backend.prompt, `"metadata":{"shareable":true}`) {
+		t.Fatalf("team evidence metadata was not encoded as JSON: %s", backend.prompt)
+	}
+}
+
 func TestStageAgentContractRecognizesCollectiveMemoryIntent(t *testing.T) {
 	for _, stage := range []Stage{StageAgentSelfReview, StageTeamCuration} {
 		contract := stageAgentContract(stage)

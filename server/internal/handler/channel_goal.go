@@ -231,7 +231,7 @@ func (h *Handler) hydrateChannelGoalWorkGraph(ctx context.Context, goal *Channel
 		return
 	}
 	var s channelGoalWorkGraphSummary
-	err := h.DB.QueryRow(ctx, `SELECT g.id::text,g.current_version,g.status,count(n.id)::int,count(n.id) FILTER(WHERE n.effective_completion='satisfied')::int,count(n.id) FILTER(WHERE n.execution_status='running')::int,count(n.id) FILTER(WHERE n.effective_completion='pending' AND n.execution_status IN('draft','queued','ready','waiting','succeeded'))::int,count(n.id) FILTER(WHERE n.effective_completion IN('stale','revoked'))::int FROM work_graph g LEFT JOIN work_graph_node n ON n.graph_id=g.id WHERE g.workspace_id=$1::uuid AND g.anchor_kind='channel_goal' AND g.anchor_id=$2::uuid GROUP BY g.id,g.current_version,g.status`, goal.WorkspaceID, goal.ID).Scan(&s.ID, &s.Version, &s.Status, &s.Total, &s.Completed, &s.Running, &s.Waiting, &s.Stale)
+	err := h.DB.QueryRow(ctx, `SELECT g.id::text,g.current_version,g.status,count(n.id)::int,count(n.id) FILTER(WHERE n.effective_completion='satisfied')::int,count(n.id) FILTER(WHERE n.execution_status='running')::int,count(n.id) FILTER(WHERE n.effective_completion='pending' AND n.execution_status IN('draft','queued','ready','waiting','succeeded'))::int,count(n.id) FILTER(WHERE n.effective_completion IN('stale','revoked'))::int FROM work_graph g LEFT JOIN work_graph_node n ON n.graph_id=g.id AND n.based_on_graph_version=g.current_version WHERE g.workspace_id=$1::uuid AND g.anchor_kind='channel_goal' AND g.anchor_id=$2::uuid GROUP BY g.id,g.current_version,g.status`, goal.WorkspaceID, goal.ID).Scan(&s.ID, &s.Version, &s.Status, &s.Total, &s.Completed, &s.Running, &s.Waiting, &s.Stale)
 	if err == nil {
 		goal.WorkGraph = &s
 	}
@@ -305,13 +305,19 @@ func (h *Handler) openSubgoalsBlockMainGoalComplete(ctx context.Context, goalID 
 	err := h.DB.QueryRow(ctx, `
 		SELECT count(*) FROM channel_goal_subgoal
 		WHERE goal_id = $1::uuid AND status IN ('captured','in_progress','waiting')`, goalID).Scan(&openSubgoals)
-	return err == nil && openSubgoals > 0
+	return err != nil || openSubgoals > 0
 }
 
 func (h *Handler) openWorkGraphBlocksMainGoalComplete(ctx context.Context, goalID string) bool {
 	var open int
-	err := h.DB.QueryRow(ctx, `SELECT count(*) FROM work_graph_node n JOIN work_graph g ON g.id=n.graph_id WHERE g.anchor_kind='channel_goal' AND g.anchor_id=$1::uuid AND g.status NOT IN('completed','cancelled') AND (n.execution_status NOT IN('succeeded','cancelled') OR n.validity_status<>'valid' OR (n.role='verifier' AND n.review_status<>'accepted'))`, goalID).Scan(&open)
-	return err == nil && open > 0
+	err := h.DB.QueryRow(ctx, `SELECT count(*)
+		FROM work_graph_node node
+		JOIN work_graph graph ON graph.id=node.graph_id
+		WHERE graph.anchor_kind='channel_goal' AND graph.anchor_id=$1::uuid
+		  AND graph.status NOT IN('completed','cancelled')
+		  AND node.based_on_graph_version=graph.current_version
+		  AND node.effective_completion<>'satisfied'`, goalID).Scan(&open)
+	return err != nil || open > 0
 }
 
 func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {

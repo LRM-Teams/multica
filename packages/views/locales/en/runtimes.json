@@ -151,6 +151,7 @@
     "version_prefix": "v{{version}}",
     "basics_owner": "Owner",
     "basics_daemon_id": "Computer ID",
+    "copy_computer_id_aria": "Copy computer ID",
     "ops": {
       "section": "Actions",
       "local_only": "Local only",

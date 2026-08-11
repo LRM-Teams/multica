@@ -91,6 +91,9 @@ func (s *PostgresStore) CreateRun(ctx context.Context, in StartInput, cfg RunCon
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
+	if err = registerRunArtifactsAfterInitializationTx(ctx, tx, in.WorkspaceID, in.SessionID); err != nil {
+		return Run{}, RunEvent{}, err
+	}
 	run, err := loadRun(ctx, tx, in.SessionID, in.WorkspaceID, false)
 	if err != nil {
 		return Run{}, RunEvent{}, err
@@ -121,6 +124,9 @@ func (s *PostgresStore) InitializeRun(ctx context.Context, in StartInput, cfg Ru
 	}
 	event, err := initializeRunTx(ctx, tx, in, cfg, sourcePolicy, configJSON)
 	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	if err = registerRunArtifactsAfterInitializationTx(ctx, tx, in.WorkspaceID, in.SessionID); err != nil {
 		return Run{}, RunEvent{}, err
 	}
 	run, err = loadRun(ctx, tx, in.SessionID, in.WorkspaceID, false)

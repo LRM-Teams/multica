@@ -209,6 +209,20 @@ func TestNoteAIJobCompletedReturnsAssistantResult(t *testing.T) {
 	}
 }
 
+func noteAIPagePromptForTest(instruction string) string {
+	return `You are editing a user's Notion-style note page.
+The user pressed Space on an empty line and asked AI to edit the current page from that cursor position.
+Return ONLY a valid JSON object.
+Full current page Markdown:
+<page>
+old page
+</page>
+User instruction:
+<instruction>
+` + instruction + `
+</instruction>`
+}
+
 func TestNoteAIJobRepairsSelectedMarkdownOnlyResult(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -247,8 +261,56 @@ old text
 	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode repaired job: %v", err)
 	}
-	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_selection" || resp.Result.Markdown != "**Improved** [text](https://example.com)" || resp.FailureReason != nil {
+	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_selection" || resp.Result.Markdown != "**Improved** [text](https://example.com)" || resp.FailureReason != nil || resp.RepairCode == nil || *resp.RepairCode != noteAIRepairSelectedOutput {
 		t.Fatalf("repaired job response = %#v, want completed replace_selection result", resp)
+	}
+}
+
+func TestNoteAIJobRepairsPageMarkdownOnlyResult(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Page Repair Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI page repair note "+uuid.NewString())
+	job := createNoteAIJobWithPromptForTest(t, noteID, agentID, noteAIPagePromptForTest("Rewrite the whole page and polish the language."))
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now()
+		WHERE id = $1
+	`, job.TaskID); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO chat_message (chat_session_id, role, content, task_id)
+		VALUES ($1, 'assistant', $2, $3)
+	`, job.ChatSessionID, "# Better Page\n\nImproved body.", job.TaskID); err != nil {
+		t.Fatalf("insert assistant result: %v", err)
+	}
+
+	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/ai-jobs/"+job.ID, nil), "jobId", job.ID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteAIJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNoteAIJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode repaired page job: %v", err)
+	}
+	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_page" || resp.Result.Markdown != "# Better Page\n\nImproved body." || resp.FailureReason != nil || resp.RepairCode == nil || *resp.RepairCode != noteAIRepairPageOutput {
+		t.Fatalf("repaired page job response = %#v, want completed replace_page result", resp)
+	}
+}
+
+func TestParseNoteAIEditResultRepairsPageJSONWithoutAction(t *testing.T) {
+	outcome, err := parseNoteAIEditResultWithRepairOutcome(`{"markdown":"Inserted paragraph","title":"New title","rationale":"Continues the page."}`, noteAIPagePromptForTest("Continue this page from the cursor."))
+	if err != nil {
+		t.Fatalf("repair page JSON without action: %v", err)
+	}
+	result := outcome.Result
+	if result.Action != "insert" || result.Markdown != "Inserted paragraph" || result.Title == nil || *result.Title != "New title" || result.Rationale == nil || *result.Rationale != "Continues the page." || outcome.RepairCode == nil || *outcome.RepairCode != noteAIRepairPageOutput {
+		t.Fatalf("repaired page insert = result:%#v repair:%v", result, outcome.RepairCode)
 	}
 }
 
@@ -284,7 +346,7 @@ func TestNoteAIJobInvalidStructuredResultFails(t *testing.T) {
 	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode invalid job: %v", err)
 	}
-	if resp.Status != "failed" || resp.Result != nil || resp.FailureReason == nil {
+	if resp.Status != "failed" || resp.Result != nil || resp.FailureReason == nil || resp.FailureCode == nil || *resp.FailureCode != noteAIFailureInvalidOutput {
 		t.Fatalf("invalid structured result response = %#v, want failed without result", resp)
 	}
 }

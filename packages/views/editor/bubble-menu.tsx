@@ -701,6 +701,7 @@ function TextOptimizationReview({
           beforeLabel={t(($) => $.bubble_menu.optimize.current_fragment)}
           afterLabel={t(($) => $.bubble_menu.optimize.replacement_fragment)}
           emptyLabel={t(($) => $.bubble_menu.optimize.no_diff)}
+          omittedLabel={t(($) => $.bubble_menu.optimize.diff_omitted)}
           className="max-h-56"
         />
       ) : result.action === "replace_page" ? (
@@ -710,6 +711,7 @@ function TextOptimizationReview({
           beforeLabel={t(($) => $.bubble_menu.optimize.current_page)}
           afterLabel={t(($) => $.bubble_menu.optimize.proposed_page)}
           emptyLabel={t(($) => $.bubble_menu.optimize.no_diff)}
+          omittedLabel={t(($) => $.bubble_menu.optimize.diff_omitted)}
           className="max-h-56"
         />
       ) : (

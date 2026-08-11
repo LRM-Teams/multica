@@ -24,8 +24,8 @@ const boundSkillMirrorMarker = ".multica-bound-mirror"
 // Safety:
 //   - Only creates/updates/removes directories that carry boundSkillMirrorMarker.
 //   - Never touches skills/drafts.
-//   - If an unmarked directory already occupies the natural slug, that skill
-//     is skipped (no overwrite of user content).
+//   - If an unmarked directory already occupies the natural slug, the bound
+//     skill uses a collision-free sibling (no overwrite of user content).
 func mirrorBoundSkillsToAgentEnabled(agentRoot string, skills []SkillContextForEnv) error {
 	agentRoot = strings.TrimSpace(agentRoot)
 	if agentRoot == "" {
@@ -38,14 +38,9 @@ func mirrorBoundSkillsToAgentEnabled(agentRoot string, skills []SkillContextForE
 	}
 
 	desired := map[string]SkillContextForEnv{}
-	for _, skill := range skills {
-		slug := sanitizeSkillName(skill.Name)
-		// First wins on duplicate sanitized names; matches writeSkillFiles
-		// colliding to a sibling for workdir skills, but for the durable
-		// mirror we keep a single canonical slug per name.
-		if _, exists := desired[slug]; exists {
-			continue
-		}
+	slugs := planBoundSkillMirrorSlugs(enabledDir, skills)
+	for i, skill := range skills {
+		slug := slugs[i]
 		desired[slug] = skill
 	}
 
@@ -59,6 +54,39 @@ func mirrorBoundSkillsToAgentEnabled(agentRoot string, skills []SkillContextForE
 		}
 	}
 	return nil
+}
+
+// planBoundSkillMirrorSlugs is shared by the durable writer and prompt index.
+// It gives every bound skill a distinct path and avoids unmarked user-owned
+// directories, so the index never advertises two skills at one file or a file
+// the mirror deliberately skipped.
+func planBoundSkillMirrorSlugs(enabledDir string, skills []SkillContextForEnv) []string {
+	slugs := make([]string, len(skills))
+	used := make(map[string]struct{}, len(skills))
+	for i, skill := range skills {
+		base := sanitizeSkillName(skill.Name)
+		for attempt := 0; ; attempt++ {
+			candidate := base
+			if attempt == 1 {
+				candidate = base + "-multica"
+			} else if attempt > 1 {
+				candidate = fmt.Sprintf("%s-multica-%d", base, attempt)
+			}
+			if _, exists := used[candidate]; exists {
+				continue
+			}
+			dir := filepath.Join(enabledDir, candidate)
+			if _, err := os.Stat(dir); err == nil && !isBoundSkillMirrorDir(dir) {
+				continue
+			} else if err != nil && !os.IsNotExist(err) {
+				continue
+			}
+			used[candidate] = struct{}{}
+			slugs[i] = candidate
+			break
+		}
+	}
+	return slugs
 }
 
 func reconcileBoundSkillMirrors(enabledDir string, desired map[string]SkillContextForEnv) error {

@@ -329,10 +329,22 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 					}
 				}
 				if h.isAgentAssigneeReady(ctx, issue) {
-					_, _ = taskSvc.EnqueueTaskForIssue(ctx, issue)
+					var verifier bool
+					_ = pool.QueryRow(ctx, `SELECT EXISTS(
+						SELECT 1 FROM work_graph_node node
+						JOIN work_graph graph ON graph.id=node.graph_id
+						WHERE node.workspace_id=$1 AND node.issue_id=$2
+						  AND node.role='verifier' AND node.based_on_graph_version=graph.current_version
+					)`, issue.WorkspaceID, issue.ID).Scan(&verifier)
+					if verifier {
+						_, _ = taskSvc.EnqueueFreshTaskForIssue(ctx, issue)
+					} else {
+						_, _ = taskSvc.EnqueueTaskForIssue(ctx, issue)
+					}
 				}
 			}
 		}
+		h.WorkGraph.OnGraphDelta = h.wakeGoalCoordinatorForGraphDelta
 		researchStore := researchrun.NewPostgresStore(pool)
 		h.ResearchRun = researchrun.NewEngine(researchStore, &researchRunDispatcher{handler: h}, &researchRunProjector{handler: h})
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess

@@ -235,6 +235,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const reportControllerRef = useRef<{ open: () => void } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
@@ -488,21 +489,15 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
   const postUser = (body: string) => send.mutate(body);
 
+  // Plain derivation after data-gated early returns — do not use hooks here
+  // (rules-of-hooks). goal history is cheap and only needed on the success path.
   const goalVersion = data.run?.run?.goal_version ?? data.run?.contract?.goal_version ?? null;
-  const goalHistory = useMemo(
-    () =>
-      buildGoalVersionHistory({
-        currentGoal: session.goal,
-        currentVersion: goalVersion,
-        messages,
-      }),
-    [session.goal, goalVersion, messages],
-  );
-  const goalImpact = useMemo(
-    () => (typedGraph?.nodes ? summarizeGoalImpact(typedGraph.nodes) : null),
-    [typedGraph?.nodes],
-  );
-  const reportControllerRef = useRef<{ open: () => void } | null>(null);
+  const goalHistory = buildGoalVersionHistory({
+    currentGoal: session.goal,
+    currentVersion: goalVersion,
+    messages,
+  });
+  const goalImpact = typedGraph?.nodes ? summarizeGoalImpact(typedGraph.nodes) : null;
 
   const onClarificationOption = (
     question: ResearchClarificationQuestion,

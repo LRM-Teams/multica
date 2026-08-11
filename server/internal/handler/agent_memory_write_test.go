@@ -27,6 +27,9 @@ func TestSelfReviewCandidateShareable(t *testing.T) {
 	if selfReviewCandidateShareable("agent", "sensitive") {
 		t.Fatal("sensitive must not be shareable")
 	}
+	if selfReviewCandidateShareable("agent", "") {
+		t.Fatal("missing sensitivity must fail closed")
+	}
 	if !selfReviewCandidateShareable("agent", "none") {
 		t.Fatal("agent/none should be shareable")
 	}

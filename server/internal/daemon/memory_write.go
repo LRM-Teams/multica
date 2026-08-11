@@ -9,12 +9,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/memorysignal"
 )
 
 const memoryWriteSnapshotRel = ".multica/memory-write-hashes.json"
+
+var memoryWriteReportLocks sync.Map
+
+func lockMemoryWriteReport(agentRoot string) func() {
+	value, _ := memoryWriteReportLocks.LoadOrStore(agentRoot, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 // memoryWriteSnapshot persists per-file content hashes between task runs so
 // daemon can diff whitelisted agent-local memory paths.
@@ -207,6 +217,8 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 		return
 	}
 	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
+	unlock := lockMemoryWriteReport(agentRoot)
+	defer unlock()
 	prior, err := loadMemoryWriteSnapshot(agentRoot)
 	if err != nil {
 		return

@@ -66,6 +66,17 @@ func TestHandleAgentStartIntentReportsAcceptedThenIndependentReady(t *testing.T)
 	const dispatchID = "44444444-4444-4444-8444-444444444444"
 	d := New(Config{ServerBaseURL: server.URL, WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	var frames []struct {
+		eventType string
+		payload   any
+	}
+	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(eventType string, payload any) error {
+		frames = append(frames, struct {
+			eventType string
+			payload   any
+		}{eventType: eventType, payload: payload})
+		return nil
+	})
 
 	d.handleAgentStartIntent(t.Context(), protocol.DaemonHeartbeatPendingAgentStartIntent{
 		StartDispatchID: dispatchID, AgentID: agentID, RuntimeID: runtimeID, WorkspaceID: workspaceID,
@@ -90,6 +101,20 @@ func TestHandleAgentStartIntentReportsAcceptedThenIndependentReady(t *testing.T)
 		AgentID: agentID, RuntimeID: runtimeID, WorkspaceID: workspaceID,
 	}) {
 		t.Fatal("ready observation did not find the installed local residency, root, and coordinator")
+	}
+	if len(frames) != 3 {
+		t.Fatalf("Workspace Runner initialization frames = %#v, want active status, session, then Message recovery", frames)
+	}
+	status, ok := frames[0].payload.(protocol.AgentStatusPayload)
+	if frames[0].eventType != protocol.EventAgentStatus || !ok || status.AgentID != agentID || status.Status != protocol.AgentStatusActive || status.LaunchID == "" {
+		t.Fatalf("first Workspace Runner lifecycle frame = %#v, want active Agent status", frames[0])
+	}
+	session, ok := frames[1].payload.(protocol.AgentSessionPayload)
+	if frames[1].eventType != protocol.EventAgentSession || !ok || session.AgentID != agentID || session.LaunchID != status.LaunchID {
+		t.Fatalf("second Workspace Runner lifecycle frame = %#v, want matching Agent session", frames[1])
+	}
+	if frames[2].eventType != protocol.EventAgentRecoveryRequest {
+		t.Fatalf("third Workspace Runner initialization frame = %#v, want Message recovery request", frames[2])
 	}
 }
 

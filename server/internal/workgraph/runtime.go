@@ -64,6 +64,7 @@ func normalizeCreate(in CreateInput) (CreateInput, error) {
 		return in, ErrInvalidGraph
 	}
 	seen := make(map[string]NodeSpec, len(in.Nodes))
+	hasVerifier := false
 	for i := range in.Nodes {
 		n := &in.Nodes[i]
 		n.TempID = strings.TrimSpace(n.TempID)
@@ -72,11 +73,32 @@ func normalizeCreate(in CreateInput) (CreateInput, error) {
 		n.AssigneeID = strings.TrimSpace(n.AssigneeID)
 		n.Role = strings.TrimSpace(n.Role)
 		n.Objective = strings.TrimSpace(n.Objective)
+		n.WorkerMode = strings.TrimSpace(n.WorkerMode)
+		n.CloneReason = strings.TrimSpace(n.CloneReason)
 		if n.ContextPolicy == "" {
 			n.ContextPolicy = "bounded"
 		}
+		if n.WorkerMode == "" {
+			n.WorkerMode = WorkerModeReuseAgent
+		}
 		if n.TempID == "" || (n.IssueID == "" && (n.Title == "" || n.AssigneeID == "")) || !validRoles[n.Role] || !validContextPolicies[n.ContextPolicy] {
 			return in, ErrInvalidGraph
+		}
+		if n.WorkerMode != WorkerModeReuseAgent && n.WorkerMode != WorkerModeDerivedAgent {
+			return in, ErrInvalidGraph
+		}
+		if n.WorkerMode == WorkerModeDerivedAgent {
+			if n.Role != "verifier" || n.IssueID != "" || n.CloneReason == "" || len(n.CloneReason) > 1000 {
+				return in, ErrInvalidGraph
+			}
+			switch n.ContextPolicy {
+			case "blind", "adversarial", "replication", "sealed":
+			default:
+				return in, ErrInvalidGraph
+			}
+		}
+		if n.Role == "verifier" {
+			hasVerifier = true
 		}
 		if _, ok := seen[n.TempID]; ok {
 			return in, ErrInvalidGraph
@@ -91,6 +113,17 @@ func normalizeCreate(in CreateInput) (CreateInput, error) {
 			n.CompletionContract = []string{}
 		}
 		seen[n.TempID] = *n
+	}
+	if !hasVerifier {
+		return in, ErrInvalidGraph
+	}
+	for _, n := range seen {
+		if n.Role != "verifier" {
+			continue
+		}
+		if len(n.DependsOn) != 1 || seen[n.DependsOn[0]].Role == "verifier" {
+			return in, ErrInvalidGraph
+		}
 	}
 	depthMemo := map[string]int{}
 	visiting := map[string]bool{}
@@ -204,28 +237,40 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 	}
 	issueIDs := make([]uuid.UUID, 0, len(in.Nodes))
 	issueIDMap := make(map[string]string, len(in.Nodes))
+	canonicalAgentByTemp := make(map[string]uuid.UUID, len(in.Nodes))
+	derivedAgentByTemp := make(map[string]uuid.UUID)
 	for _, n := range in.Nodes {
 		if n.IssueID != "" {
 			id, parseErr := uuid.Parse(n.IssueID)
 			if parseErr != nil {
 				return CreateResult{}, ErrInvalidGraph
 			}
-			var ok bool
-			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM issue WHERE workspace_id=$1 AND id=$2 AND status='backlog' AND assignee_type='agent' AND assignee_id IS NOT NULL)`, workspaceID, id).Scan(&ok); err != nil || !ok {
+			var canonicalAgent uuid.UUID
+			if err = tx.QueryRow(ctx, `SELECT COALESCE(agent.source_agent_id,agent.id) FROM issue item JOIN agent ON agent.id=item.assignee_id AND agent.workspace_id=item.workspace_id WHERE item.workspace_id=$1 AND item.id=$2 AND item.status='backlog' AND item.assignee_type='agent'`, workspaceID, id).Scan(&canonicalAgent); err != nil {
 				return CreateResult{}, ErrInvalidGraph
 			}
 			issueIDs = append(issueIDs, id)
 			issueIDMap[n.TempID] = id.String()
+			canonicalAgentByTemp[n.TempID] = canonicalAgent
 			continue
 		}
-		agentID, parseErr := uuid.Parse(n.AssigneeID)
+		sourceAgentID, parseErr := uuid.Parse(n.AssigneeID)
 		if parseErr != nil {
 			return CreateResult{}, ErrInvalidGraph
 		}
-		var agentOK bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL)`, workspaceID, agentID).Scan(&agentOK); err != nil || !agentOK {
+		var canonicalAgent uuid.UUID
+		if err = tx.QueryRow(ctx, `SELECT COALESCE(source_agent_id,id) FROM agent WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL AND runtime_id IS NOT NULL`, workspaceID, sourceAgentID).Scan(&canonicalAgent); err != nil {
 			return CreateResult{}, ErrInvalidGraph
 		}
+		agentID := sourceAgentID
+		if n.WorkerMode == WorkerModeDerivedAgent {
+			agentID, err = cloneReviewAgent(ctx, tx, workspaceID, sourceAgentID, in.IdempotencyKey, n.TempID)
+			if err != nil {
+				return CreateResult{}, err
+			}
+			derivedAgentByTemp[n.TempID] = agentID
+		}
+		canonicalAgentByTemp[n.TempID] = canonicalAgent
 		var number int
 		if err = tx.QueryRow(ctx, `UPDATE workspace SET issue_counter=issue_counter+1 WHERE id=$1 RETURNING issue_counter`, workspaceID).Scan(&number); err != nil {
 			return CreateResult{}, err
@@ -247,6 +292,14 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 		}
 		issueIDs = append(issueIDs, id)
 		issueIDMap[n.TempID] = id.String()
+	}
+	for _, n := range in.Nodes {
+		if n.Role != "verifier" {
+			continue
+		}
+		if canonicalAgentByTemp[n.TempID] == canonicalAgentByTemp[n.DependsOn[0]] {
+			return CreateResult{}, ErrGraphForbidden
+		}
 	}
 
 	var graphID uuid.UUID
@@ -272,6 +325,15 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 		nodeIDs[n.TempID] = nodeID.String()
 	}
 	for _, n := range in.Nodes {
+		derivedID, ok := derivedAgentByTemp[n.TempID]
+		if !ok {
+			continue
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO work_review_agent_assignment(workspace_id,graph_id,verifier_node_id,issue_id,source_agent_id,derived_agent_id) VALUES($1,$2,$3,$4,$5,$6)`, workspaceID, graphID, nodeUUIDs[n.TempID], issueIDs[indexNode(in.Nodes, n.TempID)], canonicalAgentByTemp[n.TempID], derivedID); err != nil {
+			return CreateResult{}, err
+		}
+	}
+	for _, n := range in.Nodes {
 		for _, dep := range n.DependsOn {
 			_, err = tx.Exec(ctx, `INSERT INTO work_graph_edge (workspace_id,graph_id,from_node_id,to_node_id,edge_type,required,created_version) VALUES ($1,$2,$3,$4,'depends_on',true,1)`, workspaceID, graphID, nodeUUIDs[dep], nodeUUIDs[n.TempID])
 			if err != nil {
@@ -280,7 +342,10 @@ func (s *Store) Create(ctx context.Context, input CreateInput) (CreateResult, er
 		}
 	}
 	for _, n := range in.Nodes {
-		content := fmt.Sprintf("Goal-managed node\n\n- graph_id: `%s`\n- node_id: `%s`\n- goal_id: `%s`\n- objective: %s\n- completion: submit at least one durable artifact; verifier nodes must also submit PASS evidence.\n- artifact command: `multica issue graph artifact %s --input-file <json>`", graphID, nodeUUIDs[n.TempID], anchorID, n.Objective, graphID)
+		content := fmt.Sprintf("Goal-managed node\n\n- graph_id: `%s`\n- node_id: `%s`\n- goal_id: `%s`\n- objective: %s\n- completion: submit at least one durable artifact; verifier nodes must submit a structured verdict against the immutable artifact revision in the review envelope.\n- artifact command: `multica issue graph artifact %s --input-file <json>`", graphID, nodeUUIDs[n.TempID], anchorID, n.Objective, graphID)
+		if n.Role == "verifier" {
+			content += fmt.Sprintf("\n- review isolation: `%s`; this review always starts in a fresh provider session. Do not inspect the producer's private session or memory.", n.ContextPolicy)
+		}
 		if _, err = tx.Exec(ctx, `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'system',$3,$4,'system')`, issueIDs[indexNode(in.Nodes, n.TempID)], workspaceID, uuid.Nil, content); err != nil {
 			return CreateResult{}, err
 		}
@@ -409,7 +474,7 @@ func loadGraphTx(ctx context.Context, q rowQuerier, workspaceID, graphID uuid.UU
 	g.BudgetPolicy = budget
 	g.Nodes = []Node{}
 	g.Edges = []Edge{}
-	rows, err := q.Query(ctx, `SELECT id::text,issue_id::text,role,context_policy,execution_status,validity_status,review_status,completion_authority,effective_completion,objective,completion_contract,budget,based_on_graph_version,created_at FROM work_graph_node WHERE graph_id=$1 ORDER BY created_at,id`, graphID)
+	rows, err := q.Query(ctx, `SELECT id::text,issue_id::text,role,context_policy,execution_status,validity_status,review_status,completion_authority,effective_completion,objective,completion_contract,budget,based_on_graph_version,created_at FROM work_graph_node WHERE graph_id=$1 AND based_on_graph_version=$2 ORDER BY created_at,id`, graphID, g.CurrentVersion)
 	if err != nil {
 		return g, err
 	}
@@ -453,7 +518,34 @@ func (s *Store) ReconcileReady(ctx context.Context, workspaceID, graphID string)
 	if err != nil {
 		return nil, ErrInvalidGraph
 	}
-	rows, err := s.pool.Query(ctx, `UPDATE work_graph_node n SET execution_status='ready',updated_at=now() WHERE n.workspace_id=$1 AND n.graph_id=$2 AND n.execution_status IN ('queued','waiting') AND n.validity_status='valid' AND EXISTS (SELECT 1 FROM work_graph graph WHERE graph.id=$2 AND graph.workspace_id=$1 AND graph.status='active' AND n.based_on_graph_version=graph.current_version) AND NOT EXISTS (SELECT 1 FROM work_graph_edge e JOIN work_graph_node upstream ON upstream.id=e.from_node_id WHERE e.graph_id=n.graph_id AND e.to_node_id=n.id AND e.edge_type='depends_on' AND e.required AND e.retired_version IS NULL AND upstream.effective_completion<>'satisfied') RETURNING n.id::text`, w, g)
+	rows, err := s.pool.Query(ctx, `UPDATE work_graph_node n SET execution_status='ready',updated_at=now()
+		WHERE n.workspace_id=$1 AND n.graph_id=$2
+		  AND n.execution_status IN ('queued','waiting') AND n.validity_status='valid'
+		  AND NOT (n.role='verifier' AND n.review_status='blocked')
+		  AND EXISTS (
+		    SELECT 1 FROM work_graph graph
+		    WHERE graph.id=$2 AND graph.workspace_id=$1 AND graph.status='active'
+		      AND n.based_on_graph_version=graph.current_version
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM work_graph_edge edge
+		    JOIN work_graph_node upstream ON upstream.id=edge.from_node_id
+		    WHERE edge.graph_id=n.graph_id AND edge.to_node_id=n.id
+		      AND edge.edge_type='depends_on' AND edge.required AND edge.retired_version IS NULL
+		      AND (
+		        (n.role<>'verifier' AND upstream.effective_completion<>'satisfied')
+		        OR
+		        (n.role='verifier' AND (
+		          upstream.execution_status<>'succeeded' OR upstream.validity_status<>'valid'
+		          OR NOT EXISTS (
+		            SELECT 1 FROM work_artifact_revision artifact
+		            WHERE artifact.workspace_id=n.workspace_id AND artifact.graph_id=n.graph_id
+		              AND artifact.producer_node_id=upstream.id AND artifact.validity_status='valid'
+		          )
+		        ))
+		      )
+		  )
+		RETURNING n.id::text`, w, g)
 	if err != nil {
 		return nil, err
 	}

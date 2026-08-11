@@ -25,7 +25,7 @@ func (d *Daemon) handleAgentStartIntent(ctx context.Context, pending protocol.Da
 		}, "failure")
 		return
 	}
-	if err := d.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{
+	if err := d.handleDaemonAgentStartFrame(protocol.DaemonAgentStartPayload{
 		AgentID:             pending.AgentID,
 		RuntimeID:           pending.RuntimeID,
 		WorkspaceID:         pending.WorkspaceID,

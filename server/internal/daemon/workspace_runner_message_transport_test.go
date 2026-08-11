@@ -304,9 +304,16 @@ func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
 	d.mu.Unlock()
 
 	requests := 0
+	statuses := 0
+	sessions := 0
 	d.attachWorkspaceRunnerMessageTransport("workspace-1", func(eventType string, _ any) error {
-		if eventType == protocol.EventAgentRecoveryRequest {
+		switch eventType {
+		case protocol.EventAgentRecoveryRequest:
 			requests++
+		case protocol.EventAgentStatus:
+			statuses++
+		case protocol.EventAgentSession:
+			sessions++
 		}
 		return nil
 	})
@@ -322,5 +329,50 @@ func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("Message recovery requests=%d, want one for the newly created coordinator", requests)
+	}
+	if statuses != 1 || sessions != 1 {
+		t.Fatalf("Workspace Runner lifecycle frames status=%d session=%d, want one stable managed launch", statuses, sessions)
+	}
+}
+
+func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-4111-8111-111111111111"
+		agentID     = "22222222-2222-4222-8222-222222222222"
+		runtimeID   = "33333333-3333-4333-8333-333333333333"
+	)
+	root := t.TempDir()
+	persisting := New(Config{WorkspacesRoot: root}, nil)
+	if _, accepted, err := persisting.reminderAgents.applyStart(agentID, runtimeID, workspaceID, 1); err != nil || !accepted {
+		t.Fatalf("persist residency accepted=%v err=%v", accepted, err)
+	}
+
+	restarted := New(Config{WorkspacesRoot: root}, nil)
+	restarted.mu.Lock()
+	restarted.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	restarted.mu.Unlock()
+	if err := restarted.restoreResidentAgents(); err != nil {
+		t.Fatalf("restore residents: %v", err)
+	}
+
+	restarted.messageCoordinatorMu.RLock()
+	coordinator := restarted.messageCoordinators[agentID]
+	gotRuntimeID := restarted.messageRuntimeIDs[agentID]
+	restarted.messageCoordinatorMu.RUnlock()
+	if coordinator == nil || gotRuntimeID != runtimeID {
+		t.Fatalf("restored coordinator=%v runtime_id=%q", coordinator, gotRuntimeID)
+	}
+	producer := restarted.workspaceAgentActivityProducer(workspaceID)
+	_, frames := producer.AttachTransport(func(protocol.AgentActivityPayload) {})
+	if len(frames) != 2 || frames[0].EventType != protocol.EventAgentStatus || frames[1].EventType != protocol.EventAgentSession {
+		t.Fatalf("restored Runner lifecycle frames = %#v, want status then session", frames)
+	}
+	var recovery protocol.AgentRecoveryRequest
+	restarted.beginMessageRecoveryWithSend(func(request protocol.AgentRecoveryRequest) error {
+		recovery = request
+		return nil
+	})
+	if recovery.AgentID != agentID || recovery.RecoveryID == "" {
+		t.Fatalf("restored Message recovery request = %+v", recovery)
 	}
 }

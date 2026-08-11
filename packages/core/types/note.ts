@@ -42,6 +42,8 @@ export interface UpdateNotePageSharesRequest {
 
 export type NoteAIJobStatus = "queued" | "dispatched" | "running" | "completed" | "failed" | "cancelled";
 export type NoteAIEditAction = "insert" | "replace_selection" | "replace_page" | "patch";
+export type NoteAIJobFailureCode = "invalid_structured_output" | "assistant_failure" | "task_failure" | "task_error";
+export type NoteAIJobRepairCode = "repaired_selected_output" | "repaired_page_output";
 
 export interface NoteAIEditResult {
   action: NoteAIEditAction;
@@ -68,6 +70,8 @@ export interface NoteAIJob {
   status: NoteAIJobStatus;
   result?: NoteAIEditResult | null;
   failure_reason?: string | null;
+  failure_code?: NoteAIJobFailureCode | null;
+  repair_code?: NoteAIJobRepairCode | null;
   created_at: string;
   updated_at?: string;
 }

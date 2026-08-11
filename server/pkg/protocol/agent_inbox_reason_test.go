@@ -17,6 +17,7 @@ func TestIsResidualChannelChatInboxReason(t *testing.T) {
 		{AgentInboxReasonIssueThreadBackflow, false},
 		{AgentInboxReasonCollaborationTurn, false},
 		{AgentInboxReasonChannelOnboarding, false},
+		{AgentInboxReasonGoalGraphDelta, false},
 		{"issue", false},
 		{"quick_create", false},
 	}

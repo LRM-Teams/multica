@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -92,6 +93,8 @@ type NoteAIJobResponse struct {
 	Status        string            `json:"status"`
 	Result        *NoteAIEditResult `json:"result,omitempty"`
 	FailureReason *string           `json:"failure_reason,omitempty"`
+	FailureCode   *string           `json:"failure_code,omitempty"`
+	RepairCode    *string           `json:"repair_code,omitempty"`
 	CreatedAt     string            `json:"created_at"`
 	UpdatedAt     string            `json:"updated_at,omitempty"`
 }
@@ -949,6 +952,11 @@ func noteAISelectedEditPrompt(prompt string) bool {
 		strings.Contains(prompt, "Selected Markdown excerpt to replace:")
 }
 
+func noteAIPageEditPrompt(prompt string) bool {
+	return strings.Contains(prompt, "You are editing a user's Notion-style note page.") &&
+		strings.Contains(prompt, "Full current page Markdown:")
+}
+
 func repairSelectedNoteAIEditResult(content, prompt string) (*NoteAIEditResult, error) {
 	if !noteAISelectedEditPrompt(prompt) {
 		return nil, fmt.Errorf("note AI output repair is only supported for selected edits")
@@ -963,16 +971,113 @@ func repairSelectedNoteAIEditResult(content, prompt string) (*NoteAIEditResult, 
 	})
 }
 
-func parseNoteAIEditResultWithRepair(content, prompt string) (*NoteAIEditResult, error) {
+func noteAIInstruction(prompt string) string {
+	start := strings.Index(prompt, "<instruction>")
+	end := strings.Index(prompt, "</instruction>")
+	if start < 0 || end < 0 || end <= start {
+		return ""
+	}
+	start += len("<instruction>")
+	return strings.TrimSpace(prompt[start:end])
+}
+
+func noteAIInferPageRepairAction(prompt string, target *string) string {
+	if target != nil && strings.TrimSpace(*target) != "" {
+		return "patch"
+	}
+	instruction := strings.ToLower(noteAIInstruction(prompt))
+	replacePageTerms := []string{
+		"rewrite", "translate", "summarize", "summarise", "reorganize", "reorganise",
+		"polish", "whole page", "entire page", "full page", "current page",
+		"\u6574\u9875", "\u5168\u6587", "\u91cd\u5199", "\u7ffb\u8bd1", "\u603b\u7ed3", "\u6da6\u8272",
+	}
+	for _, term := range replacePageTerms {
+		if strings.Contains(instruction, term) {
+			return "replace_page"
+		}
+	}
+	replaceSelectionTerms := []string{"replace the empty line", "replace this line", "replace cursor block", "\u66ff\u6362\u7a7a\u884c", "\u66ff\u6362\u8fd9\u4e00\u884c"}
+	for _, term := range replaceSelectionTerms {
+		if strings.Contains(instruction, term) {
+			return "replace_selection"
+		}
+	}
+	return "insert"
+}
+
+func noteAIOptionalLooseStringField(content, field string) *string {
+	value, err := extractLooseNoteAIStringField(content, field)
+	if err != nil || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	value = strings.TrimSpace(value)
+	return &value
+}
+
+func repairPageNoteAIEditResult(content, prompt string) (*NoteAIEditResult, error) {
+	if !noteAIPageEditPrompt(prompt) || noteAISelectedEditPrompt(prompt) {
+		return nil, fmt.Errorf("note AI page output repair is only supported for page edits")
+	}
+	trimmed := stripNoteAIJSONFences(content)
+	markdown := trimmed
+	if extracted, err := extractLooseNoteAIStringField(trimmed, "markdown"); err == nil && strings.TrimSpace(extracted) != "" {
+		markdown = extracted
+	}
+	result := &NoteAIEditResult{
+		Markdown:  markdown,
+		Target:    noteAIOptionalLooseStringField(trimmed, "target"),
+		Title:     noteAIOptionalLooseStringField(trimmed, "title"),
+		Rationale: noteAIOptionalLooseStringField(trimmed, "rationale"),
+	}
+	if actionMatch := noteAIJSONActionRE.FindStringSubmatch(trimmed); len(actionMatch) >= 2 {
+		switch strings.TrimSpace(actionMatch[1]) {
+		case "insert", "replace_selection", "replace_page", "patch":
+			result.Action = strings.TrimSpace(actionMatch[1])
+		case "append", "continue", "draft", "add":
+			result.Action = "insert"
+		case "rewrite", "replace", "page", "edit_page":
+			result.Action = "replace_page"
+		}
+	}
+	if result.Action == "" {
+		result.Action = noteAIInferPageRepairAction(prompt, result.Target)
+	}
+	return validateNoteAIEditResult(result)
+}
+
+type noteAIParseOutcome struct {
+	Result     *NoteAIEditResult
+	RepairCode *string
+}
+
+const (
+	noteAIRepairSelectedOutput = "repaired_selected_output"
+	noteAIRepairPageOutput     = "repaired_page_output"
+	noteAIFailureInvalidOutput = "invalid_structured_output"
+	noteAIFailureAssistant     = "assistant_failure"
+	noteAIFailureTask          = "task_failure"
+	noteAIFailureTaskError     = "task_error"
+)
+
+func parseNoteAIEditResultWithRepairOutcome(content, prompt string) (noteAIParseOutcome, error) {
 	result, err := parseNoteAIEditResult(content)
 	if err == nil {
-		return result, nil
+		return noteAIParseOutcome{Result: result}, nil
 	}
-	repaired, repairErr := repairSelectedNoteAIEditResult(content, prompt)
-	if repairErr == nil {
-		return repaired, nil
+	if repaired, repairErr := repairSelectedNoteAIEditResult(content, prompt); repairErr == nil {
+		code := noteAIRepairSelectedOutput
+		return noteAIParseOutcome{Result: repaired, RepairCode: &code}, nil
 	}
-	return nil, err
+	if repaired, repairErr := repairPageNoteAIEditResult(content, prompt); repairErr == nil {
+		code := noteAIRepairPageOutput
+		return noteAIParseOutcome{Result: repaired, RepairCode: &code}, nil
+	}
+	return noteAIParseOutcome{}, err
+}
+
+func parseNoteAIEditResultWithRepair(content, prompt string) (*NoteAIEditResult, error) {
+	outcome, err := parseNoteAIEditResultWithRepairOutcome(content, prompt)
+	return outcome.Result, err
 }
 
 func noteAIStatusFromTask(status string, terminalOutcome pgtype.Text, startedAt pgtype.Timestamptz, result *NoteAIEditResult, failure *string) string {
@@ -1043,25 +1148,56 @@ WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspace
 	}
 	var result *NoteAIEditResult
 	var failure *string
+	var failureCode *string
+	var repairCode *string
 	if assistantContent.Valid && strings.TrimSpace(assistantContent.String) != "" {
-		parsed, err := parseNoteAIEditResultWithRepair(assistantContent.String, prompt)
+		outcome, err := parseNoteAIEditResultWithRepairOutcome(assistantContent.String, prompt)
 		if err != nil {
 			value := "agent returned invalid structured note AI edit"
+			code := noteAIFailureInvalidOutput
 			failure = &value
+			failureCode = &code
+			slog.Warn("note AI structured output invalid",
+				"workspace_id", uuidToString(workspaceID),
+				"page_id", uuidToString(pageID),
+				"job_id", uuidToString(jobID),
+				"task_id", uuidToString(taskID),
+				"agent_id", uuidToString(agentID),
+				"failure_code", code,
+				"error", err,
+			)
 		} else {
-			result = parsed
+			result = outcome.Result
+			repairCode = outcome.RepairCode
+			if repairCode != nil {
+				slog.Info("note AI output repaired",
+					"workspace_id", uuidToString(workspaceID),
+					"page_id", uuidToString(pageID),
+					"job_id", uuidToString(jobID),
+					"task_id", uuidToString(taskID),
+					"agent_id", uuidToString(agentID),
+					"repair_code", *repairCode,
+					"action", result.Action,
+				)
+			}
 		}
 	}
 	switch {
 	case assistantFailure.Valid && assistantFailure.String != "":
 		value := assistantFailure.String
+		code := noteAIFailureAssistant
 		failure = &value
+		failureCode = &code
 	case taskFailure.Valid && taskFailure.String != "":
 		value := taskFailure.String
+		code := noteAIFailureTask
 		failure = &value
+		failureCode = &code
 	case taskError.Valid && taskError.String != "":
 		value := taskError.String
+		code := noteAIFailureTaskError
 		failure = &value
+		failureCode = &code
 	}
 	resp = NoteAIJobResponse{
 		ID:            uuidToString(jobID),
@@ -1073,6 +1209,8 @@ WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspace
 		Status:        noteAIStatusFromTask(taskStatus, terminalOutcome, taskStartedAt, result, failure),
 		Result:        result,
 		FailureReason: failure,
+		FailureCode:   failureCode,
+		RepairCode:    repairCode,
 		CreatedAt:     timestampToString(createdAt),
 		UpdatedAt:     timestampToString(taskUpdatedAt),
 	}

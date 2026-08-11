@@ -82,6 +82,23 @@ func TestPostgresStoreCreateRunIsAtomic(t *testing.T) {
 			t.Fatalf("%s rows=%d want=%d", table, got, want)
 		}
 	}
+	for kind, want := range map[string]int{
+		"run_session":       1,
+		"contract_revision": 1,
+		"question":          1,
+		"task":              1,
+	} {
+		var got int
+		if err = pool.QueryRow(ctx, `
+			SELECT count(*)::int FROM research_artifact_passport
+			WHERE session_id = $1::uuid AND entity_kind = $2 AND current_version = 1
+		`, run.SessionID, kind).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("artifact passport %s rows=%d want=%d", kind, got, want)
+		}
+	}
 }
 
 func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *testing.T) {

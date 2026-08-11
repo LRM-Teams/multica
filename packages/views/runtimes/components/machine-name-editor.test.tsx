@@ -96,20 +96,27 @@ describe("MachineNameEditor", () => {
     unmount();
   });
 
-  it.each(["title", "basics"] as const)(
-    "%s variant always exposes a rename control (no hover-only pencil)",
-    (variant) => {
-      const { container, unmount } = render(
-        <I18nProvider locale="en" resources={TEST_RESOURCES}>
-          <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant={variant} />
-        </I18nProvider>,
-      );
-      expect(renameButton(container)).toBeTruthy();
-      fireEvent.click(renameButton(container));
-      expect(within(container).getByRole("textbox")).toBeTruthy();
-      unmount();
-    },
-  );
+  it("title variant always exposes a rename control (no hover-only pencil)", () => {
+    const { container, unmount } = render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="title" />
+      </I18nProvider>,
+    );
+    expect(renameButton(container)).toBeTruthy();
+    fireEvent.click(renameButton(container));
+    expect(within(container).getByRole("textbox")).toBeTruthy();
+    unmount();
+  });
+
+  it("basics variant is display-only (single rename surface is the title)", () => {
+    const { container, unmount } = render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="basics" />
+      </I18nProvider>,
+    );
+    expect(within(container).queryAllByRole("button")).toHaveLength(0);
+    unmount();
+  });
 
   it("patches display_name on all runtimes when saved from title", () => {
     const { container, unmount } = render(

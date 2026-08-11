@@ -73,11 +73,17 @@ export function ResearchConstellationWorkspace({
   detailPanel,
   composer,
   registerReportController,
+  typedGraphHasNextPage = false,
+  typedGraphLoadMorePending = false,
+  onLoadMoreTypedGraph,
   className,
 }: {
   typedGraph: TypedGraphResponse | undefined;
   typedLoading: boolean;
   typedError: boolean;
+  typedGraphHasNextPage?: boolean;
+  typedGraphLoadMorePending?: boolean;
+  onLoadMoreTypedGraph?: () => void;
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
@@ -233,10 +239,15 @@ export function ResearchConstellationWorkspace({
     [typedGraph?.nodes, typedGraph?.total_node_count],
   );
 
-  const summaryTitle = t(($) => $.d5.summary.title, {
-    loaded: summary.loadedDirections,
-    total: summary.totalDirections ?? summary.loadedDirections,
-  });
+  const summaryTitle =
+    summary.totalDirections != null
+      ? t(($) => $.d5.summary.title_with_total, {
+          loaded: summary.loadedDirections,
+          total: summary.totalDirections,
+        })
+      : t(($) => $.d5.summary.title, {
+          loaded: summary.loadedDirections,
+        });
   const summaryDetail = t(($) => $.d5.summary.detail, {
     stable: summary.stableResults,
     active: summary.activeProbes,
@@ -311,6 +322,17 @@ export function ResearchConstellationWorkspace({
     [isMobile, onSelectNode, snapshotNodes, typedGraph?.nodes],
   );
 
+  const graphRemainingCount =
+    typedGraph?.total_node_count != null
+      ? Math.max(0, typedGraph.total_node_count - (typedGraph.nodes?.length ?? 0))
+      : 0;
+  const loadMoreLabel =
+    typedGraphHasNextPage && onLoadMoreTypedGraph
+      ? typedGraphLoadMorePending
+        ? t(($) => $.d5.summary.load_more_pending)
+        : t(($) => $.d5.summary.load_more, { count: graphRemainingCount })
+      : undefined;
+
   const handleLineageSelect = useCallback(
     (nodeId: string) => {
       handleCanvasSelect(nodeId);
@@ -367,6 +389,9 @@ export function ResearchConstellationWorkspace({
             relatedNodeIds={relatedNodeIds}
             typedNodes={typedGraph?.nodes}
             hiddenCountLabel={(count) => t(($) => $.d5.cluster_hidden, { count })}
+            loadMoreLabel={loadMoreLabel}
+            onLoadMore={onLoadMoreTypedGraph}
+            loadMorePending={typedGraphLoadMorePending}
             keyboardNav={{
               nodes: snapshotNodes,
               edges: (typedGraph?.edges ?? []).map((edge) => ({

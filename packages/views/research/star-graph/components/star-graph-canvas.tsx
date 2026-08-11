@@ -71,6 +71,9 @@ export interface StarGraphCanvasProps {
   relatedNodeIds?: ReadonlySet<string>;
   entityBudget?: number;
   hiddenCountLabel?: (count: number) => string;
+  loadMoreLabel?: string;
+  onLoadMore?: () => void;
+  loadMorePending?: boolean;
   typedNodes?: readonly TypedGraphNode[];
   className?: string;
 }
@@ -96,6 +99,9 @@ export function StarGraphCanvas({
   relatedNodeIds,
   entityBudget = STAR_GRAPH_DOM_BUDGET,
   hiddenCountLabel,
+  loadMoreLabel,
+  onLoadMore,
+  loadMorePending = false,
   typedNodes,
   className,
 }: StarGraphCanvasProps) {
@@ -393,8 +399,8 @@ export function StarGraphCanvas({
           {liveText}
         </div>
       ) : null}
-      {(summaryTitle || summaryDetail || filterHiddenNote || hiddenEntityCount > 0) && (
-        <div data-testid="star-graph-summary" className="sg-summary-label pointer-events-none">
+      {(summaryTitle || summaryDetail || filterHiddenNote || hiddenEntityCount > 0 || onLoadMore) && (
+        <div data-testid="star-graph-summary" className="sg-summary-label">
           {summaryTitle && <b>{summaryTitle}</b>}
           {summaryDetail && <span>{summaryDetail}</span>}
           {filterHiddenNote ? (
@@ -404,6 +410,17 @@ export function StarGraphCanvas({
             <span data-testid="star-graph-budget-note">
               · {visibleEntities.length}/{displayEntities.length}
             </span>
+          ) : null}
+          {onLoadMore && loadMoreLabel ? (
+            <button
+              type="button"
+              data-testid="star-graph-load-more"
+              className="sg-summary-load-more"
+              disabled={loadMorePending}
+              onClick={onLoadMore}
+            >
+              {loadMoreLabel}
+            </button>
           ) : null}
         </div>
       )}

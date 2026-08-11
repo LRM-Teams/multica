@@ -40,6 +40,9 @@ describe("applyResearchWSEvent", () => {
     });
     const data = qc.getData() as typeof EMPTY_RESEARCH_SNAPSHOT;
     expect(data.nodes.map((n) => n.id).sort()).toEqual(["n1", "n2"]);
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.graphTypedInfinite("ws", "s1"),
+    });
   });
 
   it("removes snapshot cache when session is deleted", () => {

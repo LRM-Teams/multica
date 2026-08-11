@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 
 export type ResearchPresencePhase =
@@ -70,6 +70,8 @@ export const researchKeys = {
       pagination?.limit ?? null,
       pagination?.offset ?? null,
     ] as const,
+  graphTypedInfinite: (wsId: string, sessionId: string) =>
+    ["research", wsId, "graph-typed-infinite", sessionId] as const,
 };
 
 /** Default first-screen page size for D5 constellation canvas (G8). */
@@ -184,6 +186,29 @@ export function researchGraphTypedOptions(
   return queryOptions({
     queryKey: researchKeys.graphTyped(wsId, sessionId, page),
     queryFn: () => api.getResearchGraphTyped(sessionId, page),
+    enabled: !!wsId && !!sessionId,
+  });
+}
+
+/**
+ * Infinite typed-graph loader for large sessions (G8/G9). Pages merge via
+ * `mergeTypedGraphPages`; the canvas never fabricates nodes beyond what loaded.
+ */
+export function researchGraphTypedInfiniteOptions(wsId: string, sessionId: string) {
+  return infiniteQueryOptions({
+    queryKey: researchKeys.graphTypedInfinite(wsId, sessionId),
+    queryFn: ({ pageParam }) =>
+      api.getResearchGraphTyped(sessionId, {
+        limit: RESEARCH_TYPED_GRAPH_PAGE_LIMIT,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((count, page) => count + (page.nodes?.length ?? 0), 0);
+      const total = lastPage.total_node_count;
+      if (total != null && loaded < total) return loaded;
+      return undefined;
+    },
     enabled: !!wsId && !!sessionId,
   });
 }

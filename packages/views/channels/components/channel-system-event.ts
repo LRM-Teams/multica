@@ -397,64 +397,6 @@ export function parseProjectSystemEvent(message: SystemEventSource): ProjectSyst
   return null;
 }
 
-function optBool(params: Record<string, unknown>, key: string): boolean {
-  return params[key] === true;
-}
-
-/**
- * #656/#655 — a Reminder fire receipt. The BE (`reminder.go`) writes a quiet
- * `type=system` row with a hard-coded English fallback content string
- * ("Reminder fired: <title>" + optional " · Anchor unavailable") for
- * old/unrecognized clients; the FE composes its own localized ×4 copy from
- * these structured params instead. Read-only surface — no thread/quote/
- * reaction/action affordances, same as every other system row.
- */
-export const REMINDER_EVENTS = {
-  fired: "reminder_fired",
-} as const;
-
-export type ReminderSystemEventKind = (typeof REMINDER_EVENTS)[keyof typeof REMINDER_EVENTS];
-
-const REMINDER_EVENT_KINDS = new Set<string>(Object.values(REMINDER_EVENTS));
-
-export interface ReminderSystemEvent {
-  event: ReminderSystemEventKind;
-  reminderId: string;
-  occurrenceId: string;
-  title: string;
-  /**
-   * Whether the reminder's anchored message/thread was still reachable at
-   * fire time — false means deleted/archived/never-set. Never accompanied by
-   * any raw id/target metadata (see `fireReminderOccurrence` in reminder.go):
-   * this is a boolean fact, not a link.
-   */
-  anchorAvailable: boolean;
-}
-
-/**
- * Extract the structured Reminder-fired event. Returns null for any other
- * system message (falls back to the raw canonical `content`) or a row
- * missing the fields the projection depends on (`reminder_id`/`title`).
- */
-export function parseReminderSystemEvent(message: SystemEventSource): ReminderSystemEvent | null {
-  if (message.type !== "system" || !Array.isArray(message.parts)) return null;
-  for (const part of message.parts) {
-    if (part.type !== "system_event" || !REMINDER_EVENT_KINDS.has(part.event)) continue;
-    const params = part.event_params;
-    const reminderId = optString(params, "reminder_id");
-    const title = optString(params, "title");
-    if (!reminderId || !title) continue;
-    return {
-      event: part.event as ReminderSystemEventKind,
-      reminderId,
-      occurrenceId: optString(params, "occurrence_id") ?? "",
-      title,
-      anchorAvailable: optBool(params, "anchor_available"),
-    };
-  }
-  return null;
-}
-
 /**
  * Thread attention system events (LRM-540). Today the BE emits only
  * `thread_unfollowed` when an agent explicitly unfollows (#329: re-follow is

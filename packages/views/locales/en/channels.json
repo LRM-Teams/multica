@@ -686,10 +686,6 @@
         "changed": "{actor} moved this channel from project «{previous}» to project «{project}»",
         "unbound": "{actor} unlinked this channel from project «{previous}»"
       },
-      "reminder": {
-        "fired": "Reminder fired: {title}",
-        "anchor_unavailable_suffix": " · Anchor unavailable"
-      },
       "thread": {
         "unfollowed": "{actor} unfollowed this thread",
         "followed": "{actor} followed this thread"

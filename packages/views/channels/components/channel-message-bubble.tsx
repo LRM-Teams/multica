@@ -57,7 +57,6 @@ import {
   parseIssueSystemEvent,
   parseIssueAggregateSystemEvent,
   parseProjectSystemEvent,
-  parseReminderSystemEvent,
   parseThreadSystemEvent,
 } from "./channel-system-event";
 import {
@@ -65,7 +64,6 @@ import {
   IssueSystemEventContent,
   IssueAggregateSystemEventContent,
   ProjectSystemEventContent,
-  ReminderSystemEventContent,
   ThreadSystemEventContent,
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
@@ -192,10 +190,6 @@ function ChannelSystemMessageRow({
   // Channel↔project association events (#610): bind/change/unbind, projected into
   // a localized row whose sole clickable object is the project name.
   const projectEvent = parseProjectSystemEvent(message);
-  // #656/#655 Reminder-fired receipts: localized ×4 "Reminder fired: <title>"
-  // (+ "Anchor unavailable" when the anchored message/thread no longer
-  // exists), read-only — never the backend's hard-coded English fallback.
-  const reminderEvent = parseReminderSystemEvent(message);
   // LRM-540: thread unfollow/follow — structured actor token (display_name),
   // never the BE `@handle unfollowed this thread` fallback content.
   const threadEvent = parseThreadSystemEvent(message);
@@ -239,8 +233,6 @@ function ChannelSystemMessageRow({
             <MemberSystemEventContent event={memberEvent} />
           ) : projectEvent ? (
             <ProjectSystemEventContent event={projectEvent} />
-          ) : reminderEvent ? (
-            <ReminderSystemEventContent event={reminderEvent} />
           ) : threadEvent ? (
             <ThreadSystemEventContent event={threadEvent} />
           ) : hasReferenceParts ? (

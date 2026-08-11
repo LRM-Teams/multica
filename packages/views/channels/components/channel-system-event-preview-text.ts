@@ -8,7 +8,6 @@ import {
   parseIssueAggregateSystemEvent,
   parseIssueSystemEvent,
   parseProjectSystemEvent,
-  parseReminderSystemEvent,
   parseThreadSystemEvent,
   type SystemEventSource,
 } from "./channel-system-event";
@@ -226,17 +225,6 @@ function formatProjectEventPreview(
   });
 }
 
-function formatReminderEventPreview(
-  event: NonNullable<ReturnType<typeof parseReminderSystemEvent>>,
-  t: T,
-): string {
-  const template = t(($) => $.message.system_event.reminder.fired);
-  const body = fillSlots(template, { title: event.title });
-  return event.anchorAvailable
-    ? body
-    : `${body}${t(($) => $.message.system_event.reminder.anchor_unavailable_suffix)}`;
-}
-
 function formatThreadEventPreview(
   event: NonNullable<ReturnType<typeof parseThreadSystemEvent>>,
   t: T,
@@ -273,9 +261,6 @@ export function formatSystemEventPreviewText(
 
   const projectEvent = parseProjectSystemEvent(message);
   if (projectEvent) return formatProjectEventPreview(projectEvent, t, resolveMention);
-
-  const reminderEvent = parseReminderSystemEvent(message);
-  if (reminderEvent) return formatReminderEventPreview(reminderEvent, t);
 
   const threadEvent = parseThreadSystemEvent(message);
   if (threadEvent) return formatThreadEventPreview(threadEvent, t, resolveMention);

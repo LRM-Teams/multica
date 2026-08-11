@@ -90,6 +90,13 @@ require_config "$deploy_workflow" 'docker-compose.oss.yml'
 require_config "$deploy_workflow" 'AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}'
 require_config "$deploy_workflow" 'AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}'
 require_config "$deploy_workflow" '- name: Run database migration'
+require_config "$deploy_workflow" '- name: Publish Honor assets to OSS'
+require_config "$deploy_workflow" '--entrypoint ./publish_honor_assets backend'
+require_config "$deploy_workflow" 'https://cdn.leagent.me/honor-assets/v1/users/user-honor-level-01.webp'
+require_config "$deploy_workflow" 'https://cdn.leagent.me/honor-assets/v1/users/user-honor-level-80.webp'
+require_config "$deploy_workflow" 'https://cdn.leagent.me/honor-assets/v1/agents/agent-honor-level-01.webp'
+require_config "$deploy_workflow" 'https://cdn.leagent.me/honor-assets/v1/agents/agent-honor-level-30.webp'
+require_config "$deploy_workflow" 'https://cdn.leagent.me/honor-assets/v1/honor-center-orbit.webp'
 require_config "$deploy_workflow" 'Host-local database identity and protected speech/RTC configuration preflight passed.'
 require_config "$deploy_workflow" '--project-name multica'
 require_config "$deploy_workflow" 'db_user="$(compose_env_value POSTGRES_USER multica)"'
@@ -136,7 +143,7 @@ if [[ -z "$compose_environment_unset_line" || -z "$oss_credential_assert_line" ]
   echo "Aliyun deploy must retain compose_environment until the OSS credential assertion has consumed it."
   exit 1
 fi
-if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 3 ]]; then
+if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 4 ]]; then
   echo "Every Aliyun deploy/verify Compose wrapper must clear ambient POSTGRES_* values."
   exit 1
 fi
@@ -188,15 +195,18 @@ require_config "$deploy_job" 'post-health'
 require_config "$deploy_job" '"ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}"'
 require_config "$deploy_job" '"ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"'
 
+asset_publish_step_line="$(grep -nF -- '- name: Publish Honor assets to OSS' .github/workflows/deploy.yml | cut -d: -f1)"
 migration_step_line="$(grep -nF -- '- name: Run database migration' .github/workflows/deploy.yml | cut -d: -f1)"
 runtime_step_line="$(grep -nF -- '- name: Pull & restart backend + frontend + Caddy' .github/workflows/deploy.yml | cut -d: -f1)"
 caddy_install_line="$(grep -nF -- 'install -m 0644 "${RUNNER_TEMP}/multica-deploy-bundle/deploy/aliyun/Caddyfile"' .github/workflows/deploy.yml | cut -d: -f1)"
 first_runtime_up_line="$(grep -nF -- 'compose up -d frontend' .github/workflows/deploy.yml | cut -d: -f1)"
-if [[ -z "$migration_step_line" || -z "$runtime_step_line" || -z "$caddy_install_line" || -z "$first_runtime_up_line" ]] ||
+if [[ -z "$asset_publish_step_line" || -z "$migration_step_line" || -z "$runtime_step_line" || -z "$caddy_install_line" || -z "$first_runtime_up_line" ]] ||
+  ((asset_publish_step_line >= migration_step_line)) ||
+  ((asset_publish_step_line >= runtime_step_line)) ||
   ((migration_step_line >= runtime_step_line)) ||
   ((migration_step_line >= caddy_install_line)) ||
   ((migration_step_line >= first_runtime_up_line)); then
-  echo "Aliyun database migration must be its own step before Caddy installation and every runtime compose up."
+  echo "Aliyun immutable assets and database migration must complete before Caddy installation and every runtime compose up."
   exit 1
 fi
 

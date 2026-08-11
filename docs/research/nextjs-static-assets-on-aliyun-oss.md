@@ -17,6 +17,7 @@ Do not treat “all static files” as one Next.js switch:
 | `next/image` optimized response | `https://www.leagent.me/_next/image?...` by default | Not a build artifact and not uploadable; it is generated at runtime | Keep on Next.js unless replacing it with a custom image loader/service |
 | Application HTML, RSC/navigation responses, API, WebSocket | Main application/API origins | Do not upload to OSS | Keep behind Caddy/Next.js/backend |
 | Agent preset avatars | Existing faces under `.../agent-avatars/v1/human-01.jpg`; new pool under `.../v2/agent-01.png` | Upload once under versioned, independently managed prefixes; immutable one-year cache | Retain the old Web copies for legacy clients; do not couple persisted DB URLs to a Next build ID |
+| Honor raster catalog | `https://cdn.leagent.me/honor-assets/v1/{users,agents}/...` and `.../honor-center-orbit.webp` | Published from the backend image before rollout; immutable one-year cache | Keep byte-identical files under `public/honor-assets/v1` only as an error fallback for self-host/test/CDN failure; normal requests use OSS |
 
 ## What Next.js officially does
 
@@ -35,6 +36,17 @@ Next.js maps `public/avatars/me.png` to `/avatars/me.png`. These paths remain ma
 Official source: [Next.js `public` folder](https://nextjs.org/docs/app/api-reference/file-conventions/public-folder) and the [v16.2.12 source document](https://github.com/vercel/next.js/blob/v16.2.12/docs/01-app/03-api-reference/03-file-conventions/public-folder.mdx).
 
 Selected public assets can be moved, but their references must change explicitly. Use content-hashed filenames or a release prefix such as `app-public/sha-abc1234/...` before applying a long immutable TTL. Stable public names should use revalidation or a short TTL. In this repository, `/sw.js` must remain same-origin because it registers with scope `/`; moving it to an OSS origin would break the service-worker security model. The favicon/application metadata are also better kept at their canonical same-origin paths.
+
+The honor system is an explicit versioned-product-catalog exception. Its 80
+user-level images, 30 Agent-level images, and honor-center background live in
+`server/internal/honorassets/assets`, are embedded in the deployment publisher,
+and are addressed through `honor-assets/v1`. A byte-identical copy under
+`apps/web/public/honor-assets/v1` prevents a test/self-host deployment or a CDN
+outage from rendering broken badges; the browser switches to it only after the
+CDN request fails. Changing any bytes at an existing public path requires a new
+catalog version; the one-time deploy publisher must upload and byte-verify every
+object before the production frontend is restarted, then can be retired after
+the catalog is verified in OSS.
 
 ### `next/image`
 

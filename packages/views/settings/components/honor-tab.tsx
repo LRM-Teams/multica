@@ -40,9 +40,12 @@ import {
   honorLevelProgress,
   isRareHonorBadge,
 } from "../../honor/honor-progress";
+import {
+  HONOR_HERO_IMAGE_URL,
+  recoverHonorAsset,
+} from "../../honor/honor-assets";
 import { useHonorBadgeCopy } from "../../honor/use-honor-badge-copy";
 import { useT } from "../../i18n";
-import honorHeroImage from "./assets/honor-center-orbit.webp";
 
 const honorKeys = {
   me: ["honor", "me"] as const,
@@ -60,19 +63,6 @@ const honorActionOrder = [
   "member.invite",
   "presence.minute",
 ] as const;
-// Next.js's webpack/turbopack asset loader types a `.webp` import as
-// `StaticImageData` ({ src: string, ... }); Vite (desktop's build) types the
-// same import as a plain `string` URL. `packages/views/assets.d.ts` declares
-// the union for callers that see it, but desktop's tsconfig doesn't include
-// that ambient file, so it type-checks this import as bare `string` and
-// narrows the object branch below to `never`. Go through `unknown` so the
-// cast compiles regardless of which of the two shapes this specific
-// tsconfig actually sees.
-const honorHeroImageSrc =
-  typeof honorHeroImage === "string"
-    ? honorHeroImage
-    : (honorHeroImage as unknown as { src: string }).src;
-
 export function HonorTab() {
   const { t, i18n } = useT("settings");
   const honorBadgeCopy = useHonorBadgeCopy();
@@ -286,9 +276,12 @@ export function HonorTab() {
     <div className="space-y-7 pb-4">
       <section className="honor-dark-surface relative isolate min-h-[340px] overflow-hidden rounded-[1.75rem] border border-cyan-400/20 bg-slate-950 text-white shadow-[0_30px_90px_-50px_rgba(34,211,238,0.7)]">
         <img
-          src={honorHeroImageSrc}
+          src={HONOR_HERO_IMAGE_URL}
           alt=""
           aria-hidden="true"
+          onError={(event) =>
+            recoverHonorAsset(event.currentTarget, "honor-center-orbit.webp")
+          }
           className="absolute inset-0 size-full object-cover object-center opacity-85"
         />
         <div

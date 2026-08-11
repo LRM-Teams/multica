@@ -292,6 +292,61 @@ func TestS3StorageCdnDomainPrefersPublicBaseURL(t *testing.T) {
 	}
 }
 
+func TestS3StorageUploadImmutableSetsVersionedAssetCachePolicy(t *testing.T) {
+	t.Parallel()
+
+	var gotCacheControl string
+	var gotContentType string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %s, want PUT", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		gotCacheControl = r.Header.Get("Cache-Control")
+		gotContentType = r.Header.Get("Content-Type")
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	store := &S3Storage{
+		client: s3.New(s3.Options{
+			Region:       "cn-beijing",
+			Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("AKID", "SECRET", "")),
+			BaseEndpoint: aws.String(srv.URL),
+			UsePathStyle: true,
+			HTTPClient:   srv.Client(),
+		}),
+		bucket:         "test-bucket",
+		region:         "cn-beijing",
+		endpointURL:    srv.URL,
+		forcePathStyle: true,
+		publicBaseURL:  "https://cdn.example.com",
+	}
+
+	gotURL, err := store.UploadImmutable(
+		context.Background(),
+		"honor-assets/v1/users/user-honor-level-01.webp",
+		[]byte("webp"),
+		"image/webp",
+		"user-honor-level-01.webp",
+	)
+	if err != nil {
+		t.Fatalf("UploadImmutable: %v", err)
+	}
+	if gotURL != "https://cdn.example.com/honor-assets/v1/users/user-honor-level-01.webp" {
+		t.Fatalf("URL = %q", gotURL)
+	}
+	if gotCacheControl != "public,max-age=31536000,immutable" {
+		t.Fatalf("Cache-Control = %q", gotCacheControl)
+	}
+	if gotContentType != "image/webp" {
+		t.Fatalf("Content-Type = %q", gotContentType)
+	}
+}
+
 // TestS3StorageVerifyUpload_RecomputesChecksumWhenAWSChecksumMissing guards the
 // OSS / S3-compatible fix: Aliyun OSS does not populate HeadObject
 // ChecksumSHA256 (it uses CRC64), so VerifyUpload must fall back to reading the

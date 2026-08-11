@@ -67,6 +67,7 @@ type RuntimePendingNoticeHandoff func(context.Context, PendingNoticeSnapshot) er
 // Its callers send agent:deliver:ack only after Accept returns successfully.
 type MessageCoordinator struct {
 	mu                sync.Mutex
+	boundaryCommitMu  sync.Mutex
 	root              string
 	boundaries        map[string]int64
 	pending           map[string]map[int64]protocol.AgentMessageProjection
@@ -77,6 +78,7 @@ type MessageCoordinator struct {
 	handoffGeneration uint64
 	activeHandoff     *runtimeMessageHandoffToken
 	boundaryHealthy   bool
+	writeBoundaries   func(string, map[string]int64) error
 	noticeHandoff     RuntimePendingNoticeHandoff
 	noticeCoalesce    time.Duration
 	noticeRetry       time.Duration
@@ -102,6 +104,7 @@ type runtimeMessageHandoffToken struct {
 	messages           []protocol.AgentMessageProjection
 	proposedBoundaries map[string]int64
 	runtimeAccepted    bool
+	commitInProgress   bool
 	activityEmitted    bool
 }
 
@@ -145,6 +148,7 @@ func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, acti
 		accepted: make(map[string]struct{}), handoff: handoff, activity: activity,
 		recovery:        messageRecoveryState{status: messageRecoveryUnknown},
 		boundaryHealthy: healthy,
+		writeBoundaries: writeConsumedSeqs,
 		noticeCoalesce:  pendingNoticeCoalesceWindow,
 		noticeRetry:     pendingNoticeRetryDelay,
 	}, nil
@@ -167,6 +171,8 @@ func (c *MessageCoordinator) ConfigurePendingNotices(handoff RuntimePendingNotic
 // Close stops future Notice attempts. Pending remains rebuildable from the
 // canonical service and is intentionally not persisted during shutdown.
 func (c *MessageCoordinator) Close() {
+	c.boundaryCommitMu.Lock()
+	defer c.boundaryCommitMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
@@ -341,7 +347,7 @@ func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFre
 	if result.LatestSeq > next[target] {
 		next[target] = result.LatestSeq
 	}
-	if err := writeConsumedSeqs(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
+	if err := c.writeBoundaries(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
 		c.boundaryHealthy = false
 		return MessageSendFreshness{}, fmt.Errorf("persist Context Boundary after freshness hold: %w", err)
 	}
@@ -460,7 +466,7 @@ func (c *MessageCoordinator) Check(limit int) (MessageCheckResult, error) {
 			next[message.Target] = message.Seq
 		}
 	}
-	if err := writeConsumedSeqs(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
+	if err := c.writeBoundaries(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
 		c.boundaryHealthy = false
 		return MessageCheckResult{}, fmt.Errorf("persist Context Boundary after message check: %w", err)
 	}
@@ -495,7 +501,7 @@ func (c *MessageCoordinator) MarkRead(target string, throughSeq int64) error {
 	next := cloneBoundaries(c.boundaries)
 	if throughSeq > next[target] {
 		next[target] = throughSeq
-		if err := writeConsumedSeqs(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
+		if err := c.writeBoundaries(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
 			c.boundaryHealthy = false
 			return fmt.Errorf("persist Context Boundary after message read: %w", err)
 		}
@@ -557,30 +563,15 @@ func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNo
 			c.mu.Unlock()
 			return handedOff, errRuntimeMessageHandoffInvalidated
 		}
-		if !token.activityEmitted && c.activity != nil {
-			c.activity(token.messages)
-			token.activityEmitted = true
-		}
-		if err := writeConsumedSeqs(filepath.Join(c.root, consumedSeqsFileName), token.proposedBoundaries); err != nil {
-			// Keep the accepted in-memory token so a same-process retry persists
-			// the boundary without handing the concrete bodies to the runtime twice.
-			// A process crash may conservatively replay because bodies are forbidden
-			// from durable local state; it may never skip them.
-			c.boundaryHealthy = false
+		if token.commitInProgress {
 			c.mu.Unlock()
-			return handedOff, fmt.Errorf("persist Context Boundary after runtime handoff: %w", err)
+			return handedOff, errRuntimeMessageHandoffInProgress
 		}
-		c.boundaries = token.proposedBoundaries
-		c.boundaryHealthy = true
-		for _, message := range token.messages {
-			delete(c.pending[message.Target], message.Seq)
-			delete(c.accepted, messageIdentityKey(message))
-			if len(c.pending[message.Target]) == 0 {
-				delete(c.pending, message.Target)
-			}
-		}
-		c.activeHandoff = nil
+		token.commitInProgress = true
 		c.mu.Unlock()
+		if err := c.commitRuntimeMessageHandoff(token); err != nil {
+			return handedOff, err
+		}
 	}
 }
 
@@ -597,7 +588,7 @@ func (c *MessageCoordinator) reserveRuntimeMessageHandoff() (*runtimeMessageHand
 		return nil, false, errors.New("Message freshness is unknown until recovery completes")
 	}
 	if c.activeHandoff != nil {
-		if c.activeHandoff.runtimeAccepted {
+		if c.activeHandoff.runtimeAccepted && !c.activeHandoff.commitInProgress {
 			return c.activeHandoff, false, nil
 		}
 		return nil, false, errRuntimeMessageHandoffInProgress
@@ -640,6 +631,78 @@ func (c *MessageCoordinator) runtimeMessageHandoffContentsCurrentLocked(token *r
 		}
 	}
 	return true
+}
+
+// commitRuntimeMessageHandoff serializes native-acceptance commits without
+// holding the main coordinator mutex across Activity or filesystem I/O. Close
+// takes the same commit mutex, so no stale writer can outlive replacement.
+func (c *MessageCoordinator) commitRuntimeMessageHandoff(token *runtimeMessageHandoffToken) error {
+	c.mu.Lock()
+	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || !token.runtimeAccepted || !token.commitInProgress || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
+		if c.runtimeMessageHandoffCurrentLocked(token) {
+			token.commitInProgress = false
+			c.activeHandoff = nil
+		}
+		c.mu.Unlock()
+		return errRuntimeMessageHandoffInvalidated
+	}
+	activity := c.activity
+	emitActivity := activity != nil && !token.activityEmitted
+	if emitActivity {
+		token.activityEmitted = true
+	}
+	messages := append([]protocol.AgentMessageProjection(nil), token.messages...)
+	proposedBoundaries := cloneBoundaries(token.proposedBoundaries)
+	boundaryPath := filepath.Join(c.root, consumedSeqsFileName)
+	c.mu.Unlock()
+
+	if emitActivity {
+		activity(messages)
+	}
+
+	c.boundaryCommitMu.Lock()
+	defer c.boundaryCommitMu.Unlock()
+	c.mu.Lock()
+	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || !token.commitInProgress || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
+		if c.runtimeMessageHandoffCurrentLocked(token) {
+			token.commitInProgress = false
+			c.activeHandoff = nil
+		}
+		c.mu.Unlock()
+		return errRuntimeMessageHandoffInvalidated
+	}
+	c.mu.Unlock()
+
+	writeErr := c.writeBoundaries(boundaryPath, proposedBoundaries)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || !token.commitInProgress || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
+		if c.runtimeMessageHandoffCurrentLocked(token) {
+			token.commitInProgress = false
+			c.activeHandoff = nil
+		}
+		return errRuntimeMessageHandoffInvalidated
+	}
+	token.commitInProgress = false
+	if writeErr != nil {
+		// The native Runtime already accepted this exact token. Keep it as an
+		// in-process coverage receipt so retry performs only the durable commit.
+		// Restart may conservatively replay because the file proves no coverage.
+		c.boundaryHealthy = false
+		return fmt.Errorf("persist Context Boundary after runtime handoff: %w", writeErr)
+	}
+	c.boundaries = proposedBoundaries
+	c.boundaryHealthy = true
+	for _, message := range token.messages {
+		delete(c.pending[message.Target], message.Seq)
+		delete(c.accepted, messageIdentityKey(message))
+		if len(c.pending[message.Target]) == 0 {
+			delete(c.pending, message.Target)
+		}
+	}
+	c.activeHandoff = nil
+	return nil
 }
 
 func (c *MessageCoordinator) schedulePendingNoticeLocked(delay time.Duration) {

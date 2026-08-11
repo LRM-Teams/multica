@@ -1054,6 +1054,194 @@ func TestMessageCoordinatorConcurrentFlushCannotReserveActiveBatch(t *testing.T)
 	}
 }
 
+func TestMessageCoordinatorBlockedBoundaryCommitDoesNotBlockNewDelivery(t *testing.T) {
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	commitStarted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	var (
+		writeMu        sync.Mutex
+		writeCalls     int
+		writeSnapshots []map[string]int64
+		startOnce      sync.Once
+		releaseOnce    sync.Once
+	)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseCommit) }) })
+	originalWriter := coordinator.writeBoundaries
+	coordinator.writeBoundaries = func(path string, boundaries map[string]int64) error {
+		writeMu.Lock()
+		writeCalls++
+		callNumber := writeCalls
+		writeSnapshots = append(writeSnapshots, cloneBoundaries(boundaries))
+		writeMu.Unlock()
+		if callNumber == 1 {
+			startOnce.Do(func() { close(commitStarted) })
+			<-releaseCommit
+		}
+		return originalWriter(path, boundaries)
+	}
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- coordinator.Flush(context.Background()) }()
+	select {
+	case <-commitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("boundary commit did not start")
+	}
+
+	acceptDone := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel-1", 2, "delivery-2"))
+		acceptDone <- err
+	}()
+	select {
+	case err := <-acceptDone:
+		if err != nil {
+			t.Fatalf("Accept during boundary commit: %v", err)
+		}
+	case <-time.After(time.Second):
+		releaseOnce.Do(func() { close(releaseCommit) })
+		<-flushDone
+		t.Fatal("boundary filesystem I/O held the coordinator state lock")
+	}
+	releaseOnce.Do(func() { close(releaseCommit) })
+	if err := <-flushDone; err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := coordinator.Boundaries()["channel-1"]; got != 2 {
+		t.Fatalf("boundary after serialized commits = %d, want 2", got)
+	}
+	writeMu.Lock()
+	gotSnapshots := append([]map[string]int64(nil), writeSnapshots...)
+	writeMu.Unlock()
+	if want := []map[string]int64{{"channel-1": 1}, {"channel-1": 2}}; !reflect.DeepEqual(gotSnapshots, want) {
+		t.Fatalf("serialized boundary snapshots = %v, want %v", gotSnapshots, want)
+	}
+}
+
+func TestMessageCoordinatorBlockedActivityDoesNotBlockNewDelivery(t *testing.T) {
+	activityStarted := make(chan struct{})
+	releaseActivity := make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseActivity) }) })
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, func([]protocol.AgentMessageProjection) {
+		startOnce.Do(func() { close(activityStarted) })
+		<-releaseActivity
+	})
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- coordinator.Flush(context.Background()) }()
+	select {
+	case <-activityStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Message received Activity did not start")
+	}
+	acceptDone := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel-1", 2, "delivery-2"))
+		acceptDone <- err
+	}()
+	select {
+	case err := <-acceptDone:
+		if err != nil {
+			t.Fatalf("Accept during Activity: %v", err)
+		}
+	case <-time.After(time.Second):
+		releaseOnce.Do(func() { close(releaseActivity) })
+		<-flushDone
+		t.Fatal("Activity callback held the coordinator state lock")
+	}
+	releaseOnce.Do(func() { close(releaseActivity) })
+	if err := <-flushDone; err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+}
+
+func TestMessageCoordinatorCloseInvalidatesAcceptedTokenBeforeBoundaryWrite(t *testing.T) {
+	activityStarted := make(chan struct{})
+	releaseActivity := make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseActivity) }) })
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, func([]protocol.AgentMessageProjection) {
+		startOnce.Do(func() { close(activityStarted) })
+		<-releaseActivity
+	})
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	writeCalls := 0
+	coordinator.writeBoundaries = func(string, map[string]int64) error {
+		writeCalls++
+		return nil
+	}
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- coordinator.Flush(context.Background()) }()
+	select {
+	case <-activityStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Message received Activity did not start")
+	}
+	closeDone := make(chan struct{})
+	go func() {
+		coordinator.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		releaseOnce.Do(func() { close(releaseActivity) })
+		t.Fatal("Close waited for non-state Activity callback")
+	}
+	releaseOnce.Do(func() { close(releaseActivity) })
+	if err := <-flushDone; !errors.Is(err, errRuntimeMessageHandoffInvalidated) {
+		t.Fatalf("Flush after Close = %v, want invalidated token", err)
+	}
+	if writeCalls != 0 {
+		t.Fatalf("stale accepted token performed %d boundary writes", writeCalls)
+	}
+	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
+		t.Fatalf("stale accepted token advanced boundary to %d", got)
+	}
+}
+
+func TestMessageCoordinatorCommitAdvancesExactTargetMaxima(t *testing.T) {
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	for _, delivery := range []protocol.AgentDeliverPayload{
+		testDelivery("message-a2", "channel:a", 2, "delivery-a2"),
+		testDelivery("message-a4", "channel:a", 4, "delivery-a4"),
+		testDelivery("message-b3", "channel:b", 3, "delivery-b3"),
+	} {
+		if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+			t.Fatalf("Accept %s: %v", delivery.Message.ID, err)
+		}
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got, want := coordinator.Boundaries(), map[string]int64{"channel:a": 4, "channel:b": 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("committed boundaries = %v, want %v", got, want)
+	}
+}
+
 func TestMessageCoordinatorDeduplicatesDeliveryWithoutSecondHandoffOrActivity(t *testing.T) {
 	var handoffs, activities int
 	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, func([]protocol.AgentMessageProjection) { activities++ })

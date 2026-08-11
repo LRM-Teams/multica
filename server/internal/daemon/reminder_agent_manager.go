@@ -1,69 +1,23 @@
 package daemon
 
 import (
-	"encoding/json"
-	"errors"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
-	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
-
-const reminderAgentStateFile = "reminder_agents.json"
-
-type reminderAgentState struct {
-	Agents                  []reminderAgentResidency `json:"agents"`
-	RemovedAgentIDs         []string                 `json:"removed_agent_ids,omitempty"`
-	PlacementHighWatermarks map[string]int64         `json:"placement_high_watermarks,omitempty"`
-	RuntimeLifecycleCursors map[string]int64         `json:"runtime_lifecycle_cursors,omitempty"`
-}
-
-type reminderAgentResidency struct {
-	AgentID             string `json:"agent_id"`
-	RuntimeID           string `json:"runtime_id"`
-	WorkspaceID         string `json:"workspace_id"`
-	PlacementGeneration int64  `json:"placement_generation"`
-	Running             int    `json:"-"`
-}
 
 // reminderAgentManager is the daemon-local source of running and idle Agents
 // used for Reminder reconnect snapshots. It deliberately does not accept an
 // owner inventory from the server. Agents become resident when this daemon
 // executes them and remain idle residents across process restarts.
 type reminderAgentManager struct {
-	mu                      sync.Mutex
-	agents                  map[string]reminderAgentResidency
-	placementHighWatermarks map[string]int64
-	runtimeLifecycleCursors map[string]int64
-	root                    string
-	path                    string
-	logger                  *slog.Logger
-	writeState              func(string, []byte) error
+	*localAgentAttachmentRegistry
 }
 
 func newReminderAgentManager(workspacesRoot string, logger *slog.Logger) *reminderAgentManager {
-	m := &reminderAgentManager{
-		agents:                  make(map[string]reminderAgentResidency),
-		placementHighWatermarks: make(map[string]int64),
-		runtimeLifecycleCursors: make(map[string]int64),
-		root:                    strings.TrimSpace(workspacesRoot),
-		logger:                  logger,
-		writeState:              writeReminderAgentState,
-	}
-	if m.root != "" {
-		m.path = filepath.Join(m.root, ".daemon", reminderAgentStateFile)
-		m.load()
-		m.bootstrapFromLocalAgentConfigs()
-		if err := m.persistLocked(); err != nil && m.logger != nil {
-			m.logger.Warn("persist reminder agent residency failed", "error", err)
-		}
-	}
-	return m
+	return &reminderAgentManager{localAgentAttachmentRegistry: newLocalAgentAttachmentRegistry(workspacesRoot, logger)}
 }
 
 func (m *reminderAgentManager) markRunning(agentID, runtimeID, workspaceID string) bool {
@@ -336,160 +290,4 @@ func (m *reminderAgentManager) advanceLifecycleCursors(cursors map[string]int64)
 	}
 	m.mu.Unlock()
 	return err
-}
-
-func (m *reminderAgentManager) load() {
-	raw, err := os.ReadFile(m.path)
-	if err != nil {
-		if !os.IsNotExist(err) && m.logger != nil {
-			m.logger.Warn("load reminder agent residency failed", "error", err)
-		}
-		return
-	}
-	var state reminderAgentState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		if m.logger != nil {
-			m.logger.Warn("decode reminder agent residency failed", "error", err)
-		}
-		return
-	}
-	for _, entry := range state.Agents {
-		if entry.AgentID == "" {
-			continue
-		}
-		entry.Running = 0
-		m.agents[entry.AgentID] = entry
-	}
-	for _, agentID := range state.RemovedAgentIDs {
-		if agentID != "" {
-			m.placementHighWatermarks[agentID] = 1
-		}
-	}
-	for agentID, generation := range state.PlacementHighWatermarks {
-		if agentID != "" && generation > m.placementHighWatermarks[agentID] {
-			m.placementHighWatermarks[agentID] = generation
-		}
-	}
-	for runtimeID, seq := range state.RuntimeLifecycleCursors {
-		if runtimeID != "" && seq > 0 {
-			m.runtimeLifecycleCursors[runtimeID] = seq
-		}
-	}
-}
-
-// bootstrapFromLocalAgentConfigs upgrades an existing daemon without waiting
-// for another task to execute. A durable agent credential is daemon-local
-// recoverable config and contains the exact workspace/runtime/agent binding
-// that produced the local Agent home. Removed owners are tombstoned so stale
-// config directories cannot resurrect them after archive or runtime migration.
-func (m *reminderAgentManager) bootstrapFromLocalAgentConfigs() {
-	if m == nil || m.root == "" {
-		return
-	}
-	workspaces, err := os.ReadDir(m.root)
-	if err != nil {
-		if !os.IsNotExist(err) && m.logger != nil {
-			m.logger.Warn("scan reminder agent configs failed", "error", err)
-		}
-		return
-	}
-	for _, workspace := range workspaces {
-		if !workspace.IsDir() || !isCanonicalUUIDDirName(workspace.Name()) {
-			continue
-		}
-		agentsRoot := agentworkspace.AgentsDir(m.root, workspace.Name())
-		agents, readErr := os.ReadDir(agentsRoot)
-		if readErr != nil {
-			continue
-		}
-		for _, agentDir := range agents {
-			if !agentDir.IsDir() {
-				continue
-			}
-			configPath := filepath.Join(agentworkspace.Root(m.root, workspace.Name(), agentDir.Name()), "runtime", "credentials", "current.json")
-			raw, readErr := os.ReadFile(configPath)
-			if readErr != nil {
-				continue
-			}
-			var config cachedAgentCredential
-			if json.Unmarshal(raw, &config) != nil || config.AgentID == "" || config.AgentID != agentDir.Name() || config.WorkspaceID != workspace.Name() {
-				continue
-			}
-			if m.placementHighWatermarks[config.AgentID] > 0 {
-				continue
-			}
-			if _, exists := m.agents[config.AgentID]; exists {
-				continue
-			}
-			m.agents[config.AgentID] = reminderAgentResidency{
-				AgentID:     config.AgentID,
-				RuntimeID:   config.RuntimeID,
-				WorkspaceID: config.WorkspaceID,
-			}
-		}
-	}
-}
-
-func (m *reminderAgentManager) persistLocked() error {
-	if m.path == "" {
-		return nil
-	}
-	entries := make([]reminderAgentResidency, 0, len(m.agents))
-	for _, entry := range m.agents {
-		entry.Running = 0
-		entries = append(entries, entry)
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].AgentID < entries[j].AgentID })
-	highWatermarks := make(map[string]int64, len(m.placementHighWatermarks))
-	for agentID, generation := range m.placementHighWatermarks {
-		highWatermarks[agentID] = generation
-	}
-	cursors := make(map[string]int64, len(m.runtimeLifecycleCursors))
-	for runtimeID, seq := range m.runtimeLifecycleCursors {
-		cursors[runtimeID] = seq
-	}
-	raw, err := json.Marshal(reminderAgentState{Agents: entries, PlacementHighWatermarks: highWatermarks, RuntimeLifecycleCursors: cursors})
-	if err != nil {
-		return err
-	}
-	if m.writeState == nil {
-		return errors.New("reminder agent state writer is not configured")
-	}
-	return m.writeState(m.path, raw)
-}
-
-func writeReminderAgentState(path string, raw []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	// Unique temp name: a fixed path+".tmp" races when two daemon processes
-	// (crash-loop / overlapping supervise restarts) write the same state file.
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(raw); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
 }

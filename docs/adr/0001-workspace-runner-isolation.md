@@ -6,3 +6,11 @@ to that binding; it is not the Workspace's global execution owner, so the same
 Workspace may run through bindings on multiple machines. This preserves
 multi-machine execution and Agent migration while making credentials, inbox
 state, crashes, and restarts independently containable per binding.
+
+The Runner is a state-owning object whose immutable identity is the stable
+Daemon, current daemon process instance, and Workspace. Runtime membership is
+mutable input and is never part of Runner identity. Each Runner owns its local
+Process Manager, Activity producer, and Workspace-scoped Inbox registry state.
+Machine-wide Agent Attachment, Runtime capacity, Credential Proxy, and
+diagnostic registries are injected references; constructing a Runner must not
+copy those owners or create another global singleton.

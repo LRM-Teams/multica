@@ -398,6 +398,130 @@ func TestResearchArtifactReciprocalGuards320RoundTrips(t *testing.T) {
 	}
 }
 
+func TestResearchArtifactAppendOnlyCascadeGuards335RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_cascade_335_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	taskID := "30000000-0000-4000-8000-000000000001"
+	attemptID := "40000000-0000-4000-8000-000000000001"
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_session (id, workspace_id) VALUES ($1::uuid, $2::uuid)
+	`, sessionID, workspaceID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		ALTER TABLE research_task_attempt
+		  ADD CONSTRAINT research_task_attempt_session_cascade_test_fkey
+		  FOREIGN KEY (session_id) REFERENCES research_session(id) ON DELETE CASCADE
+	`); err != nil {
+		t.Fatalf("add producer session cascade: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid)
+	`, taskID, workspaceID, sessionID); err != nil {
+		t.Fatalf("seed producer task: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task_attempt (id, workspace_id, session_id, task_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid)
+	`, attemptID, workspaceID, sessionID, taskID); err != nil {
+		t.Fatalf("seed producer attempt: %v", err)
+	}
+
+	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
+	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
+	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
+	up335, down335 := readMigrationPair(t, "335_research_artifact_append_only_cascade_guards")
+	for _, upSQL := range []string{up318, up319, up320, up335} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+	var manifestCascade bool
+	if err = conn.QueryRow(ctx, `
+		SELECT confdeltype = 'c'
+		FROM pg_constraint
+		WHERE conrelid = 'research_artifact_input_reference'::regclass
+		  AND conname = 'research_artifact_input_reference_manifest_fkey'
+	`).Scan(&manifestCascade); err != nil || !manifestCascade {
+		t.Fatalf("manifest input-reference cascade=%v err=%v", manifestCascade, err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_artifact_version (
+		  workspace_id, session_id, artifact_id, version, schema_name, schema_version,
+		  canonicalization_version, content_hash, access_level, hash_origin,
+		  produced_by_task_id, produced_by_attempt_id
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 2, 'attempt', 'legacy-v1',
+		  'research-artifact-c14n-v1', $4, 'raw', 'production', $5::uuid, $3::uuid
+		)
+	`, workspaceID, sessionID, attemptID,
+		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskID); err != nil {
+		t.Fatalf("seed produced artifact version: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET current_version = 2
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, attemptID); err != nil {
+		t.Fatalf("advance produced artifact version: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `DELETE FROM research_artifact_version WHERE session_id = $1::uuid`, sessionID); err == nil {
+		t.Fatal("expected direct version delete to remain rejected")
+	}
+	directDeleteTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin direct producer delete: %v", err)
+	}
+	if _, err = directDeleteTx.Exec(ctx, `DELETE FROM research_task_attempt WHERE id = $1::uuid`, attemptID); err != nil {
+		_ = directDeleteTx.Rollback(ctx)
+	} else if err = directDeleteTx.Commit(ctx); err == nil {
+		t.Fatal("expected direct producer delete to remain rejected")
+	}
+	if _, err = conn.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, workspaceID); err != nil {
+		t.Fatalf("workspace cascade delete: %v", err)
+	}
+	var remainingVersions int
+	if err = conn.QueryRow(ctx, `SELECT count(*)::int FROM research_artifact_version`).Scan(&remainingVersions); err != nil || remainingVersions != 0 {
+		t.Fatalf("versions after cascade=%d err=%v", remainingVersions, err)
+	}
+
+	if _, err = conn.Exec(ctx, down335); err != nil {
+		t.Fatalf("apply 335 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up335); err != nil {
+		t.Fatalf("reapply 335 up: %v", err)
+	}
+}
+
 func TestResearchArtifactPolicyCouplingGuards321RoundTrips(t *testing.T) {
 	pool := openTestPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -1911,5 +2035,56 @@ func TestResearchDispatchManifestBinding330RoundTrips(t *testing.T) {
 	}
 	if _, err = conn.Exec(ctx, up330); err != nil {
 		t.Fatalf("reapply 330 up: %v", err)
+	}
+}
+
+func TestResearchArtifactManifestOmissionReasons333RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_d333_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		CREATE FUNCTION research_artifact_context_omission_reason_allowed(reason TEXT)
+		RETURNS BOOLEAN LANGUAGE sql IMMUTABLE AS $$
+		  SELECT reason IN ('access_denied', 'stale', 'superseded', 'duplicate', 'token_budget', 'irrelevant');
+		$$
+	`); err != nil {
+		t.Fatalf("create legacy omission reason function: %v", err)
+	}
+
+	up333, down333 := readMigrationPair(t, "333_research_artifact_omission_reasons")
+	if _, err = conn.Exec(ctx, up333); err != nil {
+		t.Fatalf("apply 333 up: %v", err)
+	}
+	var allowed bool
+	if err = conn.QueryRow(ctx, `SELECT research_artifact_context_omission_reason_allowed('evaluation_compartment')`).Scan(&allowed); err != nil || !allowed {
+		t.Fatalf("evaluation_compartment allowed=%v err=%v", allowed, err)
+	}
+	if err = conn.QueryRow(ctx, `SELECT research_artifact_context_omission_reason_allowed('lifecycle')`).Scan(&allowed); err != nil || !allowed {
+		t.Fatalf("lifecycle allowed=%v err=%v", allowed, err)
+	}
+	if _, err = conn.Exec(ctx, down333); err != nil {
+		t.Fatalf("apply 333 down: %v", err)
+	}
+	if err = conn.QueryRow(ctx, `SELECT research_artifact_context_omission_reason_allowed('evaluation_compartment')`).Scan(&allowed); err != nil || allowed {
+		t.Fatalf("evaluation_compartment allowed after down=%v err=%v", allowed, err)
 	}
 }

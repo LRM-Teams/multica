@@ -168,7 +168,7 @@ const node: ResearchGraphNode & {
   },
   created_at: "2026-07-06T09:00:00Z",
   updated_at: "2026-07-06T09:00:00Z",
-};
+} as ResearchGraphNode;
 
 const sources: ResearchSource[] = [
   {
@@ -350,7 +350,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
           result: "Pricing evidence now has independent corroboration.",
         },
       },
-    };
+    } as ResearchGraphNode;
     const run = {
       tasks: [
         {

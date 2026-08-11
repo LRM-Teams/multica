@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { TypedGraphResponse } from "@multica/core/research";
+import {
+  TypedGraphResponseSchema,
+  type TypedGraphResponse,
+} from "@multica/core/research";
 import { buildD5SessionCanvasModel } from "./build-d5-session-canvas";
 import { testTypedNode } from "./test-typed-graph-node";
 import { extractLayoutResultFromViewModel } from "../star-graph/lib/star-canvas-view-model";
@@ -13,8 +16,8 @@ const emptyLineage = {
   supersedes: {},
 };
 
-function fixture(extraNodes: TypedGraphResponse["nodes"] = []): TypedGraphResponse {
-  return {
+function fixture(extraNodes: Record<string, unknown>[] = []): TypedGraphResponse {
+  return TypedGraphResponseSchema.parse({
     session_id: "s1",
     graph_version: 1,
     nodes: [
@@ -41,7 +44,7 @@ function fixture(extraNodes: TypedGraphResponse["nodes"] = []): TypedGraphRespon
     edges: [{ id: "e1", from_node_id: "goal", to_node_id: "stable", edge_type: "leads_to" }],
     clusters: [{ id: "cluster-a", label: "Theme A", cluster_type: "topic" }],
     lineage: emptyLineage,
-  } as unknown as TypedGraphResponse;
+  });
 }
 
 describe("buildD5SessionCanvasModel", () => {

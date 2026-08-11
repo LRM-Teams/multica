@@ -120,7 +120,11 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-instance-1"
-	installTestRunnerActivity(t, d, "workspace-1", producer)
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
+	runner.processes.newID = func() string { return "launch-a" }
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"}); err != nil {
+		t.Fatal(err)
+	}
 
 	d.observeMessageSendHold("agent-a", "workspace-1", "#general", 3, "server_race")
 	if len(sent) != 1 {

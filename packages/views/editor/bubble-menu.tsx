@@ -40,6 +40,7 @@ import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
 import { modKey } from "@multica/core/platform";
 import { NoteAIDiffPreview } from "./note-ai-diff";
+import { captureNoteAIApplyDiagnostic } from "./utils/note-ai-apply-diagnostics";
 import {
   captureNoteAIUndoSnapshot,
   setEditorMarkdown,
@@ -621,12 +622,14 @@ function TextOptimizationReview({
   const { result } = state;
   const finishApply = (snapshot: ReturnType<typeof captureNoteAIUndoSnapshot>) => {
     if (result.title) onApplyTitle?.(result.title);
+    captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "applied", result });
     showNoteAIApplyUndoToast({
       editor,
       snapshot,
       onApplyTitle,
       message: t(($) => $.bubble_menu.optimize.applied),
       undoLabel: t(($) => $.bubble_menu.optimize.undo),
+      onUndo: () => captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "undo_clicked", result }),
     });
     onClose();
   };
@@ -635,6 +638,7 @@ function TextOptimizationReview({
     try {
       replaceEditorRangeWithMarkdown(editor, state.from, state.to, result.markdown);
     } catch {
+      captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
       return;
     }
@@ -645,6 +649,7 @@ function TextOptimizationReview({
     try {
       replaceEditorRangeWithMarkdown(editor, state.to, state.to, `\n\n${result.markdown}`);
     } catch {
+      captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
       return;
     }
@@ -655,6 +660,7 @@ function TextOptimizationReview({
     try {
       setEditorMarkdown(editor, result.markdown);
     } catch {
+      captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
       return;
     }
@@ -664,12 +670,14 @@ function TextOptimizationReview({
     const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     const patched = patchedDocumentMarkdown(snapshot.markdown, result);
     if (!patched) {
+      captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "patch_target_missing", result });
       showErrorToast(t(($) => $.bubble_menu.optimize.patch_target_missing));
       return;
     }
     try {
       setEditorMarkdown(editor, patched);
     } catch {
+      captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
       return;
     }

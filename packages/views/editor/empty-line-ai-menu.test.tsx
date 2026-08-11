@@ -6,6 +6,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { EmptyLineAiMenu, type EmptyLineAiState } from "./empty-line-ai-menu";
 
 const toastSuccessMock = vi.hoisted(() => vi.fn());
+const captureEventMock = vi.hoisted(() => vi.fn());
 const mockInsertContentAt = vi.fn((_pos: number, _content: string) => undefined);
 const mockRun = vi.fn();
 
@@ -53,6 +54,10 @@ vi.mock("sonner", () => ({
   toast: {
     success: toastSuccessMock,
   },
+}));
+
+vi.mock("@multica/core/analytics", () => ({
+  captureEvent: captureEventMock,
 }));
 
 vi.mock("@floating-ui/dom", () => ({
@@ -110,6 +115,7 @@ vi.mock("../i18n", () => ({
 describe("EmptyLineAiMenu dismiss interactions", () => {
   beforeEach(() => {
     toastSuccessMock.mockClear();
+    captureEventMock.mockClear();
     mockInsertContentAt.mockClear();
     mockRun.mockClear();
   });
@@ -226,6 +232,14 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Replace" }));
     expect(editor.commands.setContent).toHaveBeenCalledWith("# Revised page");
     expect(onApplyTitle).toHaveBeenCalledWith("Revised title");
+    expect(captureEventMock).toHaveBeenCalledWith("note_ai_edit_apply_result", {
+      surface: "page",
+      outcome: "applied",
+      action: "replace_page",
+      title_suggested: true,
+      has_patch_target: false,
+      markdown_length: "# Revised page".length,
+    });
     expect(toastSuccessMock).toHaveBeenCalledWith(
       "AI edit applied",
       expect.objectContaining({
@@ -265,6 +279,11 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
     expect(editor.commands.setContent).toHaveBeenNthCalledWith(2, "Old paragraph\n\nKeep this");
     expect(onApplyTitle).toHaveBeenNthCalledWith(1, "Revised title");
     expect(onApplyTitle).toHaveBeenNthCalledWith(2, "Old title");
+    expect(captureEventMock).toHaveBeenLastCalledWith("note_ai_edit_apply_result", expect.objectContaining({
+      surface: "page",
+      outcome: "undo_clicked",
+      action: "replace_page",
+    }));
   });
 
   it("applies structured patch by replacing only the target fragment", () => {

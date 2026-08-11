@@ -181,6 +181,7 @@ type DaemonRegisterRequest struct {
 	// and tasks keep working without manual intervention.
 	LegacyDaemonIDs                  []string                          `json:"legacy_daemon_ids"`
 	DeviceName                       string                            `json:"device_name"`
+	OS                               string                            `json:"os"`
 	CLIVersion                       string                            `json:"cli_version"` // multica CLI version
 	LaunchedBy                       string                            `json:"launched_by"` // "desktop" when spawned by the Electron app
 	Capabilities                     []string                          `json:"capabilities"`
@@ -412,6 +413,9 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		// API can expose it without re-parsing the glued device_info string.
 		if req.DeviceName != "" {
 			metadataMap["device_name"] = req.DeviceName
+		}
+		if osName := strings.ToLower(strings.TrimSpace(req.OS)); osName != "" {
+			metadataMap["os"] = osName
 		}
 		// sandbox_instance_id is forwarded only by daemon-enabled env-dispatch
 		// sandboxes; recording it on the runtime row lets env-dispatch discover

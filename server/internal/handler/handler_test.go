@@ -358,13 +358,25 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 }
 
 func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
+	// research_artifact_policy_mutation / lifecycle_event are append-only
+	// (BEFORE DELETE guards from migration 318). Workspace cascade would hit
+	// those triggers and fail suite teardown after any research fixture ran.
+	// session_replication_role=replica disables user triggers for this tx only.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, handlerTestEmail); err != nil {
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		return err
 	}
-	return nil
+	if _, err := tx.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, handlerTestEmail); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func newRequest(method, path string, body any) *http.Request {

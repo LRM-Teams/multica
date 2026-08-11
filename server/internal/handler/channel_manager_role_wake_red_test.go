@@ -195,8 +195,43 @@ func roleChangeWakeCount(
 	return count, minPriority, maxPriority
 }
 
+func seedOrdinaryRoleContractReminder(t *testing.T, channelID, agentID string) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent_reminder (
+			id, workspace_id, agent_id, initiator_user_id, title,
+			anchor_channel_id, fire_at
+		) VALUES ($1, $2, $3, $4, 'ordinary role contract reminder', $5, now() + interval '2 hours')`,
+		id, testWorkspaceID, agentID, testUserID, channelID,
+	); err != nil {
+		t.Fatalf("seed ordinary Reminder: %v", err)
+	}
+	return id
+}
+
+func ordinaryRoleContractReminderSnapshot(t *testing.T, reminderID string) string {
+	t.Helper()
+	var snapshot string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT jsonb_build_object(
+			'id', id::text,
+			'status', status,
+			'version', version,
+			'title', title,
+			'fire_at', fire_at
+		)::text
+		FROM agent_reminder
+		WHERE id = $1`, reminderID).Scan(&snapshot); err != nil {
+		t.Fatalf("snapshot ordinary Reminder: %v", err)
+	}
+	return snapshot
+}
+
 func TestAgentManagerRoleTransitionWritesCanonicalEventAndDirectedWake(t *testing.T) {
 	fixture := newRoleWakeFixture(t)
+	reminderID := seedOrdinaryRoleContractReminder(t, fixture.channel.ID, fixture.agentA)
+	reminderBefore := ordinaryRoleContractReminderSnapshot(t, reminderID)
 	if testHandler.TaskService == nil {
 		t.Skip("task service not configured")
 	}
@@ -267,6 +302,80 @@ func TestAgentManagerRoleTransitionWritesCanonicalEventAndDirectedWake(t *testin
 		},
 	) {
 		t.Fatalf("ordered role transitions=%+v want member→manager then manager→member", got)
+	}
+	if reminderAfter := ordinaryRoleContractReminderSnapshot(t, reminderID); reminderAfter != reminderBefore {
+		t.Fatalf("role transition mutated ordinary Reminder\nbefore=%s\nafter=%s", reminderBefore, reminderAfter)
+	}
+	var reminderCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2`,
+		testWorkspaceID, fixture.agentA,
+	).Scan(&reminderCount); err != nil {
+		t.Fatalf("count role-contract Reminders: %v", err)
+	}
+	if reminderCount != 1 {
+		t.Fatalf("role transition manufactured Reminder rows: got=%d want=1", reminderCount)
+	}
+}
+
+func TestReminderWakeRacingManagerRemovalUsesCurrentRole(t *testing.T) {
+	fixture := newRoleWakeFixture(t)
+	patchChannelMemberRole(t, fixture.channel.ID, "agent", fixture.agentA, "manager")
+
+	var eventID pgtype.UUID
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT id
+		FROM agent_inbox_event
+		WHERE workspace_id = $1 AND channel_id = $2 AND agent_id = $3 AND reason = $4
+		ORDER BY created_at, id
+		LIMIT 1`,
+		testWorkspaceID, fixture.channel.ID, fixture.agentA, channelRoleChangedWakeContractReason,
+	).Scan(&eventID); err != nil {
+		t.Fatalf("load role wake fixture: %v", err)
+	}
+	event, err := testHandler.Queries.GetAgentInboxEvent(context.Background(), eventID)
+	if err != nil {
+		t.Fatalf("get role wake fixture: %v", err)
+	}
+	contextJSON, err := json.Marshal(channelWakeContext{
+		Type: channelWakeContextType, Prompt: "ordinary Reminder due",
+		ChannelID: fixture.channel.ID,
+	})
+	if err != nil {
+		t.Fatalf("marshal Reminder wake context: %v", err)
+	}
+	event.Reason = "reminder"
+	event.Context = contextJSON
+	event.TriggerSummary = pgtype.Text{String: "ordinary Reminder due", Valid: true}
+
+	agentRow, err := testHandler.Queries.GetAgent(context.Background(), parseUUID(fixture.agentA))
+	if err != nil {
+		t.Fatalf("load Reminder owner: %v", err)
+	}
+	runtime, err := testHandler.Queries.GetAgentRuntime(context.Background(), agentRow.RuntimeID)
+	if err != nil {
+		t.Fatalf("load Reminder owner runtime: %v", err)
+	}
+	runtime.OwnerID = pgtype.UUID{}
+
+	// The Reminder was queued while the role existed, then removal committed
+	// before claim. Claim must rebuild authority from the durable roster.
+	patchChannelMemberRole(t, fixture.channel.ID, "agent", fixture.agentA, "member")
+	task := testHandler.agentInboxTaskResponse(
+		context.Background(),
+		runtime,
+		event,
+		db.AgentEventDelivery{
+			ID: parseUUID(uuid.NewString()), InboxEventID: event.ID,
+			AgentSessionID: event.AgentSessionID, RuntimeID: runtime.ID,
+			LeaseToken: parseUUID(uuid.NewString()),
+		},
+	)
+	if task == nil || task.Agent == nil {
+		t.Fatal("Reminder race claim did not produce Agent context")
+	}
+	if got := taskAgentManagerChannelsForContract(t, task.Agent); len(got) != 0 {
+		t.Fatalf("Reminder race retained stale manager authority: %+v", got)
 	}
 }
 
@@ -492,6 +601,27 @@ func TestRoleWakeClaimAggregatesUnarchivedManagerChannelsFromRosterSource(t *tes
 	})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("derived claim manager channels=%+v want active roster-source channels %+v", got, want)
+	}
+	// A new Handler reconstructs responsibility solely from durable roster
+	// state; no process-local role/reminder cache participates in recovery.
+	recoveredHandler := &Handler{DB: testPool}
+	recoveredRows := recoveredHandler.agentManagerChannels(
+		context.Background(),
+		parseUUID(testWorkspaceID),
+		parseUUID(derivedAgentID),
+	)
+	recovered := make([]managerChannelContract, 0, len(recoveredRows))
+	for _, channel := range recoveredRows {
+		recovered = append(recovered, managerChannelContract{ID: channel.ID, Name: channel.Name})
+	}
+	sort.Slice(recovered, func(i, j int) bool {
+		if recovered[i].Name == recovered[j].Name {
+			return recovered[i].ID < recovered[j].ID
+		}
+		return recovered[i].Name < recovered[j].Name
+	})
+	if !reflect.DeepEqual(recovered, got) {
+		t.Fatalf("recovered manager responsibility=%+v want %+v", recovered, got)
 	}
 	for _, channel := range got {
 		if channel.ID == archived.ID {

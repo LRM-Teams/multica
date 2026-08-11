@@ -31,7 +31,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { paths, useCurrentWorkspace } from "@multica/core/paths";
+import { appendQueryParams, paths, useCurrentWorkspace } from "@multica/core/paths";
 import { agentListOptions, memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import {
   evolutionKeys,
@@ -497,7 +497,12 @@ function DeliveryPreview({
   const materializedSkill = submission.materialized_skill;
   const skillEnabled = Boolean(materializedSkill && sourceAgent?.skills.some((skill) => skill.id === materializedSkill.id));
   const agentHref = workspaceSlug && submission.source_agent_id
-    ? `${paths.workspace(workspaceSlug).agentDetail(submission.source_agent_id)}?tab=${submission.unit_type === "skill" ? "skills" : "memory"}`
+    ? appendQueryParams(
+        paths.workspace(workspaceSlug).agentDetail(submission.source_agent_id),
+        {
+          tab: submission.unit_type === "skill" ? "skills" : "memory",
+        },
+      )
     : "";
 
   return (

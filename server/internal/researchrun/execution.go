@@ -29,6 +29,7 @@ type executionStore interface {
 	FailDispatchIntent(context.Context, string, string, AttemptFailure) (bool, RunEvent, error)
 	AcknowledgeDispatchIntent(context.Context, string, string, string) (bool, Attempt, RunEvent, error)
 	TaskContext(context.Context, string, string) (RunSnapshot, error)
+	SessionArtifactPassportEnabled(context.Context, string, string) (bool, error)
 }
 
 type executionModule struct {
@@ -352,17 +353,29 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 			attempt := Attempt{ID: attemptID, SessionID: snapshot.Run.SessionID, WorkspaceID: snapshot.Run.WorkspaceID,
 				TaskID: currentTask.ID, AssignedAgentID: agentID, ExecutionTarget: target,
 				DispatchKey: dispatchKey, Status: AttemptStatusDispatching}
-			prompt, promptErr := module.prompts.Build(snapshot.Run, currentTask, attempt, snapshot, members)
-			if promptErr != nil {
-				return outcome, promptErr
+			passportEnabled, passportErr := module.store.SessionArtifactPassportEnabled(
+				ctx, snapshot.Run.SessionID, snapshot.Run.WorkspaceID,
+			)
+			if passportErr != nil {
+				return outcome, passportErr
+			}
+			var prompt string
+			if !passportEnabled {
+				var promptErr error
+				prompt, promptErr = module.prompts.Build(snapshot.Run, currentTask, attempt, snapshot, members)
+				if promptErr != nil {
+					return outcome, promptErr
+				}
 			}
 			request := DispatchRequest{
 				Run: snapshot.Run, Task: currentTask, AttemptID: attempt.ID, AgentID: agentID,
 				Target: target, Key: attempt.DispatchKey, Prompt: prompt,
 			}
-			request.RequestHash, err = HashDispatchRequest(request)
-			if err != nil {
-				return outcome, err
+			if !passportEnabled {
+				request.RequestHash, err = HashDispatchRequest(request)
+				if err != nil {
+					return outcome, err
+				}
 			}
 			_, _, err = module.store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
 				AttemptID: attemptID, SessionID: snapshot.Run.SessionID, TaskID: currentTask.ID,

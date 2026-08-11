@@ -85,7 +85,8 @@ func TestBuildPromptInjectsCurrentManagerAuthorityIntoResumedSession(t *testing.
 		"Group manager this wake (server-claimed):",
 		`id="channel-lrm2" name="LRM2.0开发群"`,
 		"Ignore any other session/brief for roles not listed",
-		"One anchored `multica reminder schedule` per channel",
+		"ordinary self-owned Reminder capability",
+		"only when you judge a later follow-up is useful",
 		"User message:\nhello",
 	} {
 		if !strings.Contains(promoted, want) {
@@ -97,7 +98,8 @@ func TestBuildPromptInjectsCurrentManagerAuthorityIntoResumedSession(t *testing.
 	demoted := BuildPrompt(resumed, "cursor", "")
 	for _, want := range []string{
 		"Group manager this wake (server-claimed): none.",
-		"Drop any manager duties/reminders from an older session or brief",
+		"Do no stale channel-management work",
+		"Existing self-owned Reminders remain ordinary Agent Reminders",
 		"User message:\nhello",
 	} {
 		if !strings.Contains(demoted, want) {
@@ -106,6 +108,14 @@ func TestBuildPromptInjectsCurrentManagerAuthorityIntoResumedSession(t *testing.
 	}
 	if strings.Contains(demoted, `name="LRM2.0开发群"`) {
 		t.Fatalf("demoted resumed prompt retained old manager channel\n--- output ---\n%s", demoted)
+	}
+	for _, forbidden := range []string{
+		"One anchored `multica reminder schedule` per channel",
+		"Drop any manager duties/reminders",
+	} {
+		if strings.Contains(promoted, forbidden) || strings.Contains(demoted, forbidden) {
+			t.Fatalf("manager role overlay retained role-owned Reminder policy %q", forbidden)
+		}
 	}
 }
 

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	channelCollaborationTurnReason = protocol.AgentInboxReasonCollaborationTurn
+	channelCollaborationTurnReason     = protocol.AgentInboxReasonCollaborationTurn
 	collaborationManagerFallbackReason = "collaboration_manager_fallback"
 )
 
@@ -496,7 +496,7 @@ func (h *Handler) failCollaborationTurnTx(ctx context.Context, tx pgx.Tx, event 
 
 func (h *Handler) createCollaborationManagerFallbackTx(ctx context.Context, tx pgx.Tx, workspaceID, channelID, sourceMessageID, sessionID pgtype.UUID, reason string) ([]channelAgentWake, error) {
 	// The retired singleton manager cannot be used as a fallback target. Current
-	// managers discover the suspended open loop through their own patrol brief.
+	// channel roles are injected independently when those agents next wake.
 	return nil, nil
 }
 

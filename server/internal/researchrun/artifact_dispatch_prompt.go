@@ -94,6 +94,47 @@ func loadAttemptManifestIDTx(
 	return manifestID, err
 }
 
+// replayDispatchPromptFromManifest rebuilds the dispatch prompt from the frozen
+// manifest-filtered task snapshot without using the caller-supplied placeholder.
+func replayDispatchPromptFromManifest(
+	ctx context.Context,
+	store *PostgresStore,
+	workspaceID, attemptID string,
+) (string, error) {
+	snapshot, err := store.TaskContextForAttempt(ctx, attemptID, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	if snapshot.AttemptContext == nil || !snapshot.AttemptContext.ManifestFiltered {
+		return "", fmt.Errorf("%w: attempt has no frozen manifest context", ErrInvalidTransition)
+	}
+	var attempt Attempt
+	for _, candidate := range snapshot.Attempts {
+		if candidate.ID == attemptID {
+			attempt = candidate
+			break
+		}
+	}
+	if attempt.ID == "" {
+		return "", ErrRunNotFound
+	}
+	var task Task
+	for _, candidate := range snapshot.Tasks {
+		if candidate.ID == attempt.TaskID {
+			task = candidate
+			break
+		}
+	}
+	if task.ID == "" {
+		return "", ErrRunNotFound
+	}
+	members, err := store.ListFleetMembers(ctx, snapshot.Run.SessionID, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	return buildTaskPrompt(snapshot.Run, task, attempt, snapshot, members)
+}
+
 func verifyManifestPromptShadow(
 	livePrompt, manifestPrompt string,
 	liveSnapshot, filtered RunSnapshot,

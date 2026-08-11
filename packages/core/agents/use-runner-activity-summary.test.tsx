@@ -39,7 +39,7 @@ describe("useRunnerActivitySummary", () => {
     expect(result.current.two.data?.label).toBe("Thinking...");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "https://api.example.test/api/agents/runner-activity-summaries",
+      "https://api.example.test/api/members/agents/runner-activity-summaries",
     );
   });
 });

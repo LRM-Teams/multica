@@ -27,6 +27,8 @@ type resultAcceptanceStore interface {
 	ListAttempts(context.Context, string) ([]Attempt, error)
 	ListFleetMembers(context.Context, string, string) ([]FleetMember, error)
 	AcceptResult(context.Context, AcceptResultInput) (AcceptResultOutcome, error)
+	SessionArtifactPassportEnabled(context.Context, string, string) (bool, error)
+	AttemptHasDispatchManifest(context.Context, string, string, string) (bool, error)
 }
 
 type resultAcceptanceModule struct {
@@ -73,6 +75,21 @@ func (module resultAcceptanceModule) Accept(ctx context.Context, submission resu
 			ErrCapabilityUnavailable,
 			strings.Join(missing, ", "),
 		)
+	}
+	passportEnabled, err := module.store.SessionArtifactPassportEnabled(ctx, submission.SessionID, submission.WorkspaceID)
+	if err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	if passportEnabled {
+		hasManifest, manifestErr := module.store.AttemptHasDispatchManifest(
+			ctx, submission.SessionID, submission.WorkspaceID, submission.AttemptID,
+		)
+		if manifestErr != nil {
+			return AcceptResultOutcome{}, manifestErr
+		}
+		if !hasManifest {
+			return AcceptResultOutcome{}, fmt.Errorf("%w: acceptance requires dispatch manifest", ErrInvalidTransition)
+		}
 	}
 	return module.store.AcceptResult(ctx, AcceptResultInput{
 		SessionID: submission.SessionID, AttemptID: submission.AttemptID,

@@ -1015,7 +1015,10 @@
     "new_frontier_label": "NEW FRONTIERS",
     "canvas": {
       "loading": "Loading constellation…",
-      "error": "Could not load the typed research graph."
+      "error": "Could not load the typed research graph.",
+      "projection_mismatch_title": "Star-map projection unavailable",
+      "projection_mismatch_body": "The session snapshot has graph nodes, but the typed constellation projection did not arrive. Retry or wait for the next sync.",
+      "projection_mismatch_diagnostics": "Snapshot nodes: {{snapshotCount}} · Typed nodes: {{typedCount}}"
     },
     "inspector": {
       "close": "Close inspector",

@@ -8,8 +8,7 @@ import (
 )
 
 // prepareCanonicalChannelMessageCommit remains the canonical message-service
-// hook. The retired server-managed group patrol no longer needs a transactional
-// side effect here.
+// hook. Channel messages do not mutate Agent Reminders as a side effect.
 func (h *Handler) prepareCanonicalChannelMessageCommit(
 	context.Context,
 	db.DBTX,

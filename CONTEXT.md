@@ -13,6 +13,16 @@ bindings. A Workspace is not an individual Agent's filesystem working
 directory.
 _Avoid_: Agent workdir, machine directory
 
+### Members Directory
+
+The workspace product surface that catalogs active human members and
+non-archived Agents for browse and profile management. Agents are still
+Agents for execution and identity; the directory is how the product presents
+both kinds of participants in one roster. It is the sole product entry for
+inviting humans and changing or removing human membership.
+_Avoid_: Agents page (retired name for this surface), Settings members tab
+(retired human-admin entry), team page, people list
+
 ### Machine Service
 
 The single machine-local authority for supervising Multica execution under one

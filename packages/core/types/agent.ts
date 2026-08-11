@@ -118,8 +118,7 @@ export interface RuntimeDevice {
   status: "online" | "offline";
   /**
    * Legacy composite from daemon registration (e.g.
-   * "ubuntu · codex-cli 0.146.0"). Prefer `device_name` for the Basics →
-   * OS row. Older servers only send this field.
+   * "ubuntu · codex-cli 0.146.0"). It must not be used as an OS value.
    */
   device_info: string;
   /**
@@ -128,6 +127,8 @@ export interface RuntimeDevice {
    * until the daemon re-registers after the server started persisting it.
    */
   device_name?: string;
+  /** Daemon-reported GOOS. Older servers and daemons omit it. */
+  os?: string;
   metadata: Record<string, unknown>;
   /**
    * Runtime/daemon-advertised protocol capabilities. Older daemons omit this;

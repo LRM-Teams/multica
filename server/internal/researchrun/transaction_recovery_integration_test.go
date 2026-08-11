@@ -446,8 +446,9 @@ func TestActivateReadyTasksTransactionRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := run.pool.Exec(run.ctx, `
-			INSERT INTO research_task_dependency (task_id, depends_on_task_id) VALUES ($1::uuid, $2::uuid)
-		`, blockedID, failedID); err != nil {
+			INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid)
+		`, run.fixture.workspaceID, run.fixture.sessionID, blockedID, failedID); err != nil {
 			t.Fatal(err)
 		}
 		assertState := func(blockedStatus, blockedReason, readyStatus string, blockedEvents int) {

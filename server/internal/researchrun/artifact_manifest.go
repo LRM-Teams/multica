@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -19,6 +20,58 @@ func readPolicyWatermarkTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionI
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
 	`, workspaceID, sessionID).Scan(&watermark)
 	return watermark, err
+}
+
+func casPassportEligibilityRevisionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, artifactID string,
+	currentVersion int32,
+	eligibilityRevision int64,
+	lifecycle ArtifactLifecycleStatus,
+) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET updated_at = now()
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		  AND current_version = $4
+		  AND eligibility_revision = $5
+		  AND lifecycle_status = $6
+	`, workspaceID, sessionID, artifactID, currentVersion, eligibilityRevision, lifecycle)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: passport eligibility CAS failed", ErrInvalidTransition)
+	}
+	return nil
+}
+
+func casArtifactVersionRepresentationTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, versionRowID string,
+	contentHash, representationHash string,
+) error {
+	var matched bool
+	err := tx.QueryRow(ctx, `
+		SELECT true
+		FROM research_artifact_version
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		  AND content_hash = $4
+	`, workspaceID, sessionID, versionRowID, contentHash).Scan(&matched)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: artifact version representation CAS failed", ErrInvalidTransition)
+	}
+	if err != nil {
+		return err
+	}
+	_ = representationHash
+	return nil
 }
 
 func reservePolicyWatermarkCASTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, expected int64) (int64, error) {
@@ -430,4 +483,41 @@ func verifyAcceptanceManifestPolicyTx(
 		return 0, 0, err
 	}
 	return manifestWatermark, reserved, nil
+}
+
+func verifyAcceptanceManifestEntryEligibilityTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var stale bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM research_artifact_context_entry e
+		  JOIN research_artifact_context_manifest m
+		    ON m.workspace_id = e.workspace_id
+		   AND m.session_id = e.session_id
+		   AND m.id = e.manifest_id
+		  JOIN research_artifact_version v
+		    ON v.workspace_id = e.workspace_id
+		   AND v.session_id = e.session_id
+		   AND v.id = e.artifact_version_id
+		  JOIN research_artifact_passport p
+		    ON p.workspace_id = v.workspace_id
+		   AND p.session_id = v.session_id
+		   AND p.id = v.artifact_id
+		  WHERE m.workspace_id = $1::uuid
+		    AND m.session_id = $2::uuid
+		    AND m.attempt_id = $3::uuid
+		    AND e.eligibility_revision <> p.eligibility_revision
+		)
+	`, workspaceID, sessionID, attemptID).Scan(&stale)
+	if err != nil {
+		return err
+	}
+	if stale {
+		return fmt.Errorf("%w: acceptance manifest entry eligibility stale", ErrInvalidTransition)
+	}
+	return nil
 }

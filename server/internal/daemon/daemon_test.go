@@ -99,6 +99,7 @@ func TestDaemonRegister_RevokedWorkspaceBindingDoesNotFallbackToSession(t *testi
 		}
 		var req struct {
 			WorkspaceID  string   `json:"workspace_id"`
+			OS           string   `json:"os"`
 			Capabilities []string `json:"capabilities"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -106,6 +107,9 @@ func TestDaemonRegister_RevokedWorkspaceBindingDoesNotFallbackToSession(t *testi
 		}
 		if req.WorkspaceID != "ws-1" {
 			t.Fatalf("workspace_id = %q, want ws-1", req.WorkspaceID)
+		}
+		if req.OS != runtime.GOOS {
+			t.Fatalf("os = %q, want %q", req.OS, runtime.GOOS)
 		}
 
 		switch call := calls.Add(1); call {

@@ -367,6 +367,8 @@ export const AgentRuntimeSchema = z.object({
   device_info: z.string().default(""),
   // Machine label from daemon register (metadata.device_name). Older servers omit it.
   device_name: z.string().optional(),
+  // Daemon-reported GOOS. Older servers and daemons omit it.
+  os: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).catch({}),
   capabilities: z.array(z.string()).optional(),
   current_version: z.string().nullable(),
@@ -2711,16 +2713,11 @@ const RawReminderDefinitionSchema = z.object({
   title: z.string(),
   status: z.string(),
   schedule_kind: z.string(),
-  // Managed patrol definitions stay visible while dormant. The backend
-  // projects those rows as status=fired with no next fire instead of
-  // inventing a countdown for inactive work.
   next_fire_at: z.string().optional(),
   last_fire_at: z.string().optional(),
   cadence: z.string().optional(),
   schedule_timezone: z.string().optional(),
   snooze_count: z.number().default(0),
-  origin_kind: z.string(),
-  managed_kind: z.string().optional(),
   anchor: RawReminderAnchorSchema,
 }).loose();
 

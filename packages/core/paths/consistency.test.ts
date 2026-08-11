@@ -49,7 +49,9 @@ describe("paths.workspace() shape", () => {
       ["projects", "projects"],
       ["research", "research"],
       ["channels", "channels"],
-      ["agents", "agents"],
+      // agents() redirects to Members Directory (ADR 0013)
+      ["agents", "members"],
+      ["members", "members"],
       ["evolution", "evolution"],
       ["planBilling", "plan-billing"],
       ["inbox", "inbox"],

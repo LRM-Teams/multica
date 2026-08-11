@@ -64,6 +64,15 @@ func TestAgentRuntimeResponseRequiresMetadataDeviceName(t *testing.T) {
 	if resp.DeviceName != "ubuntu" {
 		t.Fatalf("device_name: got %q want ubuntu", resp.DeviceName)
 	}
+	if resp.OS != "" {
+		t.Fatalf("without metadata.os got %q; want empty", resp.OS)
+	}
+
+	rt.Metadata = []byte(`{"device_name":"ubuntu","os":"linux"}`)
+	resp = (&Handler{}).runtimeToResponse(t.Context(), rt)
+	if resp.OS != "linux" {
+		t.Fatalf("os: got %q want linux", resp.OS)
+	}
 
 	// Mutation: no metadata.device_name → empty (no device_info compat parse).
 	rt = runtimeWithMetadata(t, rt, map[string]any{"version": "codex-cli 0.146.0"})

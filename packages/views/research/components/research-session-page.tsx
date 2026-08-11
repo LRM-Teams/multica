@@ -189,9 +189,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     data: typedGraphPages,
     isLoading: typedGraphLoading,
     isError: typedGraphError,
+    refetch: refetchTypedGraph,
     fetchNextPage: fetchNextTypedGraphPage,
     hasNextPage: typedGraphHasNextPage,
     isFetchingNextPage: typedGraphFetchingNextPage,
+    isFetching: typedGraphFetching,
   } = useInfiniteQuery(researchGraphTypedInfiniteOptions(wsId, sessionId));
   const selectedNodeId = useResearchCanvasStore((s) => s.selectedNodeId);
   const selectCanvasNode = useResearchCanvasStore((s) => s.selectNode);
@@ -519,6 +521,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     messages,
   });
   const goalImpact = typedGraph?.nodes ? summarizeGoalImpact(typedGraph.nodes) : null;
+  const projectionMismatch =
+    canvasMode === "ready" &&
+    !typedGraphLoading &&
+    !typedGraphError &&
+    (!typedGraph || typedGraph.nodes.length === 0);
 
   const onClarificationOption = (
     question: ResearchClarificationQuestion,
@@ -600,7 +607,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
   const sessionBody = (
     <div
-      className="relative flex h-full min-h-0 flex-col bg-background"
+      className="research-d5-theme relative flex h-full min-h-0 flex-col"
       data-testid="research-session-page"
     >
       {/* LRM-971: homepage-family shell atmosphere behind chrome + canvas. */}
@@ -660,6 +667,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           typedGraph={typedGraph}
           typedLoading={typedGraphLoading}
           typedError={typedGraphError}
+          projectionMismatch={projectionMismatch}
+          onRetryTypedGraph={() => {
+            void refetchTypedGraph();
+          }}
+          retryTypedGraphPending={typedGraphFetching && !typedGraphFetchingNextPage}
+          snapshotNodeCount={data.nodes.length}
+          typedGraphSessionId={sessionId}
+          typedGraphVersion={typedGraph?.graph_version ?? null}
           typedGraphHasNextPage={typedGraphHasNextPage === true}
           typedGraphLoadMorePending={typedGraphFetchingNextPage}
           onLoadMoreTypedGraph={

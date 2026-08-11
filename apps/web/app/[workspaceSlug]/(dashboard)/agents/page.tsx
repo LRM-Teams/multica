@@ -1,19 +1,15 @@
 "use client";
 
-import { lazyNamedRoute } from "@/lib/lazy-route";
+import { useEffect } from "react";
+import { useWorkspacePaths } from "@multica/core/paths";
+import { useNavigation } from "@multica/views/navigation";
 
-const AgentsPage = lazyNamedRoute(
-  () => import("@multica/views/agents"),
-  "AgentsPage",
-);
-
-// Web has no bundled daemon, so the runtime filter always groups
-// local-mode runtimes under "Remote" (buildRuntimeMachines has no
-// localDaemonId / localMachineName / ensureLocalMachine context
-// here) — that's the expected web behavior, not a bug. The Desktop
-// app wires those props through `DesktopAgentsPage` so the local
-// section appears in the dropdown the same way it does on the
-// Runtimes page.
-export default function AgentsRoute() {
-  return <AgentsPage />;
+/** Legacy Agents list → Members Directory (ADR 0013). */
+export default function AgentsRedirectPage() {
+  const paths = useWorkspacePaths();
+  const navigation = useNavigation();
+  useEffect(() => {
+    navigation.replace(paths.members());
+  }, [navigation, paths]);
+  return null;
 }

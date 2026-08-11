@@ -22,7 +22,7 @@ import {
   Activity,
   ListTodo,
   LayoutDashboard,
-  Bot,
+  Users,
   Monitor,
   ChevronDown,
   ChevronRight,
@@ -118,7 +118,7 @@ type NavKey =
   | "projects"
   | "research"
   | "channels"
-  | "agents"
+  | "members"
   | "usage"
   | "evolution"
   | "notes"
@@ -136,7 +136,7 @@ type NavLabelKey =
   | "projects"
   | "research"
   | "channels"
-  | "agents"
+  | "members"
   | "usage"
   | "evolution"
   | "notes"
@@ -158,7 +158,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity 
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "research", labelKey: "research", icon: Telescope },
-  { key: "agents", labelKey: "agents", icon: Bot },
+  { key: "members", labelKey: "members", icon: Users },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
   { key: "evolution", labelKey: "evolution", icon: Sparkles },
   { key: "notes", labelKey: "notes", icon: NotepadText },

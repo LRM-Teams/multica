@@ -7,8 +7,6 @@ import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
 import { ProjectDetailPage } from "./pages/project-detail-page";
 import { SkillDetailPage } from "./pages/skill-detail-page";
-import { AgentDetailPage } from "./pages/agent-detail-page";
-import { MemberDetailPage } from "./pages/member-detail-page";
 import { RuntimeDetailPage } from "./pages/runtime-detail-page";
 import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { DesktopResearchSessionPage } from "./pages/research-session-page";
@@ -24,7 +22,7 @@ import { SkillsPage } from "@multica/views/skills";
 import { KnowledgeListPage } from "@multica/views/knowledge";
 import { NotesPage } from "@multica/views/notes";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
-import { DesktopAgentsPage } from "./components/desktop-agents-page";
+import { DesktopMembersPage } from "./components/desktop-members-page";
 import { SandboxesPage } from "@multica/views/sandboxes";
 import { SandboxDetailPage } from "./pages/sandbox-detail-page";
 import { SandboxNodeSetupPage } from "./pages/sandbox-node-setup-page";
@@ -37,6 +35,26 @@ import { PageShell } from "./components/page-shell";
 export function NotesPageRoute() {
   const { id } = useParams();
   return <NotesPage pageId={id} />;
+}
+
+function AgentsIdToMembersRedirect() {
+  const { id } = useParams();
+  return (
+    <Navigate
+      to={`../members?member=agent%3A${encodeURIComponent(id ?? "")}`}
+      replace
+    />
+  );
+}
+
+function MembersIdToQueryRedirect() {
+  const { id } = useParams();
+  return (
+    <Navigate
+      to={`../members?member=user%3A${encodeURIComponent(id ?? "")}`}
+      replace
+    />
+  );
 }
 
 /**
@@ -143,16 +161,25 @@ export const appRoutes: RouteObject[] = [
             element: <WikiDetailPage />,
             handle: { title: "Knowledge" },
           },
-          { path: "agents", element: <DesktopAgentsPage />, handle: { title: "Agents" } },
+          {
+            path: "members",
+            element: <DesktopMembersPage />,
+            handle: { title: "Members" },
+          },
+          {
+            path: "agents",
+            element: <Navigate to="../members" replace />,
+            handle: { title: "Members" },
+          },
           {
             path: "agents/:id",
-            element: <AgentDetailPage />,
-            handle: { title: "Agent" },
+            element: <AgentsIdToMembersRedirect />,
+            handle: { title: "Members" },
           },
           {
             path: "members/:id",
-            element: <MemberDetailPage />,
-            handle: { title: "Member" },
+            element: <MembersIdToQueryRedirect />,
+            handle: { title: "Members" },
           },
           { path: "inbox", element: <InboxPage />, handle: { title: "Activity" } },
           {

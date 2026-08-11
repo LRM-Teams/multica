@@ -24,8 +24,8 @@ const (
 	reminderMaxDelay  = 90 * 24 * time.Hour
 	reminderActiveCap = 25
 
-	// reminderDailyFireQuota is LRM-1523 L4 governance: a cadence (every:*) /
-	// patrol reminder may post a visible "Reminder fired" receipt into its anchor
+	// reminderDailyFireQuota is LRM-1523 L4 governance: an interval or calendar
+	// cadence reminder may post a visible "Reminder fired" receipt into its anchor
 	// channel at most this many times per (agent, channel, UTC day). Excess
 	// occurrences are coalesced into the day's first notice instead of spamming
 	// the shared development/scheduling channel on every tick.
@@ -148,10 +148,6 @@ type agentReminder struct {
 	CurrentOccurrenceID       pgtype.UUID
 	TerminalReason            pgtype.Text
 	Version                   int64
-	OriginKind                string
-	ManagedKind               pgtype.Text
-	OriginKey                 pgtype.Text
-	ManagedBackoffStep        int16
 }
 
 type reminderQueryRower interface {
@@ -194,9 +190,6 @@ type agentReminderResponse struct {
 	CurrentOccurrenceID       *string `json:"current_occurrence_id,omitempty"`
 	TerminalReason            *string `json:"terminal_reason,omitempty"`
 	Version                   int64   `json:"version"`
-	OriginKind                string  `json:"origin_kind"`
-	ManagedKind               *string `json:"managed_kind,omitempty"`
-	OriginKey                 *string `json:"origin_key,omitempty"`
 }
 
 type agentReminderScheduleRequest struct {
@@ -265,9 +258,6 @@ func reminderResponse(r agentReminder) agentReminderResponse {
 		CurrentOccurrenceID:       uuidPtr(r.CurrentOccurrenceID),
 		TerminalReason:            nullableTextPtr(r.TerminalReason),
 		Version:                   r.Version,
-		OriginKind:                r.OriginKind,
-		ManagedKind:               nullableTextPtr(r.ManagedKind),
-		OriginKey:                 nullableTextPtr(r.OriginKey),
 	}
 }
 
@@ -317,8 +307,6 @@ func scanAgentReminder(row rowScanner) (agentReminder, error) {
 		&out.CreatedAt, &out.UpdatedAt, &out.FiredAt, &out.Cadence,
 		&out.ScheduleTimezone, &out.CadenceNextAt, &out.CurrentOccurrenceID,
 		&out.TerminalReason, &out.Version,
-		&out.OriginKind, &out.ManagedKind, &out.OriginKey,
-		&out.ManagedBackoffStep,
 	)
 	return out, err
 }
@@ -327,8 +315,7 @@ func reminderSelectColumns() string {
 	return `id, workspace_id, agent_id, initiator_user_id, title, anchor_channel_id, anchor_message_id,
 		anchor_thread_root_message_id, fire_at, status, fired_receipt_message_id, snooze_count,
 		created_at, updated_at, fired_at, cadence, schedule_timezone, cadence_next_at,
-		current_occurrence_id, terminal_reason, version, origin_kind, managed_kind,
-		origin_key, managed_backoff_step`
+		current_occurrence_id, terminal_reason, version`
 }
 
 func parseReminderFireAt(now time.Time, delaySeconds *int64, rawFireAt string) (time.Time, error) {
@@ -398,7 +385,6 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		SELECT count(*)
 		FROM agent_reminder
 		WHERE workspace_id = $1 AND agent_id = $2
-		  AND origin_kind = 'agent'
 		  AND status IN ('scheduled', 'firing')`, origin.workspaceID, origin.agentID).Scan(&activeCount); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to schedule reminder")
 		return
@@ -417,9 +403,8 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 			scheduleTimezone = schedule.Timezone
 		}
 	}
-	// Anchor channel is the message's channel (may differ from wake origin —
-	// product lock B / 贝克汉姆 cross-channel patrol). Membership already
-	// checked in resolveReminderAnchor.
+	// Anchor channel is the message's channel and may differ from the wake
+	// origin. Membership is already checked in resolveReminderAnchor.
 	row := tx.QueryRow(r.Context(), `
 		INSERT INTO agent_reminder (
 			workspace_id, agent_id, initiator_user_id, title, anchor_channel_id, anchor_message_id,
@@ -931,7 +916,7 @@ func (h *Handler) agentReminderScheduleInitiatorUserID(ctx context.Context, work
 // Product lock B (2026-08-04): schedule may cross channels — msg-id is the
 // source of truth for the anchor channel. The agent must currently be a
 // member/manager of that channel (agentHasSurfaceAccess). Wake origin.channel
-// is NOT required to match (贝克汉姆 LRM2.0 patrol → pr-frontend schedule).
+// is NOT required to match the request's wake channel.
 func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, bool) {
 	rawMessageID = strings.TrimSpace(rawMessageID)
 	if rawMessageID == "" {
@@ -1768,7 +1753,7 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	}
 	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
 
-	// LRM-1523 L4: govern the visual-fire rate of patrol/cadence reminders into a
+	// LRM-1523 L4: govern the visual-fire rate of cadence reminders into a
 	// shared channel. Once the (agent, channel, UTC day) quota is reached, the
 	// occurrence still fires (terminal) but is coalesced: no fresh visible
 	// receipt and no agent re-wake — the day's first in-quota notice already

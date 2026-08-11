@@ -79,7 +79,7 @@ import { PullRequestList } from "./pull-request-list";
 import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { appendQueryParams, useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useReactionActorName } from "../../common/use-reaction-actor-name";
 import {
@@ -1452,7 +1452,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     (entry: TimelineEntry): string | null => {
       const runId = activityRunPointer(entry);
       if (!runId || entry.actor_type !== "agent") return null;
-      return `${paths.agentDetail(entry.actor_id)}?run=${encodeURIComponent(runId)}`;
+      return appendQueryParams(paths.agentDetail(entry.actor_id), { run: runId });
     },
     [paths],
   );

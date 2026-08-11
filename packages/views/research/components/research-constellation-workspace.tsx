@@ -44,6 +44,7 @@ import { STAR_GRAPH_MOBILE_DOM_BUDGET } from "../star-graph/lib/star-graph-visib
 import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
+import { ResearchCanvasProjectionMismatch } from "./research-canvas-projection-mismatch";
 import { ResearchD5Rail } from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
 import "./research-d5-layout.css";
@@ -57,6 +58,12 @@ export function ResearchConstellationWorkspace({
   typedGraph,
   typedLoading,
   typedError,
+  projectionMismatch = false,
+  onRetryTypedGraph,
+  retryTypedGraphPending = false,
+  snapshotNodeCount = 0,
+  typedGraphSessionId,
+  typedGraphVersion = null,
   snapshotNodes,
   selectedNode,
   onSelectNode,
@@ -84,6 +91,12 @@ export function ResearchConstellationWorkspace({
   typedGraph: TypedGraphResponse | undefined;
   typedLoading: boolean;
   typedError: boolean;
+  projectionMismatch?: boolean;
+  onRetryTypedGraph?: () => void;
+  retryTypedGraphPending?: boolean;
+  snapshotNodeCount?: number;
+  typedGraphSessionId?: string;
+  typedGraphVersion?: number | null;
   typedGraphHasNextPage?: boolean;
   typedGraphLoadMorePending?: boolean;
   onLoadMoreTypedGraph?: () => void;
@@ -221,8 +234,11 @@ export function ResearchConstellationWorkspace({
   }, [canvasModel]);
 
   const lensHints = useMemo(
-    () => buildD5LensDisplayHints(activeLens, typedGraph, canvasModel),
-    [activeLens, typedGraph, canvasModel],
+    () =>
+      buildD5LensDisplayHints(activeLens, typedGraph, canvasModel, {
+        filterRound: canvasFilter.round,
+      }),
+    [activeLens, typedGraph, canvasModel, canvasFilter.round],
   );
 
   const motionDirectives = useMemo(() => {
@@ -378,12 +394,12 @@ export function ResearchConstellationWorkspace({
         data-testid="research-session-canvas-host"
         {...(backgroundInert ? { inert: true } : {})}
       >
-        {typedLoading && !canvasModel ? (
+        {typedLoading && !canvasModel && !projectionMismatch ? (
           <div className="grid h-full place-items-center text-sm text-muted-foreground">
             {t(($) => $.d5.canvas.loading)}
           </div>
         ) : null}
-        {typedError && !canvasModel ? (
+        {typedError && !canvasModel && !projectionMismatch ? (
           <div
             role="alert"
             className="grid h-full place-items-center px-6 text-center text-sm text-destructive"
@@ -391,7 +407,17 @@ export function ResearchConstellationWorkspace({
             {t(($) => $.d5.canvas.error)}
           </div>
         ) : null}
-        {canvasModel ? (
+        {projectionMismatch ? (
+          <ResearchCanvasProjectionMismatch
+            sessionId={typedGraphSessionId}
+            snapshotNodeCount={snapshotNodeCount}
+            typedNodeCount={typedGraph?.nodes.length ?? 0}
+            graphVersion={typedGraphVersion}
+            onRetry={() => onRetryTypedGraph?.()}
+            retryPending={retryTypedGraphPending}
+          />
+        ) : null}
+        {canvasModel && !projectionMismatch ? (
           <StarGraphCanvas
             model={canvasModel}
             selectedNodeId={selectedNode?.id ?? null}

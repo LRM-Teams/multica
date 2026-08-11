@@ -49,5 +49,30 @@
     "breadcrumb_fallback": "Member",
     "not_found_title": "Member not found",
     "not_found_description": "This member may have left the workspace."
+  },
+  "directory": {
+    "title": "Members",
+    "loading": "Loading…",
+    "agents_section": "Agents",
+    "humans_section": "Humans",
+    "no_agents": "No agents yet",
+    "no_humans": "No humans yet",
+    "empty_select": "Select a member",
+    "you_suffix": "(you)",
+    "create_agent_aria": "Create agent",
+    "invite_human_aria": "Invite human",
+    "invite_title": "Invite human",
+    "invite_email_label": "Email",
+    "invite_role_label": "Role",
+    "send_invite": "Send invite",
+    "cancel": "Cancel",
+    "computer_required": "Select a computer before creating an agent",
+    "role_updated": "Role updated",
+    "role_update_failed": "Failed to update role",
+    "member_removed": "Member removed",
+    "member_remove_failed": "Failed to remove member",
+    "remove_member": "Remove member",
+    "remove_confirm_title": "Remove {{name}}?",
+    "remove_confirm_description": "They will lose access to this workspace immediately."
   }
 }

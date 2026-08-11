@@ -29,6 +29,17 @@ injection, Draft interception, freshness coordination, and response
 consumption; it does not assemble canonical Message Parts.
 _Avoid_: API gateway, Message store, runtime proxy
 
+### Agent Command Capability
+
+An effective permission granted to one concrete local Agent launch to invoke a
+category of machine-local commands. The authorization policy derives the set
+from inputs such as the Agent's role, Workspace policy, launch mode, and
+available machine features; the Machine Service snapshots it for the launch
+and enforces it independently of any environment variable reported by the
+Agent process. It describes what the launch may do, not what the Agent knows
+how to do.
+_Avoid_: Agent skill, Agent role, CLI feature flag, environment permission
+
 ### Workspace Execution Binding
 
 A durable authorization relationship that permits one machine to execute

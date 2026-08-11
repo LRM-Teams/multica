@@ -106,6 +106,8 @@ type Daemon struct {
 	messageCoordinators     map[string]*MessageCoordinator
 	messageDraftStore       *MessageDraftStore
 	messageRuntimeIDs       map[string]string
+	agentProxyCredentialMu  sync.RWMutex
+	agentProxyCredentials   map[[32]byte]authenticatedAgentProxy
 	messageSendMu           sync.Mutex
 	messageSends            map[string]int
 	agentProcessManagers    map[string]*agentProcessManager

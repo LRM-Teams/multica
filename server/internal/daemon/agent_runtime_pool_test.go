@@ -221,6 +221,35 @@ func TestCanonicalAgentRuntimeIdentityKeyRotationChangesRestartBoundary(t *testi
 	}
 }
 
+func TestCanonicalAgentRuntimePoolCleansPreparedProcessWhenFactoryFails(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
+		"PATH":            "/usr/bin",
+		"MULTICA_TASK_ID": "turn-a",
+	})
+	cleanupCalls := 0
+	_, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: identity,
+		Mode:     canonicalRuntimeResident,
+		PrepareLaunchEnvironment: func(environment map[string]string) (func(), error) {
+			environment["PATH"] = "/launch-scoped/bin:" + environment["PATH"]
+			return func() { cleanupCalls++ }, nil
+		},
+		Factory: func(config agent.Config) (agent.Backend, func(), error) {
+			if !strings.HasPrefix(config.Env["PATH"], "/launch-scoped/bin:") {
+				t.Fatalf("factory did not receive prepared process environment: %#v", config.Env)
+			}
+			return nil, nil, errors.New("factory failed")
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "factory failed") {
+		t.Fatalf("acquire error = %v, want factory failure", err)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("prepared process cleanup calls = %d, want 1", cleanupCalls)
+	}
+}
+
 // Frank/Parker: agent×runtime long-lived across chats — no force-fresh on chat change.
 func TestCanonicalAgentRuntimePoolReusesAcrossChatSurfaces(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()

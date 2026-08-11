@@ -206,7 +206,11 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	// (not on resident reuse). Create-only AGENTS write — zero filesystem I/O
 	// on the reuse path. Must not leave a half-created slot if it fails.
 	BeforeCreate func() error
-	Now          time.Time
+	// PrepareLaunchEnvironment may add launch-scoped transport state after the
+	// stable runtime fingerprint has been computed. Its cleanup is owned by the
+	// concrete backend lifetime and runs on every create failure.
+	PrepareLaunchEnvironment func(map[string]string) (func(), error)
+	Now                      time.Time
 	// Context bounds capacity-wait when the pool is full of running agents
 	// and no idle resident can be evicted. Nil → context.Background().
 	Context context.Context
@@ -427,8 +431,24 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		config := request.BackendConfig
 		config.ExecutablePath = request.Identity.Executable
 		config.Env = cloneStringMap(request.Identity.Environment)
+		var processCleanup func()
+		if request.PrepareLaunchEnvironment != nil {
+			processCleanup, err = request.PrepareLaunchEnvironment(config.Env)
+			if err != nil {
+				if processCleanup != nil {
+					processCleanup()
+				}
+				slot.running = false
+				slot.fingerprint = prevFingerprint
+				slot.mode = prevMode
+				return nil, fmt.Errorf("prepare canonical runtime process: %w", err)
+			}
+		}
 		created, closeFn, err := request.Factory(config)
 		if err != nil {
+			if processCleanup != nil {
+				processCleanup()
+			}
 			slot.running = false
 			slot.fingerprint = prevFingerprint
 			slot.mode = prevMode
@@ -441,13 +461,16 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 			if closeFn != nil {
 				closeFn()
 			}
+			if processCleanup != nil {
+				processCleanup()
+			}
 			return nil, errors.New("canonical runtime backend factory returned nil backend")
 		}
 		backend = created
-		closeBackend = closeFn
+		closeBackend = combineRuntimeCleanup(closeFn, processCleanup)
 		if request.Mode == canonicalRuntimeResident {
 			slot.backend = created
-			slot.close = closeFn
+			slot.close = closeBackend
 			// New resident process is up — clear any server-side "crashed"
 			// fact from a prior idle death. First-ever create is a no-op clear.
 			// Fire async: we still hold slot.mu here and subscribers may do I/O.
@@ -474,6 +497,16 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		turnClose: closeBackend,
 		pool:      p,
 	}, nil
+}
+
+func combineRuntimeCleanup(cleanups ...func()) func() {
+	return func() {
+		for _, cleanup := range cleanups {
+			if cleanup != nil {
+				cleanup()
+			}
+		}
+	}
 }
 
 // canonicalSessionBackend is the only Execute wrapper on the canonical path.

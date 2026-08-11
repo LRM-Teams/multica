@@ -8,10 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/turntransport"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -93,6 +97,8 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 		"MULTICA_AGENT_INBOX_LEASE_TOKEN",
 		"MULTICA_TOKEN",
 		"MULTICA_TOKEN_FILE",
+		AgentProxyTokenFileEnv,
+		"MULTICA_AGENT_ACTIVE_CAPABILITIES",
 	} {
 		if _, exists := config.Env[forbidden]; exists {
 			t.Fatalf("resident Message runtime leaked %s into provider environment", forbidden)
@@ -103,6 +109,20 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	}
 	if config.Env["MESSAGE_RUNTIME_SETTING"] != "enabled" {
 		t.Fatalf("resident Message runtime omitted agent custom environment: %#v", config.Env)
+	}
+	wrapperDir := strings.Split(config.Env["PATH"], string(os.PathListSeparator))[0]
+	wrapperPath := filepath.Join(wrapperDir, turntransport.CliWrapperFilename())
+	wrapper, err := os.ReadFile(wrapperPath)
+	if err != nil {
+		t.Fatalf("read resident Agent Proxy wrapper: %v", err)
+	}
+	for _, expected := range []string{"MULTICA_AGENT_ID", "MULTICA_WORKSPACE_ID", AgentProxyURLEnv, AgentProxyTokenFileEnv} {
+		if !strings.Contains(string(wrapper), expected) {
+			t.Fatalf("resident Agent Proxy wrapper omitted %q: %s", expected, wrapper)
+		}
+	}
+	if strings.Contains(string(wrapper), "MULTICA_AGENT_ACTIVE_CAPABILITIES") {
+		t.Fatal("resident Agent Proxy wrapper prematurely restricted the existing CLI command surface")
 	}
 	if config.ResidentOptions.Cwd != config.Env["MULTICA_AGENT_ROOT"] || config.ResidentOptions.Model != "codex-test" {
 		t.Fatalf("resident startup options = %+v", config.ResidentOptions)
@@ -119,6 +139,12 @@ func TestEnsureResidentMessageRuntimeUsesOnlyStableAgentConfiguration(t *testing
 	defer mu.Unlock()
 	if len(requests) != 2 {
 		t.Fatalf("stable-config and credential requests = %v, want exactly two", requests)
+	}
+	if err := d.canonicalRuntimes.closeAll(); err != nil {
+		t.Fatalf("close resident runtimes: %v", err)
+	}
+	if _, err := os.Stat(wrapperDir); !os.IsNotExist(err) {
+		t.Fatalf("resident Agent Proxy transport survived backend cleanup: %v", err)
 	}
 }
 
@@ -150,7 +176,7 @@ func TestMessageRecoveryMergesTerminalSnapshotBeforeCreatingResidentRuntime(t *t
 	readyAtFactory := make(chan bool, 1)
 	var coordinator *MessageCoordinator
 	d := &Daemon{
-		cfg:    Config{WorkspacesRoot: t.TempDir(), Agents: map[string]AgentEntry{"codex": {Path: "/usr/bin/true"}}},
+		cfg:    Config{WorkspacesRoot: t.TempDir(), HealthPort: 19514, Agents: map[string]AgentEntry{"codex": {Path: "/usr/bin/true"}}},
 		client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID, Provider: "codex"}},
 		agentVersions:     make(map[string]string),

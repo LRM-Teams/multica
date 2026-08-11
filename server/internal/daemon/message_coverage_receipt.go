@@ -73,6 +73,17 @@ type coverageReceipt struct {
 	phase              coverageReceiptPhase
 }
 
+func (c *MessageCoordinator) ownsCoverageReceipt(receiptID string) bool {
+	if c == nil {
+		return false
+	}
+	receiptID = strings.TrimSpace(receiptID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	receipt := c.coverageReceipts[receiptID]
+	return !c.closed && receipt != nil && receipt.id == receiptID && receipt.key == c.key
+}
+
 // PrepareCoverage reserves one bounded, expiring receipt without changing the
 // durable Context Boundary or removing Pending.
 func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageOffer, error) {

@@ -308,6 +308,18 @@ messages`.
 
 - The local Credential Proxy owns credentials and all freshness-sensitive send
   behavior. The Agent runtime never receives service credentials.
+- Each concrete Agent process launch receives a random machine-local proxy
+  credential through an owner-only token file. A generated `multica` wrapper
+  pins `MULTICA_WORKSPACE_ID`, `MULTICA_AGENT_ID`, the proxy URL, and the token
+  file path; the Machine Service maps the token to the fixed Workspace, Agent,
+  and runtime scope. Environment values and request fields never grant that
+  authority.
+- Agent Proxy rollout is additive to the existing Agent CLI authorization
+  contract. It must not reduce the commands that an Agent can already invoke.
+  `MULTICA_AGENT_ACTIVE_CAPABILITIES` is therefore not injected or enforced
+  until a complete command manifest and its derivation from authoritative
+  server policy are designed and migration-tested. An incomplete allowlist
+  such as only `message.read` and `message.send` is invalid.
 - The Proxy derives its internal `seenUpToSeq` value from the local Context
   Boundary for the target. This field is an internal Server request detail, not
   a public CLI flag or persisted server cursor.

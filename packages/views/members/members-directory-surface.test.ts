@@ -26,4 +26,14 @@ describe("Members Directory surface cutover (ADR 0013)", () => {
     expect(src).toMatch(/labelKey: "members"/);
     expect(src).not.toMatch(/key: "agents"/);
   });
+
+  it("directory page waits for runtimes before stamping default selection", () => {
+    const src = readFileSync(
+      join(viewsRoot, "members/members-directory-page.tsx"),
+      "utf8",
+    );
+    expect(src).toMatch(/isMembersDirectoryRosterReady/);
+    expect(src).toMatch(/runtimesLoading/);
+    expect(src).toMatch(/rosterReady/);
+  });
 });

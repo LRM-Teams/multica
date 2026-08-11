@@ -4,6 +4,7 @@ import {
   buildMembersDirectoryRoster,
   defaultMembersSelection,
   filterDirectoryAgents,
+  isMembersDirectoryRosterReady,
   resolveMembersSelection,
 } from "./members-directory-model";
 
@@ -97,6 +98,75 @@ describe("buildMembersDirectoryRoster", () => {
       g.agents.some((a) => a.id === "a1"),
     )!;
     expect(g0.agents.map((a) => a.name)).toEqual(["Alice", "Zed"]);
+  });
+});
+
+describe("isMembersDirectoryRosterReady", () => {
+  it("is false while any of agents/members/runtimes is still loading", () => {
+    expect(
+      isMembersDirectoryRosterReady({
+        agentsLoading: false,
+        membersLoading: false,
+        runtimesLoading: true,
+      }),
+    ).toBe(false);
+    expect(
+      isMembersDirectoryRosterReady({
+        agentsLoading: true,
+        membersLoading: false,
+        runtimesLoading: false,
+      }),
+    ).toBe(false);
+    expect(
+      isMembersDirectoryRosterReady({
+        agentsLoading: false,
+        membersLoading: true,
+        runtimesLoading: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true only when agents, members, and runtimes have settled", () => {
+    expect(
+      isMembersDirectoryRosterReady({
+        agentsLoading: false,
+        membersLoading: false,
+        runtimesLoading: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("documents the AC1 race: agents ready + runtimes empty looks human-only until runtimes load", () => {
+    // Intermediate state while runtimesLoading=true: page must NOT stamp default.
+    expect(
+      isMembersDirectoryRosterReady({
+        agentsLoading: false,
+        membersLoading: false,
+        runtimesLoading: true,
+      }),
+    ).toBe(false);
+
+    const agents = [
+      agent({ id: "a1", name: "Alice", runtime_id: "rt-1" }),
+    ];
+    const humans = [member({ user_id: "u1", name: "Frank" })];
+
+    // Partial roster (runtimes still []): agents cannot group → would default to human.
+    const partial = buildMembersDirectoryRoster(agents, humans, []);
+    expect(partial.listedAgents).toEqual([]);
+    expect(defaultMembersSelection(partial)).toEqual({
+      kind: "user",
+      id: "u1",
+    });
+
+    // After runtimes resolve, default is the agent (what AC1 requires).
+    const ready = buildMembersDirectoryRoster(agents, humans, [
+      runtime({ id: "rt-1", name: "Pi", daemon_id: "d1", device_name: "s144" }),
+    ]);
+    expect(defaultMembersSelection(ready)).toEqual({
+      kind: "agent",
+      id: "a1",
+    });
   });
 });
 

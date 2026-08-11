@@ -107,6 +107,22 @@ export function buildMembersDirectoryRoster(
   };
 }
 
+/**
+ * Whether agent/member/runtime queries have settled enough to stamp a
+ * default URL selection. Must wait for runtimes: with agents ready and
+ * runtimes still loading, the roster temporarily looks agent-empty and
+ * would incorrectly default to the first human (AC1 race).
+ */
+export function isMembersDirectoryRosterReady(opts: {
+  agentsLoading: boolean;
+  membersLoading: boolean;
+  runtimesLoading: boolean;
+}): boolean {
+  return (
+    !opts.agentsLoading && !opts.membersLoading && !opts.runtimesLoading
+  );
+}
+
 /** Default selection: first agent under first computer, else first human. */
 export function defaultMembersSelection(
   roster: MembersDirectoryRoster,

@@ -34,6 +34,7 @@ import { MemberSidePanel } from "./member-side-panel";
 import { InviteHumanDialog } from "./invite-human-dialog";
 import {
   buildMembersDirectoryRoster,
+  isMembersDirectoryRosterReady,
   resolveMembersSelection,
 } from "./members-directory-model";
 import { MemberDirectoryManageFooter } from "./member-directory-manage-footer";
@@ -96,10 +97,20 @@ export function MembersDirectoryPage({
   const urlSelection = parseMembersSelectionFromSearch(
     navigation.searchParams as { get(name: string): string | null },
   );
-  const selection = useMemo(
-    () => resolveMembersSelection(roster, urlSelection),
-    [roster, urlSelection],
-  );
+
+  // Wait for runtimes too — otherwise agents with runtime_ids map to zero
+  // groups while runtimes=[], default becomes first human, and that wrong
+  // selection gets stamped into the URL before computers load (AC1 race).
+  const rosterReady = isMembersDirectoryRosterReady({
+    agentsLoading,
+    membersLoading,
+    runtimesLoading,
+  });
+
+  const selection = useMemo(() => {
+    if (!rosterReady && !urlSelection) return null;
+    return resolveMembersSelection(roster, urlSelection);
+  }, [roster, urlSelection, rosterReady]);
 
   const setSelection = useCallback(
     (kind: "agent" | "user", id: string) => {
@@ -110,18 +121,11 @@ export function MembersDirectoryPage({
 
   // Keep URL in sync when roster resolves a default and URL is empty.
   useEffect(() => {
-    if (agentsLoading || membersLoading || !selection || urlSelection) return;
+    if (!rosterReady || !selection || urlSelection) return;
     navigation.replace(
       paths.members({ kind: selection.kind, id: selection.id }),
     );
-  }, [
-    agentsLoading,
-    membersLoading,
-    selection,
-    urlSelection,
-    navigation,
-    paths,
-  ]);
+  }, [rosterReady, selection, urlSelection, navigation, paths]);
 
   const [showCreate, setShowCreate] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
@@ -182,7 +186,7 @@ export function MembersDirectoryPage({
       ? (roster.humans.find((h) => h.user_id === selection.id) ?? null)
       : null;
 
-  const loading = agentsLoading || membersLoading;
+  const loading = !rosterReady;
 
   return (
     <div

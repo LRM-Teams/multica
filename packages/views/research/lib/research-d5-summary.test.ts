@@ -32,12 +32,12 @@ describe("summarizeTypedGraph", () => {
 
   it("counts new frontiers only from server cluster metadata", () => {
     const summary = summarizeTypedGraph(
-      [{ id: "n1", level: "l", node_type: "finding", cluster_id: null }],
+      [node({ id: "n1", level: "l", node_type: "finding", cluster_id: null })],
       {
         clusters: [
           { id: "c1", cluster_type: "new_frontier", label: "New area" },
           { id: "c2", cluster_type: "topic", label: "Topic" },
-        ],
+        ] as never,
       },
     );
     expect(summary.newFrontiers).toBe(1);

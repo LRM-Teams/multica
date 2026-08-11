@@ -137,3 +137,16 @@ func TestPolicyLedgerGuardTriggerNames(t *testing.T) {
 		t.Fatalf("policy ledger triggers=%v want=%v", got, want)
 	}
 }
+
+func TestIntegrityGuardTriggerNames(t *testing.T) {
+	want := []string{
+		"research_artifact_version_producer_guard",
+		"research_result_attempt_projection_guard",
+	}
+	got := IntegrityGuardTriggerNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("integrity guard triggers=%v want=%v", got, want)
+	}
+}

@@ -41,7 +41,12 @@
     "honor_compare": "Compare with you",
     "honor_shared": "Shared badges",
     "honor_you_only": "Only you",
-    "honor_them_only": "Only them"
+    "honor_them_only": "Only them",
+    "display_name_label": "Display name",
+    "change_role_aria": "Change role",
+    "actions_section": "Actions",
+    "message_button": "Message",
+    "role_dialog_subtitle": "Choose a workspace role for this member."
   },
   "detail": {
     "workspace_fallback": "Workspace",
@@ -73,6 +78,8 @@
     "member_remove_failed": "Failed to remove member",
     "remove_member": "Remove member",
     "remove_confirm_title": "Remove {{name}}?",
-    "remove_confirm_description": "They will lose access to this workspace immediately."
+    "remove_confirm_description": "They will lose access to this workspace immediately.",
+    "search_placeholder": "Search members…",
+    "mine_badge": "Mine"
   }
 }

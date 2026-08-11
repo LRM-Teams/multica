@@ -40,7 +40,12 @@
     "honor_compare": "与你对比",
     "honor_shared": "共同徽章",
     "honor_you_only": "仅你有",
-    "honor_them_only": "仅对方有"
+    "honor_them_only": "仅对方有",
+    "display_name_label": "显示名称",
+    "change_role_aria": "更改角色",
+    "actions_section": "操作",
+    "message_button": "发消息",
+    "role_dialog_subtitle": "为此成员选择工作区角色。"
   },
   "detail": {
     "workspace_fallback": "工作区",
@@ -72,6 +77,8 @@
     "member_remove_failed": "Failed to remove member",
     "remove_member": "移除成员",
     "remove_confirm_title": "移除 {{name}}？",
-    "remove_confirm_description": "他们将立即失去此工作区的访问权限。"
+    "remove_confirm_description": "他们将立即失去此工作区的访问权限。",
+    "search_placeholder": "搜索成员…",
+    "mine_badge": "我的"
   }
 }

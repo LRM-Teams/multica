@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Members Directory — draft</title>
+  <style>
+    :root {
+      --ink: #1d1c1d;
+      --ink-2: #616061;
+      --ink-3: #868686;
+      --line: #e8e8e8;
+      --line-strong: #d1d1d1;
+      --hover: #f4f4f4;
+      --surface: #fff;
+      --bg: #f0efed;
+      --brand: #1264a3;
+      --selected: #dceef8;
+      --danger: #e01e5a;
+      --danger-soft: #fdf0f4;
+      --mine: #0f6b46;
+      --mine-soft: #e6f6ee;
+      --font: Inter, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      color: var(--ink);
+      background: var(--bg);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .banner {
+      flex-shrink: 0;
+      padding: 10px 16px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--ink-2);
+      background: #fff8e8;
+      border-bottom: 1px solid #f0e0b0;
+    }
+    .banner strong { color: #6a5420; }
+    .frame {
+      flex: 1;
+      min-height: 0;
+      margin: 16px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 12px 32px rgb(0 0 0 / 5%);
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      min-height: calc(100vh - 88px);
+    }
+
+    /* rail */
+    .rail {
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .rail-head {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+      font-weight: 650;
+      flex-shrink: 0;
+    }
+    .rail-head svg { width: 16px; height: 16px; color: var(--ink-2); }
+    .rail-tools {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .search {
+      height: 32px;
+      width: 100%;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 0 10px;
+      font-size: 13px;
+      background: #fafafa;
+    }
+    .search:focus {
+      outline: 2px solid color-mix(in srgb, var(--brand) 35%, transparent);
+      border-color: var(--brand);
+      background: #fff;
+    }
+    .rail-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 6px 0 16px;
+    }
+    .sec {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 8px 4px 10px;
+    }
+    .sec-toggle {
+      all: unset;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+      min-width: 0;
+      cursor: pointer;
+      border-radius: 6px;
+      padding: 3px 4px;
+    }
+    .sec-toggle:hover { background: var(--hover); }
+    .sec-toggle .chev {
+      width: 14px;
+      height: 14px;
+      color: var(--ink-3);
+      transition: transform .15s ease;
+      flex-shrink: 0;
+    }
+    .sec-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
+    .sec-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--ink-2);
+    }
+    .sec-count {
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink-3);
+      font-weight: 600;
+    }
+    .sec-add {
+      all: unset;
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      color: var(--ink-2);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .sec-add:hover { background: var(--hover); color: var(--ink); }
+    .machine {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 14px 2px 28px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--ink-3);
+    }
+    .machine svg { width: 12px; height: 12px; }
+    .row {
+      all: unset;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 7px 12px;
+      cursor: pointer;
+      box-sizing: border-box;
+    }
+    .row:hover { background: var(--hover); }
+    .row[aria-selected="true"] { background: var(--selected); }
+    .av {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .av.round { border-radius: 999px; }
+    .row-text { min-width: 0; flex: 1; }
+    .row-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      min-width: 0;
+    }
+    .row-title > span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .row-sub {
+      font-size: 11px;
+      color: var(--ink-3);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pill-mine {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--mine);
+      background: var(--mine-soft);
+      border-radius: 999px;
+      padding: 1px 6px;
+      flex-shrink: 0;
+    }
+    .empty {
+      padding: 4px 14px 10px 28px;
+      font-size: 11px;
+      color: var(--ink-3);
+    }
+
+    /* detail — aligned with agent profile (Image #1) */
+    .detail {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+    }
+    .body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 20px 24px 28px;
+    }
+
+    /* Identity header (same for human + agent) */
+    .ident {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 4px;
+    }
+    .ident-av {
+      width: 56px;
+      height: 56px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 800;
+      font-size: 20px;
+      position: relative;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .ident-av.sq { border-radius: 14px; }
+    .ident-av .dot {
+      position: absolute;
+      left: 2px;
+      bottom: 2px;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: #2bac76;
+      border: 2px solid #fff;
+    }
+    .ident-name {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      line-height: 1.25;
+    }
+    .ident-handle {
+      font-size: 13px;
+      color: var(--ink-3);
+      margin-top: 2px;
+    }
+    .ident-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--ink-2);
+    }
+    .ident-status .sdot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #2bac76;
+    }
+
+    /* Tabs like agent panel */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-top: 18px;
+      border-bottom: 1px solid var(--line);
+      overflow-x: auto;
+    }
+    .tab {
+      all: unset;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--ink-2);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      white-space: nowrap;
+    }
+    .tab:hover { color: var(--ink); }
+    .tab[aria-selected="true"] {
+      color: var(--ink);
+      font-weight: 650;
+      border-bottom-color: var(--ink);
+    }
+    .tab svg { width: 14px; height: 14px; opacity: 0.75; }
+
+    .section {
+      padding: 16px 0 4px;
+      border-top: 1px solid var(--line);
+      margin-top: 4px;
+    }
+    .section:first-of-type { border-top: 0; margin-top: 12px; }
+    .section-h {
+      margin: 0 0 10px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-2);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .section-h a {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--brand);
+      text-decoration: none;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .field-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--ink-2);
+      margin: 0 0 6px;
+    }
+    .field-value {
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--ink);
+      margin: 0 0 14px;
+    }
+    .field-value.muted { color: var(--ink-3); }
+    .field-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .icon-btn {
+      all: unset;
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      color: var(--ink-3);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .icon-btn:hover { background: var(--hover); color: var(--ink); }
+    .icon-btn svg { width: 14px; height: 14px; }
+
+    .honor-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      background: #fafafa;
+    }
+    .honor-crest {
+      width: 48px;
+      height: 48px;
+      border-radius: 10px;
+      background: linear-gradient(145deg, #3a3a3a, #1a1a1a);
+      flex-shrink: 0;
+      display: grid;
+      place-items: center;
+      color: #c9b896;
+      font-size: 18px;
+    }
+    .honor-lv {
+      font-size: 15px;
+      font-weight: 750;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .honor-rank {
+      font-size: 11px;
+      font-weight: 650;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #eee;
+      color: var(--ink-2);
+    }
+    .honor-sub {
+      font-size: 12px;
+      color: var(--ink-3);
+      margin-top: 2px;
+    }
+    .honor-bar {
+      margin-top: 8px;
+      height: 6px;
+      border-radius: 999px;
+      background: #e8e8e8;
+      overflow: hidden;
+      max-width: 280px;
+    }
+    .honor-bar > i {
+      display: block;
+      height: 100%;
+      width: 35%;
+      background: linear-gradient(90deg, #1a1a1a, #4a90d9);
+    }
+    .honor-to-next {
+      font-size: 11px;
+      color: var(--ink-3);
+      margin-left: auto;
+      align-self: flex-end;
+      white-space: nowrap;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 10px 12px;
+      font-size: 13px;
+      align-items: center;
+    }
+    .info-grid dt {
+      margin: 0;
+      color: var(--ink-2);
+      font-weight: 500;
+    }
+    .info-grid dd {
+      margin: 0;
+      color: var(--ink);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .role-text { font-weight: 500; }
+    .linkish {
+      color: var(--brand);
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .agent-card {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .agent-card .t { font-size: 13px; font-weight: 650; }
+    .agent-card .s { font-size: 12px; color: var(--ink-3); margin-top: 1px; }
+
+    .action-stack { display: flex; flex-direction: column; gap: 8px; }
+    .action-btn {
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--ink);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .action-btn:hover { background: var(--hover); }
+    .action-btn.danger {
+      border: 0;
+      background: var(--danger);
+      color: #fff;
+    }
+    .action-btn.danger:hover { filter: brightness(0.95); }
+    .action-btn svg { width: 15px; height: 15px; }
+  </style>
+</head>
+<body>
+  <div class="banner">
+    <strong>Throwaway draft</strong> —
+    Human / Agent <strong>同 UI 骨架</strong>（身份 · 分区 · Honor 卡 · Info · Actions），不给 human 加 Activity 等 agent 功能。
+    Role 只在 Info；Remove 进 Actions。
+  </div>
+
+  <div class="frame" id="app"></div>
+
+  <script>
+    const AGENTS = [
+      { id: "a1", name: "wuwf3的助手", machine: "Frank’s Mac", mine: false, color: "#5b8def" },
+      { id: "a2", name: "AI Master 训练专员", machine: "Frank’s Mac", mine: true, color: "#7c5cbf" },
+      { id: "a3", name: "调研专员", machine: "Cursor (ubuntu)", mine: true, color: "#2f9e76" },
+      { id: "a4", name: "QA 回归", machine: "Cursor (ubuntu)", mine: false, color: "#d97706" },
+      { id: "a5", name: "发布值守", machine: "Cloud · Tokyo", mine: false, color: "#0e7490" },
+    ];
+    const HUMANS = [
+      { id: "h1", name: "fangzq3", color: "#e11d48" },
+      { id: "h2", name: "Frank An", color: "#0d9488", you: true },
+      { id: "h3", name: "ganxin2", color: "#7c3aed" },
+      { id: "h4", name: "hewj13", color: "#0891b2" },
+      { id: "h5", name: "wuwf3", color: "#059669", email: "wuwf3@lenovo.com", handle: "@wuwf3", joined: "Jul 29, 2026" },
+      { id: "h6", name: "zhangcw5", color: "#db2777" },
+      { id: "h7", name: "zhoujie22", color: "#4f46e5" },
+    ];
+
+    const state = {
+      query: "",
+      agentsOpen: false,
+      humansOpen: true,
+      selected: { kind: "user", id: "h5" },
+      canManage: true,
+    };
+
+    const svg = {
+      users: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+      chev: `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg>`,
+      plus: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>`,
+      mon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>`,
+    };
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function filteredAgents() {
+      let list = AGENTS.slice();
+      const q = state.query.trim().toLowerCase();
+      if (q) {
+        list = list.filter(
+          (a) =>
+            a.name.toLowerCase().includes(q) ||
+            a.machine.toLowerCase().includes(q),
+        );
+      }
+      // Mine first, then name — no All/Mine filter; self profile owns "my agents" list.
+      list.sort((a, b) => Number(b.mine) - Number(a.mine) || a.name.localeCompare(b.name));
+      return list;
+    }
+
+    function filteredHumans() {
+      const q = state.query.trim().toLowerCase();
+      let list = !q
+        ? HUMANS.slice()
+        : HUMANS.filter(
+            (h) =>
+              h.name.toLowerCase().includes(q) ||
+              (h.email && h.email.toLowerCase().includes(q)),
+          );
+      // Current user always first.
+      list.sort((a, b) => Number(!!b.you) - Number(!!a.you) || a.name.localeCompare(b.name));
+      return list;
+    }
+
+    function groupByMachine(agents) {
+      const map = new Map();
+      for (const a of agents) {
+        if (!map.has(a.machine)) map.set(a.machine, []);
+        map.get(a.machine).push(a);
+      }
+      return [...map.entries()];
+    }
+
+    function rail() {
+      const agents = filteredAgents();
+      const humans = filteredHumans();
+      const agentsOpen = state.agentsOpen;
+      const humansOpen = state.humansOpen;
+
+      let agentsBody = "";
+      if (agentsOpen) {
+        if (!agents.length) {
+          agentsBody = `<div class="empty">No agents match</div>`;
+        } else {
+          agentsBody = groupByMachine(agents)
+            .map(
+              ([machine, list]) => `
+              <div class="machine">${svg.mon}<span>${esc(machine)}</span></div>
+              ${list
+                .map((a) => {
+                  const sel = state.selected.kind === "agent" && state.selected.id === a.id;
+                  return `<button type="button" class="row" data-kind="agent" data-id="${a.id}" aria-selected="${sel}">
+                    <span class="av" style="background:${a.color}">${esc(a.name.slice(0, 1))}</span>
+                    <span class="row-text">
+                      <span class="row-title">
+                        <span>${esc(a.name)}</span>
+                        ${a.mine ? `<span class="pill-mine">我的</span>` : ""}
+                      </span>
+                      <span class="row-sub">${esc(machine)}</span>
+                    </span>
+                  </button>`;
+                })
+                .join("")}`,
+            )
+            .join("");
+        }
+      }
+
+      let humansBody = "";
+      if (humansOpen) {
+        if (!humans.length) {
+          humansBody = `<div class="empty">No humans match</div>`;
+        } else {
+          humansBody = humans
+            .map((h) => {
+              const sel = state.selected.kind === "user" && state.selected.id === h.id;
+              const title = h.you ? `${h.name} (you)` : h.name;
+              return `<button type="button" class="row" data-kind="user" data-id="${h.id}" aria-selected="${sel}">
+                <span class="av round" style="background:${h.color}">${esc(h.name.slice(0, 1).toUpperCase())}</span>
+                <span class="row-text"><span class="row-title"><span>${esc(title)}</span></span></span>
+              </button>`;
+            })
+            .join("");
+        }
+      }
+
+      return `<aside class="rail">
+        <div class="rail-head">${svg.users} Members</div>
+        <div class="rail-tools">
+          <input class="search" id="search" placeholder="Search members…" value="${esc(state.query)}" />
+        </div>
+        <div class="rail-scroll">
+          <div class="sec">
+            <button type="button" class="sec-toggle" id="agentsToggle" aria-expanded="${agentsOpen}">
+              ${svg.chev}
+              <span class="sec-label">Agents</span>
+              <span class="sec-count">${agents.length}</span>
+            </button>
+            <button type="button" class="sec-add" title="Create agent">${svg.plus}</button>
+          </div>
+          ${agentsBody}
+          <div class="sec" style="margin-top:6px">
+            <button type="button" class="sec-toggle" id="humansToggle" aria-expanded="${humansOpen}">
+              ${svg.chev}
+              <span class="sec-label">Humans</span>
+              <span class="sec-count">${humans.length}</span>
+            </button>
+            <button type="button" class="sec-add" title="Invite">${svg.plus}</button>
+          </div>
+          ${humansBody}
+        </div>
+      </aside>`;
+    }
+
+    const icons = {
+      pencil: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
+      msg: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+      trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>`,
+      restart: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg>`,
+      user: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+      act: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>`,
+      file: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>`,
+    };
+
+    function honorBlock(opts) {
+      const { level, rank, xpLine, toNext, viewAll } = opts;
+      return `<section class="section">
+        <div class="section-h">
+          <span>Honor</span>
+          ${viewAll ? `<a href="#">View all ›</a>` : ""}
+        </div>
+        <div class="honor-card">
+          <div class="honor-crest">◆</div>
+          <div style="min-width:0;flex:1">
+            <div class="honor-lv">LV.${level} <span class="honor-rank">${esc(rank)}</span></div>
+            <div class="honor-sub">${esc(xpLine)}</div>
+            <div class="honor-bar"><i></i></div>
+          </div>
+          <div class="honor-to-next">${esc(toNext)}</div>
+        </div>
+      </section>`;
+    }
+
+    function detailUser(h) {
+      const isSelf = !!h.you;
+      const canEditRole = state.canManage && !isSelf;
+      const displayName = isSelf ? `${h.name} (you)` : h.name;
+      const handle = h.handle || `@${h.name}`;
+
+      // Role: single place in INFO — pencil like agent (opens edit), not a second footer select.
+      const roleDd = canEditRole
+        ? `<span class="role-text">Member</span>
+           <button type="button" class="icon-btn" title="Change role" aria-label="Change role">${icons.pencil}</button>`
+        : `<span class="role-text">Member</span>`;
+
+      const actions = isSelf
+        ? ""
+        : `<section class="section">
+            <div class="section-h">Actions</div>
+            <div class="action-stack">
+              <button type="button" class="action-btn">${icons.msg} Message</button>
+              ${
+                canEditRole
+                  ? `<button type="button" class="action-btn danger">${icons.trash} Remove member</button>`
+                  : ""
+              }
+            </div>
+          </section>`;
+
+      return `<div class="detail">
+        <div class="body">
+          <div class="ident">
+            <div class="ident-av" style="background:${h.color}">
+              ${esc(h.name.slice(0, 1).toUpperCase())}
+              <span class="dot"></span>
+            </div>
+            <div>
+              <div class="ident-name">${esc(displayName)}</div>
+              <div class="ident-handle">${esc(handle)}</div>
+              <div class="ident-status"><span class="sdot"></span> Online</div>
+            </div>
+          </div>
+
+          <!-- No tabs on human — style only, not agent feature parity -->
+          <section class="section" style="margin-top:16px">
+            <div class="field-label">Display name</div>
+            <div class="field-row">
+              <p class="field-value" style="margin:0">${esc(h.name)}</p>
+              ${isSelf ? `<button type="button" class="icon-btn" title="Edit">${icons.pencil}</button>` : ""}
+            </div>
+            <div class="field-label">Description</div>
+            <div class="field-row">
+              <p class="field-value muted" style="margin:0">No description</p>
+              ${isSelf ? `<button type="button" class="icon-btn" title="Edit">${icons.pencil}</button>` : ""}
+            </div>
+          </section>
+
+          ${honorBlock({
+            level: 1,
+            rank: "Recruit",
+            xpLine: "12 XP · 1/51 achievements",
+            toNext: "88 XP to next level",
+            viewAll: true,
+          })}
+
+          <section class="section">
+            <div class="section-h">Info</div>
+            <dl class="info-grid">
+              <dt>Role</dt><dd>${roleDd}</dd>
+              ${h.email ? `<dt>Email</dt><dd>${esc(h.email)}</dd>` : ""}
+              ${h.joined ? `<dt>Joined</dt><dd>${esc(h.joined)}</dd>` : ""}
+            </dl>
+          </section>
+
+          <section class="section">
+            <div class="section-h"><span>Created agents</span><span style="font-weight:600;color:var(--ink-3);letter-spacing:0;text-transform:none">3</span></div>
+            <div class="agent-card">
+              <span class="av" style="background:#5b8def">W</span>
+              <div><div class="t">wuwf3的助手</div><div class="s">auto</div></div>
+            </div>
+            <div class="agent-card">
+              <span class="av" style="background:#7c5cbf">A</span>
+              <div><div class="t">AI Master 训练专员</div><div class="s">Cursor (ubuntu)</div></div>
+            </div>
+            <div class="agent-card">
+              <span class="av" style="background:#2f9e76">调</span>
+              <div><div class="t">调研专员</div><div class="s">Cursor (ubuntu)</div></div>
+            </div>
+          </section>
+
+          ${actions}
+        </div>
+      </div>`;
+    }
+
+    function detailAgent(a) {
+      return `<div class="detail">
+        <div class="body">
+          <div class="ident">
+            <div class="ident-av sq" style="background:${a.color}">
+              ${esc(a.name.slice(0, 1))}
+              <span class="dot"></span>
+            </div>
+            <div>
+              <div class="ident-name">${esc(a.name)}${a.mine ? ` <span class="pill-mine">我的</span>` : ""}</div>
+              <div class="ident-handle">@${esc(a.id)}-assistant</div>
+              <div class="ident-status"><span class="sdot"></span> Online</div>
+            </div>
+          </div>
+
+          <div class="tabs" role="tablist">
+            <button type="button" class="tab" aria-selected="true">${icons.user} Profile</button>
+            <button type="button" class="tab" aria-selected="false">${icons.act} Activity</button>
+            <button type="button" class="tab" aria-selected="false">${icons.file} Files</button>
+          </div>
+
+          <section class="section">
+            <div class="field-label">Display name</div>
+            <div class="field-row">
+              <p class="field-value" style="margin:0">${esc(a.name)}</p>
+              <button type="button" class="icon-btn">${icons.pencil}</button>
+            </div>
+            <div class="field-label">Description</div>
+            <div class="field-row">
+              <p class="field-value" style="margin:0">Workspace agent on ${esc(a.machine)}</p>
+              <button type="button" class="icon-btn">${icons.pencil}</button>
+            </div>
+          </section>
+
+          ${honorBlock({
+            level: 2,
+            rank: "Reserve",
+            xpLine: "35 XP · 1/16 achievements",
+            toNext: "65 XP to next level",
+            viewAll: true,
+          })}
+
+          <section class="section">
+            <div class="section-h">Info</div>
+            <dl class="info-grid">
+              <dt>Role</dt>
+              <dd>
+                <span class="role-text">Member</span>
+                <button type="button" class="icon-btn">${icons.pencil}</button>
+              </dd>
+              <dt>Created</dt><dd>Jul 7, 2026</dd>
+              <dt>Owner</dt><dd><span class="linkish">owner</span></dd>
+            </dl>
+          </section>
+
+          <section class="section">
+            <div class="section-h">Runtime config</div>
+            <dl class="info-grid">
+              <dt>Computer</dt><dd>● Connected · ${esc(a.machine)}</dd>
+              <dt>Runtime</dt><dd>□ Codex CLI</dd>
+            </dl>
+          </section>
+
+          <section class="section">
+            <div class="section-h">Actions</div>
+            <div class="action-stack">
+              <button type="button" class="action-btn">${icons.msg} Message</button>
+              <button type="button" class="action-btn">${icons.restart} Restart…</button>
+              <button type="button" class="action-btn danger">${icons.trash} Delete</button>
+            </div>
+          </section>
+        </div>
+      </div>`;
+    }
+
+    function detail() {
+      if (state.selected.kind === "agent") {
+        const a = AGENTS.find((x) => x.id === state.selected.id);
+        return a ? detailAgent(a) : "";
+      }
+      const h = HUMANS.find((x) => x.id === state.selected.id);
+      return h ? detailUser(h) : "";
+    }
+
+    function render() {
+      const app = document.getElementById("app");
+      app.innerHTML = rail() + detail();
+
+      const search = document.getElementById("search");
+      if (search) {
+        search.addEventListener("input", (e) => {
+          state.query = e.target.value;
+          render();
+          const el = document.getElementById("search");
+          if (el) {
+            el.focus();
+            const n = el.value.length;
+            el.setSelectionRange(n, n);
+          }
+        });
+      }
+      document.getElementById("agentsToggle")?.addEventListener("click", () => {
+        state.agentsOpen = !state.agentsOpen;
+        render();
+      });
+      document.getElementById("humansToggle")?.addEventListener("click", () => {
+        state.humansOpen = !state.humansOpen;
+        render();
+      });
+      document.querySelectorAll("[data-kind]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const kind = btn.getAttribute("data-kind");
+          const id = btn.getAttribute("data-id");
+          state.selected = { kind, id };
+          // Keep the selected section expanded so the active row stays visible.
+          if (kind === "agent") state.agentsOpen = true;
+          if (kind === "user") state.humansOpen = true;
+          render();
+        });
+      });
+    }
+
+    render();
+  </script>
+</body>
+</html>

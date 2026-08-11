@@ -71,7 +71,7 @@ import {
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
-import { resolveResearchCanvasNode } from "../lib/resolve-research-canvas-node";
+import { resolveResearchCanvasNode, enrichResearchNodeForDetail } from "../lib/resolve-research-canvas-node";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -459,10 +459,13 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
   const linkedNodeId = nav.searchParams.get("node");
-  const selectedNode = resolveResearchCanvasNode(selectedNodeId ?? linkedNodeId, {
-    snapshotNodes: data.nodes,
-    typedGraph,
-  });
+  const selectedNode = (() => {
+    const base = resolveResearchCanvasNode(selectedNodeId ?? linkedNodeId, {
+      snapshotNodes: data.nodes,
+      typedGraph,
+    });
+    return base ? enrichResearchNodeForDetail(base, typedGraph) : null;
+  })();
   const executionRows = buildExecutionOverlayRows({
     members: fleet.members,
     presence,

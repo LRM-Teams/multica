@@ -25,6 +25,41 @@ export function typedNodeToSnapshotNode(node: TypedGraphNode): ResearchGraphNode
   };
 }
 
+/** Merge typed payload fields onto a snapshot node for detail rendering. */
+export function enrichResearchNodeForDetail(
+  node: ResearchGraphNode,
+  typedGraph?: Pick<TypedGraphResponse, "nodes"> | null,
+): ResearchGraphNode {
+  const typed = typedGraph?.nodes.find((entry) => entry.id === node.id);
+  if (!typed) return node;
+
+  const fromTyped = typedNodeToSnapshotNode(typed);
+  const payload =
+    fromTyped.payload && typeof fromTyped.payload === "object"
+      ? {
+          ...(node.payload && typeof node.payload === "object" && !Array.isArray(node.payload)
+            ? (node.payload as Record<string, unknown>)
+            : {}),
+          ...(fromTyped.payload as Record<string, unknown>),
+        }
+      : node.payload;
+
+  return {
+    ...node,
+    title: fromTyped.title || node.title,
+    summary: fromTyped.summary || node.summary,
+    status: fromTyped.status || node.status,
+    node_type: fromTyped.node_type || node.node_type,
+    actor_agent_id: fromTyped.actor_agent_id ?? node.actor_agent_id,
+    parent_id: fromTyped.parent_id ?? node.parent_id,
+    child_ids: fromTyped.child_ids?.length ? fromTyped.child_ids : node.child_ids,
+    confidence: fromTyped.confidence ?? node.confidence,
+    payload,
+    created_at: fromTyped.created_at || node.created_at,
+    updated_at: fromTyped.updated_at || node.updated_at,
+  };
+}
+
 /** Snapshot wins when present; otherwise fall back to the typed graph node. */
 export function resolveResearchCanvasNode(
   nodeId: string | null | undefined,

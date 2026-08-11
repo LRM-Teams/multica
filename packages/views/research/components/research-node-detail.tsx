@@ -360,7 +360,7 @@ function buildNodeRunContext(
     objective:
       task?.objective || firstString(records, ["objective", "goal", "question", "small_goal"]),
     genericMethod: firstString(records, ["method", "approach", "strategy", "plan"]),
-    result: firstString(records, ["result", "outcome", "conclusion"]) || node.summary || null,
+    result: firstString(records, ["result", "outcome", "conclusion"]),
     metrics,
     reportCreated: Boolean(firstString(records, ["report_id"])),
     producedSources,
@@ -514,7 +514,7 @@ export function ResearchNodeDetailBody({
   const deadEndReason =
     payloadString(node.payload, "reason") ||
     payloadString(node.payload, "dead_end_reason") ||
-    (node.node_type === "dead_end" ? node.summary : null);
+    null;
   const abandoned = isAbandonedStatus(node.status);
   const abandonReason = abandoned ? readAbandonReason(node) : null;
   const metricLabels = useMemo(

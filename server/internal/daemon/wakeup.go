@@ -956,20 +956,12 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) {
 	attachment, ok := d.currentAttachmentForAgent(job.OwnerAgentID)
 	if !ok {
-		// Task #69: this used to be a silent return — a due reminder whose
-		// owner isn't (yet, or anymore) in the current Attachment set produced
-		// zero trace: no fire_attempt sent, no error, no reconnect forced.
-		// A perfectly healthy WS connection (heartbeat alive, projection
-		// cursor advancing) would show no symptom at all while this
-		// specific reminder just never fires. Owner-not-present-yet is a
-		// legitimate transient state (e.g. an agent lifecycle race), so
-		// this does not fail closed here — reminderCache's local retry
-		// (task #68's fireAndScheduleRetryLocked) already re-invokes this
-		// function on a schedule, so a transient gap self-heals the moment
-		// the Attachment arrives; logging is what makes a *persistent* gap
-		// (owner genuinely never resolves) visible instead of invisible.
+		// The current connection has consumed its one attempt for this due
+		// version. Do not create a local retry or a delayed makeup wake. If the
+		// server never committed it, a reconnect snapshot can restore the same
+		// canonical version.
 		if d.logger != nil {
-			d.logger.Warn("reminder timer fired for an owner missing from current Agent Attachment set; local retry will re-check",
+			d.logger.Warn("reminder timer fired for an owner missing from current Agent Attachment set; waiting for reconnect snapshot recovery",
 				"reminder_id", job.ReminderID, "agent_id", job.OwnerAgentID, "version", job.Version)
 		}
 		return

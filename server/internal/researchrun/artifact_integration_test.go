@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -57,17 +59,17 @@ func TestLegacyManifestVisibleArtifactIDsMatchPlan(t *testing.T) {
 	module := NewArtifactContextModule()
 	candidates := []artifactVersionCandidate{
 		{
-			ArtifactID: "30000000-0000-4000-8000-000000000001",
-			Kind:       ArtifactKindClaim,
-			Lifecycle:  ArtifactLifecycleRegistered,
-			Provenance: ArtifactProvenancePartial,
+			ArtifactID:  "30000000-0000-4000-8000-000000000001",
+			Kind:        ArtifactKindClaim,
+			Lifecycle:   ArtifactLifecycleRegistered,
+			Provenance:  ArtifactProvenancePartial,
 			AccessLevel: ArtifactAccessRaw,
 		},
 		{
-			ArtifactID: "30000000-0000-4000-8000-000000000002",
-			Kind:       ArtifactKindSourceSnapshot,
-			Lifecycle:  ArtifactLifecycleWithdrawn,
-			Provenance: ArtifactProvenancePartial,
+			ArtifactID:  "30000000-0000-4000-8000-000000000002",
+			Kind:        ArtifactKindSourceSnapshot,
+			Lifecycle:   ArtifactLifecycleWithdrawn,
+			Provenance:  ArtifactProvenancePartial,
 			AccessLevel: ArtifactAccessRaw,
 		},
 	}
@@ -184,6 +186,10 @@ func TestCreateDispatchIntentPersistsManifestBoundOutbox(t *testing.T) {
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
 	attempt, _, err := store.CreateDispatchIntent(ctx, input)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			t.Fatalf("CreateDispatchIntent: %v (constraint=%s detail=%s)", err, pgErr.ConstraintName, pgErr.Detail)
+		}
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
 	var manifestID, manifestHash, requestHash string
@@ -315,21 +321,23 @@ func TestTaskContextForAttemptExcludesPostDispatchArtifacts(t *testing.T) {
 		t.Fatalf("TaskContext before: %v", err)
 	}
 	sourceID := uuid.NewString()
-	_, err = pool.Exec(ctx, `
-		INSERT INTO research_source_snapshot (
-		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
-		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
-		  verification_status
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'https://example.test/late', 'Late source', 'example.test',
-		  'primary', '{}'::text[], 'example.test', now(), 'sha256:late', 'late snapshot', '{}'::jsonb,
-		  'verified'
-		)
-	`, sourceID, fixture.workspaceID, run.SessionID)
-	if err != nil {
-		t.Fatalf("insert late source: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, insertErr := tx.Exec(ctx, `
+			INSERT INTO research_source_snapshot (
+			  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
+			  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
+			  verification_status
+			) VALUES (
+			  $1::uuid, $2::uuid, $3::uuid, 'https://example.test/late', 'Late source', 'example.test',
+			  'primary', '{}'::text[], 'example.test', now(), 'sha256:late', 'late snapshot', '{}'::jsonb,
+			  'verified'
+			)
+		`, sourceID, fixture.workspaceID, run.SessionID); insertErr != nil {
+			return insertErr
+		}
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+		return nil
+	})
 
 	liveAfter, err := store.TaskContext(ctx, tasks[0].ID, fixture.workspaceID)
 	if err != nil {
@@ -384,28 +392,38 @@ func TestAcceptResultRequiresDispatchManifest(t *testing.T) {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
 	attemptID := uuid.NewString()
-	_, err = pool.Exec(ctx, `
-		INSERT INTO research_task_attempt (
-		  id, workspace_id, session_id, task_id, attempt_number, assigned_agent_id,
-		  execution_adapter, provider, model, target_config_fingerprint,
-		  agent_config_fingerprint, runtime_config_fingerprint, provider_config_fingerprint,
-		  dispatch_key, status, inbox_task_id
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 1, $5::uuid,
-		  'agent_inbox', 'openai', 'test-model', 'cfg', 'cfg', 'cfg', 'cfg',
-		  'research-test:missing-manifest', 'running', $6::uuid
-		)
-	`, attemptID, fixture.workspaceID, run.SessionID, tasks[0].ID, fixture.agentID, uuid.NewString())
-	if err != nil {
-		t.Fatalf("insert attempt: %v", err)
+	inboxID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'draining')
+	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
+		t.Fatalf("insert inbox event: %v", err)
 	}
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, insertErr := tx.Exec(ctx, `
+			INSERT INTO research_task_attempt (
+			  id, workspace_id, session_id, task_id, attempt_number, assigned_agent_id,
+			  execution_adapter, provider, model, target_config_fingerprint,
+			  agent_config_fingerprint, runtime_config_fingerprint, provider_config_fingerprint,
+			  dispatch_key, status, inbox_task_id
+			) VALUES (
+			  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 1, $5::uuid,
+			  'agent_inbox', 'openai', 'test-model', 'cfg', 'cfg', 'cfg', 'cfg',
+			  'research-test:missing-manifest', 'running', $6::uuid
+			)
+		`, attemptID, fixture.workspaceID, run.SessionID, tasks[0].ID, fixture.agentID, inboxID); insertErr != nil {
+			return insertErr
+		}
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, run.SessionID, attemptID, string(ArtifactKindAttempt), nil, nil)
+		return nil
+	})
 	raw, err := json.Marshal(validPlanResult(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = store.AcceptResult(ctx, AcceptResultInput{
 		SessionID: run.SessionID, AttemptID: attemptID, AgentID: fixture.agentID,
-		InboxTaskID: uuid.NewString(), Raw: raw,
+		InboxTaskID: inboxID, Raw: raw,
 	})
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("AcceptResult err=%v want ErrInvalidTransition", err)

@@ -122,10 +122,14 @@ type reminderQueryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
-type reminderAnchorSnapshot struct {
-	Available bool
-	MessageID string
-	Content   string
+type authorizedReminderAnchor struct {
+	Available     bool
+	MessageID     string
+	Content       string
+	ChannelName   string
+	ChannelKind   string
+	WorkspaceSlug string
+	DMPeerDisplay string
 }
 
 type reminderFireCommit struct {
@@ -1636,7 +1640,7 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	}
 	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
 
-	anchor, err := loadReminderAnchorSnapshot(ctx, tx, reminder)
+	anchor, err := loadAuthorizedReminderAnchor(ctx, tx, reminder, pgtype.UUID{})
 	if err != nil {
 		return nil, err
 	}
@@ -1747,37 +1751,81 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	return &reminderFireCommit{Reminder: reminder, OwnerInput: ownerInput}, nil
 }
 
-func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, reminder agentReminder) (reminderAnchorSnapshot, error) {
-	if !reminder.AnchorMessageID.Valid {
-		return reminderAnchorSnapshot{}, nil
+// loadAuthorizedReminderAnchor is the single availability and authorization
+// predicate for both private owner input and the human read projection. A null
+// viewerUserID selects the already-locked owner-input path; a valid viewer also
+// requires current user membership on the same surface.
+func loadAuthorizedReminderAnchor(ctx context.Context, q reminderQueryRower, reminder agentReminder, viewerUserID pgtype.UUID) (authorizedReminderAnchor, error) {
+	if !reminder.WorkspaceID.Valid || !reminder.AgentID.Valid || !reminder.AnchorChannelID.Valid || !reminder.AnchorMessageID.Valid {
+		return authorizedReminderAnchor{}, nil
 	}
-	var messageID, content string
+	var anchor authorizedReminderAnchor
 	err := q.QueryRow(ctx, `
-		SELECT anchor.id::text, anchor.content
+		SELECT anchor.id::text, anchor.content, ch.name, ch.kind, ws.slug,
+		       COALESCE((
+		         SELECT COALESCE(NULLIF(u.display_name, ''), NULLIF(u.name, ''), u.email,
+		                         NULLIF(peer_agent.display_name, ''), peer_agent.name, '')
+		         FROM channel_member peer
+		         LEFT JOIN "user" u
+		           ON peer.member_type = 'user' AND u.id = peer.member_id
+		         LEFT JOIN agent peer_agent
+		           ON peer.member_type = 'agent' AND peer_agent.id = peer.member_id
+		         WHERE peer.channel_id = ch.id
+		           AND peer.workspace_id = ch.workspace_id
+		           AND NOT (peer.member_type = 'user' AND peer.member_id = $6)
+		         ORDER BY peer.created_at ASC
+		         LIMIT 1
+		       ), '')
 		FROM channel_message anchor
+		JOIN channel ch
+		  ON ch.id = anchor.channel_id
+		 AND ch.workspace_id = anchor.workspace_id
+		 AND ch.archived_at IS NULL
+		JOIN workspace ws ON ws.id = anchor.workspace_id
+		JOIN agent owner_agent
+		  ON owner_agent.id = $5
+		 AND owner_agent.workspace_id = anchor.workspace_id
+		 AND owner_agent.archived_at IS NULL
 		WHERE anchor.id = $1
 		  AND anchor.channel_id = $2
 		  AND anchor.workspace_id = $3
 		  AND anchor.deleted_at IS NULL
-		  AND (
-		    $4::uuid IS NULL
-		    OR EXISTS (
+		  AND anchor.thread_root_message_id IS NOT DISTINCT FROM $4::uuid
+		  AND ($4::uuid IS NULL OR EXISTS (
 		      SELECT 1
 		      FROM channel_message root
 		      WHERE root.id = $4
 		        AND root.channel_id = $2
 		        AND root.workspace_id = $3
 		        AND root.deleted_at IS NULL
-		    )
-		  )`, reminder.AnchorMessageID, reminder.AnchorChannelID, reminder.WorkspaceID,
-		reminder.AnchorThreadRootMessageID).Scan(&messageID, &content)
+		  ))
+		  AND EXISTS (
+		    SELECT 1
+		    FROM channel_member owner_membership
+		    WHERE owner_membership.channel_id = $2
+		      AND owner_membership.workspace_id = $3
+		      AND owner_membership.member_type = 'agent'
+		      AND owner_membership.member_id = $5
+		  )
+		  AND ($6::uuid IS NULL OR EXISTS (
+		    SELECT 1
+		    FROM channel_member viewer_membership
+		    WHERE viewer_membership.channel_id = $2
+		      AND viewer_membership.workspace_id = $3
+		      AND viewer_membership.member_type = 'user'
+		      AND viewer_membership.member_id = $6
+		  ))`, reminder.AnchorMessageID, reminder.AnchorChannelID, reminder.WorkspaceID,
+		reminder.AnchorThreadRootMessageID, reminder.AgentID, viewerUserID).Scan(
+		&anchor.MessageID, &anchor.Content, &anchor.ChannelName, &anchor.ChannelKind,
+		&anchor.WorkspaceSlug, &anchor.DMPeerDisplay)
 	if err != nil {
 		if errorsIsNoRows(err) {
-			return reminderAnchorSnapshot{}, nil
+			return authorizedReminderAnchor{}, nil
 		}
-		return reminderAnchorSnapshot{}, err
+		return authorizedReminderAnchor{}, err
 	}
-	return reminderAnchorSnapshot{Available: true, MessageID: messageID, Content: content}, nil
+	anchor.Available = true
+	return anchor, nil
 }
 
 func (h *Handler) terminalizeReminderOccurrence(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID pgtype.UUID, reason string) error {

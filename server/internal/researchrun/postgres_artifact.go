@@ -45,6 +45,46 @@ func ensureSessionPolicyStateTx(ctx context.Context, tx pgx.Tx, workspaceID, ses
 	return err
 }
 
+func recordVerificationPolicyMutationTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, artifactID string) error {
+	_, err := tx.Exec(ctx, `
+		WITH marked AS (
+			SELECT 1
+			FROM research_artifact_verification_tx_marker marker
+			WHERE marker.workspace_id = $1::uuid
+			  AND marker.session_id = $2::uuid
+			  AND marker.entity_id = $3::uuid
+		), watermark AS (
+			SELECT research_artifact_policy_watermark_for_tx($1::uuid, $2::uuid) AS value
+			FROM marked
+		), revised AS (
+			UPDATE research_artifact_passport p
+			SET eligibility_revision = p.eligibility_revision + 1
+			FROM watermark
+			WHERE p.workspace_id = $1::uuid
+			  AND p.session_id = $2::uuid
+			  AND p.id = $3::uuid
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM research_artifact_policy_mutation mutation
+				WHERE mutation.workspace_id = p.workspace_id
+				  AND mutation.session_id = p.session_id
+				  AND mutation.artifact_id = p.id
+				  AND mutation.mutation_kind = 'verification'
+				  AND mutation.watermark = watermark.value
+			  )
+			RETURNING p.eligibility_revision, watermark.value
+		)
+		INSERT INTO research_artifact_policy_mutation (
+			workspace_id, session_id, watermark, mutation_kind, artifact_id,
+			old_eligibility_revision, new_eligibility_revision
+		)
+		SELECT $1::uuid, $2::uuid, revised.value, 'verification', $3::uuid,
+		       revised.eligibility_revision - 1, revised.eligibility_revision
+		FROM revised
+	`, workspaceID, sessionID, artifactID)
+	return err
+}
+
 func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtifactPassportInput) error {
 	if in.AccessLevel == "" {
 		in.AccessLevel = ArtifactAccessRaw

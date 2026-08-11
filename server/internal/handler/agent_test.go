@@ -1872,6 +1872,60 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 	}
 }
 
+func TestArchiveAgentLeavesGroupsButPreservesAuthoredMessages(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	agentID := fixture.agentIDs[0]
+	message := fixture.insertMessage(t, "agent", agentID, "archived agent history", nil)
+
+	archiveReq := newRequest(http.MethodPost, "/api/agents/"+agentID+"/archive", nil)
+	archiveReq = withURLParam(archiveReq, "id", agentID)
+	archiveW := httptest.NewRecorder()
+	fixture.handler.ArchiveAgent(archiveW, archiveReq)
+	if archiveW.Code != http.StatusOK {
+		t.Fatalf("ArchiveAgent: status=%d body=%s", archiveW.Code, archiveW.Body.String())
+	}
+
+	var groupMemberships int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_member member
+		JOIN channel ch ON ch.id = member.channel_id AND ch.workspace_id = member.workspace_id
+		WHERE member.member_type = 'agent' AND member.member_id = $1 AND ch.kind = 'group'`, agentID).Scan(&groupMemberships); err != nil {
+		t.Fatal(err)
+	}
+	if groupMemberships != 0 {
+		t.Fatalf("archived agent group memberships=%d want 0", groupMemberships)
+	}
+
+	restoreReq := newRequest(http.MethodPost, "/api/agents/"+agentID+"/restore", nil)
+	restoreReq = withURLParam(restoreReq, "id", agentID)
+	restoreW := httptest.NewRecorder()
+	fixture.handler.RestoreAgent(restoreW, restoreReq)
+	if restoreW.Code != http.StatusOK {
+		t.Fatalf("RestoreAgent: status=%d body=%s", restoreW.Code, restoreW.Body.String())
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2`, fixture.channel.ID, agentID).Scan(&groupMemberships); err != nil {
+		t.Fatal(err)
+	}
+	if groupMemberships != 0 {
+		t.Fatalf("restored agent original group memberships=%d want 0 until explicit invite", groupMemberships)
+	}
+
+	var authorType, storedAuthorID, content string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT author_type, author_id::text, content
+		FROM channel_message
+		WHERE id = $1`, message.ID).Scan(&authorType, &storedAuthorID, &content); err != nil {
+		t.Fatalf("authored message removed with archived agent: %v", err)
+	}
+	if authorType != "agent" || storedAuthorID != agentID || content != "archived agent history" {
+		t.Fatalf("preserved message=%s/%s/%q want agent/%s/history", authorType, storedAuthorID, content, agentID)
+	}
+}
+
 // insertHandlerTestTask creates an in_progress task for the given
 // agent so resolveActor's GetAgentTask lookup succeeds without
 // dragging the full TaskService into the test.

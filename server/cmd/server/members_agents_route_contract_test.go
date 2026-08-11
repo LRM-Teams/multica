@@ -41,3 +41,19 @@ func TestHumanAgentRoutesDualMountedUnderMembersAndLegacyAgents(t *testing.T) {
 		}
 	}
 }
+
+func TestHumanAgentReminderRouteIsReadOnly(t *testing.T) {
+	raw, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(raw)
+	if !strings.Contains(source, `r.Get("/reminders", h.ListAgentReminders)`) {
+		t.Fatal("missing read-only human Agent Reminder route")
+	}
+	for _, method := range []string{"Post", "Put", "Patch", "Delete"} {
+		if strings.Contains(source, `r.`+method+`("/reminders",`) {
+			t.Fatalf("human Agent Reminder route unexpectedly exposes %s", method)
+		}
+	}
+}

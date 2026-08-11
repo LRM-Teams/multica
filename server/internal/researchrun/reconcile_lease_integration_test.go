@@ -189,6 +189,8 @@ func TestEngineReconcileHeartbeatRenewsDuringSlowDispatch(t *testing.T) {
 	go func() { done <- engine.ReconcileSession(ctx, fixture.sessionID) }()
 	select {
 	case <-dispatcher.started:
+	case err = <-done:
+		t.Fatalf("reconcile stopped before dispatch: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("dispatch did not start")
 	}

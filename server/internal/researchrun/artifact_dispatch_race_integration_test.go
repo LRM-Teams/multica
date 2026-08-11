@@ -39,18 +39,10 @@ func setupDispatchRaceFixture(t *testing.T, ctx context.Context, pool *pgxpool.P
 	}
 	task := tasks[0]
 	claimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-		  significance, confidence, status, goal_version, plan_version, resolution
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'dispatch-race-claim', '', 'claim for dispatch race',
-		  0.5, 0.5, 'proposed', 1, 1, ''
-		)
-	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatalf("insert claim: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+	seedIntegrationClaimArtifact(
+		t, ctx, pool, fixture.workspaceID, run.SessionID,
+		claimID, "dispatch-race-claim", "claim for dispatch race",
+	)
 
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, task.ID, fixture.agentID)
 	return dispatchRaceFixture{
@@ -112,7 +104,7 @@ func assertDispatchRolledBack(t *testing.T, ctx context.Context, fx dispatchRace
 	}
 }
 
-func TestDispatchRaceRejectsWhenCandidateFactsChangeAfterRolledBackIntent(t *testing.T) {
+func TestDispatchRaceReevaluatesFactsAfterRolledBackIntent(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -126,22 +118,24 @@ func TestDispatchRaceRejectsWhenCandidateFactsChangeAfterRolledBackIntent(t *tes
 	defer pool.Close()
 
 	cases := []struct {
-		name   string
-		mutate func(context.Context, dispatchRaceFixture) error
+		name        string
+		mutate      func(context.Context, dispatchRaceFixture) error
+		wantInvalid bool
 	}{
 		{
 			name: "eligibility_revision",
 			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
 					UPDATE research_artifact_passport
 					SET eligibility_revision = eligibility_revision + 1
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
-				return err
+				return nil
 			},
 		},
 		{
-			name: "stale_run_state_version",
+			name:        "stale_run_state_version",
+			wantInvalid: true,
 			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
 				_, err := fx.pool.Exec(ctx, `
 					UPDATE research_session
@@ -154,12 +148,13 @@ func TestDispatchRaceRejectsWhenCandidateFactsChangeAfterRolledBackIntent(t *tes
 		{
 			name: "version_content_hash",
 			mutate: func(ctx context.Context, fx dispatchRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
+				mutatedHash := contentHashFromPayload([]byte("mutated after dispatch preflight"))
+				mutateIntegrationArtifactForCASTest(t, ctx, fx.pool, `
 					UPDATE research_artifact_version
-					SET content_hash = 'sha256:mutated-after-dispatch-preflight'
+					SET content_hash = $4
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
-				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
-				return err
+				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID, mutatedHash)
+				return nil
 			},
 		},
 	}
@@ -173,10 +168,17 @@ func TestDispatchRaceRejectsWhenCandidateFactsChangeAfterRolledBackIntent(t *tes
 			if err := tc.mutate(ctx, fx); err != nil {
 				t.Fatalf("mutate: %v", err)
 			}
-			if _, _, err = fx.store.CreateDispatchIntent(ctx, fx.input); !errors.Is(err, ErrInvalidTransition) {
-				t.Fatalf("CreateDispatchIntent after mutation err=%v want ErrInvalidTransition", err)
+			_, _, err = fx.store.CreateDispatchIntent(ctx, fx.input)
+			if tc.wantInvalid {
+				if !errors.Is(err, ErrInvalidTransition) {
+					t.Fatalf("CreateDispatchIntent after mutation err=%v want ErrInvalidTransition", err)
+				}
+				assertDispatchRolledBack(t, ctx, fx)
+				return
 			}
-			assertDispatchRolledBack(t, ctx, fx)
+			if err != nil {
+				t.Fatalf("CreateDispatchIntent after fresh candidate mutation: %v", err)
+			}
 		})
 	}
 }

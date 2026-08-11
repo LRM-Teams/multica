@@ -263,10 +263,12 @@ RETURNING *;
 
 -- name: ListRunningUnattendedResearchSessions :many
 -- LRM-1076: scanner input — running sessions with unattended default on.
-SELECT * FROM research_session
-WHERE status = 'running'
-  AND unattended_enabled = true
-ORDER BY updated_at ASC
+SELECT rs.*
+FROM research_session AS rs
+JOIN workspace AS w ON w.id = rs.workspace_id
+WHERE rs.status = 'running'
+  AND rs.unattended_enabled = true
+ORDER BY rs.updated_at ASC
 LIMIT $1;
 
 -- name: IncrementResearchUnattendedAutoSteps :one

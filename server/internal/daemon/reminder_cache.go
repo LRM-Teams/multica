@@ -63,7 +63,7 @@ type reminderCache struct {
 	runtimeCursors   map[string]int64
 	runtimeResets    map[string]bool
 	recoveryRequired bool
-	pendingFires     map[string]int64
+	attemptedFires   map[string]int64
 	suspended        bool
 	clock            reminderClock
 	onFire           func(protocol.ReminderTimerJob)
@@ -85,7 +85,7 @@ func newReminderCache(clock reminderClock, logger *slog.Logger, onFire func(prot
 		fences:         make(map[string]reminderVersionFence),
 		runtimeCursors: make(map[string]int64),
 		runtimeResets:  make(map[string]bool),
-		pendingFires:   make(map[string]int64),
+		attemptedFires: make(map[string]int64),
 		clock:          clock,
 		onFire:         onFire,
 		logger:         logger,
@@ -150,7 +150,7 @@ func (c *reminderCache) initializeRecoveryStateLocked(cause error) {
 	clear(c.fences)
 	clear(c.runtimeCursors)
 	clear(c.runtimeResets)
-	clear(c.pendingFires)
+	clear(c.attemptedFires)
 	c.recoveryRequired = true
 	c.loadErr = nil
 	if err := c.persistLocked(); err != nil {
@@ -211,7 +211,7 @@ func cloneReminderCursors(in map[string]int64) map[string]int64 {
 	return out
 }
 
-func clonePendingFires(in map[string]int64) map[string]int64 {
+func cloneAttemptedFires(in map[string]int64) map[string]int64 {
 	out := make(map[string]int64, len(in))
 	for id, version := range in {
 		out[id] = version
@@ -245,7 +245,7 @@ func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) 
 	}
 	previousFences := cloneReminderFences(c.fences)
 	previousCursors := cloneReminderCursors(c.runtimeCursors)
-	previousPending, hadPending := c.pendingFires[event.ReminderID]
+	previousAttempt, hadAttempted := c.attemptedFires[event.ReminderID]
 
 	fence, exists := c.fences[event.ReminderID]
 	apply := false
@@ -253,23 +253,23 @@ func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) 
 		apply = !exists || event.Version >= fence.Version
 	} else if !exists || event.Version > fence.Version {
 		apply = true
-	} else if event.EventType == "fire_result" && event.Version == fence.Version && hadPending && previousPending == event.Version {
+	} else if event.EventType == "fire_result" && event.Version == fence.Version && hadAttempted && previousAttempt == event.Version {
 		apply = true
 	}
 	if apply {
 		c.fences[event.ReminderID] = reminderVersionFence{
 			OwnerAgentID: event.AgentID, Version: event.Version, LastSeq: event.Seq, Terminal: event.Terminal,
 		}
-		delete(c.pendingFires, event.ReminderID)
+		delete(c.attemptedFires, event.ReminderID)
 	}
 	c.runtimeCursors[event.RuntimeID] = event.Seq
 	if err := c.persistLocked(); err != nil {
 		c.fences = previousFences
 		c.runtimeCursors = previousCursors
-		if hadPending {
-			c.pendingFires[event.ReminderID] = previousPending
+		if hadAttempted {
+			c.attemptedFires[event.ReminderID] = previousAttempt
 		} else {
-			delete(c.pendingFires, event.ReminderID)
+			delete(c.attemptedFires, event.ReminderID)
 		}
 		return false, err
 	}
@@ -407,12 +407,12 @@ func (c *reminderCache) reconcileRuntimeSet(allowed map[string]bool, retiredOwne
 	for runtimeID, required := range c.runtimeResets {
 		previousResets[runtimeID] = required
 	}
-	previousPending := clonePendingFires(c.pendingFires)
+	previousAttempted := cloneAttemptedFires(c.attemptedFires)
 	changed := false
 	for reminderID, fence := range c.fences {
 		if retiredOwners[fence.OwnerAgentID] {
 			delete(c.fences, reminderID)
-			delete(c.pendingFires, reminderID)
+			delete(c.attemptedFires, reminderID)
 			changed = true
 		}
 	}
@@ -441,7 +441,7 @@ func (c *reminderCache) reconcileRuntimeSet(allowed map[string]bool, retiredOwne
 		c.fences = previousFences
 		c.runtimeCursors = previousCursors
 		c.runtimeResets = previousResets
-		c.pendingFires = previousPending
+		c.attemptedFires = previousAttempted
 		return false, err
 	}
 	for reminderID, entry := range c.entries {
@@ -497,6 +497,7 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 		return 0, nil
 	}
 	previousFences := cloneReminderFences(c.fences)
+	previousAttempted := cloneAttemptedFires(c.attemptedFires)
 	acceptedJobs := make(map[string]protocol.ReminderTimerJob)
 	for _, job := range jobs {
 		if job.OwnerAgentID != agentID || job.ReminderID == "" || job.Version < 1 {
@@ -520,16 +521,18 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 			}
 			continue
 		}
-		if pendingVersion, pending := c.pendingFires[job.ReminderID]; pending && pendingVersion == job.Version {
-			// Task #68: this was a silent `continue` — the daemon is still
-			// locally retrying this exact fire, waiting on a fire_result
-			// confirmation, and dropping it here without a trace made a
-			// stuck-forever case impossible to diagnose from logs alone.
+		if attemptedVersion, attempted := c.attemptedFires[job.ReminderID]; attempted && attemptedVersion == job.Version {
+			// One connection may attempt a due version only once. A reconnect
+			// clears this ephemeral fence so a server-uncommitted version remains
+			// recoverable from the next canonical snapshot.
 			if c.logger != nil {
-				c.logger.Info("reminder snapshot skipped job pending local fire confirmation",
+				c.logger.Info("reminder snapshot skipped job already attempted on current connection",
 					"reminder_id", job.ReminderID, "agent_id", agentID, "version", job.Version)
 			}
 			continue
+		}
+		if attemptedVersion, attempted := c.attemptedFires[job.ReminderID]; attempted && job.Version > attemptedVersion {
+			delete(c.attemptedFires, job.ReminderID)
 		}
 		acceptedJobs[job.ReminderID] = job
 		c.fences[job.ReminderID] = reminderVersionFence{OwnerAgentID: agentID, Version: job.Version, LastSeq: watermark}
@@ -539,12 +542,6 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 			continue
 		}
 		if _, present := acceptedJobs[id]; present {
-			continue
-		}
-		// Task #68: an in-flight job (fired, awaiting fire_result) is not
-		// cancelled — don't tombstone its fence or drop its entry below just
-		// because the server's job list didn't happen to include it.
-		if pendingVersion, pending := c.pendingFires[id]; pending && pendingVersion == entry.job.Version {
 			continue
 		}
 		fence := c.fences[id]
@@ -557,14 +554,12 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 	}
 	if err := c.persistLocked(); err != nil {
 		c.fences = previousFences
+		c.attemptedFires = previousAttempted
 		return 0, err
 	}
 	accepted := 0
 	for id, entry := range c.entries {
 		if entry.job.OwnerAgentID != agentID {
-			continue
-		}
-		if pendingVersion, pending := c.pendingFires[id]; pending && pendingVersion == entry.job.Version {
 			continue
 		}
 		if entry.timer != nil {
@@ -596,7 +591,7 @@ func (c *reminderCache) clear() {
 	}
 	c.suspended = true
 	clear(c.entries)
-	clear(c.pendingFires)
+	clear(c.attemptedFires)
 }
 
 func (c *reminderCache) beginConnection() {
@@ -611,7 +606,7 @@ func (c *reminderCache) beginConnection() {
 	}
 	c.suspended = true
 	clear(c.entries)
-	clear(c.pendingFires)
+	clear(c.attemptedFires)
 	c.mu.Unlock()
 }
 
@@ -686,11 +681,11 @@ func (c *reminderCache) resetRuntime(runtimeID string, reset protocol.ReminderRu
 	for id, required := range c.runtimeResets {
 		previousResets[id] = required
 	}
-	previousPending := clonePendingFires(c.pendingFires)
+	previousAttempted := cloneAttemptedFires(c.attemptedFires)
 	for id, fence := range c.fences {
 		if ownerIDs[fence.OwnerAgentID] {
 			delete(c.fences, id)
-			delete(c.pendingFires, id)
+			delete(c.attemptedFires, id)
 		}
 	}
 	for _, job := range jobs {
@@ -704,7 +699,7 @@ func (c *reminderCache) resetRuntime(runtimeID string, reset protocol.ReminderRu
 		c.fences = previousFences
 		c.runtimeCursors = previousCursors
 		c.runtimeResets = previousResets
-		c.pendingFires = previousPending
+		c.attemptedFires = previousAttempted
 		return err
 	}
 	for id, entry := range c.entries {
@@ -751,16 +746,16 @@ func (c *reminderCache) removeOwner(agentID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	previous := cloneReminderFences(c.fences)
-	previousPending := clonePendingFires(c.pendingFires)
+	previousAttempted := cloneAttemptedFires(c.attemptedFires)
 	for id, fence := range c.fences {
 		if fence.OwnerAgentID == agentID {
 			delete(c.fences, id)
-			delete(c.pendingFires, id)
+			delete(c.attemptedFires, id)
 		}
 	}
 	if err := c.persistLocked(); err != nil {
 		c.fences = previous
-		c.pendingFires = previousPending
+		c.attemptedFires = previousAttempted
 		return err
 	}
 	for id, entry := range c.entries {
@@ -787,7 +782,7 @@ func (c *reminderCache) armLocked(job protocol.ReminderTimerJob, fireAt time.Tim
 	if delay < 0 {
 		delay = 0
 	}
-	timer := c.clock.AfterFunc(delay, func() { c.fireAndScheduleRetryLocked(job) })
+	timer := c.clock.AfterFunc(delay, func() { c.attemptFireOnce(job) })
 	entry := c.entries[job.ReminderID]
 	entry.timer = timer
 	c.entries[job.ReminderID] = entry
@@ -801,35 +796,19 @@ func (c *reminderCache) armLocked(job protocol.ReminderTimerJob, fireAt time.Tim
 	}
 }
 
-// reminderFireRetryInterval is the local backoff between fire_attempt resends
-// while a job stays unconfirmed (task #68). It is short and constant, not
-// exponential: an unconfirmed reminder is user-visible overdue time, so the
-// cost of resending too often is far lower than the cost of waiting too long.
-const reminderFireRetryInterval = 15 * time.Second
-
-// fireAndScheduleRetryLocked sends job to onFire and keeps its entries
-// record alive as an in-flight copy instead of deleting it (task #68's main
-// fix). Deleting it at fire time — the previous behavior — meant a
-// fire_attempt that never got confirmed (dropped send, transient server
-// error, WS hiccup short of a reconnect) had nothing left locally to retry
-// from; recovery depended entirely on a future reconnect's snapshot(),
-// which only happens if and when the connection actually drops and comes
-// back. Confirmation is a fire_result projection event: applyProjection
-// stops whatever timer is currently in this entry (initially the due-time
-// timer, later a retry timer scheduled here) and either deletes the entry
-// (terminal) or re-arms it fresh (next cadence occurrence) — so a
-// fire_result racing a retry always wins, never double-fires after
-// confirmation.
-func (c *reminderCache) fireAndScheduleRetryLocked(job protocol.ReminderTimerJob) {
+// attemptFireOnce removes the due job before invoking the transport. The
+// in-memory attempt fence prevents snapshots on this connection from creating
+// a makeup attempt. A reconnect clears that fence, allowing the canonical
+// snapshot to recover the same version only when the server never committed it.
+func (c *reminderCache) attemptFireOnce(job protocol.ReminderTimerJob) {
 	c.mu.Lock()
 	current, ok := c.entries[job.ReminderID]
 	if !ok || current.job.Version != job.Version {
 		c.mu.Unlock()
 		return
 	}
-	c.pendingFires[job.ReminderID] = job.Version
-	current.timer = c.clock.AfterFunc(reminderFireRetryInterval, func() { c.fireAndScheduleRetryLocked(job) })
-	c.entries[job.ReminderID] = current
+	delete(c.entries, job.ReminderID)
+	c.attemptedFires[job.ReminderID] = job.Version
 	c.mu.Unlock()
 	if c.onFire != nil {
 		c.onFire(job)

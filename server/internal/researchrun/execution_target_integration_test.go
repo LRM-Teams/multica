@@ -54,11 +54,10 @@ func TestExecutionTargetIsFrozenIntoAttemptAndOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	attemptID := uuid.NewString()
-	request := DispatchRequest{Run: run, Task: tasks[0], AttemptID: attemptID, AgentID: fixture.agentID, Target: target, Prompt: "frozen target", Key: "research-target:" + attemptID}
-	request.RequestHash, err = HashDispatchRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := testDispatchRequestForTarget(
+		t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0], fixture.agentID,
+		target, attemptID, "research-target:"+attemptID,
+	)
 	attempt, _, err := store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
 		AttemptID: attemptID, SessionID: fixture.sessionID, TaskID: tasks[0].ID,
 		AgentID: fixture.agentID, Target: target, ExpectedStateVersion: run.StateVersion, Request: request,

@@ -142,7 +142,29 @@ func createForeignWorkspaceFindingNode(t *testing.T, ctx context.Context, worksp
 		t.Fatalf("commit foreign workspace graph node: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id = $1`, sessionID)
+		cleanupCtx := context.Background()
+		for _, statement := range []string{
+			`ALTER TABLE research_artifact_policy_mutation DISABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
+			`ALTER TABLE research_artifact_lifecycle_event DISABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
+		} {
+			if _, cleanupErr := testPool.Exec(cleanupCtx, statement); cleanupErr != nil {
+				t.Errorf("disable research append-only cleanup guard: %v", cleanupErr)
+				return
+			}
+		}
+		_, cleanupErr := testPool.Exec(cleanupCtx, `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		for _, statement := range []string{
+			`ALTER TABLE research_artifact_policy_mutation ENABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
+			`ALTER TABLE research_artifact_lifecycle_event ENABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
+		} {
+			if _, err := testPool.Exec(cleanupCtx, statement); err != nil {
+				t.Errorf("restore research append-only cleanup guard: %v", err)
+				return
+			}
+		}
+		if cleanupErr != nil {
+			t.Errorf("delete foreign research workspace fixture: %v", cleanupErr)
+		}
 	})
 	return node.ID
 }

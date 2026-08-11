@@ -13,6 +13,13 @@ ALTER TABLE agent_activity_launch
 ALTER TABLE agent_activity_launch
   DROP CONSTRAINT agent_activity_launch_status_check;
 
+-- The pre-323 schema cannot represent the accepted-but-not-active launch
+-- phase. Preserve the launch row and map that phase to the closest legacy
+-- state before restoring the narrower constraint.
+UPDATE agent_activity_launch
+SET status = 'active'
+WHERE status = 'accepted';
+
 ALTER TABLE agent_activity_launch
   ADD CONSTRAINT agent_activity_launch_status_check
   CHECK (status IN ('active', 'inactive'));

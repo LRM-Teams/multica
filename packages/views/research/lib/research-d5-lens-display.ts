@@ -108,9 +108,28 @@ export function buildD5LensDisplayHints(
   model: StarCanvasViewModel | null,
   options: D5LensDisplayOptions = {},
 ): D5LensDisplayHints {
-  if (!typed || !model || lens === "relations") return EMPTY_HINTS;
+  if (!typed || !model) return EMPTY_HINTS;
 
   const allNodeIds = new Set(model.entities.map((entity) => entity.id));
+
+  if (lens === "relations") {
+    const emphasizedRelations = new Set(model.relations.map((relation) => relation.id));
+    const connected = new Set<string>();
+    for (const relation of model.relations) {
+      connected.add(relation.fromNodeId);
+      connected.add(relation.toNodeId);
+    }
+    const dimmedNodes = new Set<string>();
+    for (const id of allNodeIds) {
+      if (!connected.has(id)) dimmedNodes.add(id);
+    }
+    return {
+      emphasizedNodeIds: connected,
+      dimmedNodeIds: dimmedNodes,
+      emphasizedRelationIds: emphasizedRelations,
+      dimmedRelationIds: new Set(),
+    };
+  }
 
   if (lens === "confidence") {
     const { emphasized, dimmed } = collectConfidenceEmphasis(typed);

@@ -20,7 +20,8 @@ export function buildD5SessionCanvasModel(
     nodes: typed.nodes,
     edges: typed.edges,
     seed: typed.graph_version,
-    version: `typed-${typed.graph_version}`,
+    // Stable version so graph_version bumps reuse incremental layout positions.
+    version: "d5-star-v1",
     previous: options.previousLayout,
   });
 

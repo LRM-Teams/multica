@@ -71,10 +71,10 @@ import {
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
+import { resolveResearchCanvasNode } from "../lib/resolve-research-canvas-node";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
-  stageAnchorId,
   stageAnchorTargetId,
   buildStageMessageAnchors,
 } from "../lib/research-stages";
@@ -241,9 +241,13 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     if (!data) return;
     const linkedNodeId = nav.searchParams.get("node");
     if (!linkedNodeId) return;
-    if (!data.nodes.some((node) => node.id === linkedNodeId)) return;
+    const resolved = resolveResearchCanvasNode(linkedNodeId, {
+      snapshotNodes: data.nodes,
+      typedGraph,
+    });
+    if (!resolved) return;
     selectCanvasNode(linkedNodeId);
-  }, [data, nav.searchParams, selectCanvasNode]);
+  }, [data, nav.searchParams, selectCanvasNode, typedGraph]);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
     agentId: string;
@@ -345,30 +349,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const stageFirstMessageId = useMemo(
     () => buildStageMessageAnchors(data?.messages ?? []),
     [data?.messages],
-  );
-  const anchorTarget = useCallback((el: HTMLElement | null) => {
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
-    el.classList.add("research-anchor-flash");
-    window.setTimeout(() => el.classList.remove("research-anchor-flash"), 1000);
-  }, []);
-  const handleSelectStage = useCallback(
-    (stage: string) => {
-      setChatOpen(true);
-      // Wait a frame so the chat pane mounts before scrolling.
-      requestAnimationFrame(() => {
-        const firstMessageId = stageFirstMessageId.get(stage);
-        const el =
-          (firstMessageId
-            ? document.getElementById(stageAnchorTargetId(firstMessageId))
-            : null) ??
-          document.getElementById(stageAnchorId(stage)) ??
-          chatScrollRef.current?.querySelector(`[data-research-stage="${stage}"]`) ??
-          null;
-        anchorTarget(el as HTMLElement | null);
-      });
-    },
-    [anchorTarget, setChatOpen, stageFirstMessageId],
   );
 
   // LRM-823 — session interrupt banner (wake_failed / disconnect). Hooks stay
@@ -479,11 +459,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
   const linkedNodeId = nav.searchParams.get("node");
-  const selectedNode = (() => {
-    const id = selectedNodeId ?? linkedNodeId;
-    if (!id) return null;
-    return data.nodes.find((node) => node.id === id) ?? null;
-  })();
+  const selectedNode = resolveResearchCanvasNode(selectedNodeId ?? linkedNodeId, {
+    snapshotNodes: data.nodes,
+    typedGraph,
+  });
   const executionRows = buildExecutionOverlayRows({
     members: fleet.members,
     presence,
@@ -638,7 +617,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
         members={fleet.members}
         sources={sources}
-        onSelectStage={handleSelectStage}
         pendingSubstantiveGoal={
           latestRound?.goal_patch_proposal?.trim()
             ? latestRound.goal_patch_proposal

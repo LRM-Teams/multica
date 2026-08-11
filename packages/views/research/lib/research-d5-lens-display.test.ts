@@ -36,9 +36,13 @@ const model = buildStarCanvasViewModel({
 });
 
 describe("buildD5LensDisplayHints", () => {
-  it("returns empty hints for relations lens", () => {
+  it("emphasizes connected nodes and relations in the relations lens", () => {
     const hints = buildD5LensDisplayHints("relations", typed, model);
-    expect(hints.dimmedNodeIds.size).toBe(0);
+    expect(hints.emphasizedRelationIds.has("e1")).toBe(true);
+    expect(hints.emphasizedRelationIds.has("e2")).toBe(true);
+    expect(hints.emphasizedNodeIds.has("high")).toBe(true);
+    expect(hints.emphasizedNodeIds.has("agent")).toBe(true);
+    expect(hints.dimmedNodeIds.has("low")).toBe(true);
   });
 
   it("dims unknown confidence without ranking it as zero", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffTypedGraphLayout } from "./diff-typed-graph-layout";
+import { diffTypedGraphLayout, scopeMotionEventsToLayoutDiff } from "./diff-typed-graph-layout";
 import type { TypedGraphResponse } from "@multica/core/research";
 
 const base = {
@@ -48,5 +48,29 @@ describe("diffTypedGraphLayout", () => {
     const diff = diffTypedGraphLayout(base, next);
     expect(diff.changedNodeIds).toEqual(["a"]);
     expect(diff.affectedRootIds).toEqual(expect.arrayContaining(["a", "b"]));
+  });
+
+  it("scopes motion events to the layout-affected subgraph", () => {
+    const events = [
+      {
+        transition_kind: "branch_spawned" as const,
+        related_ids: ["a", "far-away"],
+        anchor_id: "a",
+      },
+      {
+        transition_kind: "node_retired" as const,
+        related_ids: ["removed"],
+        anchor_id: null,
+      },
+    ];
+    const scoped = scopeMotionEventsToLayoutDiff(events, {
+      newNodeIds: ["c"],
+      removedNodeIds: ["removed"],
+      changedNodeIds: [],
+      affectedRootIds: ["a", "c", "removed"],
+    });
+    expect(scoped).toHaveLength(2);
+    expect(scoped[0]?.related_ids).toEqual(["a"]);
+    expect(scoped[1]?.related_ids).toEqual(["removed"]);
   });
 });

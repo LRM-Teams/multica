@@ -8,6 +8,7 @@ import {
   runtimeCurrentVersion,
   runtimeLaunchedBy,
   isNewerCliVersion,
+  isMachineUpgradeFailureSuperseded,
 } from "@multica/core/runtimes";
 import { api, ApiError } from "@multica/core/api";
 import { createSafeId } from "@multica/core/utils";
@@ -45,8 +46,17 @@ export function MachineDaemonUpgrade({
   const isSandbox = isSandboxRuntime(runtime);
   const currentVersion = cliVersion ?? runtimeCurrentVersion(runtime);
   const machineUpgrade = runtime.machine_upgrade ?? null;
-  const machineTarget =
+  const recordedMachineTarget =
     machineUpgrade?.resolved_target?.trim() || machineUpgrade?.requested_target?.trim() || null;
+  // Old failed operations may have persisted the symbolic request "latest"
+  // before target resolution failed. Once the server advertises a newer exact
+  // daemon target, that stale failure must not shadow the actionable release.
+  const isSupersededMachineFailure = isMachineUpgradeFailureSuperseded(
+    machineUpgrade,
+    currentVersion,
+    daemonTargetVersion,
+  );
+  const machineTarget = isSupersededMachineFailure ? null : recordedMachineTarget;
   const targetVersion = machineTarget ?? daemonTargetVersion ?? null;
   const updateState = runtime.update_state;
   const runtimeHealth = runtime.runtime_health;
@@ -159,9 +169,9 @@ export function MachineDaemonUpgrade({
       case "failed":
       case "rolled_back":
       case "cancelled":
-        return "failed";
+        return isSupersededMachineFailure ? null : "failed";
       case "timeout":
-        return "timeout";
+        return isSupersededMachineFailure ? null : "timeout";
       default:
         return null;
     }

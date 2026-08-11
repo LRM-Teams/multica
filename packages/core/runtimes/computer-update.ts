@@ -4,6 +4,7 @@ import {
   runtimeCurrentVersion,
   runtimeTargetVersion,
 } from "./runtime-health-state";
+import { isNewerCliVersion } from "./cli-version";
 
 /** Same aggregation key as attentionMachineKey — one toast per daemon. */
 export function computerUpdateMachineKey(runtime: AgentRuntime): string {
@@ -84,6 +85,36 @@ export function machineTitleFromRuntime(runtime: AgentRuntime): string {
 }
 
 /**
+ * A terminal legacy request such as `latest` stops owning presentation once
+ * the server can offer a newer exact release. This keeps the detail CTA and
+ * the global update toast on the same target-selection contract.
+ */
+export function isMachineUpgradeFailureSuperseded(
+  machineUpgrade: AgentRuntime["machine_upgrade"],
+  currentVersion: string | null,
+  daemonTargetVersion: string | null | undefined,
+): boolean {
+  const phase = machineUpgrade?.phase;
+  const isTerminalFailure =
+    phase === "failed" ||
+    phase === "rolled_back" ||
+    phase === "cancelled" ||
+    phase === "timeout";
+  const recordedTarget =
+    machineUpgrade?.resolved_target?.trim() ||
+    machineUpgrade?.requested_target?.trim() ||
+    null;
+  const daemonTarget = daemonTargetVersion?.trim() || null;
+  return (
+    isTerminalFailure &&
+    !!recordedTarget &&
+    !!daemonTarget &&
+    isNewerCliVersion(daemonTarget, currentVersion) &&
+    !isNewerCliVersion(recordedTarget, currentVersion)
+  );
+}
+
+/**
  * Prefer machine-upgrade resolution, then daemon target, then legacy
  * runtime target — same order as Computers detail upgrade UI.
  */
@@ -94,8 +125,13 @@ export function resolveComputerUpdateTarget(
     runtime.machine_upgrade?.resolved_target?.trim() ||
     runtime.machine_upgrade?.requested_target?.trim() ||
     null;
-  if (fromUpgrade) return fromUpgrade;
   const daemonTarget = runtime.daemon_target_version?.trim();
+  const isSupersededFailure = isMachineUpgradeFailureSuperseded(
+    runtime.machine_upgrade,
+    runtimeCurrentVersion(runtime),
+    daemonTarget,
+  );
+  if (fromUpgrade && !isSupersededFailure) return fromUpgrade;
   if (daemonTarget) return daemonTarget;
   return runtimeTargetVersion(runtime);
 }

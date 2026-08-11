@@ -280,6 +280,41 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     );
   });
 
+  it("uses the current exact target when a failed legacy upgrade requested latest", () => {
+    const runtime = makeRuntime({
+      current_version: "0.4.24-alpha.9",
+      runtime_health: "update_available",
+      target_version: "v0.4.24-alpha.11",
+      machine_upgrade: {
+        id: "machine-upgrade-failed-latest",
+        daemon_id: "daemon-1",
+        request_id: "request-failed-latest",
+        requested_target: "latest",
+        phase: "failed",
+        error_code: "target_resolution_failed",
+        error_message: "resolve latest machine upgrade target: context deadline exceeded",
+        created_at: "2026-08-11T09:58:31Z",
+        updated_at: "2026-08-11T09:58:46Z",
+      },
+    });
+
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.4.24-alpha.9"
+        daemonTargetVersion="v0.4.24-alpha.11"
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+
+    expect(screen.getByTestId("machine-daemon-upgrade-btn")).toHaveTextContent(
+      /Upgrade to v0\.4\.24-alpha\.11/,
+    );
+    expect(screen.queryByTestId("machine-daemon-upgrade-fail")).not.toBeInTheDocument();
+  });
+
   it("does not read an individual runtime target", () => {
     const runtime = makeRuntime({
       runtime_health: "update_available",

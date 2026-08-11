@@ -7,6 +7,7 @@ import type { ResearchGraphNode } from "@multica/core/types";
 
 import { buildStarCanvasViewModel } from "../lib/star-canvas-view-model";
 import { StarGraphCanvas } from "./star-graph-canvas";
+import { emptyCanvasFilter } from "@multica/core/research";
 
 const setViewport = vi.fn();
 
@@ -16,10 +17,12 @@ vi.mock("@multica/core/research", async (importOriginal) => {
     ...actual,
     useResearchCanvasStore: (selector: (state: {
       viewport: null;
+      filter: ReturnType<typeof emptyCanvasFilter>;
       setViewport: typeof setViewport;
     }) => unknown) =>
       selector({
         viewport: null,
+        filter: emptyCanvasFilter(),
         setViewport,
       }),
   };

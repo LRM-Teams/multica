@@ -103,34 +103,78 @@ registerForWorkspaceRehydration(() =>
   useResearchCanvasStore.persist.rehydrate(),
 );
 
+/** Minimal node shape for display-only canvas filtering (typed graph + legacy snapshot). */
+export interface ResearchCanvasFilterableNode {
+  id: string;
+  status?: string | null;
+  node_type?: string | null;
+  level?: string | null;
+  round?: string | number | null;
+  cluster_id?: string | null;
+  cluster?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  actor_agent_id?: string | null;
+  agent?: string | null;
+  conclusion?: string | null;
+  evidence?: unknown;
+}
+
+export function matchesResearchCanvasFilter(
+  node: ResearchCanvasFilterableNode,
+  filter: ResearchCanvasFilter,
+): boolean {
+  if (isBlankFilter(filter)) return true;
+
+  if (filter.status && (node.status ?? "") !== filter.status) return false;
+
+  if (filter.tier) {
+    const tier = (node.level || node.node_type || "").toLowerCase();
+    if (tier !== filter.tier.toLowerCase()) return false;
+  }
+
+  if (filter.round) {
+    const round = node.round != null && node.round !== "" ? String(node.round) : "";
+    if (round !== filter.round) return false;
+  }
+
+  const cluster = node.cluster_id ?? node.cluster ?? "";
+  if (filter.cluster && cluster !== filter.cluster) return false;
+
+  const q = (filter.query || "").trim().toLowerCase();
+  if (q) {
+    const haystack = [
+      node.title,
+      node.summary,
+      node.agent,
+      node.actor_agent_id,
+      node.conclusion,
+      stringifyEvidence(node.evidence),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (!haystack.includes(q)) return false;
+  }
+
+  return true;
+}
+
 /**
  * Pure display-count helper over the canonical node set. Applied to a list of
  * canonical nodes/edges it returns how many are hidden by the current filter.
  * It never mutates the input. A blank filter hides nothing.
  */
 export function countHiddenByFilter(
-  nodes: ReadonlyArray<{ id: string; node_type?: string; status?: string | null; round?: string | null; cluster?: string | null; title?: string; agent?: string | null; conclusion?: string | null; evidence?: unknown }>,
+  nodes: ReadonlyArray<ResearchCanvasFilterableNode>,
   filter: ResearchCanvasFilter,
 ): { visible: number; hidden: number } {
   if (isBlankFilter(filter)) {
     return { visible: nodes.length, hidden: 0 };
   }
-  const q = (filter.query || "").trim().toLowerCase();
   let hidden = 0;
   for (const n of nodes) {
-    let match = true;
-    if (filter.status && n.status !== filter.status) match = false;
-    if (match && filter.tier && n.node_type !== filter.tier) match = false;
-    if (match && filter.round && n.round !== filter.round) match = false;
-    if (match && filter.cluster && n.cluster !== filter.cluster) match = false;
-    if (match && q) {
-      const haystack = [n.title, n.agent, n.conclusion, stringifyEvidence(n.evidence)]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      if (!haystack.includes(q)) match = false;
-    }
-    if (!match) hidden += 1;
+    if (!matchesResearchCanvasFilter(n, filter)) hidden += 1;
   }
   return { visible: nodes.length - hidden, hidden };
 }

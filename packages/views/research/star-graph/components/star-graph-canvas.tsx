@@ -11,6 +11,8 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { useResearchCanvasStore } from "@multica/core/research";
+import type { TypedGraphNode } from "@multica/core/research";
+import { indexTypedGraphNodes } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
 import { StarGraphMapKey } from "@multica/ui/components/star-graph";
 import { cn } from "@multica/ui/lib/utils";
@@ -26,6 +28,7 @@ import type { MotionDirective } from "../../motion/directives";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import {
   computeClusterHiddenCounts,
+  filterEntitiesForCanvasDisplay,
   filterRelationsToVisibleEntities,
   selectVisibleEntityIds,
   STAR_GRAPH_DOM_BUDGET,
@@ -67,6 +70,7 @@ export interface StarGraphCanvasProps {
   relatedNodeIds?: ReadonlySet<string>;
   entityBudget?: number;
   hiddenCountLabel?: (count: number) => string;
+  typedNodes?: readonly TypedGraphNode[];
   className?: string;
 }
 
@@ -90,12 +94,14 @@ export function StarGraphCanvas({
   relatedNodeIds,
   entityBudget = STAR_GRAPH_DOM_BUDGET,
   hiddenCountLabel,
+  typedNodes,
   className,
 }: StarGraphCanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const initialCameraRef = useRef(false);
   const storedViewport = useResearchCanvasStore((s) => s.viewport);
   const setStoredViewport = useResearchCanvasStore((s) => s.setViewport);
+  const canvasFilter = useResearchCanvasStore((s) => s.filter);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [camera, setCameraState] = useState<StarGraphCamera>(
     () => storedViewport ?? DEFAULT_CAMERA,
@@ -118,9 +124,33 @@ export function StarGraphCanvas({
 
   const bounds = useMemo(() => computeEntityBounds(model.entities), [model.entities]);
 
+  const typedNodeIndex = useMemo(
+    () => (typedNodes ? indexTypedGraphNodes(typedNodes) : new Map()),
+    [typedNodes],
+  );
+
+  const displayEntities = useMemo(
+    () =>
+      filterEntitiesForCanvasDisplay(model.entities, {
+        filter: canvasFilter,
+        nodeById: typedNodeIndex,
+        rootId: model.rootId,
+        selectedNodeId,
+        relatedNodeIds,
+      }),
+    [
+      canvasFilter,
+      model.entities,
+      model.rootId,
+      relatedNodeIds,
+      selectedNodeId,
+      typedNodeIndex,
+    ],
+  );
+
   const visibleEntityIds = useMemo(
     () =>
-      selectVisibleEntityIds(model.entities, {
+      selectVisibleEntityIds(displayEntities, {
         rootId: model.rootId,
         selectedNodeId,
         relatedNodeIds,
@@ -129,8 +159,8 @@ export function StarGraphCanvas({
       }),
     [
       camera.zoom,
+      displayEntities,
       entityBudget,
-      model.entities,
       model.rootId,
       relatedNodeIds,
       selectedNodeId,
@@ -138,13 +168,13 @@ export function StarGraphCanvas({
   );
 
   const clusterHiddenCounts = useMemo(
-    () => computeClusterHiddenCounts(model.entities, visibleEntityIds),
-    [model.entities, visibleEntityIds],
+    () => computeClusterHiddenCounts(displayEntities, visibleEntityIds),
+    [displayEntities, visibleEntityIds],
   );
 
   const visibleEntities = useMemo(
-    () => model.entities.filter((entity) => visibleEntityIds.has(entity.id)),
-    [model.entities, visibleEntityIds],
+    () => displayEntities.filter((entity) => visibleEntityIds.has(entity.id)),
+    [displayEntities, visibleEntityIds],
   );
 
   const visibleRelations = useMemo(
@@ -152,7 +182,7 @@ export function StarGraphCanvas({
     [model.relations, visibleEntityIds],
   );
 
-  const hiddenEntityCount = model.entities.length - visibleEntities.length;
+  const hiddenEntityCount = displayEntities.length - visibleEntities.length;
 
   useEffect(() => {
     const node = rootRef.current;
@@ -367,7 +397,7 @@ export function StarGraphCanvas({
           {summaryDetail && <span>{summaryDetail}</span>}
           {hiddenEntityCount > 0 ? (
             <span data-testid="star-graph-budget-note">
-              · {visibleEntities.length}/{model.entities.length}
+              · {visibleEntities.length}/{displayEntities.length}
             </span>
           ) : null}
         </div>

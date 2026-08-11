@@ -1,4 +1,6 @@
 import type { StarEntityView } from "./star-canvas-view-model";
+import type { ResearchCanvasFilter, ResearchCanvasFilterableNode } from "@multica/core/research";
+import { isBlankFilter, matchesResearchCanvasFilter } from "@multica/core/research";
 
 /** D5 desktop hard DOM budget (viewport-performance §3). */
 export const STAR_GRAPH_DOM_BUDGET = 220;
@@ -147,6 +149,38 @@ export function computeClusterHiddenCounts(
     if (hiddenCount > 0) hidden.set(clusterId, hiddenCount);
   }
   return hidden;
+}
+
+/** Apply display-only canvas filter; root/selection/lineage stay visible. */
+export function filterEntitiesForCanvasDisplay(
+  entities: readonly StarEntityView[],
+  options: {
+    filter: ResearchCanvasFilter;
+    nodeById: ReadonlyMap<string, ResearchCanvasFilterableNode>;
+    rootId: string | null;
+    selectedNodeId?: string | null;
+    relatedNodeIds?: ReadonlySet<string>;
+  },
+): StarEntityView[] {
+  if (isBlankFilter(options.filter)) return [...entities];
+
+  return entities.filter((entity) => {
+    if (options.rootId && entity.id === options.rootId) return true;
+    if (options.selectedNodeId && entity.id === options.selectedNodeId) return true;
+    if (options.relatedNodeIds?.has(entity.id)) return true;
+
+    const canonical = options.nodeById.get(entity.id);
+    return matchesResearchCanvasFilter(
+      canonical ?? {
+        id: entity.id,
+        level: entity.tier,
+        title: entity.view.title,
+        status: entity.view.state,
+        cluster_id: entity.clusterId,
+      },
+      options.filter,
+    );
+  });
 }
 
 export function filterRelationsToVisibleEntities<

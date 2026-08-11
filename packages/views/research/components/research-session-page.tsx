@@ -14,6 +14,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
   dedupeResearchFleetMembers,
+  isResearchD5Lens,
   researchGraphTypedOptions,
   researchKeys,
   researchPresenceOptions,
@@ -68,7 +69,6 @@ import {
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
-import { isResearchD5Lens } from "../lib/research-d5-lens-display";
 import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
 import {
   RESEARCH_STAGE_ORDER,
@@ -168,6 +168,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
+  const d5Lens = useResearchUiStore((s) => s.d5Lens);
+  const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
@@ -187,10 +189,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     isLoading: typedGraphLoading,
     isError: typedGraphError,
   } = useQuery(researchGraphTypedOptions(wsId, sessionId));
-  const [d5Lens, setD5Lens] = useState<ResearchD5Lens>(() => {
+  useEffect(() => {
     const fromUrl = nav.searchParams.get("lens");
-    return isResearchD5Lens(fromUrl) ? fromUrl : "relations";
-  });
+    if (isResearchD5Lens(fromUrl) && fromUrl !== d5Lens) {
+      setD5Lens(fromUrl);
+    }
+  }, [d5Lens, nav.searchParams, sessionId, setD5Lens]);
   const handleD5LensChange = useCallback(
     (lens: ResearchD5Lens) => {
       setD5Lens(lens);
@@ -200,7 +204,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       const qs = params.toString();
       nav.replace(qs ? `${nav.pathname}?${qs}` : nav.pathname);
     },
-    [nav],
+    [nav, setD5Lens],
   );
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
   const selectedNodeId = useResearchCanvasStore((s) => s.selectedNodeId);

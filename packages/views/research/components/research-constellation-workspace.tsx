@@ -351,6 +351,7 @@ export function ResearchConstellationWorkspace({
             rightPanelWidth={effectiveRailWidth}
             nodeAccessibleNames={nodeAccessibleNames}
             relatedNodeIds={relatedNodeIds}
+            typedNodes={typedGraph?.nodes}
             hiddenCountLabel={(count) => t(($) => $.d5.cluster_hidden, { count })}
             keyboardNav={{
               nodes: snapshotNodes,

@@ -5,9 +5,11 @@ import {
   STAR_GRAPH_DOM_BUDGET,
   computeClusterHiddenCounts,
   effectiveEntityBudget,
+  filterEntitiesForCanvasDisplay,
   filterRelationsToVisibleEntities,
   selectVisibleEntityIds,
 } from "./star-graph-visible-budget";
+import { emptyCanvasFilter } from "@multica/core/research";
 
 function entity(
   partial: Pick<StarEntityView, "id" | "tier"> &
@@ -106,6 +108,38 @@ describe("computeClusterHiddenCounts", () => {
     ];
     const hidden = computeClusterHiddenCounts(entities, new Set(["a1"]));
     expect(hidden.get("c1")).toBe(1);
+  });
+});
+
+describe("filterEntitiesForCanvasDisplay", () => {
+  it("keeps root and selection visible under an active filter", () => {
+    const entities = [
+      entity({ id: "goal", tier: "xxl" }),
+      entity({ id: "selected", tier: "m" }),
+      entity({ id: "hidden", tier: "s" }),
+    ];
+    const filtered = filterEntitiesForCanvasDisplay(entities, {
+      filter: { status: "running" },
+      nodeById: new Map([
+        ["goal", { id: "goal", status: "active", level: "xxl" }],
+        ["selected", { id: "selected", status: "running", level: "m" }],
+        ["hidden", { id: "hidden", status: "completed", level: "s" }],
+      ]),
+      rootId: "goal",
+      selectedNodeId: "selected",
+    });
+    expect(filtered.map((entry) => entry.id)).toEqual(["goal", "selected"]);
+  });
+
+  it("passes through all entities when filter is blank", () => {
+    const entities = [entity({ id: "a", tier: "l" })];
+    expect(
+      filterEntitiesForCanvasDisplay(entities, {
+        filter: emptyCanvasFilter(),
+        nodeById: new Map(),
+        rootId: null,
+      }).length,
+    ).toBe(1);
   });
 });
 

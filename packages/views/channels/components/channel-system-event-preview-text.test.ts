@@ -48,10 +48,6 @@ const TEMPLATES = {
         changed: "{actor} 把关联项目从「{previous}」改为「{project}」",
         unbound: "{actor} 解除了与项目「{previous}」的关联",
       },
-      reminder: {
-        fired: "提醒已触发：{title}",
-        anchor_unavailable_suffix: " · 来源不可用",
-      },
       thread: {
         unfollowed: "{actor} 取消关注了此话题",
         followed: "{actor} 关注了此话题",
@@ -199,21 +195,6 @@ describe("formatSystemEventPreviewText", () => {
     });
     expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
       "@前端工程师 把本群关联到项目「LRM 2.0」",
-    );
-  });
-
-  it("localizes a reminder-fired row with the anchor-unavailable suffix", () => {
-    const message = systemMessage({
-      event: "reminder_fired",
-      params: {
-        reminder_id: "rem-1",
-        occurrence_id: "occ-1",
-        title: "Standup",
-        anchor_available: false,
-      },
-    });
-    expect(formatSystemEventPreviewText(message, t, resolveMention)).toBe(
-      "提醒已触发：Standup · 来源不可用",
     );
   });
 

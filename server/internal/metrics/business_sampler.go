@@ -45,10 +45,9 @@ const (
 	// than this. Matches the Grafana board threshold from MUL-2328.
 	stuckRunningInterval = "30 minutes"
 
-	// reminderOverdueThreshold matches task #67 / ProcessOverdueReminders:
-	// scheduled past fire_at by this long before counting as ops-visible
-	// aggregate debt (task #73 Phase A). Keep in lockstep so user Activity
-	// and platform gauges do not disagree about "overdue".
+	// Scheduled reminders count as ops-visible aggregate debt once fire_at is
+	// this far past due. This metric is observational only; daemon-owned timers
+	// remain the sole Reminder fire mechanism.
 	reminderOverdueThreshold = time.Hour
 )
 

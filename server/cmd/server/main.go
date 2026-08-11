@@ -461,11 +461,6 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
-	if err := schedulerMgr.Register(scheduler.ReminderOverdueScanJob(h)); err != nil {
-		slog.Warn("scheduler: failed to register reminder overdue scan job", "error", err)
-	} else {
-		schedulerRegistered = true
-	}
 	if schedulerRegistered {
 		go func() {
 			_ = schedulerMgr.Run(sweepCtx)

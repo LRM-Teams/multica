@@ -7,12 +7,10 @@ import {
   parseIssueSystemEvent,
   parseIssueAggregateSystemEvent,
   parseProjectSystemEvent,
-  parseReminderSystemEvent,
   parseThreadSystemEvent,
   foldedIssueEventIds,
   type IssueSystemEvent,
   type ProjectSystemEvent,
-  type ReminderSystemEvent,
   type ThreadSystemEvent,
 } from "./channel-system-event";
 import {
@@ -20,7 +18,6 @@ import {
   IssueSystemEventContent,
   IssueAggregateSystemEventContent,
   ProjectSystemEventContent,
-  ReminderSystemEventContent,
   ThreadSystemEventContent,
 } from "./channel-system-event-content";
 
@@ -222,10 +219,6 @@ vi.mock("../../i18n/use-t", () => ({
               bound: "{actor} 把本群关联到项目「{project}」",
               changed: "{actor} 把关联项目从「{previous}」改为「{project}」",
               unbound: "{actor} 解除了与项目「{previous}」的关联",
-            },
-            reminder: {
-              fired: "提醒已触发：{title}",
-              anchor_unavailable_suffix: " · 来源不可用",
             },
             thread: {
               unfollowed: "{actor} 取消关注了此话题",
@@ -870,60 +863,6 @@ describe("parseProjectSystemEvent", () => {
   });
 });
 
-describe("parseReminderSystemEvent", () => {
-  it("parses an available-anchor fire", () => {
-    const event = parseReminderSystemEvent(
-      issueMsg("m1", "reminder_fired", {
-        reminder_id: "rem-1",
-        occurrence_id: "occ-1",
-        title: "Ping the deploy thread",
-        anchor_available: true,
-      }),
-    );
-    expect(event).toMatchObject({
-      event: "reminder_fired",
-      reminderId: "rem-1",
-      occurrenceId: "occ-1",
-      title: "Ping the deploy thread",
-      anchorAvailable: true,
-    });
-  });
-
-  it("parses an unavailable-anchor fire", () => {
-    const event = parseReminderSystemEvent(
-      issueMsg("m1", "reminder_fired", {
-        reminder_id: "rem-1",
-        occurrence_id: "occ-1",
-        title: "Ping the deploy thread",
-        anchor_available: false,
-      }),
-    );
-    expect(event?.anchorAvailable).toBe(false);
-  });
-
-  it("defaults anchorAvailable to false when the field is absent (fail-closed, not fail-open)", () => {
-    const event = parseReminderSystemEvent(
-      issueMsg("m1", "reminder_fired", { reminder_id: "rem-1", title: "Ping" }),
-    );
-    expect(event?.anchorAvailable).toBe(false);
-  });
-
-  it("returns null for a row missing title or reminder_id", () => {
-    expect(
-      parseReminderSystemEvent(issueMsg("m1", "reminder_fired", { reminder_id: "rem-1" })),
-    ).toBeNull();
-    expect(
-      parseReminderSystemEvent(issueMsg("m1", "reminder_fired", { title: "Ping" })),
-    ).toBeNull();
-  });
-
-  it("ignores non-reminder system events", () => {
-    expect(
-      parseReminderSystemEvent(issueMsg("m1", "channel_member_added", { target_id: "user-2" })),
-    ).toBeNull();
-  });
-});
-
 describe("foldedIssueEventIds", () => {
   it("merges a same-source completed event with a status→done event (no double render)", () => {
     const statusDone = issueMsg("m1", "issue_status_changed", {
@@ -1275,39 +1214,6 @@ describe("ProjectSystemEventContent", () => {
     );
     expect(document.body.textContent).toBe("@ghost-x 把本群关联到项目「Q3 Roadmap」");
     expect(document.body.textContent).not.toContain("Lin");
-  });
-});
-
-describe("ReminderSystemEventContent", () => {
-  const availableEvent: ReminderSystemEvent = {
-    event: "reminder_fired",
-    reminderId: "rem-1",
-    occurrenceId: "occ-1",
-    title: "Ping the deploy thread",
-    anchorAvailable: true,
-  };
-
-  it("renders localized 'fired: title' with no unavailable suffix when the anchor is available", () => {
-    render(<ReminderSystemEventContent event={availableEvent} />);
-    expect(document.body.textContent).toBe("提醒已触发：Ping the deploy thread");
-  });
-
-  it("appends the localized unavailable suffix exactly once when the anchor is not available (no duplicate fallback)", () => {
-    render(<ReminderSystemEventContent event={{ ...availableEvent, anchorAvailable: false }} />);
-    expect(document.body.textContent).toBe("提醒已触发：Ping the deploy thread · 来源不可用");
-  });
-
-  it("keeps a very long title's full text on the accessible title= attribute even though it visually truncates", () => {
-    const longTitle = "A".repeat(200);
-    render(<ReminderSystemEventContent event={{ ...availableEvent, title: longTitle }} />);
-    const titleSpan = screen.getByTitle(longTitle);
-    expect(titleSpan).toHaveTextContent(longTitle);
-    expect(titleSpan.className).toContain("truncate");
-  });
-
-  it("exposes zero mutation/thread/quote/reaction affordances — no button, link, or menu anywhere in the row", () => {
-    render(<ReminderSystemEventContent event={availableEvent} />);
-    expect(document.querySelectorAll("button, a, [role='menu']")).toHaveLength(0);
   });
 });
 

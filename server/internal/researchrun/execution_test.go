@@ -468,6 +468,7 @@ type executionTestStore struct {
 	deferredHealth          []ExecutionTargetHealth
 	createErrors            []error
 	createdInputs           []CreateDispatchIntentInput
+	passportEnabled         bool
 }
 
 func (store *executionTestStore) ListAttempts(context.Context, string) ([]Attempt, error) {
@@ -542,6 +543,10 @@ func (store *executionTestStore) CreateDispatchIntent(_ context.Context, in Crea
 
 func (store *executionTestStore) TaskContext(context.Context, string, string) (RunSnapshot, error) {
 	return store.taskSnapshot, nil
+}
+
+func (store *executionTestStore) SessionArtifactPassportEnabled(context.Context, string, string) (bool, error) {
+	return store.passportEnabled, nil
 }
 
 func (store *executionTestStore) ClaimDispatchIntents(_ context.Context, _ string, _ string, _ time.Duration, limit int) ([]DispatchIntent, error) {

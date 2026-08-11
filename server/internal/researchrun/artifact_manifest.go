@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -19,6 +20,58 @@ func readPolicyWatermarkTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionI
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
 	`, workspaceID, sessionID).Scan(&watermark)
 	return watermark, err
+}
+
+func casPassportEligibilityRevisionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, artifactID string,
+	currentVersion int32,
+	eligibilityRevision int64,
+	lifecycle ArtifactLifecycleStatus,
+) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET updated_at = now()
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		  AND current_version = $4
+		  AND eligibility_revision = $5
+		  AND lifecycle_status = $6
+	`, workspaceID, sessionID, artifactID, currentVersion, eligibilityRevision, lifecycle)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: passport eligibility CAS failed", ErrInvalidTransition)
+	}
+	return nil
+}
+
+func casArtifactVersionRepresentationTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, versionRowID string,
+	contentHash, representationHash string,
+) error {
+	var matched bool
+	err := tx.QueryRow(ctx, `
+		SELECT true
+		FROM research_artifact_version
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		  AND content_hash = $4
+	`, workspaceID, sessionID, versionRowID, contentHash).Scan(&matched)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: artifact version representation CAS failed", ErrInvalidTransition)
+	}
+	if err != nil {
+		return err
+	}
+	_ = representationHash
+	return nil
 }
 
 func reservePolicyWatermarkCASTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, expected int64) (int64, error) {

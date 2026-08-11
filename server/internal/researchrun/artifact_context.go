@@ -221,6 +221,20 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
 	}
 
+	for _, entry := range plan.Entries {
+		if err := casPassportEligibilityRevisionTx(
+			ctx, tx, in.WorkspaceID, in.SessionID, entry.ArtifactID,
+			entry.Version, entry.EligibilityRevision, entry.Lifecycle,
+		); err != nil {
+			return dispatchManifestPlan{}, err
+		}
+		if err := casArtifactVersionRepresentationTx(
+			ctx, tx, in.WorkspaceID, in.SessionID, entry.VersionRowID,
+			entry.ContentHash, entry.RepresentationHash,
+		); err != nil {
+			return dispatchManifestPlan{}, err
+		}
+	}
 	for ordinal, entry := range plan.Entries {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO research_artifact_context_entry (
@@ -339,6 +353,19 @@ func insertResultArtifactRowTx(
 
 func timePtr(value time.Time) *time.Time {
 	return &value
+}
+
+func (s *PostgresStore) SessionArtifactPassportEnabled(ctx context.Context, sessionID, workspaceID string) (bool, error) {
+	var enabled bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT artifact_passport_enabled
+		FROM research_session
+		WHERE id = $1::uuid AND workspace_id = $2::uuid
+	`, sessionID, workspaceID).Scan(&enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrRunNotFound
+	}
+	return enabled, err
 }
 
 func sessionArtifactPassportEnabled(

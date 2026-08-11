@@ -60,7 +60,6 @@ function definition(overrides: Partial<RawReminderDefinition> = {}): RawReminder
     schedule_kind: "one_shot",
     next_fire_at: "2099-07-23T09:00:00Z",
     snooze_count: 0,
-    origin_kind: "agent",
     anchor: {
       available: true,
       kind: "channel",

@@ -1393,7 +1393,6 @@ describe("ApiClient", () => {
                 cadence: "daily@09:00",
                 schedule_timezone: "America/Los_Angeles",
                 snooze_count: 0,
-                origin_kind: "agent",
                 anchor: { available: false },
               },
               {
@@ -1403,7 +1402,6 @@ describe("ApiClient", () => {
                 schedule_kind: "some_future_kind",
                 next_fire_at: "2026-07-25T09:00:00Z",
                 snooze_count: 0,
-                origin_kind: "agent",
                 anchor: { available: false },
               },
             ],
@@ -1426,43 +1424,6 @@ describe("ApiClient", () => {
       expect(page.definitions[1]?.schedule_kind).toBe("some_future_kind");
     });
 
-    it("keeps a dormant managed patrol that truthfully omits next_fire_at", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            definitions: [
-              {
-                id: "patrol-1",
-                title: "Managed patrol",
-                status: "fired",
-                schedule_kind: "one_shot",
-                last_fire_at: "2026-07-24T08:00:00Z",
-                snooze_count: 0,
-                origin_kind: "group_manager_auto",
-                managed_kind: "patrol",
-                anchor: { available: false },
-              },
-            ],
-            occurrences: [],
-            limit: 20,
-            has_more: false,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-
-      const client = new ApiClient("https://api.example.test");
-      const page = await client.getAgentReminders("agent-1", { status: "scheduled" });
-
-      expect(page.definitions).toHaveLength(1);
-      expect(page.definitions[0]).toMatchObject({
-        id: "patrol-1",
-        status: "fired",
-        last_fire_at: "2026-07-24T08:00:00Z",
-      });
-      expect(page.definitions[0]?.next_fire_at).toBeUndefined();
-    });
   });
 
   describe("agent lifecycle (#633)", () => {

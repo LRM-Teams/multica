@@ -34,8 +34,6 @@ type humanReminderDefinition struct {
 	Cadence          *string             `json:"cadence,omitempty"`
 	ScheduleTimezone *string             `json:"schedule_timezone,omitempty"`
 	SnoozeCount      int32               `json:"snooze_count"`
-	OriginKind       string              `json:"origin_kind"`
-	ManagedKind      *string             `json:"managed_kind,omitempty"`
 	Anchor           humanReminderAnchor `json:"anchor"`
 }
 
@@ -144,7 +142,6 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 				ScheduleKind: reminderScheduleKind(reminder.Cadence), NextFireAt: nextFireAt,
 				LastFireAt: timestampToPtr(reminder.FiredAt), Cadence: nullableTextPtr(reminder.Cadence),
 				ScheduleTimezone: reminderTimezonePtr(reminder.Cadence, reminder.ScheduleTimezone), SnoozeCount: reminder.SnoozeCount,
-				OriginKind: reminder.OriginKind, ManagedKind: nullableTextPtr(reminder.ManagedKind),
 				Anchor: h.safeHumanReminderAnchor(r, request.userID, reminder),
 			})
 		}
@@ -191,8 +188,7 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 				&fr.reminder.FireAt, &fr.reminder.Status, &fr.reminder.FiredReceiptMessageID, &fr.reminder.SnoozeCount,
 				&fr.reminder.CreatedAt, &fr.reminder.UpdatedAt, &fr.reminder.FiredAt, &fr.reminder.Cadence,
 				&fr.reminder.ScheduleTimezone, &fr.reminder.CadenceNextAt, &fr.reminder.CurrentOccurrenceID,
-				&fr.reminder.TerminalReason, &fr.reminder.Version, &fr.reminder.OriginKind,
-				&fr.reminder.ManagedKind, &fr.reminder.OriginKey, &fr.reminder.ManagedBackoffStep); err != nil {
+				&fr.reminder.TerminalReason, &fr.reminder.Version); err != nil {
 				rows.Close()
 				writeError(w, http.StatusInternalServerError, "failed to load reminder history")
 				return

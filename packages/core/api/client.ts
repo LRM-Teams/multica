@@ -1308,9 +1308,8 @@ export class ApiClient {
   // #656 Agent Card Reminders tab: read-only, per the V2 product contract
   // (docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). `status`
   // selects which section this page belongs to server-side — "scheduled"
-  // populates only `definitions` (active plus the visible dormant managed
-  // patrol), "fired" populates only
-  // `occurrences` (History, cursor-paginated newest-first) — not a
+  // populates only active `definitions`, "fired" populates only `occurrences`
+  // (History, cursor-paginated newest-first) — not a
   // client-side filter of one bigger list. Matches task #655's committed
   // `ListAgentReminders` read-page contract (product baseline
   // `product/654-reminder-parity@4937f3841`) — locked independent of #870's

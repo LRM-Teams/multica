@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Copy, Terminal } from "lucide-react";
+import { Check, ChevronRight, Terminal } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useConfigStore } from "@multica/core/config";
@@ -18,16 +18,15 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
-import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import {
   DAEMON_SETUP_MODES,
   type DaemonSetupMode,
-  daemonSetupCommands,
   defaultDaemonSetupMode,
 } from "../../common/daemon-setup-commands";
+import { DaemonSetupCommandSteps } from "../../common/daemon-setup-command-steps";
 
 type Step = "instructions" | "success";
 
@@ -90,76 +89,6 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Copy button + code row — mirrors onboarding/CliInstallInstructions
-// ---------------------------------------------------------------------------
-
-function CopyButton({ text, ariaLabel }: { text: string; ariaLabel: string }) {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(t);
-  }, [copied]);
-
-  const handleCopy = () => {
-    void copyText(text).then((ok) => {
-      if (ok) setCopied(true);
-    });
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      aria-label={ariaLabel}
-      className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      {copied ? (
-        <Check className="h-3.5 w-3.5 text-success" aria-hidden />
-      ) : (
-        <Copy className="h-3.5 w-3.5" aria-hidden />
-      )}
-    </button>
-  );
-}
-
-function CommandStep({
-  n,
-  label,
-  cmd,
-  copyAria,
-}: {
-  n: number;
-  label: string;
-  cmd: string;
-  copyAria: string;
-}) {
-  return (
-    <div>
-      <p className="mb-1.5 text-xs font-medium text-foreground">
-        {n}. {label}
-      </p>
-      <div className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2.5 font-mono text-sm">
-        <Terminal
-          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground"
-          aria-hidden
-        />
-        <code
-          className={cn(
-            "min-w-0 flex-1 break-all whitespace-pre-wrap tabular-nums",
-            CODE_LIGATURE_CLASS,
-          )}
-        >
-          {cmd}
-        </code>
-        <CopyButton text={cmd} ariaLabel={copyAria} />
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Step 1: Instructions
 // ---------------------------------------------------------------------------
 
@@ -170,16 +99,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
   const daemonServerUrl = useConfigStore((state) => state.daemonServerUrl);
   const daemonAppUrl = useConfigStore((state) => state.daemonAppUrl);
   const computerVersion = useConfigStore((state) => state.computerVersion);
-  const { installCmd, setupCmd } = daemonSetupCommands(
-    mode,
-    useWorkspaceSlug() ?? undefined,
-    {
-      environment,
-      serverUrl: daemonServerUrl,
-      appUrl: daemonAppUrl,
-      computerVersion,
-    },
-  );
+  const workspaceSlug = useWorkspaceSlug() ?? undefined;
   return (
     <>
       <DialogHeader className="px-6 pt-6 pb-2">
@@ -195,24 +115,20 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
         <div className="space-y-4">
           <SetupModeSelector mode={mode} onChange={setMode} />
 
-          <CommandStep
-            n={1}
-            label={t(($) => $.connect.step1_label)}
-            cmd={installCmd}
+          <DaemonSetupCommandSteps
+            mode={mode}
+            workspaceSlug={workspaceSlug}
+            target={{
+              environment,
+              serverUrl: daemonServerUrl,
+              appUrl: daemonAppUrl,
+              computerVersion,
+            }}
+            installLabel={t(($) => $.connect.step1_label)}
+            setupLabel={t(($) => $.connect.step2_label)}
+            setupHint={t(($) => $.connect.step2_hint)}
             copyAria={t(($) => $.connect.copy_aria)}
           />
-
-          <div>
-            <CommandStep
-              n={2}
-              label={t(($) => $.connect.step2_label)}
-              cmd={setupCmd}
-              copyAria={t(($) => $.connect.copy_aria)}
-            />
-            <p className="mt-1.5 text-[11px] leading-[1.55] text-muted-foreground">
-              {t(($) => $.connect.step2_hint)}
-            </p>
-          </div>
 
           <WaitingStatus />
 

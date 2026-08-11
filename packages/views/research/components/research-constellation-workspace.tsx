@@ -222,6 +222,25 @@ export function ResearchConstellationWorkspace({
     return map;
   }, [snapshotNodes]);
 
+  const relatedNodeIds = useMemo(() => {
+    if (!selectedNode || !typedGraph) return undefined;
+    const typed = typedGraph.nodes.find((node) => node.id === selectedNode.id);
+    if (!typed) return undefined;
+    const ids = new Set<string>();
+    for (const id of typed.merged_from ?? []) {
+      if (id) ids.add(id);
+    }
+    if (typed.parent_id) ids.add(typed.parent_id);
+    for (const id of typed.child_ids ?? []) {
+      if (id) ids.add(id);
+    }
+    for (const edge of typedGraph.edges) {
+      if (edge.from_node_id === selectedNode.id) ids.add(edge.to_node_id);
+      if (edge.to_node_id === selectedNode.id) ids.add(edge.from_node_id);
+    }
+    return ids;
+  }, [selectedNode, typedGraph]);
+
   const inspectorRow =
     inspectorAgentId != null
       ? executionRows.find((row) => row.id === inspectorAgentId) ?? null
@@ -306,6 +325,7 @@ export function ResearchConstellationWorkspace({
             showMapKey
             rightPanelWidth={effectiveRailWidth}
             nodeAccessibleNames={nodeAccessibleNames}
+            relatedNodeIds={relatedNodeIds}
             keyboardNav={{
               nodes: snapshotNodes,
               edges: (typedGraph?.edges ?? []).map((edge) => ({
@@ -344,7 +364,6 @@ export function ResearchConstellationWorkspace({
                 }
               : undefined
           }
-          className={isMobile ? "research-agent-inspector-mobile" : undefined}
         />
       </section>
 

@@ -158,6 +158,39 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(screen.queryByTestId("star-graph-edges")).toBeNull();
   });
 
+  it("shows a budget note when entities exceed the DOM cap", () => {
+    const nodes = [
+      node({ id: "goal", node_type: "goal", title: "Goal", level: "xxl" }),
+      ...Array.from({ length: 12 }, (_, index) =>
+        node({
+          id: `n-${index}`,
+          title: `Node ${index}`,
+          level: "s",
+          actor_agent_id: `agent-${index}`,
+        }),
+      ),
+    ];
+    const edges = nodes.slice(1).map((entry, index) =>
+      edge({
+        id: `e-${index}`,
+        from_node_id: "goal",
+        to_node_id: entry.id,
+        edge_type: "leads_to",
+      }),
+    );
+    render(
+      <StarGraphCanvas
+        model={buildStarCanvasViewModel({ nodes, edges })}
+        entityBudget={5}
+        selectedNodeId="n-0"
+        relatedNodeIds={new Set(["goal", "n-0"])}
+      />,
+    );
+
+    expect(screen.getAllByTestId("star-graph-node")).toHaveLength(5);
+    expect(screen.getByTestId("star-graph-budget-note").textContent).toContain("5/13");
+  });
+
   it("supports keyboard navigation when keyboardNav is provided", () => {
     const onSelectNode = vi.fn();
     const keyboardNodes = [

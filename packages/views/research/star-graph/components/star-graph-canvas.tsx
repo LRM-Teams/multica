@@ -24,6 +24,11 @@ import {
 } from "../../lib/canvas-keyboard-nav";
 import type { MotionDirective } from "../../motion/directives";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
+import {
+  filterRelationsToVisibleEntities,
+  selectVisibleEntityIds,
+  STAR_GRAPH_DOM_BUDGET,
+} from "../lib/star-graph-visible-budget";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import {
   centerCameraOnPoint,
@@ -58,6 +63,8 @@ export interface StarGraphCanvasProps {
   };
   rightPanelWidth?: number;
   nodeAccessibleNames?: ReadonlyMap<string, string>;
+  relatedNodeIds?: ReadonlySet<string>;
+  entityBudget?: number;
   className?: string;
 }
 
@@ -78,6 +85,8 @@ export function StarGraphCanvas({
   keyboardNav,
   rightPanelWidth = 0,
   nodeAccessibleNames,
+  relatedNodeIds,
+  entityBudget = STAR_GRAPH_DOM_BUDGET,
   className,
 }: StarGraphCanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -105,6 +114,29 @@ export function StarGraphCanvas({
   );
 
   const bounds = useMemo(() => computeEntityBounds(model.entities), [model.entities]);
+
+  const visibleEntityIds = useMemo(
+    () =>
+      selectVisibleEntityIds(model.entities, {
+        rootId: model.rootId,
+        selectedNodeId,
+        relatedNodeIds,
+        budget: entityBudget,
+      }),
+    [entityBudget, model.entities, model.rootId, relatedNodeIds, selectedNodeId],
+  );
+
+  const visibleEntities = useMemo(
+    () => model.entities.filter((entity) => visibleEntityIds.has(entity.id)),
+    [model.entities, visibleEntityIds],
+  );
+
+  const visibleRelations = useMemo(
+    () => filterRelationsToVisibleEntities(model.relations, visibleEntityIds),
+    [model.relations, visibleEntityIds],
+  );
+
+  const hiddenEntityCount = model.entities.length - visibleEntities.length;
 
   useEffect(() => {
     const node = rootRef.current;
@@ -313,10 +345,15 @@ export function StarGraphCanvas({
           {liveText}
         </div>
       ) : null}
-      {(summaryTitle || summaryDetail) && (
+      {(summaryTitle || summaryDetail || hiddenEntityCount > 0) && (
         <div data-testid="star-graph-summary" className="sg-summary-label pointer-events-none">
           {summaryTitle && <b>{summaryTitle}</b>}
           {summaryDetail && <span>{summaryDetail}</span>}
+          {hiddenEntityCount > 0 ? (
+            <span data-testid="star-graph-budget-note">
+              · {visibleEntities.length}/{model.entities.length}
+            </span>
+          ) : null}
         </div>
       )}
 
@@ -330,18 +367,18 @@ export function StarGraphCanvas({
       >
         <StarGraphClusterLayer
           clusters={model.clusters}
-          entities={model.entities}
+          entities={visibleEntities}
           rootId={model.rootId}
           newFrontierLabel={newFrontierLabel}
         />
         <StarGraphEdges
-          relations={model.relations}
+          relations={visibleRelations}
           width={worldSize.width}
           height={worldSize.height}
           lensHints={lensHints}
         />
         <StarGraphEntityLayer
-          entities={model.entities}
+          entities={visibleEntities}
           selectedNodeId={selectedNodeId}
           nodeAccessibleNames={nodeAccessibleNames}
           lensHints={lensHints}

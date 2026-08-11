@@ -316,6 +316,35 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 		d.emitResidentRuntimeDiagnostic(agentID, runtimeID, message)
 		return
 	}
+	var observationKind AgentObservationKind
+	switch message.Type {
+	case agent.MessageThinking:
+		observationKind = AgentObservationRuntimeThinking
+	case agent.MessageCompactionStarted:
+		observationKind = AgentObservationRuntimeCompacting
+	case agent.MessageCompactionFinished:
+		observationKind = AgentObservationRuntimeCompacted
+	case agent.MessageError:
+		observationKind = AgentObservationError
+	}
+	if observationKind != "" {
+		d.mu.Lock()
+		workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+		d.mu.Unlock()
+		runner, err := d.ensureWorkspaceRunner(workspaceID)
+		if err == nil && runner.activity != nil {
+			if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
+				var data AgentObservationData = AgentRuntimeObservationData{RuntimeID: runtimeID}
+				if observationKind == AgentObservationError {
+					data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
+				}
+				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: observationKind, Data: data, At: time.Now().UTC()}); err != nil && d.logger != nil {
+					d.logger.Debug("workspace Runner runtime Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+				}
+			}
+		}
+		return
+	}
 	activityKind, detailKind, narrative := "", "", ""
 	switch message.Type {
 	case agent.MessageThinking:

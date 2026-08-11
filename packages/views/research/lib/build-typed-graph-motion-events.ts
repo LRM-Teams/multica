@@ -1,4 +1,5 @@
 import type { TypedGraphNode, TypedGraphResponse } from "@multica/core/research";
+import { MOTION_D5_STAGGER_CAP } from "../motion/tokens";
 import type { ProjectionTransitionEvent } from "../motion/transition-queue";
 
 const RETIRED_STATUSES = new Set([
@@ -90,4 +91,29 @@ export function buildTypedGraphMotionEvents(
   }
 
   return events;
+}
+
+/**
+ * Slice F · resync catch-up guard — do not replay a burst of historical motion
+ * when the client missed live deltas (background restore, pagination reset, etc.).
+ */
+export function shouldSkipTypedGraphMotionCatchUp(
+  previous: TypedGraphResponse,
+  next: TypedGraphResponse,
+  events: readonly ProjectionTransitionEvent[],
+): boolean {
+  if (events.length === 0) return false;
+
+  const versionDelta = (next.graph_version ?? 0) - (previous.graph_version ?? 0);
+  if (versionDelta > 1) return true;
+
+  const prevIds = new Set(previous.nodes.map((node) => node.id));
+  let newNodeCount = 0;
+  for (const node of next.nodes) {
+    if (!prevIds.has(node.id)) newNodeCount += 1;
+  }
+  if (newNodeCount > MOTION_D5_STAGGER_CAP) return true;
+  if (events.length > MOTION_D5_STAGGER_CAP) return true;
+
+  return false;
 }

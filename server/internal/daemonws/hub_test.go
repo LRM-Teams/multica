@@ -215,7 +215,10 @@ func TestWorkspaceRunnerAllowsNoProviderRegistrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})})
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,6 +226,20 @@ func TestWorkspaceRunnerAllowsNoProviderRegistrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	if !hub.NotifyWorkspaceRunner("daemon-1", "workspace-1", protocol.EventAgentAttach, protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+	}) {
+		t.Fatal("zero-Runtime Runner did not accept Attachment command")
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read zero-Runtime Attachment command: %v", err)
+	}
+	var command protocol.Message
+	if err := json.Unmarshal(raw, &command); err != nil || command.Type != protocol.EventAgentAttach {
+		t.Fatalf("zero-Runtime command=%+v err=%v", command, err)
+	}
 }
 
 func TestWorkspaceRunnerCapabilityBelongsOnlyToCurrentReadyConnection(t *testing.T) {

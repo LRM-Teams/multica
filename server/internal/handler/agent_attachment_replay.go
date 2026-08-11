@@ -22,6 +22,9 @@ func (h *Handler) replayAgentAttachmentCommands(ctx context.Context, identity da
 	if err := payload.Validate(); err != nil {
 		return fmt.Errorf("validate Attachment replay request: %w", err)
 	}
+	if !h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
+		return errors.New("Workspace Runner does not support Attachment replay")
+	}
 	allowed := runnerAttachmentRuntimeScope(identity)
 	events := make([]agentAttachmentReplayEvent, 0)
 	end := make(map[string]int64, len(payload.RuntimeCursors))

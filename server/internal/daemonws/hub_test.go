@@ -225,6 +225,28 @@ func TestWorkspaceRunnerAllowsNoProviderRegistrations(t *testing.T) {
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
 }
 
+func TestWorkspaceRunnerCapabilityBelongsOnlyToCurrentReadyConnection(t *testing.T) {
+	hub := NewHub()
+	key := workspaceRunnerKey{daemonID: "daemon-1", workspaceID: "workspace-1"}
+	old := &client{runnerCapabilities: map[string]struct{}{protocol.DaemonCapabilityWorkspaceRunnerAttachment: {}}}
+	current := &client{runnerCapabilities: map[string]struct{}{protocol.DaemonCapabilityAgentLifecycleActions: {}}}
+	hub.mu.Lock()
+	hub.byRunner[key] = old
+	hub.mu.Unlock()
+	if !hub.WorkspaceRunnerSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
+		t.Fatal("current Runner Attachment capability was not visible")
+	}
+	hub.mu.Lock()
+	hub.byRunner[key] = current
+	hub.mu.Unlock()
+	if hub.WorkspaceRunnerSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
+		t.Fatal("replaced Runner lent its Attachment capability to the current connection")
+	}
+	if !hub.WorkspaceRunnerSupportsCapability("daemon-1", "workspace-1", protocol.DaemonCapabilityAgentLifecycleActions) {
+		t.Fatal("current Runner capability was not visible")
+	}
+}
+
 func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing.T) {
 	hub := NewHub()
 	var accepted atomic.Int64

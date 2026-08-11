@@ -74,6 +74,21 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 	}
 }
 
+func TestWorkspaceRunnerReadyCapabilityValidation(t *testing.T) {
+	valid := WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityAgentLifecycleActions},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid ready capabilities: %v", err)
+	}
+	duplicate := valid
+	duplicate.ActiveCapabilities = []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityWorkspaceRunnerAttachment}
+	if err := duplicate.Validate(); err == nil {
+		t.Fatal("duplicate ready capabilities were accepted")
+	}
+}
+
 func TestAgentActivityOpenEntryEnvelopePreservesUnknownKinds(t *testing.T) {
 	payload := AgentActivityPayload{
 		Snapshot: AgentActivitySnapshot{

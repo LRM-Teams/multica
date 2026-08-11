@@ -49,6 +49,7 @@ type client struct {
 	// Set only after a valid `ready` frame. Until then a connection remains on
 	// the legacy runtime-multiplexed path and cannot receive Runner commands.
 	runnerDaemonInstanceID string
+	runnerCapabilities     map[string]struct{}
 	runnerLastInbound      atomic.Int64
 	runnerWatchdogOnce     sync.Once
 
@@ -887,6 +888,23 @@ func (h *Hub) IsCurrentWorkspaceRunner(daemonID, workspaceID, daemonInstanceID s
 	return c != nil && c.runnerDaemonInstanceID == daemonInstanceID
 }
 
+// WorkspaceRunnerSupportsCapability reports only the active ready connection's
+// declared capabilities. A replaced Runner cannot lend its protocol support to
+// its successor.
+func (h *Hub) WorkspaceRunnerSupportsCapability(daemonID, workspaceID, capability string) bool {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(capability) == "" {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
+	if c == nil {
+		return false
+	}
+	_, supported := c.runnerCapabilities[capability]
+	return supported
+}
+
 // NotifyWorkspaceRunner routes a command only to the current ready connection
 // for the exact daemon and Workspace. It is deliberately separate from the
 // legacy runtime fan-out route and remains dormant until the hard cut.
@@ -1017,6 +1035,10 @@ func (h *Hub) readyWorkspaceRunner(c *client, ready protocol.WorkspaceRunnerRead
 	h.mu.Lock()
 	previous := h.byRunner[key]
 	c.runnerDaemonInstanceID = ready.DaemonInstanceID
+	c.runnerCapabilities = make(map[string]struct{}, len(ready.ActiveCapabilities))
+	for _, capability := range ready.ActiveCapabilities {
+		c.runnerCapabilities[capability] = struct{}{}
+	}
 	c.runnerLastInbound.Store(time.Now().UnixNano())
 	h.byRunner[key] = c
 	h.mu.Unlock()

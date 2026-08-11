@@ -475,6 +475,10 @@ const (
 	// canonical and legacy provider resume pointers. Older daemons advertised
 	// lifecycle actions but only implemented plain process restart.
 	DaemonCapabilityAgentSessionReset = "agent_session_reset_v1"
+	// DaemonCapabilityWorkspaceRunnerAttachment selects the Runner Attachment
+	// command/replay contract. It is intentionally additive: all previously
+	// advertised daemon capabilities remain independently meaningful.
+	DaemonCapabilityWorkspaceRunnerAttachment = "workspace_runner_attachment_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by

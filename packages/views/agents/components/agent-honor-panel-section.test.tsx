@@ -86,6 +86,12 @@ vi.mock("../../i18n", () => ({
 }));
 
 vi.mock("@multica/core/paths", () => ({
+  appendQueryParams: (path: string, params: Record<string, string>) => {
+    const qs = Object.entries(params)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join("&");
+    return path.includes("?") ? `${path}&${qs}` : `${path}?${qs}`;
+  },
   useWorkspacePaths: () => ({
     agentDetail: (id: string) => `/acme/agents/${id}`,
   }),

@@ -1091,8 +1091,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/reactions", h.RemoveReaction)
 			})
 
-			// Agents
-			r.Route("/api/agents", func(r chi.Router) {
+			// Agents — dual mount under /api/agents (legacy alias for mobile/CLI)
+			// and /api/members/agents (Members Directory primary; ADR 0013).
+			// Handlers are identical; only the path prefix differs.
+			registerHumanAgentRoutes := func(r chi.Router) {
 				r.Get("/", h.ListAgents)
 				r.Get("/runner-activity-summaries", h.ListRunnerActivitySummaries)
 				r.Get("/presence", h.GetAgentPresence)
@@ -1149,7 +1151,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/env", h.UpdateAgentEnv)
 					r.Post("/credentials", h.CreateAgentCredential)
 				})
-			})
+			}
+			r.Route("/api/agents", registerHumanAgentRoutes)
+			r.Route("/api/members/agents", registerHumanAgentRoutes)
 
 			// Agent templates catalog (browse + detail). The Create flow
 			// lives under /api/agents/from-template above; this route is for

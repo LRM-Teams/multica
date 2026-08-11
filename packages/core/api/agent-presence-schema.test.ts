@@ -40,7 +40,7 @@ describe("AgentPresenceResponseSchema", () => {
         raw,
         AgentPresenceResponseSchema,
         EMPTY_AGENT_PRESENCE_RESPONSE,
-        { endpoint: "GET /api/agents/presence" },
+        { endpoint: "GET /api/members/agents/presence" },
       ),
     ).toEqual(EMPTY_AGENT_PRESENCE_RESPONSE);
   });

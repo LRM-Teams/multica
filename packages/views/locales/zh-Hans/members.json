@@ -48,5 +48,30 @@
     "breadcrumb_fallback": "成员",
     "not_found_title": "未找到该成员",
     "not_found_description": "该成员可能已经离开工作区。"
+  },
+  "directory": {
+    "title": "成员",
+    "loading": "加载中…",
+    "agents_section": "Agents",
+    "humans_section": "人类",
+    "no_agents": "暂无 Agent",
+    "no_humans": "暂无成员",
+    "empty_select": "选择一位成员",
+    "you_suffix": "（你）",
+    "create_agent_aria": "Create agent",
+    "invite_human_aria": "Invite human",
+    "invite_title": "邀请成员",
+    "invite_email_label": "邮箱",
+    "invite_role_label": "角色",
+    "send_invite": "发送邀请",
+    "cancel": "取消",
+    "computer_required": "Select a computer before creating an agent",
+    "role_updated": "角色已更新",
+    "role_update_failed": "Failed to update role",
+    "member_removed": "已移除成员",
+    "member_remove_failed": "Failed to remove member",
+    "remove_member": "移除成员",
+    "remove_confirm_title": "移除 {{name}}？",
+    "remove_confirm_description": "他们将立即失去此工作区的访问权限。"
   }
 }

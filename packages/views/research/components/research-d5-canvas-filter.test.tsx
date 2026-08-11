@@ -4,6 +4,7 @@ import type { ResearchCanvasFilter } from "@multica/core/research";
 import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
 const { storeState, setFilter, clearFilter, emptyCanvasFilter } = vi.hoisted(() => {
+  // Inline empty filter — vi.hoisted runs before module imports initialize.
   const emptyCanvasFilter = (): ResearchCanvasFilter => ({
     status: null,
     tier: null,

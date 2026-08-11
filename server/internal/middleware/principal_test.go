@@ -266,6 +266,7 @@ func humanRouteSiteFromGather(mfs []*dto.MetricFamily, site string) float64 {
 
 func TestAgentPrincipalMayUseHumanAgentPath(t *testing.T) {
 	self := "/api/agents/11111111-1111-1111-1111-111111111111"
+	selfMembers := "/api/members/agents/11111111-1111-1111-1111-111111111111"
 	cases := []struct {
 		method, path string
 		want         bool
@@ -278,6 +279,13 @@ func TestAgentPrincipalMayUseHumanAgentPath(t *testing.T) {
 		{http.MethodPut, "/api/agents/a1", false},
 		{http.MethodPut, self + "/skills", false},
 		{http.MethodPost, self + "/credentials", false},
+		// Members Directory primary prefix (ADR 0013) — same self-manage rules.
+		{http.MethodPut, selfMembers, true},
+		{http.MethodPost, selfMembers + "/archive", true},
+		{http.MethodPost, selfMembers + "/restore", true},
+		{http.MethodGet, selfMembers, false},
+		{http.MethodPost, "/api/members/agents", false},
+		{http.MethodPut, selfMembers + "/skills", false},
 	}
 	for _, tc := range cases {
 		if got := agentPrincipalMayUseHumanAgentPath(tc.method, tc.path); got != tc.want {

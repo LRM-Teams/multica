@@ -651,8 +651,10 @@ describe("IssueDetail (shared)", () => {
       const link = await screen.findByRole("link", { name: /activity/i });
       // Explicit pointer to the agent's Activity run surface (#236), carrying
       // the run id — never rendered as an empty message row.
-      expect(link).toHaveAttribute("href", expect.stringContaining("/agents/agent-1"));
-      expect(link.getAttribute("href")).toContain("run-9");
+      expect(link).toHaveAttribute(
+        "href",
+        "/test/members?member=agent%3Aagent-1&run=run-9",
+      );
     });
   });
 

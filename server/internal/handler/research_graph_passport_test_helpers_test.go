@@ -76,18 +76,33 @@ func createTestGraphEdge(t *testing.T, ctx context.Context, params db.CreateRese
 
 func createForeignWorkspaceFindingNode(t *testing.T, ctx context.Context, workspaceID pgtype.UUID) pgtype.UUID {
 	t.Helper()
+	// research_session.fleet_id is NOT NULL — seed a throwaway fleet (lead may
+	// live in the test workspace; only workspace_id scopes the foreign session).
+	leadAgentID := createHandlerTestAgent(t, "foreign-ws-lead", nil)
 	tx, err := testPool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin foreign workspace tx: %v", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	var fleetID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO research_fleet (workspace_id, lead_agent_id)
+		VALUES ($1, $2)
+		RETURNING id
+	`, workspaceID, leadAgentID).Scan(&fleetID); err != nil {
+		t.Fatalf("create foreign research fleet: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_fleet WHERE id = $1`, fleetID)
+	})
+
 	var sessionID pgtype.UUID
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO research_session (workspace_id, title, goal, status)
-		VALUES ($1, 'foreign session', 'foreign goal', 'active')
+		INSERT INTO research_session (workspace_id, fleet_id, created_by, title, goal, status)
+		VALUES ($1, $2, $3, 'foreign session', 'foreign goal', 'running')
 		RETURNING id
-	`, workspaceID).Scan(&sessionID); err != nil {
+	`, workspaceID, fleetID, parseUUID(testUserID)).Scan(&sessionID); err != nil {
 		t.Fatalf("create foreign research session: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `SELECT research_ensure_run_session_passport($1, $2)`, workspaceID, sessionID); err != nil {

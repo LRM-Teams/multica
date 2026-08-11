@@ -29,7 +29,7 @@ import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { canAssignAgentToIssue } from "@multica/core/permissions";
-import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { appendQueryParams, useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
@@ -810,7 +810,9 @@ export function AgentsPage({
               canLifecycle={selectedCanLifecycle}
               onHonor={() =>
                 navigation.push(
-                  `${paths.agentDetail(selectedAgent.id)}?tab=honor`,
+                  appendQueryParams(paths.agentDetail(selectedAgent.id), {
+                    tab: "honor",
+                  }),
                 )
               }
               onEdit={() => navigation.push(paths.agentDetail(selectedAgent.id))}

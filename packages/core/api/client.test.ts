@@ -18,7 +18,7 @@ describe("ApiClient", () => {
 
     await expect(client.getRunnerActivitySummaries()).resolves.toEqual({ items: [] });
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "https://api.example.test/api/agents/runner-activity-summaries",
+      "https://api.example.test/api/members/agents/runner-activity-summaries",
     );
   });
 
@@ -1493,7 +1493,7 @@ describe("ApiClient", () => {
 
       expect(result.id).toBe("op-1");
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://api.example.test/api/agents/a-1/lifecycle",
+        "https://api.example.test/api/members/agents/a-1/lifecycle",
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({ action_kind: "full_reset_restart" }),
@@ -1552,7 +1552,7 @@ describe("ApiClient", () => {
       const op = await client.getAgentLifecycleOperation("a-1", "op-1");
       expect(op.status).toBe("succeeded");
       expect(fetchMock.mock.calls[0]?.[0]).toBe(
-        "https://api.example.test/api/agents/a-1/lifecycle/op-1",
+        "https://api.example.test/api/members/agents/a-1/lifecycle/op-1",
       );
     });
   });

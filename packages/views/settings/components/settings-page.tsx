@@ -6,7 +6,6 @@ import {
   SlidersHorizontal,
   Key,
   Settings,
-  Users,
   FlaskConical,
   Bell,
   Plug,
@@ -23,7 +22,6 @@ import { HonorTab } from "./honor-tab";
 import { PreferencesTab } from "./preferences-tab";
 import { TokensTab } from "./tokens-tab";
 import { WorkspaceTab } from "./workspace-tab";
-import { MembersTab } from "./members-tab";
 import { GitHubTab } from "./github-tab";
 import { IntegrationsTab } from "./integrations-tab";
 import { LabsTab } from "./labs-tab";
@@ -53,21 +51,18 @@ const WORKSPACE_TAB_KEYS = [
   "github",
   "integrations",
   "labs",
-  "members",
 ] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
   github: "github",
   integrations: "integrations",
   labs: "labs",
-  members: "members",
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
   github: GitHubMark,
   integrations: Plug,
   labs: FlaskConical,
-  members: Users,
 } as const;
 
 const DEFAULT_TAB = "profile";
@@ -79,6 +74,8 @@ const TAB_QUERY_KEY = "tab";
 // tab; it now lives inside Integrations.
 const LEGACY_WORKSPACE_TAB_REDIRECTS: Record<string, string> = {
   lark: "integrations",
+  // Members admin moved to Members Directory (ADR 0013).
+  members: "general",
 };
 
 // Evolution review moved from Settings to Skills; old bookmarks still use these tab values.
@@ -211,7 +208,6 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="github"><GitHubTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="labs"><LabsTab /></TabsContent>
-          <TabsContent value="members"><MembersTab /></TabsContent>
           {extraAccountTabs?.map((tab) => (
             <TabsContent key={tab.value} value={tab.value}>{tab.content}</TabsContent>
           ))}

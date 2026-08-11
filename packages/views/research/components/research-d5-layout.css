@@ -98,7 +98,11 @@
   color: #c2f1f6;
   border-color: #347486;
 }
-.d5-workspace[data-d5-rail-open="false"] .research-agent-inspector {
+.d5-workspace[data-d5-rail-open="false"] .research-agent-inspector-sheet {
+  /* Same surface as .research-agent-inspector; kept in CSS so TSX stays hex-free (LRM-1208). */
+  background: #0d1723;
+}
+.research-agent-inspector {
   right: 24px;
 }
 .d5-lens-btn {

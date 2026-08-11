@@ -166,6 +166,8 @@ type AgentAttachmentRegistry interface {
 	Apply(workspaceID string, event AgentAttachmentEvent) (AgentAttachmentChange, error)
 	Resolve(workspaceID, agentID string) (AgentAttachment, bool)
 	List(workspaceID string) []AgentAttachment
+	WorkspaceIDs() []string
+	DetachedAgentIDs() []string
 	RecoveryState(runtimeSet AgentAttachmentRuntimeSet) (AgentAttachmentRecoveryState, error)
 	AdvanceRecovery(runtimeSet AgentAttachmentRuntimeSet, cursors []AgentAttachmentRecoveryCursor) error
 	Reconcile(runtimeSet AgentAttachmentRuntimeSet) ([]AgentAttachmentChange, error)

@@ -329,26 +329,29 @@ func (d *Daemon) reconcileReminderRuntimeSet(runtimeIDs []string) error {
 	if d.reminderCache != nil {
 		d.reminderCache.suspend()
 	}
-	managerChanged := false
-	if d.reminderAgents != nil {
-		var err error
-		managerChanged, err = d.reminderAgents.reconcileRuntimeSet(allowed)
-		if err != nil {
-			return err
+	attachmentChanged := false
+	registry := d.attachmentRegistry()
+	if registry != nil {
+		for _, runtimeSet := range d.attachmentRuntimeSets() {
+			changes, err := registry.Reconcile(runtimeSet)
+			if err != nil {
+				return err
+			}
+			attachmentChanged = attachmentChanged || len(changes) > 0
 		}
 	}
 	cacheChanged := false
 	if d.reminderCache != nil {
 		retiredOwners := []string(nil)
-		if d.reminderAgents != nil {
-			retiredOwners = d.reminderAgents.retiredAgentIDs()
+		if registry != nil {
+			retiredOwners = registry.DetachedAgentIDs()
 		}
 		var err error
 		cacheChanged, err = d.reminderCache.reconcileRuntimeSet(allowed, retiredOwners)
 		if err != nil {
 			return err
 		}
-		if !managerChanged && !cacheChanged {
+		if !attachmentChanged && !cacheChanged {
 			d.reminderCache.resume()
 		}
 	}
@@ -621,11 +624,11 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 }
 
 func (d *Daemon) handleReminderSnapshot(payload protocol.ReminderSnapshotPayload) error {
-	if d == nil || d.reminderAgents == nil {
+	if d == nil || d.attachmentRegistry() == nil {
 		return nil
 	}
-	owner, ok := d.reminderAgents.get(payload.AgentID)
-	if !ok || owner.RuntimeID != payload.RuntimeID || owner.PlacementGeneration != payload.PlacementGeneration {
+	attachment, ok := d.currentAttachmentForRuntimeAgent(payload.RuntimeID, payload.AgentID)
+	if !ok || int64(attachment.AttachmentGeneration) != payload.PlacementGeneration {
 		if d.logger != nil {
 			d.logger.Warn("reminder snapshot rejected unknown local owner", "agent_id", payload.AgentID)
 		}
@@ -640,11 +643,11 @@ func (d *Daemon) handleReminderSnapshot(payload protocol.ReminderSnapshotPayload
 }
 
 func (d *Daemon) handleReminderProjection(payload protocol.ReminderProjectionEvent) error {
-	if d == nil || d.reminderCache == nil || d.reminderAgents == nil {
+	if d == nil || d.reminderCache == nil || d.attachmentRegistry() == nil {
 		return nil
 	}
-	owner, ok := d.reminderAgents.get(payload.AgentID)
-	if !ok || owner.RuntimeID != payload.RuntimeID || owner.PlacementGeneration != payload.PlacementGeneration {
+	attachment, ok := d.currentAttachmentForRuntimeAgent(payload.RuntimeID, payload.AgentID)
+	if !ok || int64(attachment.AttachmentGeneration) != payload.PlacementGeneration {
 		if err := d.reminderCache.advanceProjectionCursor(payload.RuntimeID, payload.PrevSeq, payload.Seq); err != nil {
 			if errors.Is(err, errReminderProjectionGap) {
 				d.requestReminderProjectionReplay()
@@ -738,7 +741,7 @@ func (d *Daemon) applyDaemonAgentStart(payload protocol.DaemonAgentStartPayload)
 		}
 	}
 	if accepted && changed && !payload.Replay {
-		d.requestReminderSnapshot(payload.AgentID)
+		d.requestReminderSnapshot(payload.WorkspaceID, payload.AgentID)
 	} else if accepted && changed {
 		d.reminderGateMu.Lock()
 		if d.reminderPendingSnapshots == nil {
@@ -865,11 +868,15 @@ func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
 	return true
 }
 
-func (d *Daemon) requestReminderSnapshot(agentID string) {
-	if strings.TrimSpace(agentID) == "" {
+func (d *Daemon) requestReminderSnapshot(workspaceID, agentID string) {
+	if strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(agentID) == "" {
 		return
 	}
-	owner, ok := d.reminderAgents.get(agentID)
+	registry := d.attachmentRegistry()
+	if registry == nil {
+		return
+	}
+	attachment, ok := registry.Resolve(workspaceID, agentID)
 	if !ok {
 		return
 	}
@@ -883,18 +890,18 @@ func (d *Daemon) requestReminderSnapshot(agentID string) {
 		return
 	}
 	d.reminderGateMu.Unlock()
-	d.requestReminderSnapshotNow(agentID, owner)
+	d.requestReminderSnapshotNow(attachment)
 }
 
-func (d *Daemon) requestReminderSnapshotNow(agentID string, owner reminderAgentResidency) bool {
+func (d *Daemon) requestReminderSnapshotNow(attachment AgentAttachment) bool {
 	d.mu.Lock()
-	_, authorized := d.runtimeIndex[owner.RuntimeID]
+	runtime, authorized := d.runtimeIndex[attachment.RuntimeID]
 	d.mu.Unlock()
-	if !authorized {
+	if !authorized || runtime.WorkspaceID != attachment.WorkspaceID {
 		return false
 	}
 	return d.queueReminderFrame(protocol.EventReminderSnapshotRequest, protocol.ReminderSnapshotRequestPayload{
-		AgentID: agentID, RuntimeID: owner.RuntimeID, PlacementGeneration: owner.PlacementGeneration,
+		AgentID: attachment.AgentID, RuntimeID: attachment.RuntimeID, PlacementGeneration: int64(attachment.AttachmentGeneration),
 	})
 }
 
@@ -909,10 +916,7 @@ func (d *Daemon) requestAgentLifecycleReplay() bool {
 	}
 	d.reminderLifecycleReplayInFlight = true
 	d.reminderGateMu.Unlock()
-	storedCursors := map[string]int64{}
-	if d.reminderAgents != nil {
-		storedCursors = d.reminderAgents.lifecycleCursors()
-	}
+	storedCursors := d.attachmentRecoveryCursors()
 	cursors := map[string]int64{}
 	d.mu.Lock()
 	for runtimeID := range d.runtimeIndex {
@@ -929,11 +933,8 @@ func (d *Daemon) requestAgentLifecycleReplay() bool {
 }
 
 func (d *Daemon) requestReminderSnapshots() {
-	if d.reminderAgents == nil {
-		return
-	}
-	for _, agentID := range d.reminderAgents.residentAgentIDs() {
-		d.requestReminderSnapshot(agentID)
+	for _, attachment := range d.currentAttachments() {
+		d.requestReminderSnapshot(attachment.WorkspaceID, attachment.AgentID)
 	}
 }
 
@@ -947,8 +948,8 @@ func (d *Daemon) startReminderProjectionReplay() bool {
 	d.reminderGateMu.Unlock()
 	runtimeIDs := make([]string, 0)
 	residencies := map[string][]protocol.ReminderRuntimeResidency{}
-	if d.reminderAgents != nil {
-		storedResidencies := d.reminderAgents.runtimeResidencies()
+	if d.attachmentRegistry() != nil {
+		storedResidencies := d.reminderRuntimeResidencies()
 		d.mu.Lock()
 		for runtimeID := range d.runtimeIndex {
 			if owners := storedResidencies[runtimeID]; len(owners) > 0 {
@@ -1029,7 +1030,7 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 	if d.reminderCache == nil {
 		return nil
 	}
-	localResidencies := d.reminderAgents.runtimeResidencies()
+	localResidencies := d.reminderRuntimeResidencies()
 	d.mu.Lock()
 	for runtimeID := range payload.RuntimeCursors {
 		if _, ok := d.runtimeIndex[runtimeID]; !ok {
@@ -1115,17 +1116,8 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 		d.reminderPendingSnapshots = make(map[string]struct{})
 	}
 	if initialReplay {
-		for _, agentID := range d.reminderAgents.residentAgentIDs() {
-			owner, ok := d.reminderAgents.get(agentID)
-			if !ok {
-				continue
-			}
-			d.mu.Lock()
-			_, authorized := d.runtimeIndex[owner.RuntimeID]
-			d.mu.Unlock()
-			if authorized {
-				d.reminderPendingSnapshots[agentID] = struct{}{}
-			}
+		for _, attachment := range d.currentAttachments() {
+			d.reminderPendingSnapshots[attachment.AgentID] = struct{}{}
 		}
 	}
 	ids := make([]string, 0, len(d.reminderPendingSnapshots))
@@ -1136,11 +1128,11 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 	d.reminderCache.resume()
 	sort.Strings(ids)
 	for _, agentID := range ids {
-		owner, ok := d.reminderAgents.get(agentID)
+		attachment, ok := d.currentAttachmentForAgent(agentID)
 		if !ok {
 			continue
 		}
-		if !d.requestReminderSnapshotNow(agentID, owner) {
+		if !d.requestReminderSnapshotNow(attachment) {
 			return errors.New("queue reminder snapshot after replay")
 		}
 		d.reminderGateMu.Lock()
@@ -1151,10 +1143,10 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 }
 
 func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) {
-	owner, ok := d.reminderAgents.get(job.OwnerAgentID)
+	attachment, ok := d.currentAttachmentForAgent(job.OwnerAgentID)
 	if !ok {
 		// Task #69: this used to be a silent return — a due reminder whose
-		// owner isn't (yet, or anymore) in the local residency map produced
+		// owner isn't (yet, or anymore) in the current Attachment set produced
 		// zero trace: no fire_attempt sent, no error, no reconnect forced.
 		// A perfectly healthy WS connection (heartbeat alive, projection
 		// cursor advancing) would show no symptom at all while this
@@ -1163,18 +1155,18 @@ func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) {
 		// this does not fail closed here — reminderCache's local retry
 		// (task #68's fireAndScheduleRetryLocked) already re-invokes this
 		// function on a schedule, so a transient gap self-heals the moment
-		// the owner registers; logging is what makes a *persistent* gap
+		// the Attachment arrives; logging is what makes a *persistent* gap
 		// (owner genuinely never resolves) visible instead of invisible.
 		if d.logger != nil {
-			d.logger.Warn("reminder timer fired for an owner missing from local residency map; local retry will re-check",
+			d.logger.Warn("reminder timer fired for an owner missing from current Agent Attachment set; local retry will re-check",
 				"reminder_id", job.ReminderID, "agent_id", job.OwnerAgentID, "version", job.Version)
 		}
 		return
 	}
 	d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{
 		AgentID:             job.OwnerAgentID,
-		RuntimeID:           owner.RuntimeID,
-		PlacementGeneration: owner.PlacementGeneration,
+		RuntimeID:           attachment.RuntimeID,
+		PlacementGeneration: int64(attachment.AttachmentGeneration),
 		ReminderID:          job.ReminderID,
 		Version:             job.Version,
 		FiredAtClient:       time.Now().UTC().Format(time.RFC3339Nano),

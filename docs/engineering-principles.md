@@ -477,7 +477,8 @@
 - `AgentAttachmentRegistry` 是本机 Agent placement generation、detach tombstone、Runtime lifecycle cursor 与 Runtime-set reconciliation 的唯一实现；调用方只消费 `attached|moved|detached|unchanged`，不得读 map 或自行比较 generation。Attachment 不代表 provider process 已启动；detach 不删除 Agent Root、Inbox 或 Message Draft。
 - 所有正式操作固定 authenticated Workspace scope，event payload 不携带 `WorkspaceID`。Runtime reconciliation 必须提供该 Workspace 明确允许的 Runtime IDs，只能 detach，禁止猜测或静默 move。Attachment generation 与 per-Runtime lifecycle sequence 是两套身份；状态/tombstone 与 cursor 在一次 `Apply` 中原子持久化，失败共同回滚。
 - 迁移期继续读写现有 `.daemon/reminder_agents.json` 字段和路径；旧 `applyStart/applyStop/replay-end` 只作为同一 registry core 的 adapter，不建第二份状态、不让旧 lifecycle 失效。完整决策见 [`ADR-0013`](adr/0013-use-agent-attachment-for-durable-machine-responsibility.md)。
-- **物**：`agent_attachment.go` 的 Workspace-scoped interface、`agent_attachment_registry.go` 的单一 generation/tombstone/cursor/reconcile 实现、`agent_attachment_registry_test.go` 与原 Reminder lifecycle/restart 回归。
+- Reminder 只消费 registry 的 Workspace-scoped Attachment、Runtime residency 与 recovery cursor value snapshots，再维护自己的 timer/fence/projection state；Reminder cache cleanup 不能反向 detach Agent。缺少 Runtime→Workspace ownership proof 时不得退回 unscoped Agent lookup。
+- **物**：`agent_attachment.go` 的 Workspace-scoped interface、`agent_attachment_registry.go` 的单一 generation/tombstone/cursor/reconcile 实现、`agent_attachment_daemon.go` 的 scoped Reminder projection，以及 registry/Reminder lifecycle/restart 回归。
 
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。

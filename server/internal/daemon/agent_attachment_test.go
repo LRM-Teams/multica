@@ -17,6 +17,10 @@ func (*fakeAgentAttachmentRegistry) Resolve(string, string) (AgentAttachment, bo
 
 func (*fakeAgentAttachmentRegistry) List(string) []AgentAttachment { return nil }
 
+func (*fakeAgentAttachmentRegistry) WorkspaceIDs() []string { return nil }
+
+func (*fakeAgentAttachmentRegistry) DetachedAgentIDs() []string { return nil }
+
 func (*fakeAgentAttachmentRegistry) RecoveryState(AgentAttachmentRuntimeSet) (AgentAttachmentRecoveryState, error) {
 	return AgentAttachmentRecoveryState{}, nil
 }

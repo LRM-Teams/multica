@@ -318,7 +318,10 @@ func TestOnReminderTimerOwnerMissingLogsAndSelfHealsOnNextRetry(t *testing.T) {
 	writes := make(chan []byte, 4)
 	var d *Daemon
 	cache.onFire = func(job protocol.ReminderTimerJob) { d.onReminderTimer(job) }
-	d = &Daemon{logger: logger, reminderAgents: mgr, reminderCache: cache}
+	d = &Daemon{
+		logger: logger, reminderAgents: mgr, reminderCache: cache,
+		runtimeIndex: map[string]Runtime{"runtime-x": {ID: "runtime-x", WorkspaceID: "workspace-x"}},
+	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 	cache.resume() // setReminderWS's beginConnection() suspends arming; mimic post-replay resume.
 
@@ -335,7 +338,7 @@ func TestOnReminderTimerOwnerMissingLogsAndSelfHealsOnNextRetry(t *testing.T) {
 	default:
 	}
 	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "owner missing from local residency map") ||
+	if !strings.Contains(logOutput, "owner missing from current Agent Attachment set") ||
 		!strings.Contains(logOutput, "reminder_id=r1") ||
 		!strings.Contains(logOutput, "agent_id=agent-x") ||
 		!strings.Contains(logOutput, "version=1") {
@@ -345,8 +348,11 @@ func TestOnReminderTimerOwnerMissingLogsAndSelfHealsOnNextRetry(t *testing.T) {
 	// Owner registers before the next local retry — task #68's retry loop
 	// (not this fix) is what re-invokes onReminderTimer; the fix's job is
 	// only to not have poisoned that path and to have made the gap visible.
-	if _, _, err := mgr.applyStart("agent-x", "runtime-x", "workspace-x", 1); err != nil {
-		t.Fatalf("applyStart: %v", err)
+	if _, err := mgr.Apply("workspace-x", AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: "agent-x", RuntimeID: "runtime-x",
+		AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(clock.timers) != 2 {
 		t.Fatalf("timers scheduled after initial fire = %d, want 2 (due + retry)", len(clock.timers))
@@ -977,13 +983,22 @@ func TestReminderAgentPlacementGenerationFencesAtoBtoAOutOfOrder(t *testing.T) {
 	}
 }
 
-func TestReminderReconnectRequestsSnapshotForRunningAndIdleOwners(t *testing.T) {
+func TestReminderReconnectRequestsSnapshotForAttachedAgents(t *testing.T) {
 	root := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := newReminderAgentManager(root, logger)
-	mgr.markRunning("agent-running", "runtime-a", "workspace-a")
-	mgr.markRunning("agent-idle", "runtime-a", "workspace-a")
-	mgr.markIdle("agent-idle")
+	if _, err := mgr.Apply("workspace-a", AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: "agent-running", RuntimeID: "runtime-a",
+		AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Apply("workspace-a", AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: "agent-idle", RuntimeID: "runtime-a",
+		AttachmentGeneration: 1, LifecycleSeq: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	writes := make(chan []byte, 2)
 	done := make(chan struct{})
 	d := &Daemon{

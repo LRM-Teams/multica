@@ -268,6 +268,42 @@ func (r *localAgentAttachmentRegistry) List(workspaceID string) []AgentAttachmen
 	return attachments
 }
 
+func (r *localAgentAttachmentRegistry) WorkspaceIDs() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	workspaces := make(map[string]struct{})
+	for _, entry := range r.agents {
+		if entry.WorkspaceID != "" {
+			workspaces[entry.WorkspaceID] = struct{}{}
+		}
+	}
+	r.mu.Unlock()
+	result := make([]string, 0, len(workspaces))
+	for workspaceID := range workspaces {
+		result = append(result, workspaceID)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func (r *localAgentAttachmentRegistry) DetachedAgentIDs() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	ids := make([]string, 0)
+	for agentID := range r.placementHighWatermarks {
+		if _, attached := r.agents[agentID]; !attached {
+			ids = append(ids, agentID)
+		}
+	}
+	r.mu.Unlock()
+	sort.Strings(ids)
+	return ids
+}
+
 func (r *localAgentAttachmentRegistry) RecoveryState(runtimeSet AgentAttachmentRuntimeSet) (AgentAttachmentRecoveryState, error) {
 	if err := runtimeSet.Validate(); err != nil {
 		return AgentAttachmentRecoveryState{}, err

@@ -137,6 +137,7 @@ type Daemon struct {
 	wsConnState   string
 
 	reminderCache                    *reminderCache
+	agentAttachments                 AgentAttachmentRegistry
 	reminderAgents                   *reminderAgentManager
 	reminderWSMu                     sync.RWMutex
 	reminderWrites                   chan<- []byte
@@ -474,6 +475,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
 	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
 	d.reminderAgents = newReminderAgentManager(cfg.WorkspacesRoot, logger)
+	d.agentAttachments = d.reminderAgents.localAgentAttachmentRegistry
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	return d
@@ -3217,7 +3219,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 
 	if d.reminderAgents != nil {
 		if d.reminderAgents.markRunning(task.AgentID, task.RuntimeID, task.WorkspaceID) {
-			d.requestReminderSnapshot(task.AgentID)
+			d.requestReminderSnapshot(task.WorkspaceID, task.AgentID)
 		}
 		defer d.reminderAgents.markIdle(task.AgentID)
 	}

@@ -1,6 +1,13 @@
 package researchrun
 
-import "testing"
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
 
 func TestHashManifestEntriesDeterministic(t *testing.T) {
 	entries := []artifactVersionCandidate{
@@ -23,6 +30,23 @@ func TestHashManifestEntriesDeterministic(t *testing.T) {
 	second := hashManifestEntries([]artifactVersionCandidate{entries[1], entries[0]})
 	if first != second {
 		t.Fatalf("hash=%q want=%q", first, second)
+	}
+}
+
+func TestVerifyManifestPromptShadow(t *testing.T) {
+	live := RunSnapshot{
+		Sources:      []SourceSnapshotView{{ID: "s1"}, {ID: "s2"}},
+		Observations: []Observation{{ID: "o1"}},
+		Claims:       []Claim{{ID: "c1"}},
+	}
+	filtered := filterRunSnapshotByManifest(live, map[string]struct{}{"s1": {}, "o1": {}, "c1": {}})
+	livePrompt := "ledger: 2 source snapshots, 1 observations, 1 claims"
+	manifestPrompt := "ledger: 1 source snapshots, 1 observations, 1 claims"
+	if err := verifyManifestPromptShadow(livePrompt, manifestPrompt, live, filtered); err != nil {
+		t.Fatalf("expected filter delta to allow prompt change: %v", err)
+	}
+	if err := verifyManifestPromptShadow("same", "different", live, live); err == nil {
+		t.Fatal("expected prompt shadow mismatch")
 	}
 }
 
@@ -106,5 +130,79 @@ func TestNewArtifactContextModule(t *testing.T) {
 	module := NewArtifactContextModule()
 	if module.policy.ManifestOmissionReason(ArtifactDenyLifecycle) != "lifecycle" {
 		t.Fatal("expected lifecycle omission reason")
+	}
+}
+
+func TestCreateDispatchIntentPersistsManifestBoundOutbox(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID,
+		FleetID:     fixture.fleetID,
+		CreatedBy:   fixture.userID,
+		LeadAgentID: fixture.agentID,
+		Goal:        "Artifact passport dispatch binding",
+		Title:       "Passport dispatch",
+		DepthTier:   "standard",
+		Language:    "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	var passportEnabled bool
+	if err = pool.QueryRow(ctx, `
+		SELECT artifact_passport_enabled FROM research_session WHERE id = $1::uuid
+	`, run.SessionID).Scan(&passportEnabled); err != nil {
+		t.Fatalf("load passport flag: %v", err)
+	}
+	if !passportEnabled {
+		t.Fatal("expected artifact_passport_enabled after initialization")
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	var manifestID, manifestHash, requestHash string
+	if err = pool.QueryRow(ctx, `
+		SELECT manifest_id::text, manifest_hash, request_hash
+		FROM research_dispatch_outbox
+		WHERE attempt_id = $1::uuid
+	`, attempt.ID).Scan(&manifestID, &manifestHash, &requestHash); err != nil {
+		t.Fatalf("load outbox binding: %v", err)
+	}
+	if manifestID == "" || manifestHash == "" || requestHash == "" {
+		t.Fatalf("outbox binding incomplete: manifest_id=%q manifest_hash=%q request_hash=%q", manifestID, manifestHash, requestHash)
+	}
+	var manifestAttemptID string
+	if err = pool.QueryRow(ctx, `
+		SELECT attempt_id::text
+		FROM research_artifact_context_manifest
+		WHERE id = $1::uuid
+	`, manifestID).Scan(&manifestAttemptID); err != nil {
+		t.Fatalf("load manifest row: %v", err)
+	}
+	if manifestAttemptID != attempt.ID {
+		t.Fatalf("manifest attempt=%q want=%q", manifestAttemptID, attempt.ID)
 	}
 }

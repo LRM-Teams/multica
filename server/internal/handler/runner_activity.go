@@ -67,7 +67,10 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if ready.WorkspaceID != identity.WorkspaceID || ready.DaemonInstanceID != daemonInstanceID {
 			return errors.New("Runner ready identity does not match current connection")
 		}
-		return h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID)
+		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID); err != nil {
+			return err
+		}
+		return h.dispatchPendingRunnerLaunches(ctx, identity)
 	case protocol.EventAgentStatus:
 		var status protocol.AgentStatusPayload
 		if err := json.Unmarshal(raw, &status); err != nil {
@@ -301,6 +304,15 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 		}
 		if command.RowsAffected() != 1 {
 			return errors.New("stale Workspace Runner start acknowledgement")
+		}
+		if _, err := h.DB.Exec(ctx, `
+			UPDATE agent_start_intent
+			SET status = CASE WHEN $4 = 'queued' THEN 'queued' ELSE 'accepted' END,
+			    lifecycle_seq = GREATEST(lifecycle_seq, 1), accepted_at = COALESCE(accepted_at, now()),
+			    reported_at = now(), updated_at = now()
+			WHERE start_dispatch_id::text = $1 AND agent_id = $2 AND runtime_id = $3
+			  AND status = 'pending'`, acknowledgement.StartDispatchID, agentID, runtimeID, acknowledgement.QueueState); err != nil {
+			return fmt.Errorf("record accepted Runner launch intent: %w", err)
 		}
 		return nil
 	})

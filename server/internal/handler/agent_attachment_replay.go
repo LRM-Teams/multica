@@ -126,6 +126,11 @@ func (h *Handler) acknowledgeAgentAttachmentCommand(ctx context.Context, identit
 	if err != nil {
 		return fmt.Errorf("persist Attachment receipt: %w", err)
 	}
+	if eventType == protocol.EventAgentAttached {
+		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
+			return err
+		}
+	}
 	slog.Debug("Workspace Runner Attachment command acknowledged", "workspace_id", identity.WorkspaceID, "runtime_id", payload.RuntimeID, "agent_id", payload.AgentID, "lifecycle_seq", payload.LifecycleSeq, "outcome", "accepted", "reason", "command_receipt")
 	return nil
 }

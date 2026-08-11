@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -242,6 +245,63 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	raw, _ = json.Marshal(staleStatus)
 	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, raw); err == nil {
 		t.Fatal("stale Runner launch status was accepted")
+	}
+}
+
+func TestPendingRunnerLaunchDispatchUsesCurrentAttachmentAndStableIntentID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID, runtimeID := createHandlerTestAgent(t, "runner-dispatch-"+uuid.NewString()[:8], nil), handlerTestRuntimeID(t)
+	dispatchID := uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_start_intent (start_dispatch_id, agent_id, workspace_id, runtime_id)
+		VALUES ($1, $2, $3, $4)`, dispatchID, agentID, testWorkspaceID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	hub := daemonws.NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
+	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for hub.WorkspaceRunnerConnectionCount("daemon-1", testWorkspaceID) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("Runner did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h := *testHandler
+	h.DaemonHub = hub
+	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
+		t.Fatalf("dispatch pending Runner launch: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frame protocol.Message
+	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStart {
+		t.Fatalf("Runner launch frame=%+v err=%v", frame, err)
+	}
+	var start protocol.WorkspaceRunnerAgentStartPayload
+	if err := json.Unmarshal(frame.Payload, &start); err != nil || start.AgentID != agentID || start.RuntimeID != runtimeID || start.StartDispatchID != dispatchID {
+		t.Fatalf("Runner launch payload=%+v err=%v", start, err)
 	}
 }
 

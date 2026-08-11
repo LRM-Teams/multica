@@ -1,0 +1,169 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/researchrun"
+)
+
+type recordingResearchRunEngine struct {
+	snapshotCalled           bool
+	snapshotForAttemptCalled bool
+	snapshotSessionID        string
+	snapshotWorkspaceID      string
+	snapshotAttemptID        string
+}
+
+func (f *recordingResearchRunEngine) Create(context.Context, researchrun.StartInput) (researchrun.Run, error) {
+	panic("unexpected Create call")
+}
+
+func (f *recordingResearchRunEngine) Snapshot(_ context.Context, sessionID, workspaceID string) (researchrun.RunSnapshot, error) {
+	f.snapshotCalled = true
+	f.snapshotSessionID = sessionID
+	f.snapshotWorkspaceID = workspaceID
+	return researchrun.RunSnapshot{}, nil
+}
+
+func (f *recordingResearchRunEngine) SnapshotForAttempt(_ context.Context, sessionID, workspaceID, attemptID string) (researchrun.RunSnapshot, error) {
+	f.snapshotForAttemptCalled = true
+	f.snapshotSessionID = sessionID
+	f.snapshotWorkspaceID = workspaceID
+	f.snapshotAttemptID = attemptID
+	return researchrun.RunSnapshot{}, nil
+}
+
+func (f *recordingResearchRunEngine) ListFleetMembers(context.Context, string, string) ([]researchrun.FleetMember, error) {
+	return nil, nil
+}
+
+func (f *recordingResearchRunEngine) Pause(context.Context, string, string, string) (researchrun.Run, error) {
+	panic("unexpected Pause call")
+}
+
+func (f *recordingResearchRunEngine) Resume(context.Context, string, string, string) (researchrun.Run, error) {
+	panic("unexpected Resume call")
+}
+
+func (f *recordingResearchRunEngine) Cancel(context.Context, string, string, string, string) (researchrun.Run, error) {
+	panic("unexpected Cancel call")
+}
+
+func (f *recordingResearchRunEngine) Archive(context.Context, string, string, string, string) (researchrun.Run, error) {
+	panic("unexpected Archive call")
+}
+
+func (f *recordingResearchRunEngine) Confirm(context.Context, string, string, string) (researchrun.Run, error) {
+	panic("unexpected Confirm call")
+}
+
+func (f *recordingResearchRunEngine) Steer(context.Context, researchrun.SteerInput) (researchrun.Run, error) {
+	panic("unexpected Steer call")
+}
+
+func (f *recordingResearchRunEngine) NodeCommand(context.Context, researchrun.NodeCommandInput) (researchrun.NodeCommandOutcome, error) {
+	panic("unexpected NodeCommand call")
+}
+
+func (f *recordingResearchRunEngine) SubmitResult(context.Context, string, string, string, string, string, string, json.RawMessage) (researchrun.AcceptResultOutcome, error) {
+	panic("unexpected SubmitResult call")
+}
+
+func (f *recordingResearchRunEngine) ReconcileDue(context.Context, int) (int, error) {
+	panic("unexpected ReconcileDue call")
+}
+
+var _ researchrun.ResearchRun = (*recordingResearchRunEngine)(nil)
+
+func useResearchRunEngine(t *testing.T, engine researchrun.ResearchRun) {
+	t.Helper()
+
+	prev := testHandler.ResearchRun
+	testHandler.ResearchRun = engine
+	t.Cleanup(func() { testHandler.ResearchRun = prev })
+}
+
+func seedInitializedResearchSessionForSnapshotTest(t *testing.T) pgtype.UUID {
+	t.Helper()
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+
+	ensureMergableFleetMember(t)
+
+	ctx := context.Background()
+	var fleetID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		SELECT id FROM research_fleet WHERE workspace_id = $1
+	`, testWorkspaceID).Scan(&fleetID); err != nil {
+		t.Fatalf("load research fleet: %v", err)
+	}
+
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin session tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var sessionID pgtype.UUID
+	if err = tx.QueryRow(ctx, `
+		INSERT INTO research_session (
+			workspace_id, fleet_id, created_by, title, goal, status, run_initialized_at
+		) VALUES ($1, $2, $3, $4, $5, $6, now())
+		RETURNING id
+	`, parseUUID(testWorkspaceID), fleetID, parseUUID(testUserID),
+		"snapshot-passport-"+uuid.NewString()[:8],
+		"verify attempt-bound snapshot routing", "running").Scan(&sessionID); err != nil {
+		t.Fatalf("create initialized research session: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `SELECT research_ensure_run_session_passport($1, $2)`, parseUUID(testWorkspaceID), sessionID); err != nil {
+		t.Fatalf("ensure run session passport: %v", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit initialized research session: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id = $1`, sessionID)
+	})
+	return sessionID
+}
+
+func TestSnapshotPassportGetResearchSessionSnapshotUsesSnapshotForAttemptWhenAttemptIDPresent(t *testing.T) {
+	sessionID := seedInitializedResearchSessionForSnapshotTest(t)
+	attemptID := uuid.NewString()
+
+	engine := &recordingResearchRunEngine{}
+	useResearchRunEngine(t, engine)
+
+	path := "/api/research/sessions/" + uuidToString(sessionID) + "?attempt_id=" + attemptID
+	req := withURLParam(newRequest(http.MethodGet, path, nil), "id", uuidToString(sessionID))
+
+	recorder := httptest.NewRecorder()
+	testHandler.GetResearchSessionSnapshot(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !engine.snapshotForAttemptCalled {
+		t.Fatal("expected SnapshotForAttempt to be called when attempt_id is present")
+	}
+	if engine.snapshotCalled {
+		t.Fatal("Snapshot must not be called when attempt_id is present")
+	}
+	if engine.snapshotSessionID != uuidToString(sessionID) {
+		t.Fatalf("snapshot session id=%q, want %q", engine.snapshotSessionID, uuidToString(sessionID))
+	}
+	if engine.snapshotWorkspaceID != testWorkspaceID {
+		t.Fatalf("snapshot workspace id=%q, want %q", engine.snapshotWorkspaceID, testWorkspaceID)
+	}
+	if engine.snapshotAttemptID != attemptID {
+		t.Fatalf("snapshot attempt id=%q, want %q", engine.snapshotAttemptID, attemptID)
+	}
+}

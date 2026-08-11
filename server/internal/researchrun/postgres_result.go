@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -269,15 +270,20 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `
+	var decisionID string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
 			workspace_id, session_id, decision_kind, actor_type, actor_id,
 			goal_version, plan_version, inputs, outcome, rationale
 		) VALUES ($1::uuid, $2::uuid, 'research_method', 'agent', $3::uuid,
 		          $4, $5, $6, $7, $8)
+		RETURNING id::text
 	`, state.workspaceID, state.run.SessionID, agentID, state.run.GoalVersion,
-		state.targetPlan, inputs, outcome, truncateBytes(method.MethodRationale, 8192))
-	return err
+		state.targetPlan, inputs, outcome, truncateBytes(method.MethodRationale, 8192)).Scan(&decisionID)
+	if err != nil {
+		return err
+	}
+	return ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("research_method"), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)))
 }
 
 func isEvidenceTask(kind TaskKind) bool {
@@ -441,6 +447,9 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		}
 		if !existed {
 			created++
+			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindQuestion, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+				return nil, 0, err
+			}
 		}
 		ids[proposal.ClientKey] = id
 	}
@@ -585,6 +594,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 		} else if err == nil {
 			created++
 			taskIDs[proposal.ClientKey] = id
+			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindTask, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+				return 0, err
+			}
 		}
 		if err != nil {
 			return 0, err
@@ -775,13 +787,17 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 		ids[source.ClientKey] = id
 		if !existed {
 			created++
+			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindSourceSnapshot, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil); err != nil {
+				return nil, 0, err
+			}
 		}
 		payload, _ := json.Marshal(map[string]any{
 			"snapshot_id": id, "publisher": source.Publisher,
 			"independence_key": source.IndependenceKey, "retrieved_at": source.RetrievedAt,
 			"verification_status": verificationStatus, "evidence_traits": evidenceTraits,
 		})
-		if _, err = tx.Exec(ctx, `
+		var legacySourceID string
+		err = tx.QueryRow(ctx, `
 			INSERT INTO research_source (
 				workspace_id, session_id, url, title, source_class,
 				credibility_weight, stance, relevance, summary, excerpt, payload,
@@ -791,9 +807,15 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			WHERE NOT EXISTS (
 			  SELECT 1 FROM research_source WHERE source_snapshot_id = $10::uuid
 			)
+			RETURNING id::text
 		`, state.workspaceID, state.run.SessionID, canonical, truncateBytes(source.Title, 4096),
 			truncateBytes(source.SourceClass, 160), sourceProjectionWeight(state.run.OrchestratorVersion, source.SourceClass),
-			truncateBytes(result.Summary, 4096), truncateBytes(source.SnapshotText, 2000), payload, id); err != nil {
+			truncateBytes(result.Summary, 4096), truncateBytes(source.SnapshotText, 2000), payload, id).Scan(&legacySourceID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Legacy source projection already exists for this snapshot.
+		} else if err != nil {
+			return nil, 0, err
+		} else if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindLegacySource, state.workspaceID, state.run.SessionID, legacySourceID, time.Now(), nil, nil); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -848,6 +870,9 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 		ids[observation.ClientKey] = id
 		if !existed {
 			created++
+			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindObservation, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil); err != nil {
+				return nil, 0, err
+			}
 		}
 	}
 	return ids, created, nil
@@ -915,6 +940,9 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		ids[claim.ClientKey] = id
 		if !existed {
 			created++
+			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindClaim, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+				return nil, 0, err
+			}
 		}
 		for _, evidence := range claim.Evidence {
 			observationID, ok := observationIDs[evidence.ObservationKey]
@@ -927,7 +955,8 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				verificationStatus = "verified"
 				verifiedBy = state.task.ID
 			}
-			if _, err = tx.Exec(ctx, `
+			var evidenceID string
+			if err = tx.QueryRow(ctx, `
 				INSERT INTO research_claim_evidence (
 					workspace_id, session_id, claim_id, observation_id, relation,
 					strength, directness, method_fit, verification_status, verified_by_task_id, rationale
@@ -942,9 +971,13 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				  verified_by_task_id = COALESCE(EXCLUDED.verified_by_task_id, research_claim_evidence.verified_by_task_id),
 				  rationale = CASE WHEN EXCLUDED.rationale <> '' THEN EXCLUDED.rationale ELSE research_claim_evidence.rationale END,
 				  updated_at = now()
+				RETURNING id::text
 			`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation,
 				evidence.Strength, evidence.Directness, evidence.MethodFit, verificationStatus, verifiedBy,
-				truncateBytes(evidence.Rationale, 4096), usesEvidenceFitnessContract(state.run.OrchestratorVersion)); err != nil {
+				truncateBytes(evidence.Rationale, 4096), usesEvidenceFitnessContract(state.run.OrchestratorVersion)).Scan(&evidenceID); err != nil {
+				return nil, 0, err
+			}
+			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID, evidenceID, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -1001,6 +1034,9 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 	`, state.workspaceID, state.run.SessionID, revision, report.ContentMD, structuredJSON,
 		state.run.GoalVersion, state.targetPlan, state.task.ID, state.attemptID,
 		state.task.AssignedAgentID).Scan(&reportID); err != nil {
+		return "", err
+	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindReportRevision, state.workspaceID, state.run.SessionID, reportID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
 		return "", err
 	}
 	sections := map[string]reportStructuredSection{}
@@ -1111,15 +1147,20 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `
+	var decisionID string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
 			workspace_id, session_id, decision_kind, actor_type, actor_id,
 			goal_version, plan_version, inputs, outcome, rationale
 		) VALUES ($1::uuid, $2::uuid, $3, 'agent', $4::uuid, $5, $6, $7, $8, $9)
+		RETURNING id::text
 	`, state.workspaceID, state.run.SessionID, state.task.Kind, state.task.AssignedAgentID,
 		state.run.GoalVersion, state.targetPlan, inputs, outcome,
-		truncateBytes(strings.Join(evaluation.Findings, "\n"), 8192))
-	return err
+		truncateBytes(strings.Join(evaluation.Findings, "\n"), 8192)).Scan(&decisionID)
+	if err != nil {
+		return err
+	}
+	return ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision(string(state.task.Kind)), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)))
 }
 
 func loadReportClaimKeys(ctx context.Context, tx pgx.Tx, reportID string) ([]string, error) {

@@ -433,6 +433,10 @@ func TestActivateReadyTasksTransactionRecovery(t *testing.T) {
 		`, failedID, blockedID, readyID, run.fixture.workspaceID, run.fixture.sessionID, run.goalVersion, run.planVersion); err != nil {
 			t.Fatal(err)
 		}
+		for _, taskID := range []string{failedID, blockedID, readyID} {
+			gv, pv := run.goalVersion, run.planVersion
+			backfillIntegrationArtifactPassport(t, run.ctx, run.pool, run.fixture.workspaceID, run.fixture.sessionID, taskID, string(ArtifactKindTask), &gv, &pv)
+		}
 		if _, err := run.pool.Exec(run.ctx, `
 			INSERT INTO research_task_dependency (task_id, depends_on_task_id) VALUES ($1::uuid, $2::uuid)
 		`, blockedID, failedID); err != nil {

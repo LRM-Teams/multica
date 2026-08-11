@@ -694,3 +694,202 @@ func TestResearchArtifactPolicyLedgerGuards322RoundTrips(t *testing.T) {
 		t.Fatalf("reapply 322 up: %v", err)
 	}
 }
+
+const researchArtifactIntegrityTestDDL = `
+CREATE TABLE IF NOT EXISTS agent (id UUID PRIMARY KEY);
+INSERT INTO agent (id) VALUES ('60000000-0000-4000-8000-000000000001') ON CONFLICT DO NOTHING;
+ALTER TABLE research_task_attempt
+  ADD COLUMN IF NOT EXISTS assigned_agent_id UUID NOT NULL DEFAULT '60000000-0000-4000-8000-000000000001',
+  ADD COLUMN IF NOT EXISTS execution_adapter TEXT NOT NULL DEFAULT 'agent_inbox',
+  ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'openai',
+  ADD COLUMN IF NOT EXISTS model TEXT NOT NULL DEFAULT 'composer-1.5',
+  ADD COLUMN IF NOT EXISTS client_request_id TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS result_hash TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS result JSONB NOT NULL DEFAULT '{}'::jsonb;
+`
+
+func TestResearchArtifactIntegrityGuards323RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_integrity_323_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactIntegrityTestDDL); err != nil {
+		t.Fatalf("extend attempt schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	taskID := "30000000-0000-4000-8000-000000000003"
+	otherTaskID := "30000000-0000-4000-8000-000000000099"
+	attemptID := "30000000-0000-4000-8000-000000000004"
+	resultID := "30000000-0000-4000-8000-000000000005"
+	agentID := "60000000-0000-4000-8000-000000000001"
+	resultHash := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	requestID := "result-request-323"
+
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO research_session (id, workspace_id) VALUES ($1::uuid, $2::uuid)`, sessionID, workspaceID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'integrity-task', 1, 1)
+	`, taskID, workspaceID, sessionID); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'integrity-other-task', 1, 1)
+	`, otherTaskID, workspaceID, sessionID); err != nil {
+		t.Fatalf("seed other task: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task_attempt (
+		  id, workspace_id, session_id, task_id, assigned_agent_id,
+		  execution_adapter, provider, model, client_request_id, result_hash, result
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
+		  'agent_inbox', 'openai', 'composer-1.5', $6, $7, '{}'::jsonb
+		)
+	`, attemptID, workspaceID, sessionID, taskID, agentID, requestID, resultHash); err != nil {
+		t.Fatalf("seed attempt: %v", err)
+	}
+
+	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
+	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
+	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
+	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
+	up322, _ := readMigrationPair(t, "322_research_artifact_policy_ledger_guards")
+	up323, down323 := readMigrationPair(t, "323_research_artifact_integrity_guards")
+	for _, upSQL := range []string{up318, up319, up320, up321, up322, up323} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+
+	producerTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin producer tx: %v", err)
+	}
+	if _, err = producerTx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+		VALUES ($1::uuid, $2::uuid, 'legacy-v1-v5-compat-v1', 0)
+		ON CONFLICT (workspace_id, session_id) DO NOTHING
+	`, workspaceID, sessionID); err != nil {
+		producerTx.Rollback(ctx)
+		t.Fatalf("insert policy state: %v", err)
+	}
+	if _, err = producerTx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
+	`, workspaceID, sessionID, taskID); err != nil {
+		producerTx.Rollback(ctx)
+		t.Fatalf("register task passport: %v", err)
+	}
+	if _, err = producerTx.Exec(ctx, `
+		INSERT INTO research_artifact_version (
+		  workspace_id, session_id, artifact_id, version,
+		  schema_name, schema_version, canonicalization_version,
+		  content_hash, access_level, goal_version, plan_version, hash_origin,
+		  produced_by_task_id, produced_by_attempt_id, produced_by_agent_id,
+		  model, provider, execution_adapter
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 2,
+		  'task', 'legacy-v1', 'research-artifact-c14n-v1',
+		  'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'raw', 1, 1, 'production',
+		  $4::uuid, $5::uuid, $6::uuid,
+		  'composer-1.5', 'openai', 'agent_inbox'
+		)
+	`, workspaceID, sessionID, taskID, taskID, attemptID, agentID); err != nil {
+		producerTx.Rollback(ctx)
+		t.Fatalf("insert version with producer facts: %v", err)
+	}
+	if _, err = producerTx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
+		producerTx.Rollback(ctx)
+		t.Fatalf("set producer constraints immediate: %v", err)
+	}
+	if err = producerTx.Commit(ctx); err != nil {
+		t.Fatalf("commit producer guard tx: %v", err)
+	}
+
+	projectionTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin projection tx: %v", err)
+	}
+	if _, err = projectionTx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'result_artifact', now(), NULL, NULL)
+	`, workspaceID, sessionID, resultID); err != nil {
+		projectionTx.Rollback(ctx)
+		t.Fatalf("register result passport: %v", err)
+	}
+	if _, err = projectionTx.Exec(ctx, `
+		INSERT INTO research_result_artifact (
+		  id, workspace_id, session_id, attempt_id, client_request_id, content_hash, result
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, '{}'::jsonb)
+	`, resultID, workspaceID, sessionID, attemptID, requestID, resultHash); err != nil {
+		projectionTx.Rollback(ctx)
+		t.Fatalf("insert result artifact: %v", err)
+	}
+	if _, err = projectionTx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
+		projectionTx.Rollback(ctx)
+		t.Fatalf("set projection constraints immediate: %v", err)
+	}
+	if err = projectionTx.Commit(ctx); err != nil {
+		t.Fatalf("commit projection guard tx: %v", err)
+	}
+
+	badProducerTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin bad producer tx: %v", err)
+	}
+	if _, err = badProducerTx.Exec(ctx, `
+		INSERT INTO research_artifact_version (
+		  workspace_id, session_id, artifact_id, version,
+		  schema_name, schema_version, canonicalization_version,
+		  content_hash, access_level, goal_version, plan_version, hash_origin,
+		  produced_by_task_id, produced_by_attempt_id
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 3,
+		  'task', 'legacy-v1', 'research-artifact-c14n-v1',
+		  'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'raw', 1, 1, 'production',
+		  $4::uuid, $5::uuid
+		)
+	`, workspaceID, sessionID, taskID, otherTaskID, attemptID); err != nil {
+		badProducerTx.Rollback(ctx)
+		t.Fatalf("insert mismatched producer version: %v", err)
+	}
+	if err = badProducerTx.Commit(ctx); err == nil {
+		t.Fatal("expected producer guard to reject mismatched task_id")
+	} else {
+		badProducerTx.Rollback(ctx)
+	}
+
+	if _, err = conn.Exec(ctx, down323); err != nil {
+		t.Fatalf("apply 323 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up323); err != nil {
+		t.Fatalf("reapply 323 up: %v", err)
+	}
+}

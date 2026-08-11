@@ -159,3 +159,11 @@ func PolicyLedgerGuardTriggerNames() []string {
 		"research_artifact_policy_mutation_to_passport_guard",
 	}
 }
+
+// IntegrityGuardTriggerNames lists migration 323 producer/projection guards.
+func IntegrityGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_version_producer_guard",
+		"research_result_attempt_projection_guard",
+	}
+}

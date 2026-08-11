@@ -431,16 +431,15 @@ func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, tu
 	if err != nil || runner.activity == nil {
 		return
 	}
-	producer := runner.activity
-	activityKind, detailKind, narrative := protocol.ActivityKindOnline, "idle", "Idle"
-	if turnErr != nil {
-		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(turnErr.Error())
-	}
-	entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-	if err != nil {
+	launch, found := runner.processes.Snapshot(agentID)
+	if !found || launch.RuntimeID != runtimeID {
 		return
 	}
-	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+	kind, data := AgentObservationRuntimeIdle, AgentObservationData(AgentRuntimeObservationData{RuntimeID: runtimeID})
+	if turnErr != nil {
+		kind, data = AgentObservationError, AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_turn_failed"}
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: kind, Data: data, At: time.Now().UTC()}); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner Message completion Activity publish deferred", "error", err, "agent_id", agentID)
 	}
 }

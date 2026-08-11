@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +15,7 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
 	runtime := AgentRuntimeObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", RuntimeGeneration: 3}
 	stage := AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}
-	tool := AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-1"}
+	tool := AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-1", ToolInput: map[string]any{"command": "ls -la"}}
 	tests := []struct {
 		name        string
 		observation AgentObservation
@@ -31,7 +30,7 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
 		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at}, kind: protocol.ActivityKindWorking, entryKind: "narrative", entryText: "Working", processID: "process-1"},
 		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, entryKind: "narrative", entryText: "Thinking"},
-		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "Running tool"},
+		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "ls -la"},
 		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
 		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Context compaction finished"},
 		{name: "runtime idle", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Idle"},
@@ -306,7 +305,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if err := json.Unmarshal(activities[1].Entries[0].Body, &toolBody); err != nil {
 		t.Fatal(err)
 	}
-	if toolBody.Text != "Running tool" || toolBody.ActivityKind != protocol.ActivityKindWorking || toolBody.DetailKind != "running_command" {
+	if toolBody.Text != "ls -la" || toolBody.ActivityKind != protocol.ActivityKindWorking || toolBody.DetailKind != "running_command" {
 		t.Fatalf("tool-use Activity body = %+v", toolBody)
 	}
 	var diagnostic protocol.AgentActivitySystemBody
@@ -359,55 +358,6 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	}
 	if body.Text != "runtime Message handoff unavailable (simulated crash window)" {
 		t.Fatalf("failure narrative = %q", body.Text)
-	}
-}
-
-func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
-	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
-	installActivityProducerAgent(t, producer)
-	d := New(Config{}, nil)
-	installTestRunnerActivity(t, d, "workspace-1", producer)
-	d.publishTaskRunnerActivity(Task{ID: "task-1", AgentID: "agent-a", WorkspaceID: "workspace-1"}, protocol.ActivityKindWorking, "running_command", "Running command")
-	if len(sent) != 1 {
-		t.Fatalf("sent = %d, want 1", len(sent))
-	}
-	got := sent[0]
-	if got.Snapshot.ActivityKind != protocol.ActivityKindWorking || got.Snapshot.DetailKind != "running_command" || len(got.Entries) != 1 {
-		t.Fatalf("task Activity = %+v", got)
-	}
-	var body protocol.AgentActivityNarrativeBody
-	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Text != "Running command" || body.ActivityKind != protocol.ActivityKindWorking || body.DetailKind != "running_command" {
-		t.Fatalf("task Activity body = %+v", body)
-	}
-}
-
-func TestTaskFailurePublishesRunnerErrorWithoutRawFailureText(t *testing.T) {
-	var sent []protocol.AgentActivityPayload
-	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
-	installActivityProducerAgent(t, producer)
-	d := New(Config{}, nil)
-	d.runnerInstanceID = "daemon-1"
-	installTestRunnerActivity(t, d, "workspace-1", producer)
-
-	d.reportTaskFailure(context.Background(), Task{ID: "task-1", AgentID: "agent-a", WorkspaceID: "workspace-1"}, "sensitive provider failure", "", "", "provider_error", slog.Default())
-
-	if len(sent) != 1 {
-		t.Fatalf("sent = %d, want 1", len(sent))
-	}
-	got := sent[0]
-	if got.Snapshot.ActivityKind != protocol.ActivityKindError || got.Snapshot.DetailKind != "task_failed" || len(got.Entries) != 1 {
-		t.Fatalf("failure Activity = %+v", got)
-	}
-	var body protocol.AgentActivityNarrativeBody
-	if err := json.Unmarshal(got.Entries[0].Body, &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Text != "Agent execution failed" || body.ActivityKind != protocol.ActivityKindError || body.DetailKind != "task_failed" {
-		t.Fatalf("failure Activity body = %+v", body)
 	}
 }
 

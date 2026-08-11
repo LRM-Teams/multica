@@ -3545,10 +3545,6 @@ func (d *Daemon) watchInboxLeases(ctx context.Context, leases []AgentInboxLease,
 }
 
 func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
-	// The Runner, rather than the legacy Activity API, is the only execution
-	// observation channel. Keep this narrative deliberately generic: detailed
-	// failures remain in the authorized task result, never in Activity.
-	d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "task_failed", "Agent execution failed")
 	if !task.isInboxTask() {
 		taskLog.Error("failed task is missing its canonical inbox lease")
 		return
@@ -4620,27 +4616,6 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 	return taskfailure.Classify(errMsg).String()
 }
 
-func (d *Daemon) publishTaskRunnerActivity(task Task, activityKind, detailKind, narrative string) {
-	if d == nil || task.AgentID == "" || task.WorkspaceID == "" {
-		return
-	}
-	runner, err := d.ensureWorkspaceRunner(task.WorkspaceID)
-	if err != nil || runner.activity == nil {
-		return
-	}
-	producer := runner.activity
-	var entries []protocol.AgentActivityEntry
-	if narrative != "" {
-		entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-		if err == nil {
-			entries = []protocol.AgentActivityEntry{entry}
-		}
-	}
-	if err := producer.PublishForManagedAgent(task.AgentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner task Activity publish deferred", "error", err, "agent_id", task.AgentID, "task_id", task.ID)
-	}
-}
-
 func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
 	taskID := task.ID
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
@@ -4796,8 +4771,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						pinCancel()
 					}
 				case agent.MessageToolUse:
-					toolDetailKind, toolNarrative := toolActivityFact(msg.Tool, msg.Input)
-					d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, toolDetailKind, toolNarrative)
 					n := toolCount.Add(1)
 					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
@@ -4872,22 +4845,12 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					})
 					mu.Unlock()
 				case agent.MessageThinking:
-					// Thinking is a B-chain state (snapshot activity_kind), not an
-					// A-chain timeline event. An empty narrative keeps publishLocked
-					// from writing an entry, so bursts of thinking never flood the
-					// activity timeline (raft-aligned; see workspace_runner_activity).
-					d.publishTaskRunnerActivity(task, protocol.ActivityKindThinking, "", "")
 					if msg.Content != "" {
 						mu.Lock()
 						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageCompactionStarted, agent.MessageCompactionFinished:
-					if msg.Type == agent.MessageCompactionStarted {
-						d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compacting_context", "Compacting context")
-					} else {
-						d.publishTaskRunnerActivity(task, protocol.ActivityKindOnline, "idle", "Context compaction finished")
-					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
 					s := seq.Add(1)
@@ -4905,7 +4868,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						mu.Unlock()
 					}
 				case agent.MessageError:
-					d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "", "Runtime error")
 					taskLog.Error("agent error", "content", msg.Content)
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)

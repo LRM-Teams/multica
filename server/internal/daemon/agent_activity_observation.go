@@ -116,8 +116,11 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	case AgentObservationRuntimeTool:
 		data := observation.Data.(AgentRuntimeStageObservationData)
 		projection.activityKind = protocol.ActivityKindWorking
-		projection.detailKind, _ = toolActivityFact(data.ToolName, nil)
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Running tool")
+		var narrative string
+		projection.detailKind, narrative = toolActivityFact(data.ToolName, data.ToolInput)
+		if narrative != "" {
+			entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, narrative)
+		}
 	case AgentObservationRuntimeCompacting:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compacting_context"
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Compacting context")
@@ -153,7 +156,9 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	if err != nil {
 		return agentActivityProjection{}, err
 	}
-	projection.entries = []protocol.AgentActivityEntry{entry}
+	if entry.Kind != "" {
+		projection.entries = []protocol.AgentActivityEntry{entry}
+	}
 	return projection, nil
 }
 

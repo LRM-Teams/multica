@@ -71,6 +71,7 @@ type AgentRuntimeStageObservationData struct {
 	RuntimeID  string
 	ToolName   string
 	ToolCallID string
+	ToolInput  map[string]any
 }
 
 func (AgentRuntimeStageObservationData) agentObservationData() {}
@@ -179,7 +180,7 @@ func (observation AgentObservation) Validate() error {
 		if observation.Kind == AgentObservationRuntimeTool && strings.TrimSpace(data.ToolName) == "" {
 			return errors.New("Agent tool observation tool name is required")
 		}
-		if observation.Kind != AgentObservationRuntimeTool && (strings.TrimSpace(data.ToolName) != "" || strings.TrimSpace(data.ToolCallID) != "") {
+		if observation.Kind != AgentObservationRuntimeTool && (strings.TrimSpace(data.ToolName) != "" || strings.TrimSpace(data.ToolCallID) != "" || len(data.ToolInput) != 0) {
 			return errors.New("non-tool Agent Runtime stage observation cannot carry tool identity")
 		}
 		return nil

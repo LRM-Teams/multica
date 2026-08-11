@@ -319,7 +319,7 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 				if observationKind == AgentObservationError {
 					data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
 				} else if observationKind == AgentObservationRuntimeTool {
-					data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID}
+					data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID, ToolInput: message.Input}
 				}
 				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: observationKind, Data: data, At: time.Now().UTC()}); err != nil && d.logger != nil {
 					d.logger.Debug("workspace Runner runtime Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)

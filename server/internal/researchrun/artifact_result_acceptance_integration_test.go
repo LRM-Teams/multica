@@ -193,7 +193,7 @@ func TestAcceptResultRejectsWhenManifestEntryEligibilityAdvances(t *testing.T) {
 		  significance, confidence, status, goal_version, plan_version, resolution
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, 'accept-eligibility-claim', '', 'claim for accept eligibility',
-		  0.5, 0.5, 'proposed', 1, 1, ''
+		  'medium', 0.5, 'proposed', 1, 1, ''
 		)
 	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert claim: %v", err)
@@ -211,7 +211,7 @@ func TestAcceptResultRejectsWhenManifestEntryEligibilityAdvances(t *testing.T) {
 	}
 	if _, err = pool.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET eligibility_revision = eligibility_revision + 1, updated_at = now()
+		SET eligibility_revision = eligibility_revision + 1
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
 		t.Fatalf("advance eligibility: %v", err)

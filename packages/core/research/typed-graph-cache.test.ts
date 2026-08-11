@@ -45,7 +45,7 @@ describe("typed-graph-cache", () => {
       {
         session_id: "s1",
         graph_version: 3,
-        total_node_count: null,
+        total_node_count: 1,
         nodes: [TypedGraphNodeSchema.parse({ id: "n1", title: "Old", node_type: "finding" })],
         edges: [],
         clusters: [],
@@ -67,7 +67,7 @@ describe("typed-graph-cache", () => {
       {
         session_id: "s1",
         graph_version: 3,
-        total_node_count: null,
+        total_node_count: 0,
         nodes: [],
         edges: [],
         clusters: [],

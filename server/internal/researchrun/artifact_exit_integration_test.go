@@ -36,10 +36,19 @@ func TestPolicyWatermarkCASRejectsStaleExpected(t *testing.T) {
 	if err = ensureSessionPolicyStateTx(ctx, tx, fixture.workspaceID, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, 0); err != nil {
+	// Fixture seeding (run_session passport backfill) may already advance the
+	// watermark past 0 — always CAS against the current value.
+	var current int64
+	if err = tx.QueryRow(ctx, `
+		SELECT watermark FROM research_artifact_policy_state
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, fixture.workspaceID, fixture.sessionID).Scan(&current); err != nil {
+		t.Fatalf("read watermark: %v", err)
+	}
+	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, current); err != nil {
 		t.Fatalf("first reserve: %v", err)
 	}
-	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, 0); !errors.Is(err, ErrInvalidTransition) {
+	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, current); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("second reserve err=%v want ErrInvalidTransition", err)
 	}
 }
@@ -61,6 +70,18 @@ func TestPassportEligibilityCASRejectsStaleRevision(t *testing.T) {
 	defer cleanupResearchRunFixture(pool, fixture)
 
 	claimID := uuid.NewString()
+	// Passport backfill for claims requires a domain row (reciprocal FK guards).
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_claim (
+		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
+		  significance, confidence, status, goal_version, plan_version, resolution
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'cas-el-claim', '', 'claim for eligibility CAS',
+		  'medium', 0.5, 'proposed', 1, 1, ''
+		)
+	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
+		t.Fatalf("insert claim: %v", err)
+	}
 	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, fixture.sessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
 
 	tx, err := pool.Begin(ctx)
@@ -311,7 +332,7 @@ func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 		  significance, confidence, status, goal_version, plan_version, resolution
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, 'cas-claim', '', 'claim for CAS',
-		  0.5, 0.5, 'proposed', 1, 1, ''
+		  'medium', 0.5, 'proposed', 1, 1, ''
 		)
 	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert claim: %v", err)
@@ -321,7 +342,7 @@ func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 	// Advance eligibility revision after plan would have captured revision 1.
 	if _, err = pool.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET eligibility_revision = eligibility_revision + 1, updated_at = now()
+		SET eligibility_revision = eligibility_revision + 1
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
 		t.Fatalf("bump eligibility: %v", err)
@@ -378,7 +399,7 @@ func TestDispatchFailsWhenArtifactVersionContentHashChanges(t *testing.T) {
 		  significance, confidence, status, goal_version, plan_version, resolution
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, 'repr-cas-claim', '', 'claim for representation CAS',
-		  0.5, 0.5, 'proposed', 1, 1, ''
+		  'medium', 0.5, 'proposed', 1, 1, ''
 		)
 	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert claim: %v", err)

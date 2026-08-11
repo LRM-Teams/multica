@@ -224,7 +224,7 @@ func seedShadowEquivalenceArtifacts(
 		  created_at, updated_at
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, 'shadow-claim', '', 'shadow claim text',
-		  0.5, 0.5, 'proposed', 1, 1, '', $4, $4
+		  'medium', 0.5, 'proposed', 1, 1, '', $4, $4
 		)
 	`, claimID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert claim: %v", err)

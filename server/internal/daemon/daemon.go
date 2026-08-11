@@ -4648,12 +4648,7 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 }
 
 func (d *Daemon) publishTaskRunnerActivity(task Task, activityKind, detailKind, narrative string) {
-	if d == nil || task.AgentID == "" || task.WorkspaceID == "" {
-		return
-	}
-	d.mu.Lock()
-	producer := d.agentActivityProducers[task.WorkspaceID]
-	d.mu.Unlock()
+	producer := d.taskRunnerActivityProducer(task)
 	if producer == nil {
 		return
 	}
@@ -4666,6 +4661,27 @@ func (d *Daemon) publishTaskRunnerActivity(task Task, activityKind, detailKind, 
 	}
 	if err := producer.PublishForManagedAgent(task.AgentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner task Activity publish deferred", "error", err, "agent_id", task.AgentID, "task_id", task.ID)
+	}
+}
+
+func (d *Daemon) taskRunnerActivityProducer(task Task) *agentActivityProducer {
+	if d == nil || task.AgentID == "" || task.WorkspaceID == "" {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.agentActivityProducers[task.WorkspaceID]
+}
+
+func (d *Daemon) completeTaskRunnerCompactionIfActive(task Task, narrative string) {
+	if producer := d.taskRunnerActivityProducer(task); producer != nil {
+		_, _ = producer.CompleteCompactionIfActive(task.AgentID, d.runnerInstanceID, narrative)
+	}
+}
+
+func (d *Daemon) interruptTaskRunnerCompactionIfActive(task Task) {
+	if producer := d.taskRunnerActivityProducer(task); producer != nil {
+		producer.InterruptCompactionIfActive(task.AgentID)
 	}
 }
 
@@ -4824,6 +4840,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						pinCancel()
 					}
 				case agent.MessageToolUse:
+					d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from resumed tool use)")
 					toolDetailKind, toolNarrative := toolActivityFact(msg.Tool, msg.Input)
 					d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, toolDetailKind, toolNarrative)
 					n := toolCount.Add(1)
@@ -4900,6 +4917,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					})
 					mu.Unlock()
 				case agent.MessageThinking:
+					d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from resumed output)")
 					// Thinking is a B-chain state (snapshot activity_kind), not an
 					// A-chain timeline event. An empty narrative keeps publishLocked
 					// from writing an entry, so bursts of thinking never flood the
@@ -4914,7 +4932,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					if msg.Type == agent.MessageCompactionStarted {
 						d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compacting_context", "Compacting context")
 					} else {
-						d.publishTaskRunnerActivity(task, protocol.ActivityKindOnline, "idle", "Context compaction finished")
+						d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compaction_finished", "Context compaction finished")
 					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
@@ -4926,6 +4944,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					batch = append(batch, TaskMessageData{Seq: int(s), Type: messageType, Content: msg.Content})
 					mu.Unlock()
 				case agent.MessageText:
+					d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from resumed output)")
 					if msg.Content != "" {
 						taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))
 						mu.Lock()
@@ -4933,6 +4952,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						mu.Unlock()
 					}
 				case agent.MessageError:
+					d.interruptTaskRunnerCompactionIfActive(task)
 					d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "", "Runtime error")
 					taskLog.Error("agent error", "content", msg.Content)
 					mu.Lock()
@@ -4969,6 +4989,11 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 
 	select {
 	case result := <-session.Result:
+		if result.Status == "completed" {
+			d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from turn end)")
+		} else {
+			d.interruptTaskRunnerCompactionIfActive(task)
+		}
 		if idleWatchdogFired.Load() {
 			// The backend's wait goroutine (e.g. claude.go) translates the
 			// SIGKILL we delivered via agentCancel into Status="aborted".
@@ -4982,6 +5007,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 		}
 		return result, toolCount.Load(), nil
 	case <-drainCtx.Done():
+		d.interruptTaskRunnerCompactionIfActive(task)
 		// Idle watchdog cancels via agentCancel(), which propagates here as
 		// context.Canceled. Check this BEFORE the generic cancelled/timeout
 		// classifiers so a watchdog-induced stop isn't misreported as

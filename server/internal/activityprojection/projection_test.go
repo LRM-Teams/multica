@@ -18,6 +18,8 @@ func TestProjectSummaryOwnsAllKnownSemanticsAndUnknownFallback(t *testing.T) {
 		{"working", "running_command", "Running command..."},
 		{"working", "checking_messages", "Checking messages..."},
 		{"working", "compacting_context", "Compacting context..."},
+		{"working", "compaction_finished", "Compaction finished"},
+		{"working", "compaction_stale", "Compaction still running"},
 		{"working", "reading_file", "Reading file..."},
 		{"working", "editing_file", "Editing file..."},
 		{"working", "searching_code", "Searching code..."},
@@ -117,6 +119,32 @@ func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
 	plain := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Running command","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
 	if plain.Title != "Running command" || plain.Subtext != "" {
 		t.Fatalf("generic command row = %+v, want no subtext", plain)
+	}
+}
+
+func TestProjectTimelineEntryShowsCompactionLifecycleTitles(t *testing.T) {
+	latest := Summary{Label: "Online", Tone: "success"}
+	cases := []struct {
+		body        string
+		wantTitle   string
+		wantSubtext string
+	}{
+		{
+			body:        `{"text":"Context compaction finished","activity_kind":"working","detail_kind":"compaction_finished"}`,
+			wantTitle:   "Compaction finished",
+			wantSubtext: "Context compaction finished",
+		},
+		{
+			body:        `{"text":"Context compaction still running; no finish event observed","activity_kind":"working","detail_kind":"compaction_stale"}`,
+			wantTitle:   "Compaction still running",
+			wantSubtext: "Context compaction still running; no finish event observed",
+		},
+	}
+	for _, tc := range cases {
+		row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(tc.body)}, latest)
+		if row.Title != tc.wantTitle || row.Subtext != tc.wantSubtext || row.Tone != "warning" {
+			t.Fatalf("compaction row = %+v, want title=%q subtext=%q", row, tc.wantTitle, tc.wantSubtext)
+		}
 	}
 }
 

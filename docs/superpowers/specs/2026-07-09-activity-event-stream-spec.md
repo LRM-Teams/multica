@@ -17,7 +17,9 @@ Activity 被拆成**多个面、多套数据模型、各有各的 bug**，没一
 
 ## 2. 事件类型（照 raft-daemon 源码，别自己发明）
 
-**ActivityKind（事件种类）**：`thinking` / `tool_call` / `tool_output` / `turn_end` / `session_init` / `compaction_started` / `compaction_finished` / `wake_attempt` / `review_finished` / `error` / `text` / `system` / `transport` / `telemetry` / `blocked` / `custom`
+**ActivityKind（事件种类）**：`thinking` / `tool_call` / `tool_output` / `turn_end` / `session_init` / `compaction_started` / `compaction_finished` / `compaction_stale` / `wake_attempt` / `review_finished` / `error` / `text` / `system` / `transport` / `telemetry` / `blocked` / `custom`
+
+Compaction 对齐 `raft-computer@1.0.15`：开始、完成进入 Timeline；5 分钟未见完成追加一次 stale，后续 heartbeat 只更新 Snapshot；恢复输出可推断遗漏的完成。完成仍是 Working，Idle 只由 turn end 产生，compaction 不触发进程重启。
 
 **人话标签（用户看到的行）**：
 - Thinking · Output · Working · Message received

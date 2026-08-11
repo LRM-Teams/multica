@@ -4274,37 +4274,6 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 	}
 }
 
-func TestIsChannelOnboardingSkipReceipt(t *testing.T) {
-	onboarding := Task{InboxEvent: &AgentInboxLease{Reason: protocol.ChannelOnboardingReason}}
-	ordinary := Task{InboxEvent: &AgentInboxLease{Reason: "mention"}}
-	withoutInbox := Task{}
-
-	for _, output := range []string{
-		protocol.ChannelOnboardingSkipReceipt,
-		"  \n" + protocol.ChannelOnboardingSkipReceipt + "\t",
-	} {
-		if !isChannelOnboardingSkipReceipt(onboarding, output) {
-			t.Fatalf("onboarding exact receipt %q was not consumed", output)
-		}
-	}
-	for _, tc := range []struct {
-		name   string
-		task   Task
-		output string
-	}{
-		{name: "ordinary event", task: ordinary, output: protocol.ChannelOnboardingSkipReceipt},
-		{name: "no inbox event", task: withoutInbox, output: protocol.ChannelOnboardingSkipReceipt},
-		{name: "prose around receipt", task: onboarding, output: "I will skip: " + protocol.ChannelOnboardingSkipReceipt},
-		{name: "empty", task: onboarding, output: ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if isChannelOnboardingSkipReceipt(tc.task, tc.output) {
-				t.Fatalf("unexpected typed skip for output %q", tc.output)
-			}
-		})
-	}
-}
-
 // Pins the GitHub multica#1952 fail-closed behaviour: a task whose
 // agent run never produced a real result (blocked, cancelled, or any
 // future status we forget to enumerate) MUST go through FailTask, so

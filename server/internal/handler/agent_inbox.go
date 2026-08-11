@@ -629,7 +629,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 
 					if isChannelOnboarding {
 						terminalOutcome, err = h.completeChannelOnboardingTx(
-							r.Context(), tx, event, deliveryID, onboardingID, channelOnboardingActive, req.ChannelOnboardingDecision,
+							r.Context(), tx, event, deliveryID, onboardingID, channelOnboardingActive,
 						)
 						if err != nil {
 							return err
@@ -656,7 +656,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			},
 		)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, errChannelOnboardingDecisionRequired) {
+			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusConflict, err.Error())
 				return
 			}
@@ -745,13 +745,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			terminalOutcome = agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
 		} else {
 			terminalOutcome, err = h.completeChannelOnboardingTx(
-				r.Context(), tx, event, deliveryID, onboardingID, channelOnboardingActive, req.ChannelOnboardingDecision,
+				r.Context(), tx, event, deliveryID, onboardingID, channelOnboardingActive,
 			)
 			if err != nil {
-				if errors.Is(err, errChannelOnboardingDecisionRequired) {
-					writeError(w, http.StatusConflict, err.Error())
-					return
-				}
 				writeError(w, http.StatusInternalServerError, "failed to complete channel onboarding")
 				return
 			}
@@ -793,7 +789,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
 	}
 	// An explicit no-reply (including a source-completion abandoned draft),
-	// onboarding sent/skipped/expired, and a completed transport reply are
+	// onboarding completed/expired, and a completed transport reply are
 	// separate observable outcomes. None is a delivery failure.
 	lifecycleStatus := "completed"
 	if terminalOutcome == "held" || terminalOutcome == "no_reply" || isChannelOnboarding {

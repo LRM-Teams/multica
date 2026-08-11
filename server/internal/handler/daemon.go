@@ -1774,20 +1774,19 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL                     string                        `json:"pr_url"`
-	Output                    string                        `json:"output"`
-	Action                    string                        `json:"action"`
-	Target                    string                        `json:"target"`
-	Type                      string                        `json:"type"`
-	Parts                     []protocol.MessagePart        `json:"parts"`
-	Reaction                  *protocol.ChatReactionPayload `json:"reaction"`
-	OutputSuppressedReason    string                        `json:"output_suppressed_reason,omitempty"`
-	TransportAttempted        bool                          `json:"transport_attempted,omitempty"`
-	SessionID                 string                        `json:"session_id"` // Claude session ID for future resumption
-	WorkDir                   string                        `json:"work_dir"`   // working directory used during execution
-	RuntimeStats              *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
-	InternalOutput            json.RawMessage               `json:"internal_output,omitempty"`
-	ChannelOnboardingDecision string                        `json:"channel_onboarding_decision,omitempty"`
+	PRURL                  string                        `json:"pr_url"`
+	Output                 string                        `json:"output"`
+	Action                 string                        `json:"action"`
+	Target                 string                        `json:"target"`
+	Type                   string                        `json:"type"`
+	Parts                  []protocol.MessagePart        `json:"parts"`
+	Reaction               *protocol.ChatReactionPayload `json:"reaction"`
+	OutputSuppressedReason string                        `json:"output_suppressed_reason,omitempty"`
+	TransportAttempted     bool                          `json:"transport_attempted,omitempty"`
+	SessionID              string                        `json:"session_id"` // Claude session ID for future resumption
+	WorkDir                string                        `json:"work_dir"`   // working directory used during execution
+	RuntimeStats           *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
+	InternalOutput         json.RawMessage               `json:"internal_output,omitempty"`
 }
 
 func (h *Handler) persistChatRuntimeTokenStats(ctx context.Context, chatSessionID pgtype.UUID, stats *protocol.RuntimeTokenStats) {

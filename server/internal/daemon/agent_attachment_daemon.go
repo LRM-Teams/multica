@@ -14,10 +14,6 @@ func (d *Daemon) attachmentRegistry() *localAgentAttachmentRegistry {
 	return d.agentAttachments
 }
 
-func (d *Daemon) localAttachmentRegistry() *localAgentAttachmentRegistry {
-	return d.attachmentRegistry()
-}
-
 func (d *Daemon) attachmentRuntimeSets() []AgentAttachmentRuntimeSet {
 	registry := d.attachmentRegistry()
 	workspaces := make(map[string][]string)

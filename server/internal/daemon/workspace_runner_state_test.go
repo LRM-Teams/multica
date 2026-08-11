@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -156,17 +157,17 @@ func TestDaemonHasNoWorkspaceRunnerTransportOrGenerationMaps(t *testing.T) {
 }
 
 func TestWorkspaceRunnerInternalsDoNotEscapeRunnerModule(t *testing.T) {
-	state, err := os.ReadFile("workspace_runner_state.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, forbidden := range []string{"daemon *Daemon", "daemon       *Daemon"} {
-		if strings.Contains(string(state), forbidden) {
-			t.Fatalf("WorkspaceRunner retains whole-Daemon dependency %q", forbidden)
+	daemonType := reflect.TypeOf((*Daemon)(nil))
+	for _, owner := range []reflect.Type{reflect.TypeOf(WorkspaceRunner{}), reflect.TypeOf(workspaceRunnerDependencies{})} {
+		for i := 0; i < owner.NumField(); i++ {
+			field := owner.Field(i)
+			if field.Type == daemonType {
+				t.Fatalf("%s retains whole-Daemon dependency in field %s", owner.Name(), field.Name)
+			}
 		}
 	}
 
-	err = filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -174,7 +175,7 @@ func TestWorkspaceRunnerInternalsDoNotEscapeRunnerModule(t *testing.T) {
 			return nil
 		}
 		name := filepath.Base(path)
-		if strings.HasPrefix(name, "workspace_runner_") || name == "workspace_runner.go" || name == "runner_diagnostics.go" {
+		if strings.HasPrefix(name, "workspace_runner_") || name == "workspace_runner.go" {
 			return nil
 		}
 		raw, readErr := os.ReadFile(path)
@@ -183,7 +184,8 @@ func TestWorkspaceRunnerInternalsDoNotEscapeRunnerModule(t *testing.T) {
 		}
 		for _, forbidden := range []string{
 			"runner.inboxes", "runner.processes", "runner.activity", "runner.attachments", "runner.runtimes",
-			"candidateRunner.inboxes", "candidateRunner.processes", "candidateRunner.activity",
+			"runner.messageCoordinator", "candidateRunner.inboxes", "candidateRunner.processes",
+			"candidateRunner.activity", "candidateRunner.messageCoordinator",
 		} {
 			if strings.Contains(string(raw), forbidden) {
 				t.Errorf("%s reaches through WorkspaceRunner ownership via %q", path, forbidden)

@@ -44,6 +44,39 @@ func (runner *WorkspaceRunner) hasMessageInbox(agentID string) bool {
 	return ok
 }
 
+func (runner *WorkspaceRunner) messageContextBoundary(agentID, target string) (int64, bool, error) {
+	coordinator, _, ok := runner.messageCoordinator(agentID)
+	if !ok {
+		return 0, false, errors.New("Message coordinator is unavailable")
+	}
+	seq, known := coordinator.ContextBoundary(target)
+	return seq, known, nil
+}
+
+func (runner *WorkspaceRunner) prepareMessageCoverage(agentID string, request CoverageRequest) (CoverageOffer, error) {
+	coordinator, _, ok := runner.messageCoordinator(agentID)
+	if !ok {
+		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
+	}
+	return coordinator.PrepareCoverage(request)
+}
+
+func (runner *WorkspaceRunner) messageSendBoundarySnapshot(agentID, target string) (int64, error) {
+	coordinator, _, ok := runner.messageCoordinator(agentID)
+	if !ok {
+		return 0, errors.New("Message coordinator is unavailable")
+	}
+	return coordinator.SendBoundarySnapshot(target), nil
+}
+
+func (runner *WorkspaceRunner) preflightMessageSend(agentID, target string) (MessageSendFreshness, error) {
+	coordinator, _, ok := runner.messageCoordinator(agentID)
+	if !ok {
+		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
+	}
+	return coordinator.PreflightMessageSend(target)
+}
+
 func (runner *WorkspaceRunner) removeMessageInbox(agentID, runtimeID string) {
 	if runner == nil || runner.inboxes == nil {
 		return

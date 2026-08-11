@@ -126,7 +126,7 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d.observeMessageSendHold("agent-a", "workspace-1", "#general", 3, "server_race")
+	runner.observeMessageSendHold("agent-a", "#general", 3, "server_race")
 	if len(sent) != 1 {
 		t.Fatalf("sent payloads=%d, want 1", len(sent))
 	}
@@ -159,8 +159,9 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 func TestObserveMessageSendHoldIsFailSoftWhenAgentNotManaged(t *testing.T) {
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-instance-1"
-	// No producer is registered for the workspace; observe must not panic.
-	d.observeMessageSendHold("agent-unknown", "workspace-unknown", "#general", 0, "freshness_unknown")
+	runner := installTestRunnerActivity(t, d, "workspace-unknown", newAgentActivityProducer("daemon-instance-1", time.Now, nil))
+	// No managed launch exists for the Agent; observe must not panic.
+	runner.observeMessageSendHold("agent-unknown", "#general", 0, "freshness_unknown")
 }
 
 // newDraftReuseTestDaemon builds a Daemon whose Credential Proxy is backed by a

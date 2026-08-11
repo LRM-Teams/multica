@@ -266,11 +266,14 @@ func (p *CredentialProxy) SeenUpToSeq(agentID, target string) (int64, error) {
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
 	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
-	seq, known := coordinator.ContextBoundary(target)
+	seq, known, err := runner.messageContextBoundary(agentID, target)
+	if err != nil {
+		return 0, err
+	}
 	if !known {
 		return 0, errors.New("Message freshness is unknown")
 	}
@@ -281,11 +284,11 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if p == nil || p.daemon == nil {
 		return MessageCheckResult{}, errors.New("Credential Proxy is unavailable")
 	}
-	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
 	if err != nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
-	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: messageCheckDefaultLimit})
+	offer, err := runner.prepareMessageCoverage(agentID, CoverageRequest{Kind: CoverageCheck, Limit: messageCheckDefaultLimit})
 	if err != nil {
 		return MessageCheckResult{}, err
 	}
@@ -310,27 +313,16 @@ func (p *CredentialProxy) PrepareMessageRead(
 	if p == nil || p.daemon == nil {
 		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
 	if err != nil {
 		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}
 	if throughSeq == 0 && len(messages) == 0 {
 		return CoverageOffer{Messages: []protocol.AgentMessageProjection{}}, nil
 	}
-	return coordinator.PrepareCoverage(CoverageRequest{
+	return runner.prepareMessageCoverage(agentID, CoverageRequest{
 		Kind: CoverageRead, Target: target, ThroughSeq: throughSeq, Messages: messages,
 	})
-}
-
-func (p *CredentialProxy) messageCoordinator(agentID string) (*MessageCoordinator, error) {
-	if p == nil || p.daemon == nil {
-		return nil, errors.New("Credential Proxy is unavailable")
-	}
-	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
-	if err != nil {
-		return nil, errors.New("Message coordinator is unavailable")
-	}
-	return coordinator, nil
 }
 
 func (p *CredentialProxy) messageDraftStore() (*MessageDraftStore, error) {
@@ -400,27 +392,36 @@ func (p *CredentialProxy) ClearMessageDraft(workspaceID, agentID, target, client
 }
 
 func (p *CredentialProxy) MessageSendBoundarySnapshot(agentID, target string) (int64, error) {
-	coordinator, err := p.messageCoordinator(agentID)
-	if err != nil {
-		return 0, err
+	if p == nil || p.daemon == nil {
+		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	return coordinator.SendBoundarySnapshot(target), nil
+	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	if err != nil {
+		return 0, errors.New("Message coordinator is unavailable")
+	}
+	return runner.messageSendBoundarySnapshot(agentID, target)
 }
 
 func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageSendFreshness, error) {
-	coordinator, err := p.messageCoordinator(agentID)
-	if err != nil {
-		return MessageSendFreshness{}, err
+	if p == nil || p.daemon == nil {
+		return MessageSendFreshness{}, errors.New("Credential Proxy is unavailable")
 	}
-	return coordinator.PreflightMessageSend(target)
+	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	if err != nil {
+		return MessageSendFreshness{}, errors.New("Message coordinator is unavailable")
+	}
+	return runner.preflightMessageSend(agentID, target)
 }
 
 func (p *CredentialProxy) PrepareHeldMessageContext(agentID, target string, throughSeq int64, messages []protocol.AgentMessageProjection) (CoverageOffer, error) {
-	coordinator, err := p.messageCoordinator(agentID)
-	if err != nil {
-		return CoverageOffer{}, err
+	if p == nil || p.daemon == nil {
+		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	return coordinator.PrepareCoverage(CoverageRequest{
+	runner, err := p.daemon.resolveWorkspaceRunnerByAgent(agentID)
+	if err != nil {
+		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
+	}
+	return runner.prepareMessageCoverage(agentID, CoverageRequest{
 		Kind: CoverageHold, Target: target, ThroughSeq: throughSeq, Messages: messages,
 	})
 }

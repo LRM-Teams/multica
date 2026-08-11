@@ -3046,7 +3046,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 	ctx = executionCtx
 
-	if registry := d.localAttachmentRegistry(); registry != nil {
+	if registry := d.attachmentRegistry(); registry != nil {
 		createdProvisional, observed := registry.observeTaskStarted(task.AgentID, task.RuntimeID, task.WorkspaceID)
 		if createdProvisional {
 			d.requestReminderSnapshot(task.WorkspaceID, task.AgentID)

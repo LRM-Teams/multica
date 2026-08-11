@@ -75,16 +75,6 @@ func (d *Daemon) recordRunnerDiagnostic(workspaceID string, event diagnosticlog.
 	}
 }
 
-func (runner *WorkspaceRunner) recordDiagnostic(event diagnosticlog.Event) {
-	if runner == nil || runner.diagnostics == nil {
-		return
-	}
-	if err := runner.diagnostics.record(runner.config.WorkspaceID, event); err != nil && runner.logger != nil {
-		// Diagnostic persistence never changes product control flow.
-		runner.logger.Warn("Workspace Runner diagnostic record dropped", "reason", "sink_unavailable")
-	}
-}
-
 func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlog.Event) error {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if r == nil || r.store == nil {
@@ -114,14 +104,6 @@ func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlo
 		return errors.New("diagnostic logger is unavailable")
 	}
 	return logger.Record(event)
-}
-
-func (d *Daemon) canonicalMessageDiagnosticEvent(
-	workspaceID, runtimeID string,
-	delivery protocol.AgentDeliverPayload,
-	phase, outcome, reasonCode string,
-) diagnosticlog.Event {
-	return canonicalMessageDiagnosticEvent(workspaceID, runtimeID, delivery, phase, outcome, reasonCode)
 }
 
 func canonicalMessageDiagnosticEvent(
@@ -157,7 +139,7 @@ func (d *Daemon) recordResidentMessageBatch(
 	phase, outcome, reasonCode string,
 ) {
 	for _, message := range messages {
-		event := d.canonicalMessageDiagnosticEvent(workspaceID, runtimeID, protocol.AgentDeliverPayload{
+		event := canonicalMessageDiagnosticEvent(workspaceID, runtimeID, protocol.AgentDeliverPayload{
 			AgentID: agentID,
 			Target:  message.Target,
 			Seq:     message.Seq,

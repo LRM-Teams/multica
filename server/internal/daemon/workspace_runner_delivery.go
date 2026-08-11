@@ -155,35 +155,28 @@ func (d *Daemon) currentWorkspaceRunners() []*WorkspaceRunner {
 	return runners
 }
 
-// resolveInboxByAgent preserves existing machine-local callers that predate a
-// Workspace parameter. It succeeds only when exactly one current Runner owns
-// that Agent Inbox; ambiguity never selects a Workspace implicitly.
-func (d *Daemon) resolveInboxByAgent(agentID string) (*WorkspaceRunner, *MessageCoordinator, string, error) {
+// resolveWorkspaceRunnerByAgent preserves machine-local callers that predate a
+// Workspace parameter. It returns the owning Runner, never its Inbox internals,
+// and fails closed instead of selecting an ambiguous Workspace implicitly.
+func (d *Daemon) resolveWorkspaceRunnerByAgent(agentID string) (*WorkspaceRunner, error) {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
-		return nil, nil, "", errors.New("Agent identity is required")
+		return nil, errors.New("Agent identity is required")
 	}
 	var matchedRunner *WorkspaceRunner
-	var matchedCoordinator *MessageCoordinator
-	var matchedRuntimeID string
 	for _, runner := range d.currentWorkspaceRunners() {
-		coordinator, runtimeID, ok := runner.messageCoordinator(agentID)
-		if !ok {
+		if !runner.hasMessageInbox(agentID) {
 			continue
 		}
 		if matchedRunner != nil {
-			return nil, nil, "", fmt.Errorf("Message Inbox for Agent %q is ambiguous across Workspace Runners", agentID)
+			return nil, fmt.Errorf("Message Inbox for Agent %q is ambiguous across Workspace Runners", agentID)
 		}
-		matchedRunner, matchedCoordinator, matchedRuntimeID = runner, coordinator, runtimeID
+		matchedRunner = runner
 	}
 	if matchedRunner == nil {
-		return nil, nil, "", fmt.Errorf("Message Inbox for Agent %q is unavailable", agentID)
+		return nil, fmt.Errorf("Message Inbox for Agent %q is unavailable", agentID)
 	}
-	return matchedRunner, matchedCoordinator, matchedRuntimeID, nil
-}
-
-func (d *Daemon) sendAgentMessageRunnerFrame(agentID, eventType string, payload any) bool {
-	return d.sendWorkspaceRunnerAgentFrame(agentID, eventType, payload)
+	return matchedRunner, nil
 }
 
 // sendWorkspaceRunnerAgentFrame resolves one unambiguous Agent Inbox and sends
@@ -194,7 +187,7 @@ func (d *Daemon) sendWorkspaceRunnerAgentFrame(agentID, eventType string, payloa
 	if d == nil || agentID == "" {
 		return false
 	}
-	runner, _, _, err := d.resolveInboxByAgent(agentID)
+	runner, err := d.resolveWorkspaceRunnerByAgent(agentID)
 	if err != nil {
 		return false
 	}

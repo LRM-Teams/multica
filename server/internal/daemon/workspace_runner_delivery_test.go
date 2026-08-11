@@ -339,14 +339,14 @@ func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
 	if err := staleSend(); err == nil {
 		t.Fatal("callback from replaced connection remained writable")
 	}
-	if !d.sendAgentMessageRunnerFrame("agent-1", "agent:recovery:request", map[string]any{"request": 1}) {
+	if !d.sendWorkspaceRunnerAgentFrame("agent-1", "agent:recovery:request", map[string]any{"request": 1}) {
 		t.Fatal("current Runner connection did not receive Message frame")
 	}
 	if first != 0 || second != 1 {
 		t.Fatalf("Message frame delivery first=%d second=%d, want 0/1", first, second)
 	}
 	d.detachWorkspaceRunner(runner)
-	if d.sendAgentMessageRunnerFrame("agent-1", "agent:recovery:request", nil) {
+	if d.sendWorkspaceRunnerAgentFrame("agent-1", "agent:recovery:request", nil) {
 		t.Fatal("detached Runner accepted Message frame")
 	}
 }

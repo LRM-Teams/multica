@@ -66,6 +66,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 		}
 
 		proxy := d.CredentialProxy()
+		runner := d.currentWorkspaceRunner(request.WorkspaceID)
 		now := time.Now()
 		draft, status, err := d.prepareMessageSendDraft(r.Context(), proxy, credential, request, now)
 		if err != nil {
@@ -81,7 +82,9 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 					return
 				}
 				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, nil, "response_send", "held", "freshness_unknown")
-				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, 0, "freshness_unknown")
+				if runner != nil {
+					runner.observeMessageSendHold(request.AgentID, draft.Target, 0, "freshness_unknown")
+				}
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, MessageSendFreshness{}, "freshness_unknown"))
 				return
 			}
@@ -91,7 +94,9 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 					return
 				}
 				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, nil, "response_send", "held", "local_pending")
-				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, freshness.NewMessageCount, "local_pending")
+				if runner != nil {
+					runner.observeMessageSendHold(request.AgentID, draft.Target, freshness.NewMessageCount, "local_pending")
+				}
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, freshness, "newer_messages_available"))
 				return
 			}
@@ -150,7 +155,9 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			}
 			count, _ := jsonInteger(response["newMessageCount"])
 			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_send", "held", "server_race")
-			d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, count, "server_race")
+			if runner != nil {
+				runner.observeMessageSendHold(request.AgentID, draft.Target, count, "server_race")
+			}
 		}
 		if !credentialProxyMessageOutputIsHeld(response) {
 			if err := proxy.ClearMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey); err != nil {
@@ -404,12 +411,4 @@ func (d *Daemon) observeOverlappingMessageSend(agentID, target string) func() {
 		}
 		d.messageSendMu.Unlock()
 	}
-}
-
-func (d *Daemon) observeMessageSendHold(agentID, workspaceID, target string, newer int64, reason string) {
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil {
-		return
-	}
-	runner.observeMessageSendHold(agentID, target, newer, reason)
 }

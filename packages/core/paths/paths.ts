@@ -12,10 +12,13 @@
  *  - Zero runtime deps means this module is safe in Node (tests) and browsers
  */
 
+import { membersPathWithSelection } from "./members-selection";
+
 const encode = (id: string) => encodeURIComponent(id);
 
 function workspaceScoped(slug: string) {
   const ws = `/${encode(slug)}`;
+  const membersBase = () => `${ws}/members`;
   return {
     root: () => `${ws}/channels`,
     overview: () => `${ws}/overview`,
@@ -35,13 +38,35 @@ function workspaceScoped(slug: string) {
     researchDetail: (id: string) => `${ws}/research/${encode(id)}`,
     channels: () => `${ws}/channels`,
     channelDetail: (id: string) => `${ws}/channels/${encode(id)}`,
-    agents: () => `${ws}/agents`,
-    agentDetail: (id: string) => `${ws}/agents/${encode(id)}`,
-    memberDetail: (id: string) => `${ws}/members/${encode(id)}`,
+    /**
+     * Members Directory primary route (ADR 0013).
+     * Optional selection: pass kind+id to set `?member=agent|user:<id>`.
+     */
+    members: (selection?: { kind: "agent" | "user"; id: string }) =>
+      selection
+        ? membersPathWithSelection(membersBase(), selection.kind, selection.id)
+        : membersBase(),
+    /**
+     * @deprecated Redirect target only — use `members()`. Kept so call sites
+     * that still navigate via agents() land on the Directory.
+     */
+    agents: () => membersBase(),
+    /**
+     * @deprecated Prefer `members({ kind: "agent", id })`. Resolves to the
+     * Directory with the Agent selected (not a separate management page).
+     */
+    agentDetail: (id: string) =>
+      membersPathWithSelection(membersBase(), "agent", id),
+    /**
+     * Human selected on Members Directory (query selection). Legacy
+     * `/members/:id` full page is retired with the Directory cutover.
+     */
+    memberDetail: (id: string) =>
+      membersPathWithSelection(membersBase(), "user", id),
     // Actor-generic lightweight profile (agent OR user). Distinct from
-    // agentDetail/memberDetail (the full management pages): this is the mobile
-    // full-page host for the same peek content the desktop HoverCard shows, so
-    // Recent activity can scroll instead of being capped by an 80dvh drawer.
+    // the Members Directory page: this is the mobile full-page host for the
+    // same peek content the desktop HoverCard shows, so Recent activity can
+    // scroll instead of being capped by an 80dvh drawer.
     actorProfile: (memberType: "agent" | "user", memberId: string) =>
       `${ws}/profile/${encode(memberType)}/${encode(memberId)}`,
     inbox: () => `${ws}/inbox`,

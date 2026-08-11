@@ -1298,11 +1298,11 @@ export class ApiClient {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.include_archived) search.set("include_archived", "true");
-    return this.fetch(`/api/agents?${search}`);
+    return this.fetch(`/api/members/agents?${search}`);
   }
 
   async getAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}`);
+    return this.fetch(`/api/members/agents/${id}`);
   }
 
   // #656 Agent Card Reminders tab: read-only, per the V2 product contract
@@ -1323,14 +1323,14 @@ export class ApiClient {
     search.set("status", params.status);
     if (params.cursor) search.set("cursor", params.cursor);
     if (params.limit) search.set("limit", String(params.limit));
-    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/reminders?${search}`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/reminders?${search}`);
     return parseWithFallback(raw, RawReminderPageSchema, EMPTY_REMINDER_PAGE, {
-      endpoint: "GET /api/agents/{agentId}/reminders",
+      endpoint: "GET /api/members/agents/{agentId}/reminders",
     });
   }
 
   async createAgent(data: CreateAgentRequest): Promise<Agent> {
-    return this.fetch("/api/agents", {
+    return this.fetch("/api/members/agents", {
       method: "POST",
       body: JSON.stringify(data),
     });
@@ -1341,7 +1341,7 @@ export class ApiClient {
     model: string,
     thinkingLevel?: string,
   ): Promise<EnsureWindyResponse> {
-    const raw = await this.fetch<unknown>("/api/agents/windy", {
+    const raw = await this.fetch<unknown>("/api/members/agents/windy", {
       method: "POST",
       body: JSON.stringify({
         runtime_id: runtimeId,
@@ -1353,14 +1353,14 @@ export class ApiClient {
   }
 
   async createAgentDraft(data: CreateAgentDraftRequest): Promise<AgentCreationDraft> {
-    return this.fetch("/api/agents/drafts", {
+    return this.fetch("/api/members/agents/drafts", {
       method: "POST",
       body: JSON.stringify(data),
     });
   }
 
   async getAgentDraft(id: string): Promise<AgentCreationDraft> {
-    return this.fetch(`/api/agents/drafts/${encodeURIComponent(id)}`);
+    return this.fetch(`/api/members/agents/drafts/${encodeURIComponent(id)}`);
   }
 
   async listAgentTemplates(): Promise<AgentTemplateSummary[]> {
@@ -1396,7 +1396,7 @@ export class ApiClient {
   async createAgentFromTemplate(
     data: CreateAgentFromTemplateRequest,
   ): Promise<CreateAgentFromTemplateResponse> {
-    const raw = await this.fetch<unknown>("/api/agents/from-template", {
+    const raw = await this.fetch<unknown>("/api/members/agents/from-template", {
       method: "POST",
       body: JSON.stringify(data),
     });
@@ -1404,12 +1404,12 @@ export class ApiClient {
       raw,
       CreateAgentFromTemplateResponseSchema,
       EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
-      { endpoint: "POST /api/agents/from-template" },
+      { endpoint: "POST /api/members/agents/from-template" },
     );
   }
 
   async updateAgent(id: string, data: UpdateAgentRequest): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}`, {
+    return this.fetch(`/api/members/agents/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
@@ -1417,7 +1417,7 @@ export class ApiClient {
 
   /**
    * Workspace-level agent authority (`member` | `admin`). Separate from
-   * PUT /api/agents/:id — that endpoint rejects `workspace_role`.
+   * PUT /api/members/agents/:id — that endpoint rejects `workspace_role`.
    * Human route only; workspace owners and admins are authorized server-side.
    */
   async updateAgentWorkspaceRole(
@@ -1435,13 +1435,13 @@ export class ApiClient {
   }
 
   async archiveAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}/archive`, { method: "POST" });
+    return this.fetch(`/api/members/agents/${id}/archive`, { method: "POST" });
   }
 
   async getAgentHealth(id: string): Promise<AgentHealthResponse> {
-    const raw = await this.fetch<unknown>(`/api/agents/${id}/health`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/health`);
     return parseWithFallback(raw, AgentHealthResponseSchema, EMPTY_AGENT_HEALTH_RESPONSE, {
-      endpoint: "GET /api/agents/:id/health",
+      endpoint: "GET /api/members/agents/:id/health",
     });
   }
 
@@ -1449,29 +1449,29 @@ export class ApiClient {
   // presentation-only boundary: clients receive no provider/runtime facts and
   // must not apply a semantic fallback of their own.
   async getRunnerActivity(id: string): Promise<RunnerActivityResponse> {
-    const raw = await this.fetch<unknown>(`/api/agents/${id}/runner-activity`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/runner-activity`);
     return parseWithFallback(raw, RunnerActivityResponseSchema, EMPTY_RUNNER_ACTIVITY_RESPONSE, {
-      endpoint: "GET /api/agents/:id/runner-activity",
+      endpoint: "GET /api/members/agents/:id/runner-activity",
     });
   }
 
   async getRunnerActivitySummaries(): Promise<RunnerActivitySummariesResponse> {
-    const raw = await this.fetch<unknown>("/api/agents/runner-activity-summaries");
+    const raw = await this.fetch<unknown>("/api/members/agents/runner-activity-summaries");
     return parseWithFallback(
       raw,
       RunnerActivitySummariesResponseSchema,
       EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
-      { endpoint: "GET /api/agents/runner-activity-summaries" },
+      { endpoint: "GET /api/members/agents/runner-activity-summaries" },
     );
   }
 
   async getAgentPresence(): Promise<AgentPresenceResponse> {
-    const raw = await this.fetch<unknown>(`/api/agents/presence`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/presence`);
     return parseWithFallback(
       raw,
       AgentPresenceResponseSchema,
       EMPTY_AGENT_PRESENCE_RESPONSE,
-      { endpoint: "GET /api/agents/presence" },
+      { endpoint: "GET /api/members/agents/presence" },
     );
   }
 
@@ -1482,7 +1482,7 @@ export class ApiClient {
    * MUL-2600.
    */
   async getAgentEnv(id: string): Promise<AgentEnvResponse> {
-    return this.fetch(`/api/agents/${id}/env`);
+    return this.fetch(`/api/members/agents/${id}/env`);
   }
 
   /**
@@ -1494,7 +1494,7 @@ export class ApiClient {
    * MUL-2600.
    */
   async updateAgentEnv(id: string, data: UpdateAgentEnvRequest): Promise<AgentEnvResponse> {
-    return this.fetch(`/api/agents/${id}/env`, {
+    return this.fetch(`/api/members/agents/${id}/env`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
@@ -1504,17 +1504,17 @@ export class ApiClient {
     const search = new URLSearchParams();
     if (params?.include_hidden) search.set("include_hidden", "true");
     const suffix = search.toString() ? `?${search}` : "";
-    const raw = await this.fetch<unknown>(`/api/agents/${id}/files${suffix}`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/files${suffix}`);
     return parseWithFallback(raw, AgentFilesResponseSchema, EMPTY_AGENT_FILES_RESPONSE, {
-      endpoint: "GET /api/agents/:id/files",
+      endpoint: "GET /api/members/agents/:id/files",
     });
   }
 
   async getAgentFileContent(id: string, path: string): Promise<AgentFileContentResponse> {
     const search = new URLSearchParams({ path });
-    const raw = await this.fetch<unknown>(`/api/agents/${id}/files/content?${search}`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/files/content?${search}`);
     return parseWithFallback(raw, AgentFileContentResponseSchema, EMPTY_AGENT_FILE_CONTENT_RESPONSE, {
-      endpoint: "GET /api/agents/:id/files/content",
+      endpoint: "GET /api/members/agents/:id/files/content",
     });
   }
 
@@ -1522,7 +1522,7 @@ export class ApiClient {
     id: string,
     data: UpdateAgentFileContentRequest,
   ): Promise<UpdateAgentFileContentResponse> {
-    const raw = await this.fetch<unknown>(`/api/agents/${id}/files/content`, {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${id}/files/content`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
@@ -1530,19 +1530,19 @@ export class ApiClient {
       raw,
       UpdateAgentFileContentResponseSchema,
       EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
-      { endpoint: "PUT /api/agents/:id/files/content" },
+      { endpoint: "PUT /api/members/agents/:id/files/content" },
     );
   }
 
   async restoreAgent(id: string): Promise<Agent> {
-    return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
+    return this.fetch(`/api/members/agents/${id}/restore`, { method: "POST" });
   }
 
   // Agent lifecycle actions (#632/#633). Preflight is the server-authoritative
   // source for per-action enable/disable + immediate-vs-scheduled — the FE never
   // derives active/idle from `agent.status`.
   async getAgentLifecyclePreflight(id: string): Promise<AgentLifecyclePreflight> {
-    return this.fetch(`/api/agents/${id}/lifecycle`);
+    return this.fetch(`/api/members/agents/${id}/lifecycle`);
   }
 
   // Client sends only `action_kind` (never a path/force/runtime_id). The UUID
@@ -1553,7 +1553,7 @@ export class ApiClient {
     actionKind: AgentLifecycleActionKind,
     idempotencyKey: string,
   ): Promise<AgentLifecycleOperation> {
-    return this.fetch(`/api/agents/${id}/lifecycle`, {
+    return this.fetch(`/api/members/agents/${id}/lifecycle`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ action_kind: actionKind }),
@@ -1564,7 +1564,7 @@ export class ApiClient {
     id: string,
     operationId: string,
   ): Promise<AgentLifecycleOperation> {
-    return this.fetch(`/api/agents/${id}/lifecycle/${operationId}`);
+    return this.fetch(`/api/members/agents/${id}/lifecycle/${operationId}`);
   }
 
   // Bulk-cancel every active task (queued/dispatched/running) for the agent.
@@ -1572,7 +1572,7 @@ export class ApiClient {
   // count of cancelled rows; broadcasts task:cancelled for each so other
   // surfaces can clear their live cards.
   async cancelAgentTasks(id: string): Promise<{ cancelled: number }> {
-    return this.fetch(`/api/agents/${id}/cancel-tasks`, { method: "POST" });
+    return this.fetch(`/api/members/agents/${id}/cancel-tasks`, { method: "POST" });
   }
 
   async listRuntimes(params?: { workspace_id?: string; owner?: "me" }): Promise<AgentRuntime[]> {
@@ -2070,7 +2070,7 @@ export class ApiClient {
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {
-    return this.fetch(`/api/agents/${agentId}/tasks`);
+    return this.fetch(`/api/members/agents/${agentId}/tasks`);
   }
 
   // Workspace-scoped agent task snapshot: every active task
@@ -2123,14 +2123,14 @@ export class ApiClient {
   }
 
   async getAgentFleetRankings(): Promise<AgentFleetRank[]> {
-    const raw = await this.fetch<unknown>(`/api/agents/fleet-rankings`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/fleet-rankings`);
     return parseWithFallback(raw, agentFleetRankListSchema, EMPTY_AGENT_FLEET_RANK_LIST, {
-      endpoint: "GET /api/agents/fleet-rankings",
+      endpoint: "GET /api/members/agents/fleet-rankings",
     });
   }
 
   async getAgentFleetRank(agentId: string): Promise<AgentFleetRank> {
-    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/fleet-rank`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/fleet-rank`);
     return parseWithFallback(
       raw,
       agentFleetRankSchema,
@@ -2147,12 +2147,12 @@ export class ApiClient {
         frozen: false,
         pillars: { delivery: 0, evolution: 0, growth: 0, efficiency: 0 },
       },
-      { endpoint: `GET /api/agents/${agentId}/fleet-rank` },
+      { endpoint: `GET /api/members/agents/${agentId}/fleet-rank` },
     );
   }
 
   async getAgentFleetRankRules(): Promise<AgentFleetRulesDocument> {
-    const raw = await this.fetch<unknown>(`/api/agents/fleet-rank/rules`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/fleet-rank/rules`);
     return parseWithFallback(raw, agentFleetRulesSchema, {
       version: "",
       window_days: 30,
@@ -2160,21 +2160,21 @@ export class ApiClient {
       pillar_weights: {},
       class_thresholds: [],
       changelog: [],
-    }, { endpoint: "GET /api/agents/fleet-rank/rules" });
+    }, { endpoint: "GET /api/members/agents/fleet-rank/rules" });
   }
 
   async getAgentHonorRules(): Promise<AgentHonorRulesView> {
-    const raw = await this.fetch<unknown>("/api/agents/honor/rules");
+    const raw = await this.fetch<unknown>("/api/members/agents/honor/rules");
     return parseWithFallback(
       raw,
       agentHonorRulesViewSchema,
       EMPTY_AGENT_HONOR_RULES_VIEW,
-      { endpoint: "GET /api/agents/honor/rules" },
+      { endpoint: "GET /api/members/agents/honor/rules" },
     );
   }
 
   async updateAgentHonorRules(rules: AgentHonorRules): Promise<AgentHonorRulesView> {
-    const raw = await this.fetch<unknown>("/api/agents/honor/rules", {
+    const raw = await this.fetch<unknown>("/api/members/agents/honor/rules", {
       method: "PUT",
       body: JSON.stringify(rules),
     });
@@ -2182,25 +2182,25 @@ export class ApiClient {
       raw,
       agentHonorRulesViewSchema,
       EMPTY_AGENT_HONOR_RULES_VIEW,
-      { endpoint: "PUT /api/agents/honor/rules" },
+      { endpoint: "PUT /api/members/agents/honor/rules" },
     );
   }
 
   async getAgentHonorAdminAudit(agentId?: string): Promise<AgentHonorAdminAudit[]> {
     const query = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
-    const raw = await this.fetch<unknown>(`/api/agents/honor/audit${query}`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/honor/audit${query}`);
     return parseWithFallback(raw, agentHonorAdminAuditListSchema, [], {
-      endpoint: "GET /api/agents/honor/audit",
+      endpoint: "GET /api/members/agents/honor/audit",
     });
   }
 
   async getAgentHonor(agentId: string): Promise<AgentHonorDashboard> {
-    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/honor`);
+    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/honor`);
     return parseWithFallback(
       raw,
       agentHonorDashboardSchema,
       { ...EMPTY_AGENT_HONOR_DASHBOARD, agent_id: agentId },
-      { endpoint: "GET /api/agents/:id/honor" },
+      { endpoint: "GET /api/members/agents/:id/honor" },
     );
   }
 
@@ -2208,7 +2208,7 @@ export class ApiClient {
     agentId: string,
     input: UpdateAgentHonorShowcaseRequest,
   ): Promise<AgentHonorDashboard> {
-    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/honor`, {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/honor`, {
       method: "PATCH",
       body: JSON.stringify(input),
     });
@@ -2216,7 +2216,7 @@ export class ApiClient {
       raw,
       agentHonorDashboardSchema,
       { ...EMPTY_AGENT_HONOR_DASHBOARD, agent_id: agentId },
-      { endpoint: "PATCH /api/agents/:id/honor" },
+      { endpoint: "PATCH /api/members/agents/:id/honor" },
     );
   }
 
@@ -2224,7 +2224,7 @@ export class ApiClient {
     agentId: string,
     input: AgentHonorGrantRequest,
   ): Promise<AgentHonorDashboard> {
-    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/honor/grants`, {
+    const raw = await this.fetch<unknown>(`/api/members/agents/${agentId}/honor/grants`, {
       method: "POST",
       body: JSON.stringify(input),
     });
@@ -2232,7 +2232,7 @@ export class ApiClient {
       raw,
       agentHonorDashboardSchema,
       { ...EMPTY_AGENT_HONOR_DASHBOARD, agent_id: agentId },
-      { endpoint: "POST /api/agents/:id/honor/grants" },
+      { endpoint: "POST /api/members/agents/:id/honor/grants" },
     );
   }
 
@@ -2242,7 +2242,7 @@ export class ApiClient {
     reason: string,
   ): Promise<void> {
     await this.fetch(
-      `/api/agents/${agentId}/honor/achievements/${encodeURIComponent(achievementId)}`,
+      `/api/members/agents/${agentId}/honor/achievements/${encodeURIComponent(achievementId)}`,
       { method: "DELETE", body: JSON.stringify({ reason }) },
     );
   }
@@ -2708,15 +2708,15 @@ export class ApiClient {
   }
 
   async listAgentSkills(agentId: string): Promise<SkillSummary[]> {
-    return this.fetch(`/api/agents/${agentId}/skills`);
+    return this.fetch(`/api/members/agents/${agentId}/skills`);
   }
 
   async listAgentMemories(agentId: string): Promise<AgentMemory[]> {
-    return this.fetch(`/api/agents/${agentId}/memories`);
+    return this.fetch(`/api/members/agents/${agentId}/memories`);
   }
 
   async listAgentSkillSuggestions(agentId: string): Promise<ListAgentSkillSuggestionsResponse> {
-    return this.fetch(`/api/agents/${agentId}/skill-suggestions`);
+    return this.fetch(`/api/members/agents/${agentId}/skill-suggestions`);
   }
 
   async decideAgentSkillSuggestion(
@@ -2724,7 +2724,7 @@ export class ApiClient {
     suggestionId: string,
     data: DecideAgentSkillSuggestionRequest,
   ): Promise<void> {
-    await this.fetch(`/api/agents/${agentId}/skill-suggestions/${suggestionId}/decision`, {
+    await this.fetch(`/api/members/agents/${agentId}/skill-suggestions/${suggestionId}/decision`, {
       method: "POST",
       body: JSON.stringify(data),
     });
@@ -3088,7 +3088,7 @@ export class ApiClient {
   }
 
   async setAgentSkills(agentId: string, data: SetAgentSkillsRequest): Promise<void> {
-    await this.fetch(`/api/agents/${agentId}/skills`, {
+    await this.fetch(`/api/members/agents/${agentId}/skills`, {
       method: "PUT",
       body: JSON.stringify(data),
     });

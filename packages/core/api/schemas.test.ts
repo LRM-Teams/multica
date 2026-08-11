@@ -116,7 +116,7 @@ describe("RunnerActivitySummariesResponseSchema", () => {
       { items: [{ agent_id: 42, summary: null }] },
       RunnerActivitySummariesResponseSchema,
       EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
-      { endpoint: "GET /api/agents/runner-activity-summaries" },
+      { endpoint: "GET /api/members/agents/runner-activity-summaries" },
     )).toEqual({ items: [] });
   });
 });
@@ -172,7 +172,7 @@ describe("Agent file schemas", () => {
       { agent_id: "agent-1", status: "ok", nodes: null },
       AgentFilesResponseSchema,
       EMPTY_AGENT_FILES_RESPONSE,
-      { endpoint: "GET /api/agents/:id/files" },
+      { endpoint: "GET /api/members/agents/:id/files" },
     );
     expect(parsed).toEqual(EMPTY_AGENT_FILES_RESPONSE);
   });
@@ -182,7 +182,7 @@ describe("Agent file schemas", () => {
       { content: 123, content_hash: null },
       AgentFileContentResponseSchema,
       EMPTY_AGENT_FILE_CONTENT_RESPONSE,
-      { endpoint: "GET /api/agents/:id/files/content" },
+      { endpoint: "GET /api/members/agents/:id/files/content" },
     );
     expect(parsed).toEqual(EMPTY_AGENT_FILE_CONTENT_RESPONSE);
   });

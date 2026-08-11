@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -1790,6 +1791,150 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	}
 	if dmAnchor.DisplayName == nil || !strings.HasPrefix(*dmAnchor.DisplayName, "Thread in ") || strings.Contains(*dmAnchor.DisplayName, "direct message") || strings.Contains(string(dmEncoded), fixture.channel.Name) {
 		t.Fatalf("DM anchor did not expose a readable conversation name without leaking canonical channel name: %s", dmEncoded)
+	}
+}
+
+func TestListAgentRemindersEnforcesInternalAccessAndWorkspaceScope(t *testing.T) {
+	agentID, ownerID, memberID := privateAgentTestFixture(t)
+
+	for _, tc := range []struct {
+		name   string
+		userID string
+		want   int
+	}{
+		{name: "agent owner", userID: ownerID, want: http.StatusOK},
+		{name: "workspace owner", userID: testUserID, want: http.StatusOK},
+		{name: "plain member", userID: memberID, want: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := withURLParam(newRequestAs(tc.userID, http.MethodGet, "/api/members/agents/"+agentID+"/reminders?status=scheduled", nil), "id", agentID)
+			rec := httptest.NewRecorder()
+			testHandler.ListAgentReminders(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d body=%s want=%d", rec.Code, rec.Body.String(), tc.want)
+			}
+		})
+	}
+
+	crossWorkspace := withURLParam(newRequestAs(ownerID, http.MethodGet, "/api/members/agents/"+agentID+"/reminders?status=scheduled", nil), "id", agentID)
+	crossWorkspace.Header.Set("X-Workspace-ID", uuid.NewString())
+	rec := httptest.NewRecorder()
+	testHandler.ListAgentReminders(rec, crossWorkspace)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-workspace status=%d body=%s want 404", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListAgentReminderHistoryCursorIsStableAcrossEqualFireTimes(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "history anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+	newer := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	older := newer.Add(-time.Minute)
+	ids := []string{
+		"00000000-0000-0000-0000-000000000003",
+		"00000000-0000-0000-0000-000000000002",
+		"00000000-0000-0000-0000-000000000001",
+	}
+	for i, row := range []struct {
+		id      string
+		firedAt time.Time
+	}{
+		{id: ids[0], firedAt: newer},
+		{id: ids[1], firedAt: newer},
+		{id: ids[2], firedAt: older},
+	} {
+		if _, err := testPool.Exec(context.Background(), `
+			INSERT INTO agent_reminder_occurrence (
+				id, reminder_id, workspace_id, agent_id, cadence_scheduled_for,
+				due_at, status, title_snapshot, fired_at, fire_version
+			) VALUES ($1, $2, $3, $4, $5, $5, 'fired', $6, $5, $7)`,
+			row.id, reminderID, testWorkspaceID, fixture.agentIDs[0], row.firedAt,
+			fmt.Sprintf("history %d", i+1), int64(i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	readPage := func(cursor string) humanReminderPage {
+		path := "/api/members/agents/" + fixture.agentIDs[0] + "/reminders?status=fired&limit=2"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		req := withURLParam(newRequest(http.MethodGet, path, nil), "id", fixture.agentIDs[0])
+		rec := httptest.NewRecorder()
+		fixture.handler.ListAgentReminders(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list history status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var page humanReminderPage
+		if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+
+	first := readPage("")
+	if len(first.Occurrences) != 2 || first.Occurrences[0].ID != ids[0] || first.Occurrences[1].ID != ids[1] || !first.HasMore || first.NextCursor == nil {
+		t.Fatalf("first history page=%+v", first)
+	}
+	second := readPage(*first.NextCursor)
+	if len(second.Occurrences) != 1 || second.Occurrences[0].ID != ids[2] || second.HasMore || second.NextCursor != nil {
+		t.Fatalf("second history page=%+v", second)
+	}
+}
+
+func TestReminderMutationRollbackEmitsNoHumanInvalidation(t *testing.T) {
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityReminderVersionedCache,
+		protocol.DaemonCapabilityReminderTransientInput,
+	})
+	agentID := agentIDForTask(t, taskID)
+	changed := captureReminderChangedEvents(t, testHandler, agentID)
+	message, err := testHandler.insertChannelMessage(context.Background(), parseUUID(channelID), parseUUID(testWorkspaceID),
+		"user", parseUUID(testUserID), "Tester", "rollback reminder anchor", "multica", nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		CREATE OR REPLACE FUNCTION test_reject_reminder_lifecycle_insert()
+		RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+		  IF NEW.title_snapshot = 'rollback invalidation' THEN
+		    RAISE EXCEPTION 'injected reminder lifecycle rollback';
+		  END IF;
+		  RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER test_reject_reminder_lifecycle_insert
+		BEFORE INSERT ON agent_reminder_lifecycle_event
+		FOR EACH ROW EXECUTE FUNCTION test_reject_reminder_lifecycle_insert();
+	`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `
+			DROP TRIGGER IF EXISTS test_reject_reminder_lifecycle_insert ON agent_reminder_lifecycle_event;
+			DROP FUNCTION IF EXISTS test_reject_reminder_lifecycle_insert();
+		`)
+	})
+
+	req := agentCredentialReminderRequest(t, http.MethodPost, "/api/agent/reminders/schedule", agentID, map[string]any{
+		"title": "rollback invalidation", "delay_seconds": 300, "message_id": message.ID,
+	})
+	rec := httptest.NewRecorder()
+	testHandler.AgentTransportScheduleReminder(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("rollback schedule status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var persisted int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM agent_reminder WHERE agent_id = $1 AND title = 'rollback invalidation'`, agentID).Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != 0 || len(*changed) != 0 {
+		t.Fatalf("rollback persisted=%d changed_events=%d want 0/0", persisted, len(*changed))
 	}
 }
 

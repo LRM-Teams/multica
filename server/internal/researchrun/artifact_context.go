@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ArtifactContextModule owns D-enabled candidate selection and manifest construction.
@@ -285,6 +287,55 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		return dispatchManifestPlan{}, err
 	}
 	return plan, nil
+}
+
+func persistManifestGateSnapshotTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, manifestID string,
+	gate GateResult,
+) error {
+	encoded, err := json.Marshal(gate)
+	if err != nil {
+		return fmt.Errorf("encode manifest gate snapshot: %w", err)
+	}
+	hash := contentHashFromPayload(encoded)
+	_, err = tx.Exec(ctx, `
+		UPDATE research_artifact_context_manifest
+		SET principal_header_bytes = $4,
+		    principal_header_hash = $5
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+	`, workspaceID, sessionID, manifestID, encoded, hash)
+	return err
+}
+
+func loadManifestGateSnapshotPool(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID string,
+) (GateResult, bool, error) {
+	var raw []byte
+	err := pool.QueryRow(ctx, `
+		SELECT principal_header_bytes
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GateResult{}, false, nil
+	}
+	if err != nil {
+		return GateResult{}, false, err
+	}
+	if len(raw) == 0 {
+		return GateResult{}, false, nil
+	}
+	var gate GateResult
+	if err = json.Unmarshal(raw, &gate); err != nil {
+		return GateResult{}, false, fmt.Errorf("decode manifest gate snapshot: %w", err)
+	}
+	return gate, true, nil
 }
 
 func loadAttemptManifestSummary(

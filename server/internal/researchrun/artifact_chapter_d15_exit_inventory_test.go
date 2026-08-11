@@ -31,10 +31,10 @@ var chapterD15Coverage = map[int]string{
 	14: "covered", // replay/prompt/outbox binding tests
 	15: "partial", // dispatch transaction recovery matrix
 	16: "covered", // historical live vs frozen manifest tests
-	17: "missing", // D gate uses frozen manifest without rubric drift
-	18: "missing", // accept race fault matrix after preflight pause
+	17: "partial", // frozen gate snapshot on TaskContextForAttempt
+	18: "partial", // accept representation/hash integrity preflight
 	19: "partial", // unrelated vs affected watermark/eligibility
-	20: "missing", // result lock-order concurrency
+	20: "partial", // result lock-order concurrency + normalized manifest locks
 	21: "partial", // accept replay hash/lineage conflict
 	22: "partial", // result accept transaction recovery matrix
 	23: "partial", // handler cross-workspace 404; not full principal matrix

@@ -360,7 +360,9 @@ function buildNodeRunContext(
     objective:
       task?.objective || firstString(records, ["objective", "goal", "question", "small_goal"]),
     genericMethod: firstString(records, ["method", "approach", "strategy", "plan"]),
-    result: firstString(records, ["result", "outcome", "conclusion"]),
+    result:
+      firstString(records, ["result", "outcome", "conclusion"]) ||
+      (node.summary?.trim() || null),
     metrics,
     reportCreated: Boolean(firstString(records, ["report_id"])),
     producedSources,

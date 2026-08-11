@@ -1033,7 +1033,15 @@
       "goal_version": "目标版本 {{version}}"
     },
     "change_receipt": {
-      "title": "画布变更 · {{op}}"
+      "title": "画布变更 · {{label}}",
+      "ops": {
+        "goal_steered": "目标已更新",
+        "goal_modified": "目标版本影响",
+        "integration_formed": "结果已融合",
+        "node_retired": "方向已废弃",
+        "task_restarted": "任务已重启",
+        "run_completed": "运行已完成"
+      }
     }
   }
 }

@@ -28,13 +28,14 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { buildD5SessionCanvasModel } from "../lib/build-d5-session-canvas";
 import { extractLayoutResultFromViewModel } from "../star-graph/lib/star-canvas-view-model";
-import { buildTypedGraphMotionEvents } from "../lib/build-typed-graph-motion-events";
+import { buildTypedGraphMotionEvents, shouldSkipTypedGraphMotionCatchUp } from "../lib/build-typed-graph-motion-events";
 import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
 import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
 import type { CanvasBodyMode } from "../lib/canvas-body-mode";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import type { ExecutionRow } from "../execution-overlay";
+import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
 import { StarGraphCanvas } from "../star-graph";
@@ -168,23 +169,40 @@ export function ResearchConstellationWorkspace({
 
   useEffect(() => {
     if (!typedGraph) return;
+    if (
+      prevGraphRef.current &&
+      prevGraphRef.current.session_id &&
+      prevGraphRef.current.session_id !== typedGraph.session_id
+    ) {
+      prevGraphRef.current = typedGraph;
+      motion.settleNow();
+      return;
+    }
     if (!prevGraphRef.current) {
       prevGraphRef.current = typedGraph;
       return;
     }
-    const events = buildTypedGraphMotionEvents(prevGraphRef.current, typedGraph);
-    if (events.length > 0) {
+    const previous = prevGraphRef.current;
+    const events = buildTypedGraphMotionEvents(previous, typedGraph);
+    const skipMotion = shouldSkipTypedGraphMotionCatchUp(previous, typedGraph, events);
+
+    if (events.length > 0 && !skipMotion) {
       setGraphLiveMessage(
         t(($) => $.d5.graph_live.updating, { version: typedGraph.graph_version }),
       );
-    } else if (prevGraphRef.current.graph_version !== typedGraph.graph_version) {
+    } else if (previous.graph_version !== typedGraph.graph_version) {
       setGraphLiveMessage(
         t(($) => $.d5.graph_live.updated, { version: typedGraph.graph_version }),
       );
     }
-    for (const event of events) motion.enqueue(event);
+
+    if (skipMotion) {
+      motion.settleNow();
+    } else {
+      for (const event of events) motion.enqueue(event);
+    }
     prevGraphRef.current = typedGraph;
-  }, [typedGraph, motion.enqueue, t]);
+  }, [typedGraph, motion.enqueue, motion.settleNow, t]);
 
   const canvasModel = useMemo(
     () =>
@@ -228,7 +246,7 @@ export function ResearchConstellationWorkspace({
         });
       }
     }
-    return map;
+    return capTransitionGlowDirectives(map);
   }, [canvasModel, motion.queueSize, motion.directiveFor, motion.markerFor, motion.profile.lowPerformance]);
 
   const summary = useMemo(

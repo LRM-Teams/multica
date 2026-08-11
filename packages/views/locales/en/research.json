@@ -1033,7 +1033,15 @@
       "goal_version": "Goal version {{version}}"
     },
     "change_receipt": {
-      "title": "Canvas update · {{op}}"
+      "title": "Canvas update · {{label}}",
+      "ops": {
+        "goal_steered": "Goal updated",
+        "goal_modified": "Goal version impact",
+        "integration_formed": "Results merged",
+        "node_retired": "Direction retired",
+        "task_restarted": "Task restarted",
+        "run_completed": "Run completed"
+      }
     }
   }
 }

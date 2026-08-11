@@ -252,6 +252,9 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	if err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindAttempt, workspaceID, in.SessionID, attempt.ID, time.Now(), nil, nil); err != nil {
+		return Attempt{}, RunEvent{}, err
+	}
 	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
 	probeTargets, err := normalizeAttemptProbeTargets(target, in.ProbeTargets)
 	if err != nil {
@@ -645,6 +648,9 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindTask, workspaceID, in.SessionID, taskID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
+		return Task{}, RunEvent{}, err
+	}
 	decisionInputs, _ := json.Marshal(map[string]any{
 		"observed_findings": in.ObservedFindings, "target_findings": in.Findings,
 	})
@@ -652,12 +658,17 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 		"task_id": taskID, "task_kind": in.Kind, "required_capability": in.Capability,
 		"question_id": in.QuestionID, "question_key": questionKey, "finding_codes": findingCodes,
 	})
-	if _, err = tx.Exec(ctx, `
+	var decisionID string
+	if err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
 		  workspace_id, session_id, decision_kind, actor_type, goal_version, plan_version,
 		  inputs, outcome, rationale
 		) VALUES ($1::uuid, $2::uuid, 'remediation_routing', 'system', $3, $4, $5::jsonb, $6::jsonb, $7)
-	`, workspaceID, in.SessionID, goalVersion, planVersion, decisionInputs, decisionOutcome, in.Rationale); err != nil {
+		RETURNING id::text
+	`, workspaceID, in.SessionID, goalVersion, planVersion, decisionInputs, decisionOutcome, in.Rationale).Scan(&decisionID); err != nil {
+		return Task{}, RunEvent{}, err
+	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("remediation_routing"), workspaceID, in.SessionID, decisionID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
 		return Task{}, RunEvent{}, err
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "control_task_created", "control-task:"+taskID, "system", "", map[string]any{
@@ -971,13 +982,19 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	}
 	newGoalVersion := run.GoalVersion + 1
 	newPlanVersion := run.PlanVersion + 1
-	if _, err = tx.Exec(ctx, `
+	var contractID string
+	var contractCreatedAt time.Time
+	if err = tx.QueryRow(ctx, `
 		INSERT INTO research_contract_revision (
 			workspace_id, session_id, goal_version, goal, scope, audience,
 			freshness, language, source_policy, run_limits, authored_by, reason
 		) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11::uuid, $12)
+		RETURNING id::text, created_at
 	`, in.WorkspaceID, in.SessionID, newGoalVersion, goal, resolvedScope, resolvedAudience,
-		resolvedFreshness, resolvedLanguage, resolvedSourcePolicy, resolvedLimits, in.UserID, truncateBytes(in.Reason, 4096)); err != nil {
+		resolvedFreshness, resolvedLanguage, resolvedSourcePolicy, resolvedLimits, in.UserID, truncateBytes(in.Reason, 4096)).Scan(&contractID, &contractCreatedAt); err != nil {
+		return Run{}, RunEvent{}, nil, err
+	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindContractRevision, in.WorkspaceID, in.SessionID, contractID, contractCreatedAt, int32Ptr(int32(newGoalVersion)), nil); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	rows, err := tx.Query(ctx, `SELECT inbox_task_id::text FROM research_task_attempt WHERE session_id = $1::uuid AND status IN ('dispatching', 'running', 'cancelling') AND inbox_task_id IS NOT NULL`, in.SessionID)
@@ -1046,6 +1063,9 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	var rootQuestionID string
 	err = tx.QueryRow(ctx, `INSERT INTO research_question (workspace_id, session_id, client_key, kind, question, required, status, priority, impact, uncertainty, novelty, coverage, goal_version, plan_version) VALUES ($1::uuid, $2::uuid, 'root', 'dimension', $3, false, 'in_progress', 1, 1, 0.8, 1, 0, $4, $5) RETURNING id::text`, in.WorkspaceID, in.SessionID, goal, newGoalVersion, newPlanVersion).Scan(&rootQuestionID)
 	if err != nil {
+		return Run{}, RunEvent{}, nil, err
+	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindQuestion, in.WorkspaceID, in.SessionID, rootQuestionID, time.Now(), int32Ptr(int32(newGoalVersion)), int32Ptr(int32(newPlanVersion))); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	event, err := appendEvent(ctx, tx, in.WorkspaceID, in.SessionID, "goal_steered", fmt.Sprintf("goal-steered:%d", newGoalVersion), "user", in.UserID, map[string]any{"goal": goal, "goal_version": newGoalVersion, "plan_version": newPlanVersion, "reason": in.Reason, "allow_running_finish": in.AllowRunningFinish})

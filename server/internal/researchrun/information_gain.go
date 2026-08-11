@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -168,12 +169,17 @@ func recordInformationGain(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `
+	var decisionID string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
 		  workspace_id, session_id, decision_kind, actor_type, goal_version, plan_version,
 		  inputs, outcome, rationale
 		) VALUES ($1::uuid, $2::uuid, 'information_gain', 'system', $3, $4, $5::jsonb, $6::jsonb, $7)
+		RETURNING id::text
 	`, state.workspaceID, state.run.SessionID, state.run.GoalVersion, state.targetPlan, inputs, outcome,
-		"Measured from canonical evidence-graph changes before and after the accepted evidence result.")
-	return err
+		"Measured from canonical evidence-graph changes before and after the accepted evidence result.").Scan(&decisionID)
+	if err != nil {
+		return err
+	}
+	return ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("information_gain"), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)))
 }

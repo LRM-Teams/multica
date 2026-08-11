@@ -942,7 +942,13 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 		&event.ID, &event.WorkspaceID, &event.SessionID, &event.Sequence, &event.Type,
 		&event.IdempotencyKey, &event.ActorType, &event.ActorID, &event.Payload, &event.CreatedAt,
 	)
-	return event, err
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindRunEvent, workspaceID, sessionID, event.ID, event.CreatedAt, nil, nil); err != nil {
+		return RunEvent{}, err
+	}
+	return event, nil
 }
 
 func semanticJSONEqual(left, right []byte) bool {

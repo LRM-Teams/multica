@@ -75,7 +75,20 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
-	node, err := h.Queries.CreateResearchGraphNode(r.Context(), db.CreateResearchGraphNodeParams{
+	fromNodeID := pgtype.UUID{}
+	edgeType := ""
+	if req.FromID != "" {
+		fromID, ok := parseUUIDOrBadRequest(w, req.FromID, "from_node_id")
+		if !ok {
+			return
+		}
+		fromNodeID = fromID
+		edgeType = req.EdgeType
+		if edgeType == "" {
+			edgeType = "leads_to"
+		}
+	}
+	node, dbEdge, err := h.createResearchGraphNodeWithPassport(r.Context(), wsUUID, sessionID, db.CreateResearchGraphNodeParams{
 		WorkspaceID:  wsUUID,
 		SessionID:    sessionID,
 		NodeType:     req.NodeType,
@@ -84,34 +97,15 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 		Status:       req.Status,
 		ActorAgentID: member.AgentID,
 		Payload:      payload,
-	})
+	}, fromNodeID, edgeType)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create graph node")
 		return
 	}
 	var edge *ResearchGraphEdgeResp
-	var dbEdge *db.ResearchGraphEdge
-	if req.FromID != "" {
-		fromID, ok := parseUUIDOrBadRequest(w, req.FromID, "from_node_id")
-		if !ok {
-			return
-		}
-		et := req.EdgeType
-		if et == "" {
-			et = "leads_to"
-		}
-		e, err := h.Queries.CreateResearchGraphEdge(r.Context(), db.CreateResearchGraphEdgeParams{
-			WorkspaceID: wsUUID,
-			SessionID:   sessionID,
-			FromNodeID:  fromID,
-			ToNodeID:    node.ID,
-			EdgeType:    et,
-		})
-		if err == nil {
-			er := mapEdges([]db.ResearchGraphEdge{e})[0]
-			edge = &er
-			dbEdge = &e
-		}
+	if dbEdge != nil {
+		er := mapEdges([]db.ResearchGraphEdge{*dbEdge})[0]
+		edge = &er
 	}
 	nodeResp := mapGraphNodeWithEdge(node, dbEdge)
 	h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, "agent", uuidToString(member.AgentID), map[string]any{

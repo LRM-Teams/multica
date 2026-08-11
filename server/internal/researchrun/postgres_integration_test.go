@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -1108,7 +1110,7 @@ func TestPostgresStoreBlocksTasksWhoseDependencyIsTerminal(t *testing.T) {
 	}
 	parentID := uuid.NewString()
 	childID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	insertIntegrationTasksWithPassports(t, ctx, pool, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion, `
 		INSERT INTO research_task (
 		  id, workspace_id, session_id, client_key, kind, objective,
 		  required_capability, expected_result, status, goal_version, plan_version,
@@ -1116,9 +1118,7 @@ func TestPostgresStoreBlocksTasksWhoseDependencyIsTerminal(t *testing.T) {
 		) VALUES
 		  ($1::uuid, $3::uuid, $4::uuid, 'parent', 'discover', 'parent', 'lead', 'research_evidence_v1', 'ready', $5, $6, 2, 300, now()),
 		  ($2::uuid, $3::uuid, $4::uuid, 'child', 'verify', 'child', 'lead', 'research_evidence_v1', 'pending', $5, $6, 1, 300, NULL)
-	`, parentID, childID, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion); err != nil {
-		t.Fatal(err)
-	}
+	`, []any{parentID, childID, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion}, []string{parentID, childID})
 	if _, err = pool.Exec(ctx, `INSERT INTO research_task_dependency (task_id, depends_on_task_id) VALUES ($1::uuid, $2::uuid)`, childID, parentID); err != nil {
 		t.Fatal(err)
 	}
@@ -1211,16 +1211,14 @@ func TestCreateControlTaskDoesNotReuseSucceededDeliveryTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	succeededID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	insertIntegrationTasksWithPassports(t, ctx, pool, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion, `
 		INSERT INTO research_task (
 		  id, workspace_id, session_id, client_key, kind, objective,
 		  required_capability, expected_result, status, goal_version, plan_version,
 		  max_attempts, timeout_seconds, completed_at
 		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'synthesize-initial', 'synthesize', 'Initial report',
 		  'reporter', 'research_report_v2', 'succeeded', $4, $5, 3, 1800, now())
-	`, succeededID, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion); err != nil {
-		t.Fatal(err)
-	}
+	`, []any{succeededID, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion}, []string{succeededID})
 	task, _, err := store.CreateControlTask(ctx, ControlTaskInput{
 		SessionID: fixture.sessionID, Kind: TaskKindSynthesize, Objective: "Revise the report after quality failure", Capability: "reporter", Priority: 1,
 	})
@@ -1755,15 +1753,20 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	if err != nil || !gate.Passed {
 		t.Fatalf("gate=%+v err=%v", gate, err)
 	}
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_decision (
-		  workspace_id, session_id, decision_kind, actor_type, goal_version, plan_version, outcome, rationale
-		) VALUES ($1::uuid, $2::uuid, 'information_gain', 'system', 1, 1,
-		          '{"canonical_changed":false,"gain":{"score":0}}'::jsonb,
-		          'Simulate a duplicate saturation probe after the latest report.')
-	`, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	gainDecisionID := uuid.NewString()
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_decision (
+			  id, workspace_id, session_id, decision_kind, actor_type, goal_version, plan_version, outcome, rationale
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 'information_gain', 'system', 1, 1,
+			          '{"canonical_changed":false,"gain":{"score":0}}'::jsonb,
+			          'Simulate a duplicate saturation probe after the latest report.')
+		`, gainDecisionID, fixture.workspaceID, fixture.sessionID); err != nil {
+			return err
+		}
+		backfillIntegrationDecisionPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, gainDecisionID, "information_gain", 1, 1)
+		return nil
+	})
 	if freshGate, freshErr := store.EvaluateGate(ctx, fixture.sessionID); freshErr != nil || !freshGate.Passed {
 		t.Fatalf("duplicate evidence invalidated report gate=%+v err=%v", freshGate, freshErr)
 	}
@@ -1775,15 +1778,20 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	if err != nil || completed.Status != RunStatusCompleted {
 		t.Fatalf("completed=%+v err=%v", completed, err)
 	}
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_decision (
-		  workspace_id, session_id, decision_kind, actor_type, goal_version, plan_version, outcome, rationale
-		) VALUES ($1::uuid, $2::uuid, 'information_gain', 'system', 1, 1,
-		          '{"canonical_changed":true,"gain":{"score":0.2}}'::jsonb,
-		          'Simulate canonical evidence accepted after the latest report.')
-	`, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	canonicalGainDecisionID := uuid.NewString()
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_decision (
+			  id, workspace_id, session_id, decision_kind, actor_type, goal_version, plan_version, outcome, rationale
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 'information_gain', 'system', 1, 1,
+			          '{"canonical_changed":true,"gain":{"score":0.2}}'::jsonb,
+			          'Simulate canonical evidence accepted after the latest report.')
+		`, canonicalGainDecisionID, fixture.workspaceID, fixture.sessionID); err != nil {
+			return err
+		}
+		backfillIntegrationDecisionPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, canonicalGainDecisionID, "information_gain", 1, 1)
+		return nil
+	})
 	staleGate, err := store.EvaluateGate(ctx, fixture.sessionID)
 	if err != nil || !hasGateFinding(staleGate, "report_stale_after_evidence") {
 		t.Fatalf("stale report gate=%+v err=%v", staleGate, err)
@@ -1944,13 +1952,19 @@ func TestEvaluateGateIgnoresReportFromPriorPlanVersion(t *testing.T) {
 	}, DefaultRunConfig("standard")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_report (
-			workspace_id, session_id, revision, content_md, goal_version, plan_version
-		) VALUES ($1::uuid, $2::uuid, 1, '# Old report', 1, 1)
-	`, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	oldReportID := uuid.NewString()
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_report (
+				id, workspace_id, session_id, revision, content_md, goal_version, plan_version
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Old report', 1, 1)
+		`, oldReportID, fixture.workspaceID, fixture.sessionID); err != nil {
+			return err
+		}
+		gv, pv := 1, 1
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, oldReportID, string(ArtifactKindReportRevision), &gv, &pv)
+		return nil
+	})
 	if _, err = pool.Exec(ctx, `UPDATE research_session SET plan_version = 2 WHERE id = $1::uuid`, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
@@ -1993,14 +2007,6 @@ func TestEvaluateGateProjectsActionableEvaluationFeedback(t *testing.T) {
 		t.Fatal(err)
 	}
 	reportID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_report (
-		  id, workspace_id, session_id, revision, content_md, structured,
-		  goal_version, plan_version, author_agent_id
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Report', '{}'::jsonb, 1, 1, $4::uuid)
-	`, reportID, fixture.workspaceID, fixture.sessionID, fixture.reporterID); err != nil {
-		t.Fatal(err)
-	}
 	evaluation := EvaluationProposal{
 		Passed: false, FactualGrounding: 0.45, Coverage: 0.6, AnalyticalDepth: 0.9,
 		SourceQuality: 0.9, ContradictionHandling: 0.9, InstructionAdherence: 0.9, Readability: 0.9,
@@ -2015,25 +2021,40 @@ func TestEvaluateGateProjectsActionableEvaluationFeedback(t *testing.T) {
 		t.Fatal(err)
 	}
 	decisionID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_decision (
-		  id, workspace_id, session_id, decision_kind, actor_type, actor_id,
-		  goal_version, plan_version, inputs, outcome, rationale
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'quality_gate', 'agent', $4::uuid,
-		          1, 1, jsonb_build_object('report_id', $5::text), $6::jsonb, $7)
-	`, decisionID, fixture.workspaceID, fixture.sessionID, fixture.validatorID, reportID, outcome, evaluation.Findings[0]); err != nil {
-		t.Fatal(err)
-	}
 	citationDecisionID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_decision (
-		  id, workspace_id, session_id, decision_kind, actor_type, actor_id,
-		  goal_version, plan_version, inputs, outcome, rationale
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'citation_audit', 'agent', $4::uuid,
-		          1, 1, jsonb_build_object('report_id', $5::text), $6::jsonb, $7)
-	`, citationDecisionID, fixture.workspaceID, fixture.sessionID, fixture.validatorID, reportID, outcome, evaluation.Findings[0]); err != nil {
-		t.Fatal(err)
-	}
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_report (
+			  id, workspace_id, session_id, revision, content_md, structured,
+			  goal_version, plan_version, author_agent_id
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Report', '{}'::jsonb, 1, 1, $4::uuid)
+		`, reportID, fixture.workspaceID, fixture.sessionID, fixture.reporterID); err != nil {
+			return err
+		}
+		gv, pv := 1, 1
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, reportID, string(ArtifactKindReportRevision), &gv, &pv)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_decision (
+			  id, workspace_id, session_id, decision_kind, actor_type, actor_id,
+			  goal_version, plan_version, inputs, outcome, rationale
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 'quality_gate', 'agent', $4::uuid,
+			          1, 1, jsonb_build_object('report_id', $5::text), $6::jsonb, $7)
+		`, decisionID, fixture.workspaceID, fixture.sessionID, fixture.validatorID, reportID, outcome, evaluation.Findings[0]); err != nil {
+			return err
+		}
+		backfillIntegrationDecisionPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, decisionID, "quality_gate", 1, 1)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_decision (
+			  id, workspace_id, session_id, decision_kind, actor_type, actor_id,
+			  goal_version, plan_version, inputs, outcome, rationale
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 'citation_audit', 'agent', $4::uuid,
+			          1, 1, jsonb_build_object('report_id', $5::text), $6::jsonb, $7)
+		`, citationDecisionID, fixture.workspaceID, fixture.sessionID, fixture.validatorID, reportID, outcome, evaluation.Findings[0]); err != nil {
+			return err
+		}
+		backfillIntegrationDecisionPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, citationDecisionID, "citation_audit", 1, 1)
+		return nil
+	})
 
 	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
 	if err != nil {
@@ -2123,23 +2144,29 @@ func TestV5EvaluationDefectsPersistAndReachRemediation(t *testing.T) {
 	}
 	claimID := uuid.NewString()
 	reportID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, claim_text, significance,
-		  confidence, status, goal_version, plan_version
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'claim-alpha', 'The measured result applies inside the operating boundary.', 'high', 0.9, 'supported', 1, 1)
-	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
 	structured := `{"schema_version":1,"title":"Reviewed report","outline":[{"id":"section-alpha","title":"Result","level":1,"children":[]}],"sections":[{"id":"section-alpha","title":"Result","level":1,"markdown":"The measured result applies everywhere without qualification.","citation_ids":[]}],"citations":[],"sources":[],"gaps":[],"conclusion":"The measured result applies everywhere without qualification."}`
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_report (
-		  id, workspace_id, session_id, revision, content_md, structured,
-		  goal_version, plan_version, author_agent_id
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Reviewed report', $4::jsonb, 1, 1, $5::uuid)
-	`, reportID, fixture.workspaceID, fixture.sessionID, structured, fixture.reporterID); err != nil {
-		t.Fatal(err)
-	}
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_claim (
+			  id, workspace_id, session_id, client_key, claim_text, significance,
+			  confidence, status, goal_version, plan_version
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 'claim-alpha', 'The measured result applies inside the operating boundary.', 'high', 0.9, 'supported', 1, 1)
+		`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
+			return err
+		}
+		gv, pv := 1, 1
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, claimID, string(ArtifactKindClaim), &gv, &pv)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_report (
+			  id, workspace_id, session_id, revision, content_md, structured,
+			  goal_version, plan_version, author_agent_id
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Reviewed report', $4::jsonb, 1, 1, $5::uuid)
+		`, reportID, fixture.workspaceID, fixture.sessionID, structured, fixture.reporterID); err != nil {
+			return err
+		}
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, reportID, string(ArtifactKindReportRevision), &gv, &pv)
+		return nil
+	})
 	if _, err = pool.Exec(ctx, `
 		INSERT INTO research_report_claim (report_id, claim_id, section_id, anchor_quote)
 		VALUES ($1::uuid, $2::uuid, 'section-alpha', 'The measured result applies everywhere without qualification.')
@@ -2265,44 +2292,54 @@ func TestEvaluateGateBlocksUnreportedRequiredAnswerAndAuthorSelfReview(t *testin
 	claimID := uuid.NewString()
 	questionID := uuid.NewString()
 	reportID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, claim_text, significance,
-		  confidence, status, goal_version, plan_version
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'required-answer', 'The required answer', 'high', 0.9, 'supported', 1, 1)
-	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_question (
-		  id, workspace_id, session_id, client_key, kind, question, required,
-		  status, priority, impact, uncertainty, novelty, coverage,
-		  goal_version, plan_version, answer_claim_id
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'required-question', 'dimension', 'What is the answer?', true,
-		  'answered', 1, 1, 0.5, 0.5, 1, 1, 1, $4::uuid)
-	`, questionID, fixture.workspaceID, fixture.sessionID, claimID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_report (
-		  id, workspace_id, session_id, revision, content_md, structured,
-		  goal_version, plan_version, author_agent_id
-		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Short', '{"schema_version":1}'::jsonb, 1, 1, $4::uuid)
-	`, reportID, fixture.workspaceID, fixture.sessionID, fixture.agentID); err != nil {
-		t.Fatal(err)
-	}
 	evaluation := `{"passed":true,"factual_grounding":0.9,"coverage":0.9,"analytical_depth":0.9,"source_quality":0.9,"contradiction_handling":0.9,"instruction_adherence":0.9,"readability":0.9,"findings":[]}`
-	for _, kind := range []TaskKind{TaskKindQualityGate, TaskKindCitationAudit} {
-		if _, err = pool.Exec(ctx, `
-			INSERT INTO research_decision (
-			  workspace_id, session_id, decision_kind, actor_type, actor_id,
-			  goal_version, plan_version, inputs, outcome
-			) VALUES ($1::uuid, $2::uuid, $3, 'agent', $4::uuid, 1, 1,
-			  jsonb_build_object('report_id', $5::text), $6::jsonb)
-		`, fixture.workspaceID, fixture.sessionID, kind, fixture.agentID, reportID, evaluation); err != nil {
-			t.Fatal(err)
+	execIntegrationDomainInsert(t, ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_claim (
+			  id, workspace_id, session_id, client_key, claim_text, significance,
+			  confidence, status, goal_version, plan_version
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 'required-answer', 'The required answer', 'high', 0.9, 'supported', 1, 1)
+		`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
+			return err
 		}
-	}
+		gv, pv := 1, 1
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, claimID, string(ArtifactKindClaim), &gv, &pv)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_question (
+			  id, workspace_id, session_id, client_key, kind, question, required,
+			  status, priority, impact, uncertainty, novelty, coverage,
+			  goal_version, plan_version, answer_claim_id
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 'required-question', 'dimension', 'What is the answer?', true,
+			  'answered', 1, 1, 0.5, 0.5, 1, 1, 1, $4::uuid)
+		`, questionID, fixture.workspaceID, fixture.sessionID, claimID); err != nil {
+			return err
+		}
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, questionID, string(ArtifactKindQuestion), &gv, &pv)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_report (
+			  id, workspace_id, session_id, revision, content_md, structured,
+			  goal_version, plan_version, author_agent_id
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Short', '{"schema_version":1}'::jsonb, 1, 1, $4::uuid)
+		`, reportID, fixture.workspaceID, fixture.sessionID, fixture.agentID); err != nil {
+			return err
+		}
+		backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, reportID, string(ArtifactKindReportRevision), &gv, &pv)
+		for _, kind := range []TaskKind{TaskKindQualityGate, TaskKindCitationAudit} {
+			var auditDecisionID string
+			if err := tx.QueryRow(ctx, `
+				INSERT INTO research_decision (
+				  workspace_id, session_id, decision_kind, actor_type, actor_id,
+				  goal_version, plan_version, inputs, outcome
+				) VALUES ($1::uuid, $2::uuid, $3, 'agent', $4::uuid, 1, 1,
+				  jsonb_build_object('report_id', $5::text), $6::jsonb)
+				RETURNING id::text
+			`, fixture.workspaceID, fixture.sessionID, kind, fixture.agentID, reportID, evaluation).Scan(&auditDecisionID); err != nil {
+				return err
+			}
+			backfillIntegrationDecisionPassport(t, ctx, tx, fixture.workspaceID, fixture.sessionID, auditDecisionID, string(kind), 1, 1)
+		}
+		return nil
+	})
 
 	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
 	if err != nil {
@@ -2645,16 +2682,129 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		{`INSERT INTO research_fleet_member (workspace_id, fleet_id, agent_id, role, status, is_lead) VALUES ($1::uuid, $2::uuid, $3::uuid, 'lead', 'active', true)`, []any{fixture.workspaceID, fixture.fleetID, fixture.agentID}},
 		{`INSERT INTO research_fleet_member (workspace_id, fleet_id, agent_id, role, status, is_lead) VALUES ($1::uuid, $2::uuid, $3::uuid, 'reporter', 'active', false)`, []any{fixture.workspaceID, fixture.fleetID, fixture.reporterID}},
 		{`INSERT INTO research_fleet_member (workspace_id, fleet_id, agent_id, role, status, is_lead) VALUES ($1::uuid, $2::uuid, $3::uuid, 'validator', 'active', false)`, []any{fixture.workspaceID, fixture.fleetID, fixture.validatorID}},
-		{`INSERT INTO research_session (id, workspace_id, fleet_id, created_by, title, goal, status, depth_tier) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'Evidence comparison', 'Compare the evidence', 'running', 'standard')`, []any{fixture.sessionID, fixture.workspaceID, fixture.fleetID, fixture.userID}},
 	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin fixture tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
 	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
-			pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
-			pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+		if _, err := tx.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatalf("seed fixture: %v", err)
 		}
 	}
+	if _, err := tx.Exec(ctx, `INSERT INTO research_session (id, workspace_id, fleet_id, created_by, title, goal, status, depth_tier) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'Evidence comparison', 'Compare the evidence', 'running', 'standard')`, fixture.sessionID, fixture.workspaceID, fixture.fleetID, fixture.userID); err != nil {
+		t.Fatalf("seed fixture session: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+		VALUES ($1::uuid, $2::uuid, $3, 0)
+		ON CONFLICT (workspace_id, session_id) DO NOTHING
+	`, fixture.workspaceID, fixture.sessionID, LegacyV1V5CompatPolicy); err != nil {
+		t.Fatalf("seed fixture policy state: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $2::uuid, 'run_session', now(), NULL, NULL)
+	`, fixture.workspaceID, fixture.sessionID); err != nil {
+		t.Fatalf("seed fixture run_session passport: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit fixture tx: %v", err)
+	}
 	return fixture
+}
+
+func backfillIntegrationArtifactPassport(
+	t *testing.T,
+	ctx context.Context,
+	exec interface {
+		Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	},
+	workspaceID, sessionID, entityID, kind string,
+	goalVersion, planVersion *int,
+) {
+	t.Helper()
+	var goalArg, planArg any
+	if goalVersion != nil {
+		goalArg = *goalVersion
+	}
+	if planVersion != nil {
+		planArg = *planVersion
+	}
+	if _, err := exec.Exec(ctx, `
+		SELECT research_artifact_backfill_registered(
+		  $1::uuid, $2::uuid, $3::uuid, $4, now(), $5, $6
+		)
+	`, workspaceID, sessionID, entityID, kind, goalArg, planArg); err != nil {
+		t.Fatalf("backfill %s passport for %s: %v", kind, entityID, err)
+	}
+}
+
+func insertIntegrationTasksWithPassports(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID string,
+	goalVersion, planVersion int,
+	insertSQL string,
+	args []any,
+	taskIDs []string,
+) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, insertSQL, args...); err != nil {
+		t.Fatal(err)
+	}
+	gv, pv := goalVersion, planVersion
+	for _, taskID := range taskIDs {
+		backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, taskID, string(ArtifactKindTask), &gv, &pv)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func execIntegrationDomainInsert(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	fn func(ctx context.Context, tx pgx.Tx) error,
+) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err = fn(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func backfillIntegrationDecisionPassport(
+	t *testing.T,
+	ctx context.Context,
+	exec interface {
+		Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	},
+	workspaceID, sessionID, entityID, decisionKind string,
+	goalVersion, planVersion int,
+) {
+	t.Helper()
+	kind := string(ArtifactKindEvaluationDecision)
+	if decisionKind == "research_method" {
+		kind = string(ArtifactKindMethodDecision)
+	}
+	goal := goalVersion
+	plan := planVersion
+	backfillIntegrationArtifactPassport(t, ctx, exec, workspaceID, sessionID, entityID, kind, &goal, &plan)
 }
 
 func TestStaleResultPreservesEvidenceWithoutAdvancingCurrentPlan(t *testing.T) {

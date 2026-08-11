@@ -393,7 +393,7 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 					"details":      payload,
 				}
 				encoded, _ := json.Marshal(nodePayload)
-				node, insertErr := insertProjectedResearchNode(ctx, h.DB, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
+				node, insertErr := h.insertProjectedResearchNode(ctx, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
 				if insertErr != nil {
 					return insertErr
 				}
@@ -412,7 +412,7 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 			"details":      payload,
 		}
 		encoded, _ := json.Marshal(nodePayload)
-		node, insertErr := insertProjectedResearchNode(ctx, h.DB, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
+		node, insertErr := h.insertProjectedResearchNode(ctx, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
 		if insertErr != nil {
 			return insertErr
 		}
@@ -585,11 +585,17 @@ func valueString(values map[string]any, key string) string {
 	return value
 }
 
-func insertProjectedResearchNode(ctx context.Context, executor dbExecutor, workspaceID, sessionID pgtype.UUID, eventID, nodeType, title, summary, status string, actorAgentID pgtype.UUID, payload []byte) (db.ResearchGraphNode, error) {
+func (h *Handler) insertProjectedResearchNode(ctx context.Context, workspaceID, sessionID pgtype.UUID, eventID, nodeType, title, summary, status string, actorAgentID pgtype.UUID, payload []byte) (db.ResearchGraphNode, error) {
 	lease, ok := researchrun.ReconcileLeaseFromContext(ctx)
 	if !ok || lease.SessionID != uuidToString(sessionID) {
 		return db.ResearchGraphNode{}, researchrun.ErrRunLeaseLost
 	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.ResearchGraphNode{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	query := `
 		INSERT INTO research_graph_node (
 			workspace_id, session_id, node_type, title, summary, status,
@@ -606,7 +612,7 @@ func insertProjectedResearchNode(ctx context.Context, executor dbExecutor, works
 		          actor_agent_id, payload, created_at, updated_at
 	`
 	var node db.ResearchGraphNode
-	err := executor.QueryRow(ctx, query, workspaceID, sessionID, nodeType,
+	err = tx.QueryRow(ctx, query, workspaceID, sessionID, nodeType,
 		strings.TrimSpace(title), summary, status, actorAgentID, payload, eventID,
 		lease.Token, lease.Generation).Scan(
 		&node.ID, &node.WorkspaceID, &node.SessionID, &node.NodeType, &node.Title,
@@ -614,10 +620,10 @@ func insertProjectedResearchNode(ctx context.Context, executor dbExecutor, works
 		&node.CreatedAt, &node.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if leaseErr := assertResearchProjectionLease(ctx, executor, uuidToString(sessionID)); leaseErr != nil {
+		if leaseErr := assertResearchProjectionLease(ctx, tx, uuidToString(sessionID)); leaseErr != nil {
 			return db.ResearchGraphNode{}, leaseErr
 		}
-		err = executor.QueryRow(ctx, `
+		err = tx.QueryRow(ctx, `
 			SELECT id, workspace_id, session_id, node_type, title, summary, status,
 			       actor_agent_id, payload, created_at, updated_at
 			FROM research_graph_node WHERE run_event_id = $1::uuid
@@ -626,6 +632,22 @@ func insertProjectedResearchNode(ctx context.Context, executor dbExecutor, works
 			&node.Summary, &node.Status, &node.ActorAgentID, &node.Payload,
 			&node.CreatedAt, &node.UpdatedAt,
 		)
+		if err != nil {
+			return db.ResearchGraphNode{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return db.ResearchGraphNode{}, err
+		}
+		return node, nil
 	}
-	return node, err
+	if err != nil {
+		return db.ResearchGraphNode{}, err
+	}
+	if err := ensureGraphNodePassportTx(ctx, tx, workspaceID, sessionID, node.ID); err != nil {
+		return db.ResearchGraphNode{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.ResearchGraphNode{}, err
+	}
+	return node, nil
 }

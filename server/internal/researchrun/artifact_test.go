@@ -76,3 +76,34 @@ func TestParseArtifactEntityKindAcceptsRegistered(t *testing.T) {
 		t.Fatalf("kind=%q err=%v", kind, err)
 	}
 }
+
+func TestReciprocalArtifactPassportGuardTriggerNames(t *testing.T) {
+	want := []string{
+		"research_session_artifact_passport_guard",
+		"research_contract_revision_artifact_passport_guard",
+		"research_decision_artifact_passport_guard",
+		"research_question_artifact_passport_guard",
+		"research_task_artifact_passport_guard",
+		"research_task_attempt_artifact_passport_guard",
+		"research_result_artifact_artifact_passport_guard",
+		"research_source_artifact_passport_guard",
+		"research_source_snapshot_artifact_passport_guard",
+		"research_observation_artifact_passport_guard",
+		"research_claim_artifact_passport_guard",
+		"research_claim_evidence_artifact_passport_guard",
+		"research_report_artifact_passport_guard",
+		"research_stage_eval_artifact_passport_guard",
+		"research_message_artifact_passport_guard",
+		"research_product_round_card_artifact_passport_guard",
+		"research_artifact_context_manifest_artifact_passport_guard",
+		"research_run_event_artifact_passport_guard",
+		"research_graph_node_artifact_passport_guard",
+		"research_graph_edge_artifact_passport_guard",
+	}
+	got := ReciprocalArtifactPassportGuardTriggerNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("guard triggers=%v want=%v", got, want)
+	}
+}

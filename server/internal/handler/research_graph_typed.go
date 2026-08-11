@@ -553,6 +553,9 @@ func (h *Handler) mergeNodesAtomic(
 	if err != nil {
 		return db.ResearchGraphNode{}, nil, 0, false, pgErr("failed to create conclusion node", http.StatusInternalServerError)
 	}
+	if err := ensureGraphNodePassportTx(ctx, tx, wsUUID, sessionID, conclusion.ID); err != nil {
+		return db.ResearchGraphNode{}, nil, 0, false, pgErr("failed to register conclusion passport", http.StatusInternalServerError)
+	}
 
 	// Write merged_from edges (input -> conclusion) and mark each input superseded.
 	edgeIDs := make([]string, 0, len(inputIDs))
@@ -566,6 +569,9 @@ func (h *Handler) mergeNodesAtomic(
 		})
 		if eerr != nil {
 			return db.ResearchGraphNode{}, nil, 0, false, pgErr("failed to write merged_from edge", http.StatusInternalServerError)
+		}
+		if err := ensureGraphEdgePassportTx(ctx, tx, wsUUID, sessionID, e.ID); err != nil {
+			return db.ResearchGraphNode{}, nil, 0, false, pgErr("failed to register merge edge passport", http.StatusInternalServerError)
 		}
 		edgeIDs = append(edgeIDs, uuidToString(e.ID))
 

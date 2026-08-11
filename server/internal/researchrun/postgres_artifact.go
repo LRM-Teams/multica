@@ -204,3 +204,33 @@ func registerRunArtifactsAfterInitializationTx(ctx context.Context, tx pgx.Tx, w
 	}
 	return registerInitializedRunArtifactsTx(ctx, tx, workspaceID, sessionID)
 }
+
+func artifactKindForDecision(decisionKind string) ArtifactEntityKind {
+	if decisionKind == "research_method" {
+		return ArtifactKindMethodDecision
+	}
+	return ArtifactKindEvaluationDecision
+}
+
+func int32Ptr(v int32) *int32 {
+	return &v
+}
+
+func ensureDomainArtifactPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind ArtifactEntityKind,
+	workspaceID, sessionID, entityID string,
+	sourceCreatedAt time.Time,
+	goalVersion, planVersion *int32,
+) error {
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID:     workspaceID,
+		SessionID:       sessionID,
+		EntityID:        entityID,
+		Kind:            kind,
+		SourceCreatedAt: &sourceCreatedAt,
+		GoalVersion:     goalVersion,
+		PlanVersion:     planVersion,
+	})
+}

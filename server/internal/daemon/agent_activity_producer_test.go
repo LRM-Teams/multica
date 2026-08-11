@@ -237,7 +237,7 @@ func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
 	var frames []string
-	d.attachWorkspaceRunnerMessageTransport("workspace-1", func(eventType string, _ any) error {
+	attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, _ any) error {
 		frames = append(frames, eventType)
 		return nil
 	})

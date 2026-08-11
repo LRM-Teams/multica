@@ -7,14 +7,6 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// workspaceRunnerMessageTransport is a connection-scoped sender. It carries
-// canonical Message protocol frames only; lifecycle and reminder frames retain
-// their own bounded channels.
-type workspaceRunnerMessageTransport struct {
-	generation uint64
-	send       func(string, any) error
-}
-
 // workspaceRunnerDeliveryDispatcher keeps the Runner socket reader independent
 // from provider startup and Message turns. Deliveries for one Agent remain
 // ordered, while different Agents cannot head-of-line block each other.
@@ -78,33 +70,27 @@ func (d *workspaceRunnerDeliveryDispatcher) drain(agentID string) {
 	}
 }
 
-func (d *Daemon) attachWorkspaceRunnerMessageTransport(workspaceID string, send func(string, any) error) uint64 {
-	if d == nil || workspaceID == "" || send == nil {
-		return 0
-	}
-	d.mu.Lock()
-	if d.runnerMessageGeneration == nil {
-		d.runnerMessageGeneration = make(map[string]uint64)
-	}
-	if d.runnerMessageTransports == nil {
-		d.runnerMessageTransports = make(map[string]workspaceRunnerMessageTransport)
-	}
-	d.runnerMessageGeneration[workspaceID]++
-	generation := d.runnerMessageGeneration[workspaceID]
-	d.runnerMessageTransports[workspaceID] = workspaceRunnerMessageTransport{generation: generation, send: send}
-	d.mu.Unlock()
-	return generation
-}
-
-func (d *Daemon) detachWorkspaceRunnerMessageTransport(workspaceID string, generation uint64) {
-	if d == nil || workspaceID == "" || generation == 0 {
+func (d *Daemon) attachWorkspaceRunner(runner *WorkspaceRunner) {
+	if d == nil || runner == nil || runner.config.WorkspaceID == "" {
 		return
 	}
-	d.mu.Lock()
-	if current := d.runnerMessageTransports[workspaceID]; current.generation == generation {
-		delete(d.runnerMessageTransports, workspaceID)
+	d.workspaceRunnerMu.Lock()
+	if d.workspaceRunners == nil {
+		d.workspaceRunners = make(map[string]*WorkspaceRunner)
 	}
-	d.mu.Unlock()
+	d.workspaceRunners[runner.config.WorkspaceID] = runner
+	d.workspaceRunnerMu.Unlock()
+}
+
+func (d *Daemon) detachWorkspaceRunner(runner *WorkspaceRunner) {
+	if d == nil || runner == nil {
+		return
+	}
+	d.workspaceRunnerMu.Lock()
+	if d.workspaceRunners[runner.config.WorkspaceID] == runner {
+		delete(d.workspaceRunners, runner.config.WorkspaceID)
+	}
+	d.workspaceRunnerMu.Unlock()
 }
 
 func (d *Daemon) sendAgentMessageRunnerFrame(agentID, eventType string, payload any) bool {
@@ -113,8 +99,8 @@ func (d *Daemon) sendAgentMessageRunnerFrame(agentID, eventType string, payload 
 
 // sendWorkspaceRunnerAgentFrame resolves an Agent through its resident runtime
 // and sends one frame on that Workspace's current serialized Runner writer.
-// Message delivery, launch reconciliation, and Activity share this transport
-// without falling back to the legacy Task wakeup socket.
+// Message delivery, launch reconciliation, and Activity share this current
+// Runner connection without falling back to the legacy Task wakeup socket.
 func (d *Daemon) sendWorkspaceRunnerAgentFrame(agentID, eventType string, payload any) bool {
 	if d == nil || agentID == "" {
 		return false
@@ -127,10 +113,12 @@ func (d *Daemon) sendWorkspaceRunnerAgentFrame(agentID, eventType string, payloa
 	}
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	transport := d.runnerMessageTransports[workspaceID]
 	d.mu.Unlock()
-	if transport.send == nil {
+	d.workspaceRunnerMu.RLock()
+	runner := d.workspaceRunners[workspaceID]
+	d.workspaceRunnerMu.RUnlock()
+	if runner == nil {
 		return false
 	}
-	return transport.send(eventType, payload) == nil
+	return runner.sendOnCurrentConnection(eventType, payload) == nil
 }

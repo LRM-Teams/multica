@@ -102,22 +102,22 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
-	messageCoordinatorMu    sync.RWMutex
-	messageCoordinators     map[string]*MessageCoordinator
-	messageDraftStore       *MessageDraftStore
-	messageRuntimeIDs       map[string]string
-	agentProxyCredentialMu  sync.RWMutex
-	agentProxyCredentials   map[[32]byte]authenticatedAgentProxy
-	messageSendMu           sync.Mutex
-	messageSends            map[string]int
-	agentProcessManagers    map[string]*agentProcessManager
-	agentActivityProducers  map[string]*agentActivityProducer
-	runnerMessageTransports map[string]workspaceRunnerMessageTransport
-	runnerMessageGeneration map[string]uint64
-	lifecycleDiagnostics    *lifecycleDiagnosticWriter
-	machineUpgradeLog       *machineUpgradeEventLog
-	runnerInstanceID        string
-	runnerDiagnostics       *runnerDiagnosticRegistry
+	messageCoordinatorMu   sync.RWMutex
+	messageCoordinators    map[string]*MessageCoordinator
+	messageDraftStore      *MessageDraftStore
+	messageRuntimeIDs      map[string]string
+	agentProxyCredentialMu sync.RWMutex
+	agentProxyCredentials  map[[32]byte]authenticatedAgentProxy
+	messageSendMu          sync.Mutex
+	messageSends           map[string]int
+	agentProcessManagers   map[string]*agentProcessManager
+	agentActivityProducers map[string]*agentActivityProducer
+	workspaceRunnerMu      sync.RWMutex
+	workspaceRunners       map[string]*WorkspaceRunner
+	lifecycleDiagnostics   *lifecycleDiagnosticWriter
+	machineUpgradeLog      *machineUpgradeEventLog
+	runnerInstanceID       string
+	runnerDiagnostics      *runnerDiagnosticRegistry
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -446,8 +446,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		messageRuntimeIDs:         make(map[string]string),
 		agentProcessManagers:      make(map[string]*agentProcessManager),
 		agentActivityProducers:    make(map[string]*agentActivityProducer),
-		runnerMessageTransports:   make(map[string]workspaceRunnerMessageTransport),
-		runnerMessageGeneration:   make(map[string]uint64),
+		workspaceRunners:          make(map[string]*WorkspaceRunner),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		machineUpgradeGeneration:  uuid.NewString(),
 		runnerInstanceID:          uuid.NewString(),

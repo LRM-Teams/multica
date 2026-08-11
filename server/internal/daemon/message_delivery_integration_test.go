@@ -357,8 +357,11 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() { errCh <- runner.runConnection(ctx) }()
+	done := make(chan struct{})
+	go func() {
+		runner.Run(ctx)
+		close(done)
+	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 && time.Now().Before(deadline) {
 		runtime.Gosched()
@@ -366,8 +369,8 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 	if hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 {
 		cancel()
 		select {
-		case err := <-errCh:
-			t.Fatalf("Workspace Runner did not connect: %v", err)
+		case <-done:
+			t.Fatal("Workspace Runner did not connect")
 		case <-time.After(time.Second):
 			t.Fatal("Workspace Runner did not connect")
 		}
@@ -376,7 +379,7 @@ func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub
 		hub.CloseWorkspaceRunner(daemonID, workspaceID, d.runnerInstanceID)
 		cancel()
 		select {
-		case <-errCh:
+		case <-done:
 		case <-time.After(2 * time.Second):
 			t.Error("Workspace Runner did not stop")
 		}

@@ -104,6 +104,8 @@ func (runner *WorkspaceRunner) Run(ctx context.Context) {
 	if runner == nil || runner.daemon == nil {
 		return
 	}
+	runner.daemon.attachWorkspaceRunner(runner)
+	defer runner.daemon.detachWorkspaceRunner(runner)
 	backoff := time.Second
 	for ctx.Err() == nil {
 		if err := runner.runConnection(ctx); err != nil && ctx.Err() == nil && runner.daemon.logger != nil {
@@ -131,6 +133,26 @@ type workspaceRunnerConnection struct {
 	write   func(string, any) error
 	close   func()
 	once    sync.Once
+
+	deliveries *workspaceRunnerDeliveryDispatcher
+}
+
+func (runner *WorkspaceRunner) sendOnConnection(connection *workspaceRunnerConnection, eventType string, payload any) error {
+	runner.connectionMu.Lock()
+	defer runner.connectionMu.Unlock()
+	if runner.connection != connection {
+		return errors.New("Workspace Runner connection is stale")
+	}
+	return connection.Write(eventType, payload)
+}
+
+func (runner *WorkspaceRunner) sendOnCurrentConnection(eventType string, payload any) error {
+	runner.connectionMu.Lock()
+	defer runner.connectionMu.Unlock()
+	if runner.connection == nil {
+		return errors.New("Workspace Runner connection is unavailable")
+	}
+	return runner.connection.Write(eventType, payload)
 }
 
 func (connection *workspaceRunnerConnection) Write(eventType string, payload any) error {

@@ -128,6 +128,26 @@ func TestDaemonStartsWorkspaceRunnerWithoutOwningSocketInternals(t *testing.T) {
 	}
 }
 
+func TestDaemonHasNoWorkspaceRunnerTransportOrGenerationMaps(t *testing.T) {
+	for _, path := range []string{"daemon.go", "workspace_runner_delivery.go"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{
+			"runnerMessageTransports",
+			"runnerMessageGeneration",
+			"workspaceRunnerMessageTransport",
+			"attachWorkspaceRunnerMessageTransport",
+			"detachWorkspaceRunnerMessageTransport",
+		} {
+			if strings.Contains(string(raw), forbidden) {
+				t.Fatalf("%s still contains obsolete transport ownership %q", path, forbidden)
+			}
+		}
+	}
+}
+
 func TestWorkspaceRunnerOwnsLocalStateAndSharesMachineDependencies(t *testing.T) {
 	d := &Daemon{}
 	attachments := newLocalAgentAttachmentRegistry(t.TempDir(), nil)

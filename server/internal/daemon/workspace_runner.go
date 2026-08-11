@@ -100,7 +100,9 @@ func (d *Daemon) workspaceAgentActivityProducer(workspaceID string) *agentActivi
 func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnection, conn *websocket.Conn) error {
 	d := runner.daemon
 	workspaceID := connection.workspaceID
-	writeFrame := connection.Write
+	writeFrame := func(eventType string, payload any) error {
+		return runner.sendOnConnection(connection, eventType, payload)
+	}
 	failConnection := func(err error) {
 		if err == nil {
 			return
@@ -110,13 +112,11 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 		}
 		connection.Close()
 	}
-	deliveryDispatcher := newWorkspaceRunnerDeliveryDispatcher(connection.ctx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
+	connection.deliveries = newWorkspaceRunnerDeliveryDispatcher(connection.ctx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
 		if err := d.handleWorkspaceRunnerDelivery(deliveryCtx, workspaceID, delivery, writeFrame); err != nil {
 			failConnection(err)
 		}
 	})
-	messageTransportGeneration := d.attachWorkspaceRunnerMessageTransport(workspaceID, writeFrame)
-	defer d.detachWorkspaceRunnerMessageTransport(workspaceID, messageTransportGeneration)
 	producer := d.workspaceAgentActivityProducer(workspaceID)
 	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && d.logger != nil {
@@ -220,7 +220,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {
 				continue
 			}
-			deliveryDispatcher.Enqueue(delivery)
+			connection.deliveries.Enqueue(delivery)
 		case protocol.EventAgentRecoveryPage:
 			var page protocol.AgentRecoveryPage
 			if json.Unmarshal(message.Payload, &page) != nil {

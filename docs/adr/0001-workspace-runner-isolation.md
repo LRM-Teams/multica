@@ -21,3 +21,11 @@ serialized frame writer. Reconnect replaces and closes the prior connection
 context before installing a new writer. Socket callbacks remain private Runner
 implementation details; there is no separately exposed `RunnerTransport`
 module.
+
+Each live Runner connection also owns its per-Agent Delivery dispatcher and
+current-socket Message callbacks. Deliveries are FIFO for one Agent and may run
+concurrently across different Agents. A callback is valid only while its exact
+connection remains current; replacement fences the old callback before the new
+writer becomes externally addressable. Daemon code may resolve the current
+Runner by Workspace, but it does not keep a parallel transport or generation
+map.

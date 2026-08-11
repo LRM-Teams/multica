@@ -218,7 +218,7 @@ func TestDeliveryRepairsCoordinatorFromDurableResidency(t *testing.T) {
 	}
 
 	var recovery protocol.AgentRecoveryRequest
-	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(eventType string, payload any) error {
+	attachTestWorkspaceRunner(t, d, workspaceID, func(eventType string, payload any) error {
 		if eventType == protocol.EventAgentRecoveryRequest {
 			recovery = payload.(protocol.AgentRecoveryRequest)
 		}
@@ -322,7 +322,7 @@ func TestDeliveryDoesNotRepairCoordinatorForDetachedAgent(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerMessageTransportFencesReplacedConnection(t *testing.T) {
+func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
 	d := New(Config{}, nil)
 	d.messageCoordinatorMu.Lock()
 	d.messageRuntimeIDs["agent-1"] = "runtime-1"
@@ -332,28 +332,36 @@ func TestWorkspaceRunnerMessageTransportFencesReplacedConnection(t *testing.T) {
 	d.mu.Unlock()
 
 	var first, second int
-	firstGeneration := d.attachWorkspaceRunnerMessageTransport("workspace-1", func(string, any) error {
+	runner, firstConnection := attachTestWorkspaceRunner(t, d, "workspace-1", func(string, any) error {
 		first++
 		return nil
 	})
-	secondGeneration := d.attachWorkspaceRunnerMessageTransport("workspace-1", func(string, any) error {
+	staleSend := func() error {
+		return runner.sendOnConnection(firstConnection, "agent:recovery:request", map[string]any{"request": 0})
+	}
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	secondConnection := &workspaceRunnerConnection{workspaceID: "workspace-1", ctx: secondCtx, cancel: secondCancel, write: func(string, any) error {
 		second++
 		return nil
-	})
-	d.detachWorkspaceRunnerMessageTransport("workspace-1", firstGeneration)
+	}, close: func() {}}
+	runner.replaceConnection(secondConnection)
+	defer runner.releaseConnection(secondConnection)
+	if err := staleSend(); err == nil {
+		t.Fatal("callback from replaced connection remained writable")
+	}
 	if !d.sendAgentMessageRunnerFrame("agent-1", "agent:recovery:request", map[string]any{"request": 1}) {
-		t.Fatal("current Runner transport did not receive Message frame")
+		t.Fatal("current Runner connection did not receive Message frame")
 	}
 	if first != 0 || second != 1 {
-		t.Fatalf("Message transport delivery first=%d second=%d, want 0/1", first, second)
+		t.Fatalf("Message frame delivery first=%d second=%d, want 0/1", first, second)
 	}
-	d.detachWorkspaceRunnerMessageTransport("workspace-1", secondGeneration)
+	d.detachWorkspaceRunner(runner)
 	if d.sendAgentMessageRunnerFrame("agent-1", "agent:recovery:request", nil) {
-		t.Fatal("detached Runner transport accepted Message frame")
+		t.Fatal("detached Runner accepted Message frame")
 	}
 }
 
-func TestAgentMessageRecoveryUsesWorkspaceRunnerTransport(t *testing.T) {
+func TestAgentMessageRecoveryUsesCurrentWorkspaceRunnerConnection(t *testing.T) {
 	d := New(Config{}, nil)
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
@@ -369,7 +377,7 @@ func TestAgentMessageRecoveryUsesWorkspaceRunnerTransport(t *testing.T) {
 
 	var eventType string
 	var request protocol.AgentRecoveryRequest
-	d.attachWorkspaceRunnerMessageTransport("workspace-1", func(gotType string, payload any) error {
+	attachTestWorkspaceRunner(t, d, "workspace-1", func(gotType string, payload any) error {
 		eventType = gotType
 		request = payload.(protocol.AgentRecoveryRequest)
 		return nil
@@ -392,7 +400,7 @@ func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
 	requests := 0
 	statuses := 0
 	sessions := 0
-	d.attachWorkspaceRunnerMessageTransport("workspace-1", func(eventType string, _ any) error {
+	attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, _ any) error {
 		switch eventType {
 		case protocol.EventAgentRecoveryRequest:
 			requests++

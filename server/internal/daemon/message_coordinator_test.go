@@ -324,7 +324,7 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
-	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(string, any) error { return nil })
+	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	producer := d.workspaceAgentActivityProducer(workspaceID)
 	activities := make(chan protocol.AgentActivityPayload, 8)
 	producer.AttachTransport(func(activity protocol.AgentActivityPayload) { activities <- activity })
@@ -397,7 +397,7 @@ func TestResidentMessageTurnErrorDoesNotAutoHandoffPending(t *testing.T) {
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
-	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(string, any) error { return nil })
+	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	d.messageCoordinatorMu.RLock()
 	coordinator := d.messageCoordinators[agentID]
 	d.messageCoordinatorMu.RUnlock()

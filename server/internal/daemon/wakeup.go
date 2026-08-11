@@ -113,15 +113,7 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	if token := d.client.Token(); token != "" {
 		headers.Set("Authorization", "Bearer "+token)
 	}
-	if d.client.platform != "" {
-		headers.Set("X-Client-Platform", d.client.platform)
-	}
-	if d.client.version != "" {
-		headers.Set("X-Client-Version", d.client.version)
-	}
-	if d.client.os != "" {
-		headers.Set("X-Client-OS", d.client.os)
-	}
+	d.client.addIdentityHeaders(headers)
 
 	dialer := taskWakeupDialer()
 	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
@@ -589,14 +581,14 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 			if err := d.handleReminderProjectionReplayEnd(payload); err != nil {
 				return err
 			}
-		case protocol.EventDaemonListFilesRequest:
+		case protocol.EventAgentWorkspaceList:
 			var req protocol.ListWorkdirFilesRequestPayload
 			if err := json.Unmarshal(msg.Payload, &req); err != nil {
 				d.logger.Debug("list files request invalid payload", "error", err)
 				continue
 			}
 			d.handleListFilesRequest(req, writes)
-		case protocol.EventDaemonReadFileRequest:
+		case protocol.EventAgentWorkspaceRead:
 			var req protocol.ReadWorkdirFileRequestPayload
 			if err := json.Unmarshal(msg.Payload, &req); err != nil {
 				d.logger.Debug("read file request invalid payload", "error", err)

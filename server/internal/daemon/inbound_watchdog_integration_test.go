@@ -236,6 +236,44 @@ func TestInboundWatchdogRuntimeSetChangeCleansUp(t *testing.T) {
 	}
 }
 
+func TestTaskWakeupConnectionSendsComputerGeneration(t *testing.T) {
+	headerCh := make(chan string, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headerCh <- r.Header.Get("X-Computer-Generation")
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	d := New(Config{
+		ServerBaseURL:      srv.URL,
+		HeartbeatInterval:  time.Hour,
+		InboundWatchdog:    time.Hour,
+		WorkspacesRoot:     t.TempDir(),
+		ComputerGeneration: 33,
+	}, testDiscardLogger())
+	d.runtimeIndex["rt-1"] = Runtime{ID: "rt-1", WorkspaceID: "ws-1"}
+	runtimeSetCh, unsub := d.runtimeSet.Subscribe()
+	defer unsub()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = d.runTaskWakeupConnection(ctx, []string{"rt-1"}, make(chan taskWakeup, 1), runtimeSetCh)
+
+	select {
+	case got := <-headerCh:
+		if got != "33" {
+			t.Fatalf("X-Computer-Generation = %q, want 33", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("task wakeup handshake was not received")
+	}
+}
+
 func TestDurationFromEnvInboundWatchdogDefaultAndDisable(t *testing.T) {
 	// LoadConfig also resolves agents from PATH; this locks the same
 	// durationFromEnv wiring used for MULTICA_DAEMON_INBOUND_WATCHDOG.

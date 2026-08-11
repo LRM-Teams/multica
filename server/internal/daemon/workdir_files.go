@@ -102,7 +102,7 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 	root, target, err := confinedWorkdirPath(d.cfg.WorkspacesRoot, req.RelPath, req.FilePath)
 	if err != nil {
 		resp.Error = "workspaces root unavailable"
-		d.sendDaemonFrame(protocol.EventDaemonReadFileResponse, resp, req.RequestID, writes)
+		d.sendDaemonFrame(protocol.EventAgentWorkspaceFileContent, resp, req.RequestID, writes)
 		return
 	}
 
@@ -157,7 +157,7 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 		}
 	}
 
-	d.sendDaemonFrame(protocol.EventDaemonReadFileResponse, resp, req.RequestID, writes)
+	d.sendDaemonFrame(protocol.EventAgentWorkspaceFileContent, resp, req.RequestID, writes)
 }
 
 func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayload, writes chan<- []byte) {
@@ -279,7 +279,7 @@ func (d *Daemon) handleListFilesRequest(req protocol.ListWorkdirFilesRequestPayl
 	if err != nil {
 		return
 	}
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventDaemonListFilesResponse, Payload: payload})
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentWorkspaceFileTree, Payload: payload})
 	if err != nil {
 		return
 	}

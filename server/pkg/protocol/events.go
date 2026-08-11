@@ -166,16 +166,16 @@ const (
 	EventSandboxJobAvailable    = "sandbox:job_available"
 	EventSandboxInstanceCreated = "sandbox:instance_created"
 	EventSandboxInstanceUpdated = "sandbox:instance_updated"
-	// Workdir file-tree RPC over the daemon wakeup socket: the server pushes a
-	// request, the daemon walks the project's local workdir and replies with a
-	// flat node list. Correlated by RequestID. See protocol.ListWorkdirFiles*.
-	EventDaemonListFilesRequest  = "daemon:list_files_request"
-	EventDaemonListFilesResponse = "daemon:list_files_response"
-	// Workdir single-file read RPC (preview): server pushes a request, the
-	// daemon reads one file from the project workdir and replies with its
-	// text content. Correlated by RequestID. See protocol.ReadWorkdirFile*.
-	EventDaemonReadFileRequest  = "daemon:read_file_request"
-	EventDaemonReadFileResponse = "daemon:read_file_response"
+	// Agent Workspace file-tree RPC over the Computer socket. These event names
+	// match Raft's Computer protocol: the server asks for a local workspace tree
+	// and the Computer replies on the same persistent connection. Correlated by
+	// RequestID. See protocol.ListWorkdirFiles*.
+	EventAgentWorkspaceList     = "agent:workspace:list"
+	EventAgentWorkspaceFileTree = "agent:workspace:file_tree"
+	// Agent Workspace single-file read RPC (preview), also matching Raft's
+	// Computer protocol. Correlated by RequestID. See protocol.ReadWorkdirFile*.
+	EventAgentWorkspaceRead        = "agent:workspace:read"
+	EventAgentWorkspaceFileContent = "agent:workspace:file_content"
 	// Workdir single-file write RPC: server pushes a bounded UTF-8 text write,
 	// daemon writes inside the confined workdir root and replies with a content
 	// hash or conflict/error. Correlated by RequestID.

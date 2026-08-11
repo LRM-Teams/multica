@@ -28,6 +28,20 @@ type WorkspaceRunnerAgentDetachPayload agentAttachmentPayload
 // correlated detach command.
 type WorkspaceRunnerAgentDetachedPayload agentAttachmentPayload
 
+// WorkspaceRunnerAttachmentReplayRequest and Ack advance only cursors for
+// Runtimes authenticated on this Runner's fixed Workspace connection.
+type WorkspaceRunnerAttachmentReplayRequest struct {
+	RuntimeCursors map[string]int64 `json:"runtimeCursors"`
+}
+
+type WorkspaceRunnerAttachmentReplayEnd struct {
+	RuntimeCursors map[string]int64 `json:"runtimeCursors"`
+}
+
+type WorkspaceRunnerAttachmentReplayAck struct {
+	RuntimeCursors map[string]int64 `json:"runtimeCursors"`
+}
+
 func (payload WorkspaceRunnerAgentAttachPayload) Validate() error {
 	return validateAgentAttachmentPayload(agentAttachmentPayload(payload))
 }
@@ -42,6 +56,27 @@ func (payload WorkspaceRunnerAgentDetachPayload) Validate() error {
 
 func (payload WorkspaceRunnerAgentDetachedPayload) Validate() error {
 	return validateAgentAttachmentPayload(agentAttachmentPayload(payload))
+}
+
+func (payload WorkspaceRunnerAttachmentReplayRequest) Validate() error {
+	return validateAttachmentReplayCursors(payload.RuntimeCursors)
+}
+
+func (payload WorkspaceRunnerAttachmentReplayEnd) Validate() error {
+	return validateAttachmentReplayCursors(payload.RuntimeCursors)
+}
+
+func (payload WorkspaceRunnerAttachmentReplayAck) Validate() error {
+	return validateAttachmentReplayCursors(payload.RuntimeCursors)
+}
+
+func validateAttachmentReplayCursors(cursors map[string]int64) error {
+	for runtimeID, cursor := range cursors {
+		if err := validateRequiredIDs(runtimeID); err != nil || cursor < 0 {
+			return fmt.Errorf("invalid Attachment replay cursor")
+		}
+	}
+	return nil
 }
 
 func validateAgentAttachmentPayload(payload agentAttachmentPayload) error {

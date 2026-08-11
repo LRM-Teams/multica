@@ -9,10 +9,11 @@ import (
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
-// MinWorkspaceRunnerProtocolCLIVersion is the first release that speaks the
-// hard-cut Runner Activity protocol. Older daemons must not enter a connection
-// where frame names and Activity ownership have changed.
-const MinWorkspaceRunnerProtocolCLIVersion = "0.4.13"
+// MinWorkspaceRunnerProtocolCLIVersion is the first release line for the
+// coordinated Workspace Runner Attachment hard cut. Ready validation also
+// requires the Attachment capability, which fences prerelease builds from the
+// same release line that predate the cut.
+const MinWorkspaceRunnerProtocolCLIVersion = "0.4.24"
 
 func (h *Handler) DaemonWebSocket(w http.ResponseWriter, r *http.Request) {
 	if h.DaemonHub == nil {

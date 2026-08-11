@@ -12,11 +12,18 @@ export interface ResearchD5Summary {
 const STABLE_LEVELS = new Set(["l", "xl", "xxl"]);
 const STOP_STATUSES = new Set(["abandoned", "deprecated", "failed", "superseded", "archived"]);
 
+type ResearchD5SummaryNode = Pick<TypedGraphNode, "id"> &
+  Partial<Pick<TypedGraphNode, "level" | "status" | "node_type">> & {
+  cluster_id?: TypedGraphNode["cluster_id"];
+};
+type ResearchD5SummaryCluster = Pick<TypedGraphCluster, "id" | "cluster_type"> &
+  Partial<TypedGraphCluster>;
+
 export function summarizeTypedGraph(
-  nodes: readonly TypedGraphNode[],
+  nodes: readonly ResearchD5SummaryNode[],
   options?: {
     totalNodeCount?: number | null;
-    clusters?: readonly TypedGraphCluster[];
+    clusters?: readonly ResearchD5SummaryCluster[];
   },
 ): ResearchD5Summary {
   let stableResults = 0;

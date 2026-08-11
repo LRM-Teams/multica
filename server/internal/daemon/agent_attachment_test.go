@@ -17,8 +17,20 @@ func (*fakeAgentAttachmentRegistry) Resolve(string, string) (AgentAttachment, bo
 
 func (*fakeAgentAttachmentRegistry) List(string) []AgentAttachment { return nil }
 
-func (*fakeAgentAttachmentRegistry) RecoveryState(string) AgentAttachmentRecoveryState {
-	return AgentAttachmentRecoveryState{}
+func (*fakeAgentAttachmentRegistry) WorkspaceIDs() []string { return nil }
+
+func (*fakeAgentAttachmentRegistry) DetachedAgentIDs() []string { return nil }
+
+func (*fakeAgentAttachmentRegistry) RecoveryState(AgentAttachmentRuntimeSet) (AgentAttachmentRecoveryState, error) {
+	return AgentAttachmentRecoveryState{}, nil
+}
+
+func (*fakeAgentAttachmentRegistry) AdvanceRecovery(AgentAttachmentRuntimeSet, []AgentAttachmentRecoveryCursor) error {
+	return nil
+}
+
+func (*fakeAgentAttachmentRegistry) Reconcile(AgentAttachmentRuntimeSet) ([]AgentAttachmentChange, error) {
+	return nil, nil
 }
 
 var _ AgentAttachmentRegistry = (*fakeAgentAttachmentRegistry)(nil)
@@ -50,6 +62,22 @@ func TestAgentAttachmentEventValidation(t *testing.T) {
 				t.Fatal("Validate() accepted invalid event")
 			}
 		})
+	}
+}
+
+func TestAgentAttachmentRuntimeSetValidation(t *testing.T) {
+	valid := AgentAttachmentRuntimeSet{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1", "runtime-2"}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate(): %v", err)
+	}
+	for _, scope := range []AgentAttachmentRuntimeSet{
+		{},
+		{WorkspaceID: "workspace-1", RuntimeIDs: []string{""}},
+		{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1", "runtime-1"}},
+	} {
+		if err := scope.Validate(); err == nil {
+			t.Fatalf("Validate() accepted invalid Runtime set: %+v", scope)
+		}
 	}
 }
 

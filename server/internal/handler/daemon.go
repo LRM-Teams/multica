@@ -1168,7 +1168,23 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 		}
 	}
 	ack, _, err := h.processHeartbeat(ctx, rt, payload.SupportsBatchImport, payload.SupportsMemoryCuration, payload.ActiveMemoryCurationRunID, payload.UpdateObservation)
-	return ack, err
+	if err != nil || ack == nil {
+		return ack, err
+	}
+	// A capable current Workspace Runner receives managed launch commands on
+	// its fenced socket. Do not also return the legacy first-start envelope on
+	// the heartbeat: both paths share the same durable intent, but only one may
+	// be active for a given connection generation.
+	if h.DaemonHub != nil && h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
+		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
+			return nil, err
+		}
+		if err := h.dispatchPendingRunnerStops(ctx, identity); err != nil {
+			return nil, err
+		}
+		ack.PendingAgentStartIntents = nil
+	}
+	return ack, nil
 }
 
 // recordHeartbeat marks the runtime as alive. When LivenessStore is available

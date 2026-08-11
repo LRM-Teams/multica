@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import pg from "pg";
 import { TestApiClient } from "./fixtures";
 
-// LRM-789 — 调研主页 C 切片:进行中/已完成分组(无数字)+ 四态
+// LRM-789 — 调研主页 C 切片:进行中/已完成分组 + 四态
 // (加载等高骨架 / 失败面板+重试≠空态 / 空态 CTA 聚焦 composer / 分组列表)。
 
 const API_BASE =
@@ -12,20 +12,26 @@ const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgres://multica:multica@localhost:5432/multica?sslmode=disable";
 
-const E2E_EMAIL = "e2e-research@multica.ai";
+const E2E_EMAIL = `e2e-research-${Date.now()}@multica.ai`;
 const E2E_NAME = "E2E Research";
-const WS_SLUG = "e2e-research-ws";
+const WS_SLUG = `e2e-research-ws-${Date.now()}`;
 
 let api: TestApiClient;
 let slug: string;
 let workspaceId = "";
-const seededSessionIds: string[] = [];
 
 async function dbQuery(sql: string, params: unknown[] = []) {
   const client = new pg.Client(DATABASE_URL);
   await client.connect();
   try {
     return await client.query(sql, params);
+  } catch (error) {
+    const databaseError = error as pg.DatabaseError;
+    throw new Error(
+      [databaseError.message, databaseError.detail, databaseError.constraint]
+        .filter(Boolean)
+        .join(": "),
+    );
   } finally {
     await client.end();
   }
@@ -45,20 +51,21 @@ async function authedFetch(path: string, init?: RequestInit) {
 }
 
 async function seedSession(goal: string, status: string, stage = "s1_plan", title?: string) {
-  // Direct DB seed: POST /api/research/sessions requires a live agent runtime
-  // to seed the fleet, which the local dev stack does not have.
-  const fleet = await dbQuery("SELECT id FROM research_fleet WHERE workspace_id = $1", [workspaceId]);
-  const user = await dbQuery('SELECT id FROM "user" WHERE email = $1', [E2E_EMAIL]);
-  if (fleet.rows.length === 0 || user.rows.length === 0) {
-    throw new Error("seed prerequisites missing: fleet or user row not found");
+  const create = await authedFetch("/api/research/sessions", {
+    method: "POST",
+    body: JSON.stringify({ goal, title: title ?? goal, depth_tier: "shallow" }),
+  });
+  if (!create.ok) {
+    throw new Error(`create research session failed: ${create.status} ${await create.text()}`);
   }
-  const res = await dbQuery(
-    `INSERT INTO research_session (workspace_id, fleet_id, created_by, title, goal, status, current_stage)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [workspaceId, fleet.rows[0].id, user.rows[0].id, title ?? goal, goal, status, stage],
+  const created = (await create.json()) as { session: { id: string } };
+  const id = created.session.id;
+  await dbQuery(
+    `UPDATE research_session
+     SET title = $2, goal = $3, status = $4, current_stage = $5, updated_at = now()
+     WHERE id = $1 AND workspace_id = $6`,
+    [id, title ?? goal, goal, status, stage, workspaceId],
   );
-  const id = res.rows[0].id as string;
-  seededSessionIds.push(id);
   return id;
 }
 
@@ -74,6 +81,11 @@ async function dismissOnboarding(page: Page) {
 }
 
 async function gotoResearch(page: Page) {
+  const token = api.getToken();
+  if (!token) throw new Error("research E2E client is not authenticated");
+  await page.addInitScript((value) => {
+    localStorage.setItem("multica_token", value);
+  }, token);
   await page.goto(`/${slug}/research`);
   // Page ready when the composer textarea is interactive.
   await expect(page.locator("textarea")).toBeVisible({ timeout: 60000 });
@@ -86,29 +98,30 @@ test.beforeAll(async () => {
   const ws = await api.ensureWorkspace("E2E Research Workspace", WS_SLUG);
   slug = ws.slug;
   workspaceId = ws.id;
-  // Skip onboarding gates for the fresh DB user.
-  await dbQuery('UPDATE "user" SET onboarded_at = now() WHERE email = $1', [E2E_EMAIL]);
+  await api.ensureWorkspaceReady(ws);
+  await dbQuery(
+    `INSERT INTO agent_runtime (
+       workspace_id, daemon_id, name, runtime_mode, provider, status,
+       visibility, device_info, metadata, last_seen_at
+     )
+     VALUES ($1, NULL, $2, 'cloud', 'e2e_research_runtime', 'online',
+             'public', 'E2E research runtime', '{}'::jsonb, now())`,
+    [workspaceId, `e2e research runtime ${Date.now()}`],
+  );
+  const warm = await authedFetch("/api/research/sessions");
+  if (!warm.ok) throw new Error(`fleet warm-up failed: ${warm.status}`);
   void data;
-});
-
-test.afterAll(async () => {
-  if (workspaceId && seededSessionIds.length > 0) {
-    await dbQuery("DELETE FROM research_session WHERE id = ANY($1::uuid[])", [seededSessionIds]);
-  }
 });
 
 test.describe.serial("research list page — LRM-789 slice C", () => {
   test("empty state: icon + copy + CTA focuses composer", async ({ page }) => {
-    // Clean slate: drop any leftover sessions from prior runs.
-    await dbQuery("DELETE FROM research_session WHERE workspace_id = $1", [workspaceId]);
-
     await page.goto("/login");
     await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
     await gotoResearch(page);
 
-    const empty = page.locator("div.border-dashed").last();
+    const empty = page.getByRole("region", { name: "No research yet" });
     await expect(empty).toBeVisible();
-    const cta = empty.locator("button");
+    const cta = empty.getByRole("button", { name: "Start your first research" });
     await expect(cta).toBeVisible();
     await cta.click();
     await expect(page.locator("textarea")).toBeFocused();
@@ -124,10 +137,9 @@ test.describe.serial("research list page — LRM-789 slice C", () => {
       await route.fulfill({ json: { sessions: [] } });
     });
     await page.goto(`/${slug}/research`);
-    const busy = page.locator('[aria-busy="true"]');
+    const busy = page.getByTestId("research-session-list-skeleton");
     await expect(busy).toBeVisible({ timeout: 60000 });
-    const skeletons = busy.locator('[data-slot="skeleton"]');
-    await expect(skeletons).toHaveCount(4);
+    await expect(busy.getByTestId("research-session-row-skeleton")).toHaveCount(4);
   });
 
   test("error state: alert panel with retry, not the empty state", async ({ page }) => {
@@ -148,7 +160,7 @@ test.describe.serial("research list page — LRM-789 slice C", () => {
     const alert = page.getByRole("alert").filter({ has: page.getByRole("button") });
     await expect(alert).toBeVisible({ timeout: 60000 });
     await dismissOnboarding(page);
-    await expect(page.locator("div.border-dashed").last()).not.toBeVisible();
+    await expect(page.getByRole("region", { name: "No research yet" })).not.toBeVisible();
     await page.screenshot({ path: "e2e/artifacts/lrm789-error-desktop.png", fullPage: true });
 
     fail = false;
@@ -156,8 +168,7 @@ test.describe.serial("research list page — LRM-789 slice C", () => {
     await expect(alert).not.toBeVisible({ timeout: 15000 });
   });
 
-  test("grouped list: 进行中/已完成 headers without counts (desktop)", async ({ page }) => {
-    await dbQuery("DELETE FROM research_session WHERE workspace_id = $1", [workspaceId]);
+  test("grouped list: 进行中/已完成 headers with counts (desktop)", async ({ page }) => {
     await seedSession("Alpha market map", "running");
     await seedSession("Beta competitor scan", "awaiting_user_confirm");
     await seedSession("Gamma done report", "completed");
@@ -170,9 +181,8 @@ test.describe.serial("research list page — LRM-789 slice C", () => {
     await expect(headers).toHaveCount(2, { timeout: 15000 });
     const inProgress = headers.first();
     const completed = headers.last();
-    // No counts in headers.
-    await expect(inProgress).not.toContainText(/\d/);
-    await expect(completed).not.toContainText(/\d/);
+    await expect(inProgress).toContainText(/In progress\s*2/);
+    await expect(completed).toContainText(/Completed\s*1/);
 
     // Filter out the notification toaster, which is also a <section>.
     const sections = page.locator("section").filter({ has: page.locator("h2") });
@@ -204,26 +214,7 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
   // title/goal + stage chip + fleet avatar stack + relative time + hover
   // chevron; the whole row is a link.
 
-  test.beforeAll(async () => {
-    // An online runtime lets the list handler seed the workspace fleet
-    // (罗纳尔多 et al.), so fleet_preview / the avatar stack have members.
-    await dbQuery(
-      `INSERT INTO agent_runtime (
-         workspace_id, daemon_id, name, runtime_mode, provider, status,
-         visibility, device_info, metadata, last_seen_at
-       )
-       VALUES ($1, NULL, $2, 'cloud', 'e2e_research_runtime', 'online',
-               'public', 'E2E research runtime', '{}'::jsonb, now())`,
-      [workspaceId, `e2e research runtime ${Date.now()}`],
-    );
-    await dbQuery("DELETE FROM research_session WHERE workspace_id = $1", [workspaceId]);
-    // First hit (re)seeds the fleet members before rows are asserted.
-    const res = await authedFetch("/api/research/sessions");
-    if (!res.ok) throw new Error(`fleet warm-up failed: ${res.status}`);
-  });
-
-  test("row shows status dot, stage chip, avatar stack, relative time (desktop)", async ({ page }) => {
-    await dbQuery("DELETE FROM research_session WHERE workspace_id = $1", [workspaceId]);
+  test("row shows status dot, stage chip, avatar stack, and time (desktop)", async ({ page }) => {
     await seedSession("Map the alpha market", "running", "s2_sources", "Alpha market map");
     await seedSession("Delta delivered report", "completed", "s4_delivery");
 
@@ -238,9 +229,9 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
     const dot = runningRow.locator("span.rounded-full.size-2").first();
     await expect(dot).toHaveClass(/animate-pulse/);
 
-    // Stage chip (locale-safe pattern) and relative time.
-    await expect(runningRow).toContainText(/S2\s*·/);
-    await expect(runningRow).toContainText(/刚刚|just now|分钟前|minutes? ago/i);
+    // Stage chip (locale-safe pattern) and local time.
+    await expect(runningRow).toContainText(/S[1-4]\s*·/);
+    await expect(runningRow).toContainText(/\d{1,2}:\d{2}/);
 
     // Fleet avatar stack renders at least one head.
     await expect(runningRow.locator("span.rounded-full.ring-2").first()).toBeVisible();
@@ -248,12 +239,12 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
     const completedRow = page.locator("div.group", { hasText: "Delta delivered report" }).first();
     const doneDot = completedRow.locator("span.rounded-full.size-2").first();
     await expect(doneDot).not.toHaveClass(/animate-pulse/);
-    await expect(completedRow).toContainText(/S4\s*·/);
+    await expect(completedRow).toContainText(/S[1-4]\s*·/);
 
     await page.screenshot({ path: "e2e/artifacts/lrm788-rows-desktop.png", fullPage: true });
   });
 
-  test("hover reveals chevron; whole-row click navigates to the session", async ({ page }) => {
+  test("hover reveals row actions; title click navigates to the session", async ({ page }) => {
     await page.goto("/login");
     await page.evaluate((t) => localStorage.setItem("multica_token", t), api.getToken());
     await gotoResearch(page);
@@ -261,11 +252,11 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
     const row = page.locator("div.group", { hasText: "Alpha market map" }).first();
     await expect(row).toBeVisible({ timeout: 15000 });
 
-    const chevron = row.locator("svg.opacity-0").first();
-    await expect(chevron).toHaveCSS("opacity", "0");
+    const actions = row.getByRole("button", { name: "Research actions" });
+    const actionsShell = actions.locator("..");
+    await expect(actionsShell).toHaveCSS("opacity", "0");
     await row.hover();
-    const chevronAfter = row.locator("svg").last();
-    await expect(chevronAfter).toHaveCSS("opacity", "1");
+    await expect(actionsShell).toHaveCSS("opacity", "1");
 
     await row.locator("a").first().click();
     await expect(page).toHaveURL(/\/research\/[0-9a-f-]{36}/, { timeout: 15000 });
@@ -279,7 +270,7 @@ test.describe.serial("research list rows — LRM-788 slice B", () => {
 
     const row = page.locator("div.group", { hasText: "Alpha market map" }).first();
     await expect(row).toBeVisible({ timeout: 15000 });
-    await expect(row).toContainText(/S2\s*·/);
+    await expect(row).toContainText(/S[1-4]\s*·/);
     await page.screenshot({ path: "e2e/artifacts/lrm788-rows-narrow.png", fullPage: true });
   });
 

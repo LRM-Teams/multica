@@ -103,19 +103,19 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
-	messageCoordinatorMu    sync.RWMutex
-	messageCoordinators     map[string]*MessageCoordinator
-	messageRuntimeIDs       map[string]string
-	messageSendMu           sync.Mutex
-	messageSends            map[string]int
-	agentProcessManagers    map[string]*agentProcessManager
-	agentActivityProducers  map[string]*agentActivityProducer
-	runnerMessageTransports map[string]workspaceRunnerMessageTransport
-	runnerMessageGeneration map[string]uint64
-	lifecycleDiagnostics    *lifecycleDiagnosticWriter
-	machineUpgradeLog       *machineUpgradeEventLog
-	runnerInstanceID        string
-	runnerDiagnostics       *runnerDiagnosticRegistry
+	messageDraftStore      *MessageDraftStore
+	agentProxyCredentialMu sync.RWMutex
+	agentProxyCredentials  map[[32]byte]authenticatedAgentProxy
+	messageSendMu          sync.Mutex
+	messageSends           map[string]int
+	workspaceRunnerMu      sync.RWMutex
+	workspaceRunners       map[string]*WorkspaceRunner
+	workspaceRunnerCancels map[string]context.CancelFunc
+	workspaceRunnerRun     func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
+	lifecycleDiagnostics   *lifecycleDiagnosticWriter
+	machineUpgradeLog      *machineUpgradeEventLog
+	runnerInstanceID       string
+	runnerDiagnostics      *runnerDiagnosticRegistry
 
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
@@ -135,13 +135,12 @@ type Daemon struct {
 	wsConnState   string
 
 	reminderCache                    *reminderCache
-	reminderAgents                   *reminderAgentManager
+	agentAttachments                 AgentAttachmentRegistry
 	reminderWSMu                     sync.RWMutex
 	reminderWrites                   chan<- []byte
 	reminderWSDone                   <-chan struct{}
 	reminderClose                    func() error
 	reminderGateMu                   sync.Mutex
-	reminderLifecycleReplayInFlight  bool
 	reminderReplayComplete           bool
 	reminderProjectionReplayInFlight bool
 	reminderProjectionReplayPending  bool
@@ -263,57 +262,29 @@ type Daemon struct {
 	canonicalResidentFactoryOverride canonicalRuntimeBackendFactory
 }
 
-// registerIdleMessageCoordinator installs the one long-running coordinator for
-// an Agent on this Machine Service. The coordinator itself serializes delivery,
-// runtime handoff, and Context Boundary persistence.
-func (d *Daemon) registerIdleMessageCoordinator(agentID string, coordinator *MessageCoordinator) error {
-	if d == nil || agentID == "" || coordinator == nil {
-		return errors.New("agent id and Message coordinator are required")
-	}
-	d.messageCoordinatorMu.Lock()
-	defer d.messageCoordinatorMu.Unlock()
-	if d.messageCoordinators == nil {
-		d.messageCoordinators = make(map[string]*MessageCoordinator)
-	}
-	if d.messageRuntimeIDs == nil {
-		d.messageRuntimeIDs = make(map[string]string)
-	}
-	if _, exists := d.messageCoordinators[agentID]; exists {
-		return fmt.Errorf("Message coordinator already registered for agent %q", agentID)
-	}
-	d.messageCoordinators[agentID] = coordinator
-	return nil
-}
-
-func (d *Daemon) removeIdleMessageCoordinator(agentID, runtimeID string) {
-	d.messageCoordinatorMu.Lock()
-	if current := d.messageRuntimeIDs[agentID]; current != "" && current != runtimeID {
-		d.messageCoordinatorMu.Unlock()
+func (d *Daemon) removeIdleMessageCoordinator(workspaceID, agentID, runtimeID string) {
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
 		return
 	}
-	coordinator := d.messageCoordinators[agentID]
-	delete(d.messageCoordinators, agentID)
-	delete(d.messageRuntimeIDs, agentID)
-	d.messageCoordinatorMu.Unlock()
-	if coordinator != nil {
-		coordinator.Close()
-	}
+	runner.inboxes.Remove(agentID, runtimeID)
 }
 
-func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[delivery.AgentID]
-	runtimeID := d.messageRuntimeIDs[delivery.AgentID]
-	d.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
-		if err := d.ensureIdleMessageCoordinatorForDelivery(delivery.AgentID); err != nil {
+func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, workspaceID string, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil {
+		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
+	}
+	if runner.inboxes == nil {
+		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("Workspace Runner %q has no Inbox registry", workspaceID)
+	}
+	coordinator, runtimeID, ok := runner.inboxes.Resolve(delivery.AgentID)
+	if !ok {
+		if err := d.ensureIdleMessageCoordinatorForDelivery(workspaceID, delivery.AgentID); err != nil {
 			return protocol.AgentDeliverAckPayload{}, err
 		}
-		d.messageCoordinatorMu.RLock()
-		coordinator = d.messageCoordinators[delivery.AgentID]
-		runtimeID = d.messageRuntimeIDs[delivery.AgentID]
-		d.messageCoordinatorMu.RUnlock()
-		if coordinator == nil {
+		coordinator, runtimeID, ok = runner.inboxes.Resolve(delivery.AgentID)
+		if !ok {
 			return protocol.AgentDeliverAckPayload{}, fmt.Errorf("no idle Message coordinator for agent %q", delivery.AgentID)
 		}
 	}
@@ -321,9 +292,6 @@ func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.
 	if err != nil {
 		return protocol.AgentDeliverAckPayload{}, err
 	}
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
 	outcome := "accepted"
 	if !accepted {
 		outcome = "deduplicated"
@@ -334,65 +302,44 @@ func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.
 	return coordinator.Acknowledgement(delivery), nil
 }
 
-func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, agentID string) error {
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
+func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, workspaceID, agentID string) error {
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
+		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+	}
+	coordinator, _, ok := runner.inboxes.Resolve(agentID)
+	if !ok {
 		return fmt.Errorf("no idle Message coordinator for agent %q", agentID)
 	}
 	return coordinator.Flush(ctx)
 }
 
-func (d *Daemon) beginMessageRecoveryWithSend(send func(protocol.AgentRecoveryRequest) error) {
-	if send == nil {
+func (d *Daemon) beginAgentMessageRecovery(workspaceID, agentID string) {
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
 		return
 	}
-	d.messageCoordinatorMu.RLock()
-	coordinators := make(map[string]*MessageCoordinator, len(d.messageCoordinators))
-	for agentID, coordinator := range d.messageCoordinators {
-		coordinators[agentID] = coordinator
-	}
-	d.messageCoordinatorMu.RUnlock()
-	for agentID, coordinator := range coordinators {
-		if err := send(coordinator.BeginRecovery(agentID, 100)); err != nil && d.logger != nil {
-			d.logger.Warn("agent Message recovery request failed", "error", err, "agent_id", agentID)
-		}
-	}
-}
-
-func (d *Daemon) beginAgentMessageRecovery(agentID string) {
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
+	coordinator, _, ok := runner.inboxes.Resolve(agentID)
+	if !ok {
 		return
 	}
 	request := coordinator.BeginRecovery(agentID, 100)
-	if !d.sendAgentMessageRunnerFrame(agentID, protocol.EventAgentRecoveryRequest, request) && d.logger != nil {
-		d.logger.Warn("agent Message recovery request failed", "error", "workspace Runner Message transport unavailable", "agent_id", agentID)
+	if err := runner.sendOnCurrentConnection(protocol.EventAgentRecoveryRequest, request); err != nil && d.logger != nil {
+		d.logger.Warn("agent Message recovery request failed", "error", err, "workspace_id", workspaceID, "agent_id", agentID, "reason", "runner_connection_write_failed")
 	}
 }
 
-func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
+func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, workspaceID string, page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
 	if send == nil {
 		return errors.New("Message recovery sender is unavailable")
 	}
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[page.AgentID]
-	runtimeID := d.messageRuntimeIDs[page.AgentID]
-	d.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
-		return fmt.Errorf("no Message coordinator for recovery agent %q", page.AgentID)
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
+		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
 	}
-	// Recovery bodies cross the same resident runtime boundary as live
-	// Deliveries. On daemon restart recovery can arrive before any live
-	// Delivery has created that runtime, so prepare it before merging a page
-	// that will need handoff.
-	if len(page.Messages) > 0 {
-		if err := d.ensureResidentMessageRuntime(ctx, page.AgentID, runtimeID); err != nil {
-			return fmt.Errorf("prepare resident Message runtime for recovery: %w", err)
-		}
+	coordinator, runtimeID, ok := runner.inboxes.Resolve(page.AgentID)
+	if !ok {
+		return fmt.Errorf("no Message coordinator for recovery agent %q", page.AgentID)
 	}
 	if err := coordinator.MergeRecoveryPage(page); err != nil {
 		return err
@@ -400,16 +347,21 @@ func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, page pro
 	if page.HasMore {
 		return send(coordinator.RecoveryRequest(page.AgentID, 100))
 	}
-	// Terminal page: hand recovered bodies to the resident runtime WITHOUT
-	// blocking the workspace runner read loop. A busy / idle-input-unsupported
-	// resident runtime (e.g. Pi mid-turn with ErrCanonicalAgentRuntimeBusy /
-	// resident idle-input overlap) must not stall recovery of this agent or of
-	// any other agent whose RecoveryPage arrives on the same connection. Flush
-	// is executed on a bounded-timeout background task; the coordinator's
-	// pending-notice retry path completes it if the runtime is transiently busy.
+	// A terminal page establishes canonical freshness when it is merged above.
+	// Runtime availability is a separate concern: recovered bodies remain
+	// Pending until this best-effort handoff, a later idle delivery, message
+	// check, or a send freshness hold consumes them. Runtime work stays off the
+	// workspace runner read loop and cannot roll recovery back from ready.
 	flushCtx, cancel := context.WithTimeout(context.Background(), recoveryFlushTimeout)
 	go func() {
 		defer cancel()
+		if err := d.ensureResidentMessageRuntime(flushCtx, page.AgentID, runtimeID); err != nil {
+			if d.logger != nil {
+				d.logger.Warn("workspace Runner Message recovery runtime unavailable",
+					"error", err, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
+			}
+			return
+		}
 		if err := coordinator.Flush(flushCtx); err != nil && d.logger != nil {
 			d.logger.Warn("workspace Runner Message recovery flush deferred",
 				"error", err, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
@@ -443,12 +395,9 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		memoryCurationRuns:        make(map[string]string),
 		activeCurationRuns:        make(map[string]string),
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
-		messageCoordinators:       make(map[string]*MessageCoordinator),
-		messageRuntimeIDs:         make(map[string]string),
-		agentProcessManagers:      make(map[string]*agentProcessManager),
-		agentActivityProducers:    make(map[string]*agentActivityProducer),
-		runnerMessageTransports:   make(map[string]workspaceRunnerMessageTransport),
-		runnerMessageGeneration:   make(map[string]uint64),
+		messageDraftStore:         NewMessageDraftStore(cfg.WorkspacesRoot),
+		workspaceRunners:          make(map[string]*WorkspaceRunner),
+		workspaceRunnerCancels:    make(map[string]context.CancelFunc),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		runnerInstanceID:          uuid.NewString(),
 	}
@@ -473,7 +422,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
 	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
-	d.reminderAgents = newReminderAgentManager(cfg.WorkspacesRoot, logger)
+	d.agentAttachments = newLocalAgentAttachmentRegistry(cfg.WorkspacesRoot, logger)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	return d
@@ -499,26 +448,15 @@ func (d *Daemon) notifyRuntimeSetChanged() {
 	d.runtimeSet.notify()
 }
 
-func (d *Daemon) removeReminderAgent(agentID, runtimeID string, generation int64) error {
-	removed := false
-	if d.reminderAgents != nil {
-		var err error
-		removed, _, err = d.reminderAgents.applyStop(agentID, runtimeID, generation)
-		if err != nil {
-			return err
-		}
-	}
-	if removed && d.reminderCache != nil {
+func (d *Daemon) removeDetachedReminderAgent(agentID string) error {
+	if d.reminderCache != nil {
 		if err := d.reminderCache.removeOwner(agentID); err != nil {
 			return err
 		}
 	}
-	if removed {
-		d.removeIdleMessageCoordinator(agentID, runtimeID)
-		d.reminderGateMu.Lock()
-		delete(d.reminderPendingSnapshots, agentID)
-		d.reminderGateMu.Unlock()
-	}
+	d.reminderGateMu.Lock()
+	delete(d.reminderPendingSnapshots, agentID)
+	d.reminderGateMu.Unlock()
 	return nil
 }
 
@@ -1755,7 +1693,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.ReleaseManifestBaseURL != "" {
 		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
 	}
-	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 || len(resp.PendingAgentStartIntents) > 0 {
+	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
@@ -1766,7 +1704,6 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 			"memory_curation", resp.PendingMemoryCuration != nil,
 			"restart", resp.PendingRestart != nil,
 			"agent_lifecycle_operations", len(resp.PendingAgentLifecycleOperations),
-			"agent_start_intents", len(resp.PendingAgentStartIntents),
 		)
 	}
 	if resp.PendingUpdate != nil {
@@ -1781,9 +1718,6 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	}
 	for _, pending := range resp.PendingAgentLifecycleOperations {
 		go d.handleAgentLifecycleOperation(ctx, pending)
-	}
-	for _, pending := range resp.PendingAgentStartIntents {
-		go d.handleAgentStartIntent(ctx, pending)
 	}
 	if resp.PendingModelList != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
@@ -3220,11 +3154,14 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 	ctx = executionCtx
 
-	if d.reminderAgents != nil {
-		if d.reminderAgents.markRunning(task.AgentID, task.RuntimeID, task.WorkspaceID) {
-			d.requestReminderSnapshot(task.AgentID)
+	if registry := d.localAttachmentRegistry(); registry != nil {
+		createdProvisional, observed := registry.observeTaskStarted(task.AgentID, task.RuntimeID, task.WorkspaceID)
+		if createdProvisional {
+			d.requestReminderSnapshot(task.WorkspaceID, task.AgentID)
 		}
-		defer d.reminderAgents.markIdle(task.AgentID)
+		if observed {
+			defer registry.observeTaskFinished(task.AgentID)
+		}
 	}
 
 	// Create a cancellable context so we can interrupt the running agent
@@ -3591,10 +3528,6 @@ func (d *Daemon) watchInboxLeases(ctx context.Context, leases []AgentInboxLease,
 }
 
 func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
-	// The Runner, rather than the legacy Activity API, is the only execution
-	// observation channel. Keep this narrative deliberately generic: detailed
-	// failures remain in the authorized task result, never in Activity.
-	d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "task_failed", "Agent execution failed")
 	if !task.isInboxTask() {
 		taskLog.Error("failed task is missing its canonical inbox lease")
 		return
@@ -3914,6 +3847,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
+	agentProxyWrapperDir := ""
 	transportAttemptPath := ""
 	resolveExecutable := d.resolveExecutable
 	if resolveExecutable == nil {
@@ -3931,6 +3865,24 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
 		} else {
 			cliBinDir = filepath.Dir(selfBin)
+			agentProxyTransport, proxyErr := d.prepareAgentProxyCLITransport(
+				InboxKey{WorkspaceID: task.WorkspaceID, AgentID: agentID},
+				task.RuntimeID,
+				selfBin,
+			)
+			if proxyErr != nil {
+				// Agent Proxy is additive for existing commands. Coverage-aware
+				// commands will fail safe after output when the local credential is
+				// unavailable; unrelated CLI commands retain their prior transport.
+				taskLog.Warn("agent proxy transport unavailable", "reason", "agent_proxy_credential_unavailable")
+			} else {
+				agentProxyWrapperDir = filepath.Dir(agentProxyTransport.wrapperPath)
+				defer func() {
+					if err := agentProxyTransport.Close(); err != nil {
+						taskLog.Warn("agent proxy transport cleanup degraded", "reason", "credential_file_cleanup_failed")
+					}
+				}()
+			}
 			if agentToken == "" {
 				taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
 			} else {
@@ -4049,12 +4001,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// `multica` resolves to the task-scoped transport wrapper first; keep the
 	// real binary directory after it as a fallback for explicit wrapper exec.
 	if cliBinDir != "" {
-		pathPrefix := cliBinDir
+		pathDirectories := make([]string, 0, 3)
+		if agentProxyWrapperDir != "" {
+			pathDirectories = append(pathDirectories, agentProxyWrapperDir)
+		}
 		if cliWrapperDir != "" {
 			agentEnv["MULTICA_TOKEN_FILE"] = cliTokenFile
-			pathPrefix = cliWrapperDir + string(os.PathListSeparator) + cliBinDir
+			pathDirectories = append(pathDirectories, cliWrapperDir)
 		}
-		agentEnv["PATH"] = pathPrefix + string(os.PathListSeparator) + os.Getenv("PATH")
+		pathDirectories = append(pathDirectories, cliBinDir, os.Getenv("PATH"))
+		agentEnv["PATH"] = strings.Join(pathDirectories, string(os.PathListSeparator))
 	}
 	// Point Codex to the Agent-scoped CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.
@@ -4622,44 +4578,6 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 	return taskfailure.Classify(errMsg).String()
 }
 
-func (d *Daemon) publishTaskRunnerActivity(task Task, activityKind, detailKind, narrative string) {
-	producer := d.taskRunnerActivityProducer(task)
-	if producer == nil {
-		return
-	}
-	var entries []protocol.AgentActivityEntry
-	if narrative != "" {
-		entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-		if err == nil {
-			entries = []protocol.AgentActivityEntry{entry}
-		}
-	}
-	if err := producer.PublishForManagedAgent(task.AgentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner task Activity publish deferred", "error", err, "agent_id", task.AgentID, "task_id", task.ID)
-	}
-}
-
-func (d *Daemon) taskRunnerActivityProducer(task Task) *agentActivityProducer {
-	if d == nil || task.AgentID == "" || task.WorkspaceID == "" {
-		return nil
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.agentActivityProducers[task.WorkspaceID]
-}
-
-func (d *Daemon) completeTaskRunnerCompactionIfActive(task Task, narrative string) {
-	if producer := d.taskRunnerActivityProducer(task); producer != nil {
-		_, _ = producer.CompleteCompactionIfActive(task.AgentID, d.runnerInstanceID, narrative)
-	}
-}
-
-func (d *Daemon) interruptTaskRunnerCompactionIfActive(task Task) {
-	if producer := d.taskRunnerActivityProducer(task); producer != nil {
-		producer.InterruptCompactionIfActive(task.AgentID)
-	}
-}
-
 func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
 	taskID := task.ID
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
@@ -4815,9 +4733,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						pinCancel()
 					}
 				case agent.MessageToolUse:
-					d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from resumed tool use)")
-					toolDetailKind, toolNarrative := toolActivityFact(msg.Tool, msg.Input)
-					d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, toolDetailKind, toolNarrative)
 					n := toolCount.Add(1)
 					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
@@ -4892,23 +4807,12 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					})
 					mu.Unlock()
 				case agent.MessageThinking:
-					d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from resumed output)")
-					// Thinking is a B-chain state (snapshot activity_kind), not an
-					// A-chain timeline event. An empty narrative keeps publishLocked
-					// from writing an entry, so bursts of thinking never flood the
-					// activity timeline (raft-aligned; see workspace_runner_activity).
-					d.publishTaskRunnerActivity(task, protocol.ActivityKindThinking, "", "")
 					if msg.Content != "" {
 						mu.Lock()
 						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageCompactionStarted, agent.MessageCompactionFinished:
-					if msg.Type == agent.MessageCompactionStarted {
-						d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compacting_context", "Compacting context")
-					} else {
-						d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compaction_finished", "Context compaction finished")
-					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
 					s := seq.Add(1)
@@ -4919,7 +4823,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					batch = append(batch, TaskMessageData{Seq: int(s), Type: messageType, Content: msg.Content})
 					mu.Unlock()
 				case agent.MessageText:
-					d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from resumed output)")
 					if msg.Content != "" {
 						taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))
 						mu.Lock()
@@ -4927,8 +4830,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						mu.Unlock()
 					}
 				case agent.MessageError:
-					d.interruptTaskRunnerCompactionIfActive(task)
-					d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "", "Runtime error")
 					taskLog.Error("agent error", "content", msg.Content)
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
@@ -4964,11 +4865,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 
 	select {
 	case result := <-session.Result:
-		if result.Status == "completed" {
-			d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from turn end)")
-		} else {
-			d.interruptTaskRunnerCompactionIfActive(task)
-		}
 		if idleWatchdogFired.Load() {
 			// The backend's wait goroutine (e.g. claude.go) translates the
 			// SIGKILL we delivered via agentCancel into Status="aborted".
@@ -4982,7 +4878,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 		}
 		return result, toolCount.Load(), nil
 	case <-drainCtx.Done():
-		d.interruptTaskRunnerCompactionIfActive(task)
 		// Idle watchdog cancels via agentCancel(), which propagates here as
 		// context.Canceled. Check this BEFORE the generic cancelled/timeout
 		// classifiers so a watchdog-induced stop isn't misreported as

@@ -80,8 +80,11 @@ func newReminderOwnerInputDaemon(t *testing.T, runtime *reminderOwnerInputFakeRu
 	d.runtimeIndex["runtime-a"] = Runtime{ID: "runtime-a", WorkspaceID: "workspace-a"}
 	d.workspaces["workspace-a"] = newWorkspaceState("workspace-a", []string{"runtime-a"}, capabilities...)
 	d.mu.Unlock()
-	if _, accepted, err := d.reminderAgents.applyStart("agent-a", "runtime-a", "workspace-a", 3); err != nil || !accepted {
-		t.Fatalf("seed Reminder owner residency: accepted=%v err=%v", accepted, err)
+	if _, err := d.agentAttachments.Apply("workspace-a", AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: "agent-a", RuntimeID: "runtime-a",
+		AttachmentGeneration: 3, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatalf("seed Reminder owner Attachment: %v", err)
 	}
 	d.canonicalRuntimes.slots["agent-a\x00runtime-a"] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: runtime,
@@ -104,8 +107,10 @@ func TestReminderOwnerInputIdleInjectsExactlyOnce(t *testing.T) {
 	if inputs[0].ReminderID != payload.ReminderID || inputs[0].Version != payload.Version || inputs[0].Anchor.ReplyTarget != payload.Anchor.ReplyTarget || inputs[0].Occurrence.OccurrenceID != payload.Occurrence.OccurrenceID {
 		t.Fatalf("concrete Reminder input=%+v", inputs[0])
 	}
-	if len(d.messageCoordinators) != 0 {
-		t.Fatalf("accepted Reminder created MessageCoordinator artifacts: %d", len(d.messageCoordinators))
+	if runner := d.currentWorkspaceRunner(payload.WorkspaceID); runner != nil {
+		if _, _, found := runner.inboxes.Resolve(payload.AgentID); found {
+			t.Fatal("accepted Reminder created a MessageCoordinator")
+		}
 	}
 }
 
@@ -125,8 +130,10 @@ func TestReminderOwnerInputBusyIsAcceptedDiscardWithoutReplay(t *testing.T) {
 	if got := len(runtime.snapshot()); got != 0 {
 		t.Fatalf("busy input replayed at idle boundary: %d", got)
 	}
-	if len(d.messageCoordinators) != 0 {
-		t.Fatalf("busy Reminder created MessageCoordinator artifacts: %d", len(d.messageCoordinators))
+	if runner := d.currentWorkspaceRunner("workspace-a"); runner != nil {
+		if _, _, found := runner.inboxes.Resolve("agent-a"); found {
+			t.Fatal("busy Reminder created a MessageCoordinator")
+		}
 	}
 }
 
@@ -140,8 +147,10 @@ func TestReminderOwnerInputInjectionFailureIsFinal(t *testing.T) {
 	if got := len(runtime.snapshot()); got != 1 {
 		t.Fatalf("injection attempts=%d want=1", got)
 	}
-	if len(d.messageCoordinators) != 0 {
-		t.Fatalf("failed Reminder created MessageCoordinator artifacts: %d", len(d.messageCoordinators))
+	if runner := d.currentWorkspaceRunner("workspace-a"); runner != nil {
+		if _, _, found := runner.inboxes.Resolve("agent-a"); found {
+			t.Fatal("failed Reminder created a MessageCoordinator")
+		}
 	}
 }
 

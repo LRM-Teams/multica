@@ -206,7 +206,11 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	// (not on resident reuse). Create-only AGENTS write — zero filesystem I/O
 	// on the reuse path. Must not leave a half-created slot if it fails.
 	BeforeCreate func() error
-	Now          time.Time
+	// PrepareLaunchEnvironment may add launch-scoped transport state after the
+	// stable runtime fingerprint has been computed. Its cleanup is owned by the
+	// concrete backend lifetime and runs on every create failure.
+	PrepareLaunchEnvironment func(map[string]string) (func(), error)
+	Now                      time.Time
 	// Context bounds capacity-wait when the pool is full of running agents
 	// and no idle resident can be evicted. Nil → context.Background().
 	Context context.Context
@@ -218,8 +222,11 @@ type canonicalAgentRuntimeAcquireRequest struct {
 type ResidentRuntimeRecoveredSubscriber func(agentID, runtimeID string)
 
 type canonicalAgentRuntimePool struct {
-	mu    sync.Mutex
-	slots map[string]*canonicalAgentRuntimeSlot
+	mu                      sync.Mutex
+	slots                   map[string]*canonicalAgentRuntimeSlot
+	managedProcessGrants    map[string]agentProcessCapacityGrant
+	pendingManagedProcesses map[string]pendingManagedProcess
+	pendingManagedOrder     []string
 
 	// maxAgentProcesses bounds distinct agents with a live resident backend
 	// (backend != nil). 0 = unlimited. See #35 / resolveMaxAgentProcesses.
@@ -241,28 +248,32 @@ type canonicalAgentRuntimePool struct {
 }
 
 type canonicalAgentRuntimeSlot struct {
-	mu                           sync.Mutex
-	fingerprint                  string
-	mode                         canonicalRuntimeMode
-	provider                     string
-	running                      bool
-	idleSince                    time.Time
-	backend                      agent.Backend
-	close                        func()
-	messageInputDone             <-chan error
-	messageInputGeneration       uint64
-	messageInputAttempt          uint64
-	invalidationGeneration       uint64
-	invalidateAfterInput         bool
-	compacting                   bool
-	lastPendingNoticeFingerprint string
-	lastPendingTargetFingerprint map[string]string
+	mu                             sync.Mutex
+	fingerprint                    string
+	mode                           canonicalRuntimeMode
+	provider                       string
+	running                        bool
+	idleSince                      time.Time
+	backend                        agent.Backend
+	close                          func()
+	messageInputDone               <-chan error
+	messageInputGeneration         uint64
+	messageInputAttempt            uint64
+	invalidationGeneration         uint64
+	invalidateAfterInput           bool
+	compacting                     bool
+	lastPendingNoticeFingerprint   string
+	lastPendingTargetFingerprint   map[string]string
+	lastPendingNoticeCoordinatorID string
+	lastPendingNoticeGeneration    uint64
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
 	p := &canonicalAgentRuntimePool{
-		slots:         make(map[string]*canonicalAgentRuntimeSlot),
-		pendingAgents: make(map[string]struct{}),
+		slots:                   make(map[string]*canonicalAgentRuntimeSlot),
+		managedProcessGrants:    make(map[string]agentProcessCapacityGrant),
+		pendingManagedProcesses: make(map[string]pendingManagedProcess),
+		pendingAgents:           make(map[string]struct{}),
 	}
 	p.capacityCond = sync.NewCond(&p.mu)
 	return p
@@ -275,12 +286,14 @@ func (p *canonicalAgentRuntimePool) setMaxAgentProcesses(n int) {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if n < 0 {
 		n = 0
 	}
 	p.maxAgentProcesses = n
 	p.capacityCond.Broadcast()
+	wakeups := p.promoteManagedProcessesLocked()
+	p.mu.Unlock()
+	invokeManagedProcessGrantWakeups(wakeups)
 }
 
 // LiveAgentProcessCount returns the last published distinct-agent live count.
@@ -426,8 +439,24 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		config := request.BackendConfig
 		config.ExecutablePath = request.Identity.Executable
 		config.Env = cloneStringMap(request.Identity.Environment)
+		var processCleanup func()
+		if request.PrepareLaunchEnvironment != nil {
+			processCleanup, err = request.PrepareLaunchEnvironment(config.Env)
+			if err != nil {
+				if processCleanup != nil {
+					processCleanup()
+				}
+				slot.running = false
+				slot.fingerprint = prevFingerprint
+				slot.mode = prevMode
+				return nil, fmt.Errorf("prepare canonical runtime process: %w", err)
+			}
+		}
 		created, closeFn, err := request.Factory(config)
 		if err != nil {
+			if processCleanup != nil {
+				processCleanup()
+			}
 			slot.running = false
 			slot.fingerprint = prevFingerprint
 			slot.mode = prevMode
@@ -440,13 +469,16 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 			if closeFn != nil {
 				closeFn()
 			}
+			if processCleanup != nil {
+				processCleanup()
+			}
 			return nil, errors.New("canonical runtime backend factory returned nil backend")
 		}
 		backend = created
-		closeBackend = closeFn
+		closeBackend = combineRuntimeCleanup(closeFn, processCleanup)
 		if request.Mode == canonicalRuntimeResident {
 			slot.backend = created
-			slot.close = closeFn
+			slot.close = closeBackend
 			// New resident process is up — clear any server-side "crashed"
 			// fact from a prior idle death. First-ever create is a no-op clear.
 			// Fire async: we still hold slot.mu here and subscribers may do I/O.
@@ -473,6 +505,16 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		turnClose: closeBackend,
 		pool:      p,
 	}, nil
+}
+
+func combineRuntimeCleanup(cleanups ...func()) func() {
+	return func() {
+		for _, cleanup := range cleanups {
+			if cleanup != nil {
+				cleanup()
+			}
+		}
+	}
 }
 
 // canonicalSessionBackend is the only Execute wrapper on the canonical path.
@@ -567,6 +609,8 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	slot.close = nil
 	slot.lastPendingNoticeFingerprint = ""
 	slot.lastPendingTargetFingerprint = nil
+	slot.lastPendingNoticeCoordinatorID = ""
+	slot.lastPendingNoticeGeneration = 0
 	slot.invalidateAfterInput = false
 }
 
@@ -911,9 +955,12 @@ func isResidentAcceptBusyErr(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "turn busy")
 }
 
-func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot) error {
+func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
+	}
+	if commitIfCurrent == nil {
+		return errors.New("Pending Notice commit callback is required")
 	}
 	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
 	p.mu.Lock()
@@ -931,11 +978,16 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
 		return errors.New("canonical resident runtime is unavailable")
 	}
+	if snapshot.Fingerprint == slot.lastPendingNoticeFingerprint &&
+		snapshot.CoordinatorID == slot.lastPendingNoticeCoordinatorID &&
+		snapshot.PendingGeneration == slot.lastPendingNoticeGeneration {
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
+		}
+		return nil
+	}
 	if slot.compacting {
 		return ErrCanonicalAgentRuntimeBusy
-	}
-	if snapshot.Fingerprint == slot.lastPendingNoticeFingerprint {
-		return nil
 	}
 	input, ok := slot.backend.(agent.ResidentPendingNoticeInput)
 	if !ok {
@@ -954,10 +1006,16 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	if err := input.AcceptPendingNotice(ctx, notice); err != nil {
 		return err
 	}
-	slot.lastPendingNoticeFingerprint = snapshot.Fingerprint
-	slot.lastPendingTargetFingerprint = make(map[string]string, len(snapshot.TargetFingerprints))
-	for target, fingerprint := range snapshot.TargetFingerprints {
-		slot.lastPendingTargetFingerprint[target] = fingerprint
+	if !commitIfCurrent(func() {
+		slot.lastPendingNoticeFingerprint = snapshot.Fingerprint
+		slot.lastPendingTargetFingerprint = make(map[string]string, len(snapshot.TargetFingerprints))
+		for target, fingerprint := range snapshot.TargetFingerprints {
+			slot.lastPendingTargetFingerprint[target] = fingerprint
+		}
+		slot.lastPendingNoticeCoordinatorID = snapshot.CoordinatorID
+		slot.lastPendingNoticeGeneration = snapshot.PendingGeneration
+	}) {
+		return errPendingNoticeGenerationChanged
 	}
 	return nil
 }

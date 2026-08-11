@@ -10,7 +10,7 @@ import (
 func TestAgentProcessManagerIdempotentStartQueueAndRecovery(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	var transitions []agentLifecycleTransition
-	manager := newAgentProcessManager(1, func() time.Time { return now }, func(transition agentLifecycleTransition) {
+	manager := newAgentProcessManager("workspace-1", newTestProcessAdmission(1), func() time.Time { return now }, func(transition agentLifecycleTransition) {
 		transitions = append(transitions, transition)
 	})
 	manager.newID = sequentialIDs()
@@ -61,7 +61,7 @@ func TestAgentProcessManagerIdempotentStartQueueAndRecovery(t *testing.T) {
 }
 
 func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing.T) {
-	manager := newAgentProcessManager(2, time.Now, nil)
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
 	manager.newID = sequentialIDs()
 	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
 	if err != nil {
@@ -86,8 +86,114 @@ func TestAgentProcessManagerFencesStaleCallbacksAndCreatesNewLaunches(t *testing
 	}
 }
 
+func TestAgentProcessManagerRejectsRevokedCapacityGrant(t *testing.T) {
+	admission := newTestProcessAdmission(1)
+	manager := newAgentProcessManager("workspace-1", admission, time.Now, nil)
+	manager.newID = sequentialIDs()
+	accepted, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	manager.mu.Lock()
+	grant := manager.agents["agent-a"].capacityGrant
+	manager.mu.Unlock()
+	admission.Cancel(grant)
+	if err := manager.ProcessSpawned(agentProcessCallback{AgentID: "agent-a", LaunchID: accepted.LaunchID, ProcessInstanceID: "process-a"}); err == nil {
+		t.Fatal("ProcessSpawned accepted a revoked capacity grant")
+	}
+}
+
+func TestAgentProcessManagerSharesCanonicalCapacityAcrossRunners(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	pool.setMaxAgentProcesses(1)
+	first := newAgentProcessManager("workspace-a", pool.managedProcessAdmission(), time.Now, nil)
+	second := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
+
+	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", StartDispatchID: "dispatch-a"})
+	if err != nil || firstAck.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("Start(first) = %+v, %v; want starting", firstAck, err)
+	}
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	if err != nil || secondAck.QueueState != protocol.AgentStartQueueQueued {
+		t.Fatalf("Start(second) = %+v, %v; want globally queued", secondAck, err)
+	}
+
+	if err := first.Stop(agentProcessCallback{AgentID: "agent-a", LaunchID: firstAck.LaunchID}); err != nil {
+		t.Fatalf("Stop(first): %v", err)
+	}
+	waitForProcessQueueState(t, second, "agent-b", protocol.AgentStartQueueStarting)
+	pool.mu.Lock()
+	grants := len(pool.managedProcessGrants)
+	pending := len(pool.pendingManagedProcesses)
+	pool.mu.Unlock()
+	if grants != 1 || pending != 0 {
+		t.Fatalf("global capacity after release: grants=%d pending=%d, want 1/0", grants, pending)
+	}
+}
+
+func TestAgentProcessManagerCancelsGloballyQueuedLaunch(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	pool.setMaxAgentProcesses(1)
+	first := newAgentProcessManager("workspace-a", pool.managedProcessAdmission(), time.Now, nil)
+	second := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
+	third := newAgentProcessManager("workspace-c", pool.managedProcessAdmission(), time.Now, nil)
+
+	firstAck, _ := first.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", StartDispatchID: "dispatch-a"})
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	if err != nil || secondAck.QueueState != protocol.AgentStartQueueQueued {
+		t.Fatalf("Start(second) = %+v, %v; want queued", secondAck, err)
+	}
+	if err := second.Stop(agentProcessCallback{AgentID: "agent-b", LaunchID: secondAck.LaunchID}); err != nil {
+		t.Fatalf("Stop(queued): %v", err)
+	}
+	thirdAck, err := third.Start(agentProcessStartRequest{AgentID: "agent-c", RuntimeID: "runtime-c", StartDispatchID: "dispatch-c"})
+	if err != nil || thirdAck.QueueState != protocol.AgentStartQueueQueued {
+		t.Fatalf("Start(third) = %+v, %v; want queued", thirdAck, err)
+	}
+	if err := first.Stop(agentProcessCallback{AgentID: "agent-a", LaunchID: firstAck.LaunchID}); err != nil {
+		t.Fatalf("Stop(first): %v", err)
+	}
+	waitForProcessQueueState(t, third, "agent-c", protocol.AgentStartQueueStarting)
+	if _, found := second.Snapshot("agent-b"); found {
+		t.Fatal("cancelled queued launch was retained")
+	}
+}
+
+func TestManagedCapacityCountsResidentProcessAndEvictsOnlyIdle(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	pool.setMaxAgentProcesses(1)
+	probe := &canonicalRuntimeFactoryProbe{}
+	lease := acquireResident(t, pool, probe, "agent-a", "runtime-a", nil)
+	lease.release(true) // resident but idle: safe capacity eviction candidate.
+
+	manager := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
+	ack, err := manager.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	if err != nil || ack.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("managed Start = %+v, %v; want starting after idle eviction", ack, err)
+	}
+	if pool.agentHasLiveForTest("agent-a") {
+		t.Fatal("idle resident survived a managed-capacity admission")
+	}
+	if got := pool.EvictForCapTotal(); got != 1 {
+		t.Fatalf("idle evictions = %d, want 1", got)
+	}
+}
+
+func waitForProcessQueueState(t *testing.T, manager *agentProcessManager, agentID, want string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if snapshot, ok := manager.Snapshot(agentID); ok && snapshot.QueueState == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	snapshot, ok := manager.Snapshot(agentID)
+	t.Fatalf("queue state for %s = %+v, exists=%v; want %q", agentID, snapshot, ok, want)
+}
+
 func TestAgentProcessManagerReassignsToNewRuntimeWithNewLaunch(t *testing.T) {
-	manager := newAgentProcessManager(2, time.Now, nil)
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
 	manager.newID = sequentialIDs()
 	first, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
 	if err != nil {
@@ -106,7 +212,7 @@ func TestAgentProcessManagerReassignsToNewRuntimeWithNewLaunch(t *testing.T) {
 }
 
 func TestAgentProcessManagerReadinessPoliciesAndActivationAreIndependent(t *testing.T) {
-	manager := newAgentProcessManager(1, time.Now, nil)
+	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
 	manager.newID = sequentialIDs()
 	accepted, err := manager.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a", ReadinessPolicy: agentRuntimeReadinessInitialTurn, DeliveryMode: agentInitialDeliveryStdin})
 	if err != nil {
@@ -167,4 +273,38 @@ func assertSingleEnterAndClose(t *testing.T, transitions []agentLifecycleTransit
 			t.Fatalf("transition %s enters=%d closes=%d, want one enter and at most one close", id, count, closed[id])
 		}
 	}
+}
+
+type testProcessAdmission struct {
+	limit  int
+	active map[string]agentProcessCapacityGrant
+}
+
+func newTestProcessAdmission(limit int) *testProcessAdmission {
+	return &testProcessAdmission{limit: limit, active: make(map[string]agentProcessCapacityGrant)}
+}
+
+func (a *testProcessAdmission) Acquire(request agentProcessCapacityRequest) (agentProcessCapacityGrant, bool) {
+	if grant, ok := a.active[request.LaunchID]; ok {
+		return grant, true
+	}
+	if a.limit > 0 && len(a.active) >= a.limit {
+		return agentProcessCapacityGrant{}, false
+	}
+	grant := agentProcessCapacityGrant{ID: request.LaunchID, LaunchID: request.LaunchID}
+	a.active[grant.LaunchID] = grant
+	return grant, true
+}
+
+func (a *testProcessAdmission) Cancel(grant agentProcessCapacityGrant) { a.Release(grant) }
+
+func (a *testProcessAdmission) Release(grant agentProcessCapacityGrant) {
+	if current, ok := a.active[grant.LaunchID]; ok && current == grant {
+		delete(a.active, grant.LaunchID)
+	}
+}
+
+func (a *testProcessAdmission) Active(grant agentProcessCapacityGrant) bool {
+	current, ok := a.active[grant.LaunchID]
+	return ok && current == grant
 }

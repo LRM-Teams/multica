@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // HealthResponse is returned by the daemon's local health endpoint.
@@ -400,11 +401,19 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 			http.Error(w, "invalid read response from server", http.StatusBadGateway)
 			return
 		}
-		if seenUpToSeq > 0 {
-			if err := d.CredentialProxy().RecordMessageRead(request.AgentID, contextTarget, int64(seenUpToSeq)); err != nil {
-				http.Error(w, "persist message read boundary: "+err.Error(), http.StatusConflict)
-				return
-			}
+		var messages []protocol.AgentMessageProjection
+		if rawMessages, marshalErr := json.Marshal(response["messages"]); marshalErr != nil || json.Unmarshal(rawMessages, &messages) != nil {
+			http.Error(w, "invalid read response from server", http.StatusBadGateway)
+			return
+		}
+		offer, err := d.CredentialProxy().PrepareMessageRead(request.AgentID, contextTarget, int64(seenUpToSeq), messages)
+		if err != nil {
+			http.Error(w, "invalid read coverage from server", http.StatusBadGateway)
+			return
+		}
+		delete(response, MessageCoverageReceiptField)
+		if offer.ReceiptID != "" {
+			response[MessageCoverageReceiptField] = offer.ReceiptID
 		}
 		// Context target and sequence are proxy-only facts. A Message command
 		// never exposes a cursor-like read state to the Agent process.
@@ -556,6 +565,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/credential-proxy/messages/search", d.credentialProxyMessageSearchHandler())
 	mux.HandleFunc("/credential-proxy/messages/resolve", d.credentialProxyMessageResolveHandler())
 	mux.HandleFunc("/credential-proxy/messages/react", d.credentialProxyMessageReactHandler())
+	mux.HandleFunc(MessageCoverageCommitPath, d.credentialProxyMessageCoverageCommitHandler())
 	mux.HandleFunc("/api/", d.credentialProxyAgentAPIHandler())
 
 	srv := &http.Server{Handler: mux}

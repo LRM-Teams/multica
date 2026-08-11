@@ -244,6 +244,16 @@ type pendingNoticeRuntime struct {
 	notices []agent.ResidentPendingNotice
 }
 
+func commitPendingNoticeForTest(commit func()) bool {
+	commit()
+	return true
+}
+
+func newTestMessageCoordinator(t *testing.T, agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
+	t.Helper()
+	return NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, agentRoot, handoff, activity)
+}
+
 func (r *pendingNoticeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
 	return nil, nil
 }
@@ -418,20 +428,21 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
+	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
-	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(string, any) error { return nil })
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	producer := runner.activity
 	activities := make(chan protocol.AgentActivityPayload, 8)
 	producer.AttachTransport(func(activity protocol.AgentActivityPayload) { activities <- activity })
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
+	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	completeCoordinatorRecovery(t, coordinator)
 
 	first := testDelivery("message-1", "channel:one", 1, "delivery-1")
@@ -491,17 +502,18 @@ func TestResidentMessageTurnErrorDoesNotAutoHandoffPending(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
+	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
-	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(string, any) error { return nil })
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
+	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	completeCoordinatorRecovery(t, coordinator)
 
 	first := testDelivery("message-1", "channel:one", 1, "delivery-1")
@@ -554,12 +566,19 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 		}},
 		Fingerprint:        "all-v1",
 		TargetFingerprints: map[string]string{"channel:one": "one-v1", "dm:two": "two-v1"},
+		CoordinatorID:      "coordinator-1",
+		PendingGeneration:  1,
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first); err != nil {
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("first Notice: %v", err)
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first); err != nil {
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("duplicate Notice: %v", err)
+	}
+	newGeneration := first
+	newGeneration.PendingGeneration = 2
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", newGeneration, commitPendingNoticeForTest); err != nil {
+		t.Fatalf("same fingerprint at new Pending generation: %v", err)
 	}
 	second := PendingNoticeSnapshot{
 		Notice: agent.ResidentPendingNotice{TotalPending: 3, ChangedTargets: []agent.ResidentPendingTarget{
@@ -568,19 +587,125 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 		}},
 		Fingerprint:        "all-v2",
 		TargetFingerprints: map[string]string{"channel:one": "one-v2", "dm:two": "two-v1"},
+		CoordinatorID:      "coordinator-1",
+		PendingGeneration:  3,
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", second); err != nil {
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", second, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("changed Notice: %v", err)
 	}
 	got := backend.snapshot()
-	if len(got) != 2 {
-		t.Fatalf("runtime Notices = %+v, want first plus one changed Notice", got)
+	if len(got) != 3 {
+		t.Fatalf("runtime Notices = %+v, want first, new generation, and changed Notice", got)
 	}
 	if !reflect.DeepEqual(got[0].ChangedTargets, first.Notice.ChangedTargets) {
 		t.Fatalf("first changed targets = %+v", got[0].ChangedTargets)
 	}
-	if want := []agent.ResidentPendingTarget{{Target: "channel:one", PendingCount: 2}}; !reflect.DeepEqual(got[1].ChangedTargets, want) {
-		t.Fatalf("second changed targets = %+v, want %+v", got[1].ChangedTargets, want)
+	if !reflect.DeepEqual(got[1].ChangedTargets, first.Notice.ChangedTargets) {
+		t.Fatalf("new-generation changed targets = %+v", got[1].ChangedTargets)
+	}
+	if want := []agent.ResidentPendingTarget{{Target: "channel:one", PendingCount: 2}}; !reflect.DeepEqual(got[2].ChangedTargets, want) {
+		t.Fatalf("changed Notice targets = %+v, want %+v", got[2].ChangedTargets, want)
+	}
+}
+
+func TestMessageCoordinatorBlockedPendingNoticeDoesNotBlockNewDelivery(t *testing.T) {
+	noticeStarted := make(chan struct{})
+	releaseNotice := make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseNotice) }) })
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	coordinator.ConfigurePendingNotices(func(_ context.Context, _ PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		startOnce.Do(func() { close(noticeStarted) })
+		<-releaseNotice
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
+		}
+		return nil
+	}, 10*time.Millisecond, 20*time.Millisecond)
+	t.Cleanup(coordinator.Close)
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel:one", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+	coordinator.NotifyPendingAfterTurn()
+	select {
+	case <-noticeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Pending Notice did not start")
+	}
+	acceptDone := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel:one", 2, "delivery-2"))
+		acceptDone <- err
+	}()
+	select {
+	case err := <-acceptDone:
+		if err != nil {
+			t.Fatalf("Accept during Pending Notice: %v", err)
+		}
+	case <-time.After(time.Second):
+		releaseOnce.Do(func() { close(releaseNotice) })
+		<-acceptDone
+		t.Fatal("Pending Notice I/O held the coordinator state lock")
+	}
+	releaseOnce.Do(func() { close(releaseNotice) })
+}
+
+func TestMessageCoordinatorPendingChangeDuringNoticeRetriesCurrentGeneration(t *testing.T) {
+	firstStarted := make(chan PendingNoticeSnapshot, 1)
+	releaseFirst := make(chan struct{})
+	committed := make(chan PendingNoticeSnapshot, 1)
+	var (
+		attemptMu   sync.Mutex
+		attempts    int
+		releaseOnce sync.Once
+	)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseFirst) }) })
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		attemptMu.Lock()
+		attempts++
+		attempt := attempts
+		attemptMu.Unlock()
+		if attempt == 1 {
+			firstStarted <- snapshot
+			<-releaseFirst
+		}
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
+		}
+		committed <- snapshot
+		return nil
+	}, 10*time.Millisecond, 20*time.Millisecond)
+	t.Cleanup(coordinator.Close)
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel:one", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+	coordinator.NotifyPendingAfterTurn()
+	var first PendingNoticeSnapshot
+	select {
+	case first = <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first Pending Notice did not start")
+	}
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel:one", 2, "delivery-2")); err != nil {
+		t.Fatalf("Accept changed Pending: %v", err)
+	}
+	releaseOnce.Do(func() { close(releaseFirst) })
+	select {
+	case current := <-committed:
+		if current.PendingGeneration <= first.PendingGeneration || current.Notice.TotalPending != 2 {
+			t.Fatalf("retried Notice = %+v, first generation %d", current, first.PendingGeneration)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("changed Pending generation did not retain Notice retry debt")
 	}
 }
 
@@ -596,7 +721,11 @@ func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 	}
 
 	pool.observeResidentRuntimeMessage(slot, agent.Message{Type: agent.MessageCompactionStarted})
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", snapshot); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+	commit := func(apply func()) bool {
+		apply()
+		return true
+	}
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", snapshot, commit); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 		t.Fatalf("Notice during compaction error = %v, want busy deferral", err)
 	}
 	if got := backend.snapshot(); len(got) != 0 {
@@ -604,7 +733,7 @@ func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 	}
 
 	pool.observeResidentRuntimeMessage(slot, agent.Message{Type: agent.MessageCompactionFinished})
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", snapshot); err != nil {
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", snapshot, commit); err != nil {
 		t.Fatalf("Notice after compaction finish: %v", err)
 	}
 	if got := backend.snapshot(); len(got) != 1 {
@@ -617,7 +746,7 @@ func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *t
 	var mu sync.Mutex
 	var notices []agent.ResidentPendingNotice
 	activityCount := 0
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
 	}, func([]protocol.AgentMessageProjection) {
 		activityCount++
@@ -625,10 +754,13 @@ func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *t
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot) error {
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		mu.Lock()
-		defer mu.Unlock()
 		notices = append(notices, snapshot.Notice)
+		mu.Unlock()
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
+		}
 		return nil
 	}, 25*time.Millisecond, 40*time.Millisecond)
 	t.Cleanup(coordinator.Close)
@@ -697,7 +829,7 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 	root := t.TempDir()
 	var mu sync.Mutex
 	attempts := 0
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
 	}, func([]protocol.AgentMessageProjection) {
 		t.Fatal("Pending Notice must not emit Message received Activity")
@@ -705,15 +837,19 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot) error {
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		mu.Lock()
-		defer mu.Unlock()
 		attempts++
+		attempt := attempts
 		if snapshot.Notice.TotalPending != 1 {
 			t.Errorf("Notice total = %d, want 1", snapshot.Notice.TotalPending)
 		}
-		if attempts == 1 {
+		mu.Unlock()
+		if attempt == 1 {
 			return errors.New("unsafe provider receipt")
+		}
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
 		}
 		return nil
 	}, 20*time.Millisecond, 30*time.Millisecond)
@@ -754,7 +890,7 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 
 func TestClosedMessageCoordinatorRejectsPendingWork(t *testing.T) {
 	handoffs := 0
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffs++
 		return nil
 	}, nil)
@@ -769,18 +905,18 @@ func TestClosedMessageCoordinatorRejectsPendingWork(t *testing.T) {
 	if err := coordinator.Flush(context.Background()); err == nil {
 		t.Fatal("Flush succeeded after Close")
 	}
-	if result, err := coordinator.Check(0); err == nil {
-		t.Fatalf("Check succeeded after Close: %+v", result)
+	if offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck}); err == nil {
+		t.Fatalf("PrepareCoverage succeeded after Close: %+v", offer)
 	}
 	if handoffs != 0 {
 		t.Fatalf("runtime handoffs after Close = %d", handoffs)
 	}
 }
 
-func TestMessageCoordinatorCheckReturnsBoundedPendingAndAdvancesOnlyReturnedBoundaries(t *testing.T) {
+func TestMessageCoordinatorCoverageCheckAdvancesOnlyAfterCommit(t *testing.T) {
 	root := t.TempDir()
 	activityCount := 0
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		t.Fatal("message check must not use idle runtime handoff")
 		return nil
 	}, func([]protocol.AgentMessageProjection) {
@@ -800,38 +936,47 @@ func TestMessageCoordinatorCheckReturnsBoundedPendingAndAdvancesOnlyReturnedBoun
 		}
 	}
 
-	result, err := coordinator.Check(2)
+	first, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 2})
 	if err != nil {
-		t.Fatalf("Check: %v", err)
+		t.Fatalf("PrepareCoverage: %v", err)
 	}
-	if got := []string{result.Messages[0].ID, result.Messages[1].ID}; !reflect.DeepEqual(got, []string{"message-1", "message-2"}) {
+	if got := []string{first.Messages[0].ID, first.Messages[1].ID}; !reflect.DeepEqual(got, []string{"message-1", "message-2"}) {
 		t.Fatalf("checked Messages = %v", got)
 	}
-	if !result.HasMore || result.Remaining != 1 || result.Status != messageCheckStatusMore {
-		t.Fatalf("first Check result = %+v", result)
+	if !first.HasMore || first.Remaining != 1 || first.ReceiptID == "" {
+		t.Fatalf("first coverage offer = %+v", first)
+	}
+	if got := coordinator.Boundaries(); len(got) != 0 {
+		t.Fatalf("boundaries advanced before output commit: %+v", got)
+	}
+	if err := coordinator.CommitCoverage(first.ReceiptID); err != nil {
+		t.Fatalf("CommitCoverage: %v", err)
 	}
 	if got := coordinator.Boundaries(); !reflect.DeepEqual(got, map[string]int64{"channel:one": 2}) {
-		t.Fatalf("boundaries after bounded Check = %+v", got)
+		t.Fatalf("boundaries after first commit = %+v", got)
 	}
 	if activityCount != 0 {
 		t.Fatalf("Message received Activity count = %d, want 0", activityCount)
 	}
 
-	result, err = coordinator.Check(2)
+	second, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: 2})
 	if err != nil {
-		t.Fatalf("second Check: %v", err)
+		t.Fatalf("second PrepareCoverage: %v", err)
 	}
-	if len(result.Messages) != 1 || result.Messages[0].ID != "message-3" || result.HasMore || result.Remaining != 0 || result.Status != messageCheckStatusComplete {
-		t.Fatalf("second Check result = %+v", result)
+	if len(second.Messages) != 1 || second.Messages[0].ID != "message-3" || second.HasMore || second.Remaining != 0 {
+		t.Fatalf("second coverage offer = %+v", second)
+	}
+	if err := coordinator.CommitCoverage(second.ReceiptID); err != nil {
+		t.Fatalf("second CommitCoverage: %v", err)
 	}
 	if got := coordinator.Boundaries(); !reflect.DeepEqual(got, map[string]int64{"channel:one": 2, "dm:two": 1}) {
 		t.Fatalf("final boundaries = %+v", got)
 	}
 }
 
-func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.T) {
+func TestMessageCoordinatorCoverageCheckRetainsPendingWhenCommitWriteFails(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "agent-root")
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
 	if err != nil {
@@ -842,13 +987,17 @@ func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.
 	if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
 		t.Fatalf("Accept: %v", err)
 	}
+	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck})
+	if err != nil {
+		t.Fatalf("PrepareCoverage: %v", err)
+	}
 	if err := os.WriteFile(root, []byte("blocks agent root directory"), 0o600); err != nil {
 		t.Fatalf("block agent root: %v", err)
 	}
 
-	result, err := coordinator.Check(0)
+	err = coordinator.CommitCoverage(offer.ReceiptID)
 	if err == nil {
-		t.Fatalf("Check result = %+v, want boundary failure", result)
+		t.Fatal("CommitCoverage succeeded despite boundary failure")
 	}
 	coordinator.mu.Lock()
 	pending := coordinator.pendingBatchLocked()
@@ -863,12 +1012,8 @@ func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.
 	if err := os.Remove(root); err != nil {
 		t.Fatalf("unblock agent root: %v", err)
 	}
-	result, err = coordinator.Check(0)
-	if err != nil {
-		t.Fatalf("retry Check: %v", err)
-	}
-	if len(result.Messages) != 1 || result.Messages[0].ID != delivery.Message.ID {
-		t.Fatalf("retry result = %+v", result)
+	if err := coordinator.CommitCoverage(offer.ReceiptID); err != nil {
+		t.Fatalf("retry CommitCoverage: %v", err)
 	}
 	coordinator.mu.Lock()
 	pending = coordinator.pendingBatchLocked()
@@ -878,23 +1023,21 @@ func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.
 	}
 }
 
-func TestDaemonAgentLifecycleRegistersCoordinatorAtAgentRoot(t *testing.T) {
+func TestWorkspaceRunnerAttachmentRegistersCoordinatorAtAgentRoot(t *testing.T) {
 	const workspaceID = "11111111-1111-4111-8111-111111111111"
 	const agentID = "22222222-2222-4222-8222-222222222222"
 	const runtimeID = "33333333-3333-4333-8333-333333333333"
 	root := t.TempDir()
 	daemon := New(Config{WorkspacesRoot: root}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	daemon.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	runner, _ := attachTestWorkspaceRunner(t, daemon, workspaceID, nil)
 
-	if err := daemon.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{
-		AgentID: agentID, RuntimeID: runtimeID, WorkspaceID: workspaceID, PlacementGeneration: 1,
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
 	}); err != nil {
-		t.Fatalf("handleDaemonAgentStart: %v", err)
+		t.Fatalf("applyAttachmentAttach: %v", err)
 	}
-	daemon.messageCoordinatorMu.RLock()
-	coordinator := daemon.messageCoordinators[agentID]
-	registeredRuntimeID := daemon.messageRuntimeIDs[agentID]
-	daemon.messageCoordinatorMu.RUnlock()
+	coordinator, registeredRuntimeID := resolveTestInbox(t, daemon, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	if coordinator == nil || registeredRuntimeID != runtimeID {
 		t.Fatalf("coordinator=%v runtime_id=%q", coordinator, registeredRuntimeID)
 	}
@@ -906,16 +1049,15 @@ func TestDaemonAgentLifecycleRegistersCoordinatorAtAgentRoot(t *testing.T) {
 		t.Fatalf("Agent root was not provisioned: %v", err)
 	}
 
-	if err := daemon.handleDaemonAgentStop(protocol.DaemonAgentStopPayload{
-		AgentID: agentID, RuntimeID: runtimeID, PlacementGeneration: 1,
+	if _, err := runner.applyAttachmentDetach(protocol.WorkspaceRunnerAgentDetachPayload{
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2, CorrelationID: "detach-1",
 	}); err != nil {
-		t.Fatalf("handleDaemonAgentStop: %v", err)
+		t.Fatalf("applyAttachmentDetach: %v", err)
 	}
-	daemon.messageCoordinatorMu.RLock()
-	coordinator = daemon.messageCoordinators[agentID]
-	daemon.messageCoordinatorMu.RUnlock()
-	if coordinator != nil {
-		t.Fatal("coordinator remained registered after accepted placement stop")
+	if runner := daemon.currentWorkspaceRunner(workspaceID); runner != nil {
+		if _, _, ok := runner.inboxes.Resolve(agentID); ok {
+			t.Fatal("coordinator remained registered after accepted placement stop")
+		}
 	}
 }
 
@@ -932,14 +1074,11 @@ func completeCoordinatorRecovery(t *testing.T, coordinator *MessageCoordinator) 
 	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "fence-1"}); err != nil {
 		t.Fatalf("complete recovery: %v", err)
 	}
-	if err := coordinator.Flush(context.Background()); err != nil {
-		t.Fatalf("finalize recovery: %v", err)
-	}
 }
 
 func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -959,7 +1098,7 @@ func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T
 func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
 	root := t.TempDir()
 	var handoffs, activities int
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffs++
 		return nil
 	}, func([]protocol.AgentMessageProjection) {
@@ -1001,7 +1140,7 @@ func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
 func TestMessageCoordinatorFlushesTargetInSequenceAndRecordsOneActivityBatch(t *testing.T) {
 	var handedOff [][]string
 	var activities int
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		batch := make([]string, len(messages))
 		for i, message := range messages {
 			batch[i] = message.ID
@@ -1035,9 +1174,358 @@ func TestMessageCoordinatorFlushesTargetInSequenceAndRecordsOneActivityBatch(t *
 	}
 }
 
+func TestMessageCoordinatorBlockedRuntimeHandoffDoesNotBlockNewDelivery(t *testing.T) {
+	handoffStarted := make(chan struct{})
+	releaseHandoff := make(chan struct{})
+	var (
+		callMu         sync.Mutex
+		handoffBatches [][]string
+		startOnce      sync.Once
+		releaseOnce    sync.Once
+	)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHandoff) }) })
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+		batch := make([]string, len(messages))
+		for index, message := range messages {
+			batch[index] = message.ID
+		}
+		callMu.Lock()
+		handoffBatches = append(handoffBatches, batch)
+		callNumber := len(handoffBatches)
+		callMu.Unlock()
+		if callNumber == 1 {
+			startOnce.Do(func() { close(handoffStarted) })
+			<-releaseHandoff
+		}
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- coordinator.Flush(context.Background()) }()
+	select {
+	case <-handoffStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Runtime handoff did not start")
+	}
+
+	type acceptResult struct {
+		accepted bool
+		err      error
+	}
+	acceptDone := make(chan acceptResult, 1)
+	go func() {
+		accepted, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel-1", 2, "delivery-2"))
+		acceptDone <- acceptResult{accepted: accepted, err: err}
+	}()
+	var (
+		acceptedWhileBlocked acceptResult
+		acceptResponsive     bool
+	)
+	select {
+	case acceptedWhileBlocked = <-acceptDone:
+		acceptResponsive = true
+	case <-time.After(time.Second):
+	}
+	if !acceptResponsive {
+		releaseOnce.Do(func() { close(releaseHandoff) })
+		<-flushDone
+		<-acceptDone
+		t.Fatal("blocked Runtime handoff held the coordinator lock against Accept")
+	}
+	if acceptedWhileBlocked.err != nil || !acceptedWhileBlocked.accepted {
+		t.Fatalf("Accept during Runtime handoff = %+v", acceptedWhileBlocked)
+	}
+	coordinator.mu.Lock()
+	reserved := coordinator.activeHandoff
+	pendingWhileBlocked := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if reserved == nil || reserved.generation == 0 || reserved.phase != runtimeMessageHandoffReserved {
+		t.Fatalf("active handoff token = %+v, want reserved phase", reserved)
+	}
+	if want := []string{messageIdentityKey(testDelivery("message-1", "channel-1", 1, "delivery-1").Message)}; !reflect.DeepEqual(reserved.identities, want) {
+		t.Fatalf("reserved identities = %v, want %v", reserved.identities, want)
+	}
+	if got := reserved.proposedBoundaries["channel-1"]; got != 1 {
+		t.Fatalf("reserved boundary = %d, want 1", got)
+	}
+	if len(pendingWhileBlocked) != 2 {
+		t.Fatalf("Pending during blocked handoff = %+v, want two Messages", pendingWhileBlocked)
+	}
+	if got := []string{pendingWhileBlocked[0].ID, pendingWhileBlocked[1].ID}; !reflect.DeepEqual(got, []string{"message-1", "message-2"}) {
+		t.Fatalf("Pending during blocked handoff = %v", got)
+	}
+	releaseOnce.Do(func() { close(releaseHandoff) })
+	if err := <-flushDone; err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	callMu.Lock()
+	gotBatches := append([][]string(nil), handoffBatches...)
+	callMu.Unlock()
+	if want := [][]string{{"message-1"}, {"message-2"}}; !reflect.DeepEqual(gotBatches, want) {
+		t.Fatalf("reserved Runtime batches = %v, want %v", gotBatches, want)
+	}
+}
+
+func TestMessageCoordinatorConcurrentFlushCannotReserveActiveBatch(t *testing.T) {
+	handoffStarted := make(chan struct{})
+	releaseHandoff := make(chan struct{})
+	var (
+		calls       int
+		callMu      sync.Mutex
+		startOnce   sync.Once
+		releaseOnce sync.Once
+	)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHandoff) }) })
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		callMu.Lock()
+		calls++
+		callMu.Unlock()
+		startOnce.Do(func() { close(handoffStarted) })
+		<-releaseHandoff
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	firstFlushDone := make(chan error, 1)
+	go func() { firstFlushDone <- coordinator.Flush(context.Background()) }()
+	select {
+	case <-handoffStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first Runtime handoff did not start")
+	}
+	secondFlushDone := make(chan error, 1)
+	go func() { secondFlushDone <- coordinator.Flush(context.Background()) }()
+	var (
+		secondErr        error
+		secondResponsive bool
+	)
+	select {
+	case secondErr = <-secondFlushDone:
+		secondResponsive = true
+	case <-time.After(time.Second):
+	}
+	releaseOnce.Do(func() { close(releaseHandoff) })
+	if err := <-firstFlushDone; err != nil {
+		t.Fatalf("first Flush: %v", err)
+	}
+	if !secondResponsive {
+		secondErr = <-secondFlushDone
+		t.Fatalf("second Flush waited for active Runtime handoff; returned %v", secondErr)
+	}
+	if !errors.Is(secondErr, errRuntimeMessageHandoffInProgress) {
+		t.Fatalf("second Flush = %v, want active-handoff rejection", secondErr)
+	}
+	callMu.Lock()
+	gotCalls := calls
+	callMu.Unlock()
+	if gotCalls != 1 {
+		t.Fatalf("Runtime handoff calls = %d, want 1", gotCalls)
+	}
+}
+
+func TestMessageCoordinatorBlockedBoundaryCommitDoesNotBlockNewDelivery(t *testing.T) {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	commitStarted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	var (
+		writeMu        sync.Mutex
+		writeCalls     int
+		writeSnapshots []map[string]int64
+		startOnce      sync.Once
+		releaseOnce    sync.Once
+	)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseCommit) }) })
+	originalWriter := coordinator.writeBoundaries
+	coordinator.writeBoundaries = func(path string, boundaries map[string]int64) error {
+		writeMu.Lock()
+		writeCalls++
+		callNumber := writeCalls
+		writeSnapshots = append(writeSnapshots, cloneBoundaries(boundaries))
+		writeMu.Unlock()
+		if callNumber == 1 {
+			startOnce.Do(func() { close(commitStarted) })
+			<-releaseCommit
+		}
+		return originalWriter(path, boundaries)
+	}
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- coordinator.Flush(context.Background()) }()
+	select {
+	case <-commitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("boundary commit did not start")
+	}
+
+	acceptDone := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel-1", 2, "delivery-2"))
+		acceptDone <- err
+	}()
+	select {
+	case err := <-acceptDone:
+		if err != nil {
+			t.Fatalf("Accept during boundary commit: %v", err)
+		}
+	case <-time.After(time.Second):
+		releaseOnce.Do(func() { close(releaseCommit) })
+		<-flushDone
+		t.Fatal("boundary filesystem I/O held the coordinator state lock")
+	}
+	releaseOnce.Do(func() { close(releaseCommit) })
+	if err := <-flushDone; err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := coordinator.Boundaries()["channel-1"]; got != 2 {
+		t.Fatalf("boundary after serialized commits = %d, want 2", got)
+	}
+	writeMu.Lock()
+	gotSnapshots := append([]map[string]int64(nil), writeSnapshots...)
+	writeMu.Unlock()
+	if want := []map[string]int64{{"channel-1": 1}, {"channel-1": 2}}; !reflect.DeepEqual(gotSnapshots, want) {
+		t.Fatalf("serialized boundary snapshots = %v, want %v", gotSnapshots, want)
+	}
+}
+
+func TestMessageCoordinatorBlockedActivityDoesNotBlockNewDelivery(t *testing.T) {
+	activityStarted := make(chan struct{})
+	releaseActivity := make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseActivity) }) })
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, func([]protocol.AgentMessageProjection) {
+		startOnce.Do(func() { close(activityStarted) })
+		<-releaseActivity
+	})
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- coordinator.Flush(context.Background()) }()
+	select {
+	case <-activityStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Message received Activity did not start")
+	}
+	acceptDone := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel-1", 2, "delivery-2"))
+		acceptDone <- err
+	}()
+	select {
+	case err := <-acceptDone:
+		if err != nil {
+			t.Fatalf("Accept during Activity: %v", err)
+		}
+	case <-time.After(time.Second):
+		releaseOnce.Do(func() { close(releaseActivity) })
+		<-flushDone
+		t.Fatal("Activity callback held the coordinator state lock")
+	}
+	releaseOnce.Do(func() { close(releaseActivity) })
+	if err := <-flushDone; err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+}
+
+func TestMessageCoordinatorCloseInvalidatesAcceptedTokenBeforeBoundaryWrite(t *testing.T) {
+	activityStarted := make(chan struct{})
+	releaseActivity := make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseActivity) }) })
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, func([]protocol.AgentMessageProjection) {
+		startOnce.Do(func() { close(activityStarted) })
+		<-releaseActivity
+	})
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	writeCalls := 0
+	coordinator.writeBoundaries = func(string, map[string]int64) error {
+		writeCalls++
+		return nil
+	}
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- coordinator.Flush(context.Background()) }()
+	select {
+	case <-activityStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Message received Activity did not start")
+	}
+	closeDone := make(chan struct{})
+	go func() {
+		coordinator.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		releaseOnce.Do(func() { close(releaseActivity) })
+		t.Fatal("Close waited for non-state Activity callback")
+	}
+	releaseOnce.Do(func() { close(releaseActivity) })
+	if err := <-flushDone; !errors.Is(err, errRuntimeMessageHandoffInvalidated) {
+		t.Fatalf("Flush after Close = %v, want invalidated token", err)
+	}
+	if writeCalls != 0 {
+		t.Fatalf("stale accepted token performed %d boundary writes", writeCalls)
+	}
+	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
+		t.Fatalf("stale accepted token advanced boundary to %d", got)
+	}
+}
+
+func TestMessageCoordinatorCommitAdvancesExactTargetMaxima(t *testing.T) {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	for _, delivery := range []protocol.AgentDeliverPayload{
+		testDelivery("message-a2", "channel:a", 2, "delivery-a2"),
+		testDelivery("message-a4", "channel:a", 4, "delivery-a4"),
+		testDelivery("message-b3", "channel:b", 3, "delivery-b3"),
+	} {
+		if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+			t.Fatalf("Accept %s: %v", delivery.Message.ID, err)
+		}
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got, want := coordinator.Boundaries(), map[string]int64{"channel:a": 4, "channel:b": 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("committed boundaries = %v, want %v", got, want)
+	}
+}
+
 func TestMessageCoordinatorDeduplicatesDeliveryWithoutSecondHandoffOrActivity(t *testing.T) {
 	var handoffs, activities int
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, func([]protocol.AgentMessageProjection) { activities++ })
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, func([]protocol.AgentMessageProjection) { activities++ })
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1064,7 +1552,7 @@ func TestMessageCoordinatorDeduplicatesDeliveryWithoutSecondHandoffOrActivity(t 
 func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T) {
 	root := t.TempDir()
 	var handoffs int
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1073,16 +1561,14 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 		mode:    canonicalRuntimeResident,
 		backend: &canonicalRuntimeTestBackend{},
 	}
-	daemon := &Daemon{
-		canonicalRuntimes: runtimePool,
-		messageRuntimeIDs: map[string]string{"agent-1": "runtime-1"},
-	}
-	if err := daemon.registerIdleMessageCoordinator("agent-1", coordinator); err != nil {
-		t.Fatalf("registerIdleMessageCoordinator: %v", err)
-	}
+	daemon := &Daemon{canonicalRuntimes: runtimePool}
 	completeCoordinatorRecovery(t, coordinator)
 	delivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
-	ack, err := daemon.acceptIdleAgentDelivery(context.Background(), delivery)
+	daemon.mu.Lock()
+	daemon.runtimeIndex = map[string]Runtime{"runtime-1": {ID: "runtime-1", WorkspaceID: "workspace-1"}}
+	daemon.mu.Unlock()
+	registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	ack, err := daemon.acceptIdleAgentDelivery(context.Background(), "workspace-1", delivery)
 	if err != nil {
 		t.Fatalf("acceptIdleAgentDelivery: %v", err)
 	}
@@ -1095,7 +1581,7 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
 		t.Fatalf("boundary = %d, want 0 before handoff", got)
 	}
-	if err := daemon.flushIdleAgentDelivery(context.Background(), "agent-1"); err != nil {
+	if err := daemon.flushIdleAgentDelivery(context.Background(), "workspace-1", "agent-1"); err != nil {
 		t.Fatalf("flushIdleAgentDelivery: %v", err)
 	}
 	if handoffs != 1 {
@@ -1106,13 +1592,14 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 	}
 }
 
-func TestCoordinatorReplacementWaitsForInFlightHandoff(t *testing.T) {
+func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 	oldRoot := t.TempDir()
 	newRoot := t.TempDir()
 	handoffStarted := make(chan struct{})
 	releaseHandoff := make(chan struct{})
-	var startOnce sync.Once
-	oldCoordinator, err := NewMessageCoordinator(oldRoot, func(context.Context, []protocol.AgentMessageProjection) error {
+	var startOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHandoff) }) })
+	oldCoordinator, err := newTestMessageCoordinator(t, oldRoot, func(context.Context, []protocol.AgentMessageProjection) error {
 		startOnce.Do(func() { close(handoffStarted) })
 		<-releaseHandoff
 		return nil
@@ -1124,39 +1611,47 @@ func TestCoordinatorReplacementWaitsForInFlightHandoff(t *testing.T) {
 	if _, err := oldCoordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "delivery-1")); err != nil {
 		t.Fatal(err)
 	}
-	daemon := &Daemon{
-		messageCoordinators: map[string]*MessageCoordinator{"agent-1": oldCoordinator},
-		messageRuntimeIDs:   map[string]string{"agent-1": "runtime-old"},
-		canonicalRuntimes:   newCanonicalAgentRuntimePool(),
+	daemon := &Daemon{canonicalRuntimes: newCanonicalAgentRuntimePool()}
+	runner := registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-1"}, "runtime-old", oldCoordinator)
+	resolver := &testInboxAttachmentResolver{attachments: map[InboxKey]AgentAttachment{}}
+	resolver.set(AgentAttachment{WorkspaceID: "workspace-test", AgentID: "agent-1", RuntimeID: "runtime-old", AttachmentGeneration: 1})
+	runner.inboxes.attachments = resolver
+	runner.inboxes.ownsRuntime = func(string) bool { return true }
+	runner.inboxes.open = func(key InboxKey, runtimeID string) (*MessageCoordinator, error) {
+		return NewMessageCoordinator(key, newRoot, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	}
 	flushDone := make(chan error, 1)
-	go func() { flushDone <- daemon.flushIdleAgentDelivery(context.Background(), "agent-1") }()
+	go func() { flushDone <- daemon.flushIdleAgentDelivery(context.Background(), "workspace-test", "agent-1") }()
 	<-handoffStarted
 
 	replacementDone := make(chan error, 1)
+	resolver.set(AgentAttachment{WorkspaceID: "workspace-test", AgentID: "agent-1", RuntimeID: "runtime-new", AttachmentGeneration: 2})
 	go func() {
-		_, err := daemon.ensureIdleMessageCoordinator("agent-1", "runtime-new", newRoot)
+		_, err := runner.inboxes.Ensure("agent-1")
 		replacementDone <- err
 	}()
 	select {
 	case err := <-replacementDone:
-		t.Fatalf("coordinator replaced during in-flight handoff: %v", err)
-	case <-time.After(25 * time.Millisecond):
+		if err != nil {
+			t.Fatalf("replace coordinator: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("coordinator replacement waited for blocked Runtime handoff")
 	}
-	close(releaseHandoff)
-	if err := <-flushDone; err != nil {
-		t.Fatalf("old coordinator flush: %v", err)
+	releaseOnce.Do(func() { close(releaseHandoff) })
+	if err := <-flushDone; !errors.Is(err, errRuntimeMessageHandoffInvalidated) {
+		t.Fatalf("old coordinator Flush = %v, want invalidated token", err)
 	}
-	if err := <-replacementDone; err != nil {
-		t.Fatalf("replace coordinator: %v", err)
+	if got := oldCoordinator.Boundaries()["channel-1"]; got != 0 {
+		t.Fatalf("stale handoff advanced old coordinator boundary to %d", got)
 	}
-	if got := oldCoordinator.Boundaries()["channel-1"]; got != 1 {
-		t.Fatalf("old coordinator boundary = %d, want 1", got)
+	oldCoordinator.mu.Lock()
+	pending := oldCoordinator.pendingBatchLocked()
+	oldCoordinator.mu.Unlock()
+	if len(pending) != 1 || pending[0].ID != "message-1" {
+		t.Fatalf("stale handoff consumed old Pending: %+v", pending)
 	}
-	daemon.messageCoordinatorMu.RLock()
-	replacement := daemon.messageCoordinators["agent-1"]
-	runtimeID := daemon.messageRuntimeIDs["agent-1"]
-	daemon.messageCoordinatorMu.RUnlock()
+	replacement, runtimeID := resolveTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-1"})
 	if replacement == nil {
 		t.Fatal("replacement coordinator is nil")
 	}
@@ -1170,7 +1665,7 @@ func TestMessageCoordinatorTreatsMalformedBoundaryAsUnknownCoverage(t *testing.T
 	if err := os.WriteFile(filepath.Join(root, consumedSeqsFileName), []byte("not-json"), 0o600); err != nil {
 		t.Fatalf("write corrupt boundary: %v", err)
 	}
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1192,7 +1687,7 @@ func TestMessageCoordinatorDeletedBoundaryReplaysConservatively(t *testing.T) {
 		t.Fatalf("delete boundary: %v", err)
 	}
 	var handedOff []protocol.AgentMessageProjection
-	coordinator, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		handedOff = append(handedOff, messages...)
 		return nil
 	}, nil)
@@ -1226,7 +1721,7 @@ func TestMessageCoordinatorLowerBoundaryConservativelyReplays(t *testing.T) {
 		t.Fatalf("write lower boundary: %v", err)
 	}
 	var handedOff []protocol.AgentMessageProjection
-	coordinator, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		handedOff = append(handedOff, messages...)
 		return nil
 	}, nil)
@@ -1250,7 +1745,7 @@ func TestMessageCoordinatorLowerBoundaryConservativelyReplays(t *testing.T) {
 
 func TestMessageCoordinatorRecoveryMergesLiveAndPagedMessagesBeforeFlush(t *testing.T) {
 	var got []string
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		for _, message := range messages {
 			got = append(got, message.ID)
 		}
@@ -1275,25 +1770,225 @@ func TestMessageCoordinatorRecoveryMergesLiveAndPagedMessagesBeforeFlush(t *test
 	if err := coordinator.Flush(context.Background()); err == nil {
 		t.Fatal("Flush succeeded before recovery fence completed")
 	}
-	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snap", HighWatermark: "42", Messages: []protocol.AgentMessageProjection{{ID: "message-2", Target: "channel-1", Seq: 2, Content: "two"}}}); err != nil {
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-3", "channel-1", 3, "live-3")); err != nil {
+		t.Fatalf("live Accept during recovery: %v", err)
+	}
+	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snap", HighWatermark: "42", Messages: []protocol.AgentMessageProjection{
+		{ID: "message-2", Target: "channel-1", Seq: 2, Content: "two"},
+		{ID: "message-3", Target: "channel-1", Seq: 3, Content: "three"},
+	}}); err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
-	if coordinator.FreshnessKnown() {
-		t.Fatal("freshness became known before terminal recovery handoff")
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("terminal recovery page did not establish freshness before runtime handoff")
+	}
+	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
+		t.Fatalf("Context Boundary advanced to %d when recovery completed", got)
+	}
+	if accepted, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel-1", 1, "live-after-terminal")); err != nil || accepted {
+		t.Fatalf("duplicate live Delivery after recovery = accepted %v, error %v", accepted, err)
 	}
 	if err := coordinator.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
 	if !coordinator.FreshnessKnown() {
-		t.Fatal("freshness remains unknown after terminal recovery handoff")
+		t.Fatal("runtime handoff reverted known freshness")
 	}
-	if want := []string{"message-1", "message-2"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"message-1", "message-2", "message-3"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("handoff = %v, want %v", got, want)
 	}
 }
 
+func TestMessageCoordinatorConcurrentLiveAndRecoveryDeliveryDeduplicates(t *testing.T) {
+	var handedOff []protocol.AgentMessageProjection
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+		handedOff = append(handedOff, messages...)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	request := coordinator.BeginRecovery("agent-1", 1)
+	message := protocol.AgentMessageProjection{ID: "message-1", Target: "channel-1", Seq: 1, Content: "one"}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: message.Target, Seq: message.Seq, DeliveryID: "live-1", Message: message,
+	}
+	start := make(chan struct{})
+	var (
+		waitGroup sync.WaitGroup
+		acceptErr error
+		mergeErr  error
+	)
+	waitGroup.Add(2)
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		_, acceptErr = coordinator.Accept(context.Background(), delivery)
+	}()
+	go func() {
+		defer waitGroup.Done()
+		<-start
+		mergeErr = coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
+			AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "watermark-1",
+			Messages: []protocol.AgentMessageProjection{message},
+		})
+	}()
+	close(start)
+	waitGroup.Wait()
+	if acceptErr != nil || mergeErr != nil {
+		t.Fatalf("concurrent live/recovery merge errors = Accept %v, Merge %v", acceptErr, mergeErr)
+	}
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("concurrent live Delivery prevented terminal recovery readiness")
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if len(handedOff) != 1 || handedOff[0].ID != message.ID {
+		t.Fatalf("concurrent live/recovery handoff = %+v, want one canonical Message", handedOff)
+	}
+	if got := coordinator.Boundaries()[message.Target]; got != message.Seq {
+		t.Fatalf("Context Boundary = %d, want %d", got, message.Seq)
+	}
+}
+
+func TestMessageCoordinatorTerminalRecoveryIsReadyWithoutRuntimeHandoff(t *testing.T) {
+	handoffCalls := 0
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffCalls++
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	request := coordinator.BeginRecovery("agent-1", 2)
+	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "empty", HighWatermark: "empty",
+	}); err != nil {
+		t.Fatalf("MergeRecoveryPage: %v", err)
+	}
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("terminal empty recovery did not become ready")
+	}
+	if handoffCalls != 0 {
+		t.Fatalf("terminal empty recovery made %d runtime handoff calls", handoffCalls)
+	}
+	if got := coordinator.Boundaries(); len(got) != 0 {
+		t.Fatalf("terminal empty recovery advanced Context Boundaries: %v", got)
+	}
+}
+
+func TestMessageCoordinatorRecoveryStateTransitionsRequireNewAttemptAfterFailure(t *testing.T) {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	if got := coordinator.recovery.status; got != messageRecoveryUnknown {
+		t.Fatalf("initial recovery status = %q, want %q", got, messageRecoveryUnknown)
+	}
+	failedAttempt := coordinator.BeginRecovery("agent-1", 1)
+	if got := coordinator.recovery.status; got != messageRecoveryRecovering {
+		t.Fatalf("status after BeginRecovery = %q, want %q", got, messageRecoveryRecovering)
+	}
+	firstPage := protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: failedAttempt.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "watermark-1",
+		NextCursor: "cursor-1", HasMore: true,
+	}
+	if err := coordinator.MergeRecoveryPage(firstPage); err != nil {
+		t.Fatalf("first recovery page: %v", err)
+	}
+	if got := coordinator.recovery.status; got != messageRecoveryRecovering {
+		t.Fatalf("status after non-terminal page = %q, want %q", got, messageRecoveryRecovering)
+	}
+	if err := coordinator.MergeRecoveryPage(firstPage); err == nil {
+		t.Fatal("non-advancing recovery cursor was accepted")
+	}
+	if got := coordinator.recovery.status; got != messageRecoveryFailed {
+		t.Fatalf("status after invalid cursor = %q, want %q", got, messageRecoveryFailed)
+	}
+	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: failedAttempt.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "watermark-1",
+	}); err == nil {
+		t.Fatal("failed recovery resumed without a new recovery identity")
+	}
+	if got := coordinator.recovery.status; got != messageRecoveryFailed {
+		t.Fatalf("failed recovery changed status to %q", got)
+	}
+
+	readyAttempt := coordinator.BeginRecovery("agent-1", 1)
+	if readyAttempt.RecoveryID == failedAttempt.RecoveryID {
+		t.Fatal("new recovery attempt reused failed recovery identity")
+	}
+	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: readyAttempt.RecoveryID, SnapshotID: "snapshot-2", HighWatermark: "watermark-2",
+	}); err != nil {
+		t.Fatalf("new terminal recovery: %v", err)
+	}
+	if got := coordinator.recovery.status; got != messageRecoveryReady {
+		t.Fatalf("terminal recovery status = %q, want %q", got, messageRecoveryReady)
+	}
+}
+
+func TestMessageCoordinatorReadyPendingUsesNormalFreshnessHoldAfterBusyHandoff(t *testing.T) {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return ErrCanonicalAgentRuntimeBusy
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	request := coordinator.BeginRecovery("agent-1", 2)
+	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "busy", HighWatermark: "busy",
+		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel-1", Seq: 1, Content: "one"}},
+	}); err != nil {
+		t.Fatalf("MergeRecoveryPage: %v", err)
+	}
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("terminal recovery with Pending did not become ready")
+	}
+	if err := coordinator.Flush(context.Background()); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("busy Flush = %v", err)
+	}
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("busy runtime handoff reverted known freshness")
+	}
+	result, err := coordinator.PreflightMessageSend("channel-1")
+	if err != nil {
+		t.Fatalf("ready Pending freshness preflight: %v", err)
+	}
+	if !result.Held || result.LatestSeq != 1 || result.NewMessageCount != 1 {
+		t.Fatalf("ready Pending freshness = %+v, want held through sequence 1", result)
+	}
+}
+
+func TestMessageCoordinatorRuntimeHandoffFailureDoesNotRevertReadyRecovery(t *testing.T) {
+	handoffFailure := errors.New("runtime handoff failed")
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		return handoffFailure
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	request := coordinator.BeginRecovery("agent-1", 1)
+	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "watermark-1",
+		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel-1", Seq: 1, Content: "one"}},
+	}); err != nil {
+		t.Fatalf("MergeRecoveryPage: %v", err)
+	}
+	if err := coordinator.Flush(context.Background()); !errors.Is(err, handoffFailure) {
+		t.Fatalf("Flush error = %v, want %v", err, handoffFailure)
+	}
+	if !coordinator.FreshnessKnown() {
+		t.Fatal("runtime handoff failure reverted ready recovery")
+	}
+	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
+		t.Fatalf("failed runtime handoff advanced Context Boundary to %d", got)
+	}
+}
+
 func TestMessageCoordinatorRejectsDelayedPageFromPreviousReconnect(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1318,20 +2013,14 @@ func TestMessageCoordinatorRejectsDelayedPageFromPreviousReconnect(t *testing.T)
 	}); err != nil {
 		t.Fatalf("current recovery page was poisoned by stale page: %v", err)
 	}
-	if coordinator.FreshnessKnown() {
-		t.Fatal("current recovery became fresh before terminal handoff")
-	}
-	if err := coordinator.Flush(context.Background()); err != nil {
-		t.Fatalf("finalize current recovery: %v", err)
-	}
 	if !coordinator.FreshnessKnown() {
-		t.Fatal("current recovery did not complete after terminal handoff")
+		t.Fatal("current terminal recovery did not become ready after stale page")
 	}
 }
 
 func TestMessageCoordinatorRestartRecoversAcceptedMessageBeforeHandoff(t *testing.T) {
 	root := t.TempDir()
-	first, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	first, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		t.Fatal("first coordinator handed off before simulated crash")
 		return nil
 	}, nil)
@@ -1348,7 +2037,7 @@ func TestMessageCoordinatorRestartRecoversAcceptedMessageBeforeHandoff(t *testin
 	}
 
 	var recovered []protocol.AgentMessageProjection
-	restarted, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	restarted, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		recovered = append(recovered, messages...)
 		return nil
 	}, nil)
@@ -1375,7 +2064,7 @@ func TestMessageCoordinatorUpgradeRestartRecoversBusyPendingMessage(t *testing.T
 	firstDelivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
 	pendingDelivery := testDelivery("message-2", "channel-1", 2, "delivery-2")
 	handoffCalls := 0
-	first, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	first, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffCalls++
 		if handoffCalls == 1 {
 			return nil
@@ -1404,7 +2093,7 @@ func TestMessageCoordinatorUpgradeRestartRecoversBusyPendingMessage(t *testing.T
 	first.Close()
 
 	var recovered []protocol.AgentMessageProjection
-	restarted, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	restarted, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		recovered = append(recovered, messages...)
 		return nil
 	}, nil)
@@ -1430,7 +2119,7 @@ func TestMessageCoordinatorUpgradeRestartRecoversBusyPendingMessage(t *testing.T
 }
 
 func TestMessageCoordinatorCredentialBoundaryFailsClosedAfterRecoveryFailure(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1452,7 +2141,7 @@ func TestMessageCoordinatorCredentialBoundaryFailsClosedAfterRecoveryFailure(t *
 func TestMessageCoordinatorRetriesBoundaryWithoutDuplicateHandoffOrActivity(t *testing.T) {
 	root := t.TempDir()
 	var handoffs, activities int
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffs++
 		return nil
 	}, func([]protocol.AgentMessageProjection) { activities++ })
@@ -1486,7 +2175,7 @@ func TestMessageCoordinatorRetriesBoundaryWithoutDuplicateHandoffOrActivity(t *t
 
 func TestMessageCoordinatorRetriesRuntimeHandoffSafely(t *testing.T) {
 	var attempts, activities int
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		attempts++
 		if attempts == 1 {
 			return errors.New("runtime input unavailable")
@@ -1503,6 +2192,16 @@ func TestMessageCoordinatorRetriesRuntimeHandoffSafely(t *testing.T) {
 	if err := coordinator.Flush(context.Background()); err == nil {
 		t.Fatal("first Flush succeeded")
 	}
+	coordinator.mu.Lock()
+	activeAfterRejection := coordinator.activeHandoff
+	pendingAfterRejection := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if activeAfterRejection != nil {
+		t.Fatalf("runtime rejection retained active token: %+v", activeAfterRejection)
+	}
+	if len(pendingAfterRejection) != 1 || pendingAfterRejection[0].ID != "message-1" {
+		t.Fatalf("runtime rejection consumed Pending: %+v", pendingAfterRejection)
+	}
 	if activities != 0 || coordinator.Boundaries()["channel-1"] != 0 {
 		t.Fatalf("failed handoff activity=%d boundary=%d", activities, coordinator.Boundaries()["channel-1"])
 	}
@@ -1516,7 +2215,7 @@ func TestMessageCoordinatorRetriesRuntimeHandoffSafely(t *testing.T) {
 
 func TestMessageCoordinatorPreflightHoldsCompletePendingRangeWithNewestThree(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
 	if err != nil {
@@ -1536,42 +2235,40 @@ func TestMessageCoordinatorPreflightHoldsCompletePendingRangeWithNewestThree(t *
 	if !result.Held || result.NewMessageCount != 5 || result.Omitted != 2 || result.LatestSeq != 5 {
 		t.Fatalf("preflight result = %+v", result)
 	}
+	if result.CoverageReceipt == "" {
+		t.Fatal("freshness hold omitted two-phase coverage receipt")
+	}
 	if got, want := []string{result.Messages[0].ID, result.Messages[1].ID, result.Messages[2].ID}, []string{"message-3", "message-4", "message-5"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("shown messages = %v, want %v", got, want)
 	}
+	if got := len(coordinator.pending["channel:one"]); got != 5 {
+		t.Fatalf("pre-commit Pending count = %d, want 5", got)
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
+		t.Fatalf("pre-commit boundary = %d, want 0", got)
+	}
+	if err := coordinator.CommitCoverage(result.CoverageReceipt); err != nil {
+		t.Fatalf("CommitCoverage: %v", err)
+	}
 	if _, found := coordinator.pending["channel:one"]; found {
-		t.Fatalf("held Pending remains: %+v", coordinator.pending)
+		t.Fatalf("committed held Pending remains: %+v", coordinator.pending)
 	}
 	if got, ok := coordinator.ContextBoundary("channel:one"); !ok || got != 5 {
-		t.Fatalf("boundary = %d, known=%v; want 5, true", got, ok)
+		t.Fatalf("committed boundary = %d, known=%v; want 5, true", got, ok)
 	}
 }
 
-func TestMessageDraftExpiresAndSuccessfulClearDoesNotDeleteReplacement(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
-		return nil
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewMessageCoordinator: %v", err)
+func TestMessageCoordinatorExposesNoDraftStateOrMethods(t *testing.T) {
+	typeOf := reflect.TypeOf(MessageCoordinator{})
+	for index := 0; index < typeOf.NumField(); index++ {
+		if strings.Contains(strings.ToLower(typeOf.Field(index).Name), "draft") {
+			t.Fatalf("MessageCoordinator still owns Draft field %s", typeOf.Field(index).Name)
+		}
 	}
-	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
-	first, err := coordinator.SaveNormalMessageDraft(messageDraft{Target: "#one", Content: "first", ClientMessageID: "first-id"}, now)
-	if err != nil {
-		t.Fatalf("SaveNormalMessageDraft: %v", err)
-	}
-	if first.SavedAt != now {
-		t.Fatalf("saved at = %s, want %s", first.SavedAt, now)
-	}
-	if _, err := coordinator.SaveNormalMessageDraft(messageDraft{Target: "#one", Content: "second", ClientMessageID: "second-id"}, now.Add(time.Minute)); err != nil {
-		t.Fatalf("replace local Draft: %v", err)
-	}
-	if err := coordinator.ClearMessageDraft("#one", "first-id"); err != nil {
-		t.Fatalf("clear older Draft: %v", err)
-	}
-	if draft, found, err := coordinator.LoadMessageDraft("#one", now.Add(2*time.Minute)); err != nil || !found || draft.ClientMessageID != "second-id" {
-		t.Fatalf("replacement Draft = %+v found=%v err=%v", draft, found, err)
-	}
-	if _, found, err := coordinator.LoadMessageDraft("#one", now.Add(11*time.Minute)); err != nil || found {
-		t.Fatalf("expired Draft found=%v err=%v", found, err)
+	pointerType := reflect.TypeOf((*MessageCoordinator)(nil))
+	for index := 0; index < pointerType.NumMethod(); index++ {
+		if strings.Contains(strings.ToLower(pointerType.Method(index).Name), "draft") {
+			t.Fatalf("MessageCoordinator still exposes Draft method %s", pointerType.Method(index).Name)
+		}
 	}
 }

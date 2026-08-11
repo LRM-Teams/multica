@@ -16,7 +16,7 @@ import (
 func TestWorkspaceRunnerDeliveryAttemptsAckBeforeRuntimeHandoff(t *testing.T) {
 	var order []string
 	d := New(Config{}, nil)
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		order = append(order, "handoff")
 		return nil
 	}, nil)
@@ -24,13 +24,10 @@ func TestWorkspaceRunnerDeliveryAttemptsAckBeforeRuntimeHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	completeCoordinatorRecovery(t, coordinator)
-	d.messageCoordinatorMu.Lock()
-	d.messageCoordinators["agent-1"] = coordinator
-	d.messageRuntimeIDs["agent-1"] = "runtime-1"
-	d.messageCoordinatorMu.Unlock()
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		mode:    canonicalRuntimeResident,
 		backend: &idleMessageFakeRuntime{},
@@ -58,20 +55,17 @@ func TestWorkspaceRunnerDeliveryAttemptsAckBeforeRuntimeHandoff(t *testing.T) {
 func TestWorkspaceRunnerDeliveryWriterFailureRetainsAcceptedPending(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffs++
 		return nil
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.messageCoordinatorMu.Lock()
-	d.messageCoordinators["agent-1"] = coordinator
-	d.messageRuntimeIDs["agent-1"] = "runtime-1"
-	d.messageCoordinatorMu.Unlock()
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	delivery := protocol.AgentDeliverPayload{
 		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
 		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
@@ -97,20 +91,17 @@ func TestWorkspaceRunnerDeliveryWriterFailureRetainsAcceptedPending(t *testing.T
 
 func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	d := New(Config{}, nil)
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	completeCoordinatorRecovery(t, coordinator)
-	d.messageCoordinatorMu.Lock()
-	d.messageCoordinators["agent-1"] = coordinator
-	d.messageRuntimeIDs["agent-1"] = "runtime-1"
-	d.messageCoordinatorMu.Unlock()
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		mode:    canonicalRuntimeResident,
 		backend: &idleMessageFakeRuntime{},
@@ -210,24 +201,24 @@ func TestDeliveryRepairsCoordinatorFromDurableResidency(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
-	if _, accepted, err := d.reminderAgents.applyStart(agentID, runtimeID, workspaceID, 1); err != nil || !accepted {
-		t.Fatalf("persist residency accepted=%v err=%v", accepted, err)
+	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID,
+		AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatalf("persist Attachment: %v", err)
 	}
 
 	var recovery protocol.AgentRecoveryRequest
-	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(eventType string, payload any) error {
+	attachTestWorkspaceRunner(t, d, workspaceID, func(eventType string, payload any) error {
 		if eventType == protocol.EventAgentRecoveryRequest {
 			recovery = payload.(protocol.AgentRecoveryRequest)
 		}
 		return nil
 	})
-	if err := d.ensureIdleMessageCoordinatorForDelivery(agentID); err != nil {
+	if err := d.ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID); err != nil {
 		t.Fatalf("repair coordinator: %v", err)
 	}
-	d.messageCoordinatorMu.RLock()
-	coordinator := d.messageCoordinators[agentID]
-	gotRuntimeID := d.messageRuntimeIDs[agentID]
-	d.messageCoordinatorMu.RUnlock()
+	coordinator, gotRuntimeID := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	if coordinator == nil || gotRuntimeID != runtimeID {
 		t.Fatalf("coordinator=%v runtime_id=%q", coordinator, gotRuntimeID)
 	}
@@ -236,69 +227,157 @@ func TestDeliveryRepairsCoordinatorFromDurableResidency(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRunnerMessageTransportFencesReplacedConnection(t *testing.T) {
+func TestDeliveryDoesNotRepairCoordinatorAcrossWorkspace(t *testing.T) {
+	const (
+		attachedWorkspaceID = "11111111-1111-4111-8111-111111111111"
+		runnerWorkspaceID   = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		agentID             = "22222222-2222-4222-8222-222222222222"
+		runtimeID           = "33333333-3333-4333-8333-333333333333"
+	)
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: attachedWorkspaceID}
+	d.mu.Unlock()
+	if _, err := d.agentAttachments.Apply(attachedWorkspaceID, AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID,
+		AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: agentID, Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+	var acknowledgements int
+	if err := d.handleWorkspaceRunnerDelivery(context.Background(), runnerWorkspaceID, delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledgements != 0 {
+		t.Fatalf("cross-Workspace acknowledgements = %d, want 0", acknowledgements)
+	}
+	if runner := d.currentWorkspaceRunner(runnerWorkspaceID); runner != nil {
+		if _, _, ok := runner.inboxes.Resolve(agentID); ok {
+			t.Fatal("cross-Workspace Delivery recreated an Inbox coordinator")
+		}
+	}
+}
+
+func TestDeliveryDoesNotRepairCoordinatorForDetachedAgent(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-4111-8111-111111111111"
+		agentID     = "22222222-2222-4222-8222-222222222222"
+		runtimeID   = "33333333-3333-4333-8333-333333333333"
+	)
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	for sequence, kind := range []AgentAttachmentEventKind{AgentAttachmentEventAttach, AgentAttachmentEventDetach} {
+		if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{
+			Kind: kind, AgentID: agentID, RuntimeID: runtimeID,
+			AttachmentGeneration: 1, LifecycleSeq: AttachmentLifecycleSequence(sequence + 1),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: agentID, Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1},
+	}
+	var acknowledgements int
+	if err := d.handleWorkspaceRunnerDelivery(context.Background(), workspaceID, delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledgements != 0 {
+		t.Fatalf("detached Agent acknowledgements = %d, want 0", acknowledgements)
+	}
+	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+		if _, _, ok := runner.inboxes.Resolve(agentID); ok {
+			t.Fatal("detached Agent Delivery recreated an Inbox coordinator")
+		}
+	}
+}
+
+func TestWorkspaceRunnerWriterFencesReplacedConnection(t *testing.T) {
 	d := New(Config{}, nil)
-	d.messageCoordinatorMu.Lock()
-	d.messageRuntimeIDs["agent-1"] = "runtime-1"
-	d.messageCoordinatorMu.Unlock()
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 
 	var first, second int
-	firstGeneration := d.attachWorkspaceRunnerMessageTransport("workspace-1", func(string, any) error {
+	runner, firstConnection := attachTestWorkspaceRunner(t, d, "workspace-1", func(string, any) error {
 		first++
 		return nil
 	})
-	secondGeneration := d.attachWorkspaceRunnerMessageTransport("workspace-1", func(string, any) error {
-		second++
-		return nil
-	})
-	d.detachWorkspaceRunnerMessageTransport("workspace-1", firstGeneration)
-	if !d.sendAgentMessageRunnerFrame("agent-1", "agent:recovery:request", map[string]any{"request": 1}) {
-		t.Fatal("current Runner transport did not receive Message frame")
-	}
-	if first != 0 || second != 1 {
-		t.Fatalf("Message transport delivery first=%d second=%d, want 0/1", first, second)
-	}
-	d.detachWorkspaceRunnerMessageTransport("workspace-1", secondGeneration)
-	if d.sendAgentMessageRunnerFrame("agent-1", "agent:recovery:request", nil) {
-		t.Fatal("detached Runner transport accepted Message frame")
-	}
-}
-
-func TestAgentMessageRecoveryUsesWorkspaceRunnerTransport(t *testing.T) {
-	d := New(Config{}, nil)
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.messageCoordinatorMu.Lock()
-	d.messageCoordinators["agent-1"] = coordinator
-	d.messageRuntimeIDs["agent-1"] = "runtime-1"
-	d.messageCoordinatorMu.Unlock()
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	staleSend := func() error {
+		return runner.sendOnConnection(firstConnection, "agent:recovery:request", map[string]any{"request": 0})
+	}
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	secondConnection := &workspaceRunnerConnection{workspaceID: "workspace-1", ctx: secondCtx, cancel: secondCancel, write: func(string, any) error {
+		second++
+		return nil
+	}, close: func() {}}
+	runner.replaceConnection(secondConnection)
+	defer runner.releaseConnection(secondConnection)
+	if err := staleSend(); err == nil {
+		t.Fatal("callback from replaced connection remained writable")
+	}
+	if !d.sendAgentMessageRunnerFrame("agent-1", "agent:recovery:request", map[string]any{"request": 1}) {
+		t.Fatal("current Runner connection did not receive Message frame")
+	}
+	if first != 0 || second != 1 {
+		t.Fatalf("Message frame delivery first=%d second=%d, want 0/1", first, second)
+	}
+	d.detachWorkspaceRunner(runner)
+	if d.sendAgentMessageRunnerFrame("agent-1", "agent:recovery:request", nil) {
+		t.Fatal("detached Runner accepted Message frame")
+	}
+}
+
+func TestAgentMessageRecoveryUsesCurrentWorkspaceRunnerConnection(t *testing.T) {
+	d := New(Config{}, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
 
 	var eventType string
 	var request protocol.AgentRecoveryRequest
-	d.attachWorkspaceRunnerMessageTransport("workspace-1", func(gotType string, payload any) error {
+	attachTestWorkspaceRunner(t, d, "workspace-1", func(gotType string, payload any) error {
 		eventType = gotType
 		request = payload.(protocol.AgentRecoveryRequest)
 		return nil
 	})
+	registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
 
-	d.beginAgentMessageRecovery("agent-1")
+	d.beginAgentMessageRecovery("workspace-1", "agent-1")
 	if eventType != protocol.EventAgentRecoveryRequest || request.AgentID != "agent-1" || request.RecoveryID == "" {
 		t.Fatalf("recovery frame type=%q request=%+v", eventType, request)
 	}
 }
 
-func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
+func TestAttachmentReplayStartsMessageRecoveryOnlyAfterCompletion(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, nil)
-	d.reminderAgents = newReminderAgentManager(root, nil)
+	d.agentAttachments = newLocalAgentAttachmentRegistry(root, nil)
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.mu.Unlock()
@@ -306,7 +385,7 @@ func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
 	requests := 0
 	statuses := 0
 	sessions := 0
-	d.attachWorkspaceRunnerMessageTransport("workspace-1", func(eventType string, _ any) error {
+	runner, connection := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, _ any) error {
 		switch eventType {
 		case protocol.EventAgentRecoveryRequest:
 			requests++
@@ -317,21 +396,29 @@ func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
 		}
 		return nil
 	})
-	payload := protocol.DaemonAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", WorkspaceID: "workspace-1",
-		PlacementGeneration: 1, LifecycleSeq: 1, Replay: true,
+	payload := protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
 	}
-	if err := d.handleDaemonAgentStartFrame(payload); err != nil {
+	if _, err := runner.applyAttachmentAttach(payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.handleDaemonAgentStartFrame(payload); err != nil {
+	if _, err := runner.applyAttachmentAttach(payload); err != nil {
 		t.Fatal(err)
 	}
+	if requests != 0 {
+		t.Fatalf("Attachment commands started Message recovery before replay end: %d", requests)
+	}
+	if _, err := runner.completeAttachmentReplay(runner.attachmentRuntimeSet(), protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: map[string]int64{"runtime-1": 1}}); err != nil {
+		t.Fatal(err)
+	}
+	runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
+		return runner.sendOnConnection(connection, protocol.EventAgentRecoveryRequest, request)
+	})
 	if requests != 1 {
 		t.Fatalf("Message recovery requests=%d, want one for the newly created coordinator", requests)
 	}
-	if statuses != 1 || sessions != 1 {
-		t.Fatalf("Workspace Runner lifecycle frames status=%d session=%d, want one stable managed launch", statuses, sessions)
+	if statuses != 0 || sessions != 0 {
+		t.Fatalf("Attachment replay invented Workspace Runner launch frames: status=%d session=%d", statuses, sessions)
 	}
 }
 
@@ -342,12 +429,12 @@ func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testin
 		runtimeID   = "33333333-3333-4333-8333-333333333333"
 	)
 	root := t.TempDir()
-	persisting := New(Config{WorkspacesRoot: root}, nil)
-	if _, accepted, err := persisting.reminderAgents.applyStart(agentID, runtimeID, workspaceID, 1); err != nil || !accepted {
-		t.Fatalf("persist residency accepted=%v err=%v", accepted, err)
+	persisting := New(Config{DaemonID: "daemon-test", WorkspacesRoot: root}, nil)
+	if _, err := persisting.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+		t.Fatalf("persist Attachment: %v", err)
 	}
 
-	restarted := New(Config{WorkspacesRoot: root}, nil)
+	restarted := New(Config{DaemonID: "daemon-test", WorkspacesRoot: root}, nil)
 	restarted.mu.Lock()
 	restarted.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	restarted.mu.Unlock()
@@ -355,20 +442,21 @@ func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testin
 		t.Fatalf("restore residents: %v", err)
 	}
 
-	restarted.messageCoordinatorMu.RLock()
-	coordinator := restarted.messageCoordinators[agentID]
-	gotRuntimeID := restarted.messageRuntimeIDs[agentID]
-	restarted.messageCoordinatorMu.RUnlock()
+	runner := restarted.currentWorkspaceRunner(workspaceID)
+	if runner == nil {
+		t.Fatal("restore did not create Workspace Runner")
+	}
+	coordinator, gotRuntimeID, _ := runner.inboxes.Resolve(agentID)
 	if coordinator == nil || gotRuntimeID != runtimeID {
 		t.Fatalf("restored coordinator=%v runtime_id=%q", coordinator, gotRuntimeID)
 	}
-	producer := restarted.workspaceAgentActivityProducer(workspaceID)
+	producer := runner.activity
 	_, frames := producer.AttachTransport(func(protocol.AgentActivityPayload) {})
-	if len(frames) != 2 || frames[0].EventType != protocol.EventAgentStatus || frames[1].EventType != protocol.EventAgentSession {
-		t.Fatalf("restored Runner lifecycle frames = %#v, want status then session", frames)
+	if len(frames) != 0 {
+		t.Fatalf("restored Attachment invented Runner lifecycle frames = %#v", frames)
 	}
 	var recovery protocol.AgentRecoveryRequest
-	restarted.beginMessageRecoveryWithSend(func(request protocol.AgentRecoveryRequest) error {
+	runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
 		recovery = request
 		return nil
 	})

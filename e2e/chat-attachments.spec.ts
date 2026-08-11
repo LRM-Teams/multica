@@ -83,12 +83,8 @@ test.describe("Chat attachments", () => {
     api.setWorkspaceSlug(ws.slug);
     api.setWorkspaceId(ws.id);
 
-    const userRow = await pgc.query(
-      `SELECT id FROM "user" WHERE email = $1 LIMIT 1`,
-      ["e2e@multica.ai"],
-    );
-    if (userRow.rows.length === 0) throw new Error("e2e user missing");
-    const userId = userRow.rows[0].id as string;
+    const userId = api.getUserId();
+    if (!userId) throw new Error("e2e user missing");
 
     // Seed runtime + agent + chat_session.
     const runtimeIns = await pgc.query(
@@ -103,11 +99,11 @@ test.describe("Chat attachments", () => {
     createdRuntimeId = runtimeIns.rows[0].id as string;
 
     const agentIns = await pgc.query(
-      `INSERT INTO agent (
+       `INSERT INTO agent (
          workspace_id, name, description, runtime_mode, runtime_config,
-         runtime_id, visibility, max_concurrent_tasks, owner_id
+         runtime_id, model, max_concurrent_tasks, owner_id
        )
-       VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
+       VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'e2e-model', 1, $4)
        RETURNING id`,
       [ws.id, `E2E Chat Agent ${Date.now()}`, createdRuntimeId, userId],
     );
@@ -152,8 +148,9 @@ test.describe("Chat attachments", () => {
         attachment_ids: [uploaded.id],
       }),
     });
-    expect(sendRes.status).toBe(201);
-    const sendBody = (await sendRes.json()) as { message_id: string; task_id: string };
+    const sendResponseText = await sendRes.text();
+    expect(sendRes.status, sendResponseText).toBe(201);
+    const sendBody = JSON.parse(sendResponseText) as { message_id: string; task_id: string };
     expect(sendBody.message_id).toBeTruthy();
 
     // 3. DB check: the attachment row's chat_message_id matches the new message.

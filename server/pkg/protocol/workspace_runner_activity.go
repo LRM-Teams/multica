@@ -46,8 +46,9 @@ const (
 // connection. It says that the local Manager has initialized and reconciled;
 // it deliberately says nothing about any individual Agent being ready.
 type WorkspaceRunnerReadyPayload struct {
-	WorkspaceID      string `json:"workspaceId"`
-	DaemonInstanceID string `json:"daemonInstanceId"`
+	WorkspaceID        string   `json:"workspaceId"`
+	DaemonInstanceID   string   `json:"daemonInstanceId"`
+	ActiveCapabilities []string `json:"activeCapabilities,omitempty"`
 }
 
 // WorkspaceRunnerPingPayload and WorkspaceRunnerPongPayload are connection
@@ -159,7 +160,23 @@ type AgentActivityProbePayload struct {
 }
 
 func (p WorkspaceRunnerReadyPayload) Validate() error {
-	return validateRequiredIDs(p.WorkspaceID, p.DaemonInstanceID)
+	if err := validateRequiredIDs(p.WorkspaceID, p.DaemonInstanceID); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(p.ActiveCapabilities))
+	for _, capability := range p.ActiveCapabilities {
+		if err := validateRequiredIDs(capability); err != nil {
+			return fmt.Errorf("invalid Workspace Runner capability")
+		}
+		if _, duplicate := seen[capability]; duplicate {
+			return fmt.Errorf("duplicate Workspace Runner capability %q", capability)
+		}
+		seen[capability] = struct{}{}
+	}
+	if _, supported := seen[DaemonCapabilityWorkspaceRunnerAttachment]; !supported {
+		return fmt.Errorf("Workspace Runner Attachment capability is required")
+	}
+	return nil
 }
 
 func (p WorkspaceRunnerPingPayload) Validate() error { return validateRequiredIDs(p.PingID) }

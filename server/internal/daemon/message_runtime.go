@@ -17,107 +17,123 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot string) (bool, error) {
-	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(runtimeID) == "" {
-		return false, errors.New("agent and runtime ids are required")
+func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*MessageCoordinator, error) {
+	key, err := key.normalized()
+	if err != nil {
+		return nil, err
 	}
-	d.messageCoordinatorMu.Lock()
-	defer d.messageCoordinatorMu.Unlock()
-	if existing := d.messageCoordinators[agentID]; existing != nil {
-		if d.messageRuntimeIDs[agentID] == "" || d.messageRuntimeIDs[agentID] == runtimeID {
-			return false, nil
-		}
-		existing.Close()
+	runtimeID = strings.TrimSpace(runtimeID)
+	if runtimeID == "" {
+		return nil, errors.New("Message coordinator Runtime identity is required")
 	}
-	coordinator, err := NewMessageCoordinator(agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
-		return d.handoffIdleMessageBatch(ctx, agentID, runtimeID, messages)
+	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, key.WorkspaceID, key.AgentID)
+	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+		return nil, fmt.Errorf("create Agent root for Message coordinator: %w", err)
+	}
+	coordinator, err := NewMessageCoordinator(key, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
+		return d.handoffIdleMessageBatch(ctx, key.AgentID, runtimeID, messages)
 	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		return d.canonicalRuntimes.handoffBusyNotice(ctx, key.AgentID, runtimeID, snapshot, commitIfCurrent)
+	}, 0, 0)
+	return coordinator, nil
+}
+
+func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID string) (bool, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	if d == nil || workspaceID == "" || agentID == "" || runtimeID == "" {
+		return false, errors.New("Workspace, Agent, and Runtime ids are required")
+	}
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil {
+		return false, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
+	}
+	if runner.inboxes == nil {
+		return false, fmt.Errorf("Workspace Runner %q has no Inbox registry", workspaceID)
+	}
+	created, err := runner.inboxes.Ensure(agentID)
 	if err != nil {
 		return false, err
 	}
-	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot) error {
-		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot)
-	}, 0, 0)
-	if d.messageCoordinators == nil {
-		d.messageCoordinators = make(map[string]*MessageCoordinator)
+	_, currentRuntimeID, ok := runner.inboxes.Resolve(agentID)
+	if !ok || currentRuntimeID != runtimeID {
+		return false, fmt.Errorf("Message Inbox for agent %q resolved Runtime %q, want %q", agentID, currentRuntimeID, runtimeID)
 	}
-	if d.messageRuntimeIDs == nil {
-		d.messageRuntimeIDs = make(map[string]string)
-	}
-	d.messageCoordinators[agentID] = coordinator
-	d.messageRuntimeIDs[agentID] = runtimeID
-	return true, nil
+	return created, nil
 }
 
 // ensureIdleMessageCoordinatorForDelivery repairs restart-time coordinator
-// loss from the daemon's durable Agent placement. Runtime routing remains out
-// of the Message envelope; only an already-authorized local residency may
-// recreate this receive-side projection.
-func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(agentID string) error {
-	if d == nil || strings.TrimSpace(agentID) == "" {
-		return errors.New("agent id is required")
+// loss from the daemon's durable Agent Attachment. Runtime routing remains out
+// of the Message envelope; the fixed Runner Workspace scope and a matching
+// Attachment are both required to recreate this receive-side projection.
+func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	agentID = strings.TrimSpace(agentID)
+	if d == nil || workspaceID == "" || agentID == "" {
+		return errors.New("workspace and agent ids are required")
 	}
-	d.messageCoordinatorMu.RLock()
-	existing := d.messageCoordinators[agentID]
-	d.messageCoordinatorMu.RUnlock()
-	if existing != nil {
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil || runner.inboxes == nil {
+		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
+	}
+	if _, _, ok := runner.inboxes.Resolve(agentID); ok {
 		return nil
 	}
-	if d.reminderAgents == nil {
-		return fmt.Errorf("no durable Agent placement for %q", agentID)
+	registry := d.attachmentRegistry()
+	if registry == nil {
+		return fmt.Errorf("no durable Agent Attachment for %q in Workspace %q", agentID, workspaceID)
 	}
-	residency, ok := d.reminderAgents.get(agentID)
-	if !ok || residency.RuntimeID == "" || residency.WorkspaceID == "" || residency.PlacementGeneration < 1 {
-		return fmt.Errorf("no durable Agent placement for %q", agentID)
+	attachment, ok := registry.Resolve(workspaceID, agentID)
+	if !ok {
+		return fmt.Errorf("no durable Agent Attachment for %q in Workspace %q", agentID, workspaceID)
 	}
 	d.mu.Lock()
-	runtime, runtimeKnown := d.runtimeIndex[residency.RuntimeID]
+	runtime, runtimeKnown := d.runtimeIndex[attachment.RuntimeID]
 	d.mu.Unlock()
-	if !runtimeKnown || runtime.WorkspaceID != residency.WorkspaceID {
-		return fmt.Errorf("durable Agent placement for %q is not owned by this daemon", agentID)
+	if !runtimeKnown || runtime.WorkspaceID != workspaceID {
+		return fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, workspaceID)
 	}
-	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, residency.WorkspaceID, agentID)
-	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
-		return fmt.Errorf("create Agent root for Message coordinator: %w", err)
-	}
-	created, err := d.ensureIdleMessageCoordinator(agentID, residency.RuntimeID, agentRoot)
+	created, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID)
 	if err != nil {
 		return fmt.Errorf("repair Agent Message coordinator: %w", err)
 	}
 	if created {
-		d.beginAgentMessageRecovery(agentID)
+		d.beginAgentMessageRecovery(workspaceID, agentID)
 	}
 	return nil
 }
 
-// restoreResidentAgents rebuilds the in-memory Message and Activity projections
-// for durable idle residents after a Computer process restart. The Workspace
-// Runner attaches later and replays both the managed launch and Message
-// recovery request on its new connection.
+// restoreResidentAgents rebuilds Inbox ownership for durable Attachments after
+// a Computer process restart. Provider launches are never reconstructed here;
+// the Workspace Runner receives an explicit managed start when work exists.
 func (d *Daemon) restoreResidentAgents() error {
-	if d == nil || d.reminderAgents == nil {
+	if d == nil {
 		return nil
 	}
-	for _, agentID := range d.reminderAgents.residentAgentIDs() {
-		residency, ok := d.reminderAgents.get(agentID)
-		if !ok || residency.RuntimeID == "" || residency.WorkspaceID == "" || residency.PlacementGeneration < 1 {
+	for _, attachment := range d.currentAttachments() {
+		if attachment.RuntimeID == "" || attachment.WorkspaceID == "" || attachment.AttachmentGeneration < 1 {
 			continue
 		}
 		d.mu.Lock()
-		runtime, runtimeKnown := d.runtimeIndex[residency.RuntimeID]
+		runtime, runtimeKnown := d.runtimeIndex[attachment.RuntimeID]
 		d.mu.Unlock()
-		if !runtimeKnown || runtime.WorkspaceID != residency.WorkspaceID {
+		if !runtimeKnown || runtime.WorkspaceID != attachment.WorkspaceID {
 			continue
 		}
-		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, residency.WorkspaceID, agentID)
+		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, attachment.WorkspaceID, attachment.AgentID)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
-			return fmt.Errorf("restore Agent root %q: %w", agentID, err)
+			return fmt.Errorf("restore Agent root %q: %w", attachment.AgentID, err)
 		}
-		if _, err := d.ensureIdleMessageCoordinator(agentID, residency.RuntimeID, agentRoot); err != nil {
-			return fmt.Errorf("restore Agent Message coordinator %q: %w", agentID, err)
+		if _, err := d.ensureIdleMessageCoordinator(attachment.WorkspaceID, attachment.AgentID, attachment.RuntimeID); err != nil {
+			return fmt.Errorf("restore Agent Message coordinator %q: %w", attachment.AgentID, err)
 		}
-		if err := d.ensureWorkspaceRunnerManagedAgent(residency.WorkspaceID, agentID); err != nil {
-			return fmt.Errorf("restore Agent Workspace Runner lifecycle %q: %w", agentID, err)
+		if _, err := d.ensureWorkspaceRunner(attachment.WorkspaceID); err != nil {
+			return fmt.Errorf("restore Agent Workspace Runner %q: %w", attachment.AgentID, err)
 		}
 	}
 	return nil
@@ -132,7 +148,7 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		return err
 	}
 	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
-		d.emitMessageLifecycleActivity(agentID, runtimeID, protocol.ActivityKindWorking, "starting", "Starting")
+		d.emitMessageLifecycleActivity(agentID, runtimeID)
 	}, func() {
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
 		d.emitMessageReceivedActivity(agentID, runtimeID, preparedMessages)
@@ -153,11 +169,12 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// the prior turn finished. If Pending remains, schedule a content-free
 		// Notice; body handoff waits for idle Accept→Flush, recovery Flush, or
 		// agent `message check`.
-		d.messageCoordinatorMu.RLock()
-		coordinator := d.messageCoordinators[agentID]
-		d.messageCoordinatorMu.RUnlock()
-		if coordinator != nil {
-			coordinator.NotifyPendingAfterTurn()
+		runner := d.currentWorkspaceRunner(workspaceID)
+		if runner != nil && runner.inboxes != nil {
+			coordinator, _, ok := runner.inboxes.Resolve(agentID)
+			if ok {
+				coordinator.NotifyPendingAfterTurn()
+			}
 		}
 		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
 			d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
@@ -258,20 +275,17 @@ func convertResidentMessageMemoriesForEnv(memories []protocol.AgentMessageMemory
 	return result
 }
 
-func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID, activityKind, detailKind, narrative string) {
+func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID string) {
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
-	if workspaceID == "" {
-		return
-	}
-	entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-	if err != nil {
-		return
-	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
-	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner Message lifecycle Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err == nil && runner.activity != nil {
+		if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
+			if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting, Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC()}); err != nil && d.logger != nil {
+				d.logger.Debug("workspace Runner Message lifecycle Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+			}
+		}
 	}
 }
 
@@ -286,50 +300,50 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 	if workspaceID == "" {
 		return
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
-	switch message.Type {
-	case agent.MessageThinking, agent.MessageText:
-		_, _ = producer.CompleteCompactionIfActive(agentID, d.runnerInstanceID, "Context compaction finished (inferred from resumed output)")
-	case agent.MessageToolUse:
-		_, _ = producer.CompleteCompactionIfActive(agentID, d.runnerInstanceID, "Context compaction finished (inferred from resumed tool use)")
-	case agent.MessageError:
-		producer.InterruptCompactionIfActive(agentID)
-	}
-
-	activityKind, detailKind, narrative := "", "", ""
-	switch message.Type {
-	case agent.MessageThinking:
-		// Thinking is a B-chain state (snapshot activity_kind), not an
-		// A-chain timeline event. An empty narrative keeps it from emitting
-		// an entry, so bursts of thinking never flood the activity timeline
-		// (raft-aligned; see workspace_runner_activity).
-		activityKind = protocol.ActivityKindThinking
-	case agent.MessageToolUse:
-		activityKind = protocol.ActivityKindWorking
-		detailKind, narrative = toolActivityFact(message.Tool, message.Input)
-	case agent.MessageCompactionStarted:
-		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "compacting_context", "Compacting context"
-	case agent.MessageCompactionFinished:
-		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "compaction_finished", "Context compaction finished"
-	case agent.MessageError:
-		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(message.Content)
-	}
-	if activityKind == "" {
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
 		return
 	}
-	var entries []protocol.AgentActivityEntry
-	if narrative != "" {
-		entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-		if err != nil {
-			return
-		}
-		entries = []protocol.AgentActivityEntry{entry}
+	launch, found := runner.processes.Snapshot(agentID)
+	if !found || launch.RuntimeID != runtimeID {
+		return
 	}
-	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner resident runtime Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+
+	at := time.Now().UTC()
+	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
+	switch message.Type {
+	case agent.MessageThinking, agent.MessageText, agent.MessageToolUse:
+		_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
+	case agent.MessageError:
+		runner.activity.InterruptCompactionIfActive(agentID, launch.LaunchID)
+	}
+
+	var observationKind AgentObservationKind
+	switch message.Type {
+	case agent.MessageThinking:
+		observationKind = AgentObservationRuntimeThinking
+	case agent.MessageCompactionStarted:
+		observationKind = AgentObservationRuntimeCompacting
+	case agent.MessageCompactionFinished:
+		observationKind = AgentObservationRuntimeCompacted
+	case agent.MessageError:
+		observationKind = AgentObservationError
+	case agent.MessageToolUse:
+		observationKind = AgentObservationRuntimeTool
+	}
+	if observationKind == "" {
+		return
+	}
+	var data AgentObservationData = stage
+	if observationKind == AgentObservationError {
+		data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
+	} else if observationKind == AgentObservationRuntimeTool {
+		data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID, ToolInput: message.Input}
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: observationKind, Data: data, At: at}); err != nil && d.logger != nil {
+		d.logger.Debug("workspace Runner runtime Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
 }
-
 func (d *Daemon) emitResidentRuntimeDiagnostic(agentID, runtimeID string, message agent.Message) {
 	if message.Level != "warning" || strings.TrimSpace(message.Title) == "" || strings.TrimSpace(message.Content) == "" {
 		return
@@ -340,12 +354,15 @@ func (d *Daemon) emitResidentRuntimeDiagnostic(agentID, runtimeID string, messag
 	if workspaceID == "" {
 		return
 	}
-	entry, err := activitySystemEntry(message.Title, message.Content)
-	if err != nil {
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
 		return
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
-	if err := producer.PublishEntryForManagedAgent(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+	launch, found := runner.processes.Snapshot(agentID)
+	if !found || launch.RuntimeID != runtimeID {
+		return
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeDiagnostic, Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC()}); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner runtime diagnostic Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
 }
@@ -357,23 +374,28 @@ func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, tu
 	if workspaceID == "" {
 		return
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
-	activityKind, detailKind, narrative := protocol.ActivityKindOnline, "idle", "Idle"
-	if turnErr != nil {
-		producer.InterruptCompactionIfActive(agentID)
-		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(turnErr.Error())
-	} else {
-		_, _ = producer.CompleteCompactionIfActive(agentID, d.runnerInstanceID, "Context compaction finished (inferred from turn end)")
-	}
-	entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-	if err != nil {
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
 		return
 	}
-	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+	launch, found := runner.processes.Snapshot(agentID)
+	if !found || launch.RuntimeID != runtimeID {
+		return
+	}
+
+	at := time.Now().UTC()
+	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
+	kind, data := AgentObservationRuntimeIdle, AgentObservationData(stage)
+	if turnErr != nil {
+		runner.activity.InterruptCompactionIfActive(agentID, launch.LaunchID)
+		kind, data = AgentObservationError, AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_turn_failed"}
+	} else {
+		_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: kind, Data: data, At: at}); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner Message completion Activity publish deferred", "error", err, "agent_id", agentID)
 	}
 }
-
 func runtimeErrorNarrative(reason string) string {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -403,18 +425,12 @@ func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
 	if workspaceID != "" {
-		producer := d.workspaceAgentActivityProducer(workspaceID)
-		status, session, created, manageErr := producer.EnsureManagedAgent(agentID)
-		if manageErr == nil && created {
-			// Status must cross the same serialized Runner writer before Activity
-			// so the server can fence the new launch authoritatively.
-			d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentStatus, status)
-			d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentSession, session)
-		}
-		entry, err := activityNarrativeEntry(protocol.ActivityKindWorking, "message_received", "Message received")
-		if err == nil {
-			if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, protocol.ActivityKindWorking, "message_received", []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
-				d.logger.Debug("workspace Runner Message Activity publish deferred", "error", err, "agent_id", agentID)
+		runner, err := d.ensureWorkspaceRunner(workspaceID)
+		if err == nil && runner.activity != nil {
+			if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
+				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID, HandoffID: hex.EncodeToString(sum[:]), MessageCount: len(messages)}, At: time.Now().UTC()}); err != nil && d.logger != nil {
+					d.logger.Debug("workspace Runner Message Activity publish deferred", "error", err, "agent_id", agentID)
+				}
 			}
 		}
 	}
@@ -439,10 +455,8 @@ func (p *CredentialProxy) SeenUpToSeq(agentID, target string) (int64, error) {
 	if p == nil || p.daemon == nil {
 		return 0, errors.New("Credential Proxy is unavailable")
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	defer p.daemon.messageCoordinatorMu.RUnlock()
-	coordinator := p.daemon.messageCoordinators[agentID]
-	if coordinator == nil {
+	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	if err != nil {
 		return 0, errors.New("Message coordinator is unavailable")
 	}
 	seq, known := coordinator.ContextBoundary(target)
@@ -456,75 +470,122 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	if p == nil || p.daemon == nil {
 		return MessageCheckResult{}, errors.New("Credential Proxy is unavailable")
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	defer p.daemon.messageCoordinatorMu.RUnlock()
-	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
-	if coordinator == nil {
+	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	if err != nil {
 		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
 	}
-	return coordinator.Check(messageCheckDefaultLimit)
+	offer, err := coordinator.PrepareCoverage(CoverageRequest{Kind: CoverageCheck, Limit: messageCheckDefaultLimit})
+	if err != nil {
+		return MessageCheckResult{}, err
+	}
+	status := messageCheckStatusComplete
+	if offer.HasMore {
+		status = messageCheckStatusMore
+	}
+	return MessageCheckResult{
+		Messages: offer.Messages, HasMore: offer.HasMore, Remaining: offer.Remaining,
+		Status: status, CoverageReceipt: offer.ReceiptID,
+	}, nil
 }
 
-// RecordMessageRead consumes successful canonical history through one target's
-// local Context Boundary. The server response is the authority for both the
-// canonical target and its maximum returned sequence; the Agent never supplies
-// a cursor directly.
-func (p *CredentialProxy) RecordMessageRead(agentID, target string, throughSeq int64) error {
+// PrepareMessageRead stages only server-validated canonical bodies. The
+// boundary remains unchanged until the CLI writes the visible JSON and commits
+// the returned local receipt.
+func (p *CredentialProxy) PrepareMessageRead(
+	agentID, target string,
+	throughSeq int64,
+	messages []protocol.AgentMessageProjection,
+) (CoverageOffer, error) {
 	if p == nil || p.daemon == nil {
-		return errors.New("Credential Proxy is unavailable")
+		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	defer p.daemon.messageCoordinatorMu.RUnlock()
-	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
-	if coordinator == nil {
-		return errors.New("Message coordinator is unavailable")
+	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	if err != nil {
+		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}
-	return coordinator.MarkRead(target, throughSeq)
+	if throughSeq == 0 && len(messages) == 0 {
+		return CoverageOffer{Messages: []protocol.AgentMessageProjection{}}, nil
+	}
+	return coordinator.PrepareCoverage(CoverageRequest{
+		Kind: CoverageRead, Target: target, ThroughSeq: throughSeq, Messages: messages,
+	})
 }
 
 func (p *CredentialProxy) messageCoordinator(agentID string) (*MessageCoordinator, error) {
 	if p == nil || p.daemon == nil {
 		return nil, errors.New("Credential Proxy is unavailable")
 	}
-	p.daemon.messageCoordinatorMu.RLock()
-	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
-	p.daemon.messageCoordinatorMu.RUnlock()
-	if coordinator == nil {
+	_, coordinator, _, err := p.daemon.resolveInboxByAgent(agentID)
+	if err != nil {
 		return nil, errors.New("Message coordinator is unavailable")
 	}
 	return coordinator, nil
 }
 
-func (p *CredentialProxy) SaveNormalMessageDraft(agentID string, draft messageDraft, now time.Time) (messageDraft, error) {
-	coordinator, err := p.messageCoordinator(agentID)
-	if err != nil {
-		return messageDraft{}, err
+func (p *CredentialProxy) messageDraftStore() (*MessageDraftStore, error) {
+	if p == nil || p.daemon == nil || p.daemon.messageDraftStore == nil {
+		return nil, errors.New("Message Draft store is unavailable")
 	}
-	return coordinator.SaveNormalMessageDraft(draft, now)
+	return p.daemon.messageDraftStore, nil
 }
 
-func (p *CredentialProxy) LoadMessageDraft(agentID, target string, now time.Time) (messageDraft, bool, error) {
-	coordinator, err := p.messageCoordinator(agentID)
+func (p *CredentialProxy) SaveNormalMessageDraft(workspaceID, agentID string, draft MessageDraft, now time.Time) (MessageDraft, error) {
+	store, err := p.messageDraftStore()
 	if err != nil {
-		return messageDraft{}, false, err
+		return MessageDraft{}, err
 	}
-	return coordinator.LoadMessageDraft(target, now)
+	key := DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(draft.Target)}
+	saved, err := store.saveAt(key, draft, now)
+	if err != nil {
+		return MessageDraft{}, err
+	}
+	return saved, nil
 }
 
-func (p *CredentialProxy) RefreshMessageDraft(agentID, target, clientMessageID, contextTarget string, seenUpToSeq int64, now time.Time) (messageDraft, error) {
-	coordinator, err := p.messageCoordinator(agentID)
+func (p *CredentialProxy) LoadMessageDraft(workspaceID, agentID, target string, now time.Time) (MessageDraft, bool, error) {
+	store, err := p.messageDraftStore()
 	if err != nil {
-		return messageDraft{}, err
+		return MessageDraft{}, false, err
 	}
-	return coordinator.RefreshMessageDraft(target, clientMessageID, contextTarget, seenUpToSeq, now)
+	draft, found, err := store.Load(DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(target)}, now)
+	if err != nil || !found {
+		return MessageDraft{}, found, err
+	}
+	return draft, true, nil
 }
 
-func (p *CredentialProxy) ClearMessageDraft(agentID, target, clientMessageID string) error {
-	coordinator, err := p.messageCoordinator(agentID)
+func (p *CredentialProxy) UpdateMessageDraftBoundary(workspaceID, agentID, target, idempotencyKey, contextTarget string, seenUpToSeq int64, now time.Time) (MessageDraft, error) {
+	store, err := p.messageDraftStore()
+	if err != nil {
+		return MessageDraft{}, err
+	}
+	key := DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(target)}
+	draft, err := store.updateBoundaryAt(key, idempotencyKey, contextTarget, seenUpToSeq, now)
+	if err != nil {
+		return MessageDraft{}, err
+	}
+	return draft, nil
+}
+
+func (p *CredentialProxy) RecordMessageDraftHold(workspaceID, agentID, target, idempotencyKey, contextTarget string, seenUpToSeq int64, now time.Time) (MessageDraft, error) {
+	store, err := p.messageDraftStore()
+	if err != nil {
+		return MessageDraft{}, err
+	}
+	key := DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(target)}
+	draft, err := store.recordHoldAt(key, idempotencyKey, contextTarget, seenUpToSeq, now)
+	if err != nil {
+		return MessageDraft{}, err
+	}
+	return draft, nil
+}
+
+func (p *CredentialProxy) ClearMessageDraft(workspaceID, agentID, target, clientMessageID string) error {
+	store, err := p.messageDraftStore()
 	if err != nil {
 		return err
 	}
-	return coordinator.ClearMessageDraft(target, clientMessageID)
+	return store.Clear(DraftKey{WorkspaceID: workspaceID, AgentID: agentID, Target: strings.TrimSpace(target)}, clientMessageID)
 }
 
 func (p *CredentialProxy) MessageSendBoundarySnapshot(agentID, target string) (int64, error) {
@@ -543,10 +604,12 @@ func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageS
 	return coordinator.PreflightMessageSend(target)
 }
 
-func (p *CredentialProxy) AcceptHeldMessageContext(agentID, target string, throughSeq int64) error {
+func (p *CredentialProxy) PrepareHeldMessageContext(agentID, target string, throughSeq int64, messages []protocol.AgentMessageProjection) (CoverageOffer, error) {
 	coordinator, err := p.messageCoordinator(agentID)
 	if err != nil {
-		return err
+		return CoverageOffer{}, err
 	}
-	return coordinator.AcceptHeldContext(target, throughSeq)
+	return coordinator.PrepareCoverage(CoverageRequest{
+		Kind: CoverageHold, Target: target, ThroughSeq: throughSeq, Messages: messages,
+	})
 }

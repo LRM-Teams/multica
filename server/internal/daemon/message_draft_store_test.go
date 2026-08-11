@@ -97,6 +97,62 @@ func TestMessageDraftStoreExpiresAndRemovesDraft(t *testing.T) {
 	}
 }
 
+func TestMessageDraftStoreRecordHoldPreservesIdentityAndExtendsExpiry(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	store := newMessageDraftStore(t.TempDir(), func() time.Time { return now })
+	key := DraftKey{WorkspaceID: "workspace-1", AgentID: "agent-1", Target: "#one"}
+	if err := store.Save(key, MessageDraft{Content: "hello", IdempotencyKey: "key-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(9 * time.Minute)
+	held, err := store.RecordHold(key, "key-1", "channel:one", 7)
+	if err != nil {
+		t.Fatalf("RecordHold: %v", err)
+	}
+	if held.IdempotencyKey != "key-1" || held.HoldCount != 1 || held.ContextTarget != "channel:one" || held.SeenUpToSeq != 7 || !held.SavedAt.Equal(now) {
+		t.Fatalf("held Draft = %+v", held)
+	}
+
+	now = now.Add(9 * time.Minute)
+	loaded, found, err := store.Load(key, now)
+	if err != nil || !found || loaded.HoldCount != 1 || loaded.IdempotencyKey != "key-1" {
+		t.Fatalf("Load after extended expiry = %+v found=%v err=%v", loaded, found, err)
+	}
+	reheld, err := store.RecordHold(key, "key-1", "channel:one", 8)
+	if err != nil || reheld.HoldCount != 2 || reheld.IdempotencyKey != "key-1" || reheld.SeenUpToSeq != 8 {
+		t.Fatalf("repeated RecordHold = %+v err=%v", reheld, err)
+	}
+	now = now.Add(9 * time.Minute)
+	loaded, found, err = store.Load(key, now)
+	if err != nil || !found || loaded.HoldCount != 2 || loaded.IdempotencyKey != "key-1" {
+		t.Fatalf("Load after repeated hold = %+v found=%v err=%v", loaded, found, err)
+	}
+}
+
+func TestMessageDraftStoreBoundaryUpdateDoesNotExtendExpiry(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	store := newMessageDraftStore(t.TempDir(), func() time.Time { return now })
+	key := DraftKey{WorkspaceID: "workspace-1", AgentID: "agent-1", Target: "#one"}
+	if err := store.Save(key, MessageDraft{Content: "hello", IdempotencyKey: "key-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(9 * time.Minute)
+	updated, err := store.UpdateBoundary(key, "key-1", "channel:one", 4)
+	if err != nil {
+		t.Fatalf("UpdateBoundary: %v", err)
+	}
+	if updated.SeenUpToSeq != 4 || !updated.SavedAt.Equal(now.Add(-9*time.Minute)) {
+		t.Fatalf("boundary-updated Draft = %+v", updated)
+	}
+
+	now = now.Add(time.Minute)
+	if _, found, err := store.Load(key, now); err != nil || found {
+		t.Fatalf("boundary update extended expiry: found=%v err=%v", found, err)
+	}
+}
+
 func TestMessageDraftStoreClearDoesNotDeleteReplacement(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	store := newMessageDraftStore(t.TempDir(), func() time.Time { return now })

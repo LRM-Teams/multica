@@ -18,7 +18,8 @@ import (
 type agentProcessManager struct {
 	mu sync.Mutex
 
-	processCap   int
+	workspaceID  string
+	admission    agentProcessAdmission
 	now          func() time.Time
 	newID        func() string
 	onTransition func(agentLifecycleTransition)
@@ -26,7 +27,6 @@ type agentProcessManager struct {
 	agents     map[string]*managedAgentProcess
 	dispatches map[string]protocol.AgentStartAckPayload
 	queued     []string
-	running    int
 }
 
 type agentProcessStartRequest struct {
@@ -82,6 +82,7 @@ type managedAgentProcess struct {
 	processInstanceID string
 	readinessPolicy   string
 	deliveryMode      string
+	capacityGrant     agentProcessCapacityGrant
 	managed           bool
 	sequence          int64
 	transitions       map[string]*openLifecycleTransition
@@ -94,24 +95,36 @@ type openLifecycleTransition struct {
 	sequence int64
 }
 
-func newAgentProcessManager(processCap int, now func() time.Time, onTransition func(agentLifecycleTransition)) *agentProcessManager {
-	if processCap == 0 {
-		processCap = int(^uint(0) >> 1)
-	}
-	if processCap < 0 {
-		processCap = 1
-	}
+func newAgentProcessManager(workspaceID string, admission agentProcessAdmission, now func() time.Time, onTransition func(agentLifecycleTransition)) *agentProcessManager {
 	if now == nil {
 		now = time.Now
 	}
 	return &agentProcessManager{
-		processCap:   processCap,
+		workspaceID:  workspaceID,
+		admission:    admission,
 		now:          now,
 		newID:        func() string { return uuid.NewString() },
 		onTransition: onTransition,
 		agents:       make(map[string]*managedAgentProcess),
 		dispatches:   make(map[string]protocol.AgentStartAckPayload),
 	}
+}
+
+// Close releases only this Runner's in-memory launch state when its Binding is
+// removed. It never reaches across Workspace boundaries or synthesizes a stop
+// command on a replacement Runner.
+func (m *agentProcessManager) Close() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	for _, managed := range m.agents {
+		m.releaseLocked(managed)
+	}
+	m.agents = nil
+	m.dispatches = nil
+	m.queued = nil
+	m.mu.Unlock()
 }
 
 func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.AgentStartAckPayload, error) {
@@ -144,7 +157,7 @@ func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.
 		transitions: make(map[string]*openLifecycleTransition),
 	}
 	m.agents[request.AgentID] = managed
-	if m.running >= m.processCap {
+	if !m.acquireLocked(managed) {
 		managed.queueState = protocol.AgentStartQueueQueued
 		m.queued = append(m.queued, managed.agentID)
 		m.enterLocked(managed, "process_residency", "queued")
@@ -200,6 +213,9 @@ func (m *agentProcessManager) ProcessSpawned(callback agentProcessCallback) erro
 	managed, err := m.currentLocked(callback, false)
 	if err != nil {
 		return err
+	}
+	if m.admission == nil || !m.admission.Active(managed.capacityGrant) {
+		return errors.New("managed launch capacity grant is no longer active")
 	}
 	if managed.queueState != protocol.AgentStartQueueStarting || callback.ProcessInstanceID == "" {
 		return errors.New("process spawn is not valid for the current launch")
@@ -306,10 +322,8 @@ func (m *agentProcessManager) ProcessExited(callback agentProcessCallback, recov
 	}
 	m.closeAllLocked(managed, "terminal")
 	managed.processInstanceID = ""
-	if m.running > 0 {
-		m.running--
-	}
 	if !recover {
+		m.releaseLocked(managed)
 		managed.managed = false
 		managed.queueState = protocol.AgentStartQueueQueued
 		delete(m.agents, managed.agentID)
@@ -339,7 +353,7 @@ func (m *agentProcessManager) startLocked(request agentProcessStartRequest) (pro
 	}
 	managed := &managedAgentProcess{agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: m.newID(), readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode, managed: true, transitions: make(map[string]*openLifecycleTransition)}
 	m.agents[request.AgentID] = managed
-	if m.running >= m.processCap {
+	if !m.acquireLocked(managed) {
 		managed.queueState = protocol.AgentStartQueueQueued
 		m.queued = append(m.queued, managed.agentID)
 		m.enterLocked(managed, "process_residency", "queued")
@@ -361,7 +375,6 @@ func (m *agentProcessManager) acceptanceLocked(managed *managedAgentProcess, dis
 
 func (m *agentProcessManager) beginProcessLocked(managed *managedAgentProcess) {
 	managed.queueState = protocol.AgentStartQueueStarting
-	m.running++
 	m.enterLocked(managed, "process_residency", "starting")
 }
 
@@ -375,9 +388,7 @@ func (m *agentProcessManager) readyLocked(managed *managedAgentProcess) {
 }
 
 func (m *agentProcessManager) stopLocked(managed *managedAgentProcess) {
-	if managed.queueState != protocol.AgentStartQueueQueued && m.running > 0 {
-		m.running--
-	}
+	m.releaseLocked(managed)
 	m.queued = removeQueuedAgent(m.queued, managed.agentID)
 	m.closeAllLocked(managed, "terminal")
 	managed.managed = false
@@ -386,16 +397,68 @@ func (m *agentProcessManager) stopLocked(managed *managedAgentProcess) {
 }
 
 func (m *agentProcessManager) promoteLocked() {
-	for m.running < m.processCap && len(m.queued) > 0 {
+	for len(m.queued) > 0 {
 		agentID := m.queued[0]
 		m.queued = m.queued[1:]
 		managed := m.agents[agentID]
 		if managed == nil || !managed.managed || managed.queueState != protocol.AgentStartQueueQueued {
 			continue
 		}
+		if !m.acquireLocked(managed) {
+			m.queued = append([]string{agentID}, m.queued...)
+			return
+		}
 		m.closeLocked(managed, "process_residency", "advanced")
 		m.beginProcessLocked(managed)
 	}
+}
+
+func (m *agentProcessManager) acquireLocked(managed *managedAgentProcess) bool {
+	if m.admission == nil {
+		return false
+	}
+	grant, admitted := m.admission.Acquire(agentProcessCapacityRequest{
+		WorkspaceID: m.workspaceID,
+		AgentID:     managed.agentID,
+		RuntimeID:   managed.runtimeID,
+		LaunchID:    managed.launchID,
+		Waiter: func(grant agentProcessCapacityGrant) {
+			m.onCapacityGranted(grant)
+		},
+	})
+	managed.capacityGrant = grant
+	if !admitted {
+		return false
+	}
+	return true
+}
+
+func (m *agentProcessManager) releaseLocked(managed *managedAgentProcess) {
+	if m.admission != nil && managed.capacityGrant.LaunchID != "" {
+		m.admission.Cancel(managed.capacityGrant)
+	}
+	managed.capacityGrant = agentProcessCapacityGrant{}
+}
+
+// onCapacityGranted is called by the pool after it has atomically recorded a
+// global grant. The local launch and its opaque queued token must still match;
+// otherwise a stop, detach, or replacement won the race and the callback is a
+// harmless no-op.
+func (m *agentProcessManager) onCapacityGranted(grant agentProcessCapacityGrant) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.agents[grant.AgentID]
+	if managed == nil || !managed.managed || managed.launchID != grant.LaunchID ||
+		managed.queueState != protocol.AgentStartQueueQueued || managed.capacityGrant != grant ||
+		m.admission == nil || !m.admission.Active(grant) {
+		return
+	}
+	m.queued = removeQueuedAgent(m.queued, managed.agentID)
+	m.closeLocked(managed, "process_residency", "advanced")
+	m.beginProcessLocked(managed)
 }
 
 func (m *agentProcessManager) currentLocked(callback agentProcessCallback, requireProcess bool) (*managedAgentProcess, error) {

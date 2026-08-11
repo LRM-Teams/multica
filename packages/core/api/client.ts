@@ -1444,9 +1444,8 @@ export class ApiClient {
     });
   }
 
-  // Dormant until the coordinated Runner Activity cut. This is a
-  // presentation-only boundary: clients receive no provider/runtime facts and
-  // must not apply a semantic fallback of their own.
+  // Active presentation-only Runner Activity boundary. Clients receive no
+  // provider/runtime facts and must not apply a semantic fallback of their own.
   async getRunnerActivity(id: string): Promise<RunnerActivityResponse> {
     const raw = await this.fetch<unknown>(`/api/members/agents/${id}/runner-activity`);
     return parseWithFallback(raw, RunnerActivityResponseSchema, EMPTY_RUNNER_ACTIVITY_RESPONSE, {

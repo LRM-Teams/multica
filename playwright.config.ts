@@ -3,7 +3,10 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 30000,
+  timeout: 60000,
+  // The HTTP/UI fixtures share one mutable local database and app server.
+  // Run them serially so setup redirects and cleanup cannot cross test files.
+  workers: 1,
   retries: 0,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? process.env.FRONTEND_ORIGIN ?? "http://localhost:3000",

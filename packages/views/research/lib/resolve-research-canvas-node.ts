@@ -1,8 +1,11 @@
-import type { TypedGraphNode, TypedGraphResponse } from "@multica/core/research";
+import type { TypedGraphNode } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
 
+type CanvasTypedNode = Pick<TypedGraphNode, "id"> & Partial<TypedGraphNode>;
+type CanvasTypedGraph = { nodes: readonly CanvasTypedNode[] };
+
 /** Map a typed graph node into the snapshot node shape used by detail / keyboard nav. */
-export function typedNodeToSnapshotNode(node: TypedGraphNode): ResearchGraphNode {
+export function typedNodeToSnapshotNode(node: CanvasTypedNode): ResearchGraphNode {
   const payload =
     node.payload != null && typeof node.payload === "object" && !Array.isArray(node.payload)
       ? (node.payload as Record<string, unknown>)
@@ -27,8 +30,8 @@ export function typedNodeToSnapshotNode(node: TypedGraphNode): ResearchGraphNode
 
 /** Merge typed payload fields onto a snapshot node for detail rendering. */
 export function enrichResearchNodeForDetail(
-  node: ResearchGraphNode,
-  typedGraph?: Pick<TypedGraphResponse, "nodes"> | null,
+	  node: ResearchGraphNode,
+	  typedGraph?: CanvasTypedGraph | null,
 ): ResearchGraphNode {
   const typed = typedGraph?.nodes.find((entry) => entry.id === node.id);
   if (!typed) return node;
@@ -65,7 +68,7 @@ export function resolveResearchCanvasNode(
   nodeId: string | null | undefined,
   options: {
     snapshotNodes?: readonly ResearchGraphNode[];
-    typedGraph?: Pick<TypedGraphResponse, "nodes"> | null;
+	    typedGraph?: CanvasTypedGraph | null;
   },
 ): ResearchGraphNode | null {
   if (!nodeId) return null;
@@ -79,8 +82,8 @@ export function resolveResearchCanvasNode(
 
 /** Union snapshot + typed-only nodes for keyboard nav and accessible names. */
 export function mergeResearchCanvasNodes(
-  snapshotNodes: readonly ResearchGraphNode[],
-  typedGraph?: Pick<TypedGraphResponse, "nodes"> | null,
+	  snapshotNodes: readonly ResearchGraphNode[],
+	  typedGraph?: CanvasTypedGraph | null,
 ): ResearchGraphNode[] {
   const byId = new Map<string, ResearchGraphNode>();
   for (const node of snapshotNodes) {

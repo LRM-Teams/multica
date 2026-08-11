@@ -76,17 +76,21 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 		if !request.Anyway {
 			freshness, err := proxy.PreflightMessageSend(request.AgentID, draft.ContextTarget)
 			if err != nil {
-				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "held", "freshness_unknown")
+				if _, holdErr := proxy.RecordMessageDraftHold(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, draft.ContextTarget, draft.SeenUpToSeq, time.Now()); holdErr != nil {
+					http.Error(w, "refresh held local Draft: "+holdErr.Error(), http.StatusConflict)
+					return
+				}
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, nil, "response_send", "held", "freshness_unknown")
 				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, 0, "freshness_unknown")
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, MessageSendFreshness{}, "freshness_unknown"))
 				return
 			}
 			if freshness.Held {
-				if _, err := proxy.RefreshMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID, draft.ContextTarget, freshness.LatestSeq, time.Now()); err != nil {
+				if _, err := proxy.RecordMessageDraftHold(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, draft.ContextTarget, freshness.LatestSeq, time.Now()); err != nil {
 					http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 					return
 				}
-				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "held", "local_pending")
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, nil, "response_send", "held", "local_pending")
 				d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, freshness.NewMessageCount, "local_pending")
 				writeCredentialProxyMessageJSON(w, localMessageSendHeldResponse(draft.Target, freshness, "newer_messages_available"))
 				return
@@ -100,7 +104,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			"target":            draft.Target,
 			"content":           draft.Content,
 			"attachment_ids":    draft.AttachmentIDs,
-			"client_message_id": draft.ClientMessageID,
+			"client_message_id": draft.IdempotencyKey,
 			"seen_up_to_seq":    draft.SeenUpToSeq,
 			"context_target":    draft.ContextTarget,
 			"bypass_freshness":  request.Anyway,
@@ -118,42 +122,78 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			// The outcome is unknown whenever a send request did not return a
 			// successful response.  Keep the identity-bearing Draft for an
 			// explicit safe replay instead of trying again in the background.
-			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, nil, "response_send", "failed", "service_send_failed")
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, nil, "response_send", "failed", "service_send_failed")
 			http.Error(w, "send message through Credential Proxy: "+err.Error(), http.StatusBadGateway)
 			return
 		}
+		localCoverageReceipt := ""
 		if credentialProxyMessageOutputIsHeld(response) {
 			latestSeq, ok := jsonInteger(response["latestSeq"])
 			if !ok || latestSeq <= 0 {
 				http.Error(w, "invalid held send response from server", http.StatusBadGateway)
 				return
 			}
-			if err := proxy.AcceptHeldMessageContext(request.AgentID, draft.ContextTarget, latestSeq); err != nil {
-				http.Error(w, "persist held message Context Boundary: "+err.Error(), http.StatusConflict)
+			heldMessages, err := parseServerHeldMessageContext(response, draft.ContextTarget)
+			if err != nil {
+				http.Error(w, "invalid held send response from server", http.StatusBadGateway)
 				return
 			}
-			if _, err := proxy.RefreshMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID, draft.ContextTarget, latestSeq, time.Now()); err != nil {
+			coverage, err := proxy.PrepareHeldMessageContext(request.AgentID, draft.ContextTarget, latestSeq, heldMessages)
+			if err != nil || coverage.ReceiptID == "" {
+				http.Error(w, "prepare held message coverage", http.StatusConflict)
+				return
+			}
+			localCoverageReceipt = coverage.ReceiptID
+			if _, err := proxy.RecordMessageDraftHold(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, draft.ContextTarget, latestSeq, time.Now()); err != nil {
 				http.Error(w, "refresh held local Draft: "+err.Error(), http.StatusConflict)
 				return
 			}
 			count, _ := jsonInteger(response["newMessageCount"])
-			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_send", "held", "server_race")
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_send", "held", "server_race")
 			d.observeMessageSendHold(request.AgentID, request.WorkspaceID, draft.Target, count, "server_race")
 		}
 		if !credentialProxyMessageOutputIsHeld(response) {
-			if err := proxy.ClearMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID); err != nil {
+			if err := proxy.ClearMessageDraft(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey); err != nil {
 				// A canonical Message may already exist, so do not claim an unknown
 				// send.  The stable server identity makes a later explicit replay
 				// safe if the local cleanup needs manual recovery.
-				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_accepted", "degraded", "draft_cleanup_failed")
+				d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_accepted", "degraded", "draft_cleanup_failed")
 				http.Error(w, "clear sent local Draft: "+err.Error(), http.StatusConflict)
 				return
 			}
-			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.ClientMessageID, draft.ContextTarget, response, "response_accepted", "accepted", "")
+			d.recordAgentMessageResponse(request.WorkspaceID, request.AgentID, draft.IdempotencyKey, draft.ContextTarget, response, "response_accepted", "accepted", "")
 		}
 		sanitizeCredentialProxyMessageSendResponse(response)
+		if localCoverageReceipt != "" {
+			response[MessageCoverageReceiptField] = localCoverageReceipt
+		}
 		writeCredentialProxyMessageJSON(w, response)
 	}
+}
+
+func parseServerHeldMessageContext(response map[string]any, target string) ([]protocol.AgentMessageProjection, error) {
+	raw, found := response["heldMessages"]
+	if !found {
+		return nil, errors.New("held Messages are required")
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var messages []protocol.AgentMessageProjection
+	if err := json.Unmarshal(encoded, &messages); err != nil || len(messages) == 0 || len(messages) > messageCheckMaxLimit {
+		return nil, errors.New("held Messages are invalid")
+	}
+	target = strings.TrimSpace(target)
+	for index := range messages {
+		if strings.TrimSpace(messages[index].Target) == "" {
+			messages[index].Target = target
+		}
+		if messages[index].Target != target || strings.TrimSpace(messages[index].ID) == "" || messages[index].Seq <= 0 {
+			return nil, errors.New("held Message identity is invalid")
+		}
+	}
+	return messages, nil
 }
 
 func (request *credentialProxyMessageSendRequest) validate() error {
@@ -175,44 +215,44 @@ func (request *credentialProxyMessageSendRequest) validate() error {
 	return nil
 }
 
-func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialProxy, credential cachedAgentCredential, request credentialProxyMessageSendRequest, now time.Time) (messageDraft, int, error) {
-	var draft messageDraft
+func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialProxy, credential cachedAgentCredential, request credentialProxyMessageSendRequest, now time.Time) (MessageDraft, int, error) {
+	var draft MessageDraft
 	var err error
 	if request.SendDraft {
-		loaded, found, err := proxy.LoadMessageDraft(request.AgentID, request.Target, now)
+		loaded, found, err := proxy.LoadMessageDraft(request.WorkspaceID, request.AgentID, request.Target, now)
 		if err != nil {
-			return messageDraft{}, http.StatusConflict, fmt.Errorf("load saved Draft: %w", err)
+			return MessageDraft{}, http.StatusConflict, fmt.Errorf("load saved Draft: %w", err)
 		}
 		if !found {
-			return messageDraft{}, http.StatusNotFound, errors.New("saved Draft not found or expired")
+			return MessageDraft{}, http.StatusNotFound, errors.New("saved Draft not found or expired")
 		}
 		draft = loaded
 	} else {
 		contextTarget, status, err := d.resolveMessageSendTarget(ctx, credential.Token, request, request.Target)
 		if err != nil {
-			return messageDraft{}, status, err
+			return MessageDraft{}, status, err
 		}
 		seenUpToSeq, err := proxy.MessageSendBoundarySnapshot(request.AgentID, contextTarget)
 		if err != nil {
-			return messageDraft{}, http.StatusConflict, err
+			return MessageDraft{}, http.StatusConflict, err
 		}
 		// Raft-aligned send identity: mint an independent uuid per intent, or
 		// reuse the outstanding Draft's client_message_id when a normal send
 		// re-drives the same content for the same target (seq86/87). There is no
 		// turn-coordinate batch client_message_id.
 		clientMessageID := uuid.NewString()
-		if existing, found, loadErr := proxy.LoadMessageDraft(request.AgentID, request.Target, now); loadErr == nil && found {
+		if existing, found, loadErr := proxy.LoadMessageDraft(request.WorkspaceID, request.AgentID, request.Target, now); loadErr == nil && found {
 			if reused, ok := reuseClientMessageIDForIntent(existing, request.Content); ok {
 				clientMessageID = reused
 			}
 		}
-		saved, err := proxy.SaveNormalMessageDraft(request.AgentID, messageDraft{
+		saved, err := proxy.SaveNormalMessageDraft(request.WorkspaceID, request.AgentID, MessageDraft{
 			Target: request.Target, ContextTarget: contextTarget, Content: request.Content, AttachmentIDs: append([]string(nil), request.AttachmentIDs...),
-			ClientMessageID: clientMessageID, SeenUpToSeq: seenUpToSeq,
+			IdempotencyKey: clientMessageID, SeenUpToSeq: seenUpToSeq,
 			Kind: strings.TrimSpace(request.Kind),
 		}, now)
 		if err != nil {
-			return messageDraft{}, http.StatusConflict, fmt.Errorf("save local Draft before send: %w", err)
+			return MessageDraft{}, http.StatusConflict, fmt.Errorf("save local Draft before send: %w", err)
 		}
 		draft = saved
 	}
@@ -227,16 +267,16 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 		var status int
 		contextTarget, status, err = d.resolveMessageSendTarget(ctx, credential.Token, request, draft.Target)
 		if err != nil {
-			return messageDraft{}, status, err
+			return MessageDraft{}, status, err
 		}
 	}
 	seenUpToSeq, err := proxy.MessageSendBoundarySnapshot(request.AgentID, contextTarget)
 	if err != nil {
-		return messageDraft{}, http.StatusConflict, err
+		return MessageDraft{}, http.StatusConflict, err
 	}
-	draft, err = proxy.RefreshMessageDraft(request.AgentID, draft.Target, draft.ClientMessageID, contextTarget, seenUpToSeq, time.Now())
+	draft, err = proxy.UpdateMessageDraftBoundary(request.WorkspaceID, request.AgentID, draft.Target, draft.IdempotencyKey, contextTarget, seenUpToSeq, time.Now())
 	if err != nil {
-		return messageDraft{}, http.StatusConflict, fmt.Errorf("persist send freshness preflight: %w", err)
+		return MessageDraft{}, http.StatusConflict, fmt.Errorf("persist send freshness preflight: %w", err)
 	}
 	return draft, http.StatusOK, nil
 }
@@ -265,15 +305,15 @@ func (d *Daemon) agentCredentialClient(token string, request credentialProxyMess
 // reuseClientMessageIDForIntent reuses an outstanding (non-expired) local Draft
 // client_message_id when a normal send re-drives the SAME intent (identical
 // content) to the same target. Distinct content is a new intent.
-func reuseClientMessageIDForIntent(existing messageDraft, content string) (string, bool) {
+func reuseClientMessageIDForIntent(existing MessageDraft, content string) (string, bool) {
 	if strings.TrimSpace(existing.Content) == strings.TrimSpace(content) {
-		return existing.ClientMessageID, true
+		return existing.IdempotencyKey, true
 	}
 	return "", false
 }
 
 func localMessageSendHeldResponse(target string, freshness MessageSendFreshness, reason string) map[string]any {
-	return map[string]any{
+	response := map[string]any{
 		"action":              "message_send",
 		"target":              target,
 		"state":               "held",
@@ -287,13 +327,17 @@ func localMessageSendHeldResponse(target string, freshness MessageSendFreshness,
 		"shownMessageCount":   int64(len(freshness.Messages)),
 		"omittedMessageCount": freshness.Omitted,
 	}
+	if freshness.CoverageReceipt != "" {
+		response[MessageCoverageReceiptField] = freshness.CoverageReceipt
+	}
+	return response
 }
 
 func sanitizeCredentialProxyMessageSendResponse(response map[string]any) {
 	// These fields are intentionally only Proxy↔Server implementation state.
 	// A tool gets canonical messages and held context, never a cursor-like
 	// boundary, internal transport record, or reusable identity.
-	for _, key := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId", "freshnessResolution"} {
+	for _, key := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId", "freshnessResolution", MessageCoverageReceiptField} {
 		delete(response, key)
 	}
 	sanitizeCredentialProxyMessageValue(response)
@@ -366,36 +410,15 @@ func (d *Daemon) observeMessageSendHold(agentID, workspaceID, target string, new
 	if d.logger != nil {
 		d.logger.Info("Credential Proxy message send held", "agent_id", agentID, "workspace_id", workspaceID, "target", target, "new_message_count", newer, "reason", reason)
 	}
-	// Project a Runner Activity entry so a soft-held send is visible on the
-	// agent's Activity timeline (a "system" entry renders as a warning row with
-	// title/subtext and body_kind:none). This is intentionally fail-soft and
-	// never influences the send outcome. Unlike the managed-only publisher, the
-	// hold entry is projected for Agents that are NOT locally managed either
-	// (Raft: the daemon still reports the Activity fact with blank launch/client-
-	// seq bookkeeping); a missing transport just drops it best-effort.
-	entry, err := activitySystemEntry(messageSendHoldTitle(), messageSendHoldSubtext(newer))
-	if err != nil {
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
 		return
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
-	if err := producer.PublishHoldEntry(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+	launch, found := runner.processes.Snapshot(agentID)
+	if !found {
+		return
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: launch.RuntimeID, Target: target, NewMessageCount: int(newer), ReasonCode: reason}, At: time.Now().UTC()}); err != nil && d.logger != nil {
 		d.logger.Debug("send-hold Runner Activity publish deferred", "error", err, "agent_id", agentID, "target", target)
 	}
-}
-
-// messageSendHoldTitle is the warning-row title surfaced on the Agent Activity
-// timeline when a message send is held pending review of newer messages. It is
-// the presentation contract consumed by the Activity tab (see Dax FE test).
-func messageSendHoldTitle() string {
-	return "Message held — review newer messages before sending"
-}
-
-// messageSendHoldSubtext builds the warning-row subtext from how many newer
-// messages are pending. It is deliberately text-only; the Activity projection
-// renders it as body_kind:none.
-func messageSendHoldSubtext(newer int64) string {
-	if newer > 0 {
-		return fmt.Sprintf("%d newer messages available — review then resend", newer)
-	}
-	return "Send held — review the channel before resending"
 }

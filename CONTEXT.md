@@ -39,6 +39,22 @@ injection, Draft interception, freshness coordination, and response
 consumption; it does not assemble canonical Message Parts.
 _Avoid_: API gateway, Message store, runtime proxy
 
+### Agent Command Capability
+
+One named category of Agent CLI action whose effective state is resolved for a
+concrete local Agent launch. It describes what the launch may do, not what the
+Agent knows how to do; absence from an incomplete capability catalog never
+means denial.
+_Avoid_: Agent skill, Agent role, CLI feature flag, environment permission
+
+### Agent Command Policy
+
+The launch-scoped decision map that resolves each Agent Command Capability to
+one state: legacy passthrough, allowed, denied, or unavailable. Service-side
+role and Workspace authorization remains authoritative; the policy does not
+turn a machine-local credential or environment variable into new authority.
+_Avoid_: Command allowlist, capability environment variable, Agent skill list
+
 ### Workspace Execution Binding
 
 A durable authorization relationship that permits one machine to execute
@@ -63,6 +79,15 @@ The machine-local execution owner for one Workspace Execution Binding. At most
 one Workspace Runner is active for a binding, while the same Workspace may have
 other Workspace Runners on other machines.
 _Avoid_: Workspace owner, global Workspace runner
+
+### Agent Attachment
+
+The durable fact that one Machine Service handles one Agent in one Workspace
+through one Runtime. Attachment is fenced by its own generation and survives
+process exit or Machine Service restart. It does not mean that a provider
+process is running, and detaching it does not delete the Agent Root, Inbox,
+Message Draft, or other durable Agent data.
+_Avoid_: Agent process, launch, session, Reminder owner, Workspace attachment
 
 ### Agent Workspace (Agent Root)
 

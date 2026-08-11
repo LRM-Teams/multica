@@ -46,6 +46,7 @@ type agentActivityProducer struct {
 	newID               func() string
 	schedule            func(time.Duration, func()) func()
 	send                func(protocol.AgentActivityPayload)
+	daemonInstanceID    string
 	transportGeneration uint64
 	states              map[agentActivityProducerKey]*agentActivityProducerState
 }
@@ -69,6 +70,7 @@ type agentActivityCompactionState struct {
 	active      bool
 	startedAt   time.Time
 	stale       bool
+	runtime     AgentRuntimeStageObservationData
 	cancelStale func()
 }
 
@@ -77,19 +79,36 @@ type agentActivityReconnectFrame struct {
 	Payload   any
 }
 
-func newAgentActivityProducer(now func() time.Time, send func(protocol.AgentActivityPayload)) *agentActivityProducer {
+func newAgentActivityProducer(daemonInstanceID string, now func() time.Time, send func(protocol.AgentActivityPayload)) *agentActivityProducer {
 	if now == nil {
 		now = time.Now
 	}
 	return &agentActivityProducer{
-		now:   now,
-		newID: func() string { return uuid.NewString() },
+		daemonInstanceID: daemonInstanceID,
+		now:              now,
+		newID:            func() string { return uuid.NewString() },
 		schedule: func(delay time.Duration, callback func()) func() {
 			timer := time.AfterFunc(delay, callback)
 			return func() { timer.Stop() }
 		},
-		send: send, states: make(map[agentActivityProducerKey]*agentActivityProducerState),
+		send:   send,
+		states: make(map[agentActivityProducerKey]*agentActivityProducerState),
 	}
+}
+
+// Close releases activity sequence and managed-launch state with the owning
+// Workspace Runner. Reconnects deliberately use DetachTransport instead.
+func (p *agentActivityProducer) Close() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	for _, state := range p.states {
+		clearAgentActivityCompaction(state)
+	}
+	p.send = nil
+	p.states = nil
+	p.mu.Unlock()
 }
 
 func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, session protocol.AgentSessionPayload) error {
@@ -109,7 +128,7 @@ func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, s
 	defer p.mu.Unlock()
 	// One Agent has one current managed launch. A server-commanded launch may
 	// replace a resident Message launch (or vice versa); retaining both would
-	// make PublishForManagedAgent choose a launch nondeterministically.
+	// make launch-free observations ambiguous.
 	for existing := range p.states {
 		if existing.agentID == status.AgentID && existing.launchID != status.LaunchID {
 			clearAgentActivityCompaction(p.states[existing])
@@ -125,35 +144,6 @@ func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, s
 	state.status = status
 	state.session = session
 	return nil
-}
-
-// EnsureManagedAgent establishes the wakeable resident launch observed at the
-// concrete Message handoff boundary. It is idempotent for an already managed
-// Agent and deliberately does not invent a provider process or session ID.
-func (p *agentActivityProducer) EnsureManagedAgent(agentID string) (protocol.AgentStatusPayload, protocol.AgentSessionPayload, bool, error) {
-	if p == nil || agentID == "" {
-		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, false, errors.New("Activity managed Agent identity is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for key, state := range p.states {
-		if key.agentID == agentID {
-			return state.status, state.session, false, nil
-		}
-	}
-	launchID := p.newID()
-	status := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: launchID, Status: protocol.AgentStatusActive}
-	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID}
-	if err := status.Validate(); err != nil {
-		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, false, err
-	}
-	if err := session.Validate(); err != nil {
-		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, false, err
-	}
-	p.states[agentActivityProducerKey{agentID: agentID, launchID: launchID}] = &agentActivityProducerState{
-		status: status, session: session, connected: true,
-	}
-	return status, session, true, nil
 }
 
 func (p *agentActivityProducer) SetConnected(agentID, launchID string, connected bool) {
@@ -221,126 +211,6 @@ func (p *agentActivityProducer) DetachTransport(generation uint64) {
 	}
 }
 
-// Publish emits an immediately useful Snapshot when connected and otherwise
-// retains only the latest Snapshot. Entries observed during an outage are
-// deliberately discarded rather than replayed as invented narrative history.
-func (p *agentActivityProducer) Publish(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {
-	if p == nil {
-		return errors.New("Activity producer is not configured")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.publishLocked(snapshot, entries)
-}
-
-// PublishForManagedAgent reports a fact from a local Manager-owned boundary
-// such as concrete canonical Message handoff. The caller supplies no launch
-// identity: the producer takes it only from the currently managed launch.
-func (p *agentActivityProducer) PublishForManagedAgent(agentID, daemonInstanceID, activityKind, detailKind string, entries []protocol.AgentActivityEntry) error {
-	if p == nil || agentID == "" || daemonInstanceID == "" {
-		return errors.New("Activity managed Agent identity is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var snapshot protocol.AgentActivitySnapshot
-	var managedState *agentActivityProducerState
-	var managedKey agentActivityProducerKey
-	for key, state := range p.states {
-		if key.agentID == agentID {
-			managedKey = key
-			managedState = state
-			snapshot = state.snapshot
-			snapshot.AgentID = agentID
-			snapshot.LaunchID = key.launchID
-			break
-		}
-	}
-	if snapshot.LaunchID == "" {
-		return errors.New("Activity is not managed for this Agent")
-	}
-	snapshot.DaemonInstanceID = daemonInstanceID
-	snapshot.ActivityKind = activityKind
-	snapshot.DetailKind = detailKind
-	snapshot.ProbeID = ""
-	// This call observes a new Manager fact for the same launch. Reusing the
-	// prior fact identity would make publishLocked reject every transition after
-	// the first one as a client-sequence regression.
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
-	snapshot.ObservedAt = time.Time{}
-	if err := p.publishLocked(snapshot, entries); err != nil {
-		return err
-	}
-	switch detailKind {
-	case "compacting_context":
-		clearAgentActivityCompaction(managedState)
-		startedAt := managedState.snapshot.ObservedAt
-		managedState.compaction = agentActivityCompactionState{active: true, startedAt: startedAt}
-		managedState.compaction.cancelStale = p.schedule(compactionStaleTimeout, func() {
-			p.markCompactionStale(managedKey, startedAt)
-		})
-	case "compaction_finished", "runtime_error":
-		clearAgentActivityCompaction(managedState)
-	}
-	return nil
-}
-
-// CompleteCompactionIfActive projects a missing provider finish at the first
-// runtime fact that proves output resumed. Explicit finish events still use
-// PublishForManagedAgent directly, matching Raft's provider-event path.
-func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, daemonInstanceID, narrative string) (bool, error) {
-	if p == nil || agentID == "" || daemonInstanceID == "" {
-		return false, errors.New("Activity managed Agent identity is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var snapshot protocol.AgentActivitySnapshot
-	var managedState *agentActivityProducerState
-	for key, state := range p.states {
-		if key.agentID == agentID {
-			managedState = state
-			snapshot = state.snapshot
-			snapshot.AgentID = agentID
-			snapshot.LaunchID = key.launchID
-			break
-		}
-	}
-	if managedState == nil || !managedState.compaction.active {
-		return false, nil
-	}
-	entry, err := activityNarrativeEntry(protocol.ActivityKindWorking, "compaction_finished", narrative)
-	if err != nil {
-		return false, err
-	}
-	snapshot.DaemonInstanceID = daemonInstanceID
-	snapshot.ActivityKind = protocol.ActivityKindWorking
-	snapshot.DetailKind = "compaction_finished"
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
-	snapshot.ObservedAt = time.Time{}
-	snapshot.ProbeID = ""
-	if err := p.publishLocked(snapshot, []protocol.AgentActivityEntry{entry}); err != nil {
-		return false, err
-	}
-	clearAgentActivityCompaction(managedState)
-	return true, nil
-}
-
-func (p *agentActivityProducer) InterruptCompactionIfActive(agentID string) bool {
-	if p == nil || agentID == "" {
-		return false
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for key, state := range p.states {
-		if key.agentID == agentID && state.compaction.active {
-			clearAgentActivityCompaction(state)
-			return true
-		}
-	}
-	return false
-}
-
 func clearAgentActivityCompaction(state *agentActivityProducerState) {
 	if state == nil {
 		return
@@ -350,126 +220,6 @@ func clearAgentActivityCompaction(state *agentActivityProducerState) {
 	}
 	state.compaction = agentActivityCompactionState{}
 }
-
-func (p *agentActivityProducer) markCompactionStale(key agentActivityProducerKey, startedAt time.Time) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	state := p.states[key]
-	if state == nil || !state.compaction.active || state.compaction.stale || !state.compaction.startedAt.Equal(startedAt) {
-		return
-	}
-	state.compaction.cancelStale = nil
-	entry, err := activityNarrativeEntry(protocol.ActivityKindWorking, "compaction_stale", "Context compaction still running; no finish event observed")
-	if err != nil {
-		return
-	}
-	snapshot := state.snapshot
-	snapshot.ActivityKind = protocol.ActivityKindWorking
-	snapshot.DetailKind = "compaction_stale"
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
-	snapshot.ObservedAt = time.Time{}
-	snapshot.ProbeID = ""
-	if p.publishLocked(snapshot, []protocol.AgentActivityEntry{entry}) == nil {
-		state.compaction.stale = true
-	}
-}
-
-// PublishEntryForManagedAgent appends a timeline fact without replacing the
-// current lifecycle meaning. If no observation exists yet, Online is the
-// conservative baseline used by the runtime diagnostic contract.
-func (p *agentActivityProducer) PublishEntryForManagedAgent(agentID, daemonInstanceID string, entries []protocol.AgentActivityEntry) error {
-	if p == nil || agentID == "" || daemonInstanceID == "" {
-		return errors.New("Activity managed Agent identity is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var snapshot protocol.AgentActivitySnapshot
-	for key, state := range p.states {
-		if key.agentID == agentID {
-			snapshot = state.snapshot
-			snapshot.AgentID = agentID
-			snapshot.LaunchID = key.launchID
-			break
-		}
-	}
-	if snapshot.LaunchID == "" {
-		return errors.New("Activity is not managed for this Agent")
-	}
-	if snapshot.ActivityKind == "" {
-		snapshot.ActivityKind = protocol.ActivityKindOnline
-		snapshot.DetailKind = "idle"
-	}
-	snapshot.DaemonInstanceID = daemonInstanceID
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
-	snapshot.ObservedAt = time.Time{}
-	snapshot.ProbeID = ""
-	return p.publishLocked(snapshot, entries)
-}
-
-// PublishHoldEntry projects a soft-held send onto the Agent's Activity timeline
-// for BOTH managed and not-yet-managed Agents, aligning with Raft's semantics
-// that the daemon still reports an Activity fact even when the Agent has no
-// locally managed launch (the server reconciles a fragment whose launch/client-
-// seq bookkeeping is not tied to a managed client sequence). It is fail-soft:
-// a missing transport drops the fragment and never influences the send outcome.
-//
-// When the Agent has a managed launch the identity and ordering are inherited
-// from the managed snapshot, so the hold entry stays inside the managed
-// client-sequence stream (managed main path untouched). When the Agent is not
-// managed, a standalone fragment Snapshot is synthesized (fresh launch identity,
-// client-sequence=1, Online baseline) and pushed without touching the states map
-// or client-seq bookkeeping, so it cannot perturb a later managed launch.
-func (p *agentActivityProducer) PublishHoldEntry(agentID, daemonInstanceID string, entries []protocol.AgentActivityEntry) error {
-	if p == nil || agentID == "" || daemonInstanceID == "" {
-		return errors.New("Activity publisher Agent identity is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for key, state := range p.states {
-		if key.agentID == agentID {
-			snapshot := state.snapshot
-			snapshot.AgentID = agentID
-			snapshot.LaunchID = key.launchID
-			snapshot.DaemonInstanceID = daemonInstanceID
-			if snapshot.ActivityKind == "" {
-				snapshot.ActivityKind = protocol.ActivityKindOnline
-				snapshot.DetailKind = "idle"
-			}
-			snapshot.ClientSequence = 0 // publishLocked assigns the next value
-			snapshot.ProducerFactID = ""
-			snapshot.ObservedAt = time.Time{}
-			snapshot.ProbeID = ""
-			return p.publishLocked(snapshot, entries)
-		}
-	}
-	if p.send == nil {
-		// No live transport: best-effort drop, matching the deferred behavior of
-		// the managed path when disconnected.
-		return nil
-	}
-	snapshot := protocol.AgentActivitySnapshot{
-		AgentID:          agentID,
-		LaunchID:         p.newID(),
-		DaemonInstanceID: daemonInstanceID,
-		ActivityKind:     protocol.ActivityKindOnline,
-		DetailKind:       "idle",
-		ClientSequence:   1,
-		ProducerFactID:   p.newID(),
-		ObservedAt:       p.now().UTC(),
-	}
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Entries: entries}
-	if err := payload.Validate(); err != nil {
-		return err
-	}
-	p.send(payload)
-	return nil
-}
-
 func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {
 	key := agentActivityProducerKey{agentID: snapshot.AgentID, launchID: snapshot.LaunchID}
 	state := p.states[key]

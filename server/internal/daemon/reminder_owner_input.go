@@ -34,7 +34,7 @@ func (d *Daemon) handleReminderOwnerInput(ctx context.Context, payload protocol.
 		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, reason)
 		return reminderOwnerInputRejected
 	}
-	if d == nil || d.reminderAgents == nil || d.canonicalRuntimes == nil {
+	if d == nil || d.canonicalRuntimes == nil {
 		return reminderOwnerInputRejected
 	}
 
@@ -46,8 +46,8 @@ func (d *Daemon) handleReminderOwnerInput(ctx context.Context, payload protocol.
 		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, "runtime_or_capability_mismatch")
 		return reminderOwnerInputRejected
 	}
-	owner, ok := d.reminderAgents.get(payload.AgentID)
-	if !ok || owner.RuntimeID != payload.RuntimeID || owner.WorkspaceID != payload.WorkspaceID || owner.PlacementGeneration != payload.PlacementGeneration {
+	attachment, ok := d.currentAttachmentForRuntimeAgent(payload.RuntimeID, payload.AgentID)
+	if !ok || attachment.WorkspaceID != payload.WorkspaceID || int64(attachment.AttachmentGeneration) != payload.PlacementGeneration {
 		d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputRejected, "owner_placement_mismatch")
 		return reminderOwnerInputRejected
 	}

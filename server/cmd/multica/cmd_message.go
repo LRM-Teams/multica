@@ -105,6 +105,10 @@ func newMessageCheckCmd() *cobra.Command {
 }
 
 func runAgentMessageCheck(_ *cobra.Command, _ []string) error {
+	return runAgentMessageCheckWithWriter(os.Stdout)
+}
+
+func runAgentMessageCheckWithWriter(output io.Writer) error {
 	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
 	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
 	if agentID == "" {
@@ -136,11 +140,17 @@ func runAgentMessageCheck(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("message check through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
 	}
 	var result messageCheckCLIResponse
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
-	if err := decoder.Decode(&result); err != nil {
-		return fmt.Errorf("decode message check response: %w", err)
+	if err := consumeMessageCoverageResponse(
+		ctx,
+		response.Body,
+		output,
+		&result,
+		func(w io.Writer) error { return printMessageCheckResult(w, result) },
+		commitLocalMessageCoverage,
+	); err != nil {
+		return fmt.Errorf("consume message check response: %w", err)
 	}
-	return printMessageCheckResult(os.Stdout, result)
+	return nil
 }
 
 func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse) error {
@@ -239,6 +249,10 @@ func requiredMessageTarget(cmd *cobra.Command) (string, error) {
 }
 
 func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
+	return runAgentMessageSendWithWriter(cmd, os.Stdout)
+}
+
+func runAgentMessageSendWithWriter(cmd *cobra.Command, output io.Writer) error {
 	target, err := requiredMessageTarget(cmd)
 	if err != nil {
 		return err
@@ -258,11 +272,10 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		if anyway {
 			body["anyway"] = true
 		}
-		var out map[string]any
-		if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
+		if err := outputAgentMessageSendThroughCredentialProxy(body, output); err != nil {
 			return fmt.Errorf("send saved Draft: %w", err)
 		}
-		return printAgentTransportOutput(out)
+		return nil
 	}
 	contentBytes, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), maxAgentMessageStdinBytes+1))
 	if err != nil {
@@ -296,11 +309,31 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	}
 	// Raft-aligned: chat send identity is minted by the Credential Proxy
 	// (independent uuid / draft reuse). CLI does not stamp turn batch keys.
-	var out map[string]any
-	if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
+	if err := outputAgentMessageSendThroughCredentialProxy(body, output); err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
-	return printAgentTransportOutput(out)
+	return nil
+}
+
+func outputAgentMessageSendThroughCredentialProxy(body map[string]any, output io.Writer) error {
+	var result map[string]any
+	err := withAgentMessageCredentialProxyResponse("send", body, func(ctx context.Context, responseBody io.Reader) error {
+		return consumeMessageCoverageResponse(
+			ctx,
+			responseBody,
+			output,
+			&result,
+			func(w io.Writer) error { return cli.PrintJSON(w, result) },
+			commitLocalMessageCoverage,
+		)
+	})
+	if err != nil {
+		return err
+	}
+	if agentTransportOutputIsHeld(result) {
+		return errAgentMessageHeld
+	}
+	return nil
 }
 
 func agentTransportOutputIsHeld(out map[string]any) bool {
@@ -330,6 +363,10 @@ func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
 }
 
 func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
+	return runAgentMessageReadWithWriter(cmd, os.Stdout)
+}
+
+func runAgentMessageReadWithWriter(cmd *cobra.Command, output io.Writer) error {
 	target, err := requiredMessageTarget(cmd)
 	if err != nil {
 		return err
@@ -349,22 +386,40 @@ func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
 			body[strings.ReplaceAll(name, "-", "_")] = value
 		}
 	}
-	var out map[string]any
-	if err := postAgentMessageReadThroughCredentialProxy(body, &out); err != nil {
+	if err := outputAgentMessageReadThroughCredentialProxy(body, output); err != nil {
 		return fmt.Errorf("read messages: %w", err)
 	}
-	return printAgentTransportOutput(out)
+	return nil
 }
 
-func postAgentMessageReadThroughCredentialProxy(body map[string]any, out any) error {
-	return postAgentMessageThroughCredentialProxy("read", body, out)
-}
-
-func postAgentMessageSendThroughCredentialProxy(body map[string]any, out any) error {
-	return postAgentMessageThroughCredentialProxy("send", body, out)
+func outputAgentMessageReadThroughCredentialProxy(body map[string]any, output io.Writer) error {
+	var result map[string]any
+	return withAgentMessageCredentialProxyResponse("read", body, func(ctx context.Context, responseBody io.Reader) error {
+		return consumeMessageCoverageResponse(
+			ctx,
+			responseBody,
+			output,
+			&result,
+			func(w io.Writer) error { return cli.PrintJSON(w, result) },
+			commitLocalMessageCoverage,
+		)
+	})
 }
 
 func postAgentMessageThroughCredentialProxy(operation string, body map[string]any, out any) error {
+	return withAgentMessageCredentialProxyResponse(operation, body, func(_ context.Context, responseBody io.Reader) error {
+		if err := json.NewDecoder(io.LimitReader(responseBody, 1<<20)).Decode(out); err != nil {
+			return fmt.Errorf("decode message %s response: %w", operation, err)
+		}
+		return nil
+	})
+}
+
+func withAgentMessageCredentialProxyResponse(
+	operation string,
+	body map[string]any,
+	consume func(context.Context, io.Reader) error,
+) error {
 	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
 	workspaceID := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACE_ID"))
 	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
@@ -402,10 +457,10 @@ func postAgentMessageThroughCredentialProxy(operation string, body map[string]an
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 		return fmt.Errorf("message %s through Credential Proxy: %s: %s", operation, response.Status, strings.TrimSpace(string(detail)))
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
-		return fmt.Errorf("decode message %s response: %w", operation, err)
+	if consume == nil {
+		return fmt.Errorf("message %s response consumer is unavailable", operation)
 	}
-	return nil
+	return consume(ctx, response.Body)
 }
 
 func runAgentMessageSearch(cmd *cobra.Command, args []string) error {

@@ -23,7 +23,7 @@ func TestWriteReminderAgentStateConcurrentNoENOENT(t *testing.T) {
 			defer wg.Done()
 			payload := []byte(`{"agents":[],"writer":` + strconv.Itoa(id) + `}`)
 			for i := 0; i < rounds; i++ {
-				if err := writeReminderAgentState(path, payload); err != nil {
+				if err := writeDaemonStateAtomically(path, payload); err != nil {
 					failures.Add(1)
 					t.Errorf("writer %d round %d: %v", id, i, err)
 					return

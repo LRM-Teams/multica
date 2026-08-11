@@ -34,16 +34,22 @@ test("workspace creation is gated through explicit Wendy setup and seeded #gener
      WHERE email = $1`,
     [email],
   );
+  const daemonId = `wendy-e2e-${stamp}`;
   const runtime = await db(
     `INSERT INTO agent_runtime (
        workspace_id, daemon_id, name, runtime_mode, provider, status,
        visibility, device_info, metadata, last_seen_at
-     ) VALUES ($1, NULL, $2, 'cloud', 'e2e_wendy', 'online',
+     ) VALUES ($1, $3, $2, 'cloud', 'e2e_wendy', 'online',
                'public', 'Wendy setup acceptance', '{}'::jsonb, now())
      RETURNING id`,
-    [workspace.id, `Wendy Computer ${stamp}`],
+    [workspace.id, `Wendy Computer ${stamp}`, daemonId],
   );
   const runtimeId = runtime.rows[0].id as string;
+  await db(
+    `INSERT INTO daemon_heartbeat (workspace_id, daemon_id, last_seen_at, updated_at)
+     VALUES ($1, $2, now(), now())`,
+    [workspace.id, daemonId],
+  );
 
   await page.route(`**/api/runtimes/${runtimeId}/models`, async (route) => {
     await route.fulfill({
@@ -77,7 +83,7 @@ test("workspace creation is gated through explicit Wendy setup and seeded #gener
 
     const setup = await db(
       `SELECT workspace.onboarding_agent_id, agent.model, channel.id AS general_id,
-              array_agg(message.content ORDER BY message.created_at, message.id) AS welcome
+              array_agg(message.content ORDER BY message.seq) AS welcome
        FROM workspace
        JOIN agent ON agent.id = workspace.onboarding_agent_id
        JOIN channel ON channel.workspace_id = workspace.id AND channel.system_key = 'general'

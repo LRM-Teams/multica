@@ -169,6 +169,18 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			_, _, err := execenv.MaterializeCanonicalTurnContextB(env.AgentRoot, ledgerRoot, runtime.Provider, taskCtx)
 			return err
 		},
+		PrepareLaunchEnvironment: func(environment map[string]string) (func(), error) {
+			transport, err := d.prepareAgentProxyCLITransport(
+				InboxKey{WorkspaceID: config.WorkspaceID, AgentID: config.Agent.ID},
+				config.RuntimeID,
+				selfBin,
+			)
+			if err != nil {
+				return nil, err
+			}
+			environment["PATH"] = filepath.Dir(transport.wrapperPath) + string(os.PathListSeparator) + environment["PATH"]
+			return func() { _ = transport.Close() }, nil
+		},
 		Context: ctx,
 	})
 	if err != nil {

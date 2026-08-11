@@ -477,6 +477,10 @@ const (
 	// canonical and legacy provider resume pointers. Older daemons advertised
 	// lifecycle actions but only implemented plain process restart.
 	DaemonCapabilityAgentSessionReset = "agent_session_reset_v1"
+	// DaemonCapabilityWorkspaceRunnerAttachment selects the Runner Attachment
+	// command/replay contract. It is intentionally additive: all previously
+	// advertised daemon capabilities remain independently meaningful.
+	DaemonCapabilityWorkspaceRunnerAttachment = "workspace_runner_attachment_v1"
 )
 
 // ReminderTimerJob is the complete server-owned timer projection cached by
@@ -578,6 +582,18 @@ type ReminderFireResultPayload struct {
 	Projection ReminderProjectionEvent `json:"projection"`
 }
 
+// AgentTransientDeliverPayload is the non-durable branch of the Workspace
+// Runner agent:deliver union. Canonical Messages keep AgentDeliverPayload;
+// transient inputs share transport and resident-turn admission without gaining
+// Message identity, cursor, replay, acknowledgement, or Activity semantics.
+type AgentTransientDeliverPayload struct {
+	Kind      string                    `json:"kind"`
+	Transient bool                      `json:"transient"`
+	Reminder  ReminderOwnerInputPayload `json:"reminder"`
+}
+
+const AgentTransientDeliverKindReminder = "reminder"
+
 // ReminderOwnerInputPayload is one post-commit, best-effort Reminder input for
 // the current owner placement. It is deliberately not a Message projection and
 // carries no delivery identity or acknowledgement contract.
@@ -617,9 +633,9 @@ type ReminderOwnerInputOccurrence struct {
 	Timezone     string `json:"timezone,omitempty"`
 }
 
-// DaemonAgentStopPayload removes an Agent from the daemon-local lifecycle
-// registry. It mirrors Raft's explicit agent:stop lifecycle boundary; the
-// daemon also clears every cached Reminder owned by the Agent.
+// DaemonAgentStopPayload is the legacy wake-socket detach shape retained for
+// historical migration fixtures. Production Attachment ownership is carried
+// by the Workspace Runner attach/detach contract.
 type DaemonAgentStopPayload struct {
 	AgentID             string `json:"agent_id"`
 	RuntimeID           string `json:"runtime_id"`
@@ -628,10 +644,10 @@ type DaemonAgentStopPayload struct {
 	Replay              bool   `json:"replay,omitempty"`
 }
 
-// DaemonAgentStartPayload adds or moves an Agent in the daemon-local
-// running/idle lifecycle registry. Runtime placement mutations are replayed
-// through a durable lifecycle outbox, so an offline target daemon converges
-// before requesting the Agent's Reminder snapshot.
+// DaemonAgentStartPayload is the legacy wake-socket attach/move shape. The
+// daemon maps placement_generation to AttachmentGeneration and routes live and
+// replay frames through the AgentAttachmentRegistry before requesting the
+// Agent's Reminder snapshot.
 type DaemonAgentStartPayload struct {
 	AgentID             string `json:"agent_id"`
 	RuntimeID           string `json:"runtime_id"`

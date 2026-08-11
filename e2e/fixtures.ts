@@ -17,12 +17,14 @@ interface TestWorkspace {
   id: string;
   name: string;
   slug: string;
+  onboarding_agent_id?: string | null;
 }
 
 export class TestApiClient {
   private token: string | null = null;
   private workspaceSlug: string | null = null;
   private workspaceId: string | null = null;
+  private userId: string | null = null;
   private createdIssueIds: string[] = [];
 
   async login(email: string, name: string) {
@@ -64,6 +66,7 @@ export class TestApiClient {
       const data = await verifyRes.json();
 
       this.token = data.token;
+      this.userId = data.user?.id ?? null;
 
       // Update user name if needed
       if (name && data.user?.name !== name) {
@@ -123,6 +126,90 @@ export class TestApiClient {
     throw new Error(`Failed to ensure workspace ${slug}: ${res.status} ${res.statusText}`);
   }
 
+  /**
+   * Put a generic E2E workspace past product onboarding gates.
+   *
+   * Tests for the onboarding/setup flows deliberately do not call this.
+   * Other browser tests need a real completed-onboarding response and a
+   * server-provisioned onboarding Agent so they exercise the workspace UI
+   * instead of stopping at unrelated gates.
+   */
+  async ensureWorkspaceReady(workspace: TestWorkspace) {
+    if (!this.token || !this.userId) {
+      throw new Error("login is required before preparing an E2E workspace");
+    }
+
+    this.workspaceId = workspace.id;
+    this.workspaceSlug = workspace.slug;
+
+    const questionnaireRes = await this.authedFetch("/api/me/onboarding", {
+      method: "PATCH",
+      body: JSON.stringify({
+        questionnaire: {
+          source: [],
+          source_skipped: true,
+          role: "",
+          role_skipped: true,
+          use_case: [],
+          use_case_skipped: true,
+          version: 2,
+        },
+      }),
+    });
+    if (!questionnaireRes.ok) {
+      throw new Error(
+        `prepare onboarding questionnaire failed: ${questionnaireRes.status} ${await questionnaireRes.text()}`,
+      );
+    }
+
+    const onboardingRes = await this.authedFetch("/api/me/onboarding/complete", {
+      method: "POST",
+      body: JSON.stringify({
+        completion_path: "skip_existing",
+        workspace_id: workspace.id,
+      }),
+    });
+    if (!onboardingRes.ok) {
+      throw new Error(
+        `complete onboarding failed: ${onboardingRes.status} ${await onboardingRes.text()}`,
+      );
+    }
+
+    const client = new pg.Client(DATABASE_URL);
+    await client.connect();
+    let runtimeId: string | null = null;
+    try {
+      const binding = await client.query(
+        "SELECT onboarding_agent_id FROM workspace WHERE id = $1",
+        [workspace.id],
+      );
+      if (binding.rows[0]?.onboarding_agent_id) return;
+
+      const runtime = await client.query(
+        `INSERT INTO agent_runtime (
+           workspace_id, daemon_id, name, runtime_mode, provider, status,
+           device_info, metadata, last_seen_at, owner_id, visibility
+         ) VALUES ($1, NULL, $2, 'cloud', 'e2e_workspace_setup', 'online',
+                   'E2E workspace setup runtime', '{}'::jsonb, now(), $3, 'private')
+         RETURNING id`,
+        [workspace.id, `E2E Workspace Setup ${workspace.id}`, this.userId],
+      );
+      runtimeId = runtime.rows[0].id as string;
+    } finally {
+      await client.end();
+    }
+
+    const windyRes = await this.authedFetch("/api/members/agents/windy", {
+      method: "POST",
+      body: JSON.stringify({ runtime_id: runtimeId, model: "e2e-model" }),
+    });
+    if (!windyRes.ok) {
+      throw new Error(
+        `prepare onboarding agent failed: ${windyRes.status} ${await windyRes.text()}`,
+      );
+    }
+  }
+
   async createIssue(title: string, opts?: Record<string, unknown>) {
     const res = await this.authedFetch("/api/issues", {
       method: "POST",
@@ -151,6 +238,10 @@ export class TestApiClient {
 
   getToken() {
     return this.token;
+  }
+
+  getUserId() {
+    return this.userId;
   }
 
   private async authedFetch(path: string, init?: RequestInit) {

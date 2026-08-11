@@ -7,10 +7,59 @@ import (
 )
 
 func TestWorkspaceRunnerAgentAttachmentEventNames(t *testing.T) {
-	got := []string{EventAgentAttach, EventAgentAttached, EventAgentDetach, EventAgentDetached}
-	want := []string{"agent:attach", "agent:attached", "agent:detach", "agent:detached"}
+	got := []string{
+		EventAgentAttach, EventAgentAttached, EventAgentDetach, EventAgentDetached,
+		EventAgentAttachmentReplayReq, EventAgentAttachmentReplayEnd, EventAgentAttachmentReplayAck,
+	}
+	want := []string{
+		"agent:attach", "agent:attached", "agent:detach", "agent:detached",
+		"agent:attachment.replay_request", "agent:attachment.replay_end", "agent:attachment.replay_ack",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Attachment event names = %v, want %v", got, want)
+	}
+}
+
+func TestWorkspaceRunnerAgentAttachmentReplayPayloadRoundTrips(t *testing.T) {
+	values := []interface{ Validate() error }{
+		WorkspaceRunnerAttachmentReplayRequest{RuntimeCursors: map[string]int64{"runtime-1": 3}},
+		WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: map[string]int64{"runtime-1": 3}},
+		WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{"runtime-1": 3}},
+	}
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			t.Fatalf("%T Validate(): %v", value, err)
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"runtimeCursors"}; !sameJSONFields(fields, want) {
+			t.Fatalf("%T wire fields = %v, want %v; JSON=%s", value, mapKeys(fields), want, raw)
+		}
+	}
+}
+
+func TestWorkspaceRunnerAgentAttachmentReplayValidation(t *testing.T) {
+	invalid := []map[string]int64{
+		{"": 1},
+		{"runtime-1": -1},
+	}
+	for _, cursors := range invalid {
+		values := []interface{ Validate() error }{
+			WorkspaceRunnerAttachmentReplayRequest{RuntimeCursors: cursors},
+			WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: cursors},
+			WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: cursors},
+		}
+		for _, value := range values {
+			if err := value.Validate(); err == nil {
+				t.Fatalf("%T accepted invalid replay cursors %v", value, cursors)
+			}
+		}
 	}
 }
 

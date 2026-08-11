@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -186,6 +189,184 @@ func TestRunnerStatusPublishesPresenceOnlyOnSemanticChange(t *testing.T) {
 	}
 	if payloads[0].AgentID != agentID || payloads[0].Presence != AgentPresenceOnline || payloads[1].Presence != AgentPresenceOffline {
 		t.Fatalf("Presence payloads=%+v", payloads)
+	}
+}
+
+func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "runner-launch-"+uuid.NewString()[:8], nil)
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"daemon-1/" + testWorkspaceID + "/instance-1": true,
+	}}
+	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
+	start := protocol.AgentStartAckPayload{
+		AgentID: agentID, LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: protocol.AgentStartQueueQueued, QueueDepth: 2, QueueAgeMS: 15,
+	}
+	raw, err := json.Marshal(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
+		t.Fatalf("persist Runner start acknowledgement: %v", err)
+	}
+	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: "launch-1", ProviderSessionID: "provider-session-1", TurnID: "turn-1", RuntimeGeneration: 3}
+	raw, err = json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err != nil {
+		t.Fatalf("persist Runner session: %v", err)
+	}
+	var status, dispatchID, queueState, providerSession, providerTurn string
+	var queueDepth int
+	var queueAge, generation int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, start_dispatch_id, queue_state, queue_depth, queue_age_ms,
+		       provider_session_id, provider_turn_id, runtime_generation
+		FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(
+		&status, &dispatchID, &queueState, &queueDepth, &queueAge, &providerSession, &providerTurn, &generation,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if status != "accepted" || dispatchID != "dispatch-1" || queueState != protocol.AgentStartQueueQueued || queueDepth != 2 || queueAge != 15 || providerSession != "provider-session-1" || providerTurn != "turn-1" || generation != 3 {
+		t.Fatalf("persisted Runner launch=%q/%q/%q/%d/%d/%q/%q/%d", status, dispatchID, queueState, queueDepth, queueAge, providerSession, providerTurn, generation)
+	}
+	stale := session
+	stale.LaunchID, stale.ProviderSessionID = "launch-stale", "provider-session-stale"
+	raw, _ = json.Marshal(stale)
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err == nil {
+		t.Fatal("stale Runner session was accepted")
+	}
+	staleStatus := protocol.AgentStatusPayload{AgentID: agentID, LaunchID: "launch-stale", Status: protocol.AgentStatusActive}
+	raw, _ = json.Marshal(staleStatus)
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStatus, raw); err == nil {
+		t.Fatal("stale Runner launch status was accepted")
+	}
+}
+
+func TestPendingRunnerLaunchDispatchUsesCurrentAttachmentAndStableIntentID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID, runtimeID := createHandlerTestAgent(t, "runner-dispatch-"+uuid.NewString()[:8], nil), handlerTestRuntimeID(t)
+	dispatchID := uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_start_intent (start_dispatch_id, agent_id, workspace_id, runtime_id)
+		VALUES ($1, $2, $3, $4)`, dispatchID, agentID, testWorkspaceID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	hub := daemonws.NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
+	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for hub.WorkspaceRunnerConnectionCount("daemon-1", testWorkspaceID) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("Runner did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h := *testHandler
+	h.DaemonHub = hub
+	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
+		t.Fatalf("dispatch pending Runner launch: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frame protocol.Message
+	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStart {
+		t.Fatalf("Runner launch frame=%+v err=%v", frame, err)
+	}
+	var start protocol.WorkspaceRunnerAgentStartPayload
+	if err := json.Unmarshal(frame.Payload, &start); err != nil || start.AgentID != agentID || start.RuntimeID != runtimeID || start.StartDispatchID != dispatchID {
+		t.Fatalf("Runner launch payload=%+v err=%v", start, err)
+	}
+}
+
+func TestPendingRunnerStopDispatchUsesCurrentLaunchID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID, runtimeID := createHandlerTestAgent(t, "runner-stop-"+uuid.NewString()[:8], nil), handlerTestRuntimeID(t)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_launch (
+			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
+		) VALUES ($1, $2, $3, 'daemon-1', 'instance-1', 'launch-current', 'active')`, testWorkspaceID, agentID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_lifecycle_operation (
+			workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
+			action_kind, status, execution_mode, step, started_at
+		) VALUES ($1, $2, $3, $4, $5, 'restart', 'running', 'immediate', 'restart_runtime', now())`,
+		testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	hub := daemonws.NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
+	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for hub.WorkspaceRunnerConnectionCount("daemon-1", testWorkspaceID) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("Runner did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h := *testHandler
+	h.DaemonHub = hub
+	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if err := h.dispatchPendingRunnerStops(ctx, identity); err != nil {
+		t.Fatalf("dispatch pending Runner stop: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frame protocol.Message
+	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStop {
+		t.Fatalf("Runner stop frame=%+v err=%v", frame, err)
+	}
+	var stop protocol.WorkspaceRunnerAgentStopPayload
+	if err := json.Unmarshal(frame.Payload, &stop); err != nil || stop.AgentID != agentID || stop.LaunchID != "launch-current" {
+		t.Fatalf("Runner stop payload=%+v err=%v", stop, err)
 	}
 }
 

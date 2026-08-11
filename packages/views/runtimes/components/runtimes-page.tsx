@@ -774,8 +774,11 @@ function MachineDetailView({
     !!user && !!daemonUpgradeRuntime && daemonUpgradeRuntime.owner_id === user.id;
   const canUpgrade =
     !!daemonUpgradeRuntime && (canUpdate || isWorkspaceUpgradeAdmin);
-  const { data: workspacesData, isFetching: workspacesLoading } =
-    useRuntimeAgentWorkspaces(primaryRuntimeId, workspacesEnabled);
+  const {
+    data: workspacesData,
+    isFetching: workspacesLoading,
+    refetch: refetchWorkspaces,
+  } = useRuntimeAgentWorkspaces(primaryRuntimeId, workspacesEnabled);
   const deleteWorkspace = useDeleteRuntimeAgentWorkspace(primaryRuntimeId ?? "");
 
   const machineAgents = useMemo(
@@ -934,6 +937,10 @@ function MachineDetailView({
     }
     if (machine.health !== "online") {
       showErrorToast(t(($) => $.machine.scan_workspaces_offline));
+      return;
+    }
+    if (workspacesEnabled) {
+      void refetchWorkspaces();
       return;
     }
     setWorkspacesEnabled(true);

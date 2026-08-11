@@ -601,7 +601,19 @@ func TestClaimCircuitProbeTransactionRecovery(t *testing.T) {
 					t.Fatalf("probe token=%q want %q", probeToken, token)
 				}
 			},
-			recover: invoke,
+			recover: func() error {
+				var probeToken *string
+				if err := run.pool.QueryRow(run.ctx, `
+					SELECT probe_token::text FROM research_execution_circuit
+					WHERE last_session_id = $1::uuid AND scope = 'provider'
+				`, run.fixture.sessionID).Scan(&probeToken); err != nil {
+					return err
+				}
+				if probeToken != nil && *probeToken == token {
+					return nil
+				}
+				return invoke()
+			},
 		}
 	})
 }

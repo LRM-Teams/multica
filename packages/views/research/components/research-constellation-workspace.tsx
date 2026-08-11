@@ -191,6 +191,12 @@ export function ResearchConstellationWorkspace({
 
   // react-doctor-disable-next-line react-doctor/no-event-handler -- typed graph arrives from query/WS, not a user event; motion enqueue must react to server graph_version deltas.
   useEffect(() => {
+    if (!typedGraph) return;
+    if (
+      prevGraphRef.current &&
+      prevGraphRef.current.session_id &&
+      prevGraphRef.current.session_id !== typedGraph.session_id
+    ) {
       prevGraphRef.current = typedGraph;
       motion.settleNow();
       return;
@@ -237,6 +243,10 @@ export function ResearchConstellationWorkspace({
 
   // react-doctor-disable-next-line react-doctor/no-event-handler -- incremental layout seed is derived from canvas build output, not a click/key handler.
   useEffect(() => {
+    if (canvasBuild?.layoutForNext) {
+      previousLayoutRef.current = canvasBuild.layoutForNext;
+    }
+  }, [canvasBuild?.layoutForNext]);
 
   const lensHints = useMemo(
     () =>

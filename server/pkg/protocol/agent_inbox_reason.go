@@ -25,6 +25,10 @@ const (
 	// AgentInboxReasonChannelOnboarding is membership onboarding protocol work.
 	AgentInboxReasonChannelOnboarding = "channel_onboarding"
 
+	// AgentInboxReasonGoalGraphDelta wakes the Goal coordinator after a kernel
+	// review verdict changes the executable frontier.
+	AgentInboxReasonGoalGraphDelta = "goal_graph_delta"
+
 	// Residual channel dual-write reasons (no longer written for ordinary
 	// channel traffic; still recognized so residual rows are suppressed).
 	AgentInboxReasonChannelMention  = "mention"

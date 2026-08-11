@@ -2,6 +2,7 @@ package workgraph
 
 import (
 	"context"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -11,6 +12,7 @@ type Store struct {
 	pool         *pgxpool.Pool
 	queries      *db.Queries
 	OnNodesReady func(context.Context, string, []string)
+	OnGraphDelta func(context.Context, string, string, string)
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {

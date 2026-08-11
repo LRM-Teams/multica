@@ -55,6 +55,33 @@ func TestNormalizeCreateDefaultsBoundedContextAndBudgets(t *testing.T) {
 	}
 }
 
+func TestNormalizeCreateRequiresReviewAndConstrainsDerivedReviewer(t *testing.T) {
+	noReview := validCreateInput()
+	noReview.Nodes[1].Role = "synthesizer"
+	if _, err := normalizeCreate(noReview); !errors.Is(err, ErrInvalidGraph) {
+		t.Fatalf("graph without verifier err=%v, want ErrInvalidGraph", err)
+	}
+
+	derived := validCreateInput()
+	derived.Nodes[1].IssueID = ""
+	derived.Nodes[1].Title = "Independent review"
+	derived.Nodes[1].AssigneeID = "77777777-7777-7777-7777-777777777777"
+	derived.Nodes[1].WorkerMode = WorkerModeDerivedAgent
+	derived.Nodes[1].CloneReason = "blind review with clean memory"
+	got, err := normalizeCreate(derived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Nodes[1].WorkerMode != WorkerModeDerivedAgent || got.Nodes[1].ContextPolicy != "blind" {
+		t.Fatalf("derived verifier normalized incorrectly: %#v", got.Nodes[1])
+	}
+
+	derived.Nodes[1].ContextPolicy = "bounded"
+	if _, err = normalizeCreate(derived); !errors.Is(err, ErrInvalidGraph) {
+		t.Fatalf("derived bounded reviewer err=%v, want ErrInvalidGraph", err)
+	}
+}
+
 func TestCreateDigestExcludesDeliveryIdentityButIncludesPlan(t *testing.T) {
 	a := validCreateInput()
 	b := validCreateInput()

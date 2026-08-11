@@ -47,6 +47,12 @@
 
 ---
 
+## 0.1 产品表面：Members Directory — `仅文档`
+
+- **口径（2026-08-11）**：Workspace 主花名册是 **Members Directory**（侧栏/路由 `members`），不是独立 Agents 页；Settings「成员」Tab 删除，人的邀请/改角色/移除只在 Directory。Agent 仍是执行域实体，仅作为目录中的一类条目出现。
+- **指针**：决策表 `docs/members-directory-decisions.md`；ADR `docs/adr/0013-members-directory-replaces-agents-page.md`；术语 `CONTEXT.md` → Members Directory。
+- **欠债**：实现落地后把 product docs（`members-roles` 等）与 path helpers 改到与上表一致；旧 `/api/agents` 别名退场条件另立。
+
 ## 1. 消息写入管道（BE）
 
 ### 1.1 destination-first 统一 finalizer — `可执行`（已落地）

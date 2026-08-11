@@ -2,6 +2,7 @@ package memorycuration
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/internal/memorypolicy"
 )
 
 func ensureMemoryRootFixtures(root string) error {
@@ -168,10 +170,76 @@ func TestAgentSelfReviewRejectsClaimedWriteWithoutDiskChange(t *testing.T) {
 	}
 }
 
+func TestAgentSelfReviewRejectsAndRestoresVerboseDailyWrite(t *testing.T) {
+	root := t.TempDir()
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
+		t.Fatal(err)
+	}
+	dailyRel := "memory/daily/2026-07-08.md"
+	result, err := NewEngine().Run(Options{
+		WorkspacesRoot: root, WorkspaceID: "ws-1", AgentIDs: []string{"agent-1"},
+		Stage: StageAgentSelfReview, Since: mustDate("2026-07-08"), Until: mustDate("2026-07-08"),
+		Now: mustDateTime("2026-07-09T05:00:00Z"), StageAgent: verboseDailyStageAgent{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0].Error, "non-concise memory") {
+		t.Fatalf("errors = %#v, want concise-policy failure", result.Errors)
+	}
+	if _, err := os.Stat(filepath.Join(agentRoot, filepath.FromSlash(dailyRel))); !os.IsNotExist(err) {
+		t.Fatalf("rejected daily write was not rolled back: %v", err)
+	}
+}
+
+func TestAgentSelfReviewRestoresWritesWhenStageFails(t *testing.T) {
+	root := t.TempDir()
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewEngine().Run(Options{
+		WorkspacesRoot: root, WorkspaceID: "ws-1", AgentIDs: []string{"agent-1"},
+		Stage: StageAgentSelfReview, Since: mustDate("2026-07-08"), Until: mustDate("2026-07-08"),
+		Now: mustDateTime("2026-07-09T05:00:00Z"), StageAgent: failingWriteStageAgent{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0].Error, "stage failed") {
+		t.Fatalf("errors = %#v, want stage failure", result.Errors)
+	}
+	if _, err := os.Stat(filepath.Join(agentRoot, "memory", "daily", "2026-07-08.md")); !os.IsNotExist(err) {
+		t.Fatalf("failed stage write was not rolled back: %v", err)
+	}
+}
+
 type claimedWriteStageAgent struct{}
 
 func (claimedWriteStageAgent) RunStage(_ context.Context, _ StageAgentInput) (StageAgentOutput, error) {
 	return StageAgentOutput{Content: `{"summary":"claimed","local_writes":[{"file":"memory/MEMORY.md"}],"candidates":[]}`}, nil
+}
+
+type verboseDailyStageAgent struct{}
+
+func (verboseDailyStageAgent) RunStage(_ context.Context, input StageAgentInput) (StageAgentOutput, error) {
+	dailyRel := "memory/daily/" + input.DateTo + ".md"
+	content := "# Daily\n\n- " + strings.Repeat("过程", memorypolicy.DailyEntryMaxRunes+1) + "\n"
+	if err := os.WriteFile(filepath.Join(input.AgentRoot, filepath.FromSlash(dailyRel)), []byte(content), 0o644); err != nil {
+		return StageAgentOutput{}, err
+	}
+	return StageAgentOutput{Content: `{"summary":"verbose","local_writes":[{"file":"` + dailyRel + `"}],"candidates":[]}`}, nil
+}
+
+type failingWriteStageAgent struct{}
+
+func (failingWriteStageAgent) RunStage(_ context.Context, input StageAgentInput) (StageAgentOutput, error) {
+	dailyPath := filepath.Join(input.AgentRoot, "memory", "daily", input.DateTo+".md")
+	if err := os.WriteFile(dailyPath, []byte("# Daily\n\n- partial write\n"), 0o644); err != nil {
+		return StageAgentOutput{}, err
+	}
+	return StageAgentOutput{}, errors.New("stage failed")
 }
 
 func TestTeamCurationUsesPendingCandidatesNotRawChat(t *testing.T) {
@@ -372,11 +440,11 @@ func TestEnsureMemoryRootDoesNotSeedEmptyCurationTree(t *testing.T) {
 func TestDetectOversizedMemoryFilesUsesCanonicalSoftLimits(t *testing.T) {
 	root := t.TempDir()
 	writes := map[string]int{
-		"memory/MEMORY.md":                int(durableMemorySoftLimit) + 1,
-		"memory/STATE.md":                 int(stateMemorySoftLimit) + 1,
-		"memory/daily/2026-08-05.md":      int(dailyMemorySoftLimit) + 1,
-		"projects/project-1/DECISIONS.md": int(durableMemorySoftLimit) + 1,
-		"notes/large-but-not-memory.md":   int(durableMemorySoftLimit) + 1,
+		"memory/MEMORY.md":                int(memorypolicy.SoftFileLimit("memory/MEMORY.md")) + 1,
+		"memory/STATE.md":                 int(memorypolicy.SoftFileLimit("memory/STATE.md")) + 1,
+		"memory/daily/2026-08-05.md":      int(memorypolicy.SoftFileLimit("memory/daily/2026-08-05.md")) + 1,
+		"projects/project-1/DECISIONS.md": int(memorypolicy.SoftFileLimit("projects/project-1/DECISIONS.md")) + 1,
+		"notes/large-but-not-memory.md":   int(memorypolicy.SoftFileLimit("memory/MEMORY.md")) + 1,
 	}
 	for rel, size := range writes {
 		path := filepath.Join(root, filepath.FromSlash(rel))
@@ -391,7 +459,7 @@ func TestDetectOversizedMemoryFilesUsesCanonicalSoftLimits(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("oversized files = %+v, want 4 canonical files", got)
 	}
-	if got[0].Path != "memory/MEMORY.md" || got[0].SoftLimit != durableMemorySoftLimit {
+	if got[0].Path != "memory/MEMORY.md" || got[0].SoftLimit != memorypolicy.SoftFileLimit("memory/MEMORY.md") {
 		t.Fatalf("first oversized file = %+v", got[0])
 	}
 }

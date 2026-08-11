@@ -494,7 +494,7 @@ func (h *Hub) deliverResponse(requestID string, raw json.RawMessage) {
 // RequestWorkdirFiles pushes a list-files request to req.RuntimeID's daemon and
 // waits for the correlated response. ErrRuntimeOffline if no daemon is connected.
 func (h *Hub) RequestWorkdirFiles(ctx context.Context, req protocol.ListWorkdirFilesRequestPayload) (*protocol.ListWorkdirFilesResponsePayload, error) {
-	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonListFilesRequest, req)
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventAgentWorkspaceList, req)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +508,7 @@ func (h *Hub) RequestWorkdirFiles(ctx context.Context, req protocol.ListWorkdirF
 // RequestReadFile pushes a read-file request to req.RuntimeID's daemon and waits
 // for the correlated response. ErrRuntimeOffline if no daemon is connected.
 func (h *Hub) RequestReadFile(ctx context.Context, req protocol.ReadWorkdirFileRequestPayload) (*protocol.ReadWorkdirFileResponsePayload, error) {
-	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonReadFileRequest, req)
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventAgentWorkspaceRead, req)
 	if err != nil {
 		return nil, err
 	}
@@ -1222,8 +1222,8 @@ func (c *client) handleFrame(raw []byte) {
 		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
-	case protocol.EventDaemonListFilesResponse,
-		protocol.EventDaemonReadFileResponse,
+	case protocol.EventAgentWorkspaceFileTree,
+		protocol.EventAgentWorkspaceFileContent,
 		protocol.EventDaemonWriteFileResponse,
 		protocol.EventDaemonDeleteDirResponse,
 		protocol.EventDaemonSeedAgentContextResponse:

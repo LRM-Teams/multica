@@ -191,20 +191,25 @@ func (c *Client) SetComputerGeneration(generation int64) {
 	c.computerGeneration = generation
 }
 
-// setIdentityHeaders attaches X-Client-Platform/Version/OS to req when set.
-func (c *Client) setIdentityHeaders(req *http.Request) {
+// addIdentityHeaders attaches the Computer identity and fencing generation to
+// an HTTP request or WebSocket handshake header set.
+func (c *Client) addIdentityHeaders(headers http.Header) {
 	if c.platform != "" {
-		req.Header.Set("X-Client-Platform", c.platform)
+		headers.Set("X-Client-Platform", c.platform)
 	}
 	if c.version != "" {
-		req.Header.Set("X-Client-Version", c.version)
+		headers.Set("X-Client-Version", c.version)
 	}
 	if c.os != "" {
-		req.Header.Set("X-Client-OS", c.os)
+		headers.Set("X-Client-OS", c.os)
 	}
 	if c.computerGeneration > 0 {
-		req.Header.Set("X-Computer-Generation", strconv.FormatInt(c.computerGeneration, 10))
+		headers.Set("X-Computer-Generation", strconv.FormatInt(c.computerGeneration, 10))
 	}
+}
+
+func (c *Client) setIdentityHeaders(req *http.Request) {
+	c.addIdentityHeaders(req.Header)
 }
 
 // SetToken sets the auth token for authenticated requests.

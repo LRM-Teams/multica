@@ -1,11 +1,36 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+func TestHandleListFilesRequestUsesRaftAgentWorkspaceFileTree(t *testing.T) {
+	workspacesRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspacesRoot, "agent-root"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d := New(Config{WorkspacesRoot: workspacesRoot}, testDiscardLogger())
+	writes := make(chan []byte, 1)
+
+	d.handleListFilesRequest(protocol.ListWorkdirFilesRequestPayload{
+		RequestID: "request-1",
+		RelPath:   "agent-root",
+	}, writes)
+
+	var message protocol.Message
+	if err := json.Unmarshal(<-writes, &message); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if message.Type != protocol.EventAgentWorkspaceFileTree {
+		t.Fatalf("response type = %q, want %q", message.Type, protocol.EventAgentWorkspaceFileTree)
+	}
+}
 
 func TestWalkWorkdirFiles(t *testing.T) {
 	root := t.TempDir()

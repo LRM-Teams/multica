@@ -69,6 +69,85 @@ func TestNotifyTaskAvailable(t *testing.T) {
 	}
 }
 
+func TestRequestWorkdirFilesUsesRaftAgentWorkspaceFlow(t *testing.T) {
+	hub := NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for hub.RuntimeConnectionCount("runtime-1") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("runtime connection was not registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	type result struct {
+		response *protocol.ListWorkdirFilesResponsePayload
+		err      error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		response, requestErr := hub.RequestWorkdirFiles(ctx, protocol.ListWorkdirFilesRequestPayload{
+			RequestID: "request-1",
+			RuntimeID: "runtime-1",
+			RelPath:   "workspaces/workspace-1/agents/agent-1",
+		})
+		resultCh <- result{response: response, err: requestErr}
+	}()
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+	var request protocol.Message
+	if err := json.Unmarshal(raw, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	if request.Type != protocol.EventAgentWorkspaceList {
+		t.Fatalf("request type = %q, want %q", request.Type, protocol.EventAgentWorkspaceList)
+	}
+
+	responseFrame, err := json.Marshal(protocol.Message{
+		Type: protocol.EventAgentWorkspaceFileTree,
+		Payload: mustMarshalRaw(protocol.ListWorkdirFilesResponsePayload{
+			RequestID: "request-1",
+			Nodes:     []protocol.WorkdirFileNode{{Path: "MEMORY.md"}},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, responseFrame); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("RequestWorkdirFiles: %v", got.err)
+		}
+		if len(got.response.Nodes) != 1 || got.response.Nodes[0].Path != "MEMORY.md" {
+			t.Fatalf("response nodes = %#v", got.response.Nodes)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RequestWorkdirFiles did not receive agent:workspace:file_tree")
+	}
+}
+
 func TestWorkspaceRunnerRoutesOnlyWithinDaemonWorkspaceScope(t *testing.T) {
 	hub := NewHub()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

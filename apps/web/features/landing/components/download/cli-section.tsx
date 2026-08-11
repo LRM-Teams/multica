@@ -1,20 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, Terminal } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Check, Copy, RefreshCw, Terminal } from "lucide-react";
 import { copyText } from "@multica/ui/lib/clipboard";
+import { testComputerReleaseOptions } from "@multica/core/releases/computer-metainfo";
 import { useLocale } from "../../i18n/context";
 import { landingCLICommands } from "./cli-commands";
 
 const ENVIRONMENT =
   process.env.NEXT_PUBLIC_ENVIRONMENT === "test" ? "test" : "production";
-const { installCmd: INSTALL_CMD, setupCmd: SETUP_CMD } = landingCLICommands({
-  environment: ENVIRONMENT,
-  appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
-  apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "",
-  computerVersion: process.env.NEXT_PUBLIC_COMPUTER_VERSION ?? "",
-});
-
 /**
  * Scenario-first CLI section. Copy leans into servers / remote dev
  * boxes / headless setups rather than positioning CLI as a
@@ -23,6 +18,23 @@ const { installCmd: INSTALL_CMD, setupCmd: SETUP_CMD } = landingCLICommands({
 export function CliSection() {
   const { t } = useLocale();
   const d = t.download.cli;
+  const {
+    data: testRelease,
+    isError: testReleaseError,
+    isFetching: testReleaseFetching,
+    refetch: refetchTestRelease,
+  } = useQuery(
+    testComputerReleaseOptions(ENVIRONMENT === "test"),
+  );
+  const { installCmd, setupCmd } = landingCLICommands({
+    environment: ENVIRONMENT,
+    appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
+    apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "",
+    computerVersion: testRelease?.tag ?? "",
+  });
+  const testReleaseUnavailable =
+    ENVIRONMENT === "test" &&
+    (!testRelease || testReleaseFetching);
 
   return (
     <section id="cli" className="bg-[#f7f7f5] py-20 text-[#0a0d12] sm:py-24">
@@ -37,13 +49,27 @@ export function CliSection() {
         <div className="mt-10 flex flex-col gap-5">
           <CommandBlock
             label={d.installLabel}
-            cmd={INSTALL_CMD}
+            cmd={installCmd}
             copyLabel={d.copyLabel}
             copiedLabel={d.copiedLabel}
+            releaseState={
+              testReleaseUnavailable
+                ? testReleaseError
+                  ? "error"
+                  : "loading"
+                : undefined
+            }
+            releaseErrorLabel={d.testVersionFailed}
+            retryLabel={d.testVersionRetry}
+            onRetry={
+              testReleaseError
+                ? () => void refetchTestRelease()
+                : undefined
+            }
           />
           <CommandBlock
             label={d.startLabel}
-            cmd={SETUP_CMD}
+            cmd={setupCmd}
             copyLabel={d.copyLabel}
             copiedLabel={d.copiedLabel}
           />
@@ -60,11 +86,19 @@ function CommandBlock({
   cmd,
   copyLabel,
   copiedLabel,
+  releaseState,
+  releaseErrorLabel,
+  retryLabel,
+  onRetry,
 }: {
   label: string;
   cmd: string;
   copyLabel: string;
   copiedLabel: string;
+  releaseState?: "loading" | "error";
+  releaseErrorLabel?: string;
+  retryLabel?: string;
+  onRetry?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -86,26 +120,48 @@ function CommandBlock({
           aria-hidden
         />
         <code className="min-w-0 flex-1 whitespace-pre-wrap break-all">
-          {cmd}
-        </code>
-        <button
-          type="button"
-          onClick={onCopy}
-          aria-label={copied ? copiedLabel : copyLabel}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[#0a0d12]/70 transition-colors hover:bg-[#0a0d12]/5 hover:text-[#0a0d12]"
-        >
-          {copied ? (
-            <>
-              <Check className="size-3.5" />
-              {copiedLabel}
-            </>
+          {releaseState === "loading" ? (
+            <span
+              className="my-0.5 block h-4 w-56 animate-pulse rounded bg-[#0a0d12]/10"
+              aria-hidden
+            />
+          ) : releaseState === "error" ? (
+            releaseErrorLabel
           ) : (
-            <>
-              <Copy className="size-3.5" />
-              {copyLabel}
-            </>
+            cmd
           )}
-        </button>
+        </code>
+        {releaseState ? (
+          onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              aria-label={retryLabel}
+              className="inline-flex shrink-0 items-center rounded-md p-1 text-[#0a0d12]/70 transition-colors hover:bg-[#0a0d12]/5 hover:text-[#0a0d12]"
+            >
+              <RefreshCw className="size-3.5" />
+            </button>
+          )
+        ) : (
+          <button
+            type="button"
+            onClick={onCopy}
+            aria-label={copied ? copiedLabel : copyLabel}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[#0a0d12]/70 transition-colors hover:bg-[#0a0d12]/5 hover:text-[#0a0d12]"
+          >
+            {copied ? (
+              <>
+                <Check className="size-3.5" />
+                {copiedLabel}
+              </>
+            ) : (
+              <>
+                <Copy className="size-3.5" />
+                {copyLabel}
+              </>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );

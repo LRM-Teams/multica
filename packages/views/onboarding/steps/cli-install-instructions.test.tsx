@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { configStore } from "@multica/core/config";
 import enCommon from "../../locales/en/common.json";
@@ -13,8 +14,31 @@ const ligatureClasses = [
   "[font-feature-settings:'liga'_0]",
 ];
 
+function renderInstructions(
+  props: React.ComponentProps<typeof CliInstallInstructions> = {},
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <CliInstallInstructions {...props} />
+      </I18nProvider>
+    </QueryClientProvider>,
+  );
+}
+
 describe("CliInstallInstructions", () => {
   beforeEach(() => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          schema_version: 1,
+          environments: { test: { tag: "v0.4.24-alpha.2" } },
+        }),
+        { status: 200 },
+      );
     configStore.getState().setDaemonConfig({
       environment: "production",
       daemonServerUrl: "https://api.leagent.me",
@@ -23,11 +47,7 @@ describe("CliInstallInstructions", () => {
   });
 
   it("uses the CDN install script", () => {
-    render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <CliInstallInstructions />
-      </I18nProvider>,
-    );
+    renderInstructions();
 
     expect(
       screen.getByText(
@@ -37,11 +57,7 @@ describe("CliInstallInstructions", () => {
   });
 
   it("disables font ligatures in CLI command code", () => {
-    render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <CliInstallInstructions />
-      </I18nProvider>,
-    );
+    renderInstructions();
 
     expect(
       screen.getByText("multica setup /<workspace-slug>"),
@@ -49,11 +65,7 @@ describe("CliInstallInstructions", () => {
   });
 
   it("uses the CDN PowerShell installer for Windows", () => {
-    render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <CliInstallInstructions />
-      </I18nProvider>,
-    );
+    renderInstructions();
 
     fireEvent.click(screen.getByRole("radio", { name: "Windows" }));
 
@@ -67,22 +79,17 @@ describe("CliInstallInstructions", () => {
     ).toBeTruthy();
   });
 
-  it("uses the deployment-pinned installer and explicit endpoints in test", () => {
+  it("uses the runtime metainfo installer and explicit endpoints in test", async () => {
     configStore.getState().setDaemonConfig({
       environment: "test",
       daemonServerUrl: "https://82.157.184.89/",
       daemonAppUrl: "https://82.157.184.89/",
-      computerVersion: "v0.4.24-alpha.2",
     });
 
-    render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <CliInstallInstructions workspaceSlug="lrm-team-test" />
-      </I18nProvider>,
-    );
+    renderInstructions({ workspaceSlug: "lrm-team-test" });
 
     expect(
-      screen.getByText(
+      await screen.findByText(
         "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.4.24-alpha.2",
       ),
     ).toBeTruthy();
@@ -94,16 +101,14 @@ describe("CliInstallInstructions", () => {
     expect(screen.getByText(/Activates Test, connects this Workspace/)).toBeTruthy();
   });
 
-  it("uses the deployment-pinned PowerShell installer in test", () => {
+  it("uses the runtime metainfo PowerShell installer in test", async () => {
     configStore.getState().setDaemonConfig({
       environment: "test",
-      computerVersion: "v0.4.24-alpha.2",
     });
 
-    render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <CliInstallInstructions />
-      </I18nProvider>,
+    renderInstructions();
+    await screen.findByText(
+      "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.4.24-alpha.2",
     );
     fireEvent.click(screen.getByRole("radio", { name: "Windows" }));
 
@@ -115,11 +120,7 @@ describe("CliInstallInstructions", () => {
   });
 
   it("does not render the legacy Windows + WSL mode", () => {
-    render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <CliInstallInstructions />
-      </I18nProvider>,
-    );
+    renderInstructions();
 
     expect(screen.getByRole("radio", { name: "Mac / Linux" })).toBeTruthy();
     expect(screen.getByRole("radio", { name: "Windows" })).toBeTruthy();
@@ -128,11 +129,7 @@ describe("CliInstallInstructions", () => {
   });
 
   it("renders workspace-scoped setup command (not bare multica setup)", () => {
-    render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <CliInstallInstructions />
-      </I18nProvider>,
-    );
+    renderInstructions();
 
     // The setup command must include a workspace slug path — bare `multica setup`
     // without a workspace scope is no longer the expected flow (LRM-1420).
@@ -143,11 +140,7 @@ describe("CliInstallInstructions", () => {
   });
 
   it("keeps the connect card focused on the two required commands", () => {
-    render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <CliInstallInstructions />
-      </I18nProvider>,
-    );
+    renderInstructions();
 
     expect(screen.queryByText("Having trouble?")).toBeNull();
     expect(screen.queryByText(/agent runtime on this computer/)).toBeNull();

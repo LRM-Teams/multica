@@ -1699,6 +1699,8 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       installLabel: "Install",
       startLabel: "Start daemon",
       sshNote: "Already on a server? Same commands work over SSH.",
+      testVersionFailed: "Couldn’t load the Test version.",
+      testVersionRetry: "Retry loading the Test version",
       copyLabel: "Copy",
       copiedLabel: "Copied",
     },

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ApiClient } from "../api/client";
 import { setApiInstance, setSchemaLogger } from "../api";
 import { createAuthStore, registerAuthStore } from "../auth";
@@ -19,12 +20,23 @@ import { HonorPresenceHeartbeat } from "./honor-presence-heartbeat";
 import type { CoreProviderProps, ClientIdentity } from "./types";
 import type { StorageAdapter } from "../types/storage";
 import { configStore, type ServiceEnvironment } from "../config";
+import { testComputerReleaseOptions } from "../releases/computer-metainfo";
 
 // Module-level singletons — created once at first render, never recreated.
 // Vite HMR preserves module-level state, so these survive hot reloads.
 let initialized = false;
 let authStore: ReturnType<typeof createAuthStore>;
 let chatStore: ReturnType<typeof createChatStore>;
+
+function ComputerReleasePrefetch({
+  environment,
+}: {
+  environment: ServiceEnvironment;
+}) {
+  useQuery(testComputerReleaseOptions(environment === "test"));
+  return null;
+}
+
 function initCore(
   apiBaseUrl: string,
   appUrl: string,
@@ -124,6 +136,7 @@ export function CoreProvider({
   // through window.location.reload(), never client-side changeLanguage.
   const tree = (
     <QueryProvider>
+      <ComputerReleasePrefetch environment={environment} />
       <AuthInitializer
         onLogin={onLogin}
         onLogout={onLogout}

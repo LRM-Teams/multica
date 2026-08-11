@@ -167,3 +167,13 @@ func IntegrityGuardTriggerNames() []string {
 		"research_result_attempt_projection_guard",
 	}
 }
+
+// LinkPolicyGuardTriggerNames lists migration 324 supersession/lifecycle policy guards.
+func LinkPolicyGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_supersession_to_policy_guard",
+		"research_artifact_policy_mutation_to_supersession_guard",
+		"research_artifact_lifecycle_event_to_policy_guard",
+		"research_artifact_policy_mutation_to_lifecycle_event_guard",
+	}
+}

@@ -893,3 +893,258 @@ func TestResearchArtifactIntegrityGuards323RoundTrips(t *testing.T) {
 		t.Fatalf("reapply 323 up: %v", err)
 	}
 }
+
+func TestResearchArtifactLinkPolicyGuards324RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_link_policy_324_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	supersededTaskID := "30000000-0000-4000-8000-000000000003"
+	successorTaskID := "30000000-0000-4000-8000-000000000004"
+	lifecycleTaskID := "30000000-0000-4000-8000-000000000005"
+	decisionID := "40000000-0000-4000-8000-000000000010"
+
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO research_session (id, workspace_id) VALUES ($1::uuid, $2::uuid)`, sessionID, workspaceID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_decision (id, workspace_id, session_id, decision_kind)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'evaluation')
+	`, decisionID, workspaceID, sessionID); err != nil {
+		t.Fatalf("seed decision: %v", err)
+	}
+
+	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
+	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
+	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
+	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
+	up322, _ := readMigrationPair(t, "322_research_artifact_policy_ledger_guards")
+	up323, _ := readMigrationPair(t, "323_research_artifact_integrity_guards")
+	up324, down324 := readMigrationPair(t, "324_research_artifact_link_policy_guards")
+	for _, upSQL := range []string{up318, up319, up320, up321, up322, up323, up324} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+
+	supersessionTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin supersession tx: %v", err)
+	}
+	if _, err = supersessionTx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+		VALUES ($1::uuid, $2::uuid, 'legacy-v1-v5-compat-v1', 0)
+		ON CONFLICT (workspace_id, session_id) DO NOTHING
+	`, workspaceID, sessionID); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("insert policy state: %v", err)
+	}
+	if _, err = supersessionTx.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES
+		  ($1::uuid, $3::uuid, $4::uuid, 'superseded-task', 1, 1),
+		  ($2::uuid, $3::uuid, $4::uuid, 'successor-task', 1, 1)
+	`, supersededTaskID, successorTaskID, workspaceID, sessionID); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("insert tasks: %v", err)
+	}
+	if _, err = supersessionTx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
+	`, workspaceID, sessionID, supersededTaskID); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("register superseded passport: %v", err)
+	}
+	if _, err = supersessionTx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
+	`, workspaceID, sessionID, successorTaskID); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("register successor passport: %v", err)
+	}
+	if err = supersessionTx.Commit(ctx); err != nil {
+		t.Fatalf("commit supersession seed tx: %v", err)
+	}
+
+	var supersededVersionID, successorVersionID string
+	if err = conn.QueryRow(ctx, `
+		SELECT id::text FROM research_artifact_version
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid AND version = 1
+	`, workspaceID, sessionID, supersededTaskID).Scan(&supersededVersionID); err != nil {
+		t.Fatalf("load superseded version id: %v", err)
+	}
+	if err = conn.QueryRow(ctx, `
+		SELECT id::text FROM research_artifact_version
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid AND version = 1
+	`, workspaceID, sessionID, successorTaskID).Scan(&successorVersionID); err != nil {
+		t.Fatalf("load successor version id: %v", err)
+	}
+
+	supersessionTx, err = conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin supersession guard tx: %v", err)
+	}
+	var watermark int64
+	if err = supersessionTx.QueryRow(ctx, `
+		SELECT research_artifact_reserve_policy_watermark($1::uuid, $2::uuid)
+	`, workspaceID, sessionID).Scan(&watermark); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("reserve supersession watermark: %v", err)
+	}
+	if _, err = supersessionTx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET eligibility_revision = 2, lifecycle_status = 'superseded'
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, supersededTaskID); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("bump superseded passport: %v", err)
+	}
+	if _, err = supersessionTx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision
+		) VALUES ($1::uuid, $2::uuid, $3, 'supersession', $4::uuid, 1, 2)
+	`, workspaceID, sessionID, watermark, supersededTaskID); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("insert supersession mutation: %v", err)
+	}
+	if _, err = supersessionTx.Exec(ctx, `
+		INSERT INTO research_artifact_supersession (
+		  workspace_id, session_id, successor_version_id, superseded_version_id,
+		  superseded_artifact_id, reason, decision_id, policy_watermark,
+		  old_eligibility_revision, new_eligibility_revision
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
+		  'superseded by successor', $6::uuid, $7, 1, 2
+		)
+	`, workspaceID, sessionID, successorVersionID, supersededVersionID, supersededTaskID, decisionID, watermark); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("insert supersession edge: %v", err)
+	}
+	if _, err = supersessionTx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
+		supersessionTx.Rollback(ctx)
+		t.Fatalf("set supersession constraints immediate: %v", err)
+	}
+	if err = supersessionTx.Commit(ctx); err != nil {
+		t.Fatalf("commit supersession guard tx: %v", err)
+	}
+
+	lifecycleTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lifecycle seed tx: %v", err)
+	}
+	if _, err = lifecycleTx.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'lifecycle-task', 1, 1)
+	`, lifecycleTaskID, workspaceID, sessionID); err != nil {
+		lifecycleTx.Rollback(ctx)
+		t.Fatalf("insert lifecycle task: %v", err)
+	}
+	if _, err = lifecycleTx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
+	`, workspaceID, sessionID, lifecycleTaskID); err != nil {
+		lifecycleTx.Rollback(ctx)
+		t.Fatalf("register lifecycle passport: %v", err)
+	}
+	if err = lifecycleTx.Commit(ctx); err != nil {
+		t.Fatalf("commit lifecycle seed tx: %v", err)
+	}
+
+	lifecycleTx, err = conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lifecycle guard tx: %v", err)
+	}
+	if err = lifecycleTx.QueryRow(ctx, `
+		SELECT research_artifact_reserve_policy_watermark($1::uuid, $2::uuid)
+	`, workspaceID, sessionID).Scan(&watermark); err != nil {
+		lifecycleTx.Rollback(ctx)
+		t.Fatalf("reserve lifecycle watermark: %v", err)
+	}
+	if _, err = lifecycleTx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET eligibility_revision = 2, lifecycle_status = 'accepted'
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, lifecycleTaskID); err != nil {
+		lifecycleTx.Rollback(ctx)
+		t.Fatalf("bump lifecycle passport: %v", err)
+	}
+	if _, err = lifecycleTx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision,
+		  old_lifecycle_status, new_lifecycle_status
+		) VALUES ($1::uuid, $2::uuid, $3, 'lifecycle', $4::uuid, 1, 2, 'registered', 'accepted')
+	`, workspaceID, sessionID, watermark, lifecycleTaskID); err != nil {
+		lifecycleTx.Rollback(ctx)
+		t.Fatalf("insert lifecycle mutation: %v", err)
+	}
+	if _, err = lifecycleTx.Exec(ctx, `
+		INSERT INTO research_artifact_lifecycle_event (
+		  workspace_id, session_id, artifact_id,
+		  old_status, new_status, old_eligibility_revision, new_eligibility_revision,
+		  policy_watermark, reason
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'registered', 'accepted', 1, 2, $4, 'accepted for dispatch')
+	`, workspaceID, sessionID, lifecycleTaskID, watermark); err != nil {
+		lifecycleTx.Rollback(ctx)
+		t.Fatalf("insert lifecycle event: %v", err)
+	}
+	if _, err = lifecycleTx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
+		lifecycleTx.Rollback(ctx)
+		t.Fatalf("set lifecycle constraints immediate: %v", err)
+	}
+	if err = lifecycleTx.Commit(ctx); err != nil {
+		t.Fatalf("commit lifecycle guard tx: %v", err)
+	}
+
+	orphanLifecycleTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin orphan lifecycle tx: %v", err)
+	}
+	if _, err = orphanLifecycleTx.Exec(ctx, `
+		INSERT INTO research_artifact_lifecycle_event (
+		  workspace_id, session_id, artifact_id,
+		  old_status, new_status, old_eligibility_revision, new_eligibility_revision,
+		  policy_watermark, reason
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'accepted', 'rejected', 2, 3, 999, 'orphan')
+	`, workspaceID, sessionID, lifecycleTaskID); err != nil {
+		orphanLifecycleTx.Rollback(ctx)
+		t.Fatalf("insert orphan lifecycle event: %v", err)
+	}
+	if err = orphanLifecycleTx.Commit(ctx); err == nil {
+		t.Fatal("expected lifecycle guard to reject orphan lifecycle event")
+	} else {
+		orphanLifecycleTx.Rollback(ctx)
+	}
+
+	if _, err = conn.Exec(ctx, down324); err != nil {
+		t.Fatalf("apply 324 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up324); err != nil {
+		t.Fatalf("reapply 324 up: %v", err)
+	}
+}

@@ -150,3 +150,18 @@ func TestIntegrityGuardTriggerNames(t *testing.T) {
 		t.Fatalf("integrity guard triggers=%v want=%v", got, want)
 	}
 }
+
+func TestLinkPolicyGuardTriggerNames(t *testing.T) {
+	want := []string{
+		"research_artifact_supersession_to_policy_guard",
+		"research_artifact_policy_mutation_to_supersession_guard",
+		"research_artifact_lifecycle_event_to_policy_guard",
+		"research_artifact_policy_mutation_to_lifecycle_event_guard",
+	}
+	got := LinkPolicyGuardTriggerNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("link policy guard triggers=%v want=%v", got, want)
+	}
+}

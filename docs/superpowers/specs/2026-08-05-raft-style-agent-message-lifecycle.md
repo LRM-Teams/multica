@@ -319,7 +319,12 @@ messages`.
   `MULTICA_AGENT_ACTIVE_CAPABILITIES` is therefore not injected or enforced
   until a complete command manifest and its derivation from authoritative
   server policy are designed and migration-tested. An incomplete allowlist
-  such as only `message.read` and `message.send` is invalid.
+  such as only `message.read` and `message.send` is invalid. Agent Command
+  Policy uses the additive rollout and single-state decision contract in
+  [ADR-0013](../../adr/0013-roll-out-agent-command-policy-additively.md):
+  existing unclassified commands retain legacy passthrough, explicit denial
+  requires authoritative policy, and newly added Agent commands must declare
+  their classification.
 - The Proxy derives its internal `seenUpToSeq` value from the local Context
   Boundary for the target. This field is an internal Server request detail, not
   a public CLI flag or persisted server cursor.

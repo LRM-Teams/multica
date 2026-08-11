@@ -31,14 +31,19 @@ _Avoid_: API gateway, Message store, runtime proxy
 
 ### Agent Command Capability
 
-An effective permission granted to one concrete local Agent launch to invoke a
-category of machine-local commands. The authorization policy derives the set
-from inputs such as the Agent's role, Workspace policy, launch mode, and
-available machine features; the Machine Service snapshots it for the launch
-and enforces it independently of any environment variable reported by the
-Agent process. It describes what the launch may do, not what the Agent knows
-how to do.
+One named category of Agent CLI action whose effective state is resolved for a
+concrete local Agent launch. It describes what the launch may do, not what the
+Agent knows how to do; absence from an incomplete capability catalog never
+means denial.
 _Avoid_: Agent skill, Agent role, CLI feature flag, environment permission
+
+### Agent Command Policy
+
+The launch-scoped decision map that resolves each Agent Command Capability to
+one state: legacy passthrough, allowed, denied, or unavailable. Service-side
+role and Workspace authorization remains authoritative; the policy does not
+turn a machine-local credential or environment variable into new authority.
+_Avoid_: Command allowlist, capability environment variable, Agent skill list
 
 ### Workspace Execution Binding
 

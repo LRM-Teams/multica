@@ -12,8 +12,6 @@ import (
 type AgentObservationKind string
 
 const (
-	AgentObservationAttached            AgentObservationKind = "attached"
-	AgentObservationLaunchAccepted      AgentObservationKind = "launch_accepted"
 	AgentObservationRuntimeReady        AgentObservationKind = "runtime_ready"
 	AgentObservationRuntimeStarting     AgentObservationKind = "runtime_starting"
 	AgentObservationRuntimeWorking      AgentObservationKind = "runtime_working"
@@ -26,8 +24,6 @@ const (
 	AgentObservationMessageBodyAccepted AgentObservationKind = "message_body_accepted"
 	AgentObservationFreshnessHeld       AgentObservationKind = "freshness_held"
 	AgentObservationError               AgentObservationKind = "error"
-	AgentObservationStopped             AgentObservationKind = "stopped"
-	AgentObservationDetached            AgentObservationKind = "detached"
 )
 
 // AgentObservationData seals the observation taxonomy to the execution facts
@@ -35,20 +31,6 @@ const (
 type AgentObservationData interface {
 	agentObservationData()
 }
-
-type AgentAttachmentObservationData struct {
-	RuntimeID            string
-	AttachmentGeneration AttachmentGeneration
-}
-
-func (AgentAttachmentObservationData) agentObservationData() {}
-
-type AgentLaunchObservationData struct {
-	RuntimeID       string
-	StartDispatchID string
-}
-
-func (AgentLaunchObservationData) agentObservationData() {}
 
 // AgentRuntimeObservationData keeps the identities of a logical launch, local
 // process, provider session, provider turn, and Runtime CAS generation distinct.
@@ -101,13 +83,6 @@ type AgentErrorObservationData struct {
 
 func (AgentErrorObservationData) agentObservationData() {}
 
-type AgentStopObservationData struct {
-	RuntimeID  string
-	ReasonCode string
-}
-
-func (AgentStopObservationData) agentObservationData() {}
-
 // AgentObservation carries one validated execution fact. The authenticated
 // Workspace scope belongs to the producer; it is not duplicated here.
 type AgentObservation struct {
@@ -127,32 +102,6 @@ func (observation AgentObservation) Validate() error {
 	}
 
 	switch observation.Kind {
-	case AgentObservationAttached, AgentObservationDetached:
-		if strings.TrimSpace(observation.LaunchID) != "" {
-			return errors.New("Agent Attachment observations cannot carry a launch identity")
-		}
-		data, ok := observation.Data.(AgentAttachmentObservationData)
-		if !ok {
-			return observationDataTypeError(observation.Kind)
-		}
-		if strings.TrimSpace(data.RuntimeID) == "" || data.AttachmentGeneration < 1 {
-			return errors.New("Agent Attachment observation Runtime and generation are required")
-		}
-		return nil
-
-	case AgentObservationLaunchAccepted:
-		if err := observation.validateLaunchID(); err != nil {
-			return err
-		}
-		data, ok := observation.Data.(AgentLaunchObservationData)
-		if !ok {
-			return observationDataTypeError(observation.Kind)
-		}
-		if strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.StartDispatchID) == "" {
-			return errors.New("Agent launch observation Runtime and start dispatch identities are required")
-		}
-		return nil
-
 	case AgentObservationRuntimeReady, AgentObservationRuntimeWorking:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
@@ -221,19 +170,6 @@ func (observation AgentObservation) Validate() error {
 		}
 		if strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.ReasonCode) == "" {
 			return errors.New("Agent error observation Runtime and reason are required")
-		}
-		return nil
-
-	case AgentObservationStopped:
-		if err := observation.validateLaunchID(); err != nil {
-			return err
-		}
-		data, ok := observation.Data.(AgentStopObservationData)
-		if !ok {
-			return observationDataTypeError(observation.Kind)
-		}
-		if strings.TrimSpace(data.RuntimeID) == "" || strings.TrimSpace(data.ReasonCode) == "" {
-			return errors.New("Agent stop observation Runtime and reason are required")
 		}
 		return nil
 

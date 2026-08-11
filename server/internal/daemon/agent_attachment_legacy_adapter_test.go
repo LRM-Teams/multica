@@ -112,13 +112,4 @@ func TestWakeProductionDoesNotMutateLegacyPlacementFacade(t *testing.T) {
 			}
 		}
 	}
-	raw, err := os.ReadFile("workspace_runner.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, notYetActive := range []string{"case protocol.EventAgentAttach", "case protocol.EventAgentDetach"} {
-		if strings.Contains(string(raw), notYetActive) {
-			t.Fatalf("Workspace Runner Attachment event activated before its cutover ticket: %q", notYetActive)
-		}
-	}
 }

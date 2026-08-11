@@ -95,7 +95,8 @@ func (d *Daemon) reconcileWorkspaceRunners(parent context.Context) {
 			d.workspaceRunnerRun(next.runner, next.ctx)
 			continue
 		}
-		go next.runner.Run(next.ctx)
+		runner, child := next.runner, next.ctx
+		go runner.Run(child)
 	}
 }
 
@@ -225,9 +226,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			if err := runner.processes.Stop(agentProcessCallback{AgentID: stop.AgentID, LaunchID: stop.LaunchID}); err != nil {
 				continue
-			}
-			if err := producer.Observe(AgentObservation{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Kind: AgentObservationStopped, Data: AgentStopObservationData{RuntimeID: launch.RuntimeID, ReasonCode: "requested"}, At: time.Now().UTC()}); err != nil && d.logger != nil {
-				d.logger.Debug("workspace Runner stopped Activity publish deferred", "error", err, "agent_id", stop.AgentID)
 			}
 			producer.RemoveManaged(stop.AgentID, stop.LaunchID)
 			if err := writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil {

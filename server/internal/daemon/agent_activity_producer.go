@@ -102,7 +102,7 @@ func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, s
 	defer p.mu.Unlock()
 	// One Agent has one current managed launch. A server-commanded launch may
 	// replace a resident Message launch (or vice versa); retaining both would
-	// make PublishForManagedAgent choose a launch nondeterministically.
+	// make launch-free observations ambiguous.
 	for existing := range p.states {
 		if existing.agentID == status.AgentID && existing.launchID != status.LaunchID {
 			delete(p.states, existing)
@@ -180,126 +180,6 @@ func (p *agentActivityProducer) DetachTransport(generation uint64) {
 	for _, state := range p.states {
 		state.connected = false
 	}
-}
-
-// Publish emits an immediately useful Snapshot when connected and otherwise
-// retains only the latest Snapshot. Entries observed during an outage are
-// deliberately discarded rather than replayed as invented narrative history.
-func (p *agentActivityProducer) Publish(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {
-	if p == nil {
-		return errors.New("Activity producer is not configured")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.publishLocked(snapshot, entries)
-}
-
-// PublishForManagedAgent reports a fact from a local Manager-owned boundary
-// such as concrete canonical Message handoff. The caller supplies no launch
-// identity: the producer takes it only from the currently managed launch.
-func (p *agentActivityProducer) PublishForManagedAgent(agentID, daemonInstanceID, activityKind, detailKind string, entries []protocol.AgentActivityEntry) error {
-	if p == nil || agentID == "" || daemonInstanceID == "" {
-		return errors.New("Activity managed Agent identity is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var snapshot protocol.AgentActivitySnapshot
-	for key, state := range p.states {
-		if key.agentID == agentID {
-			snapshot = state.snapshot
-			snapshot.AgentID = agentID
-			snapshot.LaunchID = key.launchID
-			break
-		}
-	}
-	if snapshot.LaunchID == "" {
-		return errors.New("Activity is not managed for this Agent")
-	}
-	snapshot.DaemonInstanceID = daemonInstanceID
-	snapshot.ActivityKind = activityKind
-	snapshot.DetailKind = detailKind
-	snapshot.ProbeID = ""
-	// This call observes a new Manager fact for the same launch. Reusing the
-	// prior fact identity would make publishLocked reject every transition after
-	// the first one as a client-sequence regression.
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
-	snapshot.ObservedAt = time.Time{}
-	return p.publishLocked(snapshot, entries)
-}
-
-// PublishEntryForManagedAgent appends a timeline fact without replacing the
-// current lifecycle meaning. If no observation exists yet, Online is the
-// conservative baseline used by the runtime diagnostic contract.
-func (p *agentActivityProducer) PublishEntryForManagedAgent(agentID, daemonInstanceID string, entries []protocol.AgentActivityEntry) error {
-	if p == nil || agentID == "" || daemonInstanceID == "" {
-		return errors.New("Activity managed Agent identity is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var snapshot protocol.AgentActivitySnapshot
-	for key, state := range p.states {
-		if key.agentID == agentID {
-			snapshot = state.snapshot
-			snapshot.AgentID = agentID
-			snapshot.LaunchID = key.launchID
-			break
-		}
-	}
-	if snapshot.LaunchID == "" {
-		return errors.New("Activity is not managed for this Agent")
-	}
-	if snapshot.ActivityKind == "" {
-		snapshot.ActivityKind = protocol.ActivityKindOnline
-		snapshot.DetailKind = "idle"
-	}
-	snapshot.DaemonInstanceID = daemonInstanceID
-	snapshot.ClientSequence = 0
-	snapshot.ProducerFactID = ""
-	snapshot.ObservedAt = time.Time{}
-	snapshot.ProbeID = ""
-	return p.publishLocked(snapshot, entries)
-}
-
-// PublishHoldEntry projects a soft-held send onto the Agent's Activity timeline
-// for BOTH managed and not-yet-managed Agents, aligning with Raft's semantics
-// that the daemon still reports an Activity fact even when the Agent has no
-// locally managed launch (the server reconciles a fragment whose launch/client-
-// seq bookkeeping is not tied to a managed client sequence). It is fail-soft:
-// a missing transport drops the fragment and never influences the send outcome.
-//
-// When the Agent has a managed launch the identity and ordering are inherited
-// from the managed snapshot, so the hold entry stays inside the managed
-// client-sequence stream (managed main path untouched). When the Agent is not
-// managed, a standalone fragment Snapshot is synthesized (fresh launch identity,
-// client-sequence=1, Online baseline) and pushed without touching the states map
-// or client-seq bookkeeping, so it cannot perturb a later managed launch.
-func (p *agentActivityProducer) PublishHoldEntry(agentID, daemonInstanceID string, entries []protocol.AgentActivityEntry) error {
-	if p == nil || agentID == "" || daemonInstanceID == "" {
-		return errors.New("Activity publisher Agent identity is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for key, state := range p.states {
-		if key.agentID == agentID {
-			snapshot := state.snapshot
-			snapshot.AgentID = agentID
-			snapshot.LaunchID = key.launchID
-			snapshot.DaemonInstanceID = daemonInstanceID
-			if snapshot.ActivityKind == "" {
-				snapshot.ActivityKind = protocol.ActivityKindOnline
-				snapshot.DetailKind = "idle"
-			}
-			snapshot.ClientSequence = 0 // publishLocked assigns the next value
-			snapshot.ProducerFactID = ""
-			snapshot.ObservedAt = time.Time{}
-			snapshot.ProbeID = ""
-			return p.publishLocked(snapshot, entries)
-		}
-	}
-	// A hold before managed launch has no authoritative launch identity. Drop
-	// this best-effort presentation fact rather than inventing one.
-	return nil
 }
 
 func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {

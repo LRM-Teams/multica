@@ -409,8 +409,8 @@ func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
 	if requests != 1 {
 		t.Fatalf("Message recovery requests=%d, want one for the newly created coordinator", requests)
 	}
-	if statuses != 1 || sessions != 1 {
-		t.Fatalf("Workspace Runner lifecycle frames status=%d session=%d, want one stable managed launch", statuses, sessions)
+	if statuses != 0 || sessions != 0 {
+		t.Fatalf("Attachment replay invented Workspace Runner launch frames: status=%d session=%d", statuses, sessions)
 	}
 }
 
@@ -444,8 +444,8 @@ func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testin
 	}
 	producer := runner.activity
 	_, frames := producer.AttachTransport(func(protocol.AgentActivityPayload) {})
-	if len(frames) != 2 || frames[0].EventType != protocol.EventAgentStatus || frames[1].EventType != protocol.EventAgentSession {
-		t.Fatalf("restored Runner lifecycle frames = %#v, want status then session", frames)
+	if len(frames) != 0 {
+		t.Fatalf("restored Attachment invented Runner lifecycle frames = %#v", frames)
 	}
 	var recovery protocol.AgentRecoveryRequest
 	runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {

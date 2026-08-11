@@ -17,9 +17,9 @@ type agentActivityProjection struct {
 	preserveCurrent   bool
 }
 
-// Observe is the only typed execution-fact to Activity presentation mapping.
-// It requires an existing managed launch and never manufactures lifecycle
-// identity from Attachment, Message, or runtime facts.
+// Observe is the only typed Message/runtime-fact to Activity presentation
+// mapping. It requires an existing managed launch and never manufactures
+// lifecycle identity from Message or runtime facts.
 func (p *agentActivityProducer) Observe(observation AgentObservation) error {
 	if p == nil {
 		return errors.New("Activity producer is not configured")
@@ -71,20 +71,12 @@ func (p *agentActivityProducer) Observe(observation AgentObservation) error {
 }
 
 func (p *agentActivityProducer) observationStateLocked(observation AgentObservation) (agentActivityProducerKey, *agentActivityProducerState, error) {
-	if observation.LaunchID != "" {
-		key := agentActivityProducerKey{agentID: observation.AgentID, launchID: observation.LaunchID}
-		state := p.states[key]
-		if state == nil {
-			return agentActivityProducerKey{}, nil, errors.New("Activity is not managed for this Agent launch")
-		}
-		return key, state, nil
+	key := agentActivityProducerKey{agentID: observation.AgentID, launchID: observation.LaunchID}
+	state := p.states[key]
+	if state == nil {
+		return agentActivityProducerKey{}, nil, errors.New("Activity is not managed for this Agent launch")
 	}
-	for key, state := range p.states {
-		if key.agentID == observation.AgentID {
-			return key, state, nil
-		}
-	}
-	return agentActivityProducerKey{}, nil, errors.New("Activity is not managed for this Agent")
+	return key, state, nil
 }
 
 func projectAgentObservation(observation AgentObservation) (agentActivityProjection, error) {
@@ -93,12 +85,6 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 	var err error
 
 	switch observation.Kind {
-	case AgentObservationAttached:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "attached"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Agent attached")
-	case AgentObservationLaunchAccepted:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "launch_accepted"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Launch accepted")
 	case AgentObservationRuntimeReady:
 		data := observation.Data.(AgentRuntimeObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindOnline, "idle", data.ProcessInstanceID
@@ -144,12 +130,6 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Agent execution failed")
-	case AgentObservationStopped:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindOffline, "stopped"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Stopped")
-	case AgentObservationDetached:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindOffline, "detached"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Agent detached")
 	default:
 		return agentActivityProjection{}, fmt.Errorf("unknown Agent Observation kind %q", observation.Kind)
 	}

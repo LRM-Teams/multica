@@ -189,6 +189,57 @@ func TestRunnerStatusPublishesPresenceOnlyOnSemanticChange(t *testing.T) {
 	}
 }
 
+func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "runner-launch-"+uuid.NewString()[:8], nil)
+	h := *testHandler
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		"daemon-1/" + testWorkspaceID + "/instance-1": true,
+	}}
+	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
+	start := protocol.AgentStartAckPayload{
+		AgentID: agentID, LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: protocol.AgentStartQueueQueued, QueueDepth: 2, QueueAgeMS: 15,
+	}
+	raw, err := json.Marshal(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
+		t.Fatalf("persist Runner start acknowledgement: %v", err)
+	}
+	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: "launch-1", ProviderSessionID: "provider-session-1", TurnID: "turn-1", RuntimeGeneration: 3}
+	raw, err = json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err != nil {
+		t.Fatalf("persist Runner session: %v", err)
+	}
+	var status, dispatchID, queueState, providerSession, providerTurn string
+	var queueDepth int
+	var queueAge, generation int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, start_dispatch_id, queue_state, queue_depth, queue_age_ms,
+		       provider_session_id, provider_turn_id, runtime_generation
+		FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(
+		&status, &dispatchID, &queueState, &queueDepth, &queueAge, &providerSession, &providerTurn, &generation,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if status != "accepted" || dispatchID != "dispatch-1" || queueState != protocol.AgentStartQueueQueued || queueDepth != 2 || queueAge != 15 || providerSession != "provider-session-1" || providerTurn != "turn-1" || generation != 3 {
+		t.Fatalf("persisted Runner launch=%q/%q/%q/%d/%d/%q/%q/%d", status, dispatchID, queueState, queueDepth, queueAge, providerSession, providerTurn, generation)
+	}
+	stale := session
+	stale.LaunchID, stale.ProviderSessionID = "launch-stale", "provider-session-stale"
+	raw, _ = json.Marshal(stale)
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err == nil {
+		t.Fatal("stale Runner session was accepted")
+	}
+}
+
 func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

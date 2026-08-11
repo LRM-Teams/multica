@@ -74,6 +74,18 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return fmt.Errorf("decode Runner status: %w", err)
 		}
 		return h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status)
+	case protocol.EventAgentStartAck:
+		var acknowledgement protocol.AgentStartAckPayload
+		if err := json.Unmarshal(raw, &acknowledgement); err != nil {
+			return fmt.Errorf("decode Runner start acknowledgement: %w", err)
+		}
+		return h.recordRunnerStartAcknowledgement(ctx, identity, daemonInstanceID, acknowledgement)
+	case protocol.EventAgentSession:
+		var session protocol.AgentSessionPayload
+		if err := json.Unmarshal(raw, &session); err != nil {
+			return fmt.Errorf("decode Runner session: %w", err)
+		}
+		return h.recordRunnerSession(ctx, identity, daemonInstanceID, session)
 	case protocol.EventAgentActivity:
 		var activity protocol.AgentActivityPayload
 		if err := json.Unmarshal(raw, &activity); err != nil {
@@ -240,6 +252,78 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 		afterLaunch := &runnerLaunchPresence{daemonID: identity.DaemonID, daemonInstanceID: daemonInstanceID, status: status.Status}
 		after := h.projectRunnerLaunchPresence(identity.WorkspaceID, afterLaunch)
 		h.publishAgentPresenceChange(identity.WorkspaceID, status.AgentID, before, after)
+		return nil
+	})
+}
+
+func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, acknowledgement protocol.AgentStartAckPayload) error {
+	if err := acknowledgement.Validate(); err != nil {
+		return err
+	}
+	return h.runnerPresenceLocked(func() error {
+		source := h.currentRunnerPresenceSource()
+		if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+			return errors.New("stale Workspace Runner start acknowledgement")
+		}
+		workspaceID, agentID, runtimeID, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, acknowledgement.AgentID)
+		if err != nil {
+			return err
+		}
+		command, err := h.DB.Exec(ctx, `
+			INSERT INTO agent_activity_launch (
+				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
+				status, start_dispatch_id, queue_state, queue_depth, queue_age_ms, accepted_at
+			) VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8, $9, $10, now())
+			ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
+				runtime_id = EXCLUDED.runtime_id, daemon_id = EXCLUDED.daemon_id,
+				daemon_instance_id = EXCLUDED.daemon_instance_id, launch_id = EXCLUDED.launch_id,
+				status = 'accepted', start_dispatch_id = EXCLUDED.start_dispatch_id,
+				queue_state = EXCLUDED.queue_state, queue_depth = EXCLUDED.queue_depth,
+				queue_age_ms = EXCLUDED.queue_age_ms, accepted_at = COALESCE(agent_activity_launch.accepted_at, now()),
+				last_client_sequence = 0, last_producer_fact_id = '', last_activity_fingerprint = '', updated_at = now()
+			WHERE agent_activity_launch.status = 'inactive'
+			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
+			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
+			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id
+			       AND agent_activity_launch.start_dispatch_id = EXCLUDED.start_dispatch_id)`,
+			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, acknowledgement.LaunchID,
+			acknowledgement.StartDispatchID, acknowledgement.QueueState, acknowledgement.QueueDepth, acknowledgement.QueueAgeMS)
+		if err != nil {
+			return fmt.Errorf("persist Runner start acknowledgement: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("stale Workspace Runner start acknowledgement")
+		}
+		return nil
+	})
+}
+
+func (h *Handler) recordRunnerSession(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, session protocol.AgentSessionPayload) error {
+	if err := session.Validate(); err != nil {
+		return err
+	}
+	return h.runnerPresenceLocked(func() error {
+		source := h.currentRunnerPresenceSource()
+		if source == nil || !source.IsCurrentWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, daemonInstanceID) {
+			return errors.New("stale Workspace Runner session")
+		}
+		workspaceID, agentID, _, err := h.runnerActivityAgentScope(ctx, identity.WorkspaceID, session.AgentID)
+		if err != nil {
+			return err
+		}
+		command, err := h.DB.Exec(ctx, `
+			UPDATE agent_activity_launch
+			SET provider_session_id = $6, provider_turn_id = $7, runtime_generation = $8, updated_at = now()
+			WHERE workspace_id = $1 AND agent_id = $2 AND daemon_id = $3
+			  AND daemon_instance_id = $4 AND launch_id = $5 AND status IN ('accepted', 'active')`,
+			workspaceID, agentID, identity.DaemonID, daemonInstanceID, session.LaunchID,
+			session.ProviderSessionID, session.TurnID, session.RuntimeGeneration)
+		if err != nil {
+			return fmt.Errorf("persist Runner session: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("stale or unknown Workspace Runner session")
+		}
 		return nil
 	})
 }

@@ -244,6 +244,21 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil {
 				return err
 			}
+		case protocol.EventAgentAttach:
+			var attach protocol.WorkspaceRunnerAgentAttachPayload
+			if json.Unmarshal(message.Payload, &attach) != nil {
+				continue
+			}
+			receipt, err := runner.applyAttachmentAttach(attach)
+			if err != nil {
+				if d.logger != nil {
+					d.logger.Warn("Workspace Runner Attachment attach rejected", "workspace_id", workspaceID, "agent_id", attach.AgentID, "runtime_id", attach.RuntimeID, "reason", "attach_rejected", "error", err)
+				}
+				continue
+			}
+			if err := writeFrame(protocol.EventAgentAttached, receipt); err != nil {
+				return err
+			}
 		case protocol.EventAgentDeliver:
 			var delivery protocol.AgentDeliverPayload
 			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {

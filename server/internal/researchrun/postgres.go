@@ -703,10 +703,27 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		return snapshot, nil
 	}
 	allowed, ok, err := loadManifestAuthorizedArtifactIDsPool(ctx, s.pool, workspaceID, sessionID, attemptID)
-	if err != nil || !ok {
-		return snapshot, err
+	if err != nil {
+		return RunSnapshot{}, err
 	}
-	return filterRunSnapshotByManifest(snapshot, allowed), nil
+	if !ok {
+		return snapshot, nil
+	}
+	filtered := filterRunSnapshotByManifest(snapshot, allowed)
+	manifestID, manifestHash, policyWatermark, _, summaryErr := loadAttemptManifestSummaryPool(
+		ctx, s.pool, workspaceID, sessionID, attemptID,
+	)
+	if summaryErr != nil {
+		return RunSnapshot{}, summaryErr
+	}
+	filtered.AttemptContext = &AttemptArtifactContext{
+		AttemptID:        attemptID,
+		ManifestID:       manifestID,
+		ManifestHash:     manifestHash,
+		PolicyWatermark:  policyWatermark,
+		ManifestFiltered: true,
+	}
+	return filtered, nil
 }
 
 func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, duration time.Duration) (Run, RunLease, bool, error) {

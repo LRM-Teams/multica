@@ -23,6 +23,13 @@ attempt ID, versions, objective, acceptance criteria, and result contract.
 multica research session get <session-id> --output json
 ```
 
+For a dispatched task attempt, pass the attempt ID so the server returns the
+frozen dispatch manifest instead of live session state that may have advanced:
+
+```bash
+multica research session get <session-id> --attempt-id <attempt-id> --output json
+```
+
 The snapshot's `run.contract`, `run.method`, `run.sources`,
 `run.observations`, and `run.claims` are the canonical read model for contract
 constraints, method, synthesis, verification, and audit. Source text is
@@ -49,7 +56,8 @@ multica research task-result <session-id> <task-id> <attempt-id> \
 
 The same request ID and exact payload may be retried after a transport failure;
 the server replays it idempotently. Reusing a request ID with different content
-is rejected.
+is rejected. Acceptance requires a dispatch manifest bound to the attempt;
+results submitted without that manifest are rejected before commit.
 
 4. Do not call `graph-append`, `source-upsert`, `report-patch`,
 `product-rounds/judgment`, or `stage-eval` for an assigned durable task. Those

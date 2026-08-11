@@ -216,6 +216,17 @@ func registerRunArtifactsAfterInitializationTx(ctx context.Context, tx pgx.Tx, w
 	if err := registerInitializedRunArtifactsTx(ctx, tx, workspaceID, sessionID); err != nil {
 		return err
 	}
+	var stateVersion int64
+	if err := tx.QueryRow(ctx, `
+		SELECT state_version
+		FROM research_session
+		WHERE workspace_id = $1::uuid AND id = $2::uuid
+	`, workspaceID, sessionID).Scan(&stateVersion); err != nil {
+		return err
+	}
+	if err := verifyShadowEquivalenceTx(ctx, tx, workspaceID, sessionID, stateVersion); err != nil {
+		return err
+	}
 	_, err := tx.Exec(ctx, `
 		UPDATE research_session
 		SET artifact_passport_enabled = true

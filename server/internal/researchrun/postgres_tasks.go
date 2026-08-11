@@ -107,13 +107,6 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	if in.Request.Target != (ExecutionTarget{}) && (in.Request.Target != target || ValidateExecutionTarget(target, in.AgentID) != nil) {
 		return Attempt{}, RunEvent{}, fmt.Errorf("%w: dispatch execution target mismatch", ErrInvalidTransition)
 	}
-	encodedRequest, requestHash, err := encodeDispatchRequest(in.Request)
-	if err != nil {
-		return Attempt{}, RunEvent{}, fmt.Errorf("encode dispatch request: %w", err)
-	}
-	if in.Request.RequestHash != "" && in.Request.RequestHash != requestHash {
-		return Attempt{}, RunEvent{}, fmt.Errorf("%w: dispatch request hash does not match payload", ErrResultConflict)
-	}
 	if in.Request.AttemptID != in.AttemptID || in.Request.AgentID != in.AgentID ||
 		in.Request.Key == "" || in.Request.Task.ID != in.TaskID ||
 		in.Request.Run.SessionID != in.SessionID ||
@@ -127,14 +120,6 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	defer tx.Rollback(ctx)
 	if err = lockRunForMutation(ctx, tx, in.SessionID, in.Request.Run.WorkspaceID); err != nil {
 		return Attempt{}, RunEvent{}, err
-	}
-	if attempt, event, replayed, replayErr := loadDispatchIntentReplay(ctx, tx, in, target, requestHash); replayErr != nil {
-		return Attempt{}, RunEvent{}, replayErr
-	} else if replayed {
-		if err = s.commitResearchTx(ctx, txOpDispatchIntentCreate, tx); err != nil {
-			return Attempt{}, RunEvent{}, err
-		}
-		return attempt, event, nil
 	}
 
 	var workspaceID, status string
@@ -161,6 +146,20 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	if err != nil {
 		return Attempt{}, RunEvent{}, err
 	}
+
+	if attemptReplay, _, replayed, replayErr := loadDispatchIntentReplayPrepare(ctx, tx, s, in, target, workspaceID, artifactPassportEnabled); replayErr != nil {
+		return Attempt{}, RunEvent{}, replayErr
+	} else if replayed {
+		event, eventErr := loadDispatchIntentEvent(ctx, tx, in, attemptReplay, target)
+		if eventErr != nil {
+			return Attempt{}, RunEvent{}, eventErr
+		}
+		if err = s.commitResearchTx(ctx, txOpDispatchIntentCreate, tx); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
+		return attemptReplay, event, nil
+	}
+
 	err = tx.QueryRow(ctx, `
 		SELECT status, goal_version, plan_version, max_attempts,
 		       COALESCE(ready_at <= now(), true)
@@ -287,6 +286,21 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 			return Attempt{}, RunEvent{}, err
 		}
 		manifestBound = true
+		if err = verifyShadowEquivalenceTx(ctx, tx, workspaceID, in.SessionID, stateVersion); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
+	}
+	var encodedRequest []byte
+	var requestHash string
+	manifestID := ""
+	if manifestBound {
+		manifestID = manifestPlan.ManifestID
+	}
+	_, encodedRequest, requestHash, err = resolveDispatchRequestTx(
+		ctx, tx, s, in, attempt, workspaceID, artifactPassportEnabled, manifestID,
+	)
+	if err != nil {
+		return Attempt{}, RunEvent{}, err
 	}
 	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
 	probeTargets, err := normalizeAttemptProbeTargets(target, in.ProbeTargets)
@@ -335,37 +349,74 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	return attempt, event, nil
 }
 
-func loadDispatchIntentReplay(
+func loadDispatchIntentReplayPrepare(
 	ctx context.Context,
 	tx pgx.Tx,
+	store *PostgresStore,
 	in CreateDispatchIntentInput,
 	target ExecutionTarget,
-	requestHash string,
-) (Attempt, RunEvent, bool, error) {
-	var workspaceID, sessionID, taskID, agentID, dispatchKey, storedRequestHash string
+	workspaceID string,
+	artifactPassportEnabled bool,
+) (Attempt, []byte, bool, error) {
+	var sessionID, taskID, agentID, dispatchKey string
 	err := tx.QueryRow(ctx, `
-		SELECT outbox.workspace_id::text, outbox.session_id::text, outbox.task_id::text,
-		       attempt.assigned_agent_id::text, outbox.dispatch_key, outbox.request_hash
+		SELECT outbox.session_id::text, outbox.task_id::text,
+		       attempt.assigned_agent_id::text, outbox.dispatch_key
 		FROM research_dispatch_outbox outbox
 		JOIN research_task_attempt attempt ON attempt.id = outbox.attempt_id
 		WHERE outbox.attempt_id = $1::uuid
-	`, in.AttemptID).Scan(&workspaceID, &sessionID, &taskID, &agentID, &dispatchKey, &storedRequestHash)
+	`, in.AttemptID).Scan(&sessionID, &taskID, &agentID, &dispatchKey)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Attempt{}, RunEvent{}, false, nil
+		return Attempt{}, nil, false, nil
 	}
 	if err != nil {
-		return Attempt{}, RunEvent{}, false, err
+		return Attempt{}, nil, false, err
 	}
 	if workspaceID != in.Request.Run.WorkspaceID || sessionID != in.SessionID || taskID != in.TaskID ||
-		agentID != in.AgentID || dispatchKey != in.Request.Key || storedRequestHash != requestHash {
-		return Attempt{}, RunEvent{}, false, fmt.Errorf("%w: dispatch intent replay does not match committed request", ErrResultConflict)
+		agentID != in.AgentID || dispatchKey != in.Request.Key {
+		return Attempt{}, nil, false, fmt.Errorf("%w: dispatch intent replay does not match committed request", ErrResultConflict)
 	}
 	attempt, err := scanAttempt(tx.QueryRow(ctx, attemptSelectSQL+` WHERE a.id = $1::uuid`, in.AttemptID))
 	if err != nil {
-		return Attempt{}, RunEvent{}, false, err
+		return Attempt{}, nil, false, err
+	}
+	manifestID, err := loadAttemptManifestIDTx(ctx, tx, workspaceID, in.SessionID, in.AttemptID)
+	if err != nil {
+		return Attempt{}, nil, false, err
+	}
+	_, encodedRequest, requestHash, err := resolveDispatchRequestTx(
+		ctx, tx, store, in, attempt, workspaceID, artifactPassportEnabled, manifestID,
+	)
+	if err != nil {
+		return Attempt{}, nil, false, err
+	}
+	var storedRequestHash string
+	if err = tx.QueryRow(ctx, `
+		SELECT request_hash FROM research_dispatch_outbox WHERE attempt_id = $1::uuid
+	`, in.AttemptID).Scan(&storedRequestHash); err != nil {
+		return Attempt{}, nil, false, err
+	}
+	if storedRequestHash != requestHash {
+		return Attempt{}, nil, false, fmt.Errorf("%w: dispatch intent replay does not match committed request", ErrResultConflict)
+	}
+	return attempt, encodedRequest, true, nil
+}
+
+func loadDispatchIntentEvent(
+	ctx context.Context,
+	tx pgx.Tx,
+	in CreateDispatchIntentInput,
+	attempt Attempt,
+	target ExecutionTarget,
+) (RunEvent, error) {
+	var requestHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT request_hash FROM research_dispatch_outbox WHERE attempt_id = $1::uuid
+	`, in.AttemptID).Scan(&requestHash); err != nil {
+		return RunEvent{}, err
 	}
 	var event RunEvent
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT id::text, workspace_id::text, session_id::text, sequence,
 		       event_type, idempotency_key, actor_type, COALESCE(actor_id::text, ''),
 		       payload, projection_attempts, created_at
@@ -377,20 +428,20 @@ func loadDispatchIntentReplay(
 		&event.Payload, &event.ProjectionAttempts, &event.CreatedAt,
 	)
 	if err != nil {
-		return Attempt{}, RunEvent{}, false, err
+		return RunEvent{}, err
 	}
 	expectedPayload, err := json.Marshal(map[string]any{
 		"task_id": in.TaskID, "attempt_id": attempt.ID, "attempt_number": attempt.AttemptNumber, "agent_id": in.AgentID,
 		"request_hash": requestHash, "execution_target": target,
 	})
 	if err != nil {
-		return Attempt{}, RunEvent{}, false, err
+		return RunEvent{}, err
 	}
 	if event.Type != "task_dispatching" || event.ActorType != "system" || event.ActorID != "" ||
 		!semanticJSONEqual(event.Payload, expectedPayload) {
-		return Attempt{}, RunEvent{}, false, fmt.Errorf("%w: dispatch intent event does not match committed request", ErrResultConflict)
+		return RunEvent{}, fmt.Errorf("%w: dispatch intent event does not match committed request", ErrResultConflict)
 	}
-	return attempt, event, true, nil
+	return event, nil
 }
 
 func (s *PostgresStore) AttachInboxTask(ctx context.Context, attemptID, inboxTaskID string) (Attempt, RunEvent, error) {

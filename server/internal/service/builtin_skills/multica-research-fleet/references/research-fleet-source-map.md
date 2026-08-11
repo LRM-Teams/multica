@@ -24,4 +24,4 @@
 | WS events | `server/pkg/protocol/research_events.go` |
 | CLI | `server/cmd/multica/cmd_research.go` (`task-result`, session snapshot, roster administration) |
 | Frontend | `packages/views/research/`, paths `research` / `researchDetail` |
-| Artifact passport (D): policy, manifest freeze, dispatch outbox binding, result artifact lineage | migrations `318`–`330`; `server/internal/researchrun/artifact*.go`, `artifact_context.go`, `artifact_manifest.go`, `postgres_artifact.go`, `postgres_tasks.go`, `postgres_result.go`, `postgres_evidence.go` |
+| Artifact passport (D): policy, manifest freeze, dispatch outbox binding, result artifact lineage | migrations `318`–`330`; `server/internal/researchrun/artifact*.go`, `artifact_context.go`, `artifact_manifest.go`, `artifact_dispatch_prompt.go`, `postgres_artifact.go`, `postgres_tasks.go`, `postgres_result.go`, `postgres_evidence.go`; D-enabled dispatch rebinds Prompt from manifest-filtered snapshot before outbox write; session snapshot accepts `attempt_id` for manifest-filtered reads |

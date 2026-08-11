@@ -59,6 +59,32 @@
   bottom: calc(min(72dvh, 560px) + 8px);
   z-index: 40;
 }
+.d5-rail-toggle-desktop {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  z-index: 40;
+  transform: translateY(-50%);
+}
+.d5-rail-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  border: 1px solid #29394b;
+  border-radius: 8px;
+  background: #111b27;
+  color: #8292a5;
+  flex-shrink: 0;
+}
+.d5-rail-close:hover {
+  color: #c2f1f6;
+  border-color: #347486;
+}
+.d5-workspace[data-d5-rail-open="false"] .research-agent-inspector {
+  right: 24px;
+}
 .d5-lens-btn {
   border: 1px solid #2a3a4c;
   border-radius: 9px;
@@ -99,6 +125,7 @@
 }
 .d5-rail-tabs {
   display: flex;
+  align-items: center;
   gap: 5px;
   padding: 14px 15px 0;
 }

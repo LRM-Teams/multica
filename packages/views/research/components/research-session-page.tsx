@@ -68,7 +68,7 @@ import {
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import { isResearchD5Lens } from "../lib/research-d5-lens-display";
-import { buildGoalVersionHistory } from "../lib/research-d5-goal-history";
+import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -488,6 +488,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       }),
     [session.goal, goalVersion, messages],
   );
+  const goalImpact = useMemo(
+    () => (typedGraph?.nodes ? summarizeGoalImpact(typedGraph.nodes) : null),
+    [typedGraph?.nodes],
+  );
+  const reportControllerRef = useRef<{ open: () => void } | null>(null);
 
   const onClarificationOption = (
     question: ResearchClarificationQuestion,
@@ -579,6 +584,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onLensChange={handleD5LensChange}
         goalVersion={goalVersion}
         goalHistory={goalHistory}
+        goalImpact={goalImpact}
         session={session}
         contract={data.run?.contract}
         canConfirm={canConfirm}
@@ -644,6 +650,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           formingMembers={fleet.members}
           formingTasks={data.run?.tasks ?? []}
           formingMessages={messages}
+          registerReportController={(controller) => {
+            reportControllerRef.current = controller;
+          }}
           detailPanel={
             selectedNode ? (
               <ResearchNodeDetail
@@ -654,6 +663,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 open
                 placement="inline"
                 onClose={() => dispatch({ type: "select", node: null })}
+                onOpenReport={() => reportControllerRef.current?.open()}
+                onContinueDeepening={() =>
+                  postUser(
+                    t(($) => $.d5.detail.continue_message, { title: selectedNode.title }),
+                  )
+                }
               />
             ) : (
               <p className="p-4 text-sm text-muted-foreground">

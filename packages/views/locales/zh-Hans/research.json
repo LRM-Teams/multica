@@ -979,7 +979,13 @@
     "goal_panel": {
       "title": "目标版本",
       "version": "v{{version}}",
-      "current": "当前"
+      "current": "当前",
+      "impact": "{{totalNodes}} 个节点中有 {{labeledNodes}} 个已标注目标版本"
+    },
+    "detail": {
+      "open_report": "打开完整报告",
+      "continue_deepening": "继续深挖",
+      "continue_message": "请继续深挖这个方向：{{title}}"
     },
     "summary": {
       "title": "调研星图 · 已加载 {{loaded}} 条方向",

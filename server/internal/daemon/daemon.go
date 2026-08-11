@@ -987,6 +987,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.preflightAuth(ctx); err != nil {
 		return err
 	}
+	if err := d.restoreResidentAgents(); err != nil {
+		return fmt.Errorf("restore resident Agents: %w", err)
+	}
 	// A target successor records local readiness only after it has completed
 	// normal authenticated registration/preflight. This is durable recovery
 	// evidence, not remote completion: the server still requires the exact

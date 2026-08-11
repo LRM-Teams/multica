@@ -133,6 +133,11 @@ type pendingNoticeRuntime struct {
 	notices []agent.ResidentPendingNotice
 }
 
+func commitPendingNoticeForTest(commit func()) bool {
+	commit()
+	return true
+}
+
 func (r *pendingNoticeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
 	return nil, nil
 }
@@ -443,12 +448,19 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 		}},
 		Fingerprint:        "all-v1",
 		TargetFingerprints: map[string]string{"channel:one": "one-v1", "dm:two": "two-v1"},
+		CoordinatorID:      "coordinator-1",
+		PendingGeneration:  1,
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first); err != nil {
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("first Notice: %v", err)
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first); err != nil {
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("duplicate Notice: %v", err)
+	}
+	newGeneration := first
+	newGeneration.PendingGeneration = 2
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", newGeneration, commitPendingNoticeForTest); err != nil {
+		t.Fatalf("same fingerprint at new Pending generation: %v", err)
 	}
 	second := PendingNoticeSnapshot{
 		Notice: agent.ResidentPendingNotice{TotalPending: 3, ChangedTargets: []agent.ResidentPendingTarget{
@@ -457,19 +469,125 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 		}},
 		Fingerprint:        "all-v2",
 		TargetFingerprints: map[string]string{"channel:one": "one-v2", "dm:two": "two-v1"},
+		CoordinatorID:      "coordinator-1",
+		PendingGeneration:  3,
 	}
-	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", second); err != nil {
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", second, commitPendingNoticeForTest); err != nil {
 		t.Fatalf("changed Notice: %v", err)
 	}
 	got := backend.snapshot()
-	if len(got) != 2 {
-		t.Fatalf("runtime Notices = %+v, want first plus one changed Notice", got)
+	if len(got) != 3 {
+		t.Fatalf("runtime Notices = %+v, want first, new generation, and changed Notice", got)
 	}
 	if !reflect.DeepEqual(got[0].ChangedTargets, first.Notice.ChangedTargets) {
 		t.Fatalf("first changed targets = %+v", got[0].ChangedTargets)
 	}
-	if want := []agent.ResidentPendingTarget{{Target: "channel:one", PendingCount: 2}}; !reflect.DeepEqual(got[1].ChangedTargets, want) {
-		t.Fatalf("second changed targets = %+v, want %+v", got[1].ChangedTargets, want)
+	if !reflect.DeepEqual(got[1].ChangedTargets, first.Notice.ChangedTargets) {
+		t.Fatalf("new-generation changed targets = %+v", got[1].ChangedTargets)
+	}
+	if want := []agent.ResidentPendingTarget{{Target: "channel:one", PendingCount: 2}}; !reflect.DeepEqual(got[2].ChangedTargets, want) {
+		t.Fatalf("changed Notice targets = %+v, want %+v", got[2].ChangedTargets, want)
+	}
+}
+
+func TestMessageCoordinatorBlockedPendingNoticeDoesNotBlockNewDelivery(t *testing.T) {
+	noticeStarted := make(chan struct{})
+	releaseNotice := make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseNotice) }) })
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	coordinator.ConfigurePendingNotices(func(_ context.Context, _ PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		startOnce.Do(func() { close(noticeStarted) })
+		<-releaseNotice
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
+		}
+		return nil
+	}, 10*time.Millisecond, 20*time.Millisecond)
+	t.Cleanup(coordinator.Close)
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel:one", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+	coordinator.NotifyPendingAfterTurn()
+	select {
+	case <-noticeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Pending Notice did not start")
+	}
+	acceptDone := make(chan error, 1)
+	go func() {
+		_, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel:one", 2, "delivery-2"))
+		acceptDone <- err
+	}()
+	select {
+	case err := <-acceptDone:
+		if err != nil {
+			t.Fatalf("Accept during Pending Notice: %v", err)
+		}
+	case <-time.After(time.Second):
+		releaseOnce.Do(func() { close(releaseNotice) })
+		<-acceptDone
+		t.Fatal("Pending Notice I/O held the coordinator state lock")
+	}
+	releaseOnce.Do(func() { close(releaseNotice) })
+}
+
+func TestMessageCoordinatorPendingChangeDuringNoticeRetriesCurrentGeneration(t *testing.T) {
+	firstStarted := make(chan PendingNoticeSnapshot, 1)
+	releaseFirst := make(chan struct{})
+	committed := make(chan PendingNoticeSnapshot, 1)
+	var (
+		attemptMu   sync.Mutex
+		attempts    int
+		releaseOnce sync.Once
+	)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseFirst) }) })
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		attemptMu.Lock()
+		attempts++
+		attempt := attempts
+		attemptMu.Unlock()
+		if attempt == 1 {
+			firstStarted <- snapshot
+			<-releaseFirst
+		}
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
+		}
+		committed <- snapshot
+		return nil
+	}, 10*time.Millisecond, 20*time.Millisecond)
+	t.Cleanup(coordinator.Close)
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel:one", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept first Delivery: %v", err)
+	}
+	coordinator.NotifyPendingAfterTurn()
+	var first PendingNoticeSnapshot
+	select {
+	case first = <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first Pending Notice did not start")
+	}
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-2", "channel:one", 2, "delivery-2")); err != nil {
+		t.Fatalf("Accept changed Pending: %v", err)
+	}
+	releaseOnce.Do(func() { close(releaseFirst) })
+	select {
+	case current := <-committed:
+		if current.PendingGeneration <= first.PendingGeneration || current.Notice.TotalPending != 2 {
+			t.Fatalf("retried Notice = %+v, first generation %d", current, first.PendingGeneration)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("changed Pending generation did not retain Notice retry debt")
 	}
 }
 
@@ -486,10 +604,13 @@ func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *t
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot) error {
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		mu.Lock()
-		defer mu.Unlock()
 		notices = append(notices, snapshot.Notice)
+		mu.Unlock()
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
+		}
 		return nil
 	}, 25*time.Millisecond, 40*time.Millisecond)
 	t.Cleanup(coordinator.Close)
@@ -566,15 +687,19 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot) error {
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		mu.Lock()
-		defer mu.Unlock()
 		attempts++
+		attempt := attempts
 		if snapshot.Notice.TotalPending != 1 {
 			t.Errorf("Notice total = %d, want 1", snapshot.Notice.TotalPending)
 		}
-		if attempts == 1 {
+		mu.Unlock()
+		if attempt == 1 {
 			return errors.New("unsafe provider receipt")
+		}
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
 		}
 		return nil
 	}, 20*time.Millisecond, 30*time.Millisecond)
@@ -965,8 +1090,8 @@ func TestMessageCoordinatorBlockedRuntimeHandoffDoesNotBlockNewDelivery(t *testi
 	reserved := coordinator.activeHandoff
 	pendingWhileBlocked := coordinator.pendingBatchLocked()
 	coordinator.mu.Unlock()
-	if reserved == nil || reserved.generation == 0 || reserved.runtimeAccepted {
-		t.Fatalf("active handoff token = %+v, want reserved and not accepted", reserved)
+	if reserved == nil || reserved.generation == 0 || reserved.phase != runtimeMessageHandoffReserved {
+		t.Fatalf("active handoff token = %+v, want reserved phase", reserved)
 	}
 	if want := []string{messageIdentityKey(testDelivery("message-1", "channel-1", 1, "delivery-1").Message)}; !reflect.DeepEqual(reserved.identities, want) {
 		t.Fatalf("reserved identities = %v, want %v", reserved.identities, want)

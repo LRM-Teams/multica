@@ -241,21 +241,23 @@ type canonicalAgentRuntimePool struct {
 }
 
 type canonicalAgentRuntimeSlot struct {
-	mu                           sync.Mutex
-	fingerprint                  string
-	mode                         canonicalRuntimeMode
-	provider                     string
-	running                      bool
-	idleSince                    time.Time
-	backend                      agent.Backend
-	close                        func()
-	messageInputDone             <-chan error
-	messageInputGeneration       uint64
-	messageInputAttempt          uint64
-	invalidationGeneration       uint64
-	invalidateAfterInput         bool
-	lastPendingNoticeFingerprint string
-	lastPendingTargetFingerprint map[string]string
+	mu                             sync.Mutex
+	fingerprint                    string
+	mode                           canonicalRuntimeMode
+	provider                       string
+	running                        bool
+	idleSince                      time.Time
+	backend                        agent.Backend
+	close                          func()
+	messageInputDone               <-chan error
+	messageInputGeneration         uint64
+	messageInputAttempt            uint64
+	invalidationGeneration         uint64
+	invalidateAfterInput           bool
+	lastPendingNoticeFingerprint   string
+	lastPendingTargetFingerprint   map[string]string
+	lastPendingNoticeCoordinatorID string
+	lastPendingNoticeGeneration    uint64
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -566,6 +568,8 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	slot.close = nil
 	slot.lastPendingNoticeFingerprint = ""
 	slot.lastPendingTargetFingerprint = nil
+	slot.lastPendingNoticeCoordinatorID = ""
+	slot.lastPendingNoticeGeneration = 0
 	slot.invalidateAfterInput = false
 }
 
@@ -784,9 +788,12 @@ func isResidentAcceptBusyErr(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "turn busy")
 }
 
-func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot) error {
+func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
+	}
+	if commitIfCurrent == nil {
+		return errors.New("Pending Notice commit callback is required")
 	}
 	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
 	p.mu.Lock()
@@ -804,7 +811,12 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
 		return errors.New("canonical resident runtime is unavailable")
 	}
-	if snapshot.Fingerprint == slot.lastPendingNoticeFingerprint {
+	if snapshot.Fingerprint == slot.lastPendingNoticeFingerprint &&
+		snapshot.CoordinatorID == slot.lastPendingNoticeCoordinatorID &&
+		snapshot.PendingGeneration == slot.lastPendingNoticeGeneration {
+		if !commitIfCurrent(func() {}) {
+			return errPendingNoticeGenerationChanged
+		}
 		return nil
 	}
 	input, ok := slot.backend.(agent.ResidentPendingNoticeInput)
@@ -824,10 +836,16 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	if err := input.AcceptPendingNotice(ctx, notice); err != nil {
 		return err
 	}
-	slot.lastPendingNoticeFingerprint = snapshot.Fingerprint
-	slot.lastPendingTargetFingerprint = make(map[string]string, len(snapshot.TargetFingerprints))
-	for target, fingerprint := range snapshot.TargetFingerprints {
-		slot.lastPendingTargetFingerprint[target] = fingerprint
+	if !commitIfCurrent(func() {
+		slot.lastPendingNoticeFingerprint = snapshot.Fingerprint
+		slot.lastPendingTargetFingerprint = make(map[string]string, len(snapshot.TargetFingerprints))
+		for target, fingerprint := range snapshot.TargetFingerprints {
+			slot.lastPendingTargetFingerprint[target] = fingerprint
+		}
+		slot.lastPendingNoticeCoordinatorID = snapshot.CoordinatorID
+		slot.lastPendingNoticeGeneration = snapshot.PendingGeneration
+	}) {
+		return errPendingNoticeGenerationChanged
 	}
 	return nil
 }

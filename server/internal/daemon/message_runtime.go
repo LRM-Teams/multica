@@ -35,8 +35,8 @@ func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot stri
 	if err != nil {
 		return false, err
 	}
-	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot) error {
-		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot)
+	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
 	}, 0, 0)
 	if d.messageCoordinators == nil {
 		d.messageCoordinators = make(map[string]*MessageCoordinator)

@@ -57,33 +57,42 @@ type PendingNoticeSnapshot struct {
 	Notice             agent.ResidentPendingNotice
 	Fingerprint        string
 	TargetFingerprints map[string]string
+	CoordinatorID      string
+	PendingGeneration  uint64
 }
 
+// PendingNoticeCommitIfCurrent atomically checks the coordinator's Pending
+// generation and runs a short in-memory Runtime-session fingerprint commit.
+type PendingNoticeCommitIfCurrent func(func()) bool
+
 // RuntimePendingNoticeHandoff writes one content-free Pending Notice into a
-// busy runtime session.
-type RuntimePendingNoticeHandoff func(context.Context, PendingNoticeSnapshot) error
+// busy runtime session, then finalizes session suppression through the supplied
+// generation fence. It must invoke commitIfCurrent before returning nil.
+type RuntimePendingNoticeHandoff func(context.Context, PendingNoticeSnapshot, PendingNoticeCommitIfCurrent) error
 
 // MessageCoordinator owns the receive-side state for one Workspace/Agent root.
 // Its callers send agent:deliver:ack only after Accept returns successfully.
 type MessageCoordinator struct {
-	mu                sync.Mutex
-	boundaryCommitMu  sync.Mutex
-	root              string
-	boundaries        map[string]int64
-	pending           map[string]map[int64]protocol.AgentMessageProjection
-	accepted          map[string]struct{}
-	handoff           RuntimeMessageHandoff
-	activity          MessageReceivedActivity
-	recovery          messageRecoveryState
-	handoffGeneration uint64
-	activeHandoff     *runtimeMessageHandoffToken
-	boundaryHealthy   bool
-	writeBoundaries   func(string, map[string]int64) error
-	noticeHandoff     RuntimePendingNoticeHandoff
-	noticeCoalesce    time.Duration
-	noticeRetry       time.Duration
-	noticeTimer       *time.Timer
-	closed            bool
+	mu                  sync.Mutex
+	boundaryCommitMu    sync.Mutex
+	root                string
+	boundaries          map[string]int64
+	pending             map[string]map[int64]protocol.AgentMessageProjection
+	accepted            map[string]struct{}
+	handoff             RuntimeMessageHandoff
+	activity            MessageReceivedActivity
+	recovery            messageRecoveryState
+	handoffGeneration   uint64
+	activeHandoff       *runtimeMessageHandoffToken
+	boundaryHealthy     bool
+	writeBoundaries     func(string, map[string]int64) error
+	noticeHandoff       RuntimePendingNoticeHandoff
+	noticeCoordinatorID string
+	pendingGeneration   uint64
+	noticeCoalesce      time.Duration
+	noticeRetry         time.Duration
+	noticeTimer         *time.Timer
+	closed              bool
 }
 
 // MessageSendFreshness is the local preflight result for one target.  The
@@ -103,10 +112,25 @@ type runtimeMessageHandoffToken struct {
 	identities         []string
 	messages           []protocol.AgentMessageProjection
 	proposedBoundaries map[string]int64
-	runtimeAccepted    bool
-	commitInProgress   bool
+	phase              runtimeMessageHandoffPhase
 	activityEmitted    bool
 }
+
+type runtimeMessageHandoffPhase uint8
+
+const (
+	runtimeMessageHandoffReserved runtimeMessageHandoffPhase = iota
+	runtimeMessageHandoffAccepted
+	runtimeMessageHandoffCommitting
+)
+
+type pendingNoticeCommitState uint8
+
+const (
+	pendingNoticeCommitAwaiting pendingNoticeCommitState = iota
+	pendingNoticeCommitRejected
+	pendingNoticeCommitApplied
+)
 
 type messageRecoveryStatus string
 
@@ -129,6 +153,7 @@ const (
 var (
 	errRuntimeMessageHandoffInProgress  = errors.New("runtime Message handoff is already in progress")
 	errRuntimeMessageHandoffInvalidated = errors.New("runtime Message handoff token was invalidated")
+	errPendingNoticeGenerationChanged   = errors.New("Pending Notice generation changed before suppression commit")
 )
 
 func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
@@ -146,11 +171,12 @@ func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, acti
 		root: agentRoot, boundaries: boundaries,
 		pending:  make(map[string]map[int64]protocol.AgentMessageProjection),
 		accepted: make(map[string]struct{}), handoff: handoff, activity: activity,
-		recovery:        messageRecoveryState{status: messageRecoveryUnknown},
-		boundaryHealthy: healthy,
-		writeBoundaries: writeConsumedSeqs,
-		noticeCoalesce:  pendingNoticeCoalesceWindow,
-		noticeRetry:     pendingNoticeRetryDelay,
+		recovery:            messageRecoveryState{status: messageRecoveryUnknown},
+		boundaryHealthy:     healthy,
+		writeBoundaries:     writeConsumedSeqs,
+		noticeCoordinatorID: uuid.NewString(),
+		noticeCoalesce:      pendingNoticeCoalesceWindow,
+		noticeRetry:         pendingNoticeRetryDelay,
 	}, nil
 }
 
@@ -359,6 +385,7 @@ func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFre
 		delete(c.accepted, messageIdentityKey(message))
 	}
 	delete(c.pending, target)
+	c.pendingGeneration++
 	return result, nil
 }
 
@@ -399,6 +426,7 @@ func (c *MessageCoordinator) acceptLocked(delivery protocol.AgentDeliverPayload)
 	}
 	bySequence[delivery.Seq] = delivery.Message
 	c.accepted[key] = struct{}{}
+	c.pendingGeneration++
 	return true, nil
 }
 
@@ -479,6 +507,7 @@ func (c *MessageCoordinator) Check(limit int) (MessageCheckResult, error) {
 			delete(c.pending, message.Target)
 		}
 	}
+	c.pendingGeneration++
 	return result, nil
 }
 
@@ -508,14 +537,19 @@ func (c *MessageCoordinator) MarkRead(target string, throughSeq int64) error {
 		c.boundaries = next
 		c.boundaryHealthy = true
 	}
+	pendingChanged := false
 	for sequence, message := range c.pending[target] {
 		if sequence <= c.boundaries[target] {
 			delete(c.pending[target], sequence)
 			delete(c.accepted, messageIdentityKey(message))
+			pendingChanged = true
 		}
 	}
 	if len(c.pending[target]) == 0 {
 		delete(c.pending, target)
+	}
+	if pendingChanged {
+		c.pendingGeneration++
 	}
 	return nil
 }
@@ -555,19 +589,15 @@ func (c *MessageCoordinator) flushWithResult(ctx context.Context, scheduleBusyNo
 			return handedOff, fmt.Errorf("runtime Message handoff: %w", handoffErr)
 		}
 		if needsRuntime {
-			token.runtimeAccepted = true
+			token.phase = runtimeMessageHandoffAccepted
 			handedOff = true
 		}
-		if !token.runtimeAccepted || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
+		if token.phase != runtimeMessageHandoffAccepted || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
 			c.activeHandoff = nil
 			c.mu.Unlock()
 			return handedOff, errRuntimeMessageHandoffInvalidated
 		}
-		if token.commitInProgress {
-			c.mu.Unlock()
-			return handedOff, errRuntimeMessageHandoffInProgress
-		}
-		token.commitInProgress = true
+		token.phase = runtimeMessageHandoffCommitting
 		c.mu.Unlock()
 		if err := c.commitRuntimeMessageHandoff(token); err != nil {
 			return handedOff, err
@@ -588,7 +618,7 @@ func (c *MessageCoordinator) reserveRuntimeMessageHandoff() (*runtimeMessageHand
 		return nil, false, errors.New("Message freshness is unknown until recovery completes")
 	}
 	if c.activeHandoff != nil {
-		if c.activeHandoff.runtimeAccepted && !c.activeHandoff.commitInProgress {
+		if c.activeHandoff.phase == runtimeMessageHandoffAccepted {
 			return c.activeHandoff, false, nil
 		}
 		return nil, false, errRuntimeMessageHandoffInProgress
@@ -611,6 +641,7 @@ func (c *MessageCoordinator) reserveRuntimeMessageHandoff() (*runtimeMessageHand
 		identities:         identities,
 		messages:           append([]protocol.AgentMessageProjection(nil), batch...),
 		proposedBoundaries: proposedBoundaries,
+		phase:              runtimeMessageHandoffReserved,
 	}
 	c.activeHandoff = token
 	return token, true, nil
@@ -638,9 +669,8 @@ func (c *MessageCoordinator) runtimeMessageHandoffContentsCurrentLocked(token *r
 // takes the same commit mutex, so no stale writer can outlive replacement.
 func (c *MessageCoordinator) commitRuntimeMessageHandoff(token *runtimeMessageHandoffToken) error {
 	c.mu.Lock()
-	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || !token.runtimeAccepted || !token.commitInProgress || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
+	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || token.phase != runtimeMessageHandoffCommitting || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
 		if c.runtimeMessageHandoffCurrentLocked(token) {
-			token.commitInProgress = false
 			c.activeHandoff = nil
 		}
 		c.mu.Unlock()
@@ -663,9 +693,8 @@ func (c *MessageCoordinator) commitRuntimeMessageHandoff(token *runtimeMessageHa
 	c.boundaryCommitMu.Lock()
 	defer c.boundaryCommitMu.Unlock()
 	c.mu.Lock()
-	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || !token.commitInProgress || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
+	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || token.phase != runtimeMessageHandoffCommitting || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
 		if c.runtimeMessageHandoffCurrentLocked(token) {
-			token.commitInProgress = false
 			c.activeHandoff = nil
 		}
 		c.mu.Unlock()
@@ -677,18 +706,17 @@ func (c *MessageCoordinator) commitRuntimeMessageHandoff(token *runtimeMessageHa
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || !token.commitInProgress || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
+	if c.closed || !c.runtimeMessageHandoffCurrentLocked(token) || token.phase != runtimeMessageHandoffCommitting || !c.runtimeMessageHandoffContentsCurrentLocked(token) {
 		if c.runtimeMessageHandoffCurrentLocked(token) {
-			token.commitInProgress = false
 			c.activeHandoff = nil
 		}
 		return errRuntimeMessageHandoffInvalidated
 	}
-	token.commitInProgress = false
 	if writeErr != nil {
 		// The native Runtime already accepted this exact token. Keep it as an
 		// in-process coverage receipt so retry performs only the durable commit.
 		// Restart may conservatively replay because the file proves no coverage.
+		token.phase = runtimeMessageHandoffAccepted
 		c.boundaryHealthy = false
 		return fmt.Errorf("persist Context Boundary after runtime handoff: %w", writeErr)
 	}
@@ -701,6 +729,7 @@ func (c *MessageCoordinator) commitRuntimeMessageHandoff(token *runtimeMessageHa
 			delete(c.pending, message.Target)
 		}
 	}
+	c.pendingGeneration++
 	c.activeHandoff = nil
 	return nil
 }
@@ -737,15 +766,42 @@ func (c *MessageCoordinator) runPendingNoticeAttempt() {
 
 func (c *MessageCoordinator) deliverPendingNotice(ctx context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed || c.noticeHandoff == nil {
+		c.mu.Unlock()
 		return errors.New("Pending Notice handoff is unavailable")
 	}
 	snapshot := c.pendingNoticeLocked()
+	handoff := c.noticeHandoff
+	c.mu.Unlock()
 	if snapshot.Notice.TotalPending == 0 {
 		return nil
 	}
-	return c.noticeHandoff(ctx, snapshot)
+	commitState := pendingNoticeCommitAwaiting
+	commitIfCurrent := func(commit func()) bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if commitState != pendingNoticeCommitAwaiting || commit == nil || c.closed || c.noticeCoordinatorID != snapshot.CoordinatorID || c.pendingGeneration != snapshot.PendingGeneration {
+			commitState = pendingNoticeCommitRejected
+			return false
+		}
+		commit()
+		commitState = pendingNoticeCommitApplied
+		return true
+	}
+	handoffErr := handoff(ctx, snapshot, commitIfCurrent)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if handoffErr != nil {
+		if commitState == pendingNoticeCommitAwaiting {
+			commitState = pendingNoticeCommitRejected
+		}
+		return handoffErr
+	}
+	if commitState != pendingNoticeCommitApplied {
+		commitState = pendingNoticeCommitRejected
+		return errPendingNoticeGenerationChanged
+	}
+	return nil
 }
 
 func (c *MessageCoordinator) pendingNoticeLocked() PendingNoticeSnapshot {
@@ -777,6 +833,7 @@ func (c *MessageCoordinator) pendingNoticeLocked() PendingNoticeSnapshot {
 	sum := sha256.Sum256([]byte(strings.Join(identities, "\x01")))
 	return PendingNoticeSnapshot{
 		Notice: notice, Fingerprint: fmt.Sprintf("%x", sum[:]), TargetFingerprints: targetFingerprints,
+		CoordinatorID: c.noticeCoordinatorID, PendingGeneration: c.pendingGeneration,
 	}
 }
 

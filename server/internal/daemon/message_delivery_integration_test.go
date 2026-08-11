@@ -95,8 +95,8 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, root); err != nil {
 		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 	}
-	d.messageCoordinators[agentID].ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot) error {
-		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot)
+	d.messageCoordinators[agentID].ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
+		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
 	}, 20*time.Millisecond, 30*time.Millisecond)
 
 	hub := daemonws.NewHub()

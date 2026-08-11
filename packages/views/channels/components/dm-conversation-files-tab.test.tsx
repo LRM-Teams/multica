@@ -125,6 +125,9 @@ vi.mock("../../chat/components/dm-agent-bubble", () => ({
   DmAgentBubble: () => null,
 }));
 vi.mock("./dm-agent-working-cue", () => ({ DmAgentWorkingCue: () => null }));
+vi.mock("./composer-agent-activity-strip", () => ({
+  ComposerAgentActivityStrip: () => null,
+}));
 vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: () => <div data-testid="content-editor" />,
 }));

@@ -129,6 +129,7 @@ import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import { isConversationMuted, MutedIndicator } from "./conversation-muted";
 import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
+import { ComposerAgentActivityStrip } from "./composer-agent-activity-strip";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 
 /**
@@ -136,6 +137,10 @@ import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
  *  - `dm_channel` — the DM IS a kind='dm' channel, so we reuse the exact
  *    channel conversation stack (ChannelMessageBubble + ContentEditor composer
  *    + channel queries/mutations + channel:message WS).
+ *
+ * Agent Activity compact strip sits above the main composer for a 1:1 agent
+ * peer (Runner summary projection only — workspace-batched, no per-agent
+ * timeline REST). Group channels keep typing-only ConversationActivityStrip.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+
  * agent presence dot) and Files only — no stats, no share, no member
@@ -1675,6 +1680,12 @@ function DmChannelConversation({
       />
       {!readOnly ? dmSelectionMenu.menu : null}
       </div>
+      {/* Compact Agent Activity above the 1:1 agent-peer composer. Hidden for
+          human peers, agent_pair/archived read-only, and idle (component null).
+          Uses workspace Runner summary — not the heavy activity-event stream. */}
+      {dm.peer.type === "agent" && !readOnly ? (
+        <ComposerAgentActivityStrip agentId={dm.peer.id} />
+      ) : null}
       <Composer
         surface="dm_channel"
         readOnly={readOnly}

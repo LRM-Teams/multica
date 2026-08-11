@@ -186,6 +186,8 @@ describe("mergeTypedGraphPages", () => {
   });
 
   it("evicts oldest page nodes when merged cache exceeds the node budget", () => {
+    // Partial fixtures for merge/budget behavior only — cast via unknown so
+    // strict tsc does not require a full TypedGraphNode for every stub row.
     const makePage = (offset: number, count: number): TypedGraphResponse =>
       ({
         session_id: "s1",
@@ -206,7 +208,7 @@ describe("mergeTypedGraphPages", () => {
           invalidated: {},
           supersedes: {},
         },
-      }) as TypedGraphResponse;
+      }) as unknown as TypedGraphResponse;
 
     const merged = mergeTypedGraphPages([makePage(0, 800), makePage(800, 800)], {
       nodeBudget: 1000,
@@ -237,7 +239,7 @@ describe("mergeTypedGraphPages", () => {
         invalidated: {},
         supersedes: {},
       },
-    } as TypedGraphResponse;
+    } as unknown as TypedGraphResponse;
 
     const merged = mergeTypedGraphPages([page], {
       nodeBudget: 2,

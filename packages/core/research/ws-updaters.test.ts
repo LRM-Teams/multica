@@ -45,6 +45,81 @@ describe("applyResearchWSEvent", () => {
     });
   });
 
+  it("patches typed graph cache incrementally when pages are loaded", () => {
+    const store = new Map<string, unknown>();
+    store.set(JSON.stringify(researchKeys.snapshot("ws", "s1")), {
+      ...EMPTY_RESEARCH_SNAPSHOT,
+      session: { ...EMPTY_RESEARCH_SNAPSHOT.session, id: "s1" },
+      nodes: [{ id: "n1", session_id: "s1", node_type: "goal", title: "g", summary: "", status: "active", actor_agent_id: null, payload: {}, created_at: "", updated_at: "" }],
+      edges: [],
+    });
+    store.set(
+      JSON.stringify(researchKeys.graphTypedInfinite("ws", "s1")),
+      {
+        pages: [
+          {
+            session_id: "s1",
+            graph_version: 2,
+            nodes: [{ id: "n1", title: "Goal", node_type: "goal", level: "xxl" }],
+            edges: [],
+            clusters: [],
+            lineage: {
+              derived: {},
+              merged: {},
+              superseded: {},
+              restarted: {},
+              invalidated: {},
+              supersedes: {},
+            },
+          },
+        ],
+        pageParams: [0],
+      },
+    );
+    const qc = {
+      setQueryData: (_key: unknown, updater: unknown) => {
+        const key = JSON.stringify(_key);
+        const prev = store.get(key);
+        const next =
+          typeof updater === "function"
+            ? (updater as (value: unknown) => unknown)(prev)
+            : updater;
+        store.set(key, next);
+        return next;
+      },
+      invalidateQueries: vi.fn(),
+      removeQueries: vi.fn(),
+    } as unknown as QueryClient & { getData: () => unknown };
+
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:graph_updated",
+      payload: {
+        session_id: "s1",
+        graph_version: 3,
+        node: {
+          id: "n2",
+          session_id: "s1",
+          node_type: "probe",
+          title: "Probe",
+          summary: "",
+          status: "running",
+          actor_agent_id: "a1",
+          payload: { details: { objective: "Check sources" } },
+          level: "s",
+          created_at: "",
+          updated_at: "",
+        },
+      },
+    });
+
+    const typed = store.get(JSON.stringify(researchKeys.graphTypedInfinite("ws", "s1"))) as {
+      pages: Array<{ nodes: Array<{ id: string }>; graph_version: number }>;
+    };
+    expect(typed.pages[0]?.nodes.map((node) => node.id).sort()).toEqual(["n1", "n2"]);
+    expect(typed.pages[0]?.graph_version).toBe(3);
+    expect(qc.invalidateQueries).not.toHaveBeenCalled();
+  });
+
   it("removes snapshot cache when session is deleted", () => {
     const qc = makeQc({
       ...EMPTY_RESEARCH_SNAPSHOT,

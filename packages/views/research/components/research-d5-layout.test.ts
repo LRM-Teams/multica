@@ -12,5 +12,7 @@ describe("research-d5-layout local theme", () => {
     expect(css).toContain("--foreground: #e8f1f7");
     expect(css).toContain(".d5-canvas-host");
     expect(css).toMatch(/\.d5-canvas-host[\s\S]*background:\s*var\(--background\)/);
+    expect(css).toMatch(/\.d5-lens-btn[\s\S]*color:\s*var\(--muted-foreground\)/);
+    expect(css).toMatch(/\.research-agent-inspector[\s\S]*color:\s*var\(--foreground\)/);
   });
 });

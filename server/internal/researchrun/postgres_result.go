@@ -57,6 +57,12 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		if err = verifyAcceptanceManifestEntryEligibilityTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID); err != nil {
 			return AcceptResultOutcome{}, err
 		}
+		if err = verifyAcceptanceManifestHashTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+		if err = lockAcceptanceManifestAuthorizationTargetsTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID); err != nil {
+			return AcceptResultOutcome{}, err
+		}
 	}
 
 	if !state.stale && state.task.Kind == TaskKindReplan {

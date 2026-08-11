@@ -9,6 +9,28 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestResearchSessionSnapshotSameWorkspaceReturnsOK(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+
+	sessionID := seedInitializedResearchSessionForSnapshotTest(t)
+	engine := &recordingResearchRunEngine{}
+	useResearchRunEngine(t, engine)
+
+	path := "/api/research/sessions/" + uuidToString(sessionID)
+	req := withURLParam(newRequest(http.MethodGet, path, nil), "id", uuidToString(sessionID))
+
+	rec := httptest.NewRecorder()
+	testHandler.GetResearchSessionSnapshot(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("same-workspace status=%d body=%s want 200", rec.Code, rec.Body.String())
+	}
+	if !engine.snapshotCalled {
+		t.Fatal("expected Snapshot for same-workspace read")
+	}
+}
+
 func TestResearchSessionSnapshotCrossWorkspaceReturnsNotFound(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test database unavailable")

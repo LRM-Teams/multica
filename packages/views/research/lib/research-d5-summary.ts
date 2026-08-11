@@ -1,4 +1,4 @@
-import type { TypedGraphNode } from "@multica/core/research";
+import type { TypedGraphCluster, TypedGraphNode } from "@multica/core/research";
 
 export interface ResearchD5Summary {
   loadedDirections: number;
@@ -12,20 +12,20 @@ export interface ResearchD5Summary {
 const STABLE_LEVELS = new Set(["l", "xl", "xxl"]);
 const STOP_STATUSES = new Set(["abandoned", "deprecated", "failed", "superseded", "archived"]);
 
-type ResearchD5SummaryNode = Pick<
-  TypedGraphNode,
-  "id" | "level" | "status" | "node_type"
-> & {
+type ResearchD5SummaryNode = Pick<TypedGraphNode, "id"> &
+  Partial<Pick<TypedGraphNode, "level" | "status" | "node_type">> & {
   cluster_id?: TypedGraphNode["cluster_id"];
 };
 
 export function summarizeTypedGraph(
   nodes: readonly ResearchD5SummaryNode[],
-  options?: { totalNodeCount?: number | null },
+  options?: {
+    totalNodeCount?: number | null;
+    clusters?: readonly TypedGraphCluster[];
+  },
 ): ResearchD5Summary {
   let stableResults = 0;
   let activeProbes = 0;
-  let newFrontiers = 0;
   let stoppedDirections = 0;
 
   for (const node of nodes) {
@@ -39,10 +39,12 @@ export function summarizeTypedGraph(
         activeProbes += 1;
       }
     }
-    if (!node.cluster_id && level !== "xxl" && node.node_type !== "goal") {
-      newFrontiers += 1;
-    }
   }
+
+  const newFrontiers =
+    options?.clusters?.filter(
+      (cluster) => (cluster.cluster_type || "").toLowerCase() === "new_frontier",
+    ).length ?? 0;
 
   return {
     loadedDirections: nodes.length,

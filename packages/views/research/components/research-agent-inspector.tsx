@@ -1,5 +1,6 @@
 "use client";
 
+import type { TypedGraphNode } from "@multica/core/research";
 import type { ExecutionRow } from "../execution-overlay";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -13,16 +14,81 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 
+function payloadString(payload: unknown, key: string): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function objectiveFromTypedNode(node: TypedGraphNode | null | undefined): string | null {
+  if (!node) return null;
+  const root = node.payload;
+  const details =
+    root && typeof root === "object" && !Array.isArray(root)
+      ? (root as Record<string, unknown>).details
+      : null;
+  const records = [
+    details && typeof details === "object" && !Array.isArray(details)
+      ? (details as Record<string, unknown>)
+      : null,
+    root && typeof root === "object" && !Array.isArray(root)
+      ? (root as Record<string, unknown>)
+      : null,
+  ];
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of ["objective", "small_goal", "goal", "question"]) {
+      const value = payloadString(record, key);
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
+function inputFromTypedNode(node: TypedGraphNode | null | undefined): string | null {
+  if (!node) return null;
+  const root = node.payload;
+  const details =
+    root && typeof root === "object" && !Array.isArray(root)
+      ? (root as Record<string, unknown>).details
+      : null;
+  const records = [
+    details && typeof details === "object" && !Array.isArray(details)
+      ? (details as Record<string, unknown>)
+      : null,
+    root && typeof root === "object" && !Array.isArray(root)
+      ? (root as Record<string, unknown>)
+      : null,
+  ];
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of ["input", "task_input", "inputs"]) {
+      const value = payloadString(record, key);
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
 function ResearchAgentInspectorBody({
   row,
+  typedNode,
   onClose,
   onOpenAgentConfig,
 }: {
   row: ExecutionRow;
+  typedNode?: TypedGraphNode | null;
   onClose: () => void;
   onOpenAgentConfig?: () => void;
 }) {
   const { t } = useT("research");
+  const payloadObjective = objectiveFromTypedNode(typedNode);
+  const payloadInput = inputFromTypedNode(typedNode);
+  const objective =
+    row.taskObjective ||
+    payloadObjective ||
+    row.action ||
+    t(($) => $.d5.inspector.no_task);
 
   return (
     <>
@@ -46,8 +112,14 @@ function ResearchAgentInspectorBody({
       <div className="agent-body">
         <div className="agent-objective">
           <small>{t(($) => $.d5.inspector.objective)}</small>
-          <b>{row.taskObjective || row.action || t(($) => $.d5.inspector.no_task)}</b>
+          <b>{objective}</b>
         </div>
+        {payloadInput ? (
+          <section className="work-block">
+            <h4>{t(($) => $.node.input)}</h4>
+            <div className="work-item done">{payloadInput}</div>
+          </section>
+        ) : null}
         {row.stage ? (
           <p className="mt-3 text-[11px] text-muted-foreground">
             {t(($) => $.d5.inspector.phase, { phase: row.stage })}
@@ -79,12 +151,14 @@ function ResearchAgentInspectorBody({
 
 export function ResearchAgentInspector({
   row,
+  typedNode,
   open,
   onClose,
   onOpenAgentConfig,
   className,
 }: {
   row: ExecutionRow | null;
+  typedNode?: TypedGraphNode | null;
   open: boolean;
   onClose: () => void;
   onOpenAgentConfig?: () => void;
@@ -118,6 +192,7 @@ export function ResearchAgentInspector({
           </SheetHeader>
           <ResearchAgentInspectorBody
             row={row}
+            typedNode={typedNode}
             onClose={onClose}
             onOpenAgentConfig={onOpenAgentConfig}
           />
@@ -134,6 +209,7 @@ export function ResearchAgentInspector({
     >
       <ResearchAgentInspectorBody
         row={row}
+        typedNode={typedNode}
         onClose={onClose}
         onOpenAgentConfig={onOpenAgentConfig}
       />

@@ -6,6 +6,7 @@ import type {
 } from "../types/research";
 import { researchKeys, type ResearchPresenceMap } from "./queries";
 import { ResearchProductRoundCardSchema } from "./schemas";
+import { applyTypedGraphWsPatch } from "./typed-graph-cache";
 
 function sessionIdFromPayload(payload: Record<string, unknown>): string | null {
   if (typeof payload.session_id === "string") return payload.session_id;
@@ -43,21 +44,40 @@ export function applyResearchWSEvent(
     case "research_session:graph_updated": {
       const node = payload.node as ResearchSessionSnapshot["nodes"][number] | undefined;
       const edge = payload.edge as ResearchSessionSnapshot["edges"][number] | null | undefined;
+      const edges = payload.edges as ResearchSessionSnapshot["edges"] | undefined;
+      const graphVersion =
+        typeof payload.graph_version === "number" && Number.isFinite(payload.graph_version)
+          ? payload.graph_version
+          : undefined;
       patchSnapshot(qc, wsId, sessionId, (prev) => {
         const nodes = node
           ? [...prev.nodes.filter((n) => n.id !== node.id), node]
           : prev.nodes;
-        const edges = edge
-          ? [...prev.edges.filter((e) => e.id !== edge.id), edge]
-          : prev.edges;
-        return { ...prev, nodes, edges };
+        let nextEdges = prev.edges;
+        if (edge) {
+          nextEdges = [...nextEdges.filter((entry) => entry.id !== edge.id), edge];
+        }
+        if (Array.isArray(edges)) {
+          for (const incoming of edges) {
+            nextEdges = [...nextEdges.filter((entry) => entry.id !== incoming.id), incoming];
+          }
+        }
+        return { ...prev, nodes, edges: nextEdges };
       });
-      void qc.invalidateQueries({
-        queryKey: researchKeys.graphTypedInfinite(wsId, sessionId),
+      const patchResult = applyTypedGraphWsPatch(qc, wsId, sessionId, {
+        node,
+        edge: edge ?? undefined,
+        edges,
+        graphVersion,
       });
-      void qc.invalidateQueries({
-        queryKey: ["research", wsId, "graph-typed", sessionId],
-      });
+      if (patchResult.needsResync || !patchResult.patched) {
+        void qc.invalidateQueries({
+          queryKey: researchKeys.graphTypedInfinite(wsId, sessionId),
+        });
+        void qc.invalidateQueries({
+          queryKey: ["research", wsId, "graph-typed", sessionId],
+        });
+      }
       break;
     }
     case "research_session:sources_updated": {

@@ -399,7 +399,6 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		workspaceRunners:          make(map[string]*WorkspaceRunner),
 		workspaceRunnerCancels:    make(map[string]context.CancelFunc),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
-		machineUpgradeGeneration:  uuid.NewString(),
 		runnerInstanceID:          uuid.NewString(),
 	}
 	d.canonicalRuntimes.setMaxAgentProcesses(cfg.MaxAgentProcesses)

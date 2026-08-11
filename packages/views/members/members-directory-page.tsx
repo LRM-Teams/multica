@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Monitor, Plus, Users } from "lucide-react";
 import { toast } from "sonner";
@@ -46,6 +46,84 @@ export interface MembersDirectoryPageProps {
   hasLocalMachine?: boolean;
 }
 
+/** Local rail/dialog UI — one reducer so related updates don't fan out. */
+type DirectoryUiState = {
+  query: string;
+  agentsOpen: boolean;
+  humansOpen: boolean;
+  showCreate: boolean;
+  showInvite: boolean;
+  /** Selection key we last auto-expanded for (deep-link / URL). */
+  expandedForKey: string | null;
+};
+
+type DirectoryUiAction =
+  | { type: "set_query"; query: string }
+  | { type: "toggle_agents" }
+  | { type: "toggle_humans" }
+  | { type: "select_kind"; kind: "agent" | "user" }
+  | { type: "open_create"; open: boolean }
+  | { type: "open_invite"; open: boolean }
+  | {
+      type: "sync_selection";
+      key: string | null;
+      kind: "agent" | "user" | null;
+    };
+
+const initialDirectoryUi: DirectoryUiState = {
+  query: "",
+  // Agents collapsed by default; humans expanded.
+  agentsOpen: false,
+  humansOpen: true,
+  showCreate: false,
+  showInvite: false,
+  expandedForKey: null,
+};
+
+function directoryUiReducer(
+  state: DirectoryUiState,
+  action: DirectoryUiAction,
+): DirectoryUiState {
+  switch (action.type) {
+    case "set_query":
+      return { ...state, query: action.query };
+    case "toggle_agents":
+      return { ...state, agentsOpen: !state.agentsOpen };
+    case "toggle_humans":
+      return { ...state, humansOpen: !state.humansOpen };
+    case "select_kind":
+      return {
+        ...state,
+        agentsOpen: action.kind === "agent" ? true : state.agentsOpen,
+        humansOpen: action.kind === "user" ? true : state.humansOpen,
+      };
+    case "open_create":
+      return { ...state, showCreate: action.open };
+    case "open_invite":
+      return { ...state, showInvite: action.open };
+    case "sync_selection": {
+      if (action.key === state.expandedForKey) return state;
+      if (action.kind === "agent") {
+        return {
+          ...state,
+          expandedForKey: action.key,
+          agentsOpen: true,
+        };
+      }
+      if (action.kind === "user") {
+        return {
+          ...state,
+          expandedForKey: action.key,
+          humansOpen: true,
+        };
+      }
+      return { ...state, expandedForKey: action.key };
+    }
+    default:
+      return state;
+  }
+}
+
 export function MembersDirectoryPage({
   localDaemonId = null,
   localMachineName = null,
@@ -57,6 +135,7 @@ export function MembersDirectoryPage({
   const navigation = useNavigation();
   const qc = useQueryClient();
   const currentUser = useAuthStore((s) => s.user);
+  const [ui, dispatch] = useReducer(directoryUiReducer, initialDirectoryUi);
 
   const { data: agents = [], isLoading: agentsLoading } = useQuery(
     agentListOptions(wsId, { includeArchived: true }),
@@ -98,14 +177,9 @@ export function MembersDirectoryPage({
     ],
   );
 
-  const [query, setQuery] = useState("");
-  // Agents collapsed by default; humans expanded.
-  const [agentsOpen, setAgentsOpen] = useState(false);
-  const [humansOpen, setHumansOpen] = useState(true);
-
   const filtered = useMemo(
-    () => filterMembersDirectoryRoster(roster, query),
-    [roster, query],
+    () => filterMembersDirectoryRoster(roster, ui.query),
+    [roster, ui.query],
   );
 
   const urlSelection = parseMembersSelectionFromSearch(
@@ -124,10 +198,22 @@ export function MembersDirectoryPage({
     return resolveMembersSelection(roster, urlSelection);
   }, [roster, urlSelection, rosterReady]);
 
+  // Deep-link / default selection: expand the section that holds it during
+  // render (not in an effect — avoids a one-frame collapsed flash).
+  const selectionKey = selection
+    ? `${selection.kind}:${selection.id}`
+    : null;
+  if (selectionKey !== ui.expandedForKey) {
+    dispatch({
+      type: "sync_selection",
+      key: selectionKey,
+      kind: selection?.kind ?? null,
+    });
+  }
+
   const setSelection = useCallback(
     (kind: "agent" | "user", id: string) => {
-      if (kind === "agent") setAgentsOpen(true);
-      if (kind === "user") setHumansOpen(true);
+      dispatch({ type: "select_kind", kind });
       navigation.replace(paths.members({ kind, id }));
     },
     [navigation, paths],
@@ -141,16 +227,6 @@ export function MembersDirectoryPage({
     );
   }, [rosterReady, selection, urlSelection, navigation, paths]);
 
-  // Expand the section that holds the current selection (e.g. deep-linked agent).
-  useEffect(() => {
-    if (!selection) return;
-    if (selection.kind === "agent") setAgentsOpen(true);
-    if (selection.kind === "user") setHumansOpen(true);
-  }, [selection?.kind, selection?.id]);
-
-  const [showCreate, setShowCreate] = useState(false);
-  const [showInvite, setShowInvite] = useState(false);
-
   const handleCreate = async (data: CreateAgentRequest): Promise<Agent> => {
     if (!data.runtime_id) {
       throw new Error(t(($) => $.directory.computer_required));
@@ -162,8 +238,8 @@ export function MembersDirectoryPage({
         ? current.map((a) => (a.id === agent.id ? agent : a))
         : [...current, agent];
     });
-    setShowCreate(false);
-    setAgentsOpen(true);
+    dispatch({ type: "open_create", open: false });
+    dispatch({ type: "select_kind", kind: "agent" });
     navigation.replace(paths.members({ kind: "agent", id: agent.id }));
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     return agent;
@@ -235,8 +311,10 @@ export function MembersDirectoryPage({
 
         <div className="shrink-0 border-b px-3 py-2.5">
           <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={ui.query}
+            onChange={(e) =>
+              dispatch({ type: "set_query", query: e.target.value })
+            }
             placeholder={t(($) => $.directory.search_placeholder)}
             className="h-8"
             data-testid="members-directory-search"
@@ -253,14 +331,14 @@ export function MembersDirectoryPage({
               <SectionHeader
                 label={t(($) => $.directory.agents_section)}
                 count={filtered.listedAgents.length}
-                open={agentsOpen}
-                onToggle={() => setAgentsOpen((v) => !v)}
-                onAdd={() => setShowCreate(true)}
+                open={ui.agentsOpen}
+                onToggle={() => dispatch({ type: "toggle_agents" })}
+                onAdd={() => dispatch({ type: "open_create", open: true })}
                 addAria={t(($) => $.directory.create_agent_aria)}
                 testId="members-agents-add"
                 toggleTestId="members-agents-toggle"
               />
-              {agentsOpen ? (
+              {ui.agentsOpen ? (
                 filtered.computerGroups.length === 0 ? (
                   <p className="px-4 py-2 text-xs text-muted-foreground">
                     {t(($) => $.directory.no_agents)}
@@ -319,16 +397,18 @@ export function MembersDirectoryPage({
               <SectionHeader
                 label={t(($) => $.directory.humans_section)}
                 count={filtered.humans.length}
-                open={humansOpen}
-                onToggle={() => setHumansOpen((v) => !v)}
+                open={ui.humansOpen}
+                onToggle={() => dispatch({ type: "toggle_humans" })}
                 onAdd={
-                  canManageWorkspace ? () => setShowInvite(true) : undefined
+                  canManageWorkspace
+                    ? () => dispatch({ type: "open_invite", open: true })
+                    : undefined
                 }
                 addAria={t(($) => $.directory.invite_human_aria)}
                 testId="members-humans-add"
                 toggleTestId="members-humans-toggle"
               />
-              {humansOpen ? (
+              {ui.humansOpen ? (
                 filtered.humans.length === 0 ? (
                   <p className="px-4 py-2 text-xs text-muted-foreground">
                     {t(($) => $.directory.no_humans)}
@@ -417,20 +497,20 @@ export function MembersDirectoryPage({
         )}
       </div>
 
-      {showCreate ? (
+      {ui.showCreate ? (
         <CreateAgentDialog
           runtimes={runtimes}
           runtimesLoading={runtimesLoading}
           members={members}
           currentUserId={currentUser?.id ?? null}
-          onClose={() => setShowCreate(false)}
+          onClose={() => dispatch({ type: "open_create", open: false })}
           onCreate={handleCreate}
         />
       ) : null}
 
       <InviteHumanDialog
-        open={showInvite}
-        onOpenChange={setShowInvite}
+        open={ui.showInvite}
+        onOpenChange={(open) => dispatch({ type: "open_invite", open })}
         workspaceId={wsId}
         canInviteOwner={isOwner}
       />

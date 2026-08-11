@@ -265,6 +265,73 @@ func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 	}
 }
 
+func TestDispatchFailsWhenArtifactVersionContentHashChanges(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Representation CAS gate", Title: "Representation CAS",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	claimID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_claim (
+		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
+		  significance, confidence, status, goal_version, plan_version, resolution
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'repr-cas-claim', '', 'claim for representation CAS',
+		  0.5, 0.5, 'proposed', 1, 1, ''
+		)
+	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatalf("insert claim: %v", err)
+	}
+	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_version
+		SET content_hash = 'sha256:mutated-after-plan'
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
+		t.Fatalf("mutate version content hash: %v", err)
+	}
+
+	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	_, _, err = store.CreateDispatchIntent(ctx, input)
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("CreateDispatchIntent err=%v want ErrInvalidTransition", err)
+	}
+	var manifestCount int
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, fixture.workspaceID, run.SessionID).Scan(&manifestCount); err != nil {
+		t.Fatal(err)
+	}
+	if manifestCount != 0 {
+		t.Fatalf("manifest count=%d want 0 after representation CAS failure", manifestCount)
+	}
+}
+
 func cleanupResearchRunFixture(pool *pgxpool.Pool, fixture researchRunFixture) {
 	_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
 	_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)

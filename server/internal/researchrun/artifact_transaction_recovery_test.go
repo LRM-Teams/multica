@@ -53,7 +53,7 @@ func loadDispatchArtifactRecoveryCounts(t *testing.T, run *transactionRecoveryRu
 
 func assertDispatchArtifactRecoveryRolledBack(t *testing.T, run *transactionRecoveryRun) {
 	t.Helper()
-	counts := loadDispatchArtifactRecoveryCounts(t, run, "")
+	counts := loadDispatchArtifactRecoveryCounts(t, run, "00000000-0000-0000-0000-000000000000")
 	if !counts.passportEnabled {
 		t.Fatal("expected artifact_passport_enabled for dispatch artifact recovery")
 	}

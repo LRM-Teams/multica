@@ -32,11 +32,15 @@ func rebindDispatchPromptForManifestTx(
 	if err != nil {
 		return DispatchRequest{}, err
 	}
+	livePrompt, err := buildTaskPrompt(liveSnapshot.Run, in.Request.Task, attempt, liveSnapshot, members)
+	if err != nil {
+		return DispatchRequest{}, err
+	}
 	prompt, err := buildTaskPrompt(filtered.Run, in.Request.Task, attempt, filtered, members)
 	if err != nil {
 		return DispatchRequest{}, err
 	}
-	if err = verifyManifestPromptShadow(in.Request.Prompt, prompt, liveSnapshot, filtered); err != nil {
+	if err = verifyManifestPromptShadow(livePrompt, prompt, liveSnapshot, filtered); err != nil {
 		return DispatchRequest{}, err
 	}
 	request := in.Request

@@ -179,17 +179,6 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 			},
 		},
 		{
-			name: "stale_run_state_version",
-			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
-				_, err := fx.pool.Exec(ctx, `
-					UPDATE research_session
-					SET state_version = state_version + 1, updated_at = now()
-					WHERE workspace_id = $1::uuid AND id = $2::uuid
-				`, fx.fixture.workspaceID, fx.run.SessionID)
-				return err
-			},
-		},
-		{
 			name: "manifest_entry_representation_bytes",
 			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
 				_, err := fx.pool.Exec(ctx, `
@@ -234,7 +223,7 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 	}
 }
 
-func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedWatermarkAdvances(t *testing.T) {
+func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedStateAdvances(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -247,33 +236,60 @@ func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedWatermarkA
 	}
 	defer pool.Close()
 
-	fx := setupPlanAcceptanceRaceFixture(t, ctx, pool)
-	defer cleanupResearchRunFixture(pool, fx.fixture)
-	invokeAcceptWithBeforeCommitFault(t, ctx, fx)
-	assertAcceptanceRolledBack(t, ctx, fx)
-	if _, err = pool.Exec(ctx, `
-		UPDATE research_artifact_policy_state
-		SET watermark = watermark + 1, updated_at = now()
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
-	`, fx.fixture.workspaceID, fx.run.SessionID); err != nil {
-		t.Fatalf("advance unrelated watermark: %v", err)
+	cases := []struct {
+		name   string
+		mutate func(context.Context, acceptanceRaceFixture) error
+	}{
+		{
+			name: "policy_watermark",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := pool.Exec(ctx, `
+					UPDATE research_artifact_policy_state
+					SET watermark = watermark + 1, updated_at = now()
+					WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID)
+				return err
+			},
+		},
+		{
+			name: "run_state_version",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				_, err := pool.Exec(ctx, `
+					UPDATE research_session
+					SET state_version = state_version + 1, updated_at = now()
+					WHERE workspace_id = $1::uuid AND id = $2::uuid
+				`, fx.fixture.workspaceID, fx.run.SessionID)
+				return err
+			},
+		},
 	}
-	outcome, err := fx.store.AcceptResult(ctx, fx.input)
-	if err != nil {
-		t.Fatalf("AcceptResult after unrelated watermark advance: %v", err)
-	}
-	if outcome.TaskID != fx.task.ID {
-		t.Fatalf("outcome=%+v", outcome)
-	}
-	var resultArtifacts int
-	if err = pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_result_artifact
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&resultArtifacts); err != nil {
-		t.Fatal(err)
-	}
-	if resultArtifacts != 1 {
-		t.Fatalf("result artifacts=%d want 1", resultArtifacts)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := setupPlanAcceptanceRaceFixture(t, ctx, pool)
+			defer cleanupResearchRunFixture(pool, fx.fixture)
+			invokeAcceptWithBeforeCommitFault(t, ctx, fx)
+			assertAcceptanceRolledBack(t, ctx, fx)
+			if err = tc.mutate(ctx, fx); err != nil {
+				t.Fatalf("advance unrelated state: %v", err)
+			}
+			outcome, acceptErr := fx.store.AcceptResult(ctx, fx.input)
+			if acceptErr != nil {
+				t.Fatalf("AcceptResult after unrelated %s advance: %v", tc.name, acceptErr)
+			}
+			if outcome.TaskID != fx.task.ID {
+				t.Fatalf("outcome=%+v", outcome)
+			}
+			var resultArtifacts int
+			if err = pool.QueryRow(ctx, `
+				SELECT count(*)::int FROM research_result_artifact
+				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&resultArtifacts); err != nil {
+				t.Fatal(err)
+			}
+			if resultArtifacts != 1 {
+				t.Fatalf("result artifacts=%d want 1", resultArtifacts)
+			}
+		})
 	}
 }
 

@@ -163,7 +163,7 @@ func loadArtifactVersionCandidates(
 		 AND v.version = p.current_version
 		WHERE p.workspace_id = $1::uuid
 		  AND p.session_id = $2::uuid
-		  AND p.entity_kind NOT IN ('context_manifest', 'result_artifact')
+		  AND p.entity_kind NOT IN ('attempt', 'context_manifest', 'result_artifact')
 		ORDER BY p.entity_kind, p.id::text
 	`, workspaceID, sessionID)
 	if err != nil {

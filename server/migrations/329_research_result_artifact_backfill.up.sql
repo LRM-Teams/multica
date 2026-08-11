@@ -16,9 +16,9 @@ DECLARE
   v_result_id UUID;
   v_content_hash TEXT;
 BEGIN
-  SELECT a.result, COALESCE(a.client_request_id, ''),
+  SELECT a.result, a.result_hash, COALESCE(a.client_request_id, ''),
          COALESCE(s.orchestrator_version, '')
-  INTO v_result, v_client_request_id, v_orchestrator_version
+  INTO v_result, v_result_hash, v_client_request_id, v_orchestrator_version
   FROM research_task_attempt a
   JOIN research_session s ON s.id = a.session_id
   WHERE a.workspace_id = p_workspace_id
@@ -26,16 +26,18 @@ BEGIN
     AND a.id = p_attempt_id
     AND a.status = 'succeeded'
     AND a.result IS NOT NULL
-    AND a.result <> '{}'::jsonb;
+    AND a.result <> '{}'::jsonb
+    AND research_artifact_content_hash_valid(a.result_hash);
 
   IF NOT FOUND THEN
     RETURN false;
   END IF;
 
   v_result_id := gen_random_uuid();
-  v_content_hash := research_artifact_migration_content_hash(
-    'result_artifact', p_workspace_id, p_session_id, v_result_id
-  );
+  -- The result projection guard requires the artifact to preserve the exact
+  -- hash accepted with the attempt. Recomputing a migration-only hash creates
+  -- a projection that can never satisfy that invariant.
+  v_content_hash := v_result_hash;
 
   INSERT INTO research_artifact_passport (
     id, workspace_id, session_id, entity_kind, current_version, eligibility_revision,
@@ -53,7 +55,7 @@ BEGIN
   )
   SELECT
     p_workspace_id, p_session_id, v_result_id, 1, 'result_artifact', 'legacy-v1',
-    'research-artifact-c14n-v1', v_content_hash, 'raw', 'migration_recomputed',
+    'research-artifact-c14n-v1', v_content_hash, 'raw', 'legacy_stored',
     p_attempt_id
   WHERE NOT EXISTS (
     SELECT 1 FROM research_artifact_version existing
@@ -100,6 +102,7 @@ FROM research_task_attempt a
 WHERE a.status = 'succeeded'
   AND a.result IS NOT NULL
   AND a.result <> '{}'::jsonb
+  AND research_artifact_content_hash_valid(a.result_hash)
   AND NOT EXISTS (
     SELECT 1 FROM research_result_artifact ra
     WHERE ra.workspace_id = a.workspace_id

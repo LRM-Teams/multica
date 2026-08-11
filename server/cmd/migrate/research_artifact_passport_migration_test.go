@@ -1745,8 +1745,9 @@ func TestResearchResultArtifactBackfill329RoundTrips(t *testing.T) {
 	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
 	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
 	up322, _ := readMigrationPair(t, "322_research_artifact_policy_ledger_guards")
+	up323, _ := readMigrationPair(t, "323_research_artifact_integrity_guards")
 	up329, down329 := readMigrationPair(t, "329_research_result_artifact_backfill")
-	for _, upSQL := range []string{up318, up319, up320, up321, up322, up329} {
+	for _, upSQL := range []string{up318, up319, up320, up321, up322, up323, up329} {
 		if _, err = conn.Exec(ctx, upSQL); err != nil {
 			t.Fatalf("apply migration: %v", err)
 		}
@@ -1757,6 +1758,23 @@ func TestResearchResultArtifactBackfill329RoundTrips(t *testing.T) {
 		SELECT count(*)::int FROM research_result_artifact WHERE attempt_id = $1::uuid
 	`, attemptID).Scan(&resultCount); err != nil || resultCount != 1 {
 		t.Fatalf("result artifact count=%d err=%v", resultCount, err)
+	}
+	var storedHash, artifactHash, hashOrigin string
+	if err = conn.QueryRow(ctx, `
+		SELECT a.result_hash, ra.content_hash, av.hash_origin
+		FROM research_task_attempt a
+		JOIN research_result_artifact ra
+		  ON ra.workspace_id = a.workspace_id
+		 AND ra.session_id = a.session_id
+		 AND ra.attempt_id = a.id
+		JOIN research_artifact_version av
+		  ON av.workspace_id = ra.workspace_id
+		 AND av.session_id = ra.session_id
+		 AND av.artifact_id = ra.id
+		 AND av.version = 1
+		WHERE a.id = $1::uuid
+	`, attemptID).Scan(&storedHash, &artifactHash, &hashOrigin); err != nil || artifactHash != storedHash || hashOrigin != "legacy_stored" {
+		t.Fatalf("result artifact hash=%q stored attempt hash=%q origin=%q err=%v", artifactHash, storedHash, hashOrigin, err)
 	}
 
 	if _, err = conn.Exec(ctx, down329); err != nil {

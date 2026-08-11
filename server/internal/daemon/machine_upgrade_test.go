@@ -387,4 +387,32 @@ func TestMachineUpgradeBusyHandoffNeverForcesUnownedBackend(t *testing.T) {
 	}
 }
 
+func TestMachineUpgradeHandoffFailsClosedWhenClaimIsStillInFlightAtDeadline(t *testing.T) {
+	now := time.Unix(1_700_000_020, 0)
+	d := &Daemon{
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		machineUpgradeNow: func() time.Time { return now },
+		machineUpgradeWait: func(_ context.Context, delay time.Duration) error {
+			now = now.Add(delay)
+			return nil
+		},
+	}
+	if !d.tryEnterClaim() {
+		t.Fatal("pre-barrier claim was not admitted")
+	}
+
+	err := d.beginMachineUpgradeHandoff(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "claim") {
+		t.Fatalf("handoff error = %v, want an in-flight claim failure", err)
+	}
+	if d.pauseClaims {
+		t.Fatal("failed handoff left the claim barrier set")
+	}
+	if d.claimsInFlight != 1 {
+		t.Fatalf("claimsInFlight = %d, want the admitted claim to remain accounted", d.claimsInFlight)
+	}
+
+	d.exitClaim()
+}
+
 func stringPtr(value string) *string { return &value }

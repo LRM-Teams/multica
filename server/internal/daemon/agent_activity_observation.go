@@ -126,7 +126,7 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Idle")
 	case AgentObservationRuntimeDiagnostic:
-		projection.preserveCurrent = true
+		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
 		entry, err = activitySystemEntry("Runtime warning", "Provider reported a warning")
 	case AgentObservationMessageBodyAccepted:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "message_received"

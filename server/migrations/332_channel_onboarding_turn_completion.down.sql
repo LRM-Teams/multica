@@ -9,7 +9,7 @@ BEGIN
   WHERE status = 'completed';
 
   IF completed_count > 0 THEN
-    RAISE EXCEPTION 'migration 328 down cannot proceed: % completed channel onboarding row(s) have no truthful representation in the older status contract', completed_count;
+    RAISE EXCEPTION 'migration 332 down cannot proceed: % completed channel onboarding row(s) have no truthful representation in the older status contract', completed_count;
   END IF;
 END $$;
 

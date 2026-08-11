@@ -10,10 +10,12 @@ import (
 )
 
 const listRunningUnattendedResearchSessions = `-- name: ListRunningUnattendedResearchSessions :many
-SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at FROM research_session
-WHERE status = 'running'
-  AND unattended_enabled = true
-ORDER BY updated_at ASC
+SELECT rs.id, rs.workspace_id, rs.fleet_id, rs.created_by, rs.title, rs.goal, rs.status, rs.current_stage, rs.project_id, rs.channel_id, rs.handoff_summary, rs.created_at, rs.updated_at, rs.depth_tier, rs.product_round, rs.product_round_budget, rs.unattended_enabled, rs.max_open_branches, rs.single_line_confirmed, rs.unattended_auto_steps, rs.last_user_activity_at
+FROM research_session AS rs
+JOIN workspace AS w ON w.id = rs.workspace_id
+WHERE rs.status = 'running'
+  AND rs.unattended_enabled = true
+ORDER BY rs.updated_at ASC
 LIMIT $1
 `
 

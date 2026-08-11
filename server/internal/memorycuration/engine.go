@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/memorypolicy"
 )
 
 type Engine struct {
@@ -336,12 +338,6 @@ func runStageAgent(opts Options, root agentRoot, stage Stage, localFiles map[str
 	})
 }
 
-const (
-	durableMemorySoftLimit = int64(16 * 1024)
-	stateMemorySoftLimit   = int64(8 * 1024)
-	dailyMemorySoftLimit   = int64(32 * 1024)
-)
-
 func detectOversizedMemoryFiles(root string) []OversizedMemoryFile {
 	var oversized []OversizedMemoryFile
 	for _, scopeDir := range []string{"memory", "users", "projects", "channels"} {
@@ -355,16 +351,8 @@ func detectOversizedMemoryFiles(root string) []OversizedMemoryFile {
 				return nil
 			}
 			rel = filepath.ToSlash(rel)
-			limit := int64(0)
-			base := filepath.Base(rel)
-			switch {
-			case strings.HasPrefix(rel, "memory/daily/") && strings.HasSuffix(base, ".md"):
-				limit = dailyMemorySoftLimit
-			case base == "STATE.md":
-				limit = stateMemorySoftLimit
-			case base == "MEMORY.md", base == "USER.md", base == "RELATIONSHIP.md", base == "DECISIONS.md", base == "CONTEXT.md", base == "REVIEW.md":
-				limit = durableMemorySoftLimit
-			default:
+			limit := memorypolicy.SoftFileLimit(rel)
+			if limit == 0 {
 				return nil
 			}
 			info, infoErr := entry.Info()
@@ -401,33 +389,44 @@ func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResul
 		"sync_queue/memory-candidates.jsonl",
 		"sync_queue/skill-candidates.jsonl",
 	)
-	out, err := runStageAgent(opts, root, StageAgentSelfReview, files, evidence, nil)
-	if err != nil {
-		return ar, err
-	}
+	out, stageErr := runStageAgent(opts, root, StageAgentSelfReview, files, evidence, nil)
 	after, err := snapshotSelfReviewFiles(root.Root)
 	if err != nil {
 		return ar, err
 	}
 	changed := changedSelfReviewFiles(before, after)
+	reject := func(cause error) (AgentRunResult, error) {
+		if rollbackErr := restoreSelfReviewFiles(root.Root, before, changed); rollbackErr != nil {
+			return ar, fmt.Errorf("%w; restore self-review files: %v", cause, rollbackErr)
+		}
+		return ar, cause
+	}
+	if stageErr != nil {
+		return reject(stageErr)
+	}
 	var report selfReviewStageOutput
 	if !extractJSONObject(out.Content, &report) {
-		return ar, fmt.Errorf("agent self-review returned invalid JSON contract")
+		return reject(fmt.Errorf("agent self-review returned invalid JSON contract"))
 	}
 	declared := make(map[string]struct{}, len(report.LocalWrites))
 	for _, write := range report.LocalWrites {
 		rel, ok := normalizeSelfReviewPath(write.File)
 		if !ok {
-			return ar, fmt.Errorf("agent self-review declared disallowed local write %q", write.File)
+			return reject(fmt.Errorf("agent self-review declared disallowed local write %q", write.File))
 		}
 		if _, ok := changed[rel]; !ok {
-			return ar, fmt.Errorf("agent self-review declared local write %q but the file did not change", rel)
+			return reject(fmt.Errorf("agent self-review declared local write %q but the file did not change", rel))
 		}
 		declared[rel] = struct{}{}
 	}
 	for rel := range changed {
 		if _, ok := declared[rel]; !ok {
-			return ar, fmt.Errorf("agent self-review changed %q without reporting it in local_writes", rel)
+			return reject(fmt.Errorf("agent self-review changed %q without reporting it in local_writes", rel))
+		}
+		if snap, exists := after[rel]; exists {
+			if err := memorypolicy.ValidateFile(rel, snap.Content); err != nil {
+				return reject(fmt.Errorf("agent self-review wrote non-concise memory: %w", err))
+			}
 		}
 		if strings.HasPrefix(rel, "memory/daily/") {
 			ar.DailyFilesWritten++
@@ -454,8 +453,14 @@ type selfReviewStageOutput struct {
 	} `json:"candidates"`
 }
 
-func snapshotSelfReviewFiles(root string) (map[string][sha256.Size]byte, error) {
-	out := make(map[string][sha256.Size]byte)
+type selfReviewFileSnapshot struct {
+	Hash    [sha256.Size]byte
+	Content []byte
+	Mode    os.FileMode
+}
+
+func snapshotSelfReviewFiles(root string) (map[string]selfReviewFileSnapshot, error) {
+	out := make(map[string]selfReviewFileSnapshot)
 	for _, top := range []string{"memory", "users", "projects", "channels", "notes", "sync_queue", filepath.Join("skills", "drafts")} {
 		scanRoot := filepath.Join(root, top)
 		err := filepath.WalkDir(scanRoot, func(path string, entry os.DirEntry, walkErr error) error {
@@ -486,7 +491,11 @@ func snapshotSelfReviewFiles(root string) (map[string][sha256.Size]byte, error) 
 			if readErr != nil {
 				return readErr
 			}
-			out[rel] = sha256.Sum256(data)
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				return infoErr
+			}
+			out[rel] = selfReviewFileSnapshot{Hash: sha256.Sum256(data), Content: append([]byte(nil), data...), Mode: info.Mode().Perm()}
 			return nil
 		})
 		if err != nil && !os.IsNotExist(err) {
@@ -525,10 +534,10 @@ func normalizeSelfReviewPath(path string) (string, bool) {
 	}
 }
 
-func changedSelfReviewFiles(before, after map[string][sha256.Size]byte) map[string]struct{} {
+func changedSelfReviewFiles(before, after map[string]selfReviewFileSnapshot) map[string]struct{} {
 	changed := make(map[string]struct{})
-	for rel, hash := range after {
-		if old, ok := before[rel]; !ok || old != hash {
+	for rel, snap := range after {
+		if old, ok := before[rel]; !ok || old.Hash != snap.Hash {
 			changed[rel] = struct{}{}
 		}
 	}
@@ -538,6 +547,31 @@ func changedSelfReviewFiles(before, after map[string][sha256.Size]byte) map[stri
 		}
 	}
 	return changed
+}
+
+func restoreSelfReviewFiles(root string, before map[string]selfReviewFileSnapshot, changed map[string]struct{}) error {
+	paths := make([]string, 0, len(changed))
+	for rel := range changed {
+		paths = append(paths, rel)
+	}
+	sort.Strings(paths)
+	for _, rel := range paths {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		snap, existed := before[rel]
+		if !existed {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, snap.Content, snap.Mode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResult, error) {

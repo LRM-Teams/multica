@@ -65,8 +65,16 @@ Multica 的记忆分成两层：
 7. 当前事件、配额、阻塞和会过期的状态，写对应 `STATE.md`，并记录日期、状态和可用的 TTL / 到期时间。
 8. 不确定、冲突、敏感或不知道应该放在哪里的内容，先写 `memory/REVIEW.md`。
 9. 猜测、一次性执行噪音、原始聊天记录、秘密以及只对当前回复有用的内容，不写入长期记忆。
-10. 实质收工（改代码、定方案、推进 issue、非琐碎排查）时，给当天 `memory/daily/YYYY-MM-DD.md` **追加几行**流水；纯打招呼 / 贴纸 / 测试废话不写 Daily。偏好和对接仍热路径直写正式文件，不要只堆在 Daily。
+10. 实质收工（改代码、定方案、推进 issue、非琐碎排查）时，给当天 `memory/daily/YYYY-MM-DD.md` 追加 **1–3 条**短索引；纯打招呼 / 贴纸 / 测试废话不写 Daily。偏好和对接仍热路径直写正式文件，不要只堆在 Daily。
 11. **处理完可复用的问题后，agent 自己记住**：根因/修法/命令若下次还会用到，收工同轮写入项目 `MEMORY.md`/`DECISIONS.md` 或 agent `memory/MEMORY.md`/`notes/*`，不要等任何人再说「记住」；一次性噪音只留 Daily。是否可复用由 agent 判断。
+
+#### 凝练预算
+
+- Daily 是事件索引，不是工作报告：每次实质收工最多 3 条，每条最多 240 个字符，只保留结果、耐久决定、下一风险或动作。
+- 正式记忆一条只写一个稳定事实或规则，每条最多 180 个字符；同主题优先合并或替换，不追加近似副本。
+- 步骤、命令输出、文件清单、聊天复述和证据原文留在源任务；记忆只保留必要的短引用。
+- 文件软上限：Daily、agent `MEMORY/STATE`、`USER`、project `STATE` 为 2 KiB；`RELATIONSHIP` 为 1 KiB；project `MEMORY` 为 4 KiB、`DECISIONS` 为 3 KiB、channel `CONTEXT` 为 1.5 KiB；冲突出口 `REVIEW` 为 8 KiB。
+- self-review 改写后必须满足单条和文件上限；失败时整次本地改动回滚。压缩靠去重、合并和引用来源，不能直接截断。
 
 ### 3.2 热路径 vs 冷路径（避免短任务卡顿）
 
@@ -191,7 +199,7 @@ Codex 只获得当前相关作用域目录的可写权限；Pi 和其他 provide
 
 后台整理遵循以下方向：
 
-1. L1 使用当天证据更新当天的 `memory/daily/YYYY-MM-DD.md`（补 agent 漏记的流水）。
+1. L1 使用当天证据更新当天的 `memory/daily/YYYY-MM-DD.md`（补 agent 漏记的短索引，不重述过程）。
 2. L2 agent self-review 从 Daily 将稳定内容整理进正式文件（含 `USER.md` / `RELATIONSHIP.md` / `MEMORY.md` 等），将不确定或可能共享的内容放进 `REVIEW.md` / proposal。
 3. team curation 只消费主动提交的候选，进行去重、合并、冲突判断和公共知识审核。
 4. collective wording 不再自动证明 workspace/team 作用域；必须有更广受众或公共制度的明确证据。

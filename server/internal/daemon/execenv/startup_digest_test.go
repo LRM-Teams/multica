@@ -196,7 +196,7 @@ func TestStartupKernelKeepsHotPathsAndExcludesTurnWorkflow(t *testing.T) {
 		"ordinary Issue DAGs",
 		"multica <command> --help",
 		"## Output utility contract",
-		"### Memory Operating Guide (v0.11)",
+		"### Memory Operating Guide (v0.12)",
 		"users/<member-id>/USER.md",
 		"re-reading or stat-checking that exact path",
 		"memory write alone permanently changed Agent identity",

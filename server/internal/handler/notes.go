@@ -953,8 +953,10 @@ func noteAISelectedEditPrompt(prompt string) bool {
 }
 
 func noteAIPageEditPrompt(prompt string) bool {
-	return strings.Contains(prompt, "You are editing a user's Notion-style note page.") &&
-		strings.Contains(prompt, "Full current page Markdown:")
+	hasPageMarker := strings.Contains(prompt, "Full current page Markdown:")
+	hasLegacyIntro := strings.Contains(prompt, "You are editing a user's Notion-style note page.")
+	hasAssistantIntro := strings.Contains(prompt, "You are the in-note AI assistant for a user's Notion-style note page.")
+	return hasPageMarker && (hasLegacyIntro || hasAssistantIntro)
 }
 
 func repairSelectedNoteAIEditResult(content, prompt string) (*NoteAIEditResult, error) {
@@ -1054,6 +1056,7 @@ const (
 	noteAIRepairSelectedOutput = "repaired_selected_output"
 	noteAIRepairPageOutput     = "repaired_page_output"
 	noteAIFailureInvalidOutput = "invalid_structured_output"
+	noteAIFailureEmptyOutput   = "empty_structured_output"
 	noteAIFailureAssistant     = "assistant_failure"
 	noteAIFailureTask          = "task_failure"
 	noteAIFailureTaskError     = "task_error"
@@ -1104,7 +1107,10 @@ func noteAIStatusFromTask(status string, terminalOutcome pgtype.Text, startedAt 
 		if result != nil {
 			return "completed"
 		}
-		return "completed"
+		// Terminal task with neither a parseable edit nor an explicit failure —
+		// e.g. completion output was dropped before chat_message persistence.
+		// Surface failed so the UI does not treat an empty completed job as success.
+		return "failed"
 	default:
 		return status
 	}
@@ -1123,10 +1129,11 @@ func (h *Handler) noteAIJobResponse(ctx context.Context, workspaceID, userID, jo
 	var createdAt pgtype.Timestamptz
 	var pageID, agentID, chatSessionID, taskID pgtype.UUID
 	var prompt string
+	var completionOutput pgtype.Text
 	err := h.DB.QueryRow(ctx, `
 SELECT j.id, j.workspace_id, j.page_id, j.agent_id, j.chat_session_id, j.task_id, j.created_at, j.prompt,
        e.status, e.terminal_outcome, e.started_at, e.updated_at, e.error, e.failure_reason,
-       m.content, m.failure_reason
+       m.content, m.failure_reason, e.result->>'output'
 FROM note_ai_job j
 JOIN agent_inbox_event e ON e.id = j.task_id
 LEFT JOIN LATERAL (
@@ -1141,7 +1148,7 @@ LEFT JOIN LATERAL (
 WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspaceID, userID).Scan(
 		&jobID, &workspaceID, &pageID, &agentID, &chatSessionID, &taskID, &createdAt, &prompt,
 		&taskStatus, &terminalOutcome, &taskStartedAt, &taskUpdatedAt, &taskError, &taskFailure,
-		&assistantContent, &assistantFailure,
+		&assistantContent, &assistantFailure, &completionOutput,
 	)
 	if err != nil {
 		return resp, err
@@ -1150,8 +1157,16 @@ WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspace
 	var failure *string
 	var failureCode *string
 	var repairCode *string
+	outputContent := ""
 	if assistantContent.Valid && strings.TrimSpace(assistantContent.String) != "" {
-		outcome, err := parseNoteAIEditResultWithRepairOutcome(assistantContent.String, prompt)
+		outputContent = assistantContent.String
+	} else if completionOutput.Valid && strings.TrimSpace(completionOutput.String) != "" {
+		// Fallback when completion output was stored on the inbox event but never
+		// persisted as an assistant chat_message (historical unwrap-drop bug).
+		outputContent = completionOutput.String
+	}
+	if strings.TrimSpace(outputContent) != "" {
+		outcome, err := parseNoteAIEditResultWithRepairOutcome(outputContent, prompt)
 		if err != nil {
 			value := "agent returned invalid structured note AI edit"
 			code := noteAIFailureInvalidOutput
@@ -1196,6 +1211,11 @@ WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspace
 	case taskError.Valid && taskError.String != "":
 		value := taskError.String
 		code := noteAIFailureTaskError
+		failure = &value
+		failureCode = &code
+	case result == nil && failure == nil && taskStatus == "acked":
+		value := "agent returned no note AI edit"
+		code := noteAIFailureEmptyOutput
 		failure = &value
 		failureCode = &code
 	}

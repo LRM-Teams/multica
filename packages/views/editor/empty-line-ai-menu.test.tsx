@@ -77,6 +77,7 @@ vi.mock("../i18n", () => ({
           hint: "hint",
           instruction_placeholder: "Edit with AI",
           send: "Send",
+          cancel: "Cancel",
           result_title: "AI draft",
           action_insert: "Insert action",
           action_replace_selection: "Replace block action",
@@ -204,6 +205,28 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("does not dismiss or abort while loading when pointerdown is outside", () => {
+    const onClose = vi.fn();
+    render(
+      <div>
+        <button type="button" data-testid="outside">
+          outside
+        </button>
+        <EmptyLineAiMenu
+          editor={makeEditor()}
+          state={makeState({ status: "loading", instruction: "rewrite", jobStatus: "running" })}
+          onChange={vi.fn()}
+          onEditPageWithAI={vi.fn()}
+          onClose={onClose}
+        />
+      </div>,
+    );
+
+    fireEvent.pointerDown(screen.getByTestId("outside"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
   it("applies the structured replace-page action and suggested title", () => {
     const editor = makeEditor();
     const onClose = vi.fn();
@@ -328,5 +351,64 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
 
     fireEvent.pointerDown(screen.getByTestId("empty-line-ai-menu"));
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("swaps the send control for a pulsing stop button while loading, without status copy", () => {
+    const onChange = vi.fn();
+    render(
+      <EmptyLineAiMenu
+        editor={makeEditor()}
+        state={makeState({ status: "loading", instruction: "rewrite this page", jobStatus: "running" })}
+        onChange={onChange}
+        onEditPageWithAI={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI is editing…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+
+    const stop = screen.getByRole("button", { name: "Cancel" });
+    expect(stop).toHaveAttribute("aria-busy", "true");
+    expect(stop.className).toContain("animate-pulse");
+    expect(screen.getByTestId("empty-line-ai-menu").style.width).toContain("720px");
+  });
+
+  it("aborts the in-flight edit when the stop button is clicked", () => {
+    const onChange = vi.fn();
+    let capturedSignal: AbortSignal | undefined;
+    const onEditPageWithAI = vi.fn((_request, options?: { signal?: AbortSignal }) => {
+      capturedSignal = options?.signal;
+      return new Promise(() => undefined);
+    });
+
+    const { rerender } = render(
+      <EmptyLineAiMenu
+        editor={makeEditor()}
+        state={makeState({ instruction: "rewrite this page" })}
+        onChange={onChange}
+        onEditPageWithAI={onEditPageWithAI}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ status: "loading" }));
+
+    const loadingState = onChange.mock.calls[0][0] as EmptyLineAiState;
+    rerender(
+      <EmptyLineAiMenu
+        editor={makeEditor()}
+        state={loadingState}
+        onChange={onChange}
+        onEditPageWithAI={onEditPageWithAI}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ status: "loading", cancelling: true }));
+    expect(capturedSignal?.aborted).toBe(true);
   });
 });

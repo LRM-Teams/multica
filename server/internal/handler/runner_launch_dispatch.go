@@ -31,28 +31,42 @@ func (h *Handler) dispatchPendingRunnerLaunches(ctx context.Context, identity da
 	if err != nil {
 		return fmt.Errorf("list pending Workspace Runner launches: %w", err)
 	}
-	defer rows.Close()
+	type pendingLaunch struct {
+		dispatchID string
+		agentID    string
+		runtimeID  string
+	}
+	launches := make([]pendingLaunch, 0, maxAgentStartIntentBatch)
 	for rows.Next() {
 		var dispatchID, agentID, runtimeID string
 		if err := rows.Scan(&dispatchID, &agentID, &runtimeID); err != nil {
+			rows.Close()
 			return fmt.Errorf("scan pending Workspace Runner launch: %w", err)
 		}
 		if _, ok := allowed[runtimeID]; !ok {
 			continue
 		}
+		launches = append(launches, pendingLaunch{dispatchID: dispatchID, agentID: agentID, runtimeID: runtimeID})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, launch := range launches {
 		if !h.DaemonHub.NotifyWorkspaceRunner(identity.DaemonID, identity.WorkspaceID, protocol.EventDaemonAgentStart, protocol.WorkspaceRunnerAgentStartPayload{
-			AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: dispatchID,
+			AgentID: launch.agentID, RuntimeID: launch.runtimeID, StartDispatchID: launch.dispatchID,
 		}) {
 			return fmt.Errorf("current Workspace Runner unavailable while dispatching launch")
 		}
 		if _, err := h.DB.Exec(ctx, `
 			UPDATE agent_start_intent
 			SET dispatch_attempts = dispatch_attempts + 1, last_dispatched_at = now(), updated_at = now()
-			WHERE start_dispatch_id::text = $1 AND status = 'pending'`, dispatchID); err != nil {
+			WHERE start_dispatch_id::text = $1 AND status = 'pending'`, launch.dispatchID); err != nil {
 			return fmt.Errorf("record Workspace Runner launch dispatch: %w", err)
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // dispatchPendingRunnerStops projects a durable lifecycle request onto the

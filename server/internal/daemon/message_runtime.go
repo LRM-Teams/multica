@@ -149,7 +149,7 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		return err
 	}
 	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
-		d.emitMessageLifecycleActivity(agentID, runtimeID, protocol.ActivityKindWorking, "starting", "Starting")
+		d.emitMessageLifecycleActivity(agentID, runtimeID)
 	}, func() {
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
 		d.emitMessageReceivedActivity(agentID, runtimeID, preparedMessages)
@@ -276,38 +276,17 @@ func convertResidentMessageMemoriesForEnv(memories []protocol.AgentMessageMemory
 	return result
 }
 
-func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID, activityKind, detailKind, narrative string) {
-	if activityKind == protocol.ActivityKindWorking && detailKind == "starting" {
-		d.mu.Lock()
-		workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-		d.mu.Unlock()
-		runner, err := d.ensureWorkspaceRunner(workspaceID)
-		if err == nil && runner.activity != nil {
-			if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
-				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeWorking, Data: AgentRuntimeObservationData{RuntimeID: runtimeID}, At: time.Now().UTC()}); err != nil && d.logger != nil {
-					d.logger.Debug("workspace Runner Message lifecycle Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
-				}
-			}
-		}
-		return
-	}
+func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID string) {
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
-	if workspaceID == "" {
-		return
-	}
-	entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-	if err != nil {
-		return
-	}
 	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil || runner.activity == nil {
-		return
-	}
-	producer := runner.activity
-	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner Message lifecycle Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+	if err == nil && runner.activity != nil {
+		if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
+			if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting, Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC()}); err != nil && d.logger != nil {
+				d.logger.Debug("workspace Runner Message lifecycle Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+			}
+		}
 	}
 }
 
@@ -327,9 +306,7 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 	case agent.MessageError:
 		observationKind = AgentObservationError
 	case agent.MessageToolUse:
-		if message.CallID != "" {
-			observationKind = AgentObservationRuntimeTool
-		}
+		observationKind = AgentObservationRuntimeTool
 	}
 	if observationKind != "" {
 		d.mu.Lock()
@@ -338,11 +315,11 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 		runner, err := d.ensureWorkspaceRunner(workspaceID)
 		if err == nil && runner.activity != nil {
 			if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
-				var data AgentObservationData = AgentRuntimeObservationData{RuntimeID: runtimeID}
+				var data AgentObservationData = AgentRuntimeStageObservationData{RuntimeID: runtimeID}
 				if observationKind == AgentObservationError {
 					data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
 				} else if observationKind == AgentObservationRuntimeTool {
-					data = AgentRuntimeObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID}
+					data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID}
 				}
 				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: observationKind, Data: data, At: time.Now().UTC()}); err != nil && d.logger != nil {
 					d.logger.Debug("workspace Runner runtime Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
@@ -350,49 +327,6 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 			}
 		}
 		return
-	}
-	activityKind, detailKind, narrative := "", "", ""
-	switch message.Type {
-	case agent.MessageThinking:
-		// Thinking is a B-chain state (snapshot activity_kind), not an
-		// A-chain timeline event. An empty narrative keeps it from emitting
-		// an entry, so bursts of thinking never flood the activity timeline
-		// (raft-aligned; see workspace_runner_activity).
-		activityKind = protocol.ActivityKindThinking
-	case agent.MessageToolUse:
-		activityKind = protocol.ActivityKindWorking
-		detailKind, narrative = toolActivityFact(message.Tool, message.Input)
-	case agent.MessageCompactionStarted:
-		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "compacting_context", "Compacting context"
-	case agent.MessageCompactionFinished:
-		activityKind, detailKind, narrative = protocol.ActivityKindOnline, "idle", "Context compaction finished"
-	case agent.MessageError:
-		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(message.Content)
-	}
-	if activityKind == "" {
-		return
-	}
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
-	if workspaceID == "" {
-		return
-	}
-	var entries []protocol.AgentActivityEntry
-	if narrative != "" {
-		entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
-		if err != nil {
-			return
-		}
-		entries = []protocol.AgentActivityEntry{entry}
-	}
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil || runner.activity == nil {
-		return
-	}
-	producer := runner.activity
-	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner resident runtime Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
 }
 
@@ -406,16 +340,15 @@ func (d *Daemon) emitResidentRuntimeDiagnostic(agentID, runtimeID string, messag
 	if workspaceID == "" {
 		return
 	}
-	entry, err := activitySystemEntry(message.Title, message.Content)
-	if err != nil {
-		return
-	}
 	runner, err := d.ensureWorkspaceRunner(workspaceID)
 	if err != nil || runner.activity == nil {
 		return
 	}
-	producer := runner.activity
-	if err := producer.PublishEntryForManagedAgent(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
+	launch, found := runner.processes.Snapshot(agentID)
+	if !found || launch.RuntimeID != runtimeID {
+		return
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeDiagnostic, Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC()}); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner runtime diagnostic Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
 }
@@ -435,7 +368,7 @@ func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, tu
 	if !found || launch.RuntimeID != runtimeID {
 		return
 	}
-	kind, data := AgentObservationRuntimeIdle, AgentObservationData(AgentRuntimeObservationData{RuntimeID: runtimeID})
+	kind, data := AgentObservationRuntimeIdle, AgentObservationData(AgentRuntimeStageObservationData{RuntimeID: runtimeID})
 	if turnErr != nil {
 		kind, data = AgentObservationError, AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_turn_failed"}
 	}

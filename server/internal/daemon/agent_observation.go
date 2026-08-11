@@ -15,6 +15,7 @@ const (
 	AgentObservationAttached            AgentObservationKind = "attached"
 	AgentObservationLaunchAccepted      AgentObservationKind = "launch_accepted"
 	AgentObservationRuntimeReady        AgentObservationKind = "runtime_ready"
+	AgentObservationRuntimeStarting     AgentObservationKind = "runtime_starting"
 	AgentObservationRuntimeWorking      AgentObservationKind = "runtime_working"
 	AgentObservationRuntimeThinking     AgentObservationKind = "runtime_thinking"
 	AgentObservationRuntimeTool         AgentObservationKind = "runtime_tool"
@@ -62,6 +63,17 @@ type AgentRuntimeObservationData struct {
 }
 
 func (AgentRuntimeObservationData) agentObservationData() {}
+
+// AgentRuntimeStageObservationData is a provider stage fact emitted before a
+// concrete process/generation identity is available at this adapter seam.
+// It cannot be used for RuntimeReady, which remains strictly process-fenced.
+type AgentRuntimeStageObservationData struct {
+	RuntimeID  string
+	ToolName   string
+	ToolCallID string
+}
+
+func (AgentRuntimeStageObservationData) agentObservationData() {}
 
 type AgentMessageAcceptanceObservationData struct {
 	RuntimeID    string
@@ -140,7 +152,7 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationRuntimeReady, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
+	case AgentObservationRuntimeReady, AgentObservationRuntimeWorking:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}
@@ -151,14 +163,24 @@ func (observation AgentObservation) Validate() error {
 		if err := data.validateRuntimeIdentity(); err != nil {
 			return err
 		}
-		if observation.Kind == AgentObservationRuntimeTool {
-			if strings.TrimSpace(data.ToolName) == "" || strings.TrimSpace(data.ToolCallID) == "" {
-				return errors.New("Agent tool observation tool name and call identity are required")
-			}
-			return nil
-		}
 		if strings.TrimSpace(data.ToolName) != "" || strings.TrimSpace(data.ToolCallID) != "" {
 			return errors.New("non-tool Agent Runtime observation cannot carry tool identity")
+		}
+		return nil
+
+	case AgentObservationRuntimeStarting, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
+		if err := observation.validateLaunchID(); err != nil {
+			return err
+		}
+		data, ok := observation.Data.(AgentRuntimeStageObservationData)
+		if !ok || strings.TrimSpace(data.RuntimeID) == "" {
+			return observationDataTypeError(observation.Kind)
+		}
+		if observation.Kind == AgentObservationRuntimeTool && strings.TrimSpace(data.ToolName) == "" {
+			return errors.New("Agent tool observation tool name is required")
+		}
+		if observation.Kind != AgentObservationRuntimeTool && (strings.TrimSpace(data.ToolName) != "" || strings.TrimSpace(data.ToolCallID) != "") {
+			return errors.New("non-tool Agent Runtime stage observation cannot carry tool identity")
 		}
 		return nil
 

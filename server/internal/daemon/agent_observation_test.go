@@ -12,15 +12,14 @@ func TestAgentObservationValidationMatrix(t *testing.T) {
 	attachment := AgentAttachmentObservationData{RuntimeID: "runtime-1", AttachmentGeneration: 2}
 	launch := AgentLaunchObservationData{RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"}
 	runtime := AgentRuntimeObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", RuntimeGeneration: 3}
-	tool := runtime
-	tool.ToolName = "read_file"
-	tool.ToolCallID = "call-1"
+	stage := AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}
+	tool := AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "read_file", ToolCallID: "call-1"}
 	valid := []AgentObservation{
 		{AgentID: "agent-1", Kind: AgentObservationAttached, Data: attachment, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationLaunchAccepted, Data: launch, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeReady, Data: runtime, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at},
-		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeThinking, Data: runtime, At: at},
+		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeThinking, Data: stage, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationRuntimeTool, Data: tool, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at},
 		{AgentID: "agent-1", LaunchID: "launch-1", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at},
@@ -59,6 +58,7 @@ func TestAgentObservationTypesExcludePresentationAndSensitiveFields(t *testing.T
 		reflect.TypeOf(AgentAttachmentObservationData{}),
 		reflect.TypeOf(AgentLaunchObservationData{}),
 		reflect.TypeOf(AgentRuntimeObservationData{}),
+		reflect.TypeOf(AgentRuntimeStageObservationData{}),
 		reflect.TypeOf(AgentMessageAcceptanceObservationData{}),
 		reflect.TypeOf(AgentFreshnessHoldObservationData{}),
 		reflect.TypeOf(AgentErrorObservationData{}),

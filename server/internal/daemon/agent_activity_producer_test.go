@@ -15,9 +15,8 @@ import (
 func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
 	runtime := AgentRuntimeObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", RuntimeGeneration: 3}
-	tool := runtime
-	tool.ToolName = "exec_command"
-	tool.ToolCallID = "call-1"
+	stage := AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}
+	tool := AgentRuntimeStageObservationData{RuntimeID: "runtime-1", ToolName: "exec_command", ToolCallID: "call-1"}
 	tests := []struct {
 		name        string
 		observation AgentObservation
@@ -31,12 +30,12 @@ func TestAgentActivityProducerObserveGoldenMappings(t *testing.T) {
 		{name: "launch accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationLaunchAccepted, Data: AgentLaunchObservationData{RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"}, At: at}, kind: protocol.ActivityKindOnline, detail: "launch_accepted", entryKind: "narrative", entryText: "Launch accepted"},
 		{name: "runtime ready", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeReady, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Online", processID: "process-1"},
 		{name: "runtime working", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeWorking, Data: runtime, At: at}, kind: protocol.ActivityKindWorking, entryKind: "narrative", entryText: "Working", processID: "process-1"},
-		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: runtime, At: at}, kind: protocol.ActivityKindThinking, entryKind: "narrative", entryText: "Thinking", processID: "process-1"},
-		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "Running tool", processID: "process-1"},
-		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: runtime, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
-		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Context compaction finished"},
-		{name: "runtime idle", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Idle"},
-		{name: "runtime diagnostic", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeDiagnostic, Data: runtime, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "Provider reported a warning"},
+		{name: "runtime thinking", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking, Data: stage, At: at}, kind: protocol.ActivityKindThinking, entryKind: "narrative", entryText: "Thinking"},
+		{name: "runtime tool", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeTool, Data: tool, At: at}, kind: protocol.ActivityKindWorking, detail: "running_command", entryKind: "narrative", entryText: "Running tool"},
+		{name: "runtime compacting", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacting, Data: stage, At: at}, kind: protocol.ActivityKindWorking, detail: "compacting_context", entryKind: "narrative", entryText: "Compacting context"},
+		{name: "runtime compacted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeCompacted, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Context compaction finished"},
+		{name: "runtime idle", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeIdle, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "narrative", entryText: "Idle"},
+		{name: "runtime diagnostic", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeDiagnostic, Data: stage, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "Provider reported a warning"},
 		{name: "message accepted", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: "runtime-1", HandoffID: "handoff-1", MessageCount: 2}, At: at}, kind: protocol.ActivityKindWorking, detail: "message_received", entryKind: "narrative", entryText: "Message received"},
 		{name: "freshness held", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: "runtime-1", Target: "channel:one", NewMessageCount: 2, ReasonCode: "local_pending"}, At: at}, kind: protocol.ActivityKindOnline, detail: "idle", entryKind: "system", entryText: "2 newer messages available — review then resend"},
 		{name: "error", observation: AgentObservation{AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationError, Data: AgentErrorObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", ReasonCode: "provider_failed"}, At: at}, kind: protocol.ActivityKindError, detail: "runtime_error", entryKind: "narrative", entryText: "Agent execution failed", processID: "process-1"},
@@ -76,7 +75,7 @@ func TestAgentActivityProducerObserveUsesDeterministicFactIdentity(t *testing.T)
 	at := time.Date(2026, time.August, 11, 1, 0, 0, 0, time.UTC)
 	observation := AgentObservation{
 		AgentID: "agent-a", LaunchID: "launch-a", Kind: AgentObservationRuntimeThinking,
-		Data: AgentRuntimeObservationData{RuntimeID: "runtime-1", ProcessInstanceID: "process-1", RuntimeGeneration: 1}, At: at,
+		Data: AgentRuntimeStageObservationData{RuntimeID: "runtime-1"}, At: at,
 	}
 	var sent []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer("daemon-1", func() time.Time { return at }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
@@ -272,11 +271,17 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) {
 		activities = append(activities, payload)
 	})
-	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-1"
-	installTestRunnerActivity(t, d, "workspace-1", producer)
+	runner := installTestRunnerActivity(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-1", StartDispatchID: "dispatch-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.SetManaged(protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: ack.LaunchID}); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, message := range []agent.Message{
 		{Type: agent.MessageThinking},
@@ -301,22 +306,22 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	if err := json.Unmarshal(activities[1].Entries[0].Body, &toolBody); err != nil {
 		t.Fatal(err)
 	}
-	if toolBody.Text != "ls -la" || toolBody.ActivityKind != protocol.ActivityKindWorking || toolBody.DetailKind != "running_command" {
-		t.Fatalf("tool-use Activity body = %+v, want the actual command as narrative text", toolBody)
+	if toolBody.Text != "Running tool" || toolBody.ActivityKind != protocol.ActivityKindWorking || toolBody.DetailKind != "running_command" {
+		t.Fatalf("tool-use Activity body = %+v", toolBody)
 	}
 	var diagnostic protocol.AgentActivitySystemBody
 	if err := json.Unmarshal(activities[2].Entries[0].Body, &diagnostic); err != nil {
 		t.Fatal(err)
 	}
-	if activities[2].Entries[0].Kind != "system" || diagnostic.Title != "Codex config warning" || diagnostic.Text != "User namespaces are unavailable" {
+	if activities[2].Entries[0].Kind != "system" || diagnostic.Title != "Runtime warning" || diagnostic.Text != "Provider reported a warning" {
 		t.Fatalf("runtime diagnostic Activity = kind:%q body:%+v", activities[2].Entries[0].Kind, diagnostic)
 	}
 	var errorBody protocol.AgentActivityNarrativeBody
 	if err := json.Unmarshal(activities[len(activities)-1].Entries[0].Body, &errorBody); err != nil {
 		t.Fatal(err)
 	}
-	if errorBody.Text != "sensitive provider text" || errorBody.ActivityKind != protocol.ActivityKindError || errorBody.DetailKind != "runtime_error" {
-		t.Fatalf("runtime error Activity = %+v, want provider reason", errorBody)
+	if errorBody.Text != "Agent execution failed" || errorBody.ActivityKind != protocol.ActivityKindError || errorBody.DetailKind != "runtime_error" {
+		t.Fatalf("runtime error Activity = %+v, want producer-owned safe narrative", errorBody)
 	}
 }
 

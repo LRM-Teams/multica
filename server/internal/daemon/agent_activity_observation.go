@@ -103,17 +103,19 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		data := observation.Data.(AgentRuntimeObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindOnline, "idle", data.ProcessInstanceID
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Online")
+	case AgentObservationRuntimeStarting:
+		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "starting"
+		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Starting")
 	case AgentObservationRuntimeWorking:
 		data := observation.Data.(AgentRuntimeObservationData)
 		projection.activityKind, projection.processInstanceID = protocol.ActivityKindWorking, data.ProcessInstanceID
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Working")
 	case AgentObservationRuntimeThinking:
-		data := observation.Data.(AgentRuntimeObservationData)
-		projection.activityKind, projection.processInstanceID = protocol.ActivityKindThinking, data.ProcessInstanceID
+		projection.activityKind = protocol.ActivityKindThinking
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Thinking")
 	case AgentObservationRuntimeTool:
-		data := observation.Data.(AgentRuntimeObservationData)
-		projection.activityKind, projection.processInstanceID = protocol.ActivityKindWorking, data.ProcessInstanceID
+		data := observation.Data.(AgentRuntimeStageObservationData)
+		projection.activityKind = protocol.ActivityKindWorking
 		projection.detailKind, _ = toolActivityFact(data.ToolName, nil)
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Running tool")
 	case AgentObservationRuntimeCompacting:
@@ -126,7 +128,7 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Idle")
 	case AgentObservationRuntimeDiagnostic:
-		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
+		projection.activityKind, projection.detailKind, projection.preserveCurrent = protocol.ActivityKindOnline, "idle", true
 		entry, err = activitySystemEntry("Runtime warning", "Provider reported a warning")
 	case AgentObservationMessageBodyAccepted:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "message_received"

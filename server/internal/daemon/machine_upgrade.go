@@ -362,6 +362,12 @@ func (d *Daemon) beginMachineUpgradeHandoff(ctx context.Context) error {
 		succeeded = true
 		return nil
 	}
+	d.claimMu.Lock()
+	claimsInFlight := d.claimsInFlight
+	d.claimMu.Unlock()
+	if claimsInFlight > 0 {
+		return fmt.Errorf("claim handoff deadline elapsed with %d claims still in flight", claimsInFlight)
+	}
 	if err := d.forceTerminateManagedAgentProcesses(); err != nil {
 		return fmt.Errorf("force handoff: %w", err)
 	}

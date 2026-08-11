@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { EmptyLineAiMenu, type EmptyLineAiState } from "./empty-line-ai-menu";
 
+const toastSuccessMock = vi.hoisted(() => vi.fn());
 const mockInsertContentAt = vi.fn((_pos: number, _content: string) => undefined);
 const mockRun = vi.fn();
 
@@ -48,6 +49,12 @@ function makeState(overrides: Partial<EmptyLineAiState> = {}): EmptyLineAiState 
   };
 }
 
+vi.mock("sonner", () => ({
+  toast: {
+    success: toastSuccessMock,
+  },
+}));
+
 vi.mock("@floating-ui/dom", () => ({
   computePosition: vi.fn(async () => ({ x: 0, y: 0 })),
   offset: vi.fn(),
@@ -79,6 +86,8 @@ vi.mock("../i18n", () => ({
           proposed_page: "AI proposal",
           patch_target_missing: "Patch target missing",
           invalid_markdown: "Invalid markdown",
+          applied: "AI edit applied",
+          undo: "Undo",
           status_starting: "Starting",
           status_queued: "Queued",
           status_dispatched: "Dispatched",
@@ -100,6 +109,7 @@ vi.mock("../i18n", () => ({
 
 describe("EmptyLineAiMenu dismiss interactions", () => {
   beforeEach(() => {
+    toastSuccessMock.mockClear();
     mockInsertContentAt.mockClear();
     mockRun.mockClear();
   });
@@ -216,7 +226,45 @@ describe("EmptyLineAiMenu dismiss interactions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Replace" }));
     expect(editor.commands.setContent).toHaveBeenCalledWith("# Revised page");
     expect(onApplyTitle).toHaveBeenCalledWith("Revised title");
+    expect(toastSuccessMock).toHaveBeenCalledWith(
+      "AI edit applied",
+      expect.objectContaining({
+        action: expect.objectContaining({ label: "Undo" }),
+      }),
+    );
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("undoes an applied AI edit and title suggestion from the toast action", () => {
+    const editor = makeEditor();
+    const onApplyTitle = vi.fn();
+    render(
+      <EmptyLineAiMenu
+        editor={editor}
+        state={makeState({
+          status: "review",
+          result: {
+            action: "replace_page",
+            markdown: "# Revised page",
+            title: "Revised title",
+          },
+        })}
+        onChange={vi.fn()}
+        onEditPageWithAI={vi.fn()}
+        onApplyTitle={onApplyTitle}
+        currentTitle="Old title"
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    const [, options] = toastSuccessMock.mock.calls[0] as [string, { action: { onClick: () => void } }];
+    options.action.onClick();
+
+    expect(editor.commands.setContent).toHaveBeenNthCalledWith(1, "# Revised page");
+    expect(editor.commands.setContent).toHaveBeenNthCalledWith(2, "Old paragraph\n\nKeep this");
+    expect(onApplyTitle).toHaveBeenNthCalledWith(1, "Revised title");
+    expect(onApplyTitle).toHaveBeenNthCalledWith(2, "Old title");
   });
 
   it("applies structured patch by replacing only the target fragment", () => {

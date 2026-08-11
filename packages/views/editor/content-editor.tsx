@@ -99,6 +99,8 @@ interface ContentEditorProps {
   onEditPageWithAI?: PageEditAIAction;
   /** Applies an AI-suggested title only after the user confirms an edit. */
   onApplyAITitle?: (title: string) => void;
+  /** Current title snapshot used to undo AI title suggestions. */
+  currentAITitle?: string;
   /** Show the placeholder on the currently focused empty text block. */
   showEmptyLinePlaceholder?: boolean;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
@@ -225,6 +227,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onOptimizeSelection,
       onEditPageWithAI,
       onApplyAITitle,
+      currentAITitle,
       showEmptyLinePlaceholder = false,
       submitOnEnter = false,
       currentIssueId,
@@ -658,7 +661,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           <EditorContent className="flex flex-1 flex-col" editor={editor} />
           <TableControls editor={editor} rootRef={wrapperRef} />
           {showBubbleMenu && (
-            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} onApplyTitle={onApplyAITitle} />
+            <EditorBubbleMenu editor={editor} currentIssueId={currentIssueId} onOptimizeSelection={onOptimizeSelection} onApplyTitle={onApplyAITitle} currentTitle={currentAITitle} />
           )}
           {emptyLineAiState && onEditPageWithAI && (
             <EmptyLineAiMenu
@@ -667,6 +670,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
               onChange={setEmptyLineAiState}
               onEditPageWithAI={onEditPageWithAI}
               onApplyTitle={onApplyAITitle}
+              currentTitle={currentAITitle}
               onClose={() => {
                 setEmptyLineAiState(null);
                 editor.commands.focus();

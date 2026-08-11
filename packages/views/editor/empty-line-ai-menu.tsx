@@ -11,6 +11,11 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUp, Loader2, Sparkles } from "lucide-react";
 import { useT } from "../i18n";
 import { NoteAIDiffPreview } from "./note-ai-diff";
+import {
+  captureNoteAIUndoSnapshot,
+  setEditorMarkdown,
+  showNoteAIApplyUndoToast,
+} from "./utils/note-ai-apply-undo";
 
 const PAGE_AI_CONTEXT_CHARS = 2400;
 const PROMPT_MAX_HEIGHT_PX = 96;
@@ -53,14 +58,6 @@ function replaceRangeWithMarkdown(editor: Editor, from: number, to: number, mark
     tr.replaceRange(safeFrom, safeTo, slice);
     return true;
   }).run();
-}
-
-function replaceDocumentWithMarkdown(editor: Editor, markdown: string) {
-  if (editor.markdown) {
-    editor.commands.setContent(markdown, { contentType: "markdown" });
-    return;
-  }
-  editor.commands.setContent(markdown);
 }
 
 function patchedDocumentMarkdown(current: string, result: NoteAIEditResult) {
@@ -122,6 +119,7 @@ function EmptyLineAiMenu({
   onChange,
   onEditPageWithAI,
   onApplyTitle,
+  currentTitle,
   onClose,
 }: {
   editor: Editor;
@@ -129,6 +127,7 @@ function EmptyLineAiMenu({
   onChange: (state: EmptyLineAiState) => void;
   onEditPageWithAI: PageEditAIAction;
   onApplyTitle?: (title: string) => void;
+  currentTitle?: string;
   onClose: () => void;
 }) {
   const { t } = useT("editor");
@@ -251,52 +250,60 @@ function EmptyLineAiMenu({
     abortRef.current?.abort();
   };
 
-  const applyTitle = (result: NoteAIEditResult) => {
+  const finishApply = (result: NoteAIEditResult, snapshot: ReturnType<typeof captureNoteAIUndoSnapshot>) => {
     if (result.title) onApplyTitle?.(result.title);
+    showNoteAIApplyUndoToast({
+      editor,
+      snapshot,
+      onApplyTitle,
+      message: t(($) => $.page_ai.applied),
+      undoLabel: t(($) => $.page_ai.undo),
+    });
+    close();
   };
 
   const insertHere = () => {
     const result = state.result;
     if (!result) return;
+    const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     try {
       replaceRangeWithMarkdown(editor, state.from, state.to, result.markdown);
     } catch {
       showErrorToast(t(($) => $.page_ai.invalid_markdown));
       return;
     }
-    applyTitle(result);
-    close();
+    finishApply(result, snapshot);
   };
 
   const replacePage = () => {
     const result = state.result;
     if (!result) return;
+    const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     try {
-      replaceDocumentWithMarkdown(editor, result.markdown);
+      setEditorMarkdown(editor, result.markdown);
     } catch {
       showErrorToast(t(($) => $.page_ai.invalid_markdown));
       return;
     }
-    applyTitle(result);
-    close();
+    finishApply(result, snapshot);
   };
 
   const applyPatch = () => {
     const result = state.result;
     if (!result) return;
-    const patched = patchedDocumentMarkdown(editor.getMarkdown(), result);
+    const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
+    const patched = patchedDocumentMarkdown(snapshot.markdown, result);
     if (!patched) {
       showErrorToast(t(($) => $.page_ai.patch_target_missing));
       return;
     }
     try {
-      replaceDocumentWithMarkdown(editor, patched);
+      setEditorMarkdown(editor, patched);
     } catch {
       showErrorToast(t(($) => $.page_ai.invalid_markdown));
       return;
     }
-    applyTitle(result);
-    close();
+    finishApply(result, snapshot);
   };
 
   const copyPatch = () => {

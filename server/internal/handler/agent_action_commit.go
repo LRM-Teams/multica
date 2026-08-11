@@ -230,12 +230,16 @@ func (h *Handler) publishAgentActionMessageUpdated(ctx context.Context, wsUUID, 
 // ensureAgentDurableStartIntent records the first-start request in the same
 // transaction as the Agent identity. A later dispatcher may retry delivery,
 // but it must always use this original start_dispatch_id.
-func ensureAgentDurableStartIntent(ctx context.Context, tx pgx.Tx, wsUUID, agentID, runtimeID pgtype.UUID) (pgtype.UUID, error) {
+type agentStartIntentQueryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func ensureAgentDurableStartIntent(ctx context.Context, queryer agentStartIntentQueryer, wsUUID, agentID, runtimeID pgtype.UUID) (pgtype.UUID, error) {
 	var dispatchID pgtype.UUID
 	if !runtimeID.Valid {
 		return dispatchID, nil
 	}
-	err := tx.QueryRow(ctx, `
+	err := queryer.QueryRow(ctx, `
 		INSERT INTO agent_start_intent (
 			start_dispatch_id, agent_id, workspace_id, runtime_id, status
 		) VALUES (gen_random_uuid(), $1, $2, $3, 'pending')
@@ -248,19 +252,13 @@ func ensureAgentDurableStartIntent(ctx context.Context, tx pgx.Tx, wsUUID, agent
 	return dispatchID, nil
 }
 
-// createAgentManagedCommit gives ordinary human creation the same atomic
-// provisioning boundary as a committed Proposal: identity, the system
-// #general membership (and its trigger-owned onboarding fact), and the durable
-// start intent either all commit or all roll back.
-func (h *Handler) createAgentManagedCommit(ctx context.Context, wsUUID pgtype.UUID, params db.CreateAgentParams, displayName string) (db.Agent, error) {
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return db.Agent{}, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	qtx := h.Queries.WithTx(tx)
+// createAgentManagedTx is the single transaction-scoped Agent creation path:
+// identity, #general membership, and first-start intent are one atomic unit.
+// Callers may add role-specific records in the same transaction, but must not
+// duplicate the generic Agent creation steps.
+func (h *Handler) createAgentManagedTx(ctx context.Context, tx pgx.Tx, qtx *db.Queries, wsUUID pgtype.UUID, params db.CreateAgentParams, displayName string) (db.Agent, error) {
 	var created db.Agent
+	var err error
 	if strings.TrimSpace(params.Name) != "" {
 		params.DisplayName = firstNonEmpty(params.DisplayName, params.Name)
 		created, err = qtx.CreateAgent(ctx, params)
@@ -274,6 +272,22 @@ func (h *Handler) createAgentManagedCommit(ctx context.Context, wsUUID pgtype.UU
 		return db.Agent{}, err
 	}
 	if _, err := ensureAgentDurableStartIntent(ctx, tx, wsUUID, created.ID, params.RuntimeID); err != nil {
+		return db.Agent{}, err
+	}
+	return created, nil
+}
+
+// createAgentManagedCommit gives ordinary human creation and committed
+// Proposals the shared atomic Agent creation boundary.
+func (h *Handler) createAgentManagedCommit(ctx context.Context, wsUUID pgtype.UUID, params db.CreateAgentParams, displayName string) (db.Agent, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.Agent{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	created, err := h.createAgentManagedTx(ctx, tx, h.Queries.WithTx(tx), wsUUID, params, displayName)
+	if err != nil {
 		return db.Agent{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

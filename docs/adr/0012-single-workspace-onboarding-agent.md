@@ -13,11 +13,12 @@ the protocol. This deliberately differs from allowing every Agent to recruit:
 it reduces prompt surface and prevents accidental or adversarial fleet growth
 while preserving Owner/Admin direct human creation.
 
-The Workspace Owner creates Wendy during the mandatory post-Workspace setup,
-after connecting a Computer and choosing a Runtime and Model. Wendy creation,
-the binding, core hiring skill, `#general` membership, and versioned welcome
-messages commit atomically. Archiving preserves the binding and disables the
-capability; only the sole Workspace Owner may archive or restore Wendy.
+The Workspace Owner creates an ordinary Agent during the mandatory
+post-Workspace setup, after connecting a Computer and choosing a Runtime and
+Model. Generic Agent creation, the onboarding binding, core hiring skill, and
+versioned welcome messages commit atomically. `Wendy` is only its initial
+display name. Archiving preserves the binding and disables the capability;
+only the sole Workspace Owner may archive or restore the bound Agent.
 
 ## Consequences
 
@@ -27,5 +28,6 @@ capability; only the sole Workspace Owner may archive or restore Wendy.
   shared visibility does not grant ordinary Agents hiring knowledge or power.
 - A Hiring Proposal and its created Agent commit in one transaction and the
   proposal is consumable exactly once.
-- Workspaces without a bound candidate require Owner setup. A migration may
-  bind one unambiguous legacy Wendy, but never guesses among multiple candidates.
+- Workspaces without a bound Agent require Owner setup. Runtime code never
+  infers onboarding identity from a name; the one-time migration 302 may have
+  populated the structural binding for existing data before this decision.

@@ -30,13 +30,11 @@ GROUP BY classification
 ORDER BY classification;
 ```
 
-Migration 302 binds only `one_candidate` Workspaces. It does not update Agent
-rows, so Runtime and Model remain unchanged. `already_bound`, `no_candidate`,
-and `multiple_candidates` Workspaces are untouched. Owners of `no_candidate`
-Workspaces complete the explicit Wendy Setup screen. Resolve every
-`multiple_candidates` Workspace manually before retrying Setup; the API returns
-`409 onboarding_agent_ambiguous` and does not choose, merge, archive, or delete.
+Migration 302 was the one-time data cut that bound only `one_candidate`
+Workspaces. It did not update Agent rows, so Runtime and Model remained
+unchanged. Current Setup does not repeat that name-based migration logic:
+`Wendy` is only a default display name, and an unbound Workspace always creates
+a new ordinary Agent before storing `workspace.onboarding_agent_id`.
 
-After deployment, rerun the query. `one_candidate` should be zero. A nonzero
-`multiple_candidates` count is an explicit repair queue, not a migration error
-to work around by guessing.
+After the historical migration deployment, rerun the query only as a data
+audit. Name matches no longer drive runtime identity, authorization, or Setup.

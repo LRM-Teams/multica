@@ -930,6 +930,53 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 	testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 }
 
+func TestDaemonRegister_DaemonTokenRuntimeOwnedByComputerBindingUser(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "test-daemon-binding-owner-" + uuid.NewString()
+	if _, err := testPool.Exec(ctx, `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, 'test-token-hash', TRUE)
+	`, daemonID, testWorkspaceID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE workspace_id = $1 AND daemon_id = $2`, testWorkspaceID, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1`, daemonID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id = $1`, daemonID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    daemonID,
+		"device_name":  "binding-owner-device",
+		"runtimes": []map[string]any{
+			{"name": "binding-owner-runtime", "type": "codex", "version": "1.0.0", "status": "online"},
+		},
+	}, testWorkspaceID, daemonID)
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var ownerID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT owner_id::text FROM agent_runtime
+		WHERE workspace_id = $1 AND daemon_id = $2 AND provider = 'codex'
+	`, testWorkspaceID, daemonID).Scan(&ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if ownerID != testUserID {
+		t.Fatalf("runtime owner_id = %q, want Computer binding user %q", ownerID, testUserID)
+	}
+}
+
 func TestDaemonRegister_ReplacesReminderCapabilityOnReconnect(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -1,6 +1,7 @@
 export { paths, isGlobalPath } from "./paths";
 export type { WorkspacePaths } from "./paths";
 export {
+  appendQueryParams,
   encodeMembersSelection,
   membersPathWithSelection,
   membersSelectionQueryKey,

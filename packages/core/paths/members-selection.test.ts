@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  appendQueryParams,
   encodeMembersSelection,
   membersPathWithSelection,
   membersSelectionQueryKey,
@@ -56,5 +57,15 @@ describe("members selection query", () => {
     expect(
       membersPathWithSelection("/acme/members?member=user:old", "user", "u2"),
     ).toBe("/acme/members?member=user%3Au2");
+  });
+
+  it("appends extra query params without a second ?", () => {
+    const base = membersPathWithSelection("/acme/members", "agent", "a1");
+    expect(appendQueryParams(base, { run: "run-9" })).toBe(
+      "/acme/members?member=agent%3Aa1&run=run-9",
+    );
+    expect(appendQueryParams("/acme/members", { tab: "honor" })).toBe(
+      "/acme/members?tab=honor",
+    );
   });
 });

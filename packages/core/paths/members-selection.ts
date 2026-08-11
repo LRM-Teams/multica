@@ -90,3 +90,22 @@ export function membersPathWithSelection(
   const base = membersBasePath.split("?")[0] ?? membersBasePath;
   return `${base}?${q}`;
 }
+
+/**
+ * Append `key=value` pairs to a path that may already contain `?…`.
+ * Use this instead of `` `${path}?foo=` `` when `path` can be a Members
+ * selection URL (`/members?member=agent:…`).
+ */
+export function appendQueryParams(
+  path: string,
+  params: Record<string, string>,
+): string {
+  const entries = Object.entries(params).filter(
+    ([, v]) => v != null && v !== "",
+  );
+  if (entries.length === 0) return path;
+  const qs = entries
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&");
+  return path.includes("?") ? `${path}&${qs}` : `${path}?${qs}`;
+}

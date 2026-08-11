@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { agentHonorOptions } from "@multica/core/agents";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { appendQueryParams, useWorkspacePaths } from "@multica/core/paths";
 import type { AgentHonorDashboard } from "@multica/core/types";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import { Progress } from "@multica/ui/components/ui/progress";
@@ -61,7 +61,7 @@ export function AgentHonorPanelSection({
         </h3>
         {!isPending && honor ? (
           <AppLink
-            href={`${paths.agentDetail(agentId)}?tab=honor`}
+            href={appendQueryParams(paths.agentDetail(agentId), { tab: "honor" })}
             className="inline-flex items-center gap-0.5 text-[11px] font-medium text-primary hover:underline"
             data-testid="agent-honor-view-all"
           >

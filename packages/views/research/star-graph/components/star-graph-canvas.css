@@ -6,6 +6,11 @@
   background-color: #08121d;
   background-image: radial-gradient(#20354b 1px, transparent 1px);
   background-size: 22px 22px;
+  /* LRM-1208 token indirection: merge-gradient stops live in CSS (hex is
+     allowed in stylesheets) and are referenced from the SVG <stop> via var().
+     No bare #rrggbb in production TS/TSX. */
+  --sg-merge-gradient-from: #48d3e4;
+  --sg-merge-gradient-to: #58d69a;
 }
 .sg-canvas-root::after {
   content: "";

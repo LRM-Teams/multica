@@ -384,6 +384,22 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       });
   }, [sessionInterrupt, sessionId, qc, wsId, t]);
 
+  // LRM-1208 / rules-of-hooks: hooks must be unconditional. The D5 goal-history
+  // view reads server data that only exists after the early returns below, so
+  // we compute it HERE (before any `return`) with safe optional access. When
+  // data is absent the value is unused, but the hook order stays stable.
+  const goalVersion =
+    data?.run?.run?.goal_version ?? data?.run?.contract?.goal_version ?? null;
+  const goalHistory = useMemo(
+    () =>
+      buildGoalVersionHistory({
+        currentGoal: data?.session?.goal ?? "",
+        currentVersion: goalVersion,
+        messages: data?.messages ?? [],
+      }),
+    [data?.session?.goal, goalVersion, data?.messages],
+  );
+
   // LRM-799: never keep a permanent skeleton on failure — only while loading.
   // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
   // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
@@ -477,17 +493,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   ];
 
   const postUser = (body: string) => send.mutate(body);
-
-  const goalVersion = data.run?.run?.goal_version ?? data.run?.contract?.goal_version ?? null;
-  const goalHistory = useMemo(
-    () =>
-      buildGoalVersionHistory({
-        currentGoal: session.goal,
-        currentVersion: goalVersion,
-        messages,
-      }),
-    [session.goal, goalVersion, messages],
-  );
 
   const onClarificationOption = (
     question: ResearchClarificationQuestion,

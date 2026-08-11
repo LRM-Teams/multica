@@ -723,6 +723,11 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		PolicyWatermark:  policyWatermark,
 		ManifestFiltered: true,
 	}
+	if gateSnapshot, found, gateErr := loadManifestGateSnapshotPool(ctx, s.pool, workspaceID, sessionID, attemptID); gateErr != nil {
+		return RunSnapshot{}, gateErr
+	} else if found {
+		filtered.Gate = gateSnapshot
+	}
 	return filtered, nil
 }
 

@@ -78,6 +78,17 @@ func (ArtifactPolicy) CanReadNormal(
 	return true, ""
 }
 
+// EvaluationPrivateKind reports entity kinds that belong to the evaluation compartment
+// and must never appear in ordinary task-execution manifests or subject context.
+func (ArtifactPolicy) EvaluationPrivateKind(kind ArtifactEntityKind) bool {
+	switch kind {
+	case ArtifactKindStageEvaluation:
+		return true
+	default:
+		return false
+	}
+}
+
 // LegacyAdmissionAllowed implements legacy-v1-v5-compat-v1 ordinary-task admission.
 func (ArtifactPolicy) LegacyAdmissionAllowed(
 	kind ArtifactEntityKind,

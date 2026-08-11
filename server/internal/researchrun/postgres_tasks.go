@@ -289,6 +289,13 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		if err = verifyShadowEquivalenceTx(ctx, tx, workspaceID, in.SessionID, stateVersion); err != nil {
 			return Attempt{}, RunEvent{}, err
 		}
+		gateSnapshot, gateErr := s.EvaluateGate(ctx, in.SessionID)
+		if gateErr != nil {
+			return Attempt{}, RunEvent{}, gateErr
+		}
+		if err = persistManifestGateSnapshotTx(ctx, tx, workspaceID, in.SessionID, manifestPlan.ManifestID, gateSnapshot); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
 	}
 	var encodedRequest []byte
 	var requestHash string

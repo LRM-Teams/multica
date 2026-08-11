@@ -297,7 +297,7 @@ func sanitizeCredentialProxyMessageSendResponse(response map[string]any) {
 	// These fields are intentionally only Proxy↔Server implementation state.
 	// A tool gets canonical messages and held context, never a cursor-like
 	// boundary, internal transport record, or reusable identity.
-	for _, key := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId", "freshnessResolution"} {
+	for _, key := range []string{"seenUpToSeq", "latestSeq", "transport_id", "producerFactId", "freshnessResolution", MessageCoverageReceiptField} {
 		delete(response, key)
 	}
 	sanitizeCredentialProxyMessageValue(response)

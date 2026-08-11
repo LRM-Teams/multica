@@ -336,17 +336,33 @@ func TestRunAgentMessageCheckOutputFailureLeavesCoverageUncommitted(t *testing.T
 
 func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	var body map[string]any
+	commitCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/credential-proxy/messages/read" {
+		switch r.URL.Path {
+		case "/credential-proxy/messages/read":
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"action": "message_read", "target": "#one", "messages": []any{}, "limit": 2,
+				"_coverage_receipt": "receipt-read-1",
+			})
+		case "/credential-proxy/messages/coverage/commit":
+			commitCalls++
+			if got := r.Header.Get(daemon.AgentProxyTokenHeader); got != "map_read-token" {
+				t.Errorf("coverage commit token = %q", got)
+			}
+			var commit map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&commit); err != nil {
+				t.Errorf("decode coverage commit: %v", err)
+			}
+			if commit["receipt_id"] != "receipt-read-1" || len(commit) != 1 {
+				t.Errorf("coverage commit = %#v", commit)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"action": "message_read", "target": "#one", "messages": []any{}, "limit": 2,
-		})
 	}))
 	defer srv.Close()
 	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
@@ -356,6 +372,12 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
 	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+	tokenFile := filepath.Join(t.TempDir(), "agent-proxy.token")
+	if err := os.WriteFile(tokenFile, []byte("map_read-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemon.AgentProxyURLEnv, srv.URL)
+	t.Setenv(daemon.AgentProxyTokenFileEnv, tokenFile)
 
 	cmd := newMessageReadCmd()
 	_ = cmd.Flags().Set("target", "#one")
@@ -392,6 +414,43 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	var printed map[string]any
 	if err := json.Unmarshal(output, &printed); err != nil || printed["target"] != "#one" {
 		t.Fatalf("output = %q, want JSON read result (err=%v)", output, err)
+	}
+	if _, leaked := printed[messageCoverageReceiptField]; leaked {
+		t.Fatalf("message read output leaked internal receipt: %#v", printed)
+	}
+	if commitCalls != 1 {
+		t.Fatalf("read coverage commit calls = %d, want 1", commitCalls)
+	}
+}
+
+func TestRunAgentMessageReadOutputFailureLeavesCoverageUncommitted(t *testing.T) {
+	commitCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/credential-proxy/messages/read":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"action": "message_read", "target": "#one", "messages": []any{},
+				"_coverage_receipt": "receipt-read-1",
+			})
+		case "/credential-proxy/messages/coverage/commit":
+			commitCalls++
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	setMessageCredentialProxyEnv(t, srv.URL)
+
+	cmd := newMessageReadCmd()
+	_ = cmd.Flags().Set("target", "#one")
+	outputErr := errors.New("stdout closed")
+	err := runAgentMessageReadWithWriter(cmd, messageCoverageFailingWriter{err: outputErr})
+	if !errors.Is(err, outputErr) {
+		t.Fatalf("message read error = %v, want output failure", err)
+	}
+	if commitCalls != 0 {
+		t.Fatalf("read output failure attempted %d coverage commits", commitCalls)
 	}
 }
 

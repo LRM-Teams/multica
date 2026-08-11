@@ -467,21 +467,29 @@ func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, err
 	}, nil
 }
 
-// RecordMessageRead consumes successful canonical history through one target's
-// local Context Boundary. The server response is the authority for both the
-// canonical target and its maximum returned sequence; the Agent never supplies
-// a cursor directly.
-func (p *CredentialProxy) RecordMessageRead(agentID, target string, throughSeq int64) error {
+// PrepareMessageRead stages only server-validated canonical bodies. The
+// boundary remains unchanged until the CLI writes the visible JSON and commits
+// the returned local receipt.
+func (p *CredentialProxy) PrepareMessageRead(
+	agentID, target string,
+	throughSeq int64,
+	messages []protocol.AgentMessageProjection,
+) (CoverageOffer, error) {
 	if p == nil || p.daemon == nil {
-		return errors.New("Credential Proxy is unavailable")
+		return CoverageOffer{}, errors.New("Credential Proxy is unavailable")
 	}
 	p.daemon.messageCoordinatorMu.RLock()
 	defer p.daemon.messageCoordinatorMu.RUnlock()
 	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
 	if coordinator == nil {
-		return errors.New("Message coordinator is unavailable")
+		return CoverageOffer{}, errors.New("Message coordinator is unavailable")
 	}
-	return coordinator.MarkRead(target, throughSeq)
+	if throughSeq == 0 && len(messages) == 0 {
+		return CoverageOffer{Messages: []protocol.AgentMessageProjection{}}, nil
+	}
+	return coordinator.PrepareCoverage(CoverageRequest{
+		Kind: CoverageRead, Target: target, ThroughSeq: throughSeq, Messages: messages,
+	})
 }
 
 func (p *CredentialProxy) messageCoordinator(agentID string) (*MessageCoordinator, error) {

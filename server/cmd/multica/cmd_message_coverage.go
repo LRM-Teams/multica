@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	messageCoverageReceiptField = "_coverage_receipt"
-	messageCoverageCommitPath   = "/credential-proxy/messages/coverage/commit"
+	messageCoverageReceiptField = daemon.MessageCoverageReceiptField
+	messageCoverageCommitPath   = daemon.MessageCoverageCommitPath
 	maxMessageCoverageResponse  = 1 << 20
 	maxAgentProxyTokenBytes     = 4 << 10
 )

@@ -10,7 +10,10 @@ import (
 	"github.com/multica-ai/multica/server/internal/diagnosticlog"
 )
 
-const credentialProxyCoverageCommitPath = "/credential-proxy/messages/coverage/commit"
+const (
+	MessageCoverageReceiptField = "_coverage_receipt"
+	MessageCoverageCommitPath   = "/credential-proxy/messages/coverage/commit"
+)
 
 var (
 	ErrCoverageReceiptScope = errors.New("coverage receipt belongs to another Inbox")

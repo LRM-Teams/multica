@@ -54,7 +54,7 @@ func prepareCoverageCommitCredential(t *testing.T, d *Daemon, key InboxKey, runt
 
 func coverageCommitRequest(t *testing.T, handler http.Handler, token, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodPost, credentialProxyCoverageCommitPath, strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, MessageCoverageCommitPath, strings.NewReader(body))
 	request.Header.Set(AgentProxyTokenHeader, token)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -70,7 +70,7 @@ func TestCredentialProxyCoverageCommitUsesOpaqueReceiptScopeAndIsIdempotent(t *t
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := httptest.NewRequest(http.MethodPost, credentialProxyCoverageCommitPath, bytes.NewReader(body))
+		request := httptest.NewRequest(http.MethodPost, MessageCoverageCommitPath, bytes.NewReader(body))
 		request.Header.Set(AgentProxyTokenHeader, token)
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
@@ -142,7 +142,7 @@ func TestCredentialProxyCoverageCommitRouteIsMachineLocalOnly(t *testing.T) {
 
 func TestCredentialProxyCoverageCommitDoesNotReturnMessageOrBoundaryData(t *testing.T) {
 	d, _, offer, token := coverageCommitTestDaemon(t)
-	request := httptest.NewRequest(http.MethodPost, credentialProxyCoverageCommitPath, strings.NewReader(`{"receipt_id":"`+offer.ReceiptID+`"}`))
+	request := httptest.NewRequest(http.MethodPost, MessageCoverageCommitPath, strings.NewReader(`{"receipt_id":"`+offer.ReceiptID+`"}`))
 	request.Header.Set(AgentProxyTokenHeader, token)
 	recorder := httptest.NewRecorder()
 	d.credentialProxyMessageCoverageCommitHandler().ServeHTTP(recorder, request)

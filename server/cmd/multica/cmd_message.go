@@ -340,6 +340,10 @@ func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
 }
 
 func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
+	return runAgentMessageReadWithWriter(cmd, os.Stdout)
+}
+
+func runAgentMessageReadWithWriter(cmd *cobra.Command, output io.Writer) error {
 	target, err := requiredMessageTarget(cmd)
 	if err != nil {
 		return err
@@ -359,15 +363,24 @@ func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
 			body[strings.ReplaceAll(name, "-", "_")] = value
 		}
 	}
-	var out map[string]any
-	if err := postAgentMessageReadThroughCredentialProxy(body, &out); err != nil {
+	if err := outputAgentMessageReadThroughCredentialProxy(body, output); err != nil {
 		return fmt.Errorf("read messages: %w", err)
 	}
-	return printAgentTransportOutput(out)
+	return nil
 }
 
-func postAgentMessageReadThroughCredentialProxy(body map[string]any, out any) error {
-	return postAgentMessageThroughCredentialProxy("read", body, out)
+func outputAgentMessageReadThroughCredentialProxy(body map[string]any, output io.Writer) error {
+	var result map[string]any
+	return withAgentMessageCredentialProxyResponse("read", body, func(ctx context.Context, responseBody io.Reader) error {
+		return consumeMessageCoverageResponse(
+			ctx,
+			responseBody,
+			output,
+			&result,
+			func(w io.Writer) error { return cli.PrintJSON(w, result) },
+			commitLocalMessageCoverage,
+		)
+	})
 }
 
 func postAgentMessageSendThroughCredentialProxy(body map[string]any, out any) error {
@@ -375,6 +388,19 @@ func postAgentMessageSendThroughCredentialProxy(body map[string]any, out any) er
 }
 
 func postAgentMessageThroughCredentialProxy(operation string, body map[string]any, out any) error {
+	return withAgentMessageCredentialProxyResponse(operation, body, func(_ context.Context, responseBody io.Reader) error {
+		if err := json.NewDecoder(io.LimitReader(responseBody, 1<<20)).Decode(out); err != nil {
+			return fmt.Errorf("decode message %s response: %w", operation, err)
+		}
+		return nil
+	})
+}
+
+func withAgentMessageCredentialProxyResponse(
+	operation string,
+	body map[string]any,
+	consume func(context.Context, io.Reader) error,
+) error {
 	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
 	workspaceID := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACE_ID"))
 	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
@@ -412,10 +438,10 @@ func postAgentMessageThroughCredentialProxy(operation string, body map[string]an
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 		return fmt.Errorf("message %s through Credential Proxy: %s: %s", operation, response.Status, strings.TrimSpace(string(detail)))
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
-		return fmt.Errorf("decode message %s response: %w", operation, err)
+	if consume == nil {
+		return fmt.Errorf("message %s response consumer is unavailable", operation)
 	}
-	return nil
+	return consume(ctx, response.Body)
 }
 
 func runAgentMessageSearch(cmd *cobra.Command, args []string) error {

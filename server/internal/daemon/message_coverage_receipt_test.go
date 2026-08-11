@@ -252,6 +252,15 @@ func TestMessageCoordinatorReadCoverageCanPrepareWhileRecoveryIsIncomplete(t *te
 	if offer.ReceiptID == "" || !reflect.DeepEqual(offer.Messages, []protocol.AgentMessageProjection{message}) {
 		t.Fatalf("read coverage offer = %+v", offer)
 	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
+		t.Fatalf("read prepare advanced boundary to %d", got)
+	}
+	if err := coordinator.CommitCoverage(offer.ReceiptID); err != nil {
+		t.Fatalf("commit read coverage: %v", err)
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 4 {
+		t.Fatalf("committed read boundary = %d, want 4", got)
+	}
 }
 
 func TestMessageCoordinatorBlockedCoverageCommitDoesNotBlockDelivery(t *testing.T) {

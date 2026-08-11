@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,6 +328,7 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	completeCoordinatorRecovery(t, coordinator)
 
 	var upstreamBody map[string]any
+	invalidCoverageResponse := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/agent/messages/read" {
 			http.NotFound(w, r)
@@ -350,9 +352,15 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
 			t.Errorf("decode upstream request: %v", err)
 		}
+		messageTarget := "channel:one"
+		if invalidCoverageResponse {
+			messageTarget = "channel:other"
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"action": "message_read", "target": "#one", "context_target": "channel:one",
-			"seenUpToSeq": 7, "messages": []any{}, "limit": 2,
+			"seenUpToSeq": 7, "messages": []any{map[string]any{
+				"id": "message-7", "target": messageTarget, "seq": 7, "content": "read context",
+			}}, "limit": 2,
 		})
 	}))
 	defer upstream.Close()
@@ -394,12 +402,82 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 	if _, found := response["seenUpToSeq"]; found {
 		t.Fatalf("proxy leaked Context Boundary sequence: %+v", response)
 	}
+	receiptID, _ := response[MessageCoverageReceiptField].(string)
+	if receiptID == "" {
+		t.Fatalf("proxy omitted internal read coverage receipt: %+v", response)
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 0 {
+		t.Fatalf("message read advanced boundary before CLI output: %d", got)
+	}
+	if err := coordinator.CommitCoverage(receiptID); err != nil {
+		t.Fatalf("commit read coverage: %v", err)
+	}
 	if got, err := d.CredentialProxy().SeenUpToSeq("agent-1", "channel:one"); err != nil || got != 7 {
 		t.Fatalf("seen boundary = %d, %v; want 7, nil", got, err)
 	}
 	boundaries, healthy, err := loadConsumedSeqs(filepath.Join(root, consumedSeqsFileName))
 	if err != nil || !healthy || boundaries["channel:one"] != 7 {
 		t.Fatalf("durable boundaries = %+v healthy=%v err=%v", boundaries, healthy, err)
+	}
+
+	invalidCoverageResponse = true
+	invalid := httptest.NewRecorder()
+	handler.ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","workspace_id":"workspace-1","target":"#one","limit":2}`)))
+	if invalid.Code != http.StatusBadGateway {
+		t.Fatalf("cross-target read coverage status=%d body=%s, want 502", invalid.Code, invalid.Body.String())
+	}
+	if got := coordinator.Boundaries()["channel:one"]; got != 7 {
+		t.Fatalf("invalid read coverage changed boundary to %d", got)
+	}
+}
+
+func TestCredentialProxySearchAndResolveNeverExposeOrPrepareCoverage(t *testing.T) {
+	root := t.TempDir()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/messages/search":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"action": "message_search", "results": []any{}, MessageCoverageReceiptField: "forged-service-receipt",
+			})
+		case "/api/agent/messages/resolve":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"action": "message_resolve", "message": map[string]any{"id": "message-1"}, MessageCoverageReceiptField: "forged-service-receipt",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
+		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{cfg: cfg, messageCoordinators: map[string]*MessageCoordinator{}}
+
+	for name, test := range map[string]struct {
+		handler http.HandlerFunc
+		body    string
+	}{
+		"search":  {d.credentialProxyMessageSearchHandler(), `{"agent_id":"agent-1","workspace_id":"workspace-1","query":"needle","limit":10}`},
+		"resolve": {d.credentialProxyMessageResolveHandler(), `{"agent_id":"agent-1","workspace_id":"workspace-1","message_id":"message-1"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			test.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/"+name, strings.NewReader(test.body)))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var response map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if _, leaked := response[MessageCoverageReceiptField]; leaked {
+				t.Fatalf("non-covering %s leaked or invented a receipt: %#v", name, response)
+			}
+		})
 	}
 }
 

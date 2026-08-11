@@ -1262,7 +1262,10 @@ func TestRecurringReminderOfflineGapCollapsesToOneOccurrenceAndFirstFutureSlot(t
 
 	// Five ideal hourly slots elapsed while the owner was offline. The durable
 	// definition still represents one current due version, not five occurrences.
-	missedSlot := time.Now().UTC().Add(-5*time.Hour - 10*time.Minute)
+	// PostgreSQL timestamps are microsecond-precision. Normalize the expected
+	// slot before round-tripping it through the database so Linux nanosecond
+	// clocks do not make this equality assertion flaky.
+	missedSlot := time.Now().UTC().Add(-5*time.Hour - 10*time.Minute).Truncate(time.Microsecond)
 	if _, err := testPool.Exec(context.Background(), `
 		UPDATE agent_reminder
 		SET fire_at = $2, cadence_next_at = $2

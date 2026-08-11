@@ -5222,18 +5222,27 @@ func addMulticaAgentEnv(env map[string]string, cfg Config, workspaceID, agentID 
 func addPiMemoryFastModeEnv(env map[string]string) {
 	// Multica-managed Pi runs should keep explicit memory tools available, but
 	// skip the expensive automatic shutdown pipeline (session summary, learning,
-	// qmd refresh, remote sync). Users can still override these via custom_env.
-	env["PI_MEMORY_BACKGROUND_SHUTDOWN"] = "off"
-	env["PI_MEMORY_LEARNING"] = "off"
-	env["PI_MEMORY_SKILL_DRAFTS"] = "off"
-	env["PI_MEMORY_QMD_UPDATE"] = "off"
-	env["PI_MEMORY_AUTO_SYNC"] = "0"
-	env["PI_MEMORY_AUTO_SYNC_PULL"] = "0"
-	env["PI_MEMORY_AUTO_SYNC_PULL_ON_START"] = "0"
-	env["PI_MEMORY_AUTO_SYNC_UPLOAD"] = "0"
-	env["PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN"] = "0"
-	env["PI_MEMORY_NO_SEARCH"] = "1"
-	env["PI_MEMORY_REVIEW_STARTUP_HINT"] = "0"
+	// qmd refresh, remote sync). These are defaults so custom_env can opt back in
+	// for both one-shot and resident runtimes.
+	defaults := map[string]string{
+		"PI_MEMORY_FINALIZE":                     "off",
+		"PI_MEMORY_BACKGROUND_SHUTDOWN":          "off",
+		"PI_MEMORY_LEARNING":                     "off",
+		"PI_MEMORY_SKILL_DRAFTS":                 "off",
+		"PI_MEMORY_QMD_UPDATE":                   "off",
+		"PI_MEMORY_AUTO_SYNC":                    "0",
+		"PI_MEMORY_AUTO_SYNC_PULL":               "0",
+		"PI_MEMORY_AUTO_SYNC_PULL_ON_START":      "0",
+		"PI_MEMORY_AUTO_SYNC_UPLOAD":             "0",
+		"PI_MEMORY_AUTO_SYNC_UPLOAD_ON_SHUTDOWN": "0",
+		"PI_MEMORY_NO_SEARCH":                    "1",
+		"PI_MEMORY_REVIEW_STARTUP_HINT":          "0",
+	}
+	for key, value := range defaults {
+		if _, exists := env[key]; !exists {
+			env[key] = value
+		}
+	}
 }
 
 // AReaL RL proxy runtime override (§4.4). A trained task carries an

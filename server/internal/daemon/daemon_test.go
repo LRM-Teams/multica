@@ -2963,6 +2963,7 @@ func TestPiAgentEnvDisablesExpensiveAutomaticMemoryWork(t *testing.T) {
 	addPiMemoryFastModeEnv(env)
 
 	want := map[string]string{
+		"PI_MEMORY_FINALIZE":                     "off",
 		"PI_MEMORY_BACKGROUND_SHUTDOWN":          "off",
 		"PI_MEMORY_LEARNING":                     "off",
 		"PI_MEMORY_SKILL_DRAFTS":                 "off",
@@ -2979,6 +2980,26 @@ func TestPiAgentEnvDisablesExpensiveAutomaticMemoryWork(t *testing.T) {
 		if got := env[key]; got != value {
 			t.Fatalf("%s = %q, want %q", key, got, value)
 		}
+	}
+}
+
+func TestPiAgentEnvPreservesCustomMemorySettings(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"PI_MEMORY_FINALIZE": "on",
+		"PI_MEMORY_LEARNING": "review",
+	}
+	addPiMemoryFastModeEnv(env)
+
+	if got := env["PI_MEMORY_FINALIZE"]; got != "on" {
+		t.Fatalf("PI_MEMORY_FINALIZE = %q, want custom value %q", got, "on")
+	}
+	if got := env["PI_MEMORY_LEARNING"]; got != "review" {
+		t.Fatalf("PI_MEMORY_LEARNING = %q, want custom value %q", got, "review")
+	}
+	if got := env["PI_MEMORY_QMD_UPDATE"]; got != "off" {
+		t.Fatalf("PI_MEMORY_QMD_UPDATE = %q, want default %q", got, "off")
 	}
 }
 
@@ -3006,7 +3027,7 @@ func TestBlockedEnvKeyProtectsProviderNeutralAgentRoot(t *testing.T) {
 	if !isBlockedEnvKey("MULTICA_AGENT_ROOT") {
 		t.Fatal("MULTICA_AGENT_ROOT should be blocked from custom_env")
 	}
-	for _, key := range []string{"PI_MEMORY_LEARNING", "PI_MEMORY_QMD_UPDATE", "PI_MEMORY_AUTO_SYNC"} {
+	for _, key := range []string{"PI_MEMORY_FINALIZE", "PI_MEMORY_LEARNING", "PI_MEMORY_QMD_UPDATE", "PI_MEMORY_AUTO_SYNC"} {
 		if isBlockedEnvKey(key) {
 			t.Fatalf("%s should remain configurable via custom_env", key)
 		}

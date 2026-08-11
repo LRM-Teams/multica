@@ -269,7 +269,7 @@ func TestEnvironmentSwitchPrepareRequiresOwnerControlToken(t *testing.T) {
 
 func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
 	if err != nil {
@@ -309,7 +309,7 @@ func TestCredentialProxyMessageCheckDrainsCoordinatorWithoutExecutionIdentity(t 
 
 func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
 	if err != nil {
@@ -396,7 +396,7 @@ func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t
 
 func TestCredentialProxyMessageSendSavesDraftBeforeNetworkAndClearsKnownSuccess(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestCredentialProxyMessageSendSavesDraftBeforeNetworkAndClearsKnownSuccess(
 
 func TestCredentialProxyMessageSendKeepsDraftWhenUpstreamOutcomeIsUnknown(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -491,7 +491,7 @@ func TestCredentialProxyMessageSendKeepsDraftWhenUpstreamOutcomeIsUnknown(t *tes
 
 func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -544,7 +544,7 @@ func TestCredentialProxyMessageSendHoldsLocalPendingWithoutUpstreamSend(t *testi
 
 func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestCredentialProxyMessageSendConsumesServerRaceHoldAndKeepsDraft(t *testin
 
 func TestCredentialProxyMessageSendDraftReusesIdentityAndAnywayOnlyOnReplay(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}

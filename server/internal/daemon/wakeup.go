@@ -727,7 +727,7 @@ func (d *Daemon) applyDaemonAgentStart(payload protocol.DaemonAgentStartPayload)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 			return false, fmt.Errorf("create Agent root for Message coordinator: %w", err)
 		}
-		coordinatorCreated, err = d.ensureIdleMessageCoordinator(payload.AgentID, payload.RuntimeID, agentRoot)
+		coordinatorCreated, err = d.ensureIdleMessageCoordinator(payload.WorkspaceID, payload.AgentID, payload.RuntimeID, agentRoot)
 		if err != nil {
 			return false, fmt.Errorf("register Agent Message coordinator: %w", err)
 		}

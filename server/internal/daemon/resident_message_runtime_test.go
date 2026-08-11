@@ -162,7 +162,7 @@ func TestMessageRecoveryMergesTerminalSnapshotBeforeCreatingResidentRuntime(t *t
 		messageCoordinators: make(map[string]*MessageCoordinator),
 		messageRuntimeIDs:   map[string]string{agentID: runtimeID},
 	}
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
 		return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages, nil, nil, nil, nil)
 	}, nil)
 	if err != nil {
@@ -206,7 +206,7 @@ func TestMessageRecoveryCompletesWithoutResidentRuntime(t *testing.T) {
 		messageCoordinators: make(map[string]*MessageCoordinator),
 		messageRuntimeIDs:   map[string]string{agentID: "missing-runtime"},
 	}
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return errors.New("resident Runtime is unavailable")
 	}, nil)
 	if err != nil {

@@ -98,7 +98,7 @@ func TestWorkspaceRunnerCanonicalMessageDiagnosticsFollowRealDeliveryPath(t *tes
 		loggers: make(map[string]*diagnosticlog.Logger), failed: make(map[string]struct{}),
 	}
 	d.client.SetWorkspaceDaemonToken(workspaceID, "workspace-token", time.Now().Add(time.Hour))
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
 		return d.handoffIdleMessageBatch(ctx, agentID, runtimeID, messages)
 	}, nil)
 	if err != nil {

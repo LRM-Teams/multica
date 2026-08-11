@@ -16,7 +16,7 @@ import (
 func TestWorkspaceRunnerDeliveryAttemptsAckBeforeRuntimeHandoff(t *testing.T) {
 	var order []string
 	d := New(Config{}, nil)
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		order = append(order, "handoff")
 		return nil
 	}, nil)
@@ -58,7 +58,7 @@ func TestWorkspaceRunnerDeliveryAttemptsAckBeforeRuntimeHandoff(t *testing.T) {
 func TestWorkspaceRunnerDeliveryWriterFailureRetainsAcceptedPending(t *testing.T) {
 	var handoffs int
 	d := New(Config{}, nil)
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffs++
 		return nil
 	}, nil)
@@ -97,7 +97,7 @@ func TestWorkspaceRunnerDeliveryWriterFailureRetainsAcceptedPending(t *testing.T
 
 func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	d := New(Config{}, nil)
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
 	}, nil)
 	if err != nil {
@@ -269,7 +269,7 @@ func TestWorkspaceRunnerMessageTransportFencesReplacedConnection(t *testing.T) {
 
 func TestAgentMessageRecoveryUsesWorkspaceRunnerTransport(t *testing.T) {
 	d := New(Config{}, nil)
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -138,6 +138,11 @@ func commitPendingNoticeForTest(commit func()) bool {
 	return true
 }
 
+func newTestMessageCoordinator(t *testing.T, agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
+	t.Helper()
+	return NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, agentRoot, handoff, activity)
+}
+
 func (r *pendingNoticeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
 	return nil, nil
 }
@@ -316,7 +321,7 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
 	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(string, any) error { return nil })
@@ -389,7 +394,7 @@ func TestResidentMessageTurnErrorDoesNotAutoHandoffPending(t *testing.T) {
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, agentworkspace.Root(root, workspaceID, agentID)); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
 	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(string, any) error { return nil })
@@ -495,7 +500,7 @@ func TestMessageCoordinatorBlockedPendingNoticeDoesNotBlockNewDelivery(t *testin
 	releaseNotice := make(chan struct{})
 	var startOnce, releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseNotice) }) })
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -546,7 +551,7 @@ func TestMessageCoordinatorPendingChangeDuringNoticeRetriesCurrentGeneration(t *
 		releaseOnce sync.Once
 	)
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseFirst) }) })
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -596,7 +601,7 @@ func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *t
 	var mu sync.Mutex
 	var notices []agent.ResidentPendingNotice
 	activityCount := 0
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
 	}, func([]protocol.AgentMessageProjection) {
 		activityCount++
@@ -679,7 +684,7 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 	root := t.TempDir()
 	var mu sync.Mutex
 	attempts := 0
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
 	}, func([]protocol.AgentMessageProjection) {
 		t.Fatal("Pending Notice must not emit Message received Activity")
@@ -740,7 +745,7 @@ func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T
 
 func TestClosedMessageCoordinatorRejectsPendingWork(t *testing.T) {
 	handoffs := 0
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffs++
 		return nil
 	}, nil)
@@ -766,7 +771,7 @@ func TestClosedMessageCoordinatorRejectsPendingWork(t *testing.T) {
 func TestMessageCoordinatorCheckReturnsBoundedPendingAndAdvancesOnlyReturnedBoundaries(t *testing.T) {
 	root := t.TempDir()
 	activityCount := 0
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		t.Fatal("message check must not use idle runtime handoff")
 		return nil
 	}, func([]protocol.AgentMessageProjection) {
@@ -817,7 +822,7 @@ func TestMessageCoordinatorCheckReturnsBoundedPendingAndAdvancesOnlyReturnedBoun
 
 func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "agent-root")
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
 	if err != nil {
@@ -922,7 +927,7 @@ func completeCoordinatorRecovery(t *testing.T, coordinator *MessageCoordinator) 
 
 func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -942,7 +947,7 @@ func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T
 func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
 	root := t.TempDir()
 	var handoffs, activities int
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffs++
 		return nil
 	}, func([]protocol.AgentMessageProjection) {
@@ -984,7 +989,7 @@ func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
 func TestMessageCoordinatorFlushesTargetInSequenceAndRecordsOneActivityBatch(t *testing.T) {
 	var handedOff [][]string
 	var activities int
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		batch := make([]string, len(messages))
 		for i, message := range messages {
 			batch[i] = message.ID
@@ -1028,7 +1033,7 @@ func TestMessageCoordinatorBlockedRuntimeHandoffDoesNotBlockNewDelivery(t *testi
 		releaseOnce    sync.Once
 	)
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHandoff) }) })
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		batch := make([]string, len(messages))
 		for index, message := range messages {
 			batch[index] = message.ID
@@ -1127,7 +1132,7 @@ func TestMessageCoordinatorConcurrentFlushCannotReserveActiveBatch(t *testing.T)
 		releaseOnce sync.Once
 	)
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHandoff) }) })
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		callMu.Lock()
 		calls++
 		callMu.Unlock()
@@ -1180,7 +1185,7 @@ func TestMessageCoordinatorConcurrentFlushCannotReserveActiveBatch(t *testing.T)
 }
 
 func TestMessageCoordinatorBlockedBoundaryCommitDoesNotBlockNewDelivery(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1254,7 +1259,7 @@ func TestMessageCoordinatorBlockedActivityDoesNotBlockNewDelivery(t *testing.T) 
 	releaseActivity := make(chan struct{})
 	var startOnce, releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseActivity) }) })
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, func([]protocol.AgentMessageProjection) {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, func([]protocol.AgentMessageProjection) {
 		startOnce.Do(func() { close(activityStarted) })
 		<-releaseActivity
 	})
@@ -1298,7 +1303,7 @@ func TestMessageCoordinatorCloseInvalidatesAcceptedTokenBeforeBoundaryWrite(t *t
 	releaseActivity := make(chan struct{})
 	var startOnce, releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseActivity) }) })
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, func([]protocol.AgentMessageProjection) {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, func([]protocol.AgentMessageProjection) {
 		startOnce.Do(func() { close(activityStarted) })
 		<-releaseActivity
 	})
@@ -1345,7 +1350,7 @@ func TestMessageCoordinatorCloseInvalidatesAcceptedTokenBeforeBoundaryWrite(t *t
 }
 
 func TestMessageCoordinatorCommitAdvancesExactTargetMaxima(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1369,7 +1374,7 @@ func TestMessageCoordinatorCommitAdvancesExactTargetMaxima(t *testing.T) {
 
 func TestMessageCoordinatorDeduplicatesDeliveryWithoutSecondHandoffOrActivity(t *testing.T) {
 	var handoffs, activities int
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, func([]protocol.AgentMessageProjection) { activities++ })
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, func([]protocol.AgentMessageProjection) { activities++ })
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1396,7 +1401,7 @@ func TestMessageCoordinatorDeduplicatesDeliveryWithoutSecondHandoffOrActivity(t 
 func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T) {
 	root := t.TempDir()
 	var handoffs int
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { handoffs++; return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1445,7 +1450,7 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 	releaseHandoff := make(chan struct{})
 	var startOnce, releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHandoff) }) })
-	oldCoordinator, err := NewMessageCoordinator(oldRoot, func(context.Context, []protocol.AgentMessageProjection) error {
+	oldCoordinator, err := newTestMessageCoordinator(t, oldRoot, func(context.Context, []protocol.AgentMessageProjection) error {
 		startOnce.Do(func() { close(handoffStarted) })
 		<-releaseHandoff
 		return nil
@@ -1468,7 +1473,7 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 
 	replacementDone := make(chan error, 1)
 	go func() {
-		_, err := daemon.ensureIdleMessageCoordinator("agent-1", "runtime-new", newRoot)
+		_, err := daemon.ensureIdleMessageCoordinator("workspace-test", "agent-1", "runtime-new", newRoot)
 		replacementDone <- err
 	}()
 	select {
@@ -1509,7 +1514,7 @@ func TestMessageCoordinatorTreatsMalformedBoundaryAsUnknownCoverage(t *testing.T
 	if err := os.WriteFile(filepath.Join(root, consumedSeqsFileName), []byte("not-json"), 0o600); err != nil {
 		t.Fatalf("write corrupt boundary: %v", err)
 	}
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1531,7 +1536,7 @@ func TestMessageCoordinatorDeletedBoundaryReplaysConservatively(t *testing.T) {
 		t.Fatalf("delete boundary: %v", err)
 	}
 	var handedOff []protocol.AgentMessageProjection
-	coordinator, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		handedOff = append(handedOff, messages...)
 		return nil
 	}, nil)
@@ -1565,7 +1570,7 @@ func TestMessageCoordinatorLowerBoundaryConservativelyReplays(t *testing.T) {
 		t.Fatalf("write lower boundary: %v", err)
 	}
 	var handedOff []protocol.AgentMessageProjection
-	coordinator, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		handedOff = append(handedOff, messages...)
 		return nil
 	}, nil)
@@ -1589,7 +1594,7 @@ func TestMessageCoordinatorLowerBoundaryConservativelyReplays(t *testing.T) {
 
 func TestMessageCoordinatorRecoveryMergesLiveAndPagedMessagesBeforeFlush(t *testing.T) {
 	var got []string
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		for _, message := range messages {
 			got = append(got, message.ID)
 		}
@@ -1645,7 +1650,7 @@ func TestMessageCoordinatorRecoveryMergesLiveAndPagedMessagesBeforeFlush(t *test
 
 func TestMessageCoordinatorConcurrentLiveAndRecoveryDeliveryDeduplicates(t *testing.T) {
 	var handedOff []protocol.AgentMessageProjection
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		handedOff = append(handedOff, messages...)
 		return nil
 	}, nil)
@@ -1698,7 +1703,7 @@ func TestMessageCoordinatorConcurrentLiveAndRecoveryDeliveryDeduplicates(t *test
 
 func TestMessageCoordinatorTerminalRecoveryIsReadyWithoutRuntimeHandoff(t *testing.T) {
 	handoffCalls := 0
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffCalls++
 		return nil
 	}, nil)
@@ -1723,7 +1728,7 @@ func TestMessageCoordinatorTerminalRecoveryIsReadyWithoutRuntimeHandoff(t *testi
 }
 
 func TestMessageCoordinatorRecoveryStateTransitionsRequireNewAttemptAfterFailure(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1774,7 +1779,7 @@ func TestMessageCoordinatorRecoveryStateTransitionsRequireNewAttemptAfterFailure
 }
 
 func TestMessageCoordinatorReadyPendingUsesNormalFreshnessHoldAfterBusyHandoff(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy
 	}, nil)
 	if err != nil {
@@ -1807,7 +1812,7 @@ func TestMessageCoordinatorReadyPendingUsesNormalFreshnessHoldAfterBusyHandoff(t
 
 func TestMessageCoordinatorRuntimeHandoffFailureDoesNotRevertReadyRecovery(t *testing.T) {
 	handoffFailure := errors.New("runtime handoff failed")
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return handoffFailure
 	}, nil)
 	if err != nil {
@@ -1832,7 +1837,7 @@ func TestMessageCoordinatorRuntimeHandoffFailureDoesNotRevertReadyRecovery(t *te
 }
 
 func TestMessageCoordinatorRejectsDelayedPageFromPreviousReconnect(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1864,7 +1869,7 @@ func TestMessageCoordinatorRejectsDelayedPageFromPreviousReconnect(t *testing.T)
 
 func TestMessageCoordinatorRestartRecoversAcceptedMessageBeforeHandoff(t *testing.T) {
 	root := t.TempDir()
-	first, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	first, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		t.Fatal("first coordinator handed off before simulated crash")
 		return nil
 	}, nil)
@@ -1881,7 +1886,7 @@ func TestMessageCoordinatorRestartRecoversAcceptedMessageBeforeHandoff(t *testin
 	}
 
 	var recovered []protocol.AgentMessageProjection
-	restarted, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	restarted, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		recovered = append(recovered, messages...)
 		return nil
 	}, nil)
@@ -1908,7 +1913,7 @@ func TestMessageCoordinatorUpgradeRestartRecoversBusyPendingMessage(t *testing.T
 	firstDelivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
 	pendingDelivery := testDelivery("message-2", "channel-1", 2, "delivery-2")
 	handoffCalls := 0
-	first, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	first, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffCalls++
 		if handoffCalls == 1 {
 			return nil
@@ -1937,7 +1942,7 @@ func TestMessageCoordinatorUpgradeRestartRecoversBusyPendingMessage(t *testing.T
 	first.Close()
 
 	var recovered []protocol.AgentMessageProjection
-	restarted, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+	restarted, err := newTestMessageCoordinator(t, root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
 		recovered = append(recovered, messages...)
 		return nil
 	}, nil)
@@ -1963,7 +1968,7 @@ func TestMessageCoordinatorUpgradeRestartRecoversBusyPendingMessage(t *testing.T
 }
 
 func TestMessageCoordinatorCredentialBoundaryFailsClosedAfterRecoveryFailure(t *testing.T) {
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
@@ -1985,7 +1990,7 @@ func TestMessageCoordinatorCredentialBoundaryFailsClosedAfterRecoveryFailure(t *
 func TestMessageCoordinatorRetriesBoundaryWithoutDuplicateHandoffOrActivity(t *testing.T) {
 	root := t.TempDir()
 	var handoffs, activities int
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		handoffs++
 		return nil
 	}, func([]protocol.AgentMessageProjection) { activities++ })
@@ -2019,7 +2024,7 @@ func TestMessageCoordinatorRetriesBoundaryWithoutDuplicateHandoffOrActivity(t *t
 
 func TestMessageCoordinatorRetriesRuntimeHandoffSafely(t *testing.T) {
 	var attempts, activities int
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		attempts++
 		if attempts == 1 {
 			return errors.New("runtime input unavailable")
@@ -2059,7 +2064,7 @@ func TestMessageCoordinatorRetriesRuntimeHandoffSafely(t *testing.T) {
 
 func TestMessageCoordinatorPreflightHoldsCompletePendingRangeWithNewestThree(t *testing.T) {
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
 	if err != nil {

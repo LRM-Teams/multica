@@ -70,11 +70,27 @@ type PendingNoticeCommitIfCurrent func(func()) bool
 // generation fence. It must invoke commitIfCurrent before returning nil.
 type RuntimePendingNoticeHandoff func(context.Context, PendingNoticeSnapshot, PendingNoticeCommitIfCurrent) error
 
+// InboxKey is the fixed local identity of one Workspace/Agent coordinator.
+type InboxKey struct {
+	WorkspaceID string
+	AgentID     string
+}
+
+func (k InboxKey) normalized() (InboxKey, error) {
+	k.WorkspaceID = strings.TrimSpace(k.WorkspaceID)
+	k.AgentID = strings.TrimSpace(k.AgentID)
+	if k.WorkspaceID == "" || k.AgentID == "" {
+		return InboxKey{}, errors.New("Inbox Workspace and Agent identity are required")
+	}
+	return k, nil
+}
+
 // MessageCoordinator owns the receive-side state for one Workspace/Agent root.
 // Its callers send agent:deliver:ack only after Accept returns successfully.
 type MessageCoordinator struct {
 	mu                  sync.Mutex
 	boundaryCommitMu    sync.Mutex
+	key                 InboxKey
 	root                string
 	boundaries          map[string]int64
 	pending             map[string]map[int64]protocol.AgentMessageProjection
@@ -92,6 +108,10 @@ type MessageCoordinator struct {
 	noticeCoalesce      time.Duration
 	noticeRetry         time.Duration
 	noticeTimer         *time.Timer
+	coverageReceipts    map[string]*coverageReceipt
+	coverageNow         func() time.Time
+	coverageTTL         time.Duration
+	coverageCapacity    int
 	closed              bool
 }
 
@@ -156,7 +176,11 @@ var (
 	errPendingNoticeGenerationChanged   = errors.New("Pending Notice generation changed before suppression commit")
 )
 
-func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
+func NewMessageCoordinator(key InboxKey, agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
+	key, err := key.normalized()
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(agentRoot) == "" {
 		return nil, errors.New("agent root is required")
 	}
@@ -168,7 +192,7 @@ func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, acti
 		return nil, err
 	}
 	return &MessageCoordinator{
-		root: agentRoot, boundaries: boundaries,
+		key: key, root: agentRoot, boundaries: boundaries,
 		pending:  make(map[string]map[int64]protocol.AgentMessageProjection),
 		accepted: make(map[string]struct{}), handoff: handoff, activity: activity,
 		recovery:            messageRecoveryState{status: messageRecoveryUnknown},
@@ -177,6 +201,10 @@ func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, acti
 		noticeCoordinatorID: uuid.NewString(),
 		noticeCoalesce:      pendingNoticeCoalesceWindow,
 		noticeRetry:         pendingNoticeRetryDelay,
+		coverageReceipts:    make(map[string]*coverageReceipt),
+		coverageNow:         time.Now,
+		coverageTTL:         coverageReceiptDefaultTTL,
+		coverageCapacity:    coverageReceiptDefaultCapacity,
 	}, nil
 }
 
@@ -204,6 +232,7 @@ func (c *MessageCoordinator) Close() {
 	c.closed = true
 	c.handoffGeneration++
 	c.activeHandoff = nil
+	c.coverageReceipts = nil
 	if c.noticeTimer != nil {
 		c.noticeTimer.Stop()
 		c.noticeTimer = nil

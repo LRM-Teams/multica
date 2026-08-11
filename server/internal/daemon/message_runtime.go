@@ -17,9 +17,12 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot string) (bool, error) {
-	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(runtimeID) == "" {
-		return false, errors.New("agent and runtime ids are required")
+func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, agentRoot string) (bool, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	if d == nil || workspaceID == "" || agentID == "" || runtimeID == "" {
+		return false, errors.New("Workspace, Agent, and Runtime ids are required")
 	}
 	d.messageCoordinatorMu.Lock()
 	defer d.messageCoordinatorMu.Unlock()
@@ -29,7 +32,7 @@ func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot stri
 		}
 		existing.Close()
 	}
-	coordinator, err := NewMessageCoordinator(agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
+	coordinator, err := NewMessageCoordinator(InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
 		return d.handoffIdleMessageBatch(ctx, agentID, runtimeID, messages)
 	}, nil)
 	if err != nil {
@@ -80,7 +83,7 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(agentID string) error {
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		return fmt.Errorf("create Agent root for Message coordinator: %w", err)
 	}
-	created, err := d.ensureIdleMessageCoordinator(agentID, residency.RuntimeID, agentRoot)
+	created, err := d.ensureIdleMessageCoordinator(residency.WorkspaceID, agentID, residency.RuntimeID, agentRoot)
 	if err != nil {
 		return fmt.Errorf("repair Agent Message coordinator: %w", err)
 	}

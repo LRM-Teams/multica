@@ -167,7 +167,7 @@ func TestObserveMessageSendHoldIsFailSoftWhenAgentNotManaged(t *testing.T) {
 func newDraftReuseTestDaemon(t *testing.T) (*Daemon, *CredentialProxy) {
 	t.Helper()
 	root := t.TempDir()
-	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return nil
 	}, nil)
 	if err != nil {

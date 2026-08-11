@@ -92,7 +92,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: fakeRuntime,
 	}
-	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, root); err != nil {
+	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, root); err != nil {
 		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 	}
 	d.messageCoordinators[agentID].ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
@@ -512,7 +512,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 			mode: canonicalRuntimeResident, backend: normal,
 		}
-		if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, root); err != nil {
+		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, root); err != nil {
 			t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 		}
 		acks = make(chan protocol.AgentDeliverAckPayload, 2)

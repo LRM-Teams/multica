@@ -365,7 +365,8 @@ type TaskResult struct {
 	// InternalOutput is the validated structured result for a restricted
 	// execution. It is deliberately excluded from legacy task completion JSON;
 	// protocol turn persistence consumes it through its own internal contract.
-	InternalOutput         json.RawMessage `json:"-"`
-	OutputSuppressedReason string          `json:"-"`
-	TransportAttempted     bool            `json:"-"`
+	InternalOutput            json.RawMessage `json:"-"`
+	OutputSuppressedReason    string          `json:"-"`
+	ChannelOnboardingDecision string          `json:"-"`
+	TransportAttempted        bool            `json:"-"`
 }

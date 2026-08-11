@@ -15,6 +15,9 @@ import (
 
 const channelOnboardingReason = protocol.ChannelOnboardingReason
 
+var errChannelOnboardingExpired = errors.New("channel onboarding membership generation is no longer active")
+var errChannelOnboardingDecisionRequired = errors.New("channel onboarding requires an explicit send or typed skip receipt")
+
 type channelOnboardingRecord struct {
 	ID                     pgtype.UUID
 	WorkspaceID            pgtype.UUID
@@ -180,6 +183,120 @@ type channelOnboardingPublication struct {
 	WorkspaceID     pgtype.UUID
 	ChannelID       pgtype.UUID
 	SystemMessageID pgtype.UUID
+}
+
+type channelOnboardingTransportBinding struct {
+	ID                     pgtype.UUID
+	ChannelID              pgtype.UUID
+	AgentID                pgtype.UUID
+	MembershipGenerationID pgtype.UUID
+	InboxEventID           pgtype.UUID
+}
+
+func channelOnboardingClientMessageID(onboardingID pgtype.UUID) string {
+	return "channel-onboarding:" + uuidToString(onboardingID)
+}
+
+// channelOnboardingForClientMessage recognizes the product-scoped id emitted
+// in an onboarding brief. It deliberately does not use a task, inbox, or
+// lease header: regular Agent chat remains credential-authenticated.
+func channelOnboardingForClientMessage(ctx context.Context, exec dbExecutor, source agentTransportSource, clientMessageID string) (channelOnboardingTransportBinding, bool, error) {
+	const prefix = "channel-onboarding:"
+	value := strings.TrimSpace(clientMessageID)
+	if !strings.HasPrefix(value, prefix) {
+		return channelOnboardingTransportBinding{}, false, nil
+	}
+	onboardingID := parseUUID(strings.TrimPrefix(value, prefix))
+	if !onboardingID.Valid {
+		return channelOnboardingTransportBinding{}, true, errChannelOnboardingExpired
+	}
+	var binding channelOnboardingTransportBinding
+	err := exec.QueryRow(ctx, `
+		SELECT onboarding.id, onboarding.channel_id, onboarding.agent_id,
+		       onboarding.membership_generation_id, event.id
+		FROM channel_agent_onboarding onboarding
+		LEFT JOIN agent_inbox_event event
+		  ON event.channel_onboarding_id = onboarding.id
+		 AND event.reason = 'channel_onboarding'
+		WHERE onboarding.id = $1
+		  AND onboarding.workspace_id = $2
+		  AND onboarding.agent_id = $3`,
+		onboardingID, source.origin.workspaceID, source.origin.agentID).Scan(
+		&binding.ID, &binding.ChannelID, &binding.AgentID, &binding.MembershipGenerationID, &binding.InboxEventID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return channelOnboardingTransportBinding{}, true, errChannelOnboardingExpired
+		}
+		return channelOnboardingTransportBinding{}, true, err
+	}
+	return binding, true, nil
+}
+
+func channelOnboardingTargetMatches(binding channelOnboardingTransportBinding, target agentTransportTarget) bool {
+	return target.channel.Kind == "group" &&
+		parseUUID(target.channel.ID) == binding.ChannelID &&
+		!target.threadRootMessageID.Valid
+}
+
+func (h *Handler) requireActiveChannelOnboardingBeforeTarget(ctx context.Context, binding channelOnboardingTransportBinding) error {
+	if h.TxStarter == nil {
+		return errors.New("channel onboarding transaction starter unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	active, err := channelOnboardingGenerationActiveTx(ctx, tx, binding.ID, binding.ChannelID, binding.AgentID, true)
+	if err != nil {
+		return err
+	}
+	if !active {
+		if err := expireChannelOnboardingForInboxEventTx(ctx, tx, binding); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return errChannelOnboardingExpired
+	}
+	return tx.Commit(ctx)
+}
+
+func expireChannelOnboardingForInboxEventTx(ctx context.Context, tx pgx.Tx, binding channelOnboardingTransportBinding) error {
+	if binding.InboxEventID.Valid {
+		if _, err := tx.Exec(ctx, `
+			UPDATE agent_event_delivery
+			SET status = 'expired',
+			    last_error = 'channel onboarding membership generation is no longer active',
+			    updated_at = now()
+			WHERE inbox_event_id = $1
+			  AND status IN ('leased', 'processing')`, binding.InboxEventID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE agent_inbox_event
+			SET status = 'suppressed',
+			    terminal_outcome = 'expired',
+			    retryable = FALSE,
+			    terminal_at = now(),
+			    last_error = 'channel onboarding membership generation is no longer active',
+			    updated_at = now()
+			WHERE id = $1
+			  AND status IN ('pending', 'draining', 'failed')`, binding.InboxEventID); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE channel_agent_onboarding
+		SET status = 'expired',
+		    terminal_evidence = jsonb_build_object('reason', 'membership_generation_inactive'),
+		    terminal_at = now(),
+		    updated_at = now()
+		WHERE id = $1
+		  AND status IN ('pending', 'claimed')`, binding.ID)
+	return err
 }
 
 func (h *Handler) PublishPendingChannelOnboardingSystemMessages(ctx context.Context, limit int) (int, error) {
@@ -441,7 +558,9 @@ func (h *Handler) buildChannelOnboardingPrompt(ctx context.Context, onboarding c
 	}
 
 	var b strings.Builder
-	b.WriteString("You have one channel-onboarding turn as yourself. This is not a must-reply mention.\n")
+	b.WriteString("You have one channel-onboarding decision to make as yourself. This is not a must-reply mention.\n")
+	fmt.Fprintf(&b, "Onboarding event id: %s\n", uuidToString(onboarding.ID))
+	fmt.Fprintf(&b, "Membership generation id: %s\n", uuidToString(onboarding.MembershipGenerationID))
 	fmt.Fprintf(&b, "Exact message target: #%s\n", channel.Name)
 	fmt.Fprintf(&b, "Channel id: %s\n", channel.ID)
 	fmt.Fprintf(&b, "Channel name: %s\n", channel.Name)
@@ -459,8 +578,8 @@ func (h *Handler) buildChannelOnboardingPrompt(ctx context.Context, onboarding c
 	}
 	b.WriteString("\nDecision contract:\n")
 	b.WriteString("- Introduce yourself or acknowledge useful team context only when that adds natural value in this channel.\n")
-	b.WriteString("- For a low-noise, announcement-only, or already-familiar context, finish without sending a message.\n")
-	b.WriteString("- If you send, use the runtime brief's normal message-send action to the exact target above. Send at most one concise message.\n")
+	fmt.Fprintf(&b, "- For a low-noise, announcement-only, or already-familiar context, skip explicitly by making your entire final response exactly `%s`. The runtime consumes this typed receipt; it is never shown in the channel.\n", protocol.ChannelOnboardingSkipReceipt)
+	fmt.Fprintf(&b, "- If you send, use the runtime brief's canonical message-send action to the exact target above with client_message_id `%s`. Send at most one concise message; this idempotently binds the Message to this onboarding decision.\n", channelOnboardingClientMessageID(onboarding.ID))
 	b.WriteString("- Never rely on ordinary final/completion text for visible output; only an explicit message-send action is visible.\n")
 	b.WriteString("- Do not invent a backend-authored greeting, @-mention unrelated people, assign work, or start a welcome loop.\n")
 
@@ -474,10 +593,16 @@ func (h *Handler) buildChannelOnboardingPrompt(ctx context.Context, onboarding c
 	return b.String()
 }
 
-func (h *Handler) completeChannelOnboardingTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, deliveryID, onboardingID pgtype.UUID, active bool) (string, error) {
-	outcome := "completed"
+func (h *Handler) completeChannelOnboardingTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, deliveryID, onboardingID pgtype.UUID, active bool, decision string) (string, error) {
+	outcome := ""
 	if !active {
 		outcome = "expired"
+	} else if h.channelOnboardingHasCanonicalMessageTx(ctx, tx, event, onboardingID) {
+		outcome = "sent"
+	} else if decision == protocol.ChannelOnboardingDecisionSkipped {
+		outcome = "skipped"
+	} else {
+		return "", errChannelOnboardingDecisionRequired
 	}
 	evidence, err := json.Marshal(map[string]any{
 		"inbox_event_id": uuidToString(event.ID),
@@ -498,6 +623,27 @@ func (h *Handler) completeChannelOnboardingTx(ctx context.Context, tx pgx.Tx, ev
 		return "", err
 	}
 	return outcome, nil
+}
+
+func (h *Handler) channelOnboardingHasCanonicalMessageTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, onboardingID pgtype.UUID) bool {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM channel_message
+			WHERE workspace_id = $1
+			  AND channel_id = $2
+			  AND author_type = 'agent'
+			  AND author_id = $3
+			  AND client_message_id = $4
+			  AND deleted_at IS NULL
+		)`,
+		event.WorkspaceID,
+		event.ChannelID,
+		event.AgentID,
+		channelOnboardingClientMessageID(onboardingID),
+	).Scan(&exists)
+	return err == nil && exists
 }
 
 func channelOnboardingIDForInboxEventTx(ctx context.Context, tx pgx.Tx, eventID pgtype.UUID) (pgtype.UUID, error) {

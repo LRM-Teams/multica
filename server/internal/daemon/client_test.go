@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestClient_IdentityHeaders_PostJSON(t *testing.T) {
@@ -278,6 +280,30 @@ func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotUsage, usage) {
 		t.Fatalf("usage = %#v, want %#v", gotUsage, usage)
+	}
+}
+
+func TestClient_CompleteAgentInboxEventSendsTypedChannelOnboardingDecision(t *testing.T) {
+	var body map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetToken("profile-token")
+	lease := AgentInboxLease{ID: "onboarding-event", DeliveryID: "delivery-1", LeaseToken: "lease-1"}
+	if _, err := c.CompleteAgentInboxEvent(context.Background(), lease, TaskResult{
+		ChannelOnboardingDecision: protocol.ChannelOnboardingDecisionSkipped,
+	}); err != nil {
+		t.Fatalf("CompleteAgentInboxEvent: %v", err)
+	}
+	if got := string(body["channel_onboarding_decision"]); got != `"`+protocol.ChannelOnboardingDecisionSkipped+`"` {
+		t.Fatalf("channel_onboarding_decision = %s", got)
 	}
 }
 

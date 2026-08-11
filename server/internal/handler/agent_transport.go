@@ -336,6 +336,25 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "client_message_id is too long")
 		return
 	}
+	onboarding, isChannelOnboarding, err := channelOnboardingForClientMessage(r.Context(), h.DB, source, clientMessageID)
+	if err != nil {
+		if errors.Is(err, errChannelOnboardingExpired) {
+			writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding send")
+		return
+	}
+	if isChannelOnboarding {
+		if err := h.requireActiveChannelOnboardingBeforeTarget(r.Context(), onboarding); err != nil {
+			if errors.Is(err, errChannelOnboardingExpired) {
+				writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding membership generation")
+			return
+		}
+	}
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.origin, req.Target, true)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
@@ -343,6 +362,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
+		return
+	}
+	if isChannelOnboarding && !channelOnboardingTargetMatches(onboarding, target) {
+		writeError(w, http.StatusBadRequest, "channel onboarding must send to the joined channel main timeline")
 		return
 	}
 	if expected := strings.TrimSpace(req.ContextTarget); expected != "" && expected != agentTransportCanonicalMessageTarget(target) {
@@ -375,7 +398,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	}
 	initiatorID := h.channelInitiatorForTransportSource(r.Context(), source)
 	seenUpToSeq := int64(-1)
-	if !req.BypassFreshness {
+	if !isChannelOnboarding && !req.BypassFreshness {
 		seenUpToSeq, err = h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
 		if err != nil {
 			slog.Warn("agent transport freshness check failed", "agent_id", uuidToString(source.origin.agentID), "error", err)
@@ -396,6 +419,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		}
 		if errors.Is(err, errChannelAttachmentUnavailable) {
 			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, errChannelOnboardingExpired) {
+			writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
 			return
 		}
 		var wrongTurn *agentDMTurnError
@@ -1341,6 +1368,32 @@ func (h *Handler) insertAgentTransportMessage(ctx context.Context, source agentT
 	if err := h.lockAgentTransportTargetForInsert(ctx, tx, target); err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
+	}
+	onboarding, isChannelOnboarding, err := channelOnboardingForClientMessage(ctx, tx, source, clientMessageID)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return agentTransportMessageResult{}, err
+	}
+	if isChannelOnboarding {
+		if !channelOnboardingTargetMatches(onboarding, target) {
+			_ = tx.Rollback(ctx)
+			return agentTransportMessageResult{}, errors.New("channel onboarding target changed before send")
+		}
+		active, err := channelOnboardingGenerationActiveTx(ctx, tx, onboarding.ID, onboarding.ChannelID, onboarding.AgentID, true)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return agentTransportMessageResult{}, err
+		}
+		if !active {
+			if err := expireChannelOnboardingForInboxEventTx(ctx, tx, onboarding); err != nil {
+				_ = tx.Rollback(ctx)
+				return agentTransportMessageResult{}, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return agentTransportMessageResult{}, err
+			}
+			return agentTransportMessageResult{}, errChannelOnboardingExpired
+		}
 	}
 	if existing, found, err := h.findAgentChannelMessageByClientIDWithExec(ctx, tx, input.WorkspaceID, input.ChannelID, input.AuthorID, clientMessageID); err != nil {
 		_ = tx.Rollback(ctx)

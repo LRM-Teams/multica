@@ -789,6 +789,90 @@ func (p *canonicalAgentRuntimePool) observeResidentRuntimeMessage(slot *canonica
 	}
 }
 
+// handoffIdleReminderInput crosses the same single resident-turn admission
+// lock as canonical Messages but owns no MessageCoordinator state. Busy and
+// native-acceptance failures are returned directly to the transient caller;
+// nothing here queues, retries, or schedules an idle-boundary replay.
+func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context, agentID, runtimeID string, inputValue agent.ResidentReminderInput) error {
+	if p == nil {
+		return errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return errors.New("canonical resident runtime is not registered")
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	if slot.running {
+		slot.mu.Unlock()
+		return ErrCanonicalAgentRuntimeBusy
+	}
+	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
+		slot.mu.Unlock()
+		return errors.New("canonical resident runtime is unavailable")
+	}
+	input, ok := slot.backend.(agent.ResidentReminderInputReceiver)
+	if !ok {
+		slot.mu.Unlock()
+		return errors.New("canonical resident runtime does not support transient Reminder input")
+	}
+	slot.running = true
+	slot.messageInputAttempt++
+	attempt := slot.messageInputAttempt
+	invalidationGeneration := slot.invalidationGeneration
+	slot.mu.Unlock()
+
+	acceptCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		acceptCtx, cancel = context.WithTimeout(ctx, canonicalIdleAcceptTimeout)
+		defer cancel()
+	}
+	acceptance, err := input.AcceptReminderInput(acceptCtx, inputValue)
+	slot.mu.Lock()
+	if err != nil {
+		freed := false
+		if slot.messageInputAttempt == attempt {
+			slot.running = false
+			slot.idleSince = time.Now()
+			if slot.invalidateAfterInput {
+				freed = slot.backend != nil
+				slot.closeBackend()
+				slot.fingerprint = ""
+				slot.mode = ""
+			}
+		}
+		slot.mu.Unlock()
+		if freed {
+			p.signalAgentProcessCapacityFreed()
+		}
+		if isResidentAcceptBusyErr(err) {
+			return ErrCanonicalAgentRuntimeBusy
+		}
+		return err
+	}
+	if acceptance.Done == nil {
+		if slot.messageInputAttempt == attempt {
+			slot.running = false
+			slot.idleSince = time.Now()
+		}
+		slot.mu.Unlock()
+		return errors.New("canonical resident runtime returned no Reminder input completion receipt")
+	}
+	invalidated := slot.messageInputAttempt != attempt || slot.invalidationGeneration != invalidationGeneration
+	slot.messageInputDone = acceptance.Done
+	slot.mu.Unlock()
+	activityDone := drainResidentActivity(acceptance.Messages, nil)
+	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, 0, nil)
+	if invalidated {
+		return errors.New("canonical resident runtime was invalidated during Reminder input acceptance")
+	}
+	return nil
+}
+
 func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.Message)) <-chan struct{} {
 	done := make(chan struct{})
 	if messages == nil {

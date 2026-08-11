@@ -26,6 +26,7 @@ type CodexAppServerBackend interface {
 	Backend
 	ResidentMessageInput
 	ResidentMessagePreparation
+	ResidentReminderInputReceiver
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -141,8 +142,20 @@ func (b *codexAppServerBackend) AcceptMessageBatch(ctx context.Context, messages
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *codexAppServerBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentReminderInput(input)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *codexAppServerBackend) acceptIdleInputPrompt(ctx context.Context, prompt string) (ResidentMessageAcceptance, error) {
 	if !b.running.CompareAndSwap(false, true) {
-		return ResidentMessageAcceptance{}, fmt.Errorf("%w: canonical Message handoff overlaps an active turn", ErrCodexResidentTurnBusy)
+		return ResidentMessageAcceptance{}, fmt.Errorf("%w: idle input overlaps an active turn", ErrCodexResidentTurnBusy)
 	}
 
 	accepted := make(chan error, 1)

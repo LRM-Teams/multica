@@ -689,6 +689,23 @@ func (h *Hub) NotifyReminderOwnerAdded(runtimeID string, payload protocol.Daemon
 	h.notifyReminder(runtimeID, protocol.EventDaemonAgentStart, payload, "")
 }
 
+// NotifyReminderOwnerInput attempts one in-memory transport write. It does not
+// enter pendingAgentDeliveries and deliberately has no retry timer or ACK.
+func (h *Hub) NotifyReminderOwnerInput(runtimeID string, payload protocol.ReminderOwnerInputPayload) bool {
+	if h == nil || strings.TrimSpace(runtimeID) == "" {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventReminderOwnerInput, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	delivered, _ := h.notifyFrame(runtimeID, frame, "")
+	if !delivered {
+		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "runtime_id", runtimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
+	}
+	return delivered
+}
+
 func (h *Hub) notifyReminder(runtimeID, eventType string, payload any, eventID string) {
 	if h == nil || runtimeID == "" {
 		return

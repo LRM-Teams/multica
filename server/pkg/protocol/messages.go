@@ -454,6 +454,10 @@ const (
 	DaemonCapabilityMemoryCrossDeviceSync    = "memory_cross_device_sync_v2"
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
+	// DaemonCapabilityReminderTransientInput gates the owner-only, idle-only
+	// Reminder system input. Unlike canonical Message delivery, this transport
+	// is best-effort and creates no queue, receipt, or reconnect replay.
+	DaemonCapabilityReminderTransientInput = "reminder_transient_owner_input_v1"
 	// DaemonCapabilityAgentLifecycleActions gates the restart/reset-session/
 	// full-reset lifecycle actions (task #62). Advertised as of the
 	// atomic.Pointer deadlock fix + real end-to-end verification (busy
@@ -572,6 +576,45 @@ type ReminderProjectionAckPayload struct {
 
 type ReminderFireResultPayload struct {
 	Projection ReminderProjectionEvent `json:"projection"`
+}
+
+// ReminderOwnerInputPayload is one post-commit, best-effort Reminder input for
+// the current owner placement. It is deliberately not a Message projection and
+// carries no delivery identity or acknowledgement contract.
+type ReminderOwnerInputPayload struct {
+	WorkspaceID         string                       `json:"workspace_id"`
+	AgentID             string                       `json:"agent_id"`
+	RuntimeID           string                       `json:"runtime_id"`
+	PlacementGeneration int64                        `json:"placement_generation"`
+	ReminderID          string                       `json:"reminder_id"`
+	Version             int64                        `json:"version"`
+	Title               string                       `json:"title"`
+	Anchor              ReminderOwnerInputAnchor     `json:"anchor"`
+	Occurrence          ReminderOwnerInputOccurrence `json:"occurrence"`
+}
+
+// ReminderOwnerInputAnchor is the already-authorized return surface and a
+// bounded excerpt from the immutable Message Anchor. When Available is false,
+// every other field must be empty so unavailable context cannot leak.
+type ReminderOwnerInputAnchor struct {
+	Available           bool   `json:"available"`
+	ChannelID           string `json:"channel_id,omitempty"`
+	MessageID           string `json:"message_id,omitempty"`
+	ThreadRootMessageID string `json:"thread_root_message_id,omitempty"`
+	Target              string `json:"target,omitempty"`
+	ReplyTarget         string `json:"reply_target,omitempty"`
+	Excerpt             string `json:"excerpt,omitempty"`
+}
+
+// ReminderOwnerInputOccurrence supplies only bounded scheduling context for
+// the committed fire. It is diagnostic context inside the private input, not a
+// second lifecycle or delivery record.
+type ReminderOwnerInputOccurrence struct {
+	OccurrenceID string `json:"occurrence_id"`
+	ScheduledFor string `json:"scheduled_for"`
+	DueAt        string `json:"due_at"`
+	Cadence      string `json:"cadence,omitempty"`
+	Timezone     string `json:"timezone,omitempty"`
 }
 
 // DaemonAgentStopPayload removes an Agent from the daemon-local lifecycle

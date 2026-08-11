@@ -1,12 +1,24 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestTruncateReminderOwnerInputExcerptIsRuneSafeAndDaemonBounded(t *testing.T) {
+	input := "  " + strings.Repeat("界", reminderOwnerInputExcerptMaxRunes+1) + "  "
+	got := truncateReminderOwnerInputExcerpt(input)
+	if runes := []rune(got); len(runes) != reminderOwnerInputExcerptMaxRunes+1 || runes[len(runes)-1] != '…' {
+		t.Fatalf("truncated rune shape=%d/%q", len(runes), string(runes[len(runes)-1]))
+	}
+	if len(got) > 4<<10 {
+		t.Fatalf("truncated excerpt bytes=%d exceed daemon bound", len(got))
+	}
+}
 
 func TestParseReminderFireAt(t *testing.T) {
 	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)

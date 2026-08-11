@@ -2,11 +2,12 @@
  * @vitest-environment jsdom
  */
 import { QueryClient, QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
 import { channelKeys } from "../channels/queries";
+import { channelGoalKeys } from "../channels/goal";
 import { runnerActivityKeys, runnerActivitySummaryKeys } from "../agents/queries";
 import { agentPresenceKeys } from "../agents/agent-presence";
 import { researchKeys } from "../research/queries";
@@ -145,6 +146,43 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws1 });
 
     expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("coalesces graph updates and invalidates only the addressed Goal and Graph", () => {
+    vi.useFakeTimers();
+    try {
+      const ws = createMockWs();
+      renderHook(() => useRealtimeSync(ws, stores), {
+        wrapper: createWrapper(qc),
+      });
+      const channelUpdatedHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+        ([eventName]) => eventName === "channel:updated",
+      )?.[1] as ((payload: unknown) => void) | undefined;
+      expect(channelUpdatedHandler).toBeDefined();
+
+      invalidateSpy.mockClear();
+      act(() => {
+        channelUpdatedHandler?.({ id: "channel-1", work_graph_id: "graph-1" });
+        channelUpdatedHandler?.({ id: "channel-1", work_graph_id: "graph-1" });
+        vi.advanceTimersByTime(299);
+      });
+      expect(invalidateSpy).not.toHaveBeenCalled();
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(invalidateSpy).toHaveBeenCalledTimes(2);
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: channelGoalKeys.detail("channel-1"),
+        exact: true,
+      });
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: channelGoalKeys.workGraph("graph-1"),
+        exact: true,
+      });
+      expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: channelGoalKeys.all() });
+      expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: channelGoalKeys.workGraphs() });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("patches runner activity without invalidating agent queries", () => {

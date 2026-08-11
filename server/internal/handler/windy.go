@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,8 +24,6 @@ import (
 
 const (
 	windyAgentName                 = "Wendy"
-	legacyWindyAgentName           = "Windy"
-	legacyJoeAgentName             = "Joe"
 	windyAgentTemplate             = "windy_hr"
 	windyDescription               = "Personal HR and team-building lead for organizing Multica agents and teams."
 	windyMaxDraftNameLen           = 80
@@ -186,6 +183,13 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to load Wendy")
 			return
 		}
+		// Setup predating the durable first-start contract may already have a
+		// bound Wendy without the intent that gives the Computer her placement.
+		// Keep this idempotent completion path as a repair boundary too.
+		if _, err := ensureAgentDurableStartIntent(r.Context(), h.DB, wsUUID, agent.ID, agent.RuntimeID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to repair Wendy startup")
+			return
+		}
 		dmID := ""
 		if ch, ok := h.ensureWindyDM(r, workspaceID, parseUUID(userID), agent.ID); ok {
 			dmID = ch.ID
@@ -225,13 +229,9 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	agent, created, err := h.provisionOnboardingAgent(r.Context(), wsUUID, runtime, setup.Model, setup.ThinkingLevel)
+	agent, created, err := h.provisionOnboardingAgent(r.Context(), wsUUID, parseUUID(userID), runtime, setup.Model, setup.ThinkingLevel)
 	if err != nil {
 		slog.Warn("ensure Wendy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
-		if errors.Is(err, errMultipleLegacyOnboardingAgents) {
-			writeCodedError(w, http.StatusConflict, "onboarding_agent_ambiguous", err.Error())
-			return
-		}
 		writeError(w, http.StatusInternalServerError, "failed to create Wendy")
 		return
 	}
@@ -264,12 +264,12 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, WindyResponse{Agent: resp, DMID: dmID})
 }
 
-var errMultipleLegacyOnboardingAgents = errors.New("multiple legacy onboarding-agent candidates require owner repair")
-
 // provisionOnboardingAgent is the setup commit boundary. The workspace row lock
-// serializes retries while the transaction creates or adopts Wendy, binds her,
-// joins #general, and writes the deterministic welcome messages.
-func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID pgtype.UUID, runtime db.AgentRuntime, model string, thinkingLevel string) (db.Agent, bool, error) {
+// serializes retries while the shared Agent creation path creates the Agent,
+// then this role-specific layer binds it as onboarding and writes welcome
+// messages. The Agent's name is presentation only and never identifies the
+// onboarding role.
+func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID, creatorID pgtype.UUID, runtime db.AgentRuntime, model string, thinkingLevel string) (db.Agent, bool, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return db.Agent{}, false, err
@@ -286,7 +286,13 @@ func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID pgty
 		if err != nil {
 			return db.Agent{}, false, err
 		}
-		if err := h.ensureOnboardingAgentGeneralAndWelcomeTx(ctx, tx, workspaceID, agent.ID); err != nil {
+		if err := ensureAgentGeneralMembership(ctx, tx, workspaceID, agent.ID); err != nil {
+			return db.Agent{}, false, err
+		}
+		if err := h.ensureOnboardingAgentWelcomeTx(ctx, tx, workspaceID, agent.ID); err != nil {
+			return db.Agent{}, false, err
+		}
+		if _, err := ensureAgentDurableStartIntent(ctx, tx, workspaceID, agent.ID, agent.RuntimeID); err != nil {
 			return db.Agent{}, false, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -295,45 +301,30 @@ func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID pgty
 		return agent, false, nil
 	}
 
-	ownerID, err := qtx.GetFirstWorkspaceOwnerUserID(ctx, workspaceID)
+	thinking := pgtype.Text{}
+	if thinkingLevel != "" {
+		thinking = pgtype.Text{String: thinkingLevel, Valid: true}
+	}
+	agent, err := h.createAgentManagedTx(ctx, tx, qtx, workspaceID, db.CreateAgentParams{
+		WorkspaceID: workspaceID, Description: windyDescription, Instructions: windyInstructions,
+		AvatarUrl: pgtype.Text{String: windyAvatarURL, Valid: true}, AvatarSource: agentAvatarSourceAssigned,
+		RuntimeMode: runtime.RuntimeMode, RuntimeConfig: []byte("{}"), RuntimeID: runtime.ID,
+		MaxConcurrentTasks: 6, OwnerID: creatorID, CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
+		Model: pgtype.Text{String: model, Valid: true}, ThinkingLevel: thinking,
+	}, windyAgentName)
 	if err != nil {
 		return db.Agent{}, false, err
-	}
-	agents, err := qtx.ListAllAgents(ctx, workspaceID)
-	if err != nil {
-		return db.Agent{}, false, err
-	}
-	agent, candidateCount := selectOwnedWindyAgent(agents, ownerID)
-	if candidateCount > 1 {
-		return db.Agent{}, false, errMultipleLegacyOnboardingAgents
-	}
-	created := candidateCount == 0
-	if created {
-		thinking := pgtype.Text{}
-		if thinkingLevel != "" {
-			thinking = pgtype.Text{String: thinkingLevel, Valid: true}
-		}
-		agent, err = h.createAgentWithIdentityTx(ctx, tx, qtx, db.CreateAgentParams{
-			WorkspaceID: workspaceID, Description: windyDescription, Instructions: windyInstructions,
-			AvatarUrl: pgtype.Text{String: windyAvatarURL, Valid: true}, AvatarSource: agentAvatarSourceAssigned,
-			RuntimeMode: runtime.RuntimeMode, RuntimeConfig: []byte("{}"), RuntimeID: runtime.ID,
-			MaxConcurrentTasks: 6, OwnerID: ownerID, CustomEnv: []byte("{}"), CustomArgs: []byte("[]"),
-			Model: pgtype.Text{String: model, Valid: true}, ThinkingLevel: thinking,
-		}, windyAgentName, windyAgentName)
-		if err != nil {
-			return db.Agent{}, false, err
-		}
 	}
 	if err := qtx.SetWorkspaceOnboardingAgentID(ctx, db.SetWorkspaceOnboardingAgentIDParams{ID: workspaceID, OnboardingAgentID: agent.ID}); err != nil {
 		return db.Agent{}, false, err
 	}
-	if err := h.ensureOnboardingAgentGeneralAndWelcomeTx(ctx, tx, workspaceID, agent.ID); err != nil {
+	if err := h.ensureOnboardingAgentWelcomeTx(ctx, tx, workspaceID, agent.ID); err != nil {
 		return db.Agent{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return db.Agent{}, false, err
 	}
-	return agent, created, nil
+	return agent, true, nil
 }
 
 func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, runtimeID string) (db.AgentRuntime, bool) {
@@ -360,249 +351,6 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 	return db.AgentRuntime{}, false
 }
 
-// ensureWindyAgent resolves the workspace's single onboarding agent via
-// workspace.onboarding_agent_id, the persisted, name-independent binding
-// (task #902 — authorization/lookup must never key off display name again).
-//
-// binding set   -> reuse the bound agent (restore/refresh as needed).
-// binding unset -> look for the workspace owner's existing legacy-named
-//
-//	agent (Wendy/Windy/Joe) and adopt it; otherwise create a
-//	fresh one. Either way, bind it with a conditional UPDATE
-//	(SetWorkspaceOnboardingAgentID mirrors the
-//	SetDefaultSelfPlayEnv "first writer wins" pattern): if a
-//	concurrent ensure() already bound a different agent, that
-//	binding wins, and an agent this call created (but did not
-//	adopt) is archived so no orphan/duplicate is left behind.
-//
-// This intentionally does not touch or backfill any other workspace: an old
-// workspace's pre-existing Wendy/Windy/Joe rows are left exactly as they are
-// until (and unless) someone triggers ensure() there.
-func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID pgtype.UUID, runtime db.AgentRuntime) (db.Agent, bool, error) {
-	ctx := r.Context()
-
-	if boundID, err := h.Queries.GetWorkspaceOnboardingAgentID(ctx, workspaceID); err != nil {
-		return db.Agent{}, false, err
-	} else if boundID.Valid {
-		agent, err := h.Queries.GetAgent(ctx, boundID)
-		if err == nil {
-			updated, err := h.restoreAndNormalizeWindyAgent(r, agent)
-			if err != nil {
-				return db.Agent{}, false, err
-			}
-			return updated, false, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return db.Agent{}, false, err
-		}
-		// The bound agent row is gone (should only happen via a direct DB
-		// delete bypassing ON DELETE SET NULL timing); fall through and
-		// re-bind below.
-	}
-
-	ownerID, err := h.Queries.GetFirstWorkspaceOwnerUserID(ctx, workspaceID)
-	if err != nil {
-		return db.Agent{}, false, err
-	}
-
-	// isWindyAgentName/selectOwnedWindyAgent judge by display name — this is
-	// otherwise a banned pattern (never infer identity/role from a display
-	// name; task #902 exists because a permission check did exactly that).
-	// The one-time adoption below is the sole legitimate exception: with no
-	// binding yet, there is no other signal to find a pre-existing Wendy the
-	// owner already has. The moment a binding exists (the `if boundID.Valid`
-	// branch above), lookups are by workspace.onboarding_agent_id only, and
-	// name is never consulted again. Do not use this as a precedent for a
-	// new name-based check elsewhere.
-	agents, err := h.Queries.ListAllAgents(ctx, workspaceID)
-	if err != nil {
-		return db.Agent{}, false, err
-	}
-	candidate, candidateCount := selectOwnedWindyAgent(agents, ownerID)
-	if candidateCount > 1 {
-		return db.Agent{}, false, errMultipleLegacyOnboardingAgents
-	}
-	adopted := candidateCount == 1
-
-	mine := candidate
-	if !adopted {
-		created, err := h.createAgentWithIdentity(ctx, h.Queries, db.CreateAgentParams{
-			WorkspaceID:        workspaceID,
-			Description:        windyDescription,
-			Instructions:       windyInstructions,
-			AvatarUrl:          pgtype.Text{String: windyAvatarURL, Valid: true},
-			AvatarSource:       agentAvatarSourceAssigned,
-			RuntimeMode:        runtime.RuntimeMode,
-			RuntimeConfig:      []byte("{}"),
-			RuntimeID:          runtime.ID,
-			MaxConcurrentTasks: 6,
-			OwnerID:            ownerID,
-			CustomEnv:          []byte("{}"),
-			CustomArgs:         []byte("[]"),
-			McpConfig:          nil,
-			Model:              pgTextModelForRuntime(runtime.Provider),
-			ThinkingLevel:      pgtype.Text{},
-		}, windyAgentName, windyAgentName)
-		if err != nil {
-			return db.Agent{}, false, err
-		}
-		mine = created
-	}
-
-	if err := h.Queries.SetWorkspaceOnboardingAgentID(ctx, db.SetWorkspaceOnboardingAgentIDParams{
-		ID:                workspaceID,
-		OnboardingAgentID: mine.ID,
-	}); err != nil {
-		return db.Agent{}, false, err
-	}
-	winnerID, err := h.Queries.GetWorkspaceOnboardingAgentID(ctx, workspaceID)
-	if err != nil {
-		return db.Agent{}, false, err
-	}
-	if !winnerID.Valid || uuidToString(winnerID) != uuidToString(mine.ID) {
-		// Lost the race to a concurrent ensure() call. If we created a fresh
-		// agent for this attempt, archive it rather than leaving an orphan
-		// duplicate (the bug #902 exists to fix). An adopted candidate is a
-		// pre-existing agent and is left untouched either way.
-		if !adopted {
-			if _, archiveErr := h.Queries.ArchiveAgent(ctx, db.ArchiveAgentParams{ID: mine.ID, ArchivedBy: ownerID}); archiveErr != nil {
-				slog.Warn("archive losing onboarding agent failed", append(logger.RequestAttrs(r), "error", archiveErr, "workspace_id", uuidToString(workspaceID), "agent_id", uuidToString(mine.ID))...)
-			}
-		}
-		winner, err := h.Queries.GetAgent(ctx, winnerID)
-		if err != nil {
-			return db.Agent{}, false, err
-		}
-		updated, err := h.restoreAndNormalizeWindyAgent(r, winner)
-		if err != nil {
-			return db.Agent{}, false, err
-		}
-		return updated, false, nil
-	}
-
-	if adopted {
-		updated, err := h.restoreAndNormalizeWindyAgent(r, mine)
-		if err != nil {
-			return db.Agent{}, false, err
-		}
-		return updated, false, nil
-	}
-	return mine, true, nil
-}
-
-func selectOwnedWindyAgent(agents []db.Agent, userID pgtype.UUID) (db.Agent, int) {
-	var selected db.Agent
-	count := 0
-	for _, agent := range agents {
-		if !isOwnedWindyAgent(agent, userID) {
-			continue
-		}
-		count++
-		if count == 1 {
-			selected = agent
-		}
-	}
-	return selected, count
-}
-
-func isOwnedWindyAgent(agent db.Agent, userID pgtype.UUID) bool {
-	if !agent.OwnerID.Valid || uuidToString(agent.OwnerID) != uuidToString(userID) {
-		return false
-	}
-	return isWindyAgentName(agentDisplayName(agent))
-}
-
-func isWindyAgentName(name string) bool {
-	switch name {
-	case windyAgentName, legacyWindyAgentName, legacyJoeAgentName:
-		return true
-	default:
-		return false
-	}
-}
-
-func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent) (db.Agent, error) {
-	updated := agent
-	restored := false
-	if agent.ArchivedAt.Valid {
-		var err error
-		updated, err = h.Queries.RestoreAgent(r.Context(), agent.ID)
-		if err != nil {
-			return db.Agent{}, err
-		}
-		restored = true
-	}
-	if agentDisplayName(updated) != windyAgentName {
-		normalized, err := h.normalizeWindyAgent(r, updated)
-		if err != nil {
-			return db.Agent{}, err
-		}
-		updated = normalized
-	}
-	refreshed, err := h.refreshWindyInstructionsIfStale(r, updated)
-	if err != nil {
-		return db.Agent{}, err
-	}
-	updated = refreshed
-	updated, err = h.ensureWindyAgentModel(r.Context(), updated)
-	if err != nil {
-		return db.Agent{}, err
-	}
-	if restored {
-		resp := agentToResponse(updated)
-		h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), map[string]any{"agent": broadcastAgentResponse(resp)})
-		if updated.RuntimeID.Valid {
-			h.projectReminderOwnerStart(r.Context(), uuidToString(updated.ID), uuidToString(updated.RuntimeID))
-		}
-	}
-	return updated, nil
-}
-
-func (h *Handler) ensureWindyAgentModel(ctx context.Context, agent db.Agent) (db.Agent, error) {
-	if strings.TrimSpace(agent.Model.String) != "" {
-		return agent, nil
-	}
-	if !agent.RuntimeID.Valid {
-		return agent, fmt.Errorf("wendy agent %s has no runtime for model backfill", uuidToString(agent.ID))
-	}
-	runtime, err := h.Queries.GetAgentRuntime(ctx, agent.RuntimeID)
-	if err != nil {
-		return db.Agent{}, err
-	}
-	return ensureAgentHasExplicitModel(ctx, h.Queries, agent, runtime.Provider)
-}
-
-func (h *Handler) refreshWindyInstructionsIfStale(r *http.Request, agent db.Agent) (db.Agent, error) {
-	if strings.Contains(agent.Instructions, windyInstructionsCapabilityMarker) &&
-		strings.Contains(agent.Instructions, windyInstructionsAvatarDraftMarker) {
-		return agent, nil
-	}
-	updated, err := h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{
-		ID:           agent.ID,
-		Instructions: pgtype.Text{String: windyInstructions, Valid: true},
-		Description:  pgtype.Text{String: windyDescription, Valid: true},
-	})
-	if err != nil {
-		return db.Agent{}, err
-	}
-	resp := agentToResponse(updated)
-	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), updated, map[string]any{"agent": broadcastAgentResponse(resp)})
-	return updated, nil
-}
-
-func (h *Handler) normalizeWindyAgent(r *http.Request, agent db.Agent) (db.Agent, error) {
-	updated, err := h.Queries.UpdateAgent(r.Context(), db.UpdateAgentParams{
-		ID:          agent.ID,
-		DisplayName: pgtype.Text{String: windyAgentName, Valid: true},
-	})
-	if err != nil {
-		return db.Agent{}, err
-	}
-	resp := agentToResponse(updated)
-	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), updated, map[string]any{"agent": broadcastAgentResponse(resp)})
-	return updated, nil
-}
-
 func (h *Handler) ensureWindyDM(r *http.Request, workspaceID string, userID, windyID pgtype.UUID) (ChannelResponse, bool) {
 	canonical := dmCanonicalName("user", uuidToString(userID), "agent", uuidToString(windyID))
 	if ch, found := h.findDMChannel(r.Context(), workspaceID, canonical); found {
@@ -617,24 +365,13 @@ var onboardingWelcomeV1 = []string{
 	"Tell me what you’re working on. I’ll discuss the role with you and prepare a Hiring Proposal for an Owner or Admin to review.",
 }
 
-func (h *Handler) ensureOnboardingAgentGeneralAndWelcome(ctx context.Context, workspaceID, agentID pgtype.UUID) error {
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := h.ensureOnboardingAgentGeneralAndWelcomeTx(ctx, tx, workspaceID, agentID); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-func (h *Handler) ensureOnboardingAgentGeneralAndWelcomeTx(ctx context.Context, tx pgx.Tx, workspaceID, agentID pgtype.UUID) error {
-	if err := ensureAgentGeneralMembership(ctx, tx, workspaceID, agentID); err != nil {
-		return err
-	}
+func (h *Handler) ensureOnboardingAgentWelcomeTx(ctx context.Context, tx pgx.Tx, workspaceID, agentID pgtype.UUID) error {
 	var generalID pgtype.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM channel WHERE workspace_id = $1 AND system_key = 'general'`, workspaceID).Scan(&generalID); err != nil {
+		return err
+	}
+	var authorName string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(NULLIF(display_name, ''), name) FROM agent WHERE id = $1`, agentID).Scan(&authorName); err != nil {
 		return err
 	}
 	for _, content := range onboardingWelcomeV1 {
@@ -654,7 +391,7 @@ func (h *Handler) ensureOnboardingAgentGeneralAndWelcomeTx(ctx context.Context, 
 		// connection: finalizeAgentChannelMessage queries through h.DB and can
 		// deadlock with concurrent setup transactions waiting on the workspace
 		// row lock when the connection pool is small.
-		if _, err := insertChannelMessageWithPartsExec(ctx, tx, generalID, workspaceID, "agent", agentID, windyAgentName, content, nil, "multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0, channelMessageKindHint{}); err != nil {
+		if _, err := insertChannelMessageWithPartsExec(ctx, tx, generalID, workspaceID, "agent", agentID, authorName, content, nil, "multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil, pgtype.UUID{}, nil, 0, channelMessageKindHint{}); err != nil {
 			return err
 		}
 	}

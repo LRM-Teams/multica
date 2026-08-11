@@ -49,7 +49,25 @@ func TestEnsureWindy_RequiresOwnerExplicitRuntimeAndModelThenSeedsGeneral(t *tes
 	if response.Agent.Model != "explicit-setup-model" {
 		t.Fatalf("setup model=%v", response.Agent.Model)
 	}
+	var createdOwnerID string
+	if err := testPool.QueryRow(ctx, `SELECT owner_id::text FROM agent WHERE id = $1`, agentID).Scan(&createdOwnerID); err != nil {
+		t.Fatal(err)
+	}
+	if createdOwnerID != testUserID {
+		t.Fatalf("onboarding Agent owner_id = %q, want creator %q", createdOwnerID, testUserID)
+	}
 	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
+
+	var startIntentStatus, startIntentRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, runtime_id::text
+		FROM agent_start_intent
+		WHERE agent_id = $1`, agentID).Scan(&startIntentStatus, &startIntentRuntimeID); err != nil {
+		t.Fatalf("load Wendy first-start intent: %v", err)
+	}
+	if startIntentStatus != "pending" || startIntentRuntimeID != testRuntimeID {
+		t.Fatalf("Wendy first-start intent = status=%q runtime=%q", startIntentStatus, startIntentRuntimeID)
+	}
 
 	var membershipCount, welcomeCount int
 	if err := testPool.QueryRow(ctx, `
@@ -84,39 +102,101 @@ func TestEnsureWindy_RequiresOwnerExplicitRuntimeAndModelThenSeedsGeneral(t *tes
 	}
 }
 
-func TestEnsureWindy_AdoptsOneLegacyCandidateWithoutChangingRuntimeOrModel(t *testing.T) {
+func TestEnsureWindy_IdempotentRetryRepairsMissingStartIntent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	resetTestWorkspaceOnboardingAgent(t, ctx)
+
+	runtimeID := handlerTestRuntimeID(t)
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, runtime_mode, runtime_config,
+			runtime_id, max_concurrent_tasks, owner_id, model
+		) VALUES ($1, $2, 'Alice', 'local', '{}'::jsonb, $3, 6, $4, 'repair-model')
+		RETURNING id`, testWorkspaceID, "wendy-repair-"+uuid.NewString(), runtimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET onboarding_agent_id = $2 WHERE id = $1`, testWorkspaceID, agentID); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := newRequestAs(testUserID, http.MethodPost, "/api/agents/windy", map[string]string{})
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	testHandler.EnsureWindy(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("idempotent repair=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response WindyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Agent.DisplayName != "Alice" {
+		t.Fatalf("bound onboarding Agent was renamed from Alice to %q", response.Agent.DisplayName)
+	}
+
+	var status, gotRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, runtime_id::text
+		FROM agent_start_intent
+		WHERE agent_id = $1`, agentID).Scan(&status, &gotRuntimeID); err != nil {
+		t.Fatalf("load repaired Wendy first-start intent: %v", err)
+	}
+	if status != "pending" || gotRuntimeID != runtimeID {
+		t.Fatalf("repaired Wendy first-start intent = status=%q runtime=%q", status, gotRuntimeID)
+	}
+}
+
+func TestEnsureWindy_DoesNotInferOnboardingIdentityFromAgentName(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 	resetTestWorkspaceOnboardingAgent(t, ctx)
 	_ = ensureSystemGeneralForTest(t)
-	var legacyID string
-	const legacyModel = "legacy-model-must-survive"
+	var ordinaryAgentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_config,
 			runtime_id, max_concurrent_tasks, owner_id, model)
-		VALUES ($1, $2, 'Windy', 'local', '{}'::jsonb, $3, 1, $4, $5)
-		RETURNING id`, testWorkspaceID, "legacy-setup-"+uuid.NewString(), handlerTestRuntimeID(t), testUserID, legacyModel).Scan(&legacyID); err != nil {
+		VALUES ($1, $2, 'Wendy', 'local', '{}'::jsonb, $3, 1, $4, 'ordinary-agent-model')
+		RETURNING id`, testWorkspaceID, "ordinary-wendy-"+uuid.NewString(), handlerTestRuntimeID(t), testUserID).Scan(&ordinaryAgentID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, legacyID) })
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, ordinaryAgentID) })
 
 	rec := httptest.NewRecorder()
 	req := newRequestAs(testUserID, http.MethodPost, "/api/agents/windy", map[string]string{
-		"runtime_id": testRuntimeID, "model": "new-model-must-not-overwrite",
+		"runtime_id": testRuntimeID, "model": "onboarding-model",
 	})
 	req.Header.Set("X-Workspace-ID", testWorkspaceID)
 	testHandler.EnsureWindy(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("adopt=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("setup=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var gotModel, gotRuntime string
-	if err := testPool.QueryRow(ctx, `SELECT model, runtime_id FROM agent WHERE id = $1`, legacyID).Scan(&gotModel, &gotRuntime); err != nil {
+	var response WindyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if gotModel != legacyModel || gotRuntime != handlerTestRuntimeID(t) {
-		t.Fatalf("adoption changed model/runtime: %q %q", gotModel, gotRuntime)
+	if response.Agent.ID == ordinaryAgentID {
+		t.Fatalf("ordinary Agent named Wendy was adopted as onboarding Agent: %s", ordinaryAgentID)
+	}
+	var boundID string
+	if err := testPool.QueryRow(ctx, `SELECT onboarding_agent_id::text FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&boundID); err != nil {
+		t.Fatal(err)
+	}
+	if boundID != response.Agent.ID {
+		t.Fatalf("onboarding binding = %q, want newly created Agent %q", boundID, response.Agent.ID)
+	}
+	var ordinaryModel string
+	if err := testPool.QueryRow(ctx, `SELECT model FROM agent WHERE id = $1`, ordinaryAgentID).Scan(&ordinaryModel); err != nil {
+		t.Fatal(err)
+	}
+	if ordinaryModel != "ordinary-agent-model" {
+		t.Fatalf("ordinary Wendy-named Agent was mutated: model=%q", ordinaryModel)
 	}
 }
 
@@ -143,7 +223,7 @@ func TestProvisionOnboardingAgent_RollsBackWholeSetupOnWelcomeFailure(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = testHandler.provisionOnboardingAgent(ctx, parseUUID(testWorkspaceID), runtime, "rollback-model", "")
+	_, _, err = testHandler.provisionOnboardingAgent(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID), runtime, "rollback-model", "")
 	if err == nil {
 		t.Fatal("setup unexpectedly succeeded")
 	}

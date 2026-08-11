@@ -271,17 +271,17 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	req.WorkspaceID = uuidToString(wsUUID)
 
-	// Verify workspace access and resolve owner.
-	// Daemon tokens (mdt_) prove workspace access directly; OwnerID will be zero
-	// (the SQL COALESCE preserves any existing owner on upsert).
-	// PAT/JWT tokens require a membership check and set OwnerID from the member.
+	// Verify workspace access and resolve the user who connected this Computer
+	// to the Workspace. PAT/JWT requests carry that user directly. Daemon-token
+	// reconnects recover the same user from the durable Computer binding below.
 	var ownerID pgtype.UUID
+	daemonTokenRequest := false
 	if daemonWsID := middleware.DaemonWorkspaceIDFromContext(r.Context()); daemonWsID != "" {
 		if daemonWsID != req.WorkspaceID {
 			writeError(w, http.StatusNotFound, "workspace not found")
 			return
 		}
-		// ownerID stays zero — COALESCE keeps the existing owner on upsert.
+		daemonTokenRequest = true
 	} else {
 		member, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found")
 		if !ok {
@@ -323,6 +323,18 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	registrationHandler := *h
 	registrationHandler.Queries = h.Queries.WithTx(registrationLock)
 	registrationHandler.DB = registrationLock
+	if daemonTokenRequest {
+		err := registrationLock.QueryRow(r.Context(), `
+			SELECT user_id
+			FROM computer_workspace_bindings
+			WHERE daemon_id = $1 AND workspace_id = $2
+			  AND active = TRUE AND revoked_at IS NULL
+		`, req.DaemonID, wsUUID).Scan(&ownerID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "failed to resolve Computer connection owner")
+			return
+		}
+	}
 
 	tombstoned, err := registrationHandler.Queries.IsDaemonRegistrationTombstoned(r.Context(), db.IsDaemonRegistrationTombstonedParams{
 		WorkspaceID: wsUUID,

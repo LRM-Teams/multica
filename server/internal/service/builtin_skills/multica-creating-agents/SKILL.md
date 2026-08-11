@@ -63,6 +63,10 @@ opens the same dialog). At task claim time the daemon re-reads the agent row and
 assembles the runtime payload — so the **persisted** fields, not create-time
 CLI output, are what the agent runs on.
 
+The Workspace Onboarding Agent uses the same generic Agent creation transaction.
+Its additional role is identified only by `workspace.onboarding_agent_id`;
+`Wendy` is a default display name, not an identity or authorization predicate.
+
 Two distinct text fields, often confused:
 
 - `description` is a catalog summary. It is stored and shown in listings; the

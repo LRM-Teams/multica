@@ -124,3 +124,16 @@ func TestPolicyCouplingGuardTriggerNames(t *testing.T) {
 		t.Fatalf("policy coupling triggers=%v want=%v", got, want)
 	}
 }
+
+func TestPolicyLedgerGuardTriggerNames(t *testing.T) {
+	want := []string{
+		"research_artifact_passport_to_policy_mutation_guard",
+		"research_artifact_policy_mutation_to_passport_guard",
+	}
+	got := PolicyLedgerGuardTriggerNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("policy ledger triggers=%v want=%v", got, want)
+	}
+}

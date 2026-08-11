@@ -151,3 +151,11 @@ func PolicyCouplingGuardTriggerNames() []string {
 		"research_artifact_policy_mutation_to_grant_guard",
 	}
 }
+
+// PolicyLedgerGuardTriggerNames lists migration 322 generic policy ledger guards.
+func PolicyLedgerGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_passport_to_policy_mutation_guard",
+		"research_artifact_policy_mutation_to_passport_guard",
+	}
+}

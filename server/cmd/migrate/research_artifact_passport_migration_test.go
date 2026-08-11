@@ -574,3 +574,123 @@ func TestResearchArtifactPolicyCouplingGuards321RoundTrips(t *testing.T) {
 		t.Fatalf("reapply 321 up: %v", err)
 	}
 }
+
+func TestResearchArtifactPolicyLedgerGuards322RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_policy_322_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	taskID := "30000000-0000-4000-8000-000000000003"
+
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO research_session (id, workspace_id) VALUES ($1::uuid, $2::uuid)`, sessionID, workspaceID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
+	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
+	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
+	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
+	up322, down322 := readMigrationPair(t, "322_research_artifact_policy_ledger_guards")
+	for _, upSQL := range []string{up318, up319, up320, up321, up322} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+
+	positiveTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin positive tx: %v", err)
+	}
+	if _, err = positiveTx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+		VALUES ($1::uuid, $2::uuid, 'legacy-v1-v5-compat-v1', 0)
+		ON CONFLICT (workspace_id, session_id) DO NOTHING
+	`, workspaceID, sessionID); err != nil {
+		positiveTx.Rollback(ctx)
+		t.Fatalf("insert policy state: %v", err)
+	}
+	if _, err = positiveTx.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'ledger-positive', 1, 1)
+	`, taskID, workspaceID, sessionID); err != nil {
+		positiveTx.Rollback(ctx)
+		t.Fatalf("insert task: %v", err)
+	}
+	if _, err = positiveTx.Exec(ctx, `
+		SELECT research_artifact_backfill_registered($1::uuid, $2::uuid, $3::uuid, 'task', now(), 1, 1)
+	`, workspaceID, sessionID, taskID); err != nil {
+		positiveTx.Rollback(ctx)
+		t.Fatalf("register task passport: %v", err)
+	}
+	if _, err = positiveTx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
+		positiveTx.Rollback(ctx)
+		t.Fatalf("set constraints immediate: %v", err)
+	}
+	if err = positiveTx.Commit(ctx); err != nil {
+		t.Fatalf("commit ledger coupling tx: %v", err)
+	}
+
+	var mutationCount int
+	if err = conn.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_artifact_policy_mutation
+		WHERE artifact_id = $1::uuid AND mutation_kind = 'artifact_create'
+	`, taskID).Scan(&mutationCount); err != nil || mutationCount != 1 {
+		t.Fatalf("artifact_create mutations=%d err=%v", mutationCount, err)
+	}
+
+	negativeTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin negative tx: %v", err)
+	}
+	orphanID := "30000000-0000-4000-8000-000000000099"
+	if _, err = negativeTx.Exec(ctx, `
+		INSERT INTO research_artifact_passport (
+		  id, workspace_id, session_id, entity_kind, current_version, eligibility_revision,
+		  lifecycle_status, provenance_completeness, registered_at
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'task', 1, 1, 'registered', 'partial', now()
+		)
+	`, orphanID, workspaceID, sessionID); err != nil {
+		negativeTx.Rollback(ctx)
+		t.Fatalf("insert orphan passport: %v", err)
+	}
+	if err = negativeTx.Commit(ctx); err == nil {
+		t.Fatal("expected orphan passport insert without artifact_create mutation to fail")
+	} else {
+		negativeTx.Rollback(ctx)
+	}
+
+	if _, err = conn.Exec(ctx, down322); err != nil {
+		t.Fatalf("apply 322 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up322); err != nil {
+		t.Fatalf("reapply 322 up: %v", err)
+	}
+}

@@ -119,6 +119,12 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 		  AND current_version IS NULL
 	`, in.WorkspaceID, in.SessionID, in.EntityID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		SELECT research_artifact_record_artifact_create_mutation($1::uuid, $2::uuid, $3::uuid)
+	`, in.WorkspaceID, in.SessionID, in.EntityID)
 	return err
 }
 

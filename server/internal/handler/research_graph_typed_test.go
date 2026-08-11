@@ -125,7 +125,7 @@ func setupMergableResearchSession(t *testing.T, title string) (pgtype.UUID, stri
 // have real persisted results to fuse.
 func makeTypedInputNode(t *testing.T, sessionID pgtype.UUID, round int32, title string) pgtype.UUID {
 	t.Helper()
-	n, err := testHandler.Queries.CreateResearchGraphNodeTyped(context.Background(), db.CreateResearchGraphNodeTypedParams{
+	n := createTestGraphNodeTyped(t, context.Background(), db.CreateResearchGraphNodeTypedParams{
 		WorkspaceID:     parseUUID(testWorkspaceID),
 		SessionID:       sessionID,
 		NodeType:        "finding",
@@ -147,9 +147,6 @@ func makeTypedInputNode(t *testing.T, sessionID pgtype.UUID, round int32, title 
 		InvalidatedBy:   pgtype.UUID{},
 		Payload:         []byte(`{}`),
 	})
-	if err != nil {
-		t.Fatalf("create typed input node: %v", err)
-	}
 	return n.ID
 }
 
@@ -365,12 +362,7 @@ func TestResearchGraphMergeCrossWorkspaceRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO research_graph_node (id, workspace_id, session_id, node_type, title, summary, status, payload)
-		VALUES ($1, $2, $3, 'finding', 'foreign-ws', 'foreign', 'active', '{}'::jsonb)
-	`, foreignID, otherWSID, sessionA); err != nil {
-		t.Fatalf("insert foreign-workspace node: %v", err)
-	}
+	insertTestGraphNodeRaw(t, ctx, parseUUID(foreignID.String()), parseUUID(otherWSID.String()), sessionA, "finding", "foreign-ws", "foreign")
 
 	code, body := doMerge(t, sessionA, agentID,
 		[]string{uuidToString(nA), uuidToString(nB), foreignID.String()},

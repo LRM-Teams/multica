@@ -92,7 +92,7 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 		t.Fatalf("mark session quiet: %v", err)
 	}
 
-	goal, err := testHandler.Queries.CreateResearchGraphNode(ctx, db.CreateResearchGraphNodeParams{
+	goal := createTestGraphNode(t, ctx, db.CreateResearchGraphNodeParams{
 		WorkspaceID:  wsUUID,
 		SessionID:    sessionID,
 		NodeType:     "goal",
@@ -102,11 +102,8 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 		ActorAgentID: parseUUID(leadID),
 		Payload:      []byte(`{"seed":true}`),
 	})
-	if err != nil {
-		t.Fatalf("create goal node: %v", err)
-	}
 	for i := 0; i < 3; i++ {
-		sq, err := testHandler.Queries.CreateResearchGraphNode(ctx, db.CreateResearchGraphNodeParams{
+		sq := createTestGraphNode(t, ctx, db.CreateResearchGraphNodeParams{
 			WorkspaceID:  wsUUID,
 			SessionID:    sessionID,
 			NodeType:     "subquestion",
@@ -116,18 +113,13 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 			ActorAgentID: parseUUID(leadID),
 			Payload:      marshalJSONRaw(map[string]any{"seed": true, "index": i}),
 		})
-		if err != nil {
-			t.Fatalf("create subquestion %d: %v", i, err)
-		}
-		if _, err := testHandler.Queries.CreateResearchGraphEdge(ctx, db.CreateResearchGraphEdgeParams{
+		createTestGraphEdge(t, ctx, db.CreateResearchGraphEdgeParams{
 			WorkspaceID: wsUUID,
 			SessionID:   sessionID,
 			FromNodeID:  goal.ID,
 			ToNodeID:    sq.ID,
 			EdgeType:    "leads_to",
-		}); err != nil {
-			t.Fatalf("create edge %d: %v", i, err)
-		}
+		})
 	}
 
 	emitted, err := testHandler.ProcessResearchNextSteps(ctx, 8)

@@ -74,6 +74,54 @@ func (h *Handler) emitResearchProcessCard(
 	})
 }
 
+func (h *Handler) createResearchGraphNodeWithPassport(
+	ctx context.Context,
+	wsUUID, sessionID pgtype.UUID,
+	params db.CreateResearchGraphNodeParams,
+	fromNodeID pgtype.UUID,
+	edgeType string,
+) (db.ResearchGraphNode, *db.ResearchGraphEdge, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return db.ResearchGraphNode{}, nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	qtx := h.Queries.WithTx(tx)
+	node, err := qtx.CreateResearchGraphNode(ctx, params)
+	if err != nil {
+		return db.ResearchGraphNode{}, nil, err
+	}
+	if err := ensureGraphNodePassportTx(ctx, tx, wsUUID, sessionID, node.ID); err != nil {
+		return db.ResearchGraphNode{}, nil, err
+	}
+
+	var edge *db.ResearchGraphEdge
+	if fromNodeID.Valid {
+		if edgeType == "" {
+			edgeType = "leads_to"
+		}
+		e, eerr := qtx.CreateResearchGraphEdge(ctx, db.CreateResearchGraphEdgeParams{
+			WorkspaceID: wsUUID,
+			SessionID:   sessionID,
+			FromNodeID:  fromNodeID,
+			ToNodeID:    node.ID,
+			EdgeType:    edgeType,
+		})
+		if eerr != nil {
+			return db.ResearchGraphNode{}, nil, eerr
+		}
+		if err := ensureGraphEdgePassportTx(ctx, tx, wsUUID, sessionID, e.ID); err != nil {
+			return db.ResearchGraphNode{}, nil, err
+		}
+		edge = &e
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.ResearchGraphNode{}, nil, err
+	}
+	return node, edge, nil
+}
+
 func (h *Handler) createResearchGraphNodePublished(
 	ctx context.Context,
 	workspaceID string,
@@ -83,25 +131,9 @@ func (h *Handler) createResearchGraphNodePublished(
 	fromNodeID pgtype.UUID,
 	edgeType string,
 ) (db.ResearchGraphNode, *db.ResearchGraphEdge, error) {
-	node, err := h.Queries.CreateResearchGraphNode(ctx, params)
+	node, edge, err := h.createResearchGraphNodeWithPassport(ctx, wsUUID, sessionID, params, fromNodeID, edgeType)
 	if err != nil {
 		return db.ResearchGraphNode{}, nil, err
-	}
-	var edge *db.ResearchGraphEdge
-	if fromNodeID.Valid {
-		if edgeType == "" {
-			edgeType = "leads_to"
-		}
-		e, eerr := h.Queries.CreateResearchGraphEdge(ctx, db.CreateResearchGraphEdgeParams{
-			WorkspaceID: wsUUID,
-			SessionID:   sessionID,
-			FromNodeID:  fromNodeID,
-			ToNodeID:    node.ID,
-			EdgeType:    edgeType,
-		})
-		if eerr == nil {
-			edge = &e
-		}
 	}
 	h.publishResearchGraph(workspaceID, actorType, actorID, sessionID, node, edge)
 	return node, edge, nil

@@ -1559,6 +1559,144 @@ func TestHumanReminderAnchorDenialOmitsRawMetadata(t *testing.T) {
 	}
 }
 
+func TestHumanReminderAnchorRequiresEligibleOwnerAgent(t *testing.T) {
+	for _, mode := range []string{"membership_removed", "agent_archived"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+			anchor := fixture.insertMessage(t, "user", testUserID, "protected anchor", nil)
+			reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+			reminder, err := scanAgentReminder(testPool.QueryRow(context.Background(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "membership_removed":
+				if _, err := testPool.Exec(context.Background(), `
+					DELETE FROM channel_member
+					WHERE channel_id = $1 AND workspace_id = $2
+					  AND member_type = 'agent' AND member_id = $3`,
+					fixture.channel.ID, testWorkspaceID, fixture.agentIDs[0]); err != nil {
+					t.Fatal(err)
+				}
+			case "agent_archived":
+				if _, err := testPool.Exec(context.Background(), `UPDATE agent SET archived_at = now() WHERE id = $1`, fixture.agentIDs[0]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			request := withChannelTestWorkspaceCtx(t,
+				newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
+			got := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder)
+			encoded, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != `{"available":false}` {
+				t.Fatalf("ineligible owner leaked anchor metadata: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestReminderThreadAnchorRequiresExactStoredReplyRoot(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	rootA := fixture.insertMessage(t, "user", testUserID, "root a", nil)
+	rootB := fixture.insertMessage(t, "system", testUserID, "root b", nil)
+	insertedReply, err := insertChannelMessageWithPartsExec(context.Background(), testPool,
+		parseUUID(fixture.channel.ID), parseUUID(testWorkspaceID), "agent", parseUUID(fixture.agentIDs[0]),
+		"Reminder Agent", "reply secret", nil, "multica", nil, nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, parseUUID(rootA.ID), stringPtr("reminder-root-mismatch"), 0, channelMessageKindHint{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, insertedReply.Message.ID, "", "")
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_reminder SET anchor_thread_root_message_id = $2 WHERE id = $1`, reminderID, rootB.ID); err != nil {
+		t.Fatal(err)
+	}
+	reminder, err := scanAgentReminder(testPool.QueryRow(context.Background(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := withChannelTestWorkspaceCtx(t,
+		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
+	if got := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder); got != (humanReminderAnchor{Available: false}) {
+		t.Fatalf("mismatched thread root human anchor=%+v want unavailable", got)
+	}
+	notifier := &capturedReminderOwnerInputNotifier{}
+	fixture.handler.ReminderOwnerInputNotifier = notifier
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+		t.Fatalf("fire mismatched-root reminder: %v", err)
+	}
+	if calls := notifier.snapshot(); len(calls) != 1 || calls[0].payload.Anchor != (protocol.ReminderOwnerInputAnchor{}) {
+		t.Fatalf("mismatched thread root transient input=%+v want unavailable anchor", calls)
+	}
+}
+
+func TestReminderAuthorizedAnchorSupportsCanonicalAuthorTypes(t *testing.T) {
+	for _, authorType := range []string{"user", "agent", "system"} {
+		t.Run(authorType, func(t *testing.T) {
+			fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+			authorID := ""
+			switch authorType {
+			case "user":
+				authorID = testUserID
+			case "agent":
+				authorID = fixture.agentIDs[0]
+			}
+			anchor := fixture.insertMessage(t, authorType, authorID, authorType+" anchor", nil)
+			reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+			reminder, err := scanAgentReminder(testPool.QueryRow(context.Background(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := withChannelTestWorkspaceCtx(t,
+				newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
+			if got := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder); !got.Available || got.Href == nil {
+				t.Fatalf("%s human anchor=%+v want available", authorType, got)
+			}
+			notifier := &capturedReminderOwnerInputNotifier{}
+			fixture.handler.ReminderOwnerInputNotifier = notifier
+			if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+				t.Fatalf("fire %s-authored anchor: %v", authorType, err)
+			}
+			calls := notifier.snapshot()
+			if len(calls) != 1 || !calls[0].payload.Anchor.Available || calls[0].payload.Anchor.MessageID != anchor.ID ||
+				calls[0].payload.Anchor.Excerpt != authorType+" anchor" {
+				t.Fatalf("%s transient anchor=%+v", authorType, calls)
+			}
+		})
+	}
+}
+
+func TestReminderAuthorizedAnchorPreservesDMReturnSurface(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET kind = 'dm' WHERE id = $1`, fixture.channel.ID); err != nil {
+		t.Fatal(err)
+	}
+	anchor := fixture.insertMessage(t, "user", testUserID, "dm anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+	reminder, err := scanAgentReminder(testPool.QueryRow(context.Background(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := withChannelTestWorkspaceCtx(t,
+		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders", nil), testUserID)
+	humanAnchor := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder)
+	if !humanAnchor.Available || humanAnchor.Display == nil || strings.TrimSpace(*humanAnchor.Display) == "" || strings.Contains(*humanAnchor.Display, fixture.channel.Name) {
+		t.Fatalf("DM human anchor=%+v want safe peer display", humanAnchor)
+	}
+	notifier := &capturedReminderOwnerInputNotifier{}
+	fixture.handler.ReminderOwnerInputNotifier = notifier
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+		t.Fatalf("fire DM anchor: %v", err)
+	}
+	calls := notifier.snapshot()
+	if len(calls) != 1 || calls[0].payload.Anchor.Target != "channel:"+fixture.channel.ID ||
+		!strings.HasPrefix(calls[0].payload.Anchor.ReplyTarget, "dm:@") || calls[0].payload.Anchor.Excerpt != "dm anchor" {
+		t.Fatalf("DM transient anchor=%+v", calls)
+	}
+}
+
 func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)

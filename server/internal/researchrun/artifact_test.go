@@ -107,3 +107,33 @@ func TestReciprocalArtifactPassportGuardTriggerNames(t *testing.T) {
 		t.Fatalf("guard triggers=%v want=%v", got, want)
 	}
 }
+
+func TestPolicyCouplingGuardTriggerNames(t *testing.T) {
+	want := []string{
+		"research_source_snapshot_verification_to_policy_guard",
+		"research_observation_verification_to_policy_guard",
+		"research_claim_evidence_verification_to_policy_guard",
+		"research_artifact_policy_mutation_to_verification_guard",
+		"research_artifact_policy_grant_to_mutation_guard",
+		"research_artifact_policy_mutation_to_grant_guard",
+	}
+	got := PolicyCouplingGuardTriggerNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("policy coupling triggers=%v want=%v", got, want)
+	}
+}
+
+func TestPolicyLedgerGuardTriggerNames(t *testing.T) {
+	want := []string{
+		"research_artifact_passport_to_policy_mutation_guard",
+		"research_artifact_policy_mutation_to_passport_guard",
+	}
+	got := PolicyLedgerGuardTriggerNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("policy ledger triggers=%v want=%v", got, want)
+	}
+}

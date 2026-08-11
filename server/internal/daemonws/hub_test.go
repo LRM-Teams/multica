@@ -268,12 +268,16 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	hub := NewHub()
 	var accepted atomic.Int64
 	var runnerReady atomic.Int64
+	var attachmentReceipts atomic.Int64
 	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, _ json.RawMessage) error {
 		if eventType == protocol.EventAgentStartAck {
 			accepted.Add(1)
 		}
 		if eventType == protocol.EventWorkspaceRunnerReady {
 			runnerReady.Add(1)
+		}
+		if eventType == protocol.EventAgentAttached {
+			attachmentReceipts.Add(1)
 		}
 		return nil
 	})
@@ -325,6 +329,19 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 			t.Fatal("replacement Runner did not become ready")
 		}
 		time.Sleep(time.Millisecond)
+	}
+	// The replaced socket either rejects this write locally or the Hub drops it
+	// at the current-ready fence. It must never reach the receipt handler.
+	staleReceipt, err := json.Marshal(protocol.Message{Type: protocol.EventAgentAttached, Payload: mustMarshalRaw(protocol.WorkspaceRunnerAgentAttachedPayload{
+		AgentID: "agent-a", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "stale-receipt",
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.WriteMessage(websocket.TextMessage, staleReceipt)
+	time.Sleep(20 * time.Millisecond)
+	if attachmentReceipts.Load() != 0 {
+		t.Fatal("replaced Runner receipt bypassed current-ready fence")
 	}
 	if !hub.NotifyWorkspaceRunner("daemon-1", "workspace-1", protocol.EventWorkspaceRunnerPing, protocol.WorkspaceRunnerPingPayload{PingID: "ping-1"}) {
 		t.Fatal("current Runner did not receive ping")

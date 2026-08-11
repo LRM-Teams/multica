@@ -206,7 +206,7 @@ describe("mergeTypedGraphPages", () => {
           invalidated: {},
           supersedes: {},
         },
-      }) as TypedGraphResponse;
+      }) as unknown as TypedGraphResponse;
 
     const merged = mergeTypedGraphPages([makePage(0, 800), makePage(800, 800)], {
       nodeBudget: 1000,
@@ -237,7 +237,7 @@ describe("mergeTypedGraphPages", () => {
         invalidated: {},
         supersedes: {},
       },
-    } as TypedGraphResponse;
+    } as unknown as TypedGraphResponse;
 
     const merged = mergeTypedGraphPages([page], {
       nodeBudget: 2,

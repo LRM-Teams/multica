@@ -61,11 +61,12 @@ import {
   type View,
 } from "../graph-model/positioner";
 import type { Point } from "../graph-model/types";
+import { RESEARCH_TYPED_GRAPH_CACHE_NODE_BUDGET } from "@multica/core/research";
 
 /** Single request must never exceed the page size the client requested. */
 export const PER_PAGE_MAX = 500;
-/** Retained-node budget the page cache must not exceed. */
-export const CACHE_NODE_BUDGET = 1500;
+/** Retained-node budget the page cache must not exceed (typed-graph client cache). */
+export const CACHE_NODE_BUDGET = RESEARCH_TYPED_GRAPH_CACHE_NODE_BUDGET;
 /** Hard entry cap for the page cache. */
 export const CACHE_MAX_ENTRIES = 300;
 /** Worst acceptable wall time per deterministic 10k-scale step (ms). */

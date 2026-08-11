@@ -3,9 +3,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchCanvasFilter } from "@multica/core/research";
 import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
-const { storeState, setFilter, clearFilter } = vi.hoisted(() => {
+const { storeState, setFilter, clearFilter, emptyCanvasFilter } = vi.hoisted(() => {
   // Inline empty filter — vi.hoisted runs before module imports initialize.
-  const emptyFilter = (): ResearchCanvasFilter => ({
+  const emptyCanvasFilter = (): ResearchCanvasFilter => ({
     status: null,
     tier: null,
     round: null,
@@ -13,15 +13,15 @@ const { storeState, setFilter, clearFilter } = vi.hoisted(() => {
     query: "",
   });
   const storeState: { filter: ResearchCanvasFilter } = {
-    filter: emptyFilter(),
+    filter: emptyCanvasFilter(),
   };
   const setFilter = vi.fn((partial: Partial<ResearchCanvasFilter>) => {
     storeState.filter = { ...storeState.filter, ...partial };
   });
   const clearFilter = vi.fn(() => {
-    storeState.filter = emptyFilter();
+    storeState.filter = emptyCanvasFilter();
   });
-  return { storeState, setFilter, clearFilter, emptyFilter };
+  return { storeState, setFilter, clearFilter, emptyCanvasFilter };
 });
 
 vi.mock("@multica/core/research", async (importOriginal) => {
@@ -45,13 +45,7 @@ vi.mock("@multica/core/research", async (importOriginal) => {
 
 describe("ResearchD5CanvasFilter", () => {
   beforeEach(() => {
-    storeState.filter = {
-      status: null,
-      tier: null,
-      round: null,
-      cluster: null,
-      query: "",
-    };
+    storeState.filter = emptyCanvasFilter();
     setFilter.mockClear();
     clearFilter.mockClear();
   });
@@ -78,13 +72,7 @@ describe("ResearchD5CanvasFilter", () => {
   });
 
   it("clears an active filter", () => {
-    storeState.filter = {
-      status: "running",
-      tier: null,
-      round: null,
-      cluster: null,
-      query: "",
-    };
+    storeState.filter = { ...emptyCanvasFilter(), status: "running" };
     render(
       <ResearchD5CanvasFilter
         options={{

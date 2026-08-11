@@ -12,7 +12,7 @@ export const OVERLAY_INSET_PX = 16;
 /** Matches ResearchAuxDrawer desktop `w-[min(100%,360px)]`. */
 export const AUX_DRAWER_WIDTH_PX = 360;
 
-/** Controls / dock height (toolbar pill; matches ResearchCanvasDock). */
+/** Controls height baseline (star-graph zoom dock). */
 export const CONTROLS_HEIGHT_PX = 52;
 
 /** MiniMap box used for FAB stacking (matches MiniMap class sizing). */

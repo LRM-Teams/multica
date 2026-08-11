@@ -2,10 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -126,59 +122,22 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	_ = ctx
 }
 
-// fetchReleaseManifest returns the current release manifest (the "/manifest.json"
-// feed, with /latest.json legacy fallback) from the canonical release feed URL
-// resolved by releaseManifestBaseURL(). It is kept small and dependency-light on
-// purpose so the detection loop never touches the server API client.
+// fetchReleaseManifest returns the Production entry from the canonical
+// metainfo document. Release selection belongs to cli so installers, explicit
+// Machine Upgrades, and detection cannot silently drift onto different files.
 func fetchReleaseManifest(ctx context.Context) (*cli.ReleaseManifest, error) {
 	return fetchReleaseManifestForChannel(ctx, string(cli.ReleaseChannelLatest), "")
 }
 
 func fetchReleaseManifestForChannel(ctx context.Context, rawChannel, serverDispatched string) (*cli.ReleaseManifest, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	channel, err := cli.NormalizeReleaseChannel(rawChannel)
 	if err != nil {
 		return nil, err
 	}
-	base := strings.TrimRight(cli.ReleaseManifestBaseURLWithOverride(serverDispatched), "/")
-	manifestURLs := []string{base + "/manifest.json", base + "/latest.json", base + "/release.json"}
-	if channel == cli.ReleaseChannelAlpha {
-		manifestURLs = []string{base + "/alpha.json"}
-	}
-	// A dedicated client with a per-request timeout keeps a hung release-feed
-	// endpoint from stalling a detection tick indefinitely.
-	client := &http.Client{Timeout: 15 * time.Second}
-	var lastErr error
-	for _, u := range manifestURLs {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode == http.StatusNotFound {
-			resp.Body.Close()
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("release manifest %s: unexpected status %d", u, resp.StatusCode)
-			continue
-		}
-		var manifest cli.ReleaseManifest
-		if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
-			resp.Body.Close()
-			lastErr = err
-			continue
-		}
-		resp.Body.Close()
-		return &manifest, nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("release manifest: no manifest found at %s", base)
-	}
-	return nil, lastErr
+	return cli.FetchReleaseForChannelWithOverride(channel, serverDispatched)
 }

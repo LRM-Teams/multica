@@ -49,6 +49,77 @@ func TestHandleMachineUpgradeAcceptsOnlyExactRunningVersion(t *testing.T) {
 	}
 }
 
+func TestHandleMachineUpgradeAlreadyCurrentAttestsEveryWorkspaceConnection(t *testing.T) {
+	previousDetect := detectAgentVersion
+	detectAgentVersion = func(context.Context, string) (string, error) { return "codex-cli 9.9.9", nil }
+	t.Cleanup(func() { detectAgentVersion = previousDetect })
+
+	var attested map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/accept"):
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			generation := body["generation_id"]
+			_ = json.NewEncoder(w).Encode(MachineUpgradeReceipt{
+				ID:                   "upgrade-1",
+				Phase:                "converging",
+				AcceptedGeneration:   &generation,
+				AcceptedRuntimeIDs:   []string{"runtime-1"},
+				AcceptedWorkspaceIDs: []string{"workspace-1", "workspace-2"},
+			})
+		case r.URL.Path == "/api/daemon/starting":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/daemon/register":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			workspaceID, _ := body["workspace_id"].(string)
+			_ = json.NewEncoder(w).Encode(RegisterResponse{Runtimes: []Runtime{{
+				ID: "runtime-1", WorkspaceID: workspaceID, Name: "Codex", Provider: "codex", Status: "online",
+			}}})
+		case r.URL.Path == "/api/daemon/computer/machine-upgrades/upgrade-1/attest":
+			if err := json.NewDecoder(r.Body).Decode(&attested); err != nil {
+				t.Fatal(err)
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	d := &Daemon{
+		cfg: Config{
+			CLIVersion: "v9.9.9", DaemonID: "computer-1",
+			Agents: map[string]AgentEntry{"codex": {Path: "codex"}},
+		},
+		client:        NewClient(server.URL),
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentVersions: make(map[string]string),
+		workspaces: map[string]*workspaceState{
+			"workspace-1": newWorkspaceState("workspace-1", []string{"runtime-1"}),
+			"workspace-2": newWorkspaceState("workspace-2", []string{"runtime-2"}),
+		},
+	}
+	d.client.SetToken("test-token")
+	d.handleMachineUpgrade(context.Background(), "runtime-1", &PendingMachineUpgrade{ID: "upgrade-1", TargetVersion: "v9.9.9"})
+
+	if attested == nil {
+		t.Fatal("already-current Machine Upgrade did not emit Computer-level attestation")
+	}
+	if got := attested["daemon_id"]; got != "computer-1" {
+		t.Fatalf("daemon_id = %#v", got)
+	}
+	workspaceIDs, _ := attested["workspace_ids"].([]any)
+	if len(workspaceIDs) != 2 || workspaceIDs[0] != "workspace-1" || workspaceIDs[1] != "workspace-2" {
+		t.Fatalf("workspace_ids = %#v", attested["workspace_ids"])
+	}
+}
+
 func TestMachineUpgradeJournalRestoresHandoffGeneration(t *testing.T) {
 	root := t.TempDir()
 	previousRoot := versionStoreRootFn

@@ -73,7 +73,7 @@ export const CANVAS_KEYBOARD_CONTRACT = {
 /**
  * LRM-1091 planar keyboard AC (product increment on top of LRM-1105 freeze).
  * #1956 shipped layout + arrow/Enter/Esc/Shift+F10 — hard-gated.
- * Remaining `it.fails`: dedicated --branch-* tokens; destructive confirm/undo.
+ * Legacy planar graph-node chrome removed with D5 migration.
  */
 export const PLANAR_KEYBOARD_CONTRACT = {
   ArrowUp: "topology-prev",

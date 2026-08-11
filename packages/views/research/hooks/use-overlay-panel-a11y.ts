@@ -18,11 +18,8 @@ import { useCallback, useEffect, useEffectEvent, useRef } from "react";
  * - restores focus to the previously focused element when it deactivates.
  *
  * LRM-1177: restore cannot rely on node identity alone. The desktop chat
- * float's only opener is the canvas chat FAB, which `research-canvas.tsx`
- * renders as `!chatOpen ? <Fab/> : null` — it is unmounted for the whole time
- * the float is open and returns as a *different* DOM node, so the old node is
- * detached by the time we restore and the whole contract silently no-opped on
- * its primary keyboard path. We therefore also remember a stable re-locator
+ * float's opener may unmount while the panel is open and return as a different
+ * DOM node, so the old node is detached by the time we restore.
  * (`id`, else `data-testid`) and re-find the control on the way out.
  */
 
@@ -81,11 +78,10 @@ export function useOverlayPanelA11y({
   }, [active]);
 
   // Track the last control focused OUTSIDE the panel while it is closed.
-  // Capturing only at activation time is too late: React removes the opener in
-  // the same commit that opens the panel (`research-canvas.tsx` renders the
-  // chat FAB as `!chatOpen ? <Fab/> : null`), so by the time our activation
-  // effect runs `document.activeElement` is already `<body>` and there is
-  // nothing left to remember.
+  // Capturing only at activation time is too late: React may remove the opener in
+  // the same commit that opens the panel, so by the time our activation effect
+  // runs `document.activeElement` is already `<body>` and there is nothing left
+  // to remember.
   useEffect(() => {
     if (active) return;
     const doc = panelRef.current?.ownerDocument ?? globalThis.document;

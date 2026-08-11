@@ -103,7 +103,7 @@ func (s *PostgresStore) ListClaims(ctx context.Context, sessionID string) ([]Cla
 		       verification_status, COALESCE(verified_by_task_id::text, ''), rationale
 		FROM research_claim_evidence
 		WHERE session_id = $1::uuid
-		ORDER BY created_at, claim_id, observation_id
+		ORDER BY created_at, claim_id, observation_id, relation, id
 	`, sessionID)
 	if err != nil {
 		return nil, err

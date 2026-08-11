@@ -46,10 +46,10 @@
   height: 35px;
   display: grid;
   place-items: center;
-  border: 1px solid #32556a;
+  border: 1px solid color-mix(in oklab, var(--primary) 45%, var(--border));
   border-radius: 11px;
-  background: #102331;
-  color: #48d3e4;
+  background: var(--secondary);
+  color: var(--primary);
   font-weight: 900;
 }
 .d5-brand b {
@@ -85,9 +85,9 @@
   flex-shrink: 0;
 }
 .d5-filter-trigger-active {
-  border-color: #337584;
-  color: #c6f6fb;
-  background: #10252c;
+  border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
+  color: var(--accent-foreground);
+  background: var(--accent);
 }
 .d5-rail-collapsed {
   transform: translateY(calc(100% - 44px));
@@ -111,40 +111,39 @@
   width: 32px;
   height: 32px;
   margin-left: auto;
-  border: 1px solid #29394b;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #111b27;
-  color: #8292a5;
+  background: var(--secondary);
+  color: var(--muted-foreground);
   flex-shrink: 0;
 }
 .d5-rail-close:hover {
-  color: #c2f1f6;
-  border-color: #347486;
+  color: var(--secondary-foreground);
+  border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
 }
 .d5-workspace[data-d5-rail-open="false"] .research-agent-inspector-sheet {
-  /* Same surface as .research-agent-inspector; kept in CSS so TSX stays hex-free (LRM-1208). */
-  background: #0d1723;
+  background: var(--card);
 }
 .research-agent-inspector {
   right: 24px;
 }
 .d5-lens-btn {
-  border: 1px solid #2a3a4c;
+  border: 1px solid var(--border);
   border-radius: 9px;
-  background: #121c29;
-  color: #9dadbf;
+  background: var(--secondary);
+  color: var(--muted-foreground);
   padding: 8px 11px;
   font-size: 11px;
 }
 .d5-lens-btn-active {
-  border-color: #337584;
-  color: #c6f6fb;
-  background: #10252c;
+  border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
+  color: var(--accent-foreground);
+  background: var(--accent);
 }
 .d5-chrome-shell [data-testid="research-session-chrome"] {
-  border-top: 1px solid #1f2d3d;
+  border-top: 1px solid var(--border);
   border-bottom: 0;
-  background: rgba(9, 15, 23, 0.92);
+  background: color-mix(in oklab, var(--background) 92%, transparent);
 }
 .d5-workspace {
   position: relative;
@@ -185,7 +184,7 @@
   font-size: 11px;
 }
 .d5-rail-tab-active {
-  border-color: #347486;
+  border-color: color-mix(in oklab, var(--primary) 55%, var(--border));
   background: var(--accent);
   color: var(--accent-foreground);
 }
@@ -194,7 +193,7 @@
   overflow: auto;
 }
 .d5-rail-footer {
-  border-top: 1px solid #213043;
+  border-top: 1px solid var(--border);
 }
 @media (max-width: 767px) {
   .d5-chrome-top {
@@ -225,7 +224,7 @@
     width: 100%;
     max-height: min(72dvh, 560px);
     border-left: 0;
-    border-top: 1px solid #223043;
+    border-top: 1px solid var(--border);
     box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.45);
   }
   .d5-lens-group {
@@ -253,9 +252,10 @@
   top: 118px;
   z-index: 55;
   width: 310px;
-  border: 1px solid #31516a;
+  border: 1px solid color-mix(in oklab, var(--primary) 35%, var(--border));
   border-radius: 17px;
-  background: #0d1723;
+  background: var(--card);
+  color: var(--foreground);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   overflow: hidden;
   display: none;
@@ -273,8 +273,8 @@
 .research-agent-inspector .agent-head {
   position: relative;
   padding: 15px;
-  border-bottom: 1px solid #233447;
-  background: linear-gradient(135deg, #112738, #101a27);
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--accent), var(--secondary));
 }
 .research-agent-inspector .who {
   display: flex;
@@ -286,10 +286,10 @@
   height: 42px;
   display: grid;
   place-items: center;
-  border: 2px solid #48d3e4;
+  border: 2px solid var(--primary);
   border-radius: 50%;
-  background: #17364a;
-  color: #d2f6f8;
+  background: color-mix(in oklab, var(--primary) 18%, var(--secondary));
+  color: var(--secondary-foreground);
   font-weight: 900;
 }
 .research-agent-inspector .agent-close {
@@ -298,7 +298,7 @@
   top: 11px;
   border: 0;
   background: transparent;
-  color: #708398;
+  color: var(--muted-foreground);
   cursor: pointer;
 }
 .research-agent-inspector .agent-body {
@@ -306,28 +306,28 @@
 }
 .research-agent-inspector .agent-objective {
   padding: 11px;
-  border: 1px solid #284056;
+  border: 1px solid var(--border);
   border-radius: 10px;
-  background: #101d2a;
+  background: var(--secondary);
 }
 .research-agent-inspector .agent-objective small {
   display: block;
-  color: #607b92;
+  color: var(--muted-foreground);
   font-size: 8px;
   font-weight: 800;
   margin-bottom: 4px;
 }
 .research-agent-inspector .work-block h4 {
   margin: 14px 0 7px;
-  color: #6e8297;
+  color: var(--muted-foreground);
   font-size: 8px;
   font-weight: 800;
   letter-spacing: 0.1em;
 }
 .research-agent-inspector .work-item {
   padding: 7px 7px 7px 20px;
-  border-bottom: 1px solid #1f3040;
-  color: #a7b8c9;
+  border-bottom: 1px solid var(--border);
+  color: color-mix(in oklab, var(--foreground) 78%, var(--muted-foreground));
   font-size: 9px;
   line-height: 1.4;
 }
@@ -348,11 +348,11 @@
   background: #58d69a;
 }
 .research-agent-inspector .work-item.live::before {
-  background: #48d3e4;
+  background: var(--primary);
 }
 .research-agent-inspector .agent-foot {
   display: flex;
   gap: 6px;
   padding: 11px 14px;
-  border-top: 1px solid #233447;
+  border-top: 1px solid var(--border);
 }

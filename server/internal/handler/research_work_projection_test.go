@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -275,3 +276,213 @@ func TestBuildWorkTimeline_SingleCancelledAttemptShowsCancel(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildWorkTimeline_ReportKindForSynthesisTask(t *testing.T) {
+	t0 := researchProjTime(2026, 8, 10, 8, 0)
+	t1 := researchProjTime(2026, 8, 10, 8, 12)
+	task := researchrun.Task{
+		ID: "task-syn", Kind: researchrun.TaskKindSynthesize,
+		Status: researchrun.TaskStatusSucceeded, AssignedAgentID: "agent-s",
+		MaxAttempts: 1, AttemptCount: 1, StartedAt: &t0, CompletedAt: &t1,
+	}
+	evs := buildWorkTimeline(&task, nil, &researchrun.RunSnapshot{})
+	var kinds []string
+	for _, e := range evs {
+		kinds = append(kinds, e.Kind)
+	}
+	// dispatch, report(start), report(completion), complete
+	want := []string{"dispatch", "report", "report", "complete"}
+	if len(kinds) != len(want) {
+		t.Fatalf("timeline kinds = %v, want %v", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("timeline kinds = %v, want %v at %d", kinds, want, i)
+		}
+	}
+}
+
+func TestWorkProjectionEntry_ContractFieldSemantics(t *testing.T) {
+	now := researchProjTime(2026, 8, 10, 9, 0)
+	cases := []struct {
+		name         string
+		task         researchrun.Task
+		claims       []researchrun.Claim
+		sources      []researchrun.SourceSnapshotView
+		wantLatest   string
+		wantEvidence int
+		wantBlocked  string
+		wantFailed   string
+		wantNextStep string
+		wantPct      bool
+	}{
+		{
+			name:    "pending empty contract",
+			task:    researchrun.Task{ID: "t-p", Status: researchrun.TaskStatusPending, MaxAttempts: 2, AttemptCount: 0, Kind: researchrun.TaskKindPlan},
+			wantPct: false,
+		},
+		{
+			name:         "running has finding + no fabricated blocked/failed",
+			task:         researchrun.Task{ID: "t-r", Status: researchrun.TaskStatusRunning, MaxAttempts: 3, AttemptCount: 1, Kind: researchrun.TaskKindDeepRead, StartedAt: &now},
+			claims:       []researchrun.Claim{{ID: "c1", ProducedByTaskID: "t-r", Text: "mid-way finding", CreatedAt: now, UpdatedAt: now}},
+			sources:      []researchrun.SourceSnapshotView{{ID: "s1", ProducedByTaskID: "t-r", Title: "src", RetrievedAt: now}},
+			wantLatest:   "mid-way finding",
+			wantEvidence: 2,
+			wantPct:      true,
+		},
+		{
+			name:         "blocked surfaces reason + next step",
+			task:         researchrun.Task{ID: "t-b", Status: researchrun.TaskStatusBlocked, TerminalReason: "provider down", MaxAttempts: 2, AttemptCount: 1, Kind: researchrun.TaskKindVerify, CompletedAt: &now},
+			wantBlocked:  "provider down",
+			wantFailed:   "",
+			wantNextStep: "等待重派或因阻塞解除后重试",
+			wantPct:      true, // started + count>0 qualifies pct; blocked still shows progress done so far
+		},
+		{
+			name:         "failed exposes reason + retry-eligible next step",
+			task:         researchrun.Task{ID: "t-f", Status: researchrun.TaskStatusFailed, TerminalReason: "exhausted", MaxAttempts: 3, AttemptCount: 2, Kind: researchrun.TaskKindDiscover, CompletedAt: &now},
+			wantFailed:   "exhausted",
+			wantBlocked:  "",
+			wantNextStep: "将自动重试或重新派发",
+			wantPct:      true,
+		},
+		{
+			name:         "failed exhausted next step asks human",
+			task:         researchrun.Task{ID: "t-fe", Status: researchrun.TaskStatusFailed, TerminalReason: "out", MaxAttempts: 2, AttemptCount: 2, Kind: researchrun.TaskKindDiscover, CompletedAt: &now},
+			wantFailed:   "out",
+			wantNextStep: "已用尽重试次数，等待人工介入",
+			wantPct:      true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			snap := researchrun.RunSnapshot{Tasks: []researchrun.Task{c.task}, Claims: c.claims, Sources: c.sources}
+			mockAttempts := []researchrun.Attempt{}
+			entry := buildWorkProjectionEntry(&c.task, mockAttempts, &snap)
+			if entry.LatestFinding != c.wantLatest {
+				t.Errorf("latest_finding = %q, want %q", entry.LatestFinding, c.wantLatest)
+			}
+			if entry.EvidenceCount != c.wantEvidence {
+				t.Errorf("evidence_count = %d, want %d", entry.EvidenceCount, c.wantEvidence)
+			}
+			if entry.BlockedReason != c.wantBlocked {
+				t.Errorf("blocked_reason = %q, want %q", entry.BlockedReason, c.wantBlocked)
+			}
+			if entry.FailureReason != c.wantFailed {
+				t.Errorf("failure_reason = %q, want %q", entry.FailureReason, c.wantFailed)
+			}
+			if entry.NextStep != c.wantNextStep {
+				t.Errorf("next_step = %q, want %q", entry.NextStep, c.wantNextStep)
+			}
+			if c.wantPct && entry.ProgressPercent == nil {
+				t.Errorf("expected progress_percent to be present")
+			}
+			if !c.wantPct && entry.ProgressPercent != nil {
+				t.Errorf("progress_percent = %d, want absent", *entry.ProgressPercent)
+			}
+		})
+	}
+}
+
+func TestWorkProjectionNotifier_CoalescesBurstIntoOneNudge(t *testing.T) {
+	var mu sync.Mutex
+	var got []struct {
+		key string
+		seq int64
+	}
+	publish := func(key string, seq int64) {
+		mu.Lock()
+		got = append(got, struct {
+			key string
+			seq int64
+		}{key, seq})
+		mu.Unlock()
+	}
+	n := newWorkProjectionNotifier(time.Hour, publish) // long interval: no timer fires
+	defer n.Close()
+
+	// A burst of lifecycle events for the same session within the throttle
+	// window must collapse to exactly one nudge.
+	for i := 0; i < 20; i++ {
+		n.Notify("ws|session-1")
+	}
+	n.Flush()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 coalesced nudge, got %d: %+v", len(got), got)
+	}
+	if got[0].key != "ws|session-1" {
+		t.Errorf("nudge key = %q, want ws|session-1", got[0].key)
+	}
+	if got[0].seq != 1 {
+		t.Errorf("nudge seq = %d, want 1", got[0].seq)
+	}
+}
+
+func TestWorkProjectionNotifier_DistinctScopesCoalesceSeparately(t *testing.T) {
+	var mu sync.Mutex
+	var keys []string
+	publish := func(key string, seq int64) {
+		mu.Lock()
+		keys = append(keys, key)
+		mu.Unlock()
+	}
+	n := newWorkProjectionNotifier(time.Hour, publish)
+	defer n.Close()
+	for i := 0; i < 5; i++ {
+		n.Notify("ws|session-a")
+		n.Notify("ws|session-b")
+		n.Notify("other-ws|session-a") // same session id, different workspace => distinct scope
+	}
+	n.Flush()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(keys) != 3 {
+		t.Fatalf("expected 3 nudges (3 distinct scopes), got %d: %v", len(keys), keys)
+	}
+}
+
+func TestWorkProjectionNotifier_SequenceIsMonotonicAcrossWindows(t *testing.T) {
+	var mu sync.Mutex
+	var seqs []int64
+	publish := func(_ string, seq int64) {
+		mu.Lock()
+		seqs = append(seqs, seq)
+		mu.Unlock()
+	}
+	n := newWorkProjectionNotifier(time.Hour, publish)
+	defer n.Close()
+
+	// First burst -> seq 1, second burst -> seq 2: monotonic per session so a
+	// reconnecting client can detect gaps and refetch the HTTP snapshot.
+	n.Notify("ws|session-1")
+	n.Flush()
+	n.Notify("ws|session-1")
+	n.Flush()
+	n.Notify("ws|session-1")
+	n.Flush()
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []int64{1, 2, 3}
+	if len(seqs) != len(want) {
+		t.Fatalf("seqs = %v, want %v", seqs, want)
+	}
+	for i := range want {
+		if seqs[i] != want[i] {
+			t.Fatalf("seqs = %v, want %v at %d", seqs, want, i)
+		}
+	}
+}
+
+func TestScopeKeyForWorkProjectionIsolation(t *testing.T) {
+	if scopeKeyForWorkProjection("ws-a", "s-1") == scopeKeyForWorkProjection("ws-b", "s-1") {
+		t.Fatal("same session id in different workspaces must not share a nudge scope")
+	}
+	if scopeKeyForWorkProjection("ws-a", "s-1") == scopeKeyForWorkProjection("ws-a", "s-2") {
+		t.Fatal("different sessions in same workspace must not share a nudge scope")
+	}
+}
+

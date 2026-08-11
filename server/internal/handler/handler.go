@@ -150,6 +150,10 @@ type Handler struct {
 	WendyComposer       WendyComposer
 	WorkGraph           *workgraph.Store
 	ResearchRun         researchrun.ResearchRun
+	// WorkProjectionNotifier coalesces/throttles per-session work-projection WS
+	// nudges and tracks a monotonic sequence per session for reconnect gap
+	// detection (LRM-1507). Nil in tests that do not exercise WS nudges.
+	WorkProjectionNotifier *workProjectionNotifier
 	// Metrics is the shared business-metrics collector built by main.go.
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
@@ -335,6 +339,13 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		}
 		researchStore := researchrun.NewPostgresStore(pool)
 		h.ResearchRun = researchrun.NewEngine(researchStore, &researchRunDispatcher{handler: h}, &researchRunProjector{handler: h})
+		h.WorkProjectionNotifier = newWorkProjectionNotifier(workProjectionThrottleInterval, func(scopeKey string, seq int64) {
+			ws, sessionKey, ok := strings.Cut(scopeKey, "|")
+			if !ok {
+				return
+			}
+			h.publishWorkProjectionNudge(ws, sessionKey, seq, time.Now().UTC())
+		})
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit

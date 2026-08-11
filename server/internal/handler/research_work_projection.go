@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -187,6 +188,12 @@ func buildWorkTimeline(t *researchrun.Task, attempts []researchrun.Attempt, snap
 	switch t.Status {
 	case researchrun.TaskStatusSucceeded:
 		if t.CompletedAt != nil {
+			// A report-producing task surfaces a report event before its terminal
+			// complete event, so the canvas timeline shows the report being written.
+			switch t.Kind {
+			case researchrun.TaskKindSynthesize, researchrun.TaskKindReplan, researchrun.TaskKindQualityGate:
+				appendEv(workTimelineEventMilli(*t.CompletedAt, t.AssignedAgentID, nil, "report", "\u62a5\u544a\u4ea7\u51fa", "report written by synthesis task"))
+			}
 			appendEv(workTimelineEventMilli(*t.CompletedAt, t.AssignedAgentID, nil, "complete", "\u5b8c\u6210", "task succeeded"))
 		}
 	case researchrun.TaskStatusFailed:
@@ -358,18 +365,168 @@ func (h *Handler) GetResearchWorkProjection(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// publishWorkProjection pushes a small, scoped WS event when a task's status
-// transitions so the canvas timeline can refresh without polling. It is
-// best-effort; the HTTP projection above stays the authoritative snapshot.
-func (h *Handler) publishWorkProjectionEvent(workspaceID, sessionKey, agentID, taskID, status string, at time.Time) {
-	h.publish(protocol.EventResearchSessionWorkProjection, workspaceID, "session", sessionKey, map[string]any{
-		"session_id": sessionKey,
-		"task_id":    taskID,
-		"agent_id":   agentID,
-		"status":     status,
-		"stage":      workProjectionStageFor(status),
-		"unix_ms":    at.UnixMilli(),
+// workProjectionThrottleInterval is the minimum gap between two WS nudges for
+// the same research session. Lifecycle events within this window are coalesced
+// into a single nudge, which bounds WS fan-out under bursts (many tasks
+// dispatching/running at once) while the HTTP snapshot stays authoritative.
+const workProjectionThrottleInterval = 150 * time.Millisecond
+
+// workProjectionNotifier coalesces per-session work-projection nudges so a
+// burst of task lifecycle events produces at most one WS event per session per
+// interval. Every emitted nudge carries a per-session monotonic "sequence" so a
+// reconnecting client can detect it missed mid-stream nudges while offline.
+// The projection is a pure, deterministic function of the run ledger, so an
+// HTTP snapshot refetch is always lossless — that is the reconnect contract:
+// a client that reconnects (or observes a sequence gap) must refetch the
+// authoritative HTTP snapshot rather than reconstruct history from nudges.
+type workProjectionNotifier struct {
+	mu       sync.Mutex
+	interval time.Duration
+	publish  func(scopeKey string, seq int64)
+	dirty    map[string]struct{}
+	seq      map[string]int64
+	timer    *time.Timer
+	closed   bool
+}
+
+func newWorkProjectionNotifier(interval time.Duration, publish func(scopeKey string, seq int64)) *workProjectionNotifier {
+	return &workProjectionNotifier{
+		interval: interval,
+		publish:  publish,
+		dirty:    map[string]struct{}{},
+		seq:      map[string]int64{},
+	}
+}
+
+// scopeKeyForWorkProjection uniquely identifies a research session across
+// workspaces so nudges are scoped and can never leak between workspaces.
+func scopeKeyForWorkProjection(workspaceID, sessionKey string) string {
+	return workspaceID + "|" + sessionKey
+}
+
+// Notify marks a research session dirty so a single coalesced nudge is emitted
+// for it within the throttle interval. A burst of lifecycle events within the
+// window collapses to one push. Safe for concurrent callers.
+func (n *workProjectionNotifier) Notify(scopeKey string) {
+	if scopeKey == "" {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return
+	}
+	if _, ok := n.dirty[scopeKey]; ok {
+		return // already scheduled; coalesce the burst
+	}
+	n.dirty[scopeKey] = struct{}{}
+	if n.timer == nil {
+		n.timer = time.AfterFunc(n.interval, n.tick)
+	}
+}
+
+func (n *workProjectionNotifier) tick() {
+	n.mu.Lock()
+	n.drainLocked()
+	n.mu.Unlock()
+}
+
+// drainLocked emits one nudge per dirty session and resets the timer for any
+// work that arrived while draining. Called with n.mu held.
+func (n *workProjectionNotifier) drainLocked() {
+	if len(n.dirty) == 0 {
+		if n.timer != nil {
+			n.timer = nil
+		}
+		return
+	}
+	pending := n.dirty
+	n.dirty = map[string]struct{}{}
+	if n.timer != nil {
+		n.timer = nil
+	}
+	type job struct {
+		key string
+		seq int64
+	}
+	jobs := make([]job, 0, len(pending))
+	for key := range pending {
+		n.seq[key]++
+		jobs = append(jobs, job{key, n.seq[key]})
+	}
+	for _, j := range jobs {
+		if n.publish != nil {
+			n.publish(j.key, j.seq)
+		}
+	}
+}
+
+// Flush drains all pending nudges immediately. Used by tests to avoid racing a
+// timer and by shutdown paths to ensure nothing is dropped.
+func (n *workProjectionNotifier) Flush() {
+	n.mu.Lock()
+	n.drainLocked()
+	n.mu.Unlock()
+}
+
+// Close stops the notifier and flushes pending nudges exactly once.
+func (n *workProjectionNotifier) Close() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return
+	}
+	n.closed = true
+	n.drainLocked()
+}
+
+// publishWorkProjectionNudge pushes one coalesced, scoped WS event for a
+// research session when its task work projection changes, so the canvas
+// timeline can refresh without polling. It is best-effort and always carries a
+// monotonic sequence; the HTTP snapshot is the authoritative projection.
+func (h *Handler) publishWorkProjectionNudge(workspaceID, sessionKey string, seq int64, at time.Time) {
+	if h == nil || h.ResearchRun == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snap, err := h.ResearchRun.Snapshot(ctx, sessionKey, workspaceID)
+	if err != nil {
+		// Best-effort: skip the nudge; the client refetches the HTTP snapshot.
+		return
+	}
+	tasks := make([]workProjectionNudgeTask, 0, len(snap.Tasks))
+	for i := range snap.Tasks {
+		t := &snap.Tasks[i]
+		tasks = append(tasks, workProjectionNudgeTask{
+			TaskID:  t.ID,
+			AgentID: t.AssignedAgentID,
+			Status:  string(t.Status),
+			Stage:   workProjectionStageFor(string(t.Status)),
+		})
+	}
+	h.publish(protocol.EventResearchSessionWorkProjection, workspaceID, "session", sessionKey, workProjectionNudge{
+		SessionID: sessionKey,
+		Sequence:  seq,
+		Tasks:     tasks,
+		UnixMs:    at.UnixMilli(),
 	})
+}
+
+// workProjectionNudge is the WS payload for a coalesced work-projection event.
+type workProjectionNudge struct {
+	SessionID string                   `json:"session_id"`
+	Sequence  int64                    `json:"sequence"`
+	Tasks     []workProjectionNudgeTask `json:"tasks"`
+	UnixMs    int64                    `json:"unix_ms"`
+}
+
+// workProjectionNudgeTask is one task's latest status within a nudge.
+type workProjectionNudgeTask struct {
+	TaskID  string `json:"task_id"`
+	AgentID string `json:"agent_id,omitempty"`
+	Status  string `json:"status"`
+	Stage   string `json:"stage"`
 }
 
 // workProjectionLifecycleEvents lists the run-ledger event types that change a
@@ -399,39 +556,16 @@ func isTaskLifecycleEvent(eventType string) bool {
 	return strings.HasPrefix(eventType, "node_command_")
 }
 
-// publishWorkProjectionForEvent pushes a scoped work-projection nudge for the
-// task(s) touched by a lifecycle event. It is best-effort and non-fatal: the
-// HTTP projection snapshot stays authoritative, so a missed WS nudge only
-// means the client refreshes on the next poll.
+// publishWorkProjectionForEvent marks a research session dirty so a single
+// coalesced, throttled WS nudge is emitted for the task(s) touched by a
+// lifecycle event. It is best-effort and non-fatal: the HTTP projection
+// snapshot stays authoritative, so a dropped nudge (or one coalesced away by
+// the throttle) only means the client refreshes on the next poll.
 func publishWorkProjectionForEvent(ctx context.Context, h *Handler, event researchrun.RunEvent) error {
-	if h == nil || h.ResearchRun == nil {
+	if h == nil || h.ResearchRun == nil || h.WorkProjectionNotifier == nil {
 		return nil
 	}
-	snap, err := h.ResearchRun.Snapshot(ctx, event.SessionID, event.WorkspaceID)
-	if err != nil {
-		return err
-	}
-	taskID := workProjectionPayloadString(event.Payload, "task_id")
-	now := time.Now().UTC()
-	for i := range snap.Tasks {
-		t := &snap.Tasks[i]
-		if taskID != "" && t.ID != taskID {
-			continue
-		}
-		entry := buildWorkProjectionEntry(t, snap.Attempts, &snap)
-		at := now
-		switch t.Status {
-		case researchrun.TaskStatusSucceeded, researchrun.TaskStatusFailed, researchrun.TaskStatusBlocked:
-			if t.CompletedAt != nil {
-				at = t.CompletedAt.UTC()
-			}
-		case researchrun.TaskStatusRunning, researchrun.TaskStatusDispatching:
-			if t.StartedAt != nil {
-				at = t.StartedAt.UTC()
-			}
-		}
-		h.publishWorkProjectionEvent(event.WorkspaceID, event.SessionID, entry.AssignedAgentID, entry.TaskID, entry.Status, at)
-	}
+	h.WorkProjectionNotifier.Notify(scopeKeyForWorkProjection(event.WorkspaceID, event.SessionID))
 	return nil
 }
 

@@ -2,6 +2,7 @@ package memorycuration
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 type Engine struct {
@@ -389,6 +388,10 @@ func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResul
 		return ar, err
 	}
 	ar.EvidenceCollected += len(evidence)
+	before, err := snapshotSelfReviewFiles(root.Root)
+	if err != nil {
+		return ar, err
+	}
 	files := stageFilesWithScoped(root.Root,
 		"memory/daily/"+formatDate(opts.Until)+".md",
 		"memory/REVIEW.md",
@@ -402,52 +405,164 @@ func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResul
 	if err != nil {
 		return ar, err
 	}
-	ar.CuratorOutput = out.Content
-	if strings.TrimSpace(out.Content) != "" {
-		ar.Changed = true
-		ar.DailyFilesWritten = 1
-		ar.ReviewCandidatesAdded = strings.Count(out.Content, "candidate")
-		ar.SkillCandidatesAdded = strings.Count(out.Content, "skill")
+	after, err := snapshotSelfReviewFiles(root.Root)
+	if err != nil {
+		return ar, err
 	}
+	changed := changedSelfReviewFiles(before, after)
+	var report selfReviewStageOutput
+	if !extractJSONObject(out.Content, &report) {
+		return ar, fmt.Errorf("agent self-review returned invalid JSON contract")
+	}
+	declared := make(map[string]struct{}, len(report.LocalWrites))
+	for _, write := range report.LocalWrites {
+		rel, ok := normalizeSelfReviewPath(write.File)
+		if !ok {
+			return ar, fmt.Errorf("agent self-review declared disallowed local write %q", write.File)
+		}
+		if _, ok := changed[rel]; !ok {
+			return ar, fmt.Errorf("agent self-review declared local write %q but the file did not change", rel)
+		}
+		declared[rel] = struct{}{}
+	}
+	for rel := range changed {
+		if _, ok := declared[rel]; !ok {
+			return ar, fmt.Errorf("agent self-review changed %q without reporting it in local_writes", rel)
+		}
+		if strings.HasPrefix(rel, "memory/daily/") {
+			ar.DailyFilesWritten++
+		}
+	}
+	for _, candidate := range report.Candidates {
+		if strings.EqualFold(strings.TrimSpace(candidate.Type), "skill") {
+			ar.SkillCandidatesAdded++
+		} else {
+			ar.ReviewCandidatesAdded++
+		}
+	}
+	ar.Changed = len(changed) > 0 || len(report.Candidates) > 0
+	ar.CuratorOutput = out.Content
 	return ar, nil
 }
 
+type selfReviewStageOutput struct {
+	LocalWrites []struct {
+		File string `json:"file"`
+	} `json:"local_writes"`
+	Candidates []struct {
+		Type string `json:"type"`
+	} `json:"candidates"`
+}
+
+func snapshotSelfReviewFiles(root string) (map[string][sha256.Size]byte, error) {
+	out := make(map[string][sha256.Size]byte)
+	for _, top := range []string{"memory", "users", "projects", "channels", "notes", "sync_queue", filepath.Join("skills", "drafts")} {
+		scanRoot := filepath.Join(root, top)
+		err := filepath.WalkDir(scanRoot, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				if os.IsNotExist(walkErr) {
+					return nil
+				}
+				return walkErr
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			rel, ok := normalizeSelfReviewPath(rel)
+			if !ok {
+				return nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			out[rel] = sha256.Sum256(data)
+			return nil
+		})
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func normalizeSelfReviewPath(path string) (string, bool) {
+	path = filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+	if path == "." || filepath.IsAbs(path) || path == ".." || strings.HasPrefix(path, "../") {
+		return "", false
+	}
+	parts := strings.Split(path, "/")
+	base := filepath.Base(path)
+	switch {
+	case path == "memory/MEMORY.md", path == "memory/STATE.md", path == "memory/REVIEW.md", path == "memory/SCRATCHPAD.md":
+		return path, true
+	case len(parts) == 3 && parts[0] == "memory" && parts[1] == "daily" && strings.HasSuffix(base, ".md"):
+		return path, true
+	case len(parts) == 3 && parts[0] == "users" && parts[1] != "" && (base == "USER.md" || base == "RELATIONSHIP.md"):
+		return path, true
+	case len(parts) == 3 && parts[0] == "projects" && parts[1] != "" && (base == "MEMORY.md" || base == "STATE.md" || base == "DECISIONS.md"):
+		return path, true
+	case len(parts) == 3 && parts[0] == "channels" && parts[1] != "" && base == "CONTEXT.md":
+		return path, true
+	case len(parts) == 2 && parts[0] == "notes" && strings.HasSuffix(base, ".md"):
+		return path, true
+	case len(parts) == 2 && parts[0] == "sync_queue" && (strings.HasSuffix(base, ".json") || strings.HasSuffix(base, ".jsonl")):
+		return path, true
+	case len(parts) == 4 && parts[0] == "skills" && parts[1] == "drafts" && parts[2] != "" && base == "SKILL.md":
+		return path, true
+	default:
+		return "", false
+	}
+}
+
+func changedSelfReviewFiles(before, after map[string][sha256.Size]byte) map[string]struct{} {
+	changed := make(map[string]struct{})
+	for rel, hash := range after {
+		if old, ok := before[rel]; !ok || old != hash {
+			changed[rel] = struct{}{}
+		}
+	}
+	for rel := range before {
+		if _, ok := after[rel]; !ok {
+			changed[rel] = struct{}{}
+		}
+	}
+	return changed
+}
+
 func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResult, error) {
-	ar := AgentRunResult{WorkspaceID: opts.WorkspaceID, AgentID: "team", Root: agentworkspace.AgentsDir(opts.WorkspacesRoot, opts.WorkspaceID)}
+	ar := AgentRunResult{WorkspaceID: opts.WorkspaceID, AgentID: "team"}
 	if opts.StageAgent == nil {
 		return ar, fmt.Errorf("team curation requires a selected curator runtime and agent")
 	}
-	// Team curation must NOT re-ingest raw same-day chat/session evidence.
-	// Per-agent self-review already distilled sessions into MEMORY/USER/REVIEW/
-	// notes/sync_queue/skills. The curator only reads those artifacts (+ optional
-	// DB pending candidates attached by the server) to dedupe and promote.
-	localFiles := make(map[string]string)
-	for _, root := range roots {
-		files := stageFilesWithScoped(root.Root,
-			"memory/REVIEW.md",
-			"memory/MEMORY.md",
-			"memory/STATE.md",
-			"notes/relationship-map.md",
-			"notes/decisions.md",
-			"notes/work-log.md",
-			"notes/role-playbook.md",
-			"sync_queue/memory-candidates.jsonl",
-			"sync_queue/skill-candidates.jsonl",
-		)
-		for name, content := range files {
-			localFiles[root.AgentID+"/"+name] = content
-		}
-		for name, content := range collectSkillDraftFiles(root.Root, 6, 24*1024) {
-			localFiles[root.AgentID+"/"+name] = content
-		}
+	scratchRoot, err := os.MkdirTemp("", "multica-team-curation-")
+	if err != nil {
+		return ar, fmt.Errorf("create isolated team curation root: %w", err)
 	}
+	defer os.RemoveAll(scratchRoot)
+	ar.Root = scratchRoot
+	// Team curation consumes only server-filtered, explicitly shareable DB
+	// candidates. Agent-local MEMORY/REVIEW/notes/sync_queue/skill drafts may
+	// contain user-private or sensitive material and have no enforceable
+	// shareability marker, so they must not cross this trust boundary.
+	localFiles := make(map[string]string)
 	var evidence []EvidenceItem
 	if opts.DBEvidence != nil {
 		// Server may attach pending curation_candidate rows only. Ignore any raw
 		// chat/session kinds that leak through (e.g. StageAll reuse of the map).
 		appendPending := func(items []EvidenceItem) {
 			for _, item := range items {
-				if item.Kind == "curation_candidate" {
+				if teamShareableEvidence(item) {
 					evidence = append(evidence, item)
 				}
 			}
@@ -457,7 +572,7 @@ func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResul
 		}
 		appendPending(opts.DBEvidence[""])
 	}
-	ar.EvidenceCollected = len(localFiles) + len(evidence)
+	ar.EvidenceCollected = len(evidence)
 	out, err := opts.StageAgent.RunStage(opts.Context, StageAgentInput{
 		Stage: StageTeamCuration, WorkspaceID: opts.WorkspaceID, AgentID: "team", AgentRoot: ar.Root,
 		DateFrom: formatDate(opts.Since), DateTo: formatDate(opts.Until), Timezone: opts.Timezone,
@@ -469,6 +584,16 @@ func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResul
 	ar.CuratorOutput = out.Content
 	ar.SharedCandidatesAdded, ar.ConflictsFound = CountTeamCurationOutput(out.Content)
 	return ar, nil
+}
+
+func teamShareableEvidence(item EvidenceItem) bool {
+	if item.Kind != "curation_candidate" || strings.EqualFold(strings.TrimSpace(item.Scope), "user") {
+		return false
+	}
+	var metadata struct {
+		Shareable bool `json:"shareable"`
+	}
+	return len(item.Metadata) > 0 && json.Unmarshal(item.Metadata, &metadata) == nil && metadata.Shareable
 }
 
 // collectSkillDraftFiles loads a bounded set of skill drafts so team curation can

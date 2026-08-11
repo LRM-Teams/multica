@@ -2,6 +2,7 @@ package memorycuration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -14,11 +15,14 @@ type EvidenceDB interface {
 }
 
 type EvidenceItem struct {
-	Kind      string    `json:"kind"`
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Snippet   string    `json:"snippet"`
-	CreatedAt time.Time `json:"created_at"`
+	Kind      string          `json:"kind"`
+	ID        string          `json:"id"`
+	Title     string          `json:"title"`
+	Snippet   string          `json:"snippet"`
+	Scope     string          `json:"scope,omitempty"`
+	SubjectID string          `json:"subject_id,omitempty"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 func (i EvidenceItem) Reference() string {

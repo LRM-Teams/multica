@@ -3,6 +3,7 @@ package execenv
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -85,6 +86,34 @@ func TestMirrorBoundSkillsToAgentEnabled_PreservesUnmarkedUserDir(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(userDir, boundSkillMirrorMarker)); !os.IsNotExist(err) {
 		t.Fatalf("should not stamp marker onto user dir, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(enabled, "demo-helper-multica", "SKILL.md")); err != nil {
+		t.Fatalf("bound skill should use a collision-free sibling: %v", err)
+	}
+}
+
+func TestBoundSkillMirrorAndIndexResolveSanitizedCollisions(t *testing.T) {
+	t.Parallel()
+	agentRoot := t.TempDir()
+	skills := []SkillContextForEnv{
+		{Name: "Demo Helper", Content: "# First\n"},
+		{Name: "demo_helper", Content: "# Second\n"},
+	}
+	if err := mirrorBoundSkillsToAgentEnabled(agentRoot, skills); err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range []string{"demo-helper", "demo-helper-multica"} {
+		if _, err := os.Stat(filepath.Join(agentRoot, "skills", "enabled", slug, "SKILL.md")); err != nil {
+			t.Fatalf("missing mirror %s: %v", slug, err)
+		}
+	}
+	var index strings.Builder
+	renderSkillIndexWithSlugs(&index, "pi", skills, nil, filepath.Join(agentRoot, "skills"))
+	for _, slug := range []string{"demo-helper", "demo-helper-multica"} {
+		want := filepath.Join(agentRoot, "skills", "enabled", slug, "SKILL.md")
+		if !strings.Contains(index.String(), want) {
+			t.Fatalf("index missing %s:\n%s", want, index.String())
+		}
 	}
 }
 

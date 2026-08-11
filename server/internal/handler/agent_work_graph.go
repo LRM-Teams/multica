@@ -170,6 +170,7 @@ func (h *Handler) AddAgentWorkGraphVerification(w http.ResponseWriter, r *http.R
 	}
 	in.WorkspaceID = p.WorkspaceID
 	in.GraphID = chi.URLParam(r, "graphId")
+	in.ReviewerAgentID = p.AgentID
 	if err := h.WorkGraph.AuthorizeAgent(r.Context(), p.WorkspaceID, in.GraphID, p.AgentID, in.VerifierNodeID, workgraph.AccessVerify); err != nil {
 		writeWorkGraphError(w, err)
 		return

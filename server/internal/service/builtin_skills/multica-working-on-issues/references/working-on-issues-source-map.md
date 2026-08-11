@@ -14,6 +14,14 @@ at the bottom before relying on an exact line.
 | Runtime advertises the shipped atomic graph CLI but not an unavailable `issue verify` command | `server/internal/daemon/execenv/runtime_config_test.go`, `TestAssignmentBriefIncludesWorkDecompositionGate` |
 | Atomic graph CLI and stable idempotency key | `server/cmd/multica/cmd_issue_graph.go`; `server/internal/handler/agent_work_graph.go`; `server/internal/workgraph/runtime.go` |
 | Canonical DAG validation, ready calculation and downstream invalidation | `server/internal/workgraph/runtime.go`; `server/internal/workgraph/runtime_test.go`; `server/internal/workgraph/runtime_postgres_test.go` |
+| Goal Graph requires verifier nodes and enforces one direct producer plus canonical reviewer/producer identity separation | `server/internal/workgraph/runtime.go`, `normalizeCreate` and `Create`; `server/internal/workgraph/revision.go` |
+| Verifier nodes become ready from succeeded producer artifact evidence without requiring the still-gated producer to be satisfied | `server/internal/workgraph/runtime.go`, `ReconcileReady` |
+| Every verifier Issue dispatch forces a fresh provider session | `server/internal/handler/handler.go`, `OnNodesReady`; `server/internal/service/task.go`, `EnqueueFreshTaskForIssue` |
+| Blind/adversarial Goal reviewer clones omit memory, credentials, custom env/args, MCP config, and sessions; terminal clones are archived and rotated | `server/internal/workgraph/review_agent.go`; `server/internal/workgraph/runtime.go`; `server/internal/workgraph/operations.go`; migration `318_goal_independent_review_gate` |
+| PASS gates producer completion; FAIL requeues producer with findings; new artifacts stale prior attempts | `server/internal/workgraph/operations.go`, `AddArtifact`, `AddVerification`, and `RefreshNodeCompletion` |
+| Incremental revisions preserve unaffected satisfied nodes and invalidate only changed nodes plus descendants | `server/internal/workgraph/revision.go` |
+| Review verdict Graph Delta creates a directed coordinator wake | `server/internal/workgraph/operations.go`, `OnGraphDelta`; `server/internal/handler/goal_graph_delta.go`; `server/pkg/protocol/agent_inbox_reason.go` |
+| Goal completion and summary use current-version kernel `effective_completion` | `server/internal/handler/channel_goal.go`, `openWorkGraphBlocksMainGoalComplete` and `hydrateChannelGoalWorkGraph` |
 | `todo` starts an agent-assigned child and `backlog` parks it | `server/internal/handler/issue.go`, `shouldEnqueueAgentTask`; detailed citations below |
 
 The runtime Prompt makes the semantic admission decision. The canonical Work

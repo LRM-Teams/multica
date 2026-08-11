@@ -28,8 +28,8 @@ export function StarGraphEdges({
     >
       <defs>
         <linearGradient id="sg-merge-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop stopColor="#48d3e4" />
-          <stop offset="1" stopColor="#58d69a" />
+          <stop stopColor="var(--research-lane-1)" />
+          <stop offset="1" stopColor="var(--research-lane-2)" />
         </linearGradient>
       </defs>
       {relations.map((relation) => (

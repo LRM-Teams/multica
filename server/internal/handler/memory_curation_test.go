@@ -539,7 +539,7 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 	ctx := context.Background()
 	suffix := randomID()
 	const applicabilityProjectID = "22222222-2222-2222-2222-222222222222"
-	var agentID, runID, candidateID string
+	var agentID, runID, candidateID, privateCandidateID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id,name,runtime_mode,runtime_id,owner_id, model)
 		VALUES ($1,$2,'local',$3,$4, 'composer-1.5') RETURNING id::text
@@ -554,15 +554,25 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_memory_curation_candidate
-		(workspace_id,source_agent_id,run_id,candidate_type,scope,title,content)
-		VALUES ($1,$2,$3,'team_memory','team','Team release rule','Run release tests before publishing.')
+		(workspace_id,source_agent_id,run_id,candidate_type,scope,title,content,metadata)
+		VALUES ($1,$2,$3,'team_memory','team','Team release rule','Run release tests before publishing.','{"shareable":true}'::jsonb)
 		RETURNING id::text
 	`, testWorkspaceID, agentID, runID).Scan(&candidateID); err != nil {
 		t.Fatal(err)
 	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_memory_curation_candidate
+		(workspace_id,source_agent_id,run_id,candidate_type,scope,title,content,metadata)
+		VALUES ($1,$2,$3,'user_preference','user','Private preference','Never share this.','{"shareable":true}'::jsonb)
+		RETURNING id::text
+	`, testWorkspaceID, agentID, runID).Scan(&privateCandidateID); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM team_knowledge_item WHERE workspace_id=$1 AND title='Release verification'`, testWorkspaceID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM team_knowledge_item WHERE workspace_id=$1 AND title='Private leak'`, testWorkspaceID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_memory_curation_candidate WHERE id=$1`, candidateID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_memory_curation_candidate WHERE id=$1`, privateCandidateID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM memory_curation_run WHERE id=$1`, runID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id=$1`, agentID)
 	})
@@ -573,6 +583,9 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 		for _, item := range bundle.Items {
 			if item.Kind == "curation_candidate" && item.ID == candidateID {
 				foundEvidence = true
+			}
+			if item.ID == privateCandidateID {
+				t.Fatal("user-private candidate was delivered to team curator evidence")
 			}
 		}
 	}
@@ -585,8 +598,14 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 			"kind": "policy", "title": "Release verification",
 			"content": "Run release tests before publishing.", "source_candidate_ids": []string{candidateID},
 			"applies": map[string]any{"project_ids": []string{applicabilityProjectID}, "task_types": []string{"issue"}, "expires_at": "2099-01-01T00:00:00Z"},
+		}, {
+			"kind": "memory", "title": "Private leak", "content": "Never share this.",
+			"source_candidate_ids": []string{privateCandidateID},
 		}},
-		"decisions": []map[string]any{{"candidate_id": candidateID, "status": "promoted", "reason": "workspace policy"}},
+		"decisions": []map[string]any{
+			{"candidate_id": candidateID, "status": "promoted", "reason": "workspace policy"},
+			{"candidate_id": privateCandidateID, "status": "promoted", "reason": "must be rejected by server"},
+		},
 	})
 	tx, err := testPool.Begin(ctx)
 	if err != nil {
@@ -605,6 +624,20 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 	}
 	if candidateStatus != "promoted" {
 		t.Fatalf("candidate status = %q, want promoted", candidateStatus)
+	}
+	var privateStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_memory_curation_candidate WHERE id=$1`, privateCandidateID).Scan(&privateStatus); err != nil {
+		t.Fatal(err)
+	}
+	if privateStatus != "pending" {
+		t.Fatalf("private candidate status = %q, want pending", privateStatus)
+	}
+	var privateKnowledgeCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM team_knowledge_item WHERE workspace_id=$1 AND title='Private leak'`, testWorkspaceID).Scan(&privateKnowledgeCount); err != nil {
+		t.Fatal(err)
+	}
+	if privateKnowledgeCount != 0 {
+		t.Fatalf("private team knowledge count = %d, want 0", privateKnowledgeCount)
 	}
 	var knowledgeCount int
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM team_knowledge_item WHERE workspace_id=$1 AND title='Release verification' AND $2::uuid = ANY(source_candidate_ids)`, testWorkspaceID, candidateID).Scan(&knowledgeCount); err != nil {

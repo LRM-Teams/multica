@@ -150,7 +150,7 @@ func TestActiveMemoryCurationAgentIDsExcludesStaleHeartbeat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ids, err := activeMemoryCurationAgentIDs(ctx, pool, workspaceID, userID, "owned_all", "00000000-0000-0000-0000-000000000000", day)
+	ids, err := activeMemoryCurationAgentIDs(ctx, pool, workspaceID, userID, "owned_all", "00000000-0000-0000-0000-000000000000", day, day.AddDate(0, 0, 1))
 	if err != nil {
 		t.Fatalf("activeMemoryCurationAgentIDs: %v", err)
 	}

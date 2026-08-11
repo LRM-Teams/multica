@@ -1,0 +1,206 @@
+package researchrun
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type registerArtifactPassportInput struct {
+	WorkspaceID            string
+	SessionID              string
+	EntityID               string
+	Kind                   ArtifactEntityKind
+	SourceCreatedAt        *time.Time
+	ProvenanceCompleteness ArtifactProvenanceCompleteness
+	GoalVersion            *int32
+	PlanVersion            *int32
+	SchemaName             string
+	SchemaVersion          string
+	AccessLevel            ArtifactAccessLevel
+	HashOrigin             ArtifactHashOrigin
+}
+
+func migrationArtifactContentHash(kind ArtifactEntityKind, workspaceID, sessionID, entityID string) string {
+	payload := fmt.Sprintf(
+		"research-artifact-migration:%s:%s:%s:%s",
+		kind, workspaceID, sessionID, entityID,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func ensureSessionPolicyStateTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+		VALUES ($1::uuid, $2::uuid, $3, 0)
+		ON CONFLICT (workspace_id, session_id) DO NOTHING
+	`, workspaceID, sessionID, LegacyV1V5CompatPolicy)
+	return err
+}
+
+func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtifactPassportInput) error {
+	if in.AccessLevel == "" {
+		in.AccessLevel = ArtifactAccessRaw
+	}
+	if in.HashOrigin == "" {
+		in.HashOrigin = ArtifactHashOriginMigrationRecomputed
+	}
+	if in.ProvenanceCompleteness == "" {
+		in.ProvenanceCompleteness = ArtifactProvenancePartial
+	}
+	if in.SchemaName == "" {
+		in.SchemaName = string(in.Kind)
+	}
+	if in.SchemaVersion == "" {
+		in.SchemaVersion = "legacy-v1"
+	}
+	contentHash := migrationArtifactContentHash(in.Kind, in.WorkspaceID, in.SessionID, in.EntityID)
+
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO research_artifact_passport (
+			id, workspace_id, session_id, entity_kind, current_version, eligibility_revision,
+			lifecycle_status, provenance_completeness, source_created_at, registered_at
+		) VALUES (
+			$1::uuid, $2::uuid, $3::uuid, $4, NULL, 1,
+			'registered', $5, $6, now()
+		)
+		ON CONFLICT (workspace_id, session_id, id) DO NOTHING
+	`, in.EntityID, in.WorkspaceID, in.SessionID, string(in.Kind), string(in.ProvenanceCompleteness), in.SourceCreatedAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		var currentVersion *int32
+		err = tx.QueryRow(ctx, `
+			SELECT current_version FROM research_artifact_passport
+			WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+		`, in.WorkspaceID, in.SessionID, in.EntityID).Scan(&currentVersion)
+		if err != nil {
+			return err
+		}
+		if currentVersion != nil {
+			return nil
+		}
+	}
+
+	var versionCount int
+	if err = tx.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_artifact_version
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		  AND artifact_id = $3::uuid AND version = 1
+	`, in.WorkspaceID, in.SessionID, in.EntityID).Scan(&versionCount); err != nil {
+		return err
+	}
+	if versionCount == 0 {
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO research_artifact_version (
+				workspace_id, session_id, artifact_id, version, schema_name, schema_version,
+				canonicalization_version, content_hash, access_level, goal_version, plan_version,
+				hash_origin
+			) VALUES (
+				$1::uuid, $2::uuid, $3::uuid, 1, $4, $5,
+				$6, $7, $8, $9, $10, $11
+			)
+		`, in.WorkspaceID, in.SessionID, in.EntityID, in.SchemaName, in.SchemaVersion,
+			ArtifactCanonicalizationVersion, contentHash, string(in.AccessLevel),
+			in.GoalVersion, in.PlanVersion, string(in.HashOrigin)); err != nil {
+			return err
+		}
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET current_version = 1
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+		  AND current_version IS NULL
+	`, in.WorkspaceID, in.SessionID, in.EntityID)
+	return err
+}
+
+func registerRunSessionArtifactTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, sourceCreatedAt time.Time) error {
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID:            workspaceID,
+		SessionID:              sessionID,
+		EntityID:               sessionID,
+		Kind:                   ArtifactKindRunSession,
+		SourceCreatedAt:        &sourceCreatedAt,
+		ProvenanceCompleteness: ArtifactProvenancePartial,
+	})
+}
+
+func registerInitializedRunArtifactsTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {
+	var contractID string
+	var contractCreatedAt time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT id::text, created_at
+		FROM research_contract_revision
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND goal_version = 1
+	`, workspaceID, sessionID).Scan(&contractID, &contractCreatedAt)
+	if err != nil {
+		return err
+	}
+	goalVersion := int32(1)
+	planVersion := int32(1)
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: contractID,
+		Kind: ArtifactKindContractRevision, SourceCreatedAt: &contractCreatedAt,
+		GoalVersion: &goalVersion,
+	}); err != nil {
+		return err
+	}
+
+	var questionID string
+	var questionCreatedAt time.Time
+	if err = tx.QueryRow(ctx, `
+		SELECT id::text, created_at
+		FROM research_question
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		  AND goal_version = 1 AND plan_version = 1 AND client_key = 'root'
+	`, workspaceID, sessionID).Scan(&questionID, &questionCreatedAt); err != nil {
+		return err
+	}
+	if err = registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: questionID,
+		Kind: ArtifactKindQuestion, SourceCreatedAt: &questionCreatedAt,
+		GoalVersion: &goalVersion, PlanVersion: &planVersion,
+	}); err != nil {
+		return err
+	}
+
+	var taskID string
+	var taskCreatedAt time.Time
+	if err = tx.QueryRow(ctx, `
+		SELECT id::text, created_at
+		FROM research_task
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		  AND goal_version = 1 AND plan_version = 1 AND client_key = 'plan:1'
+	`, workspaceID, sessionID).Scan(&taskID, &taskCreatedAt); err != nil {
+		return err
+	}
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID: workspaceID, SessionID: sessionID, EntityID: taskID,
+		Kind: ArtifactKindTask, SourceCreatedAt: &taskCreatedAt,
+		GoalVersion: &goalVersion, PlanVersion: &planVersion,
+	})
+}
+
+func registerRunArtifactsAfterInitializationTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string) error {
+	if err := ensureSessionPolicyStateTx(ctx, tx, workspaceID, sessionID); err != nil {
+		return err
+	}
+	var sessionCreatedAt time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT created_at FROM research_session WHERE id = $1::uuid AND workspace_id = $2::uuid
+	`, sessionID, workspaceID).Scan(&sessionCreatedAt); err != nil {
+		return err
+	}
+	if err := registerRunSessionArtifactTx(ctx, tx, workspaceID, sessionID, sessionCreatedAt); err != nil {
+		return err
+	}
+	return registerInitializedRunArtifactsTx(ctx, tx, workspaceID, sessionID)
+}

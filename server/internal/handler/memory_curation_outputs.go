@@ -19,7 +19,12 @@ type curationResultEnvelope struct {
 }
 
 type selfReviewOutput struct {
-	Candidates []struct {
+	LocalWrites []struct {
+		File         string   `json:"file"`
+		CandidateIDs []string `json:"candidate_ids"`
+	} `json:"local_writes"`
+	ConsumedCandidateIDs []string `json:"consumed_candidate_ids"`
+	Candidates           []struct {
 		Type         string          `json:"type"`
 		Scope        string          `json:"scope"`
 		ScopeType    string          `json:"scope_type"`
@@ -376,7 +381,7 @@ func finalizeMemoryCurationParentFromAgentRuns(ctx context.Context, exec dbExecu
 
 func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, runID, workspaceID, agentID, output string) error {
 	var parsed selfReviewOutput
-	if !extractJSONObject(output, &parsed) || len(parsed.Candidates) == 0 {
+	if !extractJSONObject(output, &parsed) {
 		return nil
 	}
 	for _, c := range parsed.Candidates {
@@ -413,6 +418,40 @@ func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, 
 			return err
 		}
 	}
+	// A missed-write candidate is resolved only when the reviewed output also
+	// contains a verified local write. runAgentSelfReview rejects declared writes
+	// that did not actually change an allowed file on disk.
+	if len(parsed.LocalWrites) > 0 {
+		resolvedByWrite := make(map[string]struct{})
+		for _, write := range parsed.LocalWrites {
+			for _, id := range write.CandidateIDs {
+				resolvedByWrite[strings.TrimSpace(id)] = struct{}{}
+			}
+		}
+		for _, candidateIDText := range parsed.ConsumedCandidateIDs {
+			candidateIDText = strings.TrimSpace(candidateIDText)
+			if _, linked := resolvedByWrite[candidateIDText]; !linked {
+				continue
+			}
+			candidateID, err := util.ParseUUID(candidateIDText)
+			if err != nil {
+				continue
+			}
+			if _, err := exec.Exec(ctx, `
+				UPDATE agent_memory_curation_candidate
+				   SET status = 'promoted',
+				       metadata = (metadata - 'awaiting_stage') || jsonb_build_object(
+				         'agent_self_review', jsonb_build_object('run_id',$1::text,'resolution','durable_write')
+				       ),
+				       updated_at = now()
+				 WHERE id = $2 AND workspace_id = $3 AND source_agent_id = $4
+				   AND status = 'pending'
+				   AND metadata->>'awaiting_stage' = 'agent_self_review'
+			`, runID, candidateID, workspaceID, agentID); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -424,6 +463,7 @@ func uuidStringsFromAny(ids []string) []string {
 		return []string{}
 	}
 	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -432,6 +472,10 @@ func uuidStringsFromAny(ids []string) []string {
 		if _, err := util.ParseUUID(id); err != nil {
 			continue
 		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
 		out = append(out, id)
 	}
 	return out
@@ -449,6 +493,17 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 			continue
 		}
 		kind := normalizeTeamKnowledgeKind(item.Kind)
+		sourceCandidateIDs := uuidStringsFromAny(item.SourceCandidateIDs)
+		if len(sourceCandidateIDs) == 0 {
+			continue
+		}
+		shareable, err := teamCandidateIDsAreShareable(ctx, exec, workspaceID, sourceCandidateIDs)
+		if err != nil {
+			return err
+		}
+		if !shareable {
+			continue
+		}
 		metadata := curationOutputMetadata(item.Metadata, "team_curation", item.Applies)
 		// Preserve non-UUID source refs in metadata for audit; only real UUIDs
 		// go into the uuid[] column.
@@ -462,7 +517,7 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 			)
 			SELECT $1,$2,$3,$4,$5::uuid[], curator_agent_id, $6::jsonb
 			  FROM memory_curation_run WHERE id = $7
-		`, workspaceID, kind, title, content, uuidStringsFromAny(item.SourceCandidateIDs), metadata, runID); err != nil {
+		`, workspaceID, kind, title, content, sourceCandidateIDs, metadata, runID); err != nil {
 			return err
 		}
 	}
@@ -487,6 +542,8 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 			       ),
 			       updated_at = now()
 			 WHERE id = $4 AND workspace_id = $5 AND status = 'pending'
+			   AND scope <> 'user'
+			   AND metadata @> '{"shareable":true}'::jsonb
 		`, status, runID, strings.TrimSpace(decision.Reason), candidateID, workspaceID); err != nil {
 			return err
 		}
@@ -505,6 +562,22 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 		}
 	}
 	return nil
+}
+
+func teamCandidateIDsAreShareable(ctx context.Context, exec dbExecutor, workspaceID string, ids []string) (bool, error) {
+	if len(ids) == 0 {
+		return true, nil
+	}
+	var count int
+	err := exec.QueryRow(ctx, `
+		SELECT count(*)
+		  FROM agent_memory_curation_candidate
+		 WHERE workspace_id = $1
+		   AND id = ANY($2::uuid[])
+		   AND scope <> 'user'
+		   AND metadata @> '{"shareable":true}'::jsonb
+	`, workspaceID, ids).Scan(&count)
+	return count == len(ids), err
 }
 
 func nonUUIDStrings(ids []string) []string {
@@ -643,17 +716,13 @@ func normalizeTeamKnowledgeKind(v string) string {
 	}
 }
 
-// selfReviewCandidateShareable marks user-private / sensitive prefs as not
-// eligible for team curator fan-out. Team curation still sees agent/workspace
-// artifacts, but must not promote these private rows.
+// selfReviewCandidateShareable fails closed: only an explicitly non-sensitive,
+// non-user candidate may cross the team curator boundary.
 func selfReviewCandidateShareable(scope, sensitivity string) bool {
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	sensitivity = strings.ToLower(strings.TrimSpace(sensitivity))
 	if scope == "user" {
 		return false
 	}
-	if sensitivity == "sensitive" || sensitivity == "unknown" {
-		return false
-	}
-	return true
+	return sensitivity == "none"
 }

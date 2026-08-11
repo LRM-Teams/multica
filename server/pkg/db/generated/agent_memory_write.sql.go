@@ -29,18 +29,20 @@ SELECT EXISTS(
     FROM agent_memory_write_event
     WHERE agent_id = $1
       AND rel_path = $2
-      AND created_at > $3
+      AND content_hash = $3
+      AND created_at > $4
 ) AS exists
 `
 
 type HasRecentAgentMemoryWriteParams struct {
-	AgentID   pgtype.UUID `json:"agent_id"`
-	RelPath   string      `json:"rel_path"`
-	CreatedAt time.Time   `json:"created_at"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	RelPath     string      `json:"rel_path"`
+	ContentHash string      `json:"content_hash"`
+	CreatedAt   time.Time   `json:"created_at"`
 }
 
 func (q *Queries) HasRecentAgentMemoryWrite(ctx context.Context, arg HasRecentAgentMemoryWriteParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasRecentAgentMemoryWrite, arg.AgentID, arg.RelPath, arg.CreatedAt)
+	row := q.db.QueryRow(ctx, hasRecentAgentMemoryWrite, arg.AgentID, arg.RelPath, arg.ContentHash, arg.CreatedAt)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err

@@ -2,9 +2,11 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   Cloud,
+  Copy,
   Loader2,
   Monitor,
   Plus,
@@ -12,6 +14,7 @@ import {
   Square,
   X,
 } from "lucide-react";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -82,7 +85,6 @@ import {
   decorateCloudComputerMachines,
   pendingCloudComputerMachineId,
   resolveCloudComputerSelectionId,
-  shortDaemonId,
   splitRuntimeName,
   type RuntimeMachine,
 } from "./runtime-machines";
@@ -1001,17 +1003,9 @@ function MachineDetailView({
             <SectionTitle>{t(($) => $.machine.basics_section)}</SectionTitle>
             <div className="overflow-hidden rounded-xl border bg-card">
               {/*
-                Labeled form field for display_name. Title above is also
-                editable (always-visible pencil) so rename is discoverable
-                without hunting this row. List rows stay display-only.
+                Rename lives only on the hero title (single pencil). Basics
+                no longer repeats Display name — same field, one entry point.
               */}
-              <InfoRow label={t(($) => $.machine.basics_display_name)}>
-                <MachineNameEditor
-                  machine={machine}
-                  wsId={wsId}
-                  variant="basics"
-                />
-              </InfoRow>
               {ownerMember && (
                 <InfoRow label={t(($) => $.machine.basics_owner)}>
                   <span className="truncate text-sm">
@@ -1051,13 +1045,14 @@ function MachineDetailView({
                   </span>
                 </InfoRow>
               )}
-              {machine.daemonId && (
+              {machine.daemonId ? (
                 <InfoRow label={t(($) => $.machine.basics_daemon_id)}>
-                  <span className="truncate font-mono text-xs text-muted-foreground">
-                    {shortDaemonId(machine.daemonId)}
-                  </span>
+                  <ComputerIdValue
+                    id={machine.daemonId}
+                    copyAria={t(($) => $.machine.copy_computer_id_aria)}
+                  />
                 </InfoRow>
-              )}
+              ) : null}
             </div>
           </section>
 
@@ -1290,6 +1285,56 @@ function InfoRow({
       <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center justify-end">{children}</span>
     </div>
+  );
+}
+
+/**
+ * Full Computer ID + copy. Truncated IDs without copy are noise — either show
+ * the complete value with a copy control, or omit the row entirely.
+ */
+function ComputerIdValue({
+  id,
+  copyAria,
+}: {
+  id: string;
+  copyAria: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1400);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-center justify-end gap-1.5">
+      <span
+        className="min-w-0 break-all text-right font-mono text-xs text-muted-foreground"
+        data-testid="machine-basics-computer-id"
+        title={id}
+      >
+        {id}
+      </span>
+      <button
+        type="button"
+        data-testid="machine-basics-computer-id-copy"
+        aria-label={copyAria}
+        title={copyAria}
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => {
+          void copyText(id).then((ok) => {
+            if (ok) setCopied(true);
+          });
+        }}
+      >
+        {copied ? (
+          <Check className="size-3.5 text-success" aria-hidden />
+        ) : (
+          <Copy className="size-3.5" aria-hidden />
+        )}
+      </button>
+    </span>
   );
 }
 

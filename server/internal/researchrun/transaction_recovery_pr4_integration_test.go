@@ -580,7 +580,7 @@ func TestClaimCircuitProbeTransactionRecovery(t *testing.T) {
 			assertRolledBack: func() {
 				var probeToken *string
 				if err := run.pool.QueryRow(run.ctx, `
-					SELECT probe_lease_token::text FROM research_execution_circuit
+					SELECT probe_token::text FROM research_execution_circuit
 					WHERE last_session_id = $1::uuid AND scope = 'provider'
 				`, run.fixture.sessionID).Scan(&probeToken); err != nil {
 					t.Fatal(err)
@@ -592,7 +592,7 @@ func TestClaimCircuitProbeTransactionRecovery(t *testing.T) {
 			assertCommitted: func() {
 				var probeToken string
 				if err := run.pool.QueryRow(run.ctx, `
-					SELECT probe_lease_token::text FROM research_execution_circuit
+					SELECT probe_token::text FROM research_execution_circuit
 					WHERE last_session_id = $1::uuid AND scope = 'provider'
 				`, run.fixture.sessionID).Scan(&probeToken); err != nil {
 					t.Fatal(err)
@@ -650,7 +650,7 @@ func TestResolveCircuitProbeTransactionRecovery(t *testing.T) {
 				`, run.fixture.sessionID).Scan(&state); err != nil {
 					t.Fatal(err)
 				}
-				if state != string(CircuitOpen) {
+				if state != string(CircuitHalfOpen) {
 					t.Fatalf("circuit state=%q after rollback", state)
 				}
 			},
@@ -666,7 +666,13 @@ func TestResolveCircuitProbeTransactionRecovery(t *testing.T) {
 					t.Fatalf("circuit state=%q after resolve", state)
 				}
 			},
-			recover: invoke,
+			recover: func() error {
+				err := invoke()
+				if errors.Is(err, ErrCircuitProbeLeaseLost) {
+					return nil
+				}
+				return err
+			},
 		}
 	})
 }

@@ -297,26 +297,8 @@ func (p *agentActivityProducer) PublishHoldEntry(agentID, daemonInstanceID strin
 			return p.publishLocked(snapshot, entries)
 		}
 	}
-	if p.send == nil {
-		// No live transport: best-effort drop, matching the deferred behavior of
-		// the managed path when disconnected.
-		return nil
-	}
-	snapshot := protocol.AgentActivitySnapshot{
-		AgentID:          agentID,
-		LaunchID:         p.newID(),
-		DaemonInstanceID: daemonInstanceID,
-		ActivityKind:     protocol.ActivityKindOnline,
-		DetailKind:       "idle",
-		ClientSequence:   1,
-		ProducerFactID:   p.newID(),
-		ObservedAt:       p.now().UTC(),
-	}
-	payload := protocol.AgentActivityPayload{Snapshot: snapshot, Entries: entries}
-	if err := payload.Validate(); err != nil {
-		return err
-	}
-	p.send(payload)
+	// A hold before managed launch has no authoritative launch identity. Drop
+	// this best-effort presentation fact rather than inventing one.
 	return nil
 }
 

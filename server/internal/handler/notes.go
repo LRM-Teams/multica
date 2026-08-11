@@ -949,6 +949,11 @@ func noteAISelectedEditPrompt(prompt string) bool {
 		strings.Contains(prompt, "Selected Markdown excerpt to replace:")
 }
 
+func noteAIPageEditPrompt(prompt string) bool {
+	return strings.Contains(prompt, "You are editing a user's Notion-style note page.") &&
+		strings.Contains(prompt, "Full current page Markdown:")
+}
+
 func repairSelectedNoteAIEditResult(content, prompt string) (*NoteAIEditResult, error) {
 	if !noteAISelectedEditPrompt(prompt) {
 		return nil, fmt.Errorf("note AI output repair is only supported for selected edits")
@@ -963,13 +968,89 @@ func repairSelectedNoteAIEditResult(content, prompt string) (*NoteAIEditResult, 
 	})
 }
 
+func noteAIInstruction(prompt string) string {
+	start := strings.Index(prompt, "<instruction>")
+	end := strings.Index(prompt, "</instruction>")
+	if start < 0 || end < 0 || end <= start {
+		return ""
+	}
+	start += len("<instruction>")
+	return strings.TrimSpace(prompt[start:end])
+}
+
+func noteAIInferPageRepairAction(prompt string, target *string) string {
+	if target != nil && strings.TrimSpace(*target) != "" {
+		return "patch"
+	}
+	instruction := strings.ToLower(noteAIInstruction(prompt))
+	replacePageTerms := []string{
+		"rewrite", "translate", "summarize", "summarise", "reorganize", "reorganise",
+		"polish", "whole page", "entire page", "full page", "current page",
+		"\u6574\u9875", "\u5168\u6587", "\u91cd\u5199", "\u7ffb\u8bd1", "\u603b\u7ed3", "\u6da6\u8272",
+	}
+	for _, term := range replacePageTerms {
+		if strings.Contains(instruction, term) {
+			return "replace_page"
+		}
+	}
+	replaceSelectionTerms := []string{"replace the empty line", "replace this line", "replace cursor block", "\u66ff\u6362\u7a7a\u884c", "\u66ff\u6362\u8fd9\u4e00\u884c"}
+	for _, term := range replaceSelectionTerms {
+		if strings.Contains(instruction, term) {
+			return "replace_selection"
+		}
+	}
+	return "insert"
+}
+
+func noteAIOptionalLooseStringField(content, field string) *string {
+	value, err := extractLooseNoteAIStringField(content, field)
+	if err != nil || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	value = strings.TrimSpace(value)
+	return &value
+}
+
+func repairPageNoteAIEditResult(content, prompt string) (*NoteAIEditResult, error) {
+	if !noteAIPageEditPrompt(prompt) || noteAISelectedEditPrompt(prompt) {
+		return nil, fmt.Errorf("note AI page output repair is only supported for page edits")
+	}
+	trimmed := stripNoteAIJSONFences(content)
+	markdown := trimmed
+	if extracted, err := extractLooseNoteAIStringField(trimmed, "markdown"); err == nil && strings.TrimSpace(extracted) != "" {
+		markdown = extracted
+	}
+	result := &NoteAIEditResult{
+		Markdown:  markdown,
+		Target:    noteAIOptionalLooseStringField(trimmed, "target"),
+		Title:     noteAIOptionalLooseStringField(trimmed, "title"),
+		Rationale: noteAIOptionalLooseStringField(trimmed, "rationale"),
+	}
+	if actionMatch := noteAIJSONActionRE.FindStringSubmatch(trimmed); len(actionMatch) >= 2 {
+		switch strings.TrimSpace(actionMatch[1]) {
+		case "insert", "replace_selection", "replace_page", "patch":
+			result.Action = strings.TrimSpace(actionMatch[1])
+		case "append", "continue", "draft", "add":
+			result.Action = "insert"
+		case "rewrite", "replace", "page", "edit_page":
+			result.Action = "replace_page"
+		}
+	}
+	if result.Action == "" {
+		result.Action = noteAIInferPageRepairAction(prompt, result.Target)
+	}
+	return validateNoteAIEditResult(result)
+}
+
 func parseNoteAIEditResultWithRepair(content, prompt string) (*NoteAIEditResult, error) {
 	result, err := parseNoteAIEditResult(content)
 	if err == nil {
 		return result, nil
 	}
-	repaired, repairErr := repairSelectedNoteAIEditResult(content, prompt)
-	if repairErr == nil {
+	if repaired, repairErr := repairSelectedNoteAIEditResult(content, prompt); repairErr == nil {
+		return repaired, nil
+	}
+	if repaired, repairErr := repairPageNoteAIEditResult(content, prompt); repairErr == nil {
 		return repaired, nil
 	}
 	return nil, err

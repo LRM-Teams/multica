@@ -209,6 +209,20 @@ func TestNoteAIJobCompletedReturnsAssistantResult(t *testing.T) {
 	}
 }
 
+func noteAIPagePromptForTest(instruction string) string {
+	return `You are editing a user's Notion-style note page.
+The user pressed Space on an empty line and asked AI to edit the current page from that cursor position.
+Return ONLY a valid JSON object.
+Full current page Markdown:
+<page>
+old page
+</page>
+User instruction:
+<instruction>
+` + instruction + `
+</instruction>`
+}
+
 func TestNoteAIJobRepairsSelectedMarkdownOnlyResult(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -249,6 +263,53 @@ old text
 	}
 	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_selection" || resp.Result.Markdown != "**Improved** [text](https://example.com)" || resp.FailureReason != nil {
 		t.Fatalf("repaired job response = %#v, want completed replace_selection result", resp)
+	}
+}
+
+func TestNoteAIJobRepairsPageMarkdownOnlyResult(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Page Repair Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI page repair note "+uuid.NewString())
+	job := createNoteAIJobWithPromptForTest(t, noteID, agentID, noteAIPagePromptForTest("Rewrite the whole page and polish the language."))
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now()
+		WHERE id = $1
+	`, job.TaskID); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO chat_message (chat_session_id, role, content, task_id)
+		VALUES ($1, 'assistant', $2, $3)
+	`, job.ChatSessionID, "# Better Page\n\nImproved body.", job.TaskID); err != nil {
+		t.Fatalf("insert assistant result: %v", err)
+	}
+
+	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/ai-jobs/"+job.ID, nil), "jobId", job.ID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteAIJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNoteAIJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode repaired page job: %v", err)
+	}
+	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_page" || resp.Result.Markdown != "# Better Page\n\nImproved body." || resp.FailureReason != nil {
+		t.Fatalf("repaired page job response = %#v, want completed replace_page result", resp)
+	}
+}
+
+func TestParseNoteAIEditResultRepairsPageJSONWithoutAction(t *testing.T) {
+	result, err := parseNoteAIEditResultWithRepair(`{"markdown":"Inserted paragraph","title":"New title","rationale":"Continues the page."}`, noteAIPagePromptForTest("Continue this page from the cursor."))
+	if err != nil {
+		t.Fatalf("repair page JSON without action: %v", err)
+	}
+	if result.Action != "insert" || result.Markdown != "Inserted paragraph" || result.Title == nil || *result.Title != "New title" || result.Rationale == nil || *result.Rationale != "Continues the page." {
+		t.Fatalf("repaired page insert = %#v", result)
 	}
 }
 

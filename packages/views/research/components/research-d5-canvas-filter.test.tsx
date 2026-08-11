@@ -1,19 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { emptyCanvasFilter, useResearchCanvasStore } from "@multica/core/research";
+import { emptyCanvasFilter, type ResearchCanvasFilter } from "@multica/core/research";
 import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
 const { storeState, setFilter, clearFilter } = vi.hoisted(() => {
-  const storeState = {
-    filter: {
-      status: null as string | null,
-      tier: null as string | null,
-      round: null as string | null,
-      cluster: null as string | null,
-      query: "",
-    },
+  const storeState: { filter: ResearchCanvasFilter } = {
+    filter: emptyCanvasFilter(),
   };
-  const setFilter = vi.fn((partial: Partial<typeof storeState.filter>) => {
+  const setFilter = vi.fn((partial: Partial<ResearchCanvasFilter>) => {
     storeState.filter = { ...storeState.filter, ...partial };
   });
   const clearFilter = vi.fn(() => {

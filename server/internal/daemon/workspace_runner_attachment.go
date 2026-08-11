@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -35,6 +36,9 @@ func (runner *WorkspaceRunner) startManagedAgent(payload protocol.WorkspaceRunne
 	session := protocol.AgentSessionPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID}
 	if err := runner.activity.SetManaged(status, session); err != nil {
 		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("record managed start: %w", err)
+	}
+	if err := runner.activity.Observe(AgentObservation{AgentID: ack.AgentID, LaunchID: ack.LaunchID, Kind: AgentObservationLaunchAccepted, Data: AgentLaunchObservationData{RuntimeID: payload.RuntimeID, StartDispatchID: payload.StartDispatchID}, At: time.Now().UTC()}); err != nil && runner.daemon.logger != nil {
+		runner.daemon.logger.Debug("Workspace Runner launch Activity observation deferred", "workspace_id", workspaceID, "agent_id", ack.AgentID, "error", err)
 	}
 	return ack, status, session, nil
 }
@@ -116,7 +120,7 @@ func (runner *WorkspaceRunner) applyAttachmentDetach(payload protocol.WorkspaceR
 			return protocol.WorkspaceRunnerAgentDetachedPayload{}, fmt.Errorf("stop detached Agent launch: %w", err)
 		}
 		if runner.activity != nil {
-			if err := runner.activity.PublishForManagedAgent(payload.AgentID, runner.daemon.runnerInstanceID, protocol.ActivityKindOffline, "detached", nil); err != nil && runner.daemon.logger != nil {
+			if err := runner.activity.Observe(AgentObservation{AgentID: payload.AgentID, Kind: AgentObservationDetached, Data: AgentAttachmentObservationData{RuntimeID: payload.RuntimeID, AttachmentGeneration: AttachmentGeneration(payload.AttachmentGeneration)}, At: time.Now().UTC()}); err != nil && runner.daemon.logger != nil {
 				runner.daemon.logger.Debug("Workspace Runner detached Activity publish deferred", "workspace_id", workspaceID, "agent_id", payload.AgentID, "reason", "activity_not_managed", "error", err)
 			}
 			runner.activity.RemoveManaged(payload.AgentID, launch.LaunchID)

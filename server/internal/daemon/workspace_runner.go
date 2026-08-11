@@ -214,29 +214,20 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentSession, session); err != nil {
 				return err
 			}
-			// A managed launch becomes immediately observable as online. This is
-			// an actual Manager fact, not an inferred UI fallback; later provider
-			// observations replace it with working or thinking snapshots.
-			if err := producer.Publish(protocol.AgentActivitySnapshot{
-				AgentID:          ack.AgentID,
-				LaunchID:         ack.LaunchID,
-				DaemonInstanceID: d.runnerInstanceID,
-				ActivityKind:     protocol.ActivityKindOnline,
-			}, nil); err != nil {
-				return err
-			}
 		case protocol.EventDaemonAgentStop:
 			var stop protocol.WorkspaceRunnerAgentStopPayload
 			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
 				continue
 			}
+			launch, found := runner.processes.Snapshot(stop.AgentID)
+			if !found || launch.LaunchID != stop.LaunchID {
+				continue
+			}
 			if err := runner.processes.Stop(agentProcessCallback{AgentID: stop.AgentID, LaunchID: stop.LaunchID}); err != nil {
 				continue
 			}
-			if entry, err := activityNarrativeEntry(protocol.ActivityKindOffline, "stopped", "Stopped"); err == nil {
-				if err := producer.PublishForManagedAgent(stop.AgentID, d.runnerInstanceID, protocol.ActivityKindOffline, "stopped", []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
-					d.logger.Debug("workspace Runner stopped Activity publish deferred", "error", err, "agent_id", stop.AgentID)
-				}
+			if err := producer.Observe(AgentObservation{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Kind: AgentObservationStopped, Data: AgentStopObservationData{RuntimeID: launch.RuntimeID, ReasonCode: "requested"}, At: time.Now().UTC()}); err != nil && d.logger != nil {
+				d.logger.Debug("workspace Runner stopped Activity publish deferred", "error", err, "agent_id", stop.AgentID)
 			}
 			producer.RemoveManaged(stop.AgentID, stop.LaunchID)
 			if err := writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil {

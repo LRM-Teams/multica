@@ -31,7 +31,6 @@ import {
 import { useEditorState } from "@tiptap/react";
 import type { Editor } from "@tiptap/core";
 import { posToDOMRect } from "@tiptap/core";
-import { Slice } from "@tiptap/pm/model";
 import { NodeSelection } from "@tiptap/pm/state";
 import { toast } from "sonner";
 import type { NoteAIEditResult, NoteAIJobStatus } from "@multica/core/types";
@@ -40,6 +39,7 @@ import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
 import { modKey } from "@multica/core/platform";
 import { NoteAIDiffPreview } from "./note-ai-diff";
+import { patchedDocumentMarkdown, replaceRangeWithMarkdown } from "./utils/note-ai-apply";
 import { captureNoteAIApplyDiagnostic } from "./utils/note-ai-apply-diagnostics";
 import {
   captureNoteAIUndoSnapshot,
@@ -227,33 +227,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * Tiptap's `isAllowedUri` in the `setLink` command provides a second
  * safety layer.
  */
-function replaceEditorRangeWithMarkdown(editor: Editor, from: number, to: number, markdown: string) {
-  if (!editor.markdown) {
-    editor.chain().focus().command(({ tr }) => {
-      tr.insertText(markdown, from, to);
-      return true;
-    }).run();
-    return;
-  }
-  const json = editor.markdown.parse(markdown);
-  const node = editor.schema.nodeFromJSON(json);
-  const slice = Slice.maxOpen(node.content);
-  editor.chain().focus().command(({ tr }) => {
-    tr.replaceRange(from, to, slice);
-    return true;
-  }).run();
-}
-
-function patchedDocumentMarkdown(current: string, result: NoteAIEditResult) {
-  const target = result.target?.trim();
-  if (!target) return null;
-  const source = current.trimEnd();
-  if (source.includes(target)) return source.replace(target, result.markdown);
-  const looseTarget = target.trim();
-  if (looseTarget && source.includes(looseTarget)) return source.replace(looseTarget, result.markdown);
-  return null;
-}
-
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return "";
@@ -636,7 +609,7 @@ function TextOptimizationReview({
   const replaceSelection = () => {
     const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     try {
-      replaceEditorRangeWithMarkdown(editor, state.from, state.to, result.markdown);
+      replaceRangeWithMarkdown(editor, state.from, state.to, result.markdown);
     } catch {
       captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
@@ -647,7 +620,7 @@ function TextOptimizationReview({
   const insertAfter = () => {
     const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     try {
-      replaceEditorRangeWithMarkdown(editor, state.to, state.to, `\n\n${result.markdown}`);
+      replaceRangeWithMarkdown(editor, state.to, state.to, `\n\n${result.markdown}`);
     } catch {
       captureNoteAIApplyDiagnostic({ surface: "selected_text", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));

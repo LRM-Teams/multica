@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { computePosition, offset, flip, shift, autoUpdate } from "@floating-ui/dom";
 import type { Editor } from "@tiptap/core";
-import { Slice } from "@tiptap/pm/model";
 import { Button } from "@multica/ui/components/ui/button";
 import type { NoteAIEditResult, NoteAIJobStatus } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
@@ -11,6 +10,7 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUp, Loader2, Sparkles } from "lucide-react";
 import { useT } from "../i18n";
 import { NoteAIDiffPreview } from "./note-ai-diff";
+import { patchedDocumentMarkdown, replaceRangeWithMarkdown } from "./utils/note-ai-apply";
 import { captureNoteAIApplyDiagnostic } from "./utils/note-ai-apply-diagnostics";
 import {
   captureNoteAIUndoSnapshot,
@@ -41,35 +41,6 @@ export type EmptyLineAiState = {
   cancelling?: boolean;
   result?: NoteAIEditResult;
 };
-
-function replaceRangeWithMarkdown(editor: Editor, from: number, to: number, markdown: string) {
-  const safeFrom = Math.max(0, Math.min(from, editor.state.doc.content.size));
-  const safeTo = Math.max(safeFrom, Math.min(to, editor.state.doc.content.size));
-  if (!editor.markdown) {
-    editor.chain().focus().command(({ tr }) => {
-      tr.insertText(markdown, safeFrom, safeTo);
-      return true;
-    }).run();
-    return;
-  }
-  const json = editor.markdown.parse(markdown);
-  const node = editor.schema.nodeFromJSON(json);
-  const slice = Slice.maxOpen(node.content);
-  editor.chain().focus().command(({ tr }) => {
-    tr.replaceRange(safeFrom, safeTo, slice);
-    return true;
-  }).run();
-}
-
-function patchedDocumentMarkdown(current: string, result: NoteAIEditResult) {
-  const target = result.target?.trim();
-  if (!target) return null;
-  const source = current.trimEnd();
-  if (source.includes(target)) return source.replace(target, result.markdown);
-  const looseTarget = target.trim();
-  if (looseTarget && source.includes(looseTarget)) return source.replace(looseTarget, result.markdown);
-  return null;
-}
 
 function buildRequest(editor: Editor, state: EmptyLineAiState): PageEditAIRequest {
   const docSize = editor.state.doc.content.size;

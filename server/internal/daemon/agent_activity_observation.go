@@ -116,6 +116,18 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		projection.activityKind, projection.processInstanceID = protocol.ActivityKindWorking, data.ProcessInstanceID
 		projection.detailKind, _ = toolActivityFact(data.ToolName, nil)
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Running tool")
+	case AgentObservationRuntimeCompacting:
+		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "compacting_context"
+		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Compacting context")
+	case AgentObservationRuntimeCompacted:
+		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
+		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Context compaction finished")
+	case AgentObservationRuntimeIdle:
+		projection.activityKind, projection.detailKind = protocol.ActivityKindOnline, "idle"
+		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Idle")
+	case AgentObservationRuntimeDiagnostic:
+		projection.preserveCurrent = true
+		entry, err = activitySystemEntry("Runtime warning", "Provider reported a warning")
 	case AgentObservationMessageBodyAccepted:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "message_received"
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Message received")

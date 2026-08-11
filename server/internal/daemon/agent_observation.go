@@ -18,6 +18,10 @@ const (
 	AgentObservationRuntimeWorking      AgentObservationKind = "runtime_working"
 	AgentObservationRuntimeThinking     AgentObservationKind = "runtime_thinking"
 	AgentObservationRuntimeTool         AgentObservationKind = "runtime_tool"
+	AgentObservationRuntimeCompacting   AgentObservationKind = "runtime_compacting"
+	AgentObservationRuntimeCompacted    AgentObservationKind = "runtime_compacted"
+	AgentObservationRuntimeIdle         AgentObservationKind = "runtime_idle"
+	AgentObservationRuntimeDiagnostic   AgentObservationKind = "runtime_diagnostic"
 	AgentObservationMessageBodyAccepted AgentObservationKind = "message_body_accepted"
 	AgentObservationFreshnessHeld       AgentObservationKind = "freshness_held"
 	AgentObservationError               AgentObservationKind = "error"
@@ -136,7 +140,7 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationRuntimeReady, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool:
+	case AgentObservationRuntimeReady, AgentObservationRuntimeWorking, AgentObservationRuntimeThinking, AgentObservationRuntimeTool, AgentObservationRuntimeCompacting, AgentObservationRuntimeCompacted, AgentObservationRuntimeIdle, AgentObservationRuntimeDiagnostic:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}

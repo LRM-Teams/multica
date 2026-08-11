@@ -83,6 +83,29 @@ describe("ModelDropdown selected model label", () => {
     );
   });
 
+  it("truncates long model ids in the closed trigger (no overflow)", () => {
+    const longId =
+      "lenovo-deepseek-v4/DeepSeek-V4-Flash-0731-extra-long-suffix-that-must-ellipsis";
+    render(
+      <ModelDropdown
+        runtimeId="runtime-1"
+        value={longId}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const trigger = screen.getByTestId("model-dropdown-trigger");
+    expect(trigger).toHaveTextContent(longId);
+    expect(trigger).toHaveAttribute("title", longId);
+    // Flex button + overflow-hidden is what keeps long ids inside the dialog.
+    expect(trigger.className).toMatch(/overflow-hidden/);
+    expect(trigger.className).toMatch(/min-w-0/);
+    expect(trigger.className).toMatch(/max-w-full/);
+    const label = screen.getByTestId("model-dropdown-trigger-label");
+    expect(label.className).toMatch(/truncate/);
+    expect(label.className).toMatch(/min-w-0/);
+  });
+
   it("starts catalog discovery whenever a runtime is selected", () => {
     render(
       <ModelDropdown

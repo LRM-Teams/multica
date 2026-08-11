@@ -944,6 +944,37 @@ func parseNoteAIEditResult(content string) (*NoteAIEditResult, error) {
 	return validateNoteAIEditResult(loose)
 }
 
+func noteAISelectedEditPrompt(prompt string) bool {
+	return strings.Contains(prompt, `action MUST be "replace_selection"`) ||
+		strings.Contains(prompt, "Selected Markdown excerpt to replace:")
+}
+
+func repairSelectedNoteAIEditResult(content, prompt string) (*NoteAIEditResult, error) {
+	if !noteAISelectedEditPrompt(prompt) {
+		return nil, fmt.Errorf("note AI output repair is only supported for selected edits")
+	}
+	markdown := stripNoteAIJSONFences(content)
+	if extracted, err := extractLooseNoteAIStringField(markdown, "markdown"); err == nil && strings.TrimSpace(extracted) != "" {
+		markdown = extracted
+	}
+	return validateNoteAIEditResult(&NoteAIEditResult{
+		Action:   "replace_selection",
+		Markdown: markdown,
+	})
+}
+
+func parseNoteAIEditResultWithRepair(content, prompt string) (*NoteAIEditResult, error) {
+	result, err := parseNoteAIEditResult(content)
+	if err == nil {
+		return result, nil
+	}
+	repaired, repairErr := repairSelectedNoteAIEditResult(content, prompt)
+	if repairErr == nil {
+		return repaired, nil
+	}
+	return nil, err
+}
+
 func noteAIStatusFromTask(status string, terminalOutcome pgtype.Text, startedAt pgtype.Timestamptz, result *NoteAIEditResult, failure *string) string {
 	switch status {
 	case "pending", "failed":
@@ -986,8 +1017,9 @@ func (h *Handler) noteAIJobResponse(ctx context.Context, workspaceID, userID, jo
 	var assistantFailure pgtype.Text
 	var createdAt pgtype.Timestamptz
 	var pageID, agentID, chatSessionID, taskID pgtype.UUID
+	var prompt string
 	err := h.DB.QueryRow(ctx, `
-SELECT j.id, j.workspace_id, j.page_id, j.agent_id, j.chat_session_id, j.task_id, j.created_at,
+SELECT j.id, j.workspace_id, j.page_id, j.agent_id, j.chat_session_id, j.task_id, j.created_at, j.prompt,
        e.status, e.terminal_outcome, e.started_at, e.updated_at, e.error, e.failure_reason,
        m.content, m.failure_reason
 FROM note_ai_job j
@@ -1002,7 +1034,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) m ON true
 WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspaceID, userID).Scan(
-		&jobID, &workspaceID, &pageID, &agentID, &chatSessionID, &taskID, &createdAt,
+		&jobID, &workspaceID, &pageID, &agentID, &chatSessionID, &taskID, &createdAt, &prompt,
 		&taskStatus, &terminalOutcome, &taskStartedAt, &taskUpdatedAt, &taskError, &taskFailure,
 		&assistantContent, &assistantFailure,
 	)
@@ -1012,7 +1044,7 @@ WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspace
 	var result *NoteAIEditResult
 	var failure *string
 	if assistantContent.Valid && strings.TrimSpace(assistantContent.String) != "" {
-		parsed, err := parseNoteAIEditResult(assistantContent.String)
+		parsed, err := parseNoteAIEditResultWithRepair(assistantContent.String, prompt)
 		if err != nil {
 			value := "agent returned invalid structured note AI edit"
 			failure = &value

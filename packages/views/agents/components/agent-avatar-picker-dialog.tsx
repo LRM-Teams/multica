@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useReducer, useRef } from "react";
 import { Check, Loader2, Upload } from "lucide-react";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { api } from "@multica/core/api";
@@ -31,6 +31,7 @@ type DraftState = {
   selection: AgentAvatarSelection | null;
   previewUrl: string | null;
   saving: boolean;
+  cropSrc: string | null;
 };
 
 type DraftAction =
@@ -40,7 +41,8 @@ type DraftAction =
       selection: AgentAvatarSelection;
       previewUrl: string;
     }
-  | { type: "setSaving"; saving: boolean };
+  | { type: "setSaving"; saving: boolean }
+  | { type: "setCropSrc"; cropSrc: string | null };
 
 function draftReducer(state: DraftState, action: DraftAction): DraftState {
   switch (action.type) {
@@ -49,15 +51,19 @@ function draftReducer(state: DraftState, action: DraftAction): DraftState {
         selection: null,
         previewUrl: action.previewUrl,
         saving: false,
+        cropSrc: null,
       };
     case "select":
       return {
         ...state,
         selection: action.selection,
         previewUrl: action.previewUrl,
+        cropSrc: null,
       };
     case "setSaving":
       return { ...state, saving: action.saving };
+    case "setCropSrc":
+      return { ...state, cropSrc: action.cropSrc };
   }
 }
 
@@ -103,33 +109,34 @@ export function AgentAvatarPickerDialog({
   const { t } = useT("agents");
   const { upload, uploading } = useFileUpload(api);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastObjectUrlRef = useRef<string | null>(null);
+  const prevOpenRef = useRef(open);
   const [draft, dispatch] = useReducer(draftReducer, {
     selection: null,
     previewUrl: currentUrl,
     saving: false,
+    cropSrc: null,
   });
-  const [cropSrc, setCropSrc] = useState<string | null>(null);
-  const lastObjectUrlRef = useRef<string | null>(null);
-  const wasOpenRef = useRef(false);
 
-  // Reset draft only on false → true open edge so crop hide/show does not
-  // wipe a staged upload (crop keeps parent `open` true and only sets cropSrc).
-  useEffect(() => {
-    if (open && !wasOpenRef.current) {
+  // Adjust draft when `open` flips — during render (prev ref), not an effect,
+  // so we never paint a stale staged face after close/reopen. Crop hide/show
+  // keeps parent `open` true and only sets cropSrc, so it does not hit this
+  // edge and cannot wipe a staged upload.
+  if (open !== prevOpenRef.current) {
+    prevOpenRef.current = open;
+    if (open) {
       dispatch({ type: "reset", previewUrl: currentUrl ?? null });
-    }
-    if (!open) {
-      setCropSrc(null);
+    } else {
       if (lastObjectUrlRef.current) {
         URL.revokeObjectURL(lastObjectUrlRef.current);
         lastObjectUrlRef.current = null;
       }
+      dispatch({ type: "reset", previewUrl: currentUrl ?? null });
     }
-    wasOpenRef.current = open;
-  }, [open, currentUrl]);
+  }
 
   const busy = uploading || draft.saving;
-  const chooserOpen = open && !cropSrc;
+  const chooserOpen = open && !draft.cropSrc;
 
   const close = () => {
     if (busy) return;
@@ -193,23 +200,23 @@ export function AgentAvatarPickerDialog({
     if (lastObjectUrlRef.current) URL.revokeObjectURL(lastObjectUrlRef.current);
     lastObjectUrlRef.current = url;
     // Hide chooser while cropping; parent `open` stays true so draft survives.
-    setCropSrc(url);
+    dispatch({ type: "setCropSrc", cropSrc: url });
   };
 
   const handleCropCancel = () => {
-    setCropSrc(null);
     if (lastObjectUrlRef.current) {
       URL.revokeObjectURL(lastObjectUrlRef.current);
       lastObjectUrlRef.current = null;
     }
+    dispatch({ type: "setCropSrc", cropSrc: null });
   };
 
   const handleCropConfirm = async (cropped: File) => {
-    setCropSrc(null);
     if (lastObjectUrlRef.current) {
       URL.revokeObjectURL(lastObjectUrlRef.current);
       lastObjectUrlRef.current = null;
     }
+    dispatch({ type: "setCropSrc", cropSrc: null });
     let result;
     try {
       result = await upload(cropped);
@@ -241,10 +248,10 @@ export function AgentAvatarPickerDialog({
         onChange={handleFileChange}
       />
 
-      {cropSrc ? (
+      {draft.cropSrc ? (
         <AvatarCropDialog
-          key={cropSrc}
-          src={cropSrc}
+          key={draft.cropSrc}
+          src={draft.cropSrc}
           busy={uploading}
           onCancel={handleCropCancel}
           onConfirm={handleCropConfirm}

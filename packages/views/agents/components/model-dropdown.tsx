@@ -240,7 +240,7 @@ export function ModelDropdown({
             {isInitialScan
               ? t(($) => $.model_dropdown.scanning_on_computer)
               : value
-                ? modelLabel(models, value) || value
+                ? modelLabel(models, value)
                 : triggerLabel}
           </span>
           <ChevronDown
@@ -353,6 +353,5 @@ function groupByProvider(models: RuntimeModel[]): Record<string, RuntimeModel[]>
 
 function modelLabel(models: RuntimeModel[], id: string): string {
   const found = models.find((m) => m.id === id);
-  if (!found) return "custom";
-  return found.provider ? found.provider : "model";
+  return found?.label ?? id;
 }

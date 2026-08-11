@@ -18,6 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -227,6 +228,10 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 
 	runtime, ok := h.pickWindyRuntime(w, r, wsUUID, setup.RuntimeID)
 	if !ok {
+		return
+	}
+	if !agent.IsKnownThinkingValue(runtime.Provider, setup.ThinkingLevel) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("thinking_level %q is not a recognised value for runtime %q", setup.ThinkingLevel, runtime.Provider))
 		return
 	}
 	agent, created, err := h.provisionOnboardingAgent(r.Context(), wsUUID, parseUUID(userID), runtime, setup.Model, setup.ThinkingLevel)

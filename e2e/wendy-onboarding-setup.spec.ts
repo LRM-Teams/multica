@@ -15,8 +15,9 @@ async function db(sql: string, params: unknown[] = []) {
 }
 
 async function authenticate(page: Page, token: string) {
-  await page.goto("/login");
-  await page.evaluate((value) => localStorage.setItem("multica_token", value), token);
+  await page.addInitScript((value) => {
+    localStorage.setItem("multica_token", value);
+  }, token);
 }
 
 test("workspace creation is gated through explicit Wendy setup and seeded #general welcome", async ({ page }) => {
@@ -26,6 +27,13 @@ test("workspace creation is gated through explicit Wendy setup and seeded #gener
   const api = new TestApiClient();
   await api.login(email, "Wendy Setup Owner");
   const workspace = await api.ensureWorkspace("Wendy Setup", `wendy-setup-${stamp}`);
+  await db(
+    `UPDATE "user"
+     SET onboarded_at = now(),
+         onboarding_questionnaire = '{"source":["other"],"source_skipped":false}'::jsonb
+     WHERE email = $1`,
+    [email],
+  );
   const runtime = await db(
     `INSERT INTO agent_runtime (
        workspace_id, daemon_id, name, runtime_mode, provider, status,
@@ -57,9 +65,13 @@ test("workspace creation is gated through explicit Wendy setup and seeded #gener
     await page.goto(`/${workspace.slug}/issues`);
 
     await expect(page.getByRole("heading", { name: "Meet Wendy" })).toBeVisible();
-    await page.getByLabel("Runtime").selectOption(runtimeId);
-    await page.getByTestId("model-dropdown-trigger").click();
-    await page.getByRole("button", { name: /Wendy E2E Model/ }).click();
+    await page.getByTestId("runtime-picker-trigger").click();
+    await page.getByTestId(`runtime-picker-option-${runtimeId}`).click();
+    const modelTrigger = page.getByTestId("model-dropdown-trigger");
+    await modelTrigger.click();
+    await page.getByText("Wendy E2E Model", { exact: true }).last().click();
+    await expect(modelTrigger).toContainText("Wendy E2E Model");
+    await expect(modelTrigger).not.toContainText("e2e");
     await page.getByRole("button", { name: "Create Wendy" }).click();
     await expect(page.getByRole("heading", { name: "Meet Wendy" })).toBeHidden();
 

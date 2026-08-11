@@ -41,12 +41,22 @@ vi.mock("./model-dropdown", () => ({
     if (autoSelectFirst && !value.trim()) {
       queueMicrotask(() => onChange("composer-1.5"));
     }
-    return null;
+    return (
+      <button
+        type="button"
+        data-testid="create-model"
+        onClick={() => onChange(value)}
+      >
+        {value}
+      </button>
+    );
   },
 }));
 
 vi.mock("./thinking-dropdown", () => ({
-  ThinkingDropdown: () => null,
+  ThinkingDropdown: ({ value }: { value: string }) => (
+    <span data-testid="create-thinking">{value}</span>
+  ),
 }));
 
 // Provider logos don't matter for these assertions but they pull in SVGs.
@@ -288,5 +298,36 @@ describe("CreateAgentDialog workspace runtime selection", () => {
       screen.getByText("Pi", { selector: "span.truncate" }),
     );
     expect(screen.queryByText("Cursor")).toBeNull();
+  });
+
+  it("preserves reasoning when the selected runtime and model are reselected", () => {
+    const selected = makeRuntime({
+      id: "rt-selected",
+      daemon_id: "machine-selected",
+      provider: "codex",
+      owner_id: ME,
+    });
+    const template = {
+      id: "agent-template",
+      runtime_id: selected.id,
+      model: "gpt-5.6-sol",
+      thinking_level: "high",
+      name: "template-agent",
+      display_name: "Template Agent",
+      description: "",
+      instructions: "",
+      custom_env: {},
+      custom_args: [],
+      skills: [],
+      max_concurrent_tasks: 1,
+    } as unknown as Agent;
+    renderDialog([selected], template);
+
+    fireEvent.click(screen.getByTestId("runtime-picker-trigger"));
+    fireEvent.click(screen.getByTestId("runtime-picker-option-rt-selected"));
+    expect(screen.getByTestId("create-thinking")).toHaveTextContent("high");
+
+    fireEvent.click(screen.getByTestId("create-model"));
+    expect(screen.getByTestId("create-thinking")).toHaveTextContent("high");
   });
 });

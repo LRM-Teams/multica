@@ -210,7 +210,7 @@ export function CreateAgentDialog({
     firstRuntimeIdOnMachine(selectedMachine);
 
   const handleMachineSelect = (machineId: string) => {
-    if (machineId === selectedMachineId) return;
+    if (machineId === effectiveMachineId) return;
     setSelectedMachineId(machineId);
     const next = machines.find((m) => m.id === machineId) ?? null;
     setSelectedRuntimeId(firstOnlineRuntimeIdOnMachine(next));
@@ -219,6 +219,7 @@ export function CreateAgentDialog({
   };
 
   const handleRuntimeSelect = (runtimeId: string) => {
+    if (runtimeId === effectiveRuntimeId) return;
     setSelectedRuntimeId(runtimeId);
     setModel("");
     setThinkingLevel("");
@@ -401,6 +402,7 @@ export function CreateAgentDialog({
               runtimeOnline={selectedRuntimeOnline}
               model={model}
               onModelChange={(next) => {
+                if (next === model) return;
                 setModel(next);
                 setThinkingLevel("");
               }}

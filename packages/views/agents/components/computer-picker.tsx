@@ -29,12 +29,14 @@ export function ComputerPicker({
   currentUserId,
   selectedMachineId,
   onSelect,
+  disabled = false,
 }: {
   runtimes: RuntimeDevice[];
   runtimesLoading?: boolean;
   currentUserId: string | null;
   selectedMachineId: string;
   onSelect: (machineId: string) => void;
+  disabled?: boolean;
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
@@ -54,7 +56,8 @@ export function ComputerPicker({
       </Label>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          disabled={machines.length === 0 && !runtimesLoading}
+          disabled={disabled || (machines.length === 0 && !runtimesLoading)}
+          data-testid="computer-picker-trigger"
           className={executionTriggerClass}
         >
           {runtimesLoading ? (
@@ -99,6 +102,7 @@ export function ComputerPicker({
                 <button
                   key={machine.id}
                   type="button"
+                  data-testid={`computer-picker-option-${machine.id}`}
                   onClick={() => {
                     onSelect(machine.id);
                     setOpen(false);

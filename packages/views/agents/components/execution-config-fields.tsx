@@ -73,6 +73,7 @@ export function ExecutionConfigFields({
         currentUserId={currentUserId}
         selectedMachineId={machineId}
         onSelect={onMachineSelect}
+        disabled={disabled}
       />
       <RuntimePicker
         runtimes={machineRuntimes}
@@ -81,6 +82,7 @@ export function ExecutionConfigFields({
         currentUserId={currentUserId}
         selectedRuntimeId={runtimeId}
         onSelect={onRuntimeSelect}
+        disabled={disabled}
       />
       <ModelDropdown
         runtimeId={runtimeId || null}

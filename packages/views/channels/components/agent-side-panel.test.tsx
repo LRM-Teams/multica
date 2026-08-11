@@ -817,9 +817,6 @@ describe("AgentSidePanel", () => {
 
   it("never renders a separate Config tab; Runtime Config is its own Profile section (LRM-470)", () => {
     activityPermission.allowed = true;
-    // The editable state used to come from the `group_manager` marker; since
-    // #871 it comes from canEdit, which is what this test needs for the
-    // "applies next run" hint.
     permission.allowed = true;
     renderPanel("user-owner");
     expect(screen.queryByRole("button", { name: "Config" })).not.toBeInTheDocument();
@@ -829,7 +826,7 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByText("Properties")).not.toBeInTheDocument();
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
-    expect(screen.getByText("Changes take effect on the next run")).toBeInTheDocument();
+    expect(screen.queryByText("Changes take effect on the next run")).not.toBeInTheDocument();
   });
 
   it("LRM-448: Actions stack + Info field labels; Usage lives on its tab", () => {

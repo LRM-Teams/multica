@@ -165,3 +165,29 @@ func TestLinkPolicyGuardTriggerNames(t *testing.T) {
 		t.Fatalf("link policy guard triggers=%v want=%v", got, want)
 	}
 }
+
+func TestMigrationDiagnosticReasonCodes(t *testing.T) {
+	want := []string{
+		"cross_scope_reference",
+		"invalid_match_decision",
+		"malformed_uuid",
+		"unknown_schema",
+		"unresolved_reference",
+	}
+	got := MigrationDiagnosticReasonCodes()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("migration diagnostic reasons=%v want=%v", got, want)
+	}
+}
+
+func TestMigrationRelationshipParserNames(t *testing.T) {
+	want := []string{"research_message_match_decision"}
+	got := MigrationRelationshipParserNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("migration relationship parsers=%v want=%v", got, want)
+	}
+}

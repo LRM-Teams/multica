@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Draft · Agent Activity — command readability</title>
+  <style>
+    :root {
+      --background: #fafafa;
+      --card: #ffffff;
+      --foreground: #0a0a0a;
+      --muted: #737373;
+      --muted-soft: rgba(115, 115, 115, 0.55);
+      --border: #e5e5e5;
+      --muted-bg: #f5f5f5;
+      --accent-hover: rgba(0, 0, 0, 0.04);
+      --brand: #7c3aed;
+      --running: #f59e0b;
+      --active: #7c3aed;
+      --waiting: #eab308;
+      --failure: #ef4444;
+      --neutral-dot: rgba(115, 115, 115, 0.4);
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --ring: #a3a3a3;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: #ececec;
+      color: var(--foreground);
+      min-height: 100vh;
+      padding: 28px 18px 72px;
+    }
+    .page { max-width: 1120px; margin: 0 auto; }
+    h1 { font-size: 1.2rem; font-weight: 650; margin: 0 0 6px; }
+    .lead {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin: 0 0 14px;
+      max-width: 72ch;
+      line-height: 1.45;
+    }
+    .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+    .badge {
+      font-size: 11px; font-weight: 600; padding: 3px 9px;
+      border-radius: 999px; background: #eee; color: #525252;
+    }
+    .badge.ok { background: #dcfce7; color: #166534; }
+    .badge.warn { background: #fef3c7; color: #92400e; }
+    .badge.frozen { background: #e0e7ff; color: #3730a3; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+      overflow: hidden;
+    }
+    .panel-hd {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    }
+    .panel-hd h2 { margin: 0; font-size: 0.92rem; font-weight: 650; }
+    .panel-hd .tag {
+      font-size: 11px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .panel-hd .tag.before { color: #b45309; }
+    .panel-hd .tag.after { color: #15803d; }
+    .panel-bd {
+      padding: 16px 18px 20px;
+      min-height: 420px;
+    }
+    .note {
+      margin-top: 18px;
+      padding: 12px 14px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .note strong { color: var(--foreground); font-weight: 600; }
+    .note ul { margin: 6px 0 0; padding-left: 1.15rem; }
+    .note li { margin: 2px 0; }
+
+    /* —— Activity timeline (shared shell) —— */
+    .timeline {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+    }
+    .spine {
+      pointer-events: none;
+      position: absolute;
+      left: 5px;
+      top: 8px;
+      bottom: 8px;
+      width: 1.5px;
+      background: var(--border);
+    }
+    .row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 4px 0;
+    }
+    .row.idle { padding: 2px 0; }
+    .dot-col {
+      width: 12px;
+      flex-shrink: 0;
+      display: flex;
+      justify-content: center;
+      padding-top: 6px;
+    }
+    .dot {
+      position: relative;
+      z-index: 1;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.neutral { background: var(--neutral-dot); }
+    .dot.running { background: var(--running); }
+    .dot.active { background: var(--active); }
+    .dot.waiting { background: var(--waiting); }
+    .dot.failure { background: var(--failure); }
+
+    .body { min-width: 0; flex: 1; padding-top: 2px; }
+    .head {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      min-height: 0;
+    }
+    .label {
+      font-size: 13.5px;
+      font-weight: 600;
+      line-height: 1.35;
+      color: var(--foreground);
+      flex-shrink: 0;
+    }
+    .label.muted {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+    .sub {
+      font-size: 13px;
+      color: var(--muted);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      line-height: 1.35;
+      flex: 1;
+    }
+    .sub.path {
+      display: flex;
+      min-width: 0;
+      white-space: nowrap;
+    }
+    .sub.path .head-path {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sub.path .tail-path { flex-shrink: 0; }
+    .time {
+      margin-left: auto;
+      flex-shrink: 0;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted-soft);
+      padding-top: 2px;
+    }
+    .chev {
+      flex-shrink: 0;
+      color: rgba(115, 115, 115, 0.7);
+      padding-top: 1px;
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Command block */
+    .cmd {
+      position: relative;
+      margin-top: 4px;
+      border-radius: 6px;
+      background: var(--muted-bg);
+    }
+    .cmd pre {
+      margin: 0;
+      padding: 6px 10px;
+      padding-right: 36px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--foreground);
+      overflow-x: auto;
+    }
+    .cmd.clamp-2 pre {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
+    .cmd .copy {
+      position: absolute;
+      right: 6px;
+      top: 6px;
+      width: 26px;
+      height: 26px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--card);
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      padding: 0;
+      box-shadow: 0 1px 2px rgba(0,0,0,.05);
+    }
+    .cmd .copy:hover { color: var(--foreground); }
+    .cmd .copy svg { width: 14px; height: 14px; }
+    /* BEFORE: hover-only copy */
+    .cmd.hover-copy .copy { opacity: 0; }
+    .cmd.hover-copy:hover .copy { opacity: 1; }
+    /* AFTER: always visible */
+    .cmd.always-copy .copy { opacity: 1; }
+
+    .expand-btn {
+      margin-top: 4px;
+      border: none;
+      background: none;
+      padding: 0;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--brand);
+      cursor: pointer;
+    }
+    .expand-btn:hover { text-decoration: underline; }
+
+    .thinking-preview {
+      margin-top: 2px;
+      font-size: 13px;
+      color: var(--muted);
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
+      overflow: hidden;
+    }
+
+    .callout {
+      margin: 0 0 12px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      line-height: 1.4;
+      border: 1px solid transparent;
+    }
+    .callout.bad {
+      background: #fff7ed;
+      border-color: #fed7aa;
+      color: #9a3412;
+    }
+    .callout.good {
+      background: #f0fdf4;
+      border-color: #bbf7d0;
+      color: #166534;
+    }
+
+    .hint-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .hint-bar button {
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      cursor: pointer;
+      color: var(--foreground);
+    }
+    .hint-bar button:hover { background: var(--muted-bg); }
+    .hint-bar button.active {
+      background: #171717;
+      color: #fff;
+      border-color: #171717;
+    }
+
+    .long-fold pre {
+      max-height: 9.6em; /* ~8 lines */
+      overflow: hidden;
+    }
+    .long-fold.open pre {
+      max-height: min(60vh, 480px);
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Agent Activity — command readability draft</h1>
+    <p class="lead">
+      Timeline shell unchanged (spine, order, tones, Idle merge). Only command
+      default visibility + Copy. Side-by-side: current clamp-2 vs proposed full default.
+    </p>
+    <div class="badges">
+      <span class="badge frozen">timeline shell frozen</span>
+      <span class="badge warn">before · line-clamp-2 + hover Copy</span>
+      <span class="badge ok">after · full wrap + always Copy</span>
+    </div>
+
+    <div class="hint-bar" id="scenario-bar">
+      <button type="button" class="active" data-scenario="typical">Typical multica CLI</button>
+      <button type="button" data-scenario="long">Long command (fold)</button>
+      <button type="button" data-scenario="mixed">Mixed stream</button>
+    </div>
+
+    <div class="grid">
+      <!-- BEFORE -->
+      <section class="panel">
+        <div class="panel-hd">
+          <h2>Before (today)</h2>
+          <span class="tag before">current</span>
+        </div>
+        <div class="panel-bd">
+          <div class="callout bad" id="before-callout">
+            Command body clamped to 2 lines. Full text needs expand. Copy only on hover.
+          </div>
+          <div class="timeline" id="before-timeline">
+            <div class="spine" aria-hidden="true"></div>
+            <!-- filled by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- AFTER -->
+      <section class="panel">
+        <div class="panel-hd">
+          <h2>After (proposed)</h2>
+          <span class="tag after">draft</span>
+        </div>
+        <div class="panel-bd">
+          <div class="callout good" id="after-callout">
+            Normal command fully visible on first paint. Copy always shown. Chevron only when long-folded.
+          </div>
+          <div class="timeline" id="after-timeline">
+            <div class="spine" aria-hidden="true"></div>
+            <!-- filled by JS -->
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="note">
+      <strong>Still the same timeline</strong>
+      <ul>
+        <li>Chronological stream, continuous spine, tone dots (running = amber for command)</li>
+        <li>Label weight / timestamp mono right / Idle de-emphasized</li>
+        <li>No side panel, no run grouping, no BE field changes</li>
+        <li>Long threshold in draft: ≥12 lines or ≥2000 chars → Show full command</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    const COPY_SVG = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="9" y="9" width="13" height="13" rx="2"/>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+      </svg>`;
+
+    const CHEV_DOWN = `
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m6 9 6 6 6-6"/>
+      </svg>`;
+
+    const TYPICAL_CMD = `multica message send \\
+  --channel "proj-alpha" \\
+  --body "Deployed fix for attachment upload timeout; please re-run the failed job."`;
+
+    const LONG_CMD = `#!/usr/bin/env bash
+set -euo pipefail
+cd /Users/frank/Code/multica
+export MULTICA_WORKSPACE=demo
+pnpm --filter @multica/views exec vitest run agents/components/tabs/activity-timeline.test.tsx
+pnpm --filter @multica/views exec vitest run agents/components/tabs/activity-event.test.ts
+cd server && go test ./internal/handler/ -run Activity -count=1
+make cli ARGS="agent status --id agent-01HXYZ"
+multica issue comment MUL-2143 --body "Activity command readability draft HTML ready for review"
+multica message send --channel ops --body "verification green on activity command fixtures"
+echo "done: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# padding lines to force fold threshold in the draft
+echo line-11
+echo line-12
+echo line-13
+echo line-14
+echo line-15
+echo line-16
+echo line-17
+echo line-18
+echo line-19
+echo line-20`;
+
+    function cmdBlock({ content, clamp2, alwaysCopy, folded, open }) {
+      const classes = ["cmd"];
+      if (clamp2) classes.push("clamp-2");
+      if (alwaysCopy) classes.push("always-copy");
+      else classes.push("hover-copy");
+      if (folded) classes.push("long-fold");
+      if (open) classes.push("open");
+      return `
+        <div class="${classes.join(" ")}">
+          <pre><code></code></pre>
+          <button type="button" class="copy" title="Copy" aria-label="Copy">${COPY_SVG}</button>
+        </div>`;
+    }
+
+    function wireCmd(root, content) {
+      root.querySelectorAll(".cmd").forEach((el) => {
+        const code = el.querySelector("code");
+        if (code) code.textContent = content;
+        const btn = el.querySelector(".copy");
+        if (btn) {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            navigator.clipboard?.writeText(content).catch(() => {});
+            btn.title = "Copied";
+            setTimeout(() => { btn.title = "Copy"; }, 1200);
+          });
+        }
+      });
+    }
+
+    function rowCommandBefore(cmd, time, expanded) {
+      return `
+        <div class="row">
+          <div class="dot-col"><span class="dot running"></span></div>
+          <div class="body">
+            <div class="head" data-expand-before style="cursor:pointer;border-radius:6px;padding:2px 0;">
+              <span class="label">Running command</span>
+              <span class="time">${time}</span>
+              ${CHEV_DOWN}
+            </div>
+            ${cmdBlock({ content: cmd, clamp2: !expanded, alwaysCopy: false })}
+          </div>
+        </div>`;
+    }
+
+    function rowCommandAfter(cmd, time, { long = false, open = false } = {}) {
+      const showFold = long;
+      return `
+        <div class="row">
+          <div class="dot-col"><span class="dot running"></span></div>
+          <div class="body">
+            <div class="head">
+              <span class="label">Running command</span>
+              <span class="time">${time}</span>
+            </div>
+            ${cmdBlock({ content: cmd, clamp2: false, alwaysCopy: true, folded: showFold, open })}
+            ${showFold ? `<button type="button" class="expand-btn" data-toggle-long>${open ? "Show less" : "Show full command"}</button>` : ""}
+          </div>
+        </div>`;
+    }
+
+    function rowSimple(label, sub, time, tone = "neutral", idle = false) {
+      const subHtml = sub
+        ? (typeof sub === "object" && sub.path
+            ? `<span class="sub path"><span class="head-path">${sub.head}</span><span class="tail-path">${sub.tail}</span></span>`
+            : `<span class="sub">${sub}</span>`)
+        : "";
+      return `
+        <div class="row${idle ? " idle" : ""}">
+          <div class="dot-col"><span class="dot ${tone}"></span></div>
+          <div class="body">
+            <div class="head">
+              <span class="label${idle ? " muted" : ""}">${label}</span>
+              ${subHtml}
+              <span class="time">${time}</span>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function rowThinking(preview, time) {
+      return `
+        <div class="row">
+          <div class="dot-col"><span class="dot neutral"></span></div>
+          <div class="body">
+            <div class="head">
+              <span class="label">Thinking</span>
+              <span class="time">${time}</span>
+              ${CHEV_DOWN}
+            </div>
+            <div class="thinking-preview">${preview}</div>
+          </div>
+        </div>`;
+    }
+
+    const scenarios = {
+      typical: {
+        beforeCallout: "Command body clamped to 2 lines. Tail of --body is invisible until expand. Copy only on hover.",
+        afterCallout: "Same spine & label. Full multica CLI visible without click. Copy always on the block.",
+        before(cmd) {
+          return [
+            rowSimple("Working", "Message received", "4m ago", "active"),
+            rowThinking("Plan: verify attachment upload path, then comment on MUL-2143…", "3m ago"),
+            rowCommandBefore(cmd, "2m ago", false),
+            rowSimple("Writing file", {
+              path: true,
+              head: "packages/views/agents/components/tabs/",
+              tail: "activity-timeline.tsx",
+            }, "1m ago", "running"),
+            rowSimple("Idle · 2", null, "just now", "neutral", true),
+          ].join("");
+        },
+        after(cmd) {
+          return [
+            rowSimple("Working", "Message received", "4m ago", "active"),
+            rowThinking("Plan: verify attachment upload path, then comment on MUL-2143…", "3m ago"),
+            rowCommandAfter(cmd, "2m ago"),
+            rowSimple("Writing file", {
+              path: true,
+              head: "packages/views/agents/components/tabs/",
+              tail: "activity-timeline.tsx",
+            }, "1m ago", "running"),
+            rowSimple("Idle · 2", null, "just now", "neutral", true),
+          ].join("");
+        },
+        cmd: TYPICAL_CMD,
+      },
+      long: {
+        beforeCallout: "Long scripts still start as 2-line clamp; expand opens short max-height scroller — feels cut off twice.",
+        afterCallout: "First ~8 lines shown with Show full command. Copy always full text. No chevron-for-empty-chrome.",
+        before(cmd) {
+          return [
+            rowSimple("Working", "Message received", "6m ago", "active"),
+            rowCommandBefore(cmd, "4m ago", false),
+            rowSimple("Completed", null, "1m ago", "neutral"),
+          ].join("");
+        },
+        after(cmd) {
+          return [
+            rowSimple("Working", "Message received", "6m ago", "active"),
+            rowCommandAfter(cmd, "4m ago", { long: true, open: false }),
+            rowSimple("Completed", null, "1m ago", "neutral"),
+          ].join("");
+        },
+        cmd: LONG_CMD,
+      },
+      mixed: {
+        beforeCallout: "Stream shape is fine; the only pain is the command row density/visibility.",
+        afterCallout: "Non-command rows identical. Only Running command presentation changes.",
+        before(cmd) {
+          return [
+            rowSimple("Restarted", null, "12m ago", "neutral"),
+            rowSimple("Working", "Message received", "8m ago", "active"),
+            rowCommandBefore(cmd, "7m ago", false),
+            rowSimple("Reading file", {
+              path: true,
+              head: "/Users/frank/Code/multica/packages/core/types/",
+              tail: "events.ts",
+            }, "6m ago", "running"),
+            rowSimple("Searching code", "activityExpansionContent", "5m ago", "running"),
+            rowThinking("Keep timeline shell; only change CommandBlock defaults…", "4m ago"),
+            rowCommandBefore(
+              `multica issue comment MUL-2143 --body "draft html for activity command readability"`,
+              "2m ago",
+              false,
+            ),
+            rowSimple("Idle", null, "1m ago", "neutral", true),
+          ].join("");
+        },
+        after(cmd) {
+          return [
+            rowSimple("Restarted", null, "12m ago", "neutral"),
+            rowSimple("Working", "Message received", "8m ago", "active"),
+            rowCommandAfter(cmd, "7m ago"),
+            rowSimple("Reading file", {
+              path: true,
+              head: "/Users/frank/Code/multica/packages/core/types/",
+              tail: "events.ts",
+            }, "6m ago", "running"),
+            rowSimple("Searching code", "activityExpansionContent", "5m ago", "running"),
+            rowThinking("Keep timeline shell; only change CommandBlock defaults…", "4m ago"),
+            rowCommandAfter(
+              `multica issue comment MUL-2143 --body "draft html for activity command readability"`,
+              "2m ago",
+            ),
+            rowSimple("Idle", null, "1m ago", "neutral", true),
+          ].join("");
+        },
+        cmd: TYPICAL_CMD,
+      },
+    };
+
+    let current = "typical";
+
+    function render(name) {
+      current = name;
+      const s = scenarios[name];
+      document.getElementById("before-callout").textContent = s.beforeCallout;
+      document.getElementById("after-callout").textContent = s.afterCallout;
+
+      const beforeEl = document.getElementById("before-timeline");
+      const afterEl = document.getElementById("after-timeline");
+      beforeEl.innerHTML = `<div class="spine" aria-hidden="true"></div>` + s.before(s.cmd);
+      afterEl.innerHTML = `<div class="spine" aria-hidden="true"></div>` + s.after(s.cmd);
+
+      // wire before: toggle clamp on header click
+      beforeEl.querySelectorAll("[data-expand-before]").forEach((head) => {
+        head.addEventListener("click", () => {
+          const cmd = head.parentElement.querySelector(".cmd");
+          if (!cmd) return;
+          cmd.classList.toggle("clamp-2");
+        });
+      });
+      wireCmd(beforeEl, s.cmd);
+      // mixed has two different commands — re-wire each block from its code content after first paint
+      beforeEl.querySelectorAll(".cmd code").forEach((code, i) => {
+        // leave as set by wireCmd for single-cmd scenarios; for mixed second cmd set below
+      });
+      if (name === "mixed") {
+        const cmds = beforeEl.querySelectorAll(".cmd");
+        const texts = [
+          TYPICAL_CMD,
+          `multica issue comment MUL-2143 --body "draft html for activity command readability"`,
+        ];
+        cmds.forEach((el, i) => {
+          const code = el.querySelector("code");
+          if (code) code.textContent = texts[i] || texts[0];
+          const btn = el.querySelector(".copy");
+          if (btn) {
+            btn.onclick = (e) => {
+              e.stopPropagation();
+              navigator.clipboard?.writeText(code.textContent).catch(() => {});
+            };
+          }
+        });
+        const afterCmds = afterEl.querySelectorAll(".cmd");
+        afterCmds.forEach((el, i) => {
+          const code = el.querySelector("code");
+          if (code) code.textContent = texts[i] || texts[0];
+          const btn = el.querySelector(".copy");
+          if (btn) {
+            btn.onclick = (e) => {
+              e.stopPropagation();
+              navigator.clipboard?.writeText(code.textContent).catch(() => {});
+            };
+          }
+        });
+      } else {
+        wireCmd(afterEl, s.cmd);
+      }
+
+      // after long fold toggle
+      afterEl.querySelectorAll("[data-toggle-long]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const body = btn.parentElement;
+          const cmd = body.querySelector(".cmd");
+          const open = cmd.classList.toggle("open");
+          btn.textContent = open ? "Show less" : "Show full command";
+        });
+      });
+
+      document.querySelectorAll("#scenario-bar button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.scenario === name);
+      });
+    }
+
+    document.getElementById("scenario-bar").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-scenario]");
+      if (!btn) return;
+      render(btn.dataset.scenario);
+    });
+
+    render("typical");
+  </script>
+</body>
+</html>
+`)

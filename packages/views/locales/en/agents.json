@@ -441,6 +441,8 @@
       },
       "copy_command": "Copy",
       "command_copied": "Copied",
+      "show_full_command": "Show full command",
+      "show_less_command": "Show less",
       "view_diagnostics": "View diagnostic details",
       "hide_diagnostics": "Hide diagnostic details",
       "section_now": "Now",

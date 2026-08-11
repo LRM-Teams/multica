@@ -306,7 +306,7 @@
     },
     "avatar": {
       "change_aria": "更换头像",
-      "upload_aria": "上传头像",
+      "upload_aria": "选择头像",
       "remove_aria": "移除头像",
       "select_image_toast": "请选择图片文件。",
       "upload_failed_toast": "头像上传失败"
@@ -967,7 +967,7 @@
     "creation_not_authorized": "仅工作区 owner 和 admin 可创建此 Agent。",
     "generated_hint": "由 Wendy 根据当前对话生成。",
     "avatar_from_draft_hint": "已带上 Wendy 草稿头像——可更换；清除后创建时用随机预设。",
-    "avatar_random_hint": "未指定头像——创建时随机分配，也可在此上传。",
+    "avatar_random_hint": "已预选系统头像——可在 15 个内置头像中更换，或上传自己的图片。",
     "loading_card": "正在加载提案…",
     "load_card_failed": "加载提案失败",
     "card_created": "已创建：{{name}}",

@@ -1,135 +1,60 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Camera, ImagePlus, Loader2, X } from "lucide-react";
-import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { api } from "@multica/core/api";
-import { useFileUpload } from "@multica/core/hooks/use-file-upload";
+import { useState } from "react";
+import { Camera, ImagePlus, X } from "lucide-react";
+import type { AgentAvatarSelection } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
-import { AvatarCropDialog } from "./avatar-crop-dialog";
+import { AgentAvatarPickerDialog } from "./agent-avatar-picker-dialog";
 
-/** LRM-542: PNG/JPG, ≤5 MB, ≥256² input → 512² crop output. */
-const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
-const AVATAR_MIN_DIMENSION = 256;
-
-/** What the picker hands back after a successful upload: the attachment id
- * the server needs for `avatar_selection` plus the URL for local preview. */
-export interface AvatarPickerSelection {
-  attachmentId: string;
-  previewUrl: string;
-}
+/**
+ * What the create-form picker hands back after Save: either a system preset
+ * (`picked`) or an uploaded attachment (`uploaded`). Parents map this to
+ * `avatar_selection` on create.
+ */
+export type AvatarPickerSelection =
+  | { kind: "picked"; presetUrl: string; previewUrl: string }
+  | { kind: "uploaded"; attachmentId: string; previewUrl: string };
 
 interface AvatarPickerProps {
-  /** Current preview URL. null when nothing chosen yet. */
+  /** Current committed preview URL. null when nothing chosen yet. */
   value: string | null;
-  /** Fires after a successful upload with the attachment id the parent
-   *  must submit as `avatar_selection`. Re-fires with null when the user
-   *  clears the choice. */
+  /** Fires after Save with a staged choice, or with null when the user clears. */
   onChange: (selection: AvatarPickerSelection | null) => void;
-  /** Pixel size of the square. Defaults to 56 (h-14 / w-14), which lines
-   *  up vertically with the Name + Description stack in the create-agent
-   *  form so the two read as a single visual row. */
+  /** Pixel size of the square. Defaults to 56. */
   size?: number;
 }
 
-function readImageDimensions(file: File): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const width = img.naturalWidth;
-      const height = img.naturalHeight;
-      URL.revokeObjectURL(url);
-      resolve({ width, height });
+function toPickerSelection(
+  selection: AgentAvatarSelection,
+  previewUrl: string,
+): AvatarPickerSelection {
+  if (selection.kind === "uploaded") {
+    return {
+      kind: "uploaded",
+      attachmentId: selection.attachment_id,
+      previewUrl,
     };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("decode failed"));
-    };
-    img.src = url;
-  });
+  }
+  return {
+    kind: "picked",
+    presetUrl: selection.preset_url,
+    previewUrl,
+  };
 }
 
 /**
- * Compact avatar picker — a single square that lives next to the Name
- * input in the create-agent form. Mirrors the visual language of
- * agent-detail-inspector.tsx (Camera overlay on hover, file input behind
- * the scenes), so users who've configured an avatar elsewhere in the app
- * recognise the affordance immediately.
- *
- * Upload path: pick PNG/JPG → circular crop (512²) → upload → onChange.
+ * Compact square trigger for the create-agent form. Opens the shared
+ * {@link AgentAvatarPickerDialog} (15 system faces + upload, Cancel / Save).
  *
  * No avatar yet → dashed placeholder with an ImagePlus icon.
- * Has avatar    → image fills the square, hover dims it with a Camera
- *                 overlay for "click to change". A small × in the corner
- *                 clears the choice.
+ * Has avatar    → image fills the square; hover shows Camera; × clears.
  */
 export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) {
   const { t } = useT("agents");
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const { upload, uploading } = useFileUpload(api);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [previewError, setPreviewError] = useState(false);
-  const [cropSrc, setCropSrc] = useState<string | null>(null);
-  const lastObjectUrlRef = useRef<string | null>(null);
-
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = ""; // allow re-selecting the same file
-    const type = file.type.toLowerCase();
-    if (type !== "image/png" && type !== "image/jpeg") {
-      showErrorToast(t(($) => $.side_panel.avatar_err_type));
-      return;
-    }
-    if (file.size > AVATAR_MAX_BYTES) {
-      showErrorToast(t(($) => $.side_panel.avatar_err_size));
-      return;
-    }
-    try {
-      const dims = await readImageDimensions(file);
-      if (dims.width < AVATAR_MIN_DIMENSION || dims.height < AVATAR_MIN_DIMENSION) {
-        showErrorToast(t(($) => $.side_panel.avatar_err_dimensions));
-        return;
-      }
-    } catch {
-      showErrorToast(t(($) => $.side_panel.avatar_err_type));
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    if (lastObjectUrlRef.current) URL.revokeObjectURL(lastObjectUrlRef.current);
-    lastObjectUrlRef.current = url;
-    setCropSrc(url);
-  };
-
-  const handleCropCancel = () => {
-    setCropSrc(null);
-    if (lastObjectUrlRef.current) {
-      URL.revokeObjectURL(lastObjectUrlRef.current);
-      lastObjectUrlRef.current = null;
-    }
-  };
-
-  const handleCropConfirm = async (cropped: File) => {
-    setCropSrc(null);
-    if (lastObjectUrlRef.current) {
-      URL.revokeObjectURL(lastObjectUrlRef.current);
-      lastObjectUrlRef.current = null;
-    }
-    try {
-      const result = await upload(cropped);
-      if (!result) return;
-      setPreviewError(false);
-      onChange({ attachmentId: result.id, previewUrl: result.link });
-    } catch (err) {
-      showErrorToast(
-        err instanceof Error
-          ? err.message
-          : t(($) => $.create_dialog.avatar.upload_failed_toast),
-      );
-    }
-  };
 
   const hasValue = !!value && !previewError;
   const dimensionStyle = { width: size, height: size };
@@ -139,8 +64,7 @@ export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) 
       <div className="relative shrink-0" style={dimensionStyle}>
         <button
           type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
+          onClick={() => setPickerOpen(true)}
           className={cn(
             "group relative h-full w-full overflow-hidden rounded-lg outline-none transition-colors",
             "focus-visible:ring-2 focus-visible:ring-ring",
@@ -153,6 +77,7 @@ export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) 
               ? t(($) => $.create_dialog.avatar.change_aria)
               : t(($) => $.create_dialog.avatar.upload_aria)
           }
+          data-testid="avatar-picker-trigger"
           style={dimensionStyle}
         >
           {hasValue ? (
@@ -164,26 +89,18 @@ export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) 
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-              {uploading ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <ImagePlus className="h-5 w-5" />
-              )}
+              <ImagePlus className="h-5 w-5" />
             </div>
           )}
 
           {hasValue && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-              {uploading ? (
-                <Loader2 className="h-4 w-4 animate-spin text-white" />
-              ) : (
-                <Camera className="h-4 w-4 text-white" />
-              )}
+              <Camera className="h-4 w-4 text-white" />
             </div>
           )}
         </button>
 
-        {hasValue && !uploading && (
+        {hasValue && (
           <button
             type="button"
             onClick={(e) => {
@@ -193,28 +110,23 @@ export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) 
             }}
             className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
             aria-label={t(($) => $.create_dialog.avatar.remove_aria)}
+            data-testid="avatar-picker-clear"
           >
             <X className="h-3 w-3" />
           </button>
         )}
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/png,image/jpeg"
-          className="hidden"
-          onChange={handleFile}
-        />
       </div>
 
-      {cropSrc ? (
-        <AvatarCropDialog
-          src={cropSrc}
-          busy={uploading}
-          onCancel={handleCropCancel}
-          onConfirm={handleCropConfirm}
-        />
-      ) : null}
+      <AgentAvatarPickerDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        currentUrl={value}
+        onConfirm={(selection, previewUrl) => {
+          setPreviewError(false);
+          onChange(toPickerSelection(selection, previewUrl));
+        }}
+        uploadFailedMessage={t(($) => $.create_dialog.avatar.upload_failed_toast)}
+      />
     </>
   );
 }

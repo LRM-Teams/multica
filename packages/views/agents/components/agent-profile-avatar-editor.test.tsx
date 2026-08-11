@@ -21,6 +21,14 @@ const RESOURCES = {
     avatar_err_size: "Image must be 5 MB or smaller.",
     avatar_err_dimensions: "Image must be at least 256×256 pixels.",
   },
+  inspector: {
+    avatar_upload_failed_toast: "Failed to upload avatar",
+  },
+  create_dialog: {
+    avatar: {
+      upload_failed_toast: "Avatar upload failed",
+    },
+  },
 };
 
 // vi.mock factories are hoisted above top-level const, so the shared fns they

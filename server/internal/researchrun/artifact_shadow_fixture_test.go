@@ -218,8 +218,13 @@ func seedShadowEquivalenceArtifacts(
 	stageEvalID := uuid.NewString()
 	now := time.Now().UTC()
 	gv, pv := 1, 1
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_source (
 		  id, workspace_id, session_id, url, title, source_class, summary, created_at, updated_at
 		) VALUES (
@@ -229,9 +234,9 @@ func seedShadowEquivalenceArtifacts(
 	`, legacySourceID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert legacy source: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, legacySourceID, string(ArtifactKindLegacySource), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, legacySourceID, string(ArtifactKindLegacySource), nil, nil)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_source_snapshot (
 		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
 		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
@@ -244,22 +249,22 @@ func seedShadowEquivalenceArtifacts(
 	`, sourceID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert source snapshot: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_observation (
 		  id, workspace_id, session_id, source_snapshot_id, quote, datum, locator,
-		  interpretation, verification_status, created_at
+		  interpretation, content_hash, verification_status, created_at
 		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'shadow quote', 'shadow datum', 'loc',
-		  '', 'verified', $5
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'shadow quote', '"shadow datum"'::jsonb, 'loc',
+		  '', 'sha256:shadow-observation', 'verified', $5
 		)
 	`, observationID, workspaceID, sessionID, sourceID, now); err != nil {
 		t.Fatalf("insert observation: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, observationID, string(ArtifactKindObservation), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, observationID, string(ArtifactKindObservation), nil, nil)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_claim (
 		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
 		  significance, confidence, status, goal_version, plan_version, resolution,
@@ -271,9 +276,9 @@ func seedShadowEquivalenceArtifacts(
 	`, claimID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert claim: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_claim_evidence (
 		  id, workspace_id, session_id, claim_id, observation_id, relation, strength,
 		  directness, method_fit, verification_status, rationale, created_at
@@ -284,7 +289,10 @@ func seedShadowEquivalenceArtifacts(
 	`, evidenceID, workspaceID, sessionID, claimID, observationID, now); err != nil {
 		t.Fatalf("insert claim evidence: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, evidenceID, string(ArtifactKindEvidenceLink), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, evidenceID, string(ArtifactKindEvidenceLink), nil, nil)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit shadow artifacts and passports: %v", err)
+	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO research_graph_node (

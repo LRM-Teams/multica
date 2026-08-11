@@ -487,6 +487,76 @@ func testDispatchIntentInput(t *testing.T, ctx context.Context, store *PostgresS
 	}
 }
 
+func seedIntegrationInboxEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, agentID string) string {
+	t.Helper()
+	inboxID := uuid.NewString()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'pending')
+	`, inboxID, workspaceID, agentID); err != nil {
+		t.Fatalf("insert integration inbox event: %v", err)
+	}
+	return inboxID
+}
+
+func seedIntegrationClaimArtifact(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, claimID, clientKey, claimText string,
+) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_claim (
+		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
+		  significance, confidence, status, goal_version, plan_version, resolution
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, $4, '', $5,
+		  'medium', 0.5, 'proposed', 1, 1, ''
+		)
+	`, claimID, workspaceID, sessionID, clientKey, claimText); err != nil {
+		t.Fatalf("insert integration claim: %v", err)
+	}
+	goalVersion, planVersion := 1, 1
+	backfillIntegrationArtifactPassport(
+		t, ctx, tx, workspaceID, sessionID, claimID, string(ArtifactKindClaim), &goalVersion, &planVersion,
+	)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit integration claim and passport: %v", err)
+	}
+}
+
+// mutateIntegrationArtifactForCASTest bypasses policy-ledger and immutability
+// triggers so a test can model a stale manifest snapshot directly.
+func mutateIntegrationArtifactForCASTest(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	query string,
+	args ...any,
+) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("disable integration artifact triggers: %v", err)
+	}
+	if _, err = tx.Exec(ctx, query, args...); err != nil {
+		t.Fatalf("mutate integration artifact for CAS test: %v", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit integration artifact mutation: %v", err)
+	}
+}
+
 func testDispatchRequestForTarget(
 	t *testing.T,
 	ctx context.Context,
@@ -2748,12 +2818,12 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}
 	databaseURL := pool.Config().ConnString()
 	t.Cleanup(func() {
-		cleanupResearchRunFixture(t, databaseURL, fixture)
+		cleanupSeedResearchRunFixture(t, databaseURL, fixture)
 	})
 	return fixture
 }
 
-func cleanupResearchRunFixture(t *testing.T, databaseURL string, fixture researchRunFixture) {
+func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture researchRunFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -139,6 +139,11 @@ func verifyManifestPromptShadow(
 	livePrompt, manifestPrompt string,
 	liveSnapshot, filtered RunSnapshot,
 ) error {
+	// Passport-enabled dispatch intentionally leaves the caller prompt empty:
+	// the frozen manifest is the only authoritative input for prompt rendering.
+	if livePrompt == "" {
+		return nil
+	}
 	if livePrompt == manifestPrompt {
 		return nil
 	}

@@ -187,37 +187,24 @@ func TestAcceptResultRejectsWhenManifestEntryEligibilityAdvances(t *testing.T) {
 		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
 	}
 	claimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-		  significance, confidence, status, goal_version, plan_version, resolution
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'accept-eligibility-claim', '', 'claim for accept eligibility',
-		  'medium', 0.5, 'proposed', 1, 1, ''
-		)
-	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatalf("insert claim: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "accept-eligibility-claim", "claim for accept eligibility")
 
 	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
 	attempt, _, err := store.CreateDispatchIntent(ctx, input)
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
-	inboxID := uuid.NewString()
+	inboxID := seedIntegrationInboxEvent(t, ctx, pool, fixture.workspaceID, fixture.agentID)
 	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
-	if _, err = pool.Exec(ctx, `
+	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
 		UPDATE research_artifact_passport
 		SET eligibility_revision = eligibility_revision + 1
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
-		t.Fatalf("advance eligibility: %v", err)
-	}
+	`, fixture.workspaceID, run.SessionID, claimID)
 
-	raw, err := json.Marshal(validPlanResult(t))
+	raw, err := json.Marshal(upgradeResultToV5(validV4PlanResult(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,11 +452,11 @@ func setupRunningPlanAttempt(
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
-	inboxID := uuid.NewString()
+	inboxID := seedIntegrationInboxEvent(t, ctx, store.pool, fixture.workspaceID, fixture.agentID)
 	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
-	raw, err := json.Marshal(validPlanResult(t))
+	raw, err := json.Marshal(upgradeResultToV5(validV4PlanResult(t)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,30 +7,30 @@ import (
 
 func TestManifestFilteredPromptChangesDispatchRequestHash(t *testing.T) {
 	run := Run{
-		SessionID: "20000000-0000-4000-8000-000000000001",
+		SessionID:   "20000000-0000-4000-8000-000000000001",
 		WorkspaceID: "10000000-0000-4000-8000-000000000001",
-		Goal: "goal", DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV1,
+		Goal:        "goal", DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV1,
 		GoalVersion: 1, PlanVersion: 1,
 	}
 	task := Task{
-		ID: "30000000-0000-4000-8000-000000000003",
+		ID:        "30000000-0000-4000-8000-000000000003",
 		SessionID: run.SessionID, WorkspaceID: run.WorkspaceID,
 		Kind: TaskKindDiscover, GoalVersion: 1, PlanVersion: 1,
 		ExpectedResult: "research_evidence_v1",
-		Objective: "discover",
+		Objective:      "discover",
 	}
 	attempt := Attempt{
-		ID: "40000000-0000-4000-8000-000000000004",
+		ID:        "40000000-0000-4000-8000-000000000004",
 		SessionID: run.SessionID, WorkspaceID: run.WorkspaceID,
 		TaskID: task.ID, DispatchKey: "dispatch-key",
 	}
 	members := []FleetMember{{AgentID: "agent-1", Role: "scout", Status: "active"}}
 	live := RunSnapshot{
-		Run: run,
-		Contract: ResearchContract{Language: "English", Audience: "team", Freshness: "recent"},
-		Sources: []SourceSnapshotView{{ID: "source-a"}, {ID: "source-b"}},
+		Run:          run,
+		Contract:     ResearchContract{Language: "English", Audience: "team", Freshness: "recent"},
+		Sources:      []SourceSnapshotView{{ID: "source-a"}, {ID: "source-b"}},
 		Observations: []Observation{{ID: "obs-a"}},
-		Claims: []Claim{{ID: "claim-a"}},
+		Claims:       []Claim{{ID: "claim-a"}},
 	}
 	filtered := filterRunSnapshotByManifest(live, map[string]struct{}{
 		"source-a": {}, "obs-a": {}, "claim-a": {},
@@ -67,13 +67,13 @@ func TestManifestFilteredPromptChangesDispatchRequestHash(t *testing.T) {
 
 func TestManifestFilteredPromptMatchesLiveWhenCountsEqual(t *testing.T) {
 	run := Run{
-		SessionID: "20000000-0000-4000-8000-000000000002",
+		SessionID:   "20000000-0000-4000-8000-000000000002",
 		WorkspaceID: "10000000-0000-4000-8000-000000000001",
-		Goal: "goal", DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV1,
+		Goal:        "goal", DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV1,
 		GoalVersion: 1, PlanVersion: 1,
 	}
 	task := Task{
-		ID: "30000000-0000-4000-8000-000000000005",
+		ID:        "30000000-0000-4000-8000-000000000005",
 		SessionID: run.SessionID, WorkspaceID: run.WorkspaceID,
 		Kind: TaskKindPlan, GoalVersion: 1, PlanVersion: 1,
 		ExpectedResult: "research_plan_v1", Objective: "plan",
@@ -81,7 +81,7 @@ func TestManifestFilteredPromptMatchesLiveWhenCountsEqual(t *testing.T) {
 	attempt := Attempt{ID: "40000000-0000-4000-8000-000000000006", TaskID: task.ID, DispatchKey: "key"}
 	members := []FleetMember{{AgentID: "agent-1", Role: "lead", Status: "active"}}
 	snapshot := RunSnapshot{
-		Run: run,
+		Run:      run,
 		Contract: ResearchContract{Language: "English", Audience: "team", Freshness: "recent"},
 	}
 	first, err := buildTaskPrompt(run, task, attempt, snapshot, members)
@@ -94,6 +94,13 @@ func TestManifestFilteredPromptMatchesLiveWhenCountsEqual(t *testing.T) {
 	}
 	if err = verifyManifestPromptShadow(first, second, snapshot, snapshot); err != nil {
 		t.Fatalf("identical prompts should pass shadow: %v", err)
+	}
+}
+
+func TestManifestOwnedPromptDoesNotRequireCallerShadow(t *testing.T) {
+	snapshot := RunSnapshot{Claims: []Claim{{ID: "claim-1"}}}
+	if err := verifyManifestPromptShadow("", "manifest-owned prompt", snapshot, snapshot); err != nil {
+		t.Fatalf("manifest-owned prompt: %v", err)
 	}
 }
 

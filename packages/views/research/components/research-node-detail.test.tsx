@@ -164,7 +164,7 @@ const node: ResearchGraphNode & {
     goal: "",
     operation_approach: "",
     research_approach: "",
-    result: "挂牌中位价与成交价差约 8%。",
+    result: "交叉验证结果已写入研究节点。",
   },
   created_at: "2026-07-06T09:00:00Z",
   updated_at: "2026-07-06T09:00:00Z",
@@ -188,6 +188,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(el).toHaveAttribute("data-placement", "overlay-card");
     expect(screen.getByText("价格区间已交叉验证")).toBeInTheDocument();
     expect(screen.getByText("挂牌中位价与成交价差约 8%。")).toBeInTheDocument();
+    expect(screen.getByText("交叉验证结果已写入研究节点。")).toBeInTheDocument();
     expect(screen.getByText("成交样本")).toBeInTheDocument();
     expect(screen.getByText("Done")).toBeInTheDocument();
     expect(screen.queryByText("done")).toBeNull();

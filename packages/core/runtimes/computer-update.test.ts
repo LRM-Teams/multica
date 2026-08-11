@@ -99,6 +99,33 @@ describe("listComputerUpdateCandidates", () => {
     );
     expect(list).toEqual([]);
   });
+
+  it("uses the exact daemon target after a legacy latest request failed", () => {
+    const list = listComputerUpdateCandidates(
+      [
+        makeRuntime({
+          current_version: "0.4.24-alpha.9",
+          target_version: "v0.4.24-alpha.11",
+          daemon_target_version: "v0.4.24-alpha.11",
+          machine_upgrade: {
+            id: "machine-upgrade-failed-latest",
+            daemon_id: "daemon-1",
+            request_id: "request-failed-latest",
+            requested_target: "latest",
+            phase: "failed",
+            error_code: "target_resolution_failed",
+            error_message: "resolve latest machine upgrade target: context deadline exceeded",
+            created_at: "2026-08-11T09:58:31Z",
+            updated_at: "2026-08-11T09:58:46Z",
+          },
+        }),
+      ],
+      "user-1",
+    );
+
+    expect(list).toHaveLength(1);
+    expect(list[0]?.targetVersion).toBe("v0.4.24-alpha.11");
+  });
 });
 
 describe("machineTitleFromRuntime", () => {

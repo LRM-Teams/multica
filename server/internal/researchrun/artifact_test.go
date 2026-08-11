@@ -183,7 +183,11 @@ func TestMigrationDiagnosticReasonCodes(t *testing.T) {
 }
 
 func TestMigrationRelationshipParserNames(t *testing.T) {
-	want := []string{"research_message_match_decision"}
+	want := []string{
+		"research_message_match_decision",
+		"research_decision_inputs",
+		"research_run_event_payload",
+	}
 	got := MigrationRelationshipParserNames()
 	slices.Sort(want)
 	slices.Sort(got)
@@ -211,6 +215,10 @@ func TestScopedRelationshipFKNames(t *testing.T) {
 		"research_claim_evidence_observation_scoped_fkey",
 		"research_claim_evidence_verified_by_task_scoped_fkey",
 		"research_source_source_snapshot_scoped_fkey",
+		"research_report_claim_report_scoped_fkey",
+		"research_report_claim_claim_scoped_fkey",
+		"research_graph_edge_from_node_scoped_fkey",
+		"research_graph_edge_to_node_scoped_fkey",
 	}
 	got := ScopedRelationshipFKNames()
 	slices.Sort(want)

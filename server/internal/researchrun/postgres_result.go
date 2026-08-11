@@ -44,6 +44,18 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 
+	artifactPassportEnabled, err := sessionArtifactPassportEnabled(ctx, tx, in.SessionID, state.workspaceID)
+	if err != nil {
+		return AcceptResultOutcome{}, err
+	}
+	var acceptancePolicyWatermark int64
+	if artifactPassportEnabled {
+		acceptancePolicyWatermark, err = verifyAcceptanceManifestPolicyTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID)
+		if err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
+
 	if !state.stale && state.task.Kind == TaskKindReplan {
 		state.targetPlan = state.run.PlanVersion + 1
 		if err = prepareReplan(ctx, tx, state); err != nil {
@@ -149,6 +161,14 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	}
 	if err = settleAttemptCircuitSuccessTx(ctx, tx, in.AttemptID); err != nil {
 		return AcceptResultOutcome{}, err
+	}
+	if artifactPassportEnabled {
+		if err = persistAcceptedResultArtifactTx(
+			ctx, tx, state.workspaceID, in.SessionID, in.AttemptID,
+			state.run.OrchestratorVersion, in.Result, resultJSON, in.Hash, acceptancePolicyWatermark,
+		); err != nil {
+			return AcceptResultOutcome{}, classifyResultConstraint(err)
+		}
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task

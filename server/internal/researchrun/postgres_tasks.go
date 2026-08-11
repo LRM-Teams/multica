@@ -143,13 +143,18 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	var runStatus string
 	var currentGoal, currentPlan int
 	var stateVersion int64
+	var artifactPassportEnabled bool
 	err = tx.QueryRow(ctx, `
 		SELECT workspace_id::text, status, goal_version, plan_version, state_version,
-		       COALESCE((run_config->>'max_parallel_tasks')::int, 5)
+		       COALESCE((run_config->>'max_parallel_tasks')::int, 5),
+		       artifact_passport_enabled
 		FROM research_session
 		WHERE id = $1::uuid AND workspace_id = $2::uuid
 		FOR UPDATE
-	`, in.SessionID, in.Request.Run.WorkspaceID).Scan(&workspaceID, &runStatus, &currentGoal, &currentPlan, &stateVersion, &maxParallel)
+	`, in.SessionID, in.Request.Run.WorkspaceID).Scan(
+		&workspaceID, &runStatus, &currentGoal, &currentPlan, &stateVersion, &maxParallel,
+		&artifactPassportEnabled,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Attempt{}, RunEvent{}, ErrRunNotFound
 	}
@@ -254,6 +259,25 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 	}
 	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindAttempt, workspaceID, in.SessionID, attempt.ID, time.Now(), nil, nil); err != nil {
 		return Attempt{}, RunEvent{}, err
+	}
+	if artifactPassportEnabled {
+		if err = ensureSessionPolicyStateTx(ctx, tx, workspaceID, in.SessionID); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
+		manifestModule := NewArtifactContextModule()
+		manifestPlan, planErr := manifestModule.PlanDispatchManifest(ctx, tx, workspaceID, in.SessionID, stateVersion)
+		if planErr != nil {
+			return Attempt{}, RunEvent{}, planErr
+		}
+		if err = persistDispatchManifestTx(ctx, tx, persistDispatchManifestInput{
+			WorkspaceID: workspaceID,
+			SessionID:   in.SessionID,
+			AttemptID:   attempt.ID,
+			TaskID:      in.TaskID,
+			Plan:        manifestPlan,
+		}); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
 	}
 	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
 	probeTargets, err := normalizeAttemptProbeTargets(target, in.ProbeTargets)

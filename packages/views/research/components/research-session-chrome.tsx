@@ -1,24 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import type {
   ResearchFleetMember,
   ResearchRunContract,
   ResearchSession,
   ResearchSource,
 } from "@multica/core/types";
-import { Button } from "@multica/ui/components/ui/button";
-import { Checkbox } from "@multica/ui/components/ui/checkbox";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@multica/ui/components/ui/popover";
-import { Textarea } from "@multica/ui/components/ui/textarea";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { Compass } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
@@ -27,8 +14,7 @@ import {
   type ResearchCreateDepthTier,
   resolveSessionCreateParams,
 } from "../lib/research-create-params";
-import { ResearchSessionGoalCard } from "./research-session-goal-card";
-import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
+import { ResearchSessionChromeActions } from "./research-session-chrome-actions";
 import { ResearchStageTimeline } from "./research-stage-timeline";
 
 type StatusTone = { text: string; dot: string; pill: string };
@@ -119,10 +105,6 @@ export function ResearchSessionChrome({
   hideGoalCard?: boolean;
 }) {
   const { t } = useT("research");
-  const isMobile = useIsMobile();
-  const [handoffOpen, setHandoffOpen] = useState(false);
-  const [rejectOpen, setRejectOpen] = useState(false);
-  const [rejectReason, setRejectReason] = useState("");
 
   const status = session.status;
   const tone = STATUS_TONES[status] ?? DEFAULT_TONE;
@@ -141,21 +123,6 @@ export function ResearchSessionChrome({
   const showDepthChip = DEPTH_TIERS.includes(
     createParams.depth_tier as ResearchCreateDepthTier,
   );
-
-  // LRM-840: awaiting_user_confirm → approve + reject controls (not text-only).
-  // completed → 交付移交; running → none.
-  const showConfirm = status === "awaiting_user_confirm" && canConfirm;
-  const showReject = showConfirm && Boolean(onReject);
-  const showHandoff = status === "completed" && canHandoff;
-  const hasPrimary = showConfirm || showHandoff;
-  const gateBusy = Boolean(confirmPending || rejectPending);
-
-  // LRM-995: on narrow, fold secondary "查看交付" into the tools menu so the
-  // primary CTA is never crowded by an equal-weight outline button.
-  const foldDeliveryIntoTools = Boolean(onOpenDelivery) && isMobile;
-  const showDeliveryButton = Boolean(onOpenDelivery) && !isMobile;
-
-  const primaryClass = "bg-brand text-brand-foreground hover:bg-brand/90";
 
   const roundLabel =
     typeof session.product_round === "number" &&
@@ -238,194 +205,32 @@ export function ResearchSessionChrome({
           sessionStatus={session.status}
           onSelectStage={onSelectStage}
         />
-        <div className={cn("ml-auto flex shrink-0 items-center gap-2", hasPrimary && "pl-1")}>
-          {/* LRM-1008 / LRM-898 D — compact Goal Card: GOAL stays an icon even on desktop. */}
-          {!hideGoalCard ? (
-            <ResearchSessionGoalCard
-              sessionId={session.id}
-              goal={session.goal}
-              pendingSubstantive={pendingSubstantiveGoal}
-              onConfirmSubstantive={onConfirmSubstantiveGoal}
-              loading={goalLoading}
-              error={goalError}
-              onRetry={onGoalRetry}
-              compact
-            />
-          ) : null}
-          {showConfirm ? (
-            <Button
-              size="sm"
-              className={cn(
-                primaryClass,
-                // LRM-1240 — keep focusable while gateBusy (same frozen pattern as LRM-1213).
-                gateBusy && "opacity-50 cursor-not-allowed",
-              )}
-              // Native `disabled` drops focus to <body> in Chromium after the
-              // click that started the pending request. Guard the handler instead.
-              aria-disabled={gateBusy || undefined}
-              onClick={() => {
-                if (gateBusy) return;
-                onConfirm();
-              }}
-              data-testid="research-session-primary"
-              data-gate-action="approve"
-            >
-              {t(($) => $.panel.gate_approve)}
-            </Button>
-          ) : null}
-          {showReject ? (
-            <Popover
-              open={rejectOpen}
-              onOpenChange={(open) => {
-                // LRM-1240 — do not open reject popover while gate is busy.
-                if (gateBusy && open) return;
-                setRejectOpen(open);
-                if (!open) setRejectReason("");
-              }}
-            >
-              <PopoverTrigger
-                render={
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-disabled={gateBusy || undefined}
-                    className={cn(gateBusy && "opacity-50 cursor-not-allowed")}
-                    data-testid="research-session-gate-reject"
-                    data-gate-action="reject"
-                  />
-                }
-              >
-                {t(($) => $.panel.gate_reject)}
-              </PopoverTrigger>
-              <PopoverContent
-                align="end"
-                className="w-[min(20rem,calc(100vw-2rem))] gap-3 p-3"
-                data-testid="research-session-gate-reject-popover"
-              >
-                <PopoverHeader>
-                  <PopoverTitle>{t(($) => $.panel.gate_reject_title)}</PopoverTitle>
-                  <PopoverDescription>
-                    {t(($) => $.panel.gate_reject_hint)}
-                  </PopoverDescription>
-                </PopoverHeader>
-                <Textarea
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                  placeholder={t(($) => $.panel.gate_reject_placeholder)}
-                  rows={3}
-                  disabled={rejectPending}
-                  className="min-h-[4.5rem] w-full resize-y text-sm"
-                  data-testid="research-session-gate-reject-reason"
-                />
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  className="w-full"
-                  disabled={rejectPending}
-                  data-testid="research-session-gate-reject-submit"
-                  onClick={() => {
-                    onReject?.(rejectReason);
-                    setRejectOpen(false);
-                    setRejectReason("");
-                  }}
-                >
-                  {rejectPending
-                    ? t(($) => $.panel.gate_reject_submitting)
-                    : t(($) => $.panel.gate_reject_submit)}
-                </Button>
-              </PopoverContent>
-            </Popover>
-          ) : null}
-          {showHandoff ? (
-            <Popover
-              open={handoffOpen}
-              onOpenChange={(open) => {
-                // LRM-1265 — do not re-open handoff while pending (pending lives on trigger).
-                if (handoffPending && open) return;
-                setHandoffOpen(open);
-              }}
-            >
-              <PopoverTrigger
-                render={
-                  <Button
-                    size="sm"
-                    className={cn(
-                      primaryClass,
-                      // LRM-1265 / LRM-1248·H — pending expression on trigger (not submit).
-                      handoffPending && "opacity-50 cursor-not-allowed",
-                    )}
-                    // Native `disabled` drops focus to <body> after the click that
-                    // started the pending handoff. Guard open/click instead.
-                    aria-disabled={handoffPending || undefined}
-                    onClick={() => {
-                      if (handoffPending) return;
-                    }}
-                    data-testid="research-session-primary"
-                  />
-                }
-              >
-                {t(($) => $.panel.handoff_title)}
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-64 gap-3 p-3">
-                <PopoverHeader>
-                  <PopoverTitle>{t(($) => $.panel.handoff_title)}</PopoverTitle>
-                </PopoverHeader>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Checkbox
-                    checked={createProject}
-                    onCheckedChange={(v) => onCreateProjectChange(v === true)}
-                  />
-                  {t(($) => $.panel.handoff_project)}
-                </label>
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Checkbox
-                    checked={createChannel}
-                    onCheckedChange={(v) => onCreateChannelChange(v === true)}
-                  />
-                  {t(($) => $.panel.handoff_channel)}
-                </label>
-                <Button
-                  size="sm"
-                  disabled={!createProject && !createChannel}
-                  onClick={() => {
-                    onHandoff();
-                    setHandoffOpen(false);
-                  }}
-                >
-                  {t(($) => $.panel.handoff)}
-                </Button>
-              </PopoverContent>
-            </Popover>
-          ) : null}
-          {showDeliveryButton ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onOpenDelivery}
-              data-testid="research-session-delivery"
-            >
-              {t(($) => $.panel.view_delivery)}
-            </Button>
-          ) : null}
-          <ResearchSessionMetaMenu
-            members={members}
-            sources={sources}
-            session={session}
-            contract={contract}
-            sessionStatus={session.status}
-            leadingActions={
-              foldDeliveryIntoTools && onOpenDelivery
-                ? [
-                    {
-                      id: "view-delivery",
-                      label: t(($) => $.panel.view_delivery),
-                      onSelect: onOpenDelivery,
-                    },
-                  ]
-                : undefined
-            }
-          />
-        </div>
+        <ResearchSessionChromeActions
+          session={session}
+          contract={contract}
+          canConfirm={canConfirm}
+          canHandoff={canHandoff}
+          createProject={createProject}
+          createChannel={createChannel}
+          onCreateProjectChange={onCreateProjectChange}
+          onCreateChannelChange={onCreateChannelChange}
+          onConfirm={onConfirm}
+          onReject={onReject}
+          onHandoff={onHandoff}
+          confirmPending={confirmPending}
+          rejectPending={rejectPending}
+          handoffPending={handoffPending}
+          onOpenDelivery={onOpenDelivery}
+          members={members}
+          sources={sources}
+          pendingSubstantiveGoal={pendingSubstantiveGoal}
+          onConfirmSubstantiveGoal={onConfirmSubstantiveGoal}
+          goalLoading={goalLoading}
+          goalError={goalError}
+          onGoalRetry={onGoalRetry}
+          showGoalCard={!hideGoalCard}
+          className="ml-auto"
+        />
       </div>
     </header>
   );

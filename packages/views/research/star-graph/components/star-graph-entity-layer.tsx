@@ -1,6 +1,6 @@
 "use client";
 
-import { StarGraphNode } from "@multica/ui/components/star-graph";
+import { StarGraphNode, resolveStarGraphState } from "@multica/ui/components/star-graph";
 import { cn } from "@multica/ui/lib/utils";
 import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
 import type { MotionDirective } from "../../motion/directives";
@@ -27,7 +27,9 @@ export function StarGraphEntityLayer({
     <div data-testid="star-graph-entities" className="absolute inset-0">
       {entities.map((entity) => {
         const selected = entity.id === selectedNodeId;
-        const state = selected ? "selected" : entity.view.state;
+        const state = resolveStarGraphState(
+          selected ? [entity.view.state, "selected"] : [entity.view.state],
+        );
         const motion = motionDirectives?.get(entity.id) ?? null;
         const dimmed =
           selected ? false : lensHints?.dimmedNodeIds.has(entity.id) ?? false;

@@ -140,11 +140,6 @@
   color: var(--accent-foreground);
   background: var(--accent);
 }
-.d5-chrome-shell [data-testid="research-session-chrome"] {
-  border-top: 1px solid var(--border);
-  border-bottom: 0;
-  background: color-mix(in oklab, var(--background) 92%, transparent);
-}
 .d5-workspace {
   position: relative;
   display: flex;

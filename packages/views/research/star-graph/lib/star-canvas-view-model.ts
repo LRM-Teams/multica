@@ -140,17 +140,24 @@ export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation
     case "refines":
     case "escalated_to":
     case "decompose":
+    case "derived_from":
+    case "deepens":
       return "decompose";
     case "supports":
     case "resolved_by":
+    case "merged_from":
       return "support";
     case "challenged_by":
     case "contradicts":
     case "invalidates":
     case "supersedes":
-      return "challenge";
-    case "discussed_by":
+    case "superseded_by":
+    case "invalidated_by":
     case "abandons":
+      return "challenge";
+    case "restart_of":
+      return "newdir";
+    case "discussed_by":
     default:
       // Neutral relation drives layout determinism without overloading the
       // challenge/support semantics; the real edgeType still styles the line.

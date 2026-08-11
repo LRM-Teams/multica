@@ -32,6 +32,10 @@ import { buildTypedGraphMotionEvents, shouldSkipTypedGraphMotionCatchUp } from "
 import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
 import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
+import {
+  mergeResearchCanvasNodes,
+  resolveResearchCanvasNode,
+} from "../lib/resolve-research-canvas-node";
 import { firstOrderNeighborIds } from "../lib/typed-graph-neighborhood";
 import type { CanvasBodyMode } from "../lib/canvas-body-mode";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
@@ -267,12 +271,29 @@ export function ResearchConstellationWorkspace({
     return capTransitionGlowDirectives(map);
   }, [canvasModel, motion.queueSize, motion.directiveFor, motion.markerFor, motion.profile.lowPerformance]);
 
+  const canvasNodes = useMemo(
+    () => mergeResearchCanvasNodes(snapshotNodes, typedGraph),
+    [snapshotNodes, typedGraph],
+  );
+
+  const clusterLabels = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const cluster of typedGraph?.clusters ?? []) {
+      const id = cluster.id || cluster.name;
+      if (!id) continue;
+      const label = (cluster.label || cluster.name || "").trim();
+      if (label) map.set(id, label);
+    }
+    return map;
+  }, [typedGraph?.clusters]);
+
   const summary = useMemo(
     () =>
       summarizeTypedGraph(typedGraph?.nodes ?? [], {
         totalNodeCount: typedGraph?.total_node_count ?? null,
+        clusters: typedGraph?.clusters,
       }),
-    [typedGraph?.nodes, typedGraph?.total_node_count],
+    [typedGraph?.clusters, typedGraph?.nodes, typedGraph?.total_node_count],
   );
 
   const summaryTitle =
@@ -301,11 +322,11 @@ export function ResearchConstellationWorkspace({
 
   const nodeAccessibleNames = useMemo(() => {
     const map = new Map<string, string>();
-    for (const node of snapshotNodes) {
+    for (const node of canvasNodes) {
       map.set(node.id, buildNodeAccessibleName(node));
     }
     return map;
-  }, [snapshotNodes]);
+  }, [canvasNodes]);
 
   const relatedNodeIds = useMemo(() => {
     if (!typedGraph) return undefined;
@@ -338,8 +359,11 @@ export function ResearchConstellationWorkspace({
 
   const handleCanvasSelect = useCallback(
     (nodeId: string) => {
-      const snapshotNode = snapshotNodes.find((node) => node.id === nodeId) ?? null;
-      onSelectNode(snapshotNode);
+      const resolved = resolveResearchCanvasNode(nodeId, {
+        snapshotNodes,
+        typedGraph,
+      });
+      onSelectNode(resolved);
       setRailMode("detail");
       if (isMobile) setRailOpen(true);
 
@@ -355,7 +379,7 @@ export function ResearchConstellationWorkspace({
         setReportOpen(true);
       }
     },
-    [isMobile, onSelectNode, snapshotNodes, typedGraph?.nodes],
+    [isMobile, onSelectNode, snapshotNodes, typedGraph],
   );
 
   const graphRemainingCount =
@@ -426,7 +450,7 @@ export function ResearchConstellationWorkspace({
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
             filterHiddenNote={filterHiddenNote}
-            newFrontierLabel={t(($) => $.d5.new_frontier_label)}
+            clusterLabels={clusterLabels}
             lensHints={lensHints}
             motionDirectives={motionDirectives}
             showMapKey
@@ -441,7 +465,7 @@ export function ResearchConstellationWorkspace({
             onLoadMore={onLoadMoreTypedGraph}
             loadMorePending={typedGraphLoadMorePending}
             keyboardNav={{
-              nodes: snapshotNodes,
+              nodes: canvasNodes,
               edges: (typedGraph?.edges ?? []).map((edge) => ({
                 from_node_id: edge.from_node_id,
                 to_node_id: edge.to_node_id,

@@ -193,12 +193,18 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     hasNextPage: typedGraphHasNextPage,
     isFetchingNextPage: typedGraphFetchingNextPage,
   } = useInfiniteQuery(researchGraphTypedInfiniteOptions(wsId, sessionId));
+  const selectedNodeId = useResearchCanvasStore((s) => s.selectedNodeId);
+  const selectCanvasNode = useResearchCanvasStore((s) => s.selectNode);
+  const clearCanvasSelection = useResearchCanvasStore((s) => s.clearSelection);
+  const clearCanvasFilter = useResearchCanvasStore((s) => s.clearFilter);
   const typedGraph = useMemo(
     () =>
       typedGraphPages?.pages.length
-        ? mergeTypedGraphPages(typedGraphPages.pages)
+        ? mergeTypedGraphPages(typedGraphPages.pages, {
+            pinNodeIds: selectedNodeId ? [selectedNodeId] : [],
+          })
         : undefined,
-    [typedGraphPages],
+    [typedGraphPages, selectedNodeId],
   );
   useEffect(() => {
     const fromUrl = nav.searchParams.get("lens");
@@ -218,10 +224,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     [nav, setD5Lens],
   );
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
-  const selectedNodeId = useResearchCanvasStore((s) => s.selectedNodeId);
-  const selectCanvasNode = useResearchCanvasStore((s) => s.selectNode);
-  const clearCanvasSelection = useResearchCanvasStore((s) => s.clearSelection);
-  const clearCanvasFilter = useResearchCanvasStore((s) => s.clearFilter);
   useEffect(() => {
     clearCanvasSelection();
     clearCanvasFilter();

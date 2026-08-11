@@ -177,6 +177,241 @@ func TestMachineUpgradeCandidateReadyIsDurableAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestInterruptedMachineUpgradeRecoveryResumesOnlyIncompletePhases(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		phase          string
+		runningVersion string
+		wantStage      int
+		wantVerify     int
+		wantActivate   int
+		wantRestart    bool
+		wantPhase      string
+		detached       bool
+	}{
+		{name: "before staging", phase: "accepted", runningVersion: "v9.9.9", wantStage: 1, wantVerify: 1, wantActivate: 1, wantRestart: true, wantPhase: "handoff"},
+		{name: "after staging", phase: "staged", runningVersion: "v9.9.9", wantVerify: 1, wantActivate: 1, wantRestart: true, wantPhase: "handoff"},
+		{name: "after Active commit", phase: "handoff", runningVersion: "v10.0.0", wantPhase: "handoff"},
+		{name: "during detached candidate startup", phase: "handoff", runningVersion: "v10.0.0", wantPhase: "handoff", detached: true},
+		{name: "after local attestation", phase: "candidate_ready", runningVersion: "v10.0.0", wantPhase: "candidate_ready"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			previousRoot := versionStoreRootFn
+			versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+			t.Cleanup(func() { versionStoreRootFn = previousRoot })
+			stageCalls, verifyCalls, activateCalls, restartCalls := 0, 0, 0, 0
+			d := &Daemon{
+				cfg:    Config{CLIVersion: tc.runningVersion, ComputerGeneration: 2, DetachedMachineUpgradeCandidate: tc.detached},
+				logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				machineUpgradeStageFn: func(string) (string, error) {
+					stageCalls++
+					return "staged", nil
+				},
+				machineUpgradeVerifyFn: func(string, string) (string, error) {
+					verifyCalls++
+					return "v10.0.0", nil
+				},
+				activateStagedFn: func(context.Context, string, string) (string, error) {
+					activateCalls++
+					return "/versions/v10.0.0/multica", nil
+				},
+				cancelFunc: func() { restartCalls++ },
+			}
+			journal := &machineUpgradeJournal{
+				ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+				PredecessorComputerGeneration: 1, RuntimeIDs: []string{"runtime-1"}, Phase: tc.phase,
+			}
+			if err := d.writeMachineUpgradeJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := d.recoverInterruptedMachineUpgrade(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if restarted != tc.wantRestart || stageCalls != tc.wantStage || verifyCalls != tc.wantVerify || activateCalls != tc.wantActivate || restartCalls != btoi(tc.wantRestart) {
+				t.Fatalf("recovery restarted=%v stage=%d verify=%d activate=%d restart=%d", restarted, stageCalls, verifyCalls, activateCalls, restartCalls)
+			}
+			stored, err := d.currentMachineUpgradeJournal()
+			if err != nil || stored == nil || stored.Phase != tc.wantPhase {
+				t.Fatalf("recovery journal=%+v err=%v", stored, err)
+			}
+			if stored.TargetRestartAttempts != btoi(tc.wantRestart) {
+				t.Fatalf("target restart attempts=%d, want %d", stored.TargetRestartAttempts, btoi(tc.wantRestart))
+			}
+		})
+	}
+}
+
+func TestForwardRecoveryBoundsTargetRestarts(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+	activateCalls, restartCalls := 0, 0
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v9.9.9"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			activateCalls++
+			return "", nil
+		},
+		cancelFunc: func() { restartCalls++ },
+	}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-1"}, Phase: "handoff", TargetRestartAttempts: machineUpgradeMaxRestartAttempts,
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
+		t.Fatalf("exhausted recovery restarted=%v err=%v", restarted, err)
+	}
+	if activateCalls != 0 || restartCalls != 0 {
+		t.Fatalf("exhausted recovery activate=%d restart=%d", activateCalls, restartCalls)
+	}
+	stored, err := d.currentMachineUpgradeJournal()
+	if err != nil || stored == nil || stored.TargetRestartAttempts != machineUpgradeMaxRestartAttempts {
+		t.Fatalf("retained marker=%+v err=%v", stored, err)
+	}
+}
+
+func TestRollbackPendingRecoveryRestoresOnceAndBoundsRestarts(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		runningVersion  string
+		restartAttempts int
+		wantRestore     int
+		wantRestart     bool
+		wantError       bool
+		detached        bool
+	}{
+		{name: "detached target restores exact source and restarts", runningVersion: "v10.0.0", wantRestore: 1, wantRestart: true, detached: true},
+		{name: "restored source continues to registration proof", runningVersion: "v9.9.9", restartAttempts: 1},
+		{name: "exhausted rollback remains retained for operator recovery", runningVersion: "v10.0.0", restartAttempts: machineUpgradeMaxRestartAttempts, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			previousRoot := versionStoreRootFn
+			versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+			t.Cleanup(func() { versionStoreRootFn = previousRoot })
+			restoreCalls, restartCalls := 0, 0
+			d := &Daemon{
+				cfg:    Config{CLIVersion: tc.runningVersion, DetachedMachineUpgradeCandidate: tc.detached},
+				logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				machineUpgradeRollbackFn: func(context.Context, *machineUpgradeJournal) (string, error) {
+					restoreCalls++
+					return "/versions/v9.9.9/multica", nil
+				},
+				cancelFunc: func() { restartCalls++ },
+			}
+			journal := &machineUpgradeJournal{
+				ID: "upgrade-1", Generation: "generation-a", RollbackGeneration: "rollback-a",
+				SourceVersion: "v9.9.9", TargetVersion: "v10.0.0", IncumbentGeneration: 7,
+				RuntimeIDs: []string{"runtime-1"}, Phase: "rollback_pending", RollbackRestartAttempts: tc.restartAttempts,
+			}
+			if err := d.writeMachineUpgradeJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := d.recoverInterruptedMachineUpgrade(context.Background())
+			if (err != nil) != tc.wantError {
+				t.Fatalf("recovery err=%v, wantError=%v", err, tc.wantError)
+			}
+			if restarted != tc.wantRestart || restoreCalls != tc.wantRestore || restartCalls != btoi(tc.wantRestart) {
+				t.Fatalf("recovery restarted=%v restores=%d restarts=%d err=%v", restarted, restoreCalls, restartCalls, err)
+			}
+			stored, readErr := d.currentMachineUpgradeJournal()
+			if readErr != nil || stored == nil || stored.Phase != "rollback_pending" {
+				t.Fatalf("rollback marker=%+v err=%v", stored, readErr)
+			}
+			wantAttempts := tc.restartAttempts + btoi(tc.wantRestart)
+			if stored.RollbackRestartAttempts != wantAttempts {
+				t.Fatalf("rollback attempts=%d, want %d", stored.RollbackRestartAttempts, wantAttempts)
+			}
+		})
+	}
+}
+
+func TestMachineUpgradeJournalClearsOnlyForMatchingTerminalReceiptAndLiveSet(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+	generation := "generation-a"
+	targetVersion := "v10.0.0"
+	serverReceipt := MachineUpgradeReceipt{
+		ID: "upgrade-1", Phase: "completed", AcceptedGeneration: &generation,
+		ResolvedTarget:     &targetVersion,
+		AcceptedRuntimeIDs: []string{"runtime-1"}, AttestedRuntimeIDs: []string{"runtime-1"},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/runtimes/runtime-1/machine-upgrades/"+serverReceipt.ID {
+			t.Fatalf("receipt path=%s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(serverReceipt)
+	}))
+	defer server.Close()
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v10.0.0", ComputerGeneration: 2},
+		client: NewClient(server.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces: map[string]*workspaceState{"workspace-1": {runtimeIDs: []string{"runtime-1"}}},
+	}
+	d.client.SetToken("test-token")
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: generation, SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		PredecessorComputerGeneration: 1, RuntimeIDs: []string{"runtime-1"}, Phase: "candidate_ready",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	serverReceipt.AcceptedGeneration = stringPtr("stale-generation")
+	if err := d.reconcileMachineUpgradeTerminalJournal(context.Background()); err == nil {
+		t.Fatal("stale terminal receipt must be rejected")
+	}
+	if retained, err := d.currentMachineUpgradeJournal(); err != nil || retained == nil {
+		t.Fatalf("stale receipt removed marker=%+v err=%v", retained, err)
+	}
+
+	serverReceipt.AcceptedGeneration = &generation
+	if err := d.reconcileMachineUpgradeTerminalJournal(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if cleared, err := d.currentMachineUpgradeJournal(); err != nil || cleared != nil {
+		t.Fatalf("matching terminal receipt marker=%+v err=%v", cleared, err)
+	}
+
+	sourceVersion := "v9.9.9"
+	rollbackGeneration := "rollback-a"
+	serverReceipt = MachineUpgradeReceipt{
+		ID: "upgrade-2", Phase: "rolled_back", SourceVersion: &sourceVersion,
+		AcceptedRuntimeIDs: []string{"runtime-1"}, RollbackGeneration: &rollbackGeneration,
+		RollbackRuntimeIDs: []string{"runtime-1"},
+	}
+	d.cfg.CLIVersion = sourceVersion
+	rollbackJournal := &machineUpgradeJournal{
+		ID: "upgrade-2", Generation: "generation-b", RollbackGeneration: rollbackGeneration,
+		SourceVersion: sourceVersion, TargetVersion: targetVersion, RuntimeIDs: []string{"runtime-1"}, Phase: "rollback_pending",
+	}
+	if err := d.writeMachineUpgradeJournal(rollbackJournal); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.reconcileMachineUpgradeTerminalJournal(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if cleared, err := d.currentMachineUpgradeJournal(); err != nil || cleared != nil {
+		t.Fatalf("matching rollback receipt marker=%+v err=%v", cleared, err)
+	}
+}
+
+func btoi(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func TestResolveMachineUpgradeLatestAtDelivery(t *testing.T) {
 	previous := fetchMachineUpgradeRelease
 	fetchMachineUpgradeRelease = func(channel cli.ReleaseChannel, override string) (*cli.ReleaseManifest, error) {

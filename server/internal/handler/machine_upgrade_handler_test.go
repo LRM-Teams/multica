@@ -289,6 +289,13 @@ func TestMachineUpgrade_ComputerAttestationRequiresExactAcceptedRuntimeSet(t *te
 		!sameMachineRuntimeSet(completed.AttestedRuntimeIDs, []string{firstRuntimeID, secondRuntimeID}) {
 		t.Fatalf("exact Computer proof = %+v err=%v", completed, err)
 	}
+	replayed, err := testHandler.MachineUpgradeStore.AttestComputer(
+		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9",
+		[]string{secondRuntimeID, firstRuntimeID}, accepted.AcceptedWorkspaceIDs,
+	)
+	if err != nil || replayed.ID != completed.ID || replayed.Phase != MachineUpgradeCompleted {
+		t.Fatalf("completed Computer proof replay = %+v err=%v", replayed, err)
+	}
 }
 
 func TestMachineUpgrade_LegacyHeartbeatBootstrapsV0413AndRequiresFullTargetReregistration(t *testing.T) {
@@ -589,6 +596,9 @@ func TestMachineUpgrade_HandoffCompletesOnlyWithSuccessorSiblingSet(t *testing.T
 			t.Fatalf("progress %s: %v", phase, err)
 		}
 	}
+	if replayed, err := testHandler.MachineUpgradeStore.Progress(context.Background(), daemonID, created.ID, MachineUpgradeVerifying, "", ""); err != nil || replayed == nil || replayed.Phase != MachineUpgradeHandoff {
+		t.Fatalf("lost verifying report replay = %+v, %v", replayed, err)
+	}
 	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
 	testHandler.attestMachineUpgradeRegistration(httptest.NewRequest(http.MethodPost, "/", nil), firstRuntime, "v10.0.0", "generation-successor")
 	op, _ := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
@@ -599,6 +609,9 @@ func TestMachineUpgrade_HandoffCompletesOnlyWithSuccessorSiblingSet(t *testing.T
 	op, _ = testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
 	if op.Phase != MachineUpgradeCompleted || op.Result == nil || *op.Result != "completed" {
 		t.Fatalf("full successor convergence = %+v", op)
+	}
+	if late, err := testHandler.MachineUpgradeStore.Progress(context.Background(), daemonID, created.ID, MachineUpgradeFailed, "late_failure", "lost response"); err != nil || late == nil || late.Phase != MachineUpgradeCompleted {
+		t.Fatalf("late terminal report changed completion = %+v, %v", late, err)
 	}
 }
 
@@ -633,6 +646,10 @@ func TestMachineUpgradeRollbackRequiresRestoredFullSiblingSet(t *testing.T) {
 	if err != nil || rollback == nil || rollback.Phase != MachineUpgradeRollbackPending {
 		t.Fatalf("begin rollback = %+v, %v", rollback, err)
 	}
+	rollbackReplay, err := testHandler.MachineUpgradeStore.BeginRollback(context.Background(), daemonID, created.ID, "generation-rollback", "candidate_takeover_failed", "candidate did not bind")
+	if err != nil || rollbackReplay == nil || rollbackReplay.Phase != MachineUpgradeRollbackPending {
+		t.Fatalf("begin rollback replay = %+v, %v", rollbackReplay, err)
+	}
 	testHandler.attestMachineUpgradeRollbackRegistration(httptest.NewRequest(http.MethodPost, "/api/daemon/register", nil), firstRuntime, "v9.9.9", "generation-rollback")
 	op, _ := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
 	if op.Phase != MachineUpgradeRollbackPending || len(op.RollbackRuntimeIDs) != 1 {
@@ -642,6 +659,58 @@ func TestMachineUpgradeRollbackRequiresRestoredFullSiblingSet(t *testing.T) {
 	op, _ = testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
 	if op.Phase != MachineUpgradeRolledBack || op.Result == nil || *op.Result != "rolled_back" || !sameMachineRuntimeSet(op.RollbackRuntimeIDs, []string{firstRuntimeID, secondRuntimeID}) {
 		t.Fatalf("restored rollback proof = %+v", op)
+	}
+	replayedRollback, err := testHandler.MachineUpgradeStore.AttestRollback(context.Background(), daemonID, created.ID, "generation-rollback", firstRuntimeID, "v9.9.9", []string{firstRuntimeID, secondRuntimeID})
+	if err != nil || replayedRollback == nil || replayedRollback.Phase != MachineUpgradeRolledBack {
+		t.Fatalf("rolled-back proof replay = %+v, %v", replayedRollback, err)
+	}
+	receiptReq := newRequestAsUser(testUserID, http.MethodGet, "/api/daemon/runtimes/"+firstRuntimeID+"/machine-upgrades/"+created.ID, nil)
+	receiptReq = withRouteParams(receiptReq, "runtimeId", firstRuntimeID, "upgradeId", created.ID)
+	receiptW := httptest.NewRecorder()
+	testHandler.GetDaemonMachineUpgrade(receiptW, receiptReq)
+	if receiptW.Code != http.StatusOK {
+		t.Fatalf("daemon terminal receipt = %d: %s", receiptW.Code, receiptW.Body.String())
+	}
+	var receipt MachineUpgrade
+	if err := json.Unmarshal(receiptW.Body.Bytes(), &receipt); err != nil || receipt.ID != created.ID || receipt.Phase != MachineUpgradeRolledBack {
+		t.Fatalf("daemon terminal receipt = %+v err=%v", receipt, err)
+	}
+}
+
+func TestMachineUpgradeFailedRollbackRetainsGenerationAndIsIdempotent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
+	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
+	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+firstRuntimeID+"/machine-upgrades/"+created.ID+"/accept", map[string]string{
+		"generation_id": "generation-target", "cli_version": "v9.9.9", "resolved_target": "v10.0.0",
+	})
+	acceptReq = withRouteParams(acceptReq, "runtimeId", firstRuntimeID, "upgradeId", created.ID)
+	acceptW := httptest.NewRecorder()
+	testHandler.AcceptMachineUpgrade(acceptW, acceptReq)
+	if acceptW.Code != http.StatusOK {
+		t.Fatalf("accept = %d: %s", acceptW.Code, acceptW.Body.String())
+	}
+	for _, phase := range []MachineUpgradePhase{MachineUpgradeVerifying, MachineUpgradeHandoff} {
+		if _, err := testHandler.MachineUpgradeStore.Progress(context.Background(), daemonID, created.ID, phase, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := testHandler.MachineUpgradeStore.BeginRollback(context.Background(), daemonID, created.ID, "generation-rollback", "candidate_takeover_failed", "candidate did not bind"); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := testHandler.MachineUpgradeStore.Progress(context.Background(), daemonID, created.ID, MachineUpgradeFailed, "rollback_restore_failed", "source binary unavailable")
+	if err != nil || failed == nil || failed.Phase != MachineUpgradeFailed || failed.Result == nil || *failed.Result != "failed" || failed.RollbackGeneration == nil || *failed.RollbackGeneration != "generation-rollback" {
+		t.Fatalf("failed rollback = %+v, %v", failed, err)
+	}
+	replayed, err := testHandler.MachineUpgradeStore.Progress(context.Background(), daemonID, created.ID, MachineUpgradeFailed, "rollback_restore_failed", "lost response replay")
+	if err != nil || replayed == nil || replayed.Phase != MachineUpgradeFailed || replayed.ErrorCode == nil || *replayed.ErrorCode != "rollback_restore_failed" {
+		t.Fatalf("failed rollback replay = %+v, %v", replayed, err)
 	}
 }
 

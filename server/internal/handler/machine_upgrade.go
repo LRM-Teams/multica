@@ -399,6 +399,21 @@ func (s *PostgresMachineUpgradeStore) Progress(ctx context.Context, daemonID, id
 	if s == nil || s.db == nil {
 		return nil, errors.New("machine upgrade store is not configured")
 	}
+	op, err := s.Get(ctx, daemonID, id)
+	if err != nil || op == nil {
+		return op, err
+	}
+	// Progress delivery is at-least-once. A lost response may replay an older
+	// phase after the operation advanced, and a late failure must never replace
+	// a terminal success/rollback. Return the durable newer truth unchanged.
+	if op.Phase.terminal() {
+		return op, nil
+	}
+	if requestedRank, ok := machineUpgradeProgressRank(phase); ok {
+		if currentRank, currentOK := machineUpgradeProgressRank(op.Phase); currentOK && currentRank >= requestedRank {
+			return op, nil
+		}
+	}
 	switch phase {
 	case MachineUpgradeStaging:
 		return scanMachineUpgrade(s.db.QueryRow(ctx, `
@@ -424,7 +439,7 @@ func (s *PostgresMachineUpgradeStore) Progress(ctx context.Context, daemonID, id
 			SET phase = 'failed', result = 'failed', error_code = NULLIF($3, ''),
 				error_message = NULLIF($4, ''), completed_at = now(), updated_at = now()
 			WHERE daemon_id = $1 AND id = $2
-			  AND phase IN ('starting', 'staging', 'verifying', 'handoff', 'converging')
+			  AND phase IN ('starting', 'staging', 'verifying', 'handoff', 'converging', 'rollback_pending')
 			RETURNING `+machineUpgradeColumns, daemonID, id, strings.TrimSpace(errorCode), strings.TrimSpace(errorMessage)))
 	case MachineUpgradeTimeout:
 		return scanMachineUpgrade(s.db.QueryRow(ctx, `
@@ -439,6 +454,25 @@ func (s *PostgresMachineUpgradeStore) Progress(ctx context.Context, daemonID, id
 	}
 }
 
+func machineUpgradeProgressRank(phase MachineUpgradePhase) (int, bool) {
+	switch phase {
+	case MachineUpgradeQueued:
+		return 0, true
+	case MachineUpgradeStarting:
+		return 1, true
+	case MachineUpgradeStaging:
+		return 2, true
+	case MachineUpgradeVerifying:
+		return 3, true
+	case MachineUpgradeHandoff:
+		return 4, true
+	case MachineUpgradeConverging:
+		return 5, true
+	default:
+		return 0, false
+	}
+}
+
 // Attest records a fresh registration from one captured sibling. Completion
 // is possible only after every accepted runtime has registered the resolved
 // target under the exact accepted daemon generation and the managed set still
@@ -449,6 +483,11 @@ func (s *PostgresMachineUpgradeStore) Attest(ctx context.Context, daemonID, id, 
 		return op, err
 	}
 	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
+	if op.Phase == MachineUpgradeCompleted && op.AcceptedGeneration != nil && *op.AcceptedGeneration == strings.TrimSpace(generation) &&
+		sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) && containsMachineRuntimeID(op.AttestedRuntimeIDs, runtimeID) &&
+		op.ResolvedTarget != nil && versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
+		return op, nil
+	}
 	if (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) || op.AcceptedGeneration == nil || *op.AcceptedGeneration != strings.TrimSpace(generation) ||
 		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) || !containsMachineRuntimeID(op.AcceptedRuntimeIDs, runtimeID) ||
 		op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
@@ -480,6 +519,12 @@ func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemon
 	}
 	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
 	workspaceIDs = normalizedMachineRuntimeIDs(workspaceIDs)
+	if op.Phase == MachineUpgradeCompleted && op.AcceptedGeneration != nil && *op.AcceptedGeneration == strings.TrimSpace(generation) &&
+		sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) && sameMachineRuntimeSet(op.AttestedRuntimeIDs, runtimeIDs) &&
+		sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) && sameMachineRuntimeSet(op.AttestedWorkspaceIDs, workspaceIDs) &&
+		op.ResolvedTarget != nil && versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) {
+		return op, nil
+	}
 	if (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) ||
 		op.AcceptedGeneration == nil || *op.AcceptedGeneration != strings.TrimSpace(generation) ||
 		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) ||
@@ -507,6 +552,14 @@ func (s *PostgresMachineUpgradeStore) BeginRollback(ctx context.Context, daemonI
 	if strings.TrimSpace(generation) == "" {
 		return nil, errMachineUpgradeAttestationRejected
 	}
+	op, err := s.Get(ctx, daemonID, id)
+	if err != nil || op == nil {
+		return op, err
+	}
+	if (op.Phase == MachineUpgradeRollbackPending || op.Phase == MachineUpgradeRolledBack) &&
+		op.RollbackGeneration != nil && *op.RollbackGeneration == strings.TrimSpace(generation) {
+		return op, nil
+	}
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
 		SET phase = 'rollback_pending', rollback_generation = $3,
@@ -530,6 +583,11 @@ func (s *PostgresMachineUpgradeStore) AttestRollback(ctx context.Context, daemon
 		return op, err
 	}
 	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
+	if op.Phase == MachineUpgradeRolledBack && op.RollbackGeneration != nil && *op.RollbackGeneration == strings.TrimSpace(generation) &&
+		op.SourceVersion != nil && versionsMatch(op.SourceVersion, stringPointer(strings.TrimSpace(cliVersion))) &&
+		sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) && sameMachineRuntimeSet(op.RollbackRuntimeIDs, runtimeIDs) {
+		return op, nil
+	}
 	if op.Phase != MachineUpgradeRollbackPending || op.RollbackGeneration == nil || *op.RollbackGeneration != strings.TrimSpace(generation) ||
 		op.SourceVersion == nil || !versionsMatch(op.SourceVersion, stringPointer(strings.TrimSpace(cliVersion))) ||
 		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) || !containsMachineRuntimeID(op.AcceptedRuntimeIDs, runtimeID) {

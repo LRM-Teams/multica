@@ -414,6 +414,7 @@ func runDaemonForeground(cmd *cobra.Command) error {
 				return fmt.Errorf("record detached takeover rollback: %w", rollbackStateErr)
 			}
 			if recoveryErr := rollbackDetachedMachineUpgrade(profile, d); recoveryErr != nil {
+				d.ReportMachineUpgradeRollbackFailure(recoveryErr)
 				return fmt.Errorf("start detached machine-upgrade successor: %w; rollback recovery: %v", takeoverErr, recoveryErr)
 			}
 			return fmt.Errorf("start detached machine-upgrade successor: %w; previous Active generation restored", takeoverErr)
@@ -440,21 +441,16 @@ func rollbackDetachedMachineUpgrade(profile string, d *daemon.Daemon) error {
 	if d == nil {
 		return errors.New("daemon is required for detached rollback")
 	}
-	store, err := cli.OpenVersionStore("")
-	if err != nil {
-		return fmt.Errorf("open version store: %w", err)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	state, _, err := store.RollbackToPreviousActive(ctx, "machine-upgrade-rollback")
+	path, err := d.PrepareMachineUpgradeRollbackRestart(ctx)
 	if err != nil {
 		return fmt.Errorf("restore previous Active: %w", err)
 	}
-	incumbent, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve incumbent binary: %w", err)
+	if err := bestEffortSyncInstalledServiceUnit(profile, path); err != nil {
+		return fmt.Errorf("rewrite OS service to restored Active: %w", err)
 	}
-	if err := spawnDetachedDaemonBinary(incumbent, profile, state.ActiveVersion, nil); err != nil {
+	if err := spawnDetachedDaemonBinary(path, profile, d.MachineUpgradeTarget(), nil); err != nil {
 		return fmt.Errorf("start restored incumbent: %w", err)
 	}
 	return nil

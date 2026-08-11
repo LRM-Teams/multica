@@ -16,6 +16,8 @@ import (
 
 const machineUpgradeGracefulDrain = 10 * time.Second
 
+const machineUpgradeMaxRestartAttempts = 2
+
 var fetchMachineUpgradeRelease = cli.FetchReleaseForChannelWithOverride
 
 // machineUpgradeJournal is the daemon-local recovery record written before a
@@ -33,6 +35,8 @@ type machineUpgradeJournal struct {
 	// IncumbentGeneration, which is the VersionStore activation generation.
 	PredecessorComputerGeneration int64    `json:"predecessor_computer_generation"`
 	RollbackGeneration            string   `json:"rollback_generation,omitempty"`
+	TargetRestartAttempts         int      `json:"target_restart_attempts,omitempty"`
+	RollbackRestartAttempts       int      `json:"rollback_restart_attempts,omitempty"`
 	RuntimeIDs                    []string `json:"runtime_ids"`
 	WorkspaceIDs                  []string `json:"workspace_ids"`
 	Phase                         string   `json:"phase"`
@@ -207,6 +211,10 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "activation_failed", err)
 		return
 	}
+	if err := d.captureCommittedMachineUpgradeGeneration(journal); err != nil {
+		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "activation_state_mismatch", err)
+		return
+	}
 	d.appendMachineUpgradeEvent(machineUpgradeEvent{
 		Event:         machineUpgradeEventActivated,
 		UpgradeID:     journal.ID,
@@ -214,6 +222,11 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 		SourceVersion: journal.SourceVersion,
 		TargetVersion: journal.TargetVersion,
 	})
+	journal.TargetRestartAttempts++
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "journal_persist_failed", err)
+		return
+	}
 	d.restartBinary = path
 	d.mu.Lock()
 	d.machineUpgradeTarget = targetVersion
@@ -600,7 +613,7 @@ func (d *Daemon) currentMachineUpgradeJournal() (*machineUpgradeJournal, error) 
 			continue
 		}
 		var candidate machineUpgradeJournal
-		if json.Unmarshal(data, &candidate) != nil || (candidate.Phase != "handoff" && candidate.Phase != "candidate_ready" && candidate.Phase != "rollback_pending") {
+		if json.Unmarshal(data, &candidate) != nil || (candidate.Phase != "accepted" && candidate.Phase != "staged" && candidate.Phase != "handoff" && candidate.Phase != "candidate_ready" && candidate.Phase != "rollback_pending") {
 			continue
 		}
 		if newest == nil || candidate.UpdatedAt > newest.UpdatedAt {

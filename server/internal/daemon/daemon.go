@@ -236,6 +236,11 @@ type Daemon struct {
 	// activateStagedFn CAS-commits the explicit staged target and returns its
 	// re-exec path. Nil → commitStagedActivation. Tests may no-op with ("", nil).
 	activateStagedFn func(ctx context.Context, updateID, targetVersion string) (string, error)
+	// Machine Upgrade recovery seams mirror the durable stage and verification
+	// phases so restart-boundary tests can prove completed phases are not rerun.
+	machineUpgradeStageFn    func(targetVersion string) (string, error)
+	machineUpgradeVerifyFn   func(targetVersion, updateOutput string) (string, error)
+	machineUpgradeRollbackFn func(context.Context, *machineUpgradeJournal) (string, error)
 	// Machine Upgrade handoff seams keep the bounded drain deterministic in
 	// tests. Production defaults are installed by the helper methods.
 	machineUpgradeNow  func() time.Time
@@ -324,6 +329,9 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	d.agentAttachments = newLocalAgentAttachmentRegistry(cfg.WorkspacesRoot, logger)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
+	d.machineUpgradeStageFn = d.runStageUpdate
+	d.machineUpgradeVerifyFn = d.verifyStagedBinary
+	d.machineUpgradeRollbackFn = d.restoreMachineUpgradeSource
 	return d
 }
 
@@ -824,6 +832,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.preflightAuth(ctx); err != nil {
 		return err
 	}
+	// preflight registered this Computer's runtimes. Recovery may immediately
+	// reactivate and restart an interrupted Machine Upgrade, so install cleanup
+	// before entering the recovery state machine.
+	defer d.deregisterRuntimes()
+	if restarted, err := d.recoverInterruptedMachineUpgrade(ctx); err != nil {
+		return fmt.Errorf("recover interrupted Machine Upgrade: %w", err)
+	} else if restarted {
+		return nil
+	}
 	if err := d.restoreResidentAgents(); err != nil {
 		return fmt.Errorf("restore resident Agents: %w", err)
 	}
@@ -837,9 +854,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)
 		}
 	}
-
-	// Deregister runtimes on shutdown (uses a fresh context since ctx will be cancelled).
-	defer d.deregisterRuntimes()
+	if err := d.reconcileMachineUpgradeTerminalJournal(ctx); err != nil {
+		d.logger.Debug("machine upgrade terminal marker not yet clearable", "error", err)
+	}
 
 	// Start workspace sync loop to discover newly created workspaces.
 	go d.workspaceSyncLoop(ctx)
@@ -912,6 +929,27 @@ func (d *Daemon) BeginMachineUpgradeRollback(cause error) error {
 		return fmt.Errorf("machine upgrade rollback identity is incomplete")
 	}
 	return d.client.ReportMachineUpgradeRollback(context.Background(), runtimeID, upgradeID, generation, "candidate_takeover_failed", cause.Error())
+}
+
+// ReportMachineUpgradeRollbackFailure leaves the rollback marker intact while
+// projecting a typed terminal failure to the server. Operator recovery still
+// has the exact local identity and retained source available for diagnosis.
+func (d *Daemon) ReportMachineUpgradeRollbackFailure(cause error) {
+	if cause == nil || d.client == nil {
+		return
+	}
+	journal, err := d.currentMachineUpgradeJournal()
+	if err != nil || journal == nil || journal.Phase != "rollback_pending" {
+		return
+	}
+	runtimeID := ""
+	if len(journal.RuntimeIDs) > 0 {
+		runtimeID = strings.TrimSpace(journal.RuntimeIDs[0])
+	}
+	if runtimeID == "" {
+		return
+	}
+	d.failMachineUpgrade(context.Background(), runtimeID, journal.ID, "rollback_restore_failed", cause)
 }
 
 // deregisterRuntimes notifies the server that all runtimes are going offline.
@@ -1591,6 +1629,9 @@ func (d *Daemon) runHeartbeatTick(ctx context.Context, rid string) {
 func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {
 	if resp == nil {
 		return
+	}
+	if err := d.reconcileMachineUpgradeTerminalJournal(ctx); err != nil {
+		d.logger.Debug("machine upgrade terminal marker not yet clearable", "runtime_id", runtimeID, "error", err)
 	}
 	if resp.ReleaseManifestBaseURL != "" {
 		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)

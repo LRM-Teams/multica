@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkQuickCreateCliVersion } from "./cli-version";
+import { checkQuickCreateCliVersion, isNewerCliVersion } from "./cli-version";
 
 describe("checkQuickCreateCliVersion", () => {
   it("returns ok for a tagged release at or above the minimum", () => {
@@ -22,5 +22,38 @@ describe("checkQuickCreateCliVersion", () => {
     expect(checkQuickCreateCliVersion("v0.2.15-235-gdaf0e935").state).toBe("ok");
     expect(checkQuickCreateCliVersion("v0.2.15-235-gdaf0e935-dirty").state).toBe("ok");
     expect(checkQuickCreateCliVersion("0.1.0-1-gabc1234").state).toBe("ok");
+  });
+});
+
+describe("isNewerCliVersion", () => {
+  it("orders release core versions", () => {
+    expect(isNewerCliVersion("v0.4.25-alpha.1", "v0.4.24-rc.99")).toBe(
+      true,
+    );
+    expect(isNewerCliVersion("v0.5.0-alpha.1", "v0.4.99")).toBe(true);
+  });
+
+  it("orders the release prerelease stages and numeric sequence", () => {
+    expect(isNewerCliVersion("v0.4.24-alpha.11", "0.4.24-alpha.9")).toBe(
+      true,
+    );
+    expect(isNewerCliVersion("v0.4.24-beta.1", "v0.4.24-alpha.99")).toBe(
+      true,
+    );
+    expect(isNewerCliVersion("v0.4.24-rc.1", "v0.4.24-beta.99")).toBe(
+      true,
+    );
+    expect(isNewerCliVersion("v0.4.24", "v0.4.24-rc.99")).toBe(true);
+  });
+
+  it("rejects older, equal, unsupported, and development versions", () => {
+    expect(isNewerCliVersion("v0.4.24-alpha.9", "v0.4.24-alpha.11")).toBe(
+      false,
+    );
+    expect(isNewerCliVersion("v0.4.24-alpha.11", "0.4.24-alpha.11")).toBe(
+      false,
+    );
+    expect(isNewerCliVersion("v0.4.24-preview.1", "v0.4.23")).toBe(false);
+    expect(isNewerCliVersion("v0.4.24", "v0.4.23-5-gabcdef0")).toBe(false);
   });
 });

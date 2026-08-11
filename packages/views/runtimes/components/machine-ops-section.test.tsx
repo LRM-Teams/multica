@@ -258,6 +258,28 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     );
   });
 
+  it("shows Upgrade for a later alpha release of the same core version", () => {
+    const runtime = makeRuntime({
+      current_version: "0.4.24-alpha.9",
+      runtime_health: "update_available",
+      target_version: null,
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.4.24-alpha.9"
+        daemonTargetVersion="v0.4.24-alpha.11"
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+
+    expect(screen.getByTestId("machine-daemon-upgrade-btn")).toHaveTextContent(
+      /Upgrade to v0\.4\.24-alpha\.11/,
+    );
+  });
+
   it("does not read an individual runtime target", () => {
     const runtime = makeRuntime({
       runtime_health: "update_available",

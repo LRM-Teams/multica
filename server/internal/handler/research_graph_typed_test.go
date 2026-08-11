@@ -175,12 +175,106 @@ func doMerge(t *testing.T, sessionID pgtype.UUID, agentID string, inputIDs []str
 
 func doGetTyped(t *testing.T, sessionID pgtype.UUID) (int, ResearchGraphTypedResp) {
 	t.Helper()
-	req := newRequest(http.MethodGet, "/api/research/sessions/"+uuidToString(sessionID)+"/graph/typed", nil)
+	return doGetTypedQuery(t, sessionID, "")
+}
+
+func doGetTypedQuery(t *testing.T, sessionID pgtype.UUID, query string) (int, ResearchGraphTypedResp) {
+	t.Helper()
+	req := newRequest(http.MethodGet, "/api/research/sessions/"+uuidToString(sessionID)+"/graph/typed"+query, nil)
 	rec := httptest.NewRecorder()
 	testHandler.GetResearchGraphTyped(rec, withURLParam(req, "id", uuidToString(sessionID)))
 	var resp ResearchGraphTypedResp
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	return rec.Code, resp
+}
+
+func TestParseTypedGraphPagination(t *testing.T) {
+	t.Run("no query returns non-paginated", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graph/typed", nil)
+		limit, offset, paginated, ok := parseTypedGraphPagination(rec, req)
+		if !ok || paginated {
+			t.Fatalf("expected non-paginated ok=true, got paginated=%v ok=%v", paginated, ok)
+		}
+		if limit != 0 || offset != 0 {
+			t.Fatalf("limit=%d offset=%d", limit, offset)
+		}
+	})
+
+	t.Run("limit without offset defaults offset zero", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graph/typed?limit=50", nil)
+		limit, offset, paginated, ok := parseTypedGraphPagination(rec, req)
+		if !ok || !paginated {
+			t.Fatalf("expected paginated ok=true, got paginated=%v ok=%v", paginated, ok)
+		}
+		if limit != 50 || offset != 0 {
+			t.Fatalf("limit=%d offset=%d", limit, offset)
+		}
+	})
+
+	t.Run("offset without limit is bad request", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graph/typed?offset=10", nil)
+		_, _, _, ok := parseTypedGraphPagination(rec, req)
+		if ok {
+			t.Fatal("expected bad request when offset set without limit")
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d", rec.Code)
+		}
+	})
+
+	t.Run("limit above cap is clamped", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graph/typed?limit=99999", nil)
+		limit, _, paginated, ok := parseTypedGraphPagination(rec, req)
+		if !ok || !paginated {
+			t.Fatalf("expected paginated ok=true")
+		}
+		if limit != maxTypedGraphPageLimit {
+			t.Fatalf("limit=%d want %d", limit, maxTypedGraphPageLimit)
+		}
+	})
+}
+
+func TestResearchGraphTypedPaginationFiltersPage(t *testing.T) {
+	sessionID, _ := setupMergableResearchSession(t, "paginate")
+	makeTypedInputNode(t, sessionID, 1, "page-a")
+	makeTypedInputNode(t, sessionID, 1, "page-b")
+	makeTypedInputNode(t, sessionID, 1, "page-c")
+
+	code, page := doGetTypedQuery(t, sessionID, "?limit=2&offset=0")
+	if code != http.StatusOK {
+		t.Fatalf("paginated get status=%d", code)
+	}
+	if page.TotalNodeCount == nil || *page.TotalNodeCount != 3 {
+		t.Fatalf("total_node_count=%v want 3", page.TotalNodeCount)
+	}
+	if len(page.Nodes) != 2 {
+		t.Fatalf("nodes=%d want 2", len(page.Nodes))
+	}
+
+	code, full := doGetTyped(t, sessionID)
+	if code != http.StatusOK {
+		t.Fatalf("full get status=%d", code)
+	}
+	if full.TotalNodeCount != nil {
+		t.Fatalf("non-paginated response must omit total_node_count, got %v", full.TotalNodeCount)
+	}
+
+	loaded := make(map[string]struct{})
+	for _, n := range page.Nodes {
+		loaded[n.ID] = struct{}{}
+	}
+	for _, edge := range page.Edges {
+		if _, ok := loaded[edge.FromNodeID]; !ok {
+			t.Fatalf("edge from %s not in page nodes", edge.FromNodeID)
+		}
+		if _, ok := loaded[edge.ToNodeID]; !ok {
+			t.Fatalf("edge to %s not in page nodes", edge.ToNodeID)
+		}
+	}
 }
 
 // AC1: 两轮真实成果 + 一次三合一融合，刷新后等级/谱系/集群/旧节点状态完全一致。

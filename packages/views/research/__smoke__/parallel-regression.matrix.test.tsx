@@ -63,6 +63,9 @@ import enResearch from "../../locales/en/research.json";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RESEARCH_ROOT = path.resolve(__dirname, "..");
 
+/** D5 star-map canvas — canonical keyboard/a11y surface (replaces planar research-canvas). */
+const D5_CANVAS_SOURCE = "star-graph/components/star-graph-canvas.tsx";
+
 function readResearchSource(relPath: string): string {
   return fs.readFileSync(path.join(RESEARCH_ROOT, relPath), "utf8");
 }
@@ -492,16 +495,16 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
 
   // LRM-1091 planar canvas shipped role=application + name — hard gate now.
   it(
-    `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name (after 1091 wire)`,
+    `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name (D5 star-graph)`,
     () => {
-      const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      const canvasSrc = readResearchSource(D5_CANVAS_SOURCE);
       expect(
         /role=["']application["']/.test(canvasSrc),
-        failHint(SMOKE_ISSUES.canvasKeyboard, "research-canvas.tsx missing role=application"),
+        failHint(SMOKE_ISSUES.canvasKeyboard, "star-graph-canvas.tsx missing role=application"),
       ).toBe(true);
       expect(
         /aria-label=/.test(canvasSrc) || /aria-labelledby=/.test(canvasSrc),
-        failHint(SMOKE_ISSUES.canvasKeyboard, "research-canvas.tsx missing accessible name"),
+        failHint(SMOKE_ISSUES.canvasKeyboard, "star-graph-canvas.tsx missing accessible name"),
       ).toBe(true);
     },
   );
@@ -512,13 +515,13 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
   it(
     `${SMOKE_ISSUES.canvasKeyboard}: Home/End jump via canvas-keyboard-nav + resolveCanvasKeyEvent`,
     () => {
-      const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      const canvasSrc = readResearchSource(D5_CANVAS_SOURCE);
       const navSrc = readResearchSource("lib/canvas-keyboard-nav.ts");
       expect(
         canvasSrc.includes("resolveCanvasKeyEvent"),
         failHint(
           SMOKE_ISSUES.canvasKeyboard,
-          "research-canvas.tsx missing resolveCanvasKeyEvent wiring",
+          "star-graph-canvas.tsx missing resolveCanvasKeyEvent wiring",
         ),
       ).toBe(true);
       for (const key of ["Home", "End"]) {
@@ -742,15 +745,15 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
   // LRM-1091 planar keyboard wiring shipped — hard gate now.
   // LRM-1105 slice3: key literals live in canvas-keyboard-nav; canvas only wires resolveCanvasKeyEvent.
   it(
-    `${SMOKE_ISSUES.canvasPlanar}: canvas wires planar keyboard map (topo ↑↓, branch ←→, Enter/Esc, Shift+F10)`,
+    `${SMOKE_ISSUES.canvasPlanar}: D5 canvas wires keyboard map via resolveCanvasKeyEvent (shared nav contract)`,
     () => {
-      const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      const canvasSrc = readResearchSource(D5_CANVAS_SOURCE);
       const navSrc = readResearchSource("lib/canvas-keyboard-nav.ts");
       expect(
         canvasSrc.includes("resolveCanvasKeyEvent"),
         failHint(
           SMOKE_ISSUES.canvasPlanar,
-          "research-canvas.tsx missing resolveCanvasKeyEvent wiring",
+          "star-graph-canvas.tsx missing resolveCanvasKeyEvent wiring",
         ),
       ).toBe(true);
       for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "Escape"]) {
@@ -765,10 +768,6 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
           SMOKE_ISSUES.canvasPlanar,
           "canvas-keyboard-nav.ts missing Shift+F10 context menu",
         ),
-      ).toBe(true);
-      expect(
-        canvasSrc.includes("topology") || canvasSrc.includes("branch"),
-        failHint(SMOKE_ISSUES.canvasPlanar, "planar nav helpers not referenced in canvas"),
       ).toBe(true);
     },
   );
@@ -816,7 +815,7 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     `${SMOKE_ISSUES.canvasPlanar}: destructive ring/canvas path has confirm/undo hook`,
     () => {
       const ringSrc = readResearchSource("lib/node-action-ring.ts");
-      const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      const canvasSrc = readResearchSource(D5_CANVAS_SOURCE);
       const hasConfirmOrUndo =
         /confirm|undo|AlertDialog|destructiveNeedsConfirm/i.test(ringSrc) ||
         /confirm|undo|AlertDialog/i.test(canvasSrc);

@@ -357,3 +357,42 @@ export function rebaseStarCanvasIntoViewModel(
     },
   };
 }
+
+/**
+ * Reconstruct a layout result from a built view-model so incremental layout
+ * can reuse stable positions on the next graph_version tick.
+ */
+export function extractLayoutResultFromViewModel(
+  model: Pick<
+    StarCanvasViewModel,
+    "entities" | "relations" | "clusters" | "rootId" | "version" | "stats"
+  >,
+): StarGraphLayoutResult {
+  return {
+    nodes: model.entities.map((e) => ({
+      id: e.id,
+      tier: e.tier,
+      x: e.x,
+      y: e.y,
+      radius: e.radius,
+      label: e.label,
+      clusterId: e.clusterId,
+      angle: e.angle,
+      radiusOffset: e.radiusOffset,
+      parentId: e.parentId,
+    })),
+    edges: model.relations.map((r) => ({
+      id: r.id,
+      fromNodeId: r.fromNodeId,
+      toNodeId: r.toNodeId,
+      kind: r.kind,
+      from: r.from,
+      to: r.to,
+    })),
+    clusters: model.clusters,
+    rootId: model.rootId,
+    version: model.version,
+    stats: model.stats,
+    keyByNode: new Map(),
+  };
+}

@@ -991,6 +991,11 @@
       "title": "调研星图 · 已加载 {{loaded}} 条方向",
       "detail": "{{stable}} 个稳定结果 · {{active}} 个深挖 · {{newDir}} 个新方向 · {{stopped}} 个已停止"
     },
+    "cluster_hidden": "+{{count}} 隐藏",
+    "graph_live": {
+      "updating": "星图正在重组（v{{version}}）…",
+      "updated": "星图已更新至 v{{version}}"
+    },
     "new_frontier_label": "全新方向",
     "canvas": {
       "loading": "正在加载调研星图…",

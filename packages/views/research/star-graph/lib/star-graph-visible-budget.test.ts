@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { StarEntityView } from "./star-canvas-view-model";
 import {
+  LOW_ZOOM_CLUSTER_COLLAPSE,
   STAR_GRAPH_DOM_BUDGET,
+  computeClusterHiddenCounts,
+  effectiveEntityBudget,
   filterRelationsToVisibleEntities,
   selectVisibleEntityIds,
 } from "./star-graph-visible-budget";
 
 function entity(
   partial: Pick<StarEntityView, "id" | "tier"> &
-    Partial<Pick<StarEntityView, "view">>,
+    Partial<Pick<StarEntityView, "view" | "clusterId">>,
 ): StarEntityView {
   return {
     id: partial.id,
@@ -17,7 +20,7 @@ function entity(
     y: 0,
     radius: 40,
     label: { halfWidth: 20, halfHeight: 10 },
-    clusterId: null,
+    clusterId: partial.clusterId ?? null,
     angle: 0,
     radiusOffset: 0,
     parentId: null,
@@ -68,6 +71,41 @@ describe("selectVisibleEntityIds", () => {
 
   it("uses the D5 default budget constant", () => {
     expect(STAR_GRAPH_DOM_BUDGET).toBe(220);
+  });
+
+  it("reduces budget at low zoom", () => {
+    expect(effectiveEntityBudget(220, 0.4)).toBeLessThan(220);
+    expect(effectiveEntityBudget(220, 1)).toBe(220);
+  });
+
+  it("collapses to one node per cluster at very low zoom", () => {
+    const entities = [
+      entity({ id: "goal", tier: "xxl" }),
+      entity({ id: "a1", tier: "s", clusterId: "c1" }),
+      entity({ id: "a2", tier: "s", clusterId: "c1" }),
+      entity({ id: "b1", tier: "s", clusterId: "c2" }),
+      entity({ id: "b2", tier: "s", clusterId: "c2" }),
+    ];
+
+    const visible = selectVisibleEntityIds(entities, {
+      rootId: "goal",
+      zoom: LOW_ZOOM_CLUSTER_COLLAPSE - 0.1,
+    });
+
+    expect(visible.has("goal")).toBe(true);
+    expect(["a1", "a2"].filter((id) => visible.has(id)).length).toBe(1);
+    expect(["b1", "b2"].filter((id) => visible.has(id)).length).toBe(1);
+  });
+});
+
+describe("computeClusterHiddenCounts", () => {
+  it("counts hidden nodes per cluster", () => {
+    const entities = [
+      entity({ id: "a1", tier: "s", clusterId: "c1" }),
+      entity({ id: "a2", tier: "s", clusterId: "c1" }),
+    ];
+    const hidden = computeClusterHiddenCounts(entities, new Set(["a1"]));
+    expect(hidden.get("c1")).toBe(1);
   });
 });
 

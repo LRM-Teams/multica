@@ -58,6 +58,7 @@ export function ResearchD5Chrome({
             goalVersion={goalVersion}
             goalHistory={goalHistory}
             goalImpact={goalImpact}
+            panelPlacement="below"
             className="max-w-full"
           />
         </div>

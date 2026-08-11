@@ -12,7 +12,10 @@ export interface ResearchD5Summary {
 const STABLE_LEVELS = new Set(["l", "xl", "xxl"]);
 const STOP_STATUSES = new Set(["abandoned", "deprecated", "failed", "superseded", "archived"]);
 
-export function summarizeTypedGraph(nodes: readonly TypedGraphNode[]): ResearchD5Summary {
+export function summarizeTypedGraph(
+  nodes: readonly TypedGraphNode[],
+  options?: { totalNodeCount?: number | null },
+): ResearchD5Summary {
   let stableResults = 0;
   let activeProbes = 0;
   let newFrontiers = 0;
@@ -36,7 +39,10 @@ export function summarizeTypedGraph(nodes: readonly TypedGraphNode[]): ResearchD
 
   return {
     loadedDirections: nodes.length,
-    totalDirections: null,
+    totalDirections:
+      options?.totalNodeCount != null && options.totalNodeCount > nodes.length
+        ? options.totalNodeCount
+        : null,
     stableResults,
     activeProbes,
     newFrontiers,

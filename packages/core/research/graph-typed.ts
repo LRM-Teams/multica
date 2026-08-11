@@ -125,6 +125,8 @@ export const TypedGraphResponseSchema = z
   .object({
     session_id: z.string().optional().default(""),
     graph_version: z.number().int().optional().default(0),
+    /** Server-side total when the graph is paginated (optional until BE ships). */
+    total_node_count: z.number().int().nullable().optional().default(null),
     nodes: z.array(TypedGraphNodeSchema).optional().default([]),
     edges: z.array(TypedGraphEdgeSchema).optional().default([]),
     clusters: z.array(TypedGraphClusterSchema).optional().default([]),
@@ -145,6 +147,7 @@ export type TypedGraphResponse = z.infer<typeof TypedGraphResponseSchema>;
 export const EMPTY_TYPED_GRAPH: TypedGraphResponse = {
   session_id: "",
   graph_version: 0,
+  total_node_count: null,
   nodes: [],
   edges: [],
   clusters: [],

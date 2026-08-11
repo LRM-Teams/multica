@@ -83,6 +83,23 @@
   letter-spacing: 0.13em;
   text-transform: uppercase;
 }
+.sg-cluster-hidden-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid #2f5168;
+  background: rgba(8, 18, 29, 0.82);
+  color: #8eb0c8;
+  font:
+    700 8px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  letter-spacing: 0.04em;
+}
 .sg-new-frontier-zone {
   position: absolute;
   border: 1px dashed #554977;

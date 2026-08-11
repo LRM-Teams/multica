@@ -3,6 +3,9 @@ import type { StarEntityView } from "./star-canvas-view-model";
 /** D5 desktop hard DOM budget (viewport-performance §3). */
 export const STAR_GRAPH_DOM_BUDGET = 220;
 
+/** Below this zoom, non-protected nodes collapse to one representative per cluster. */
+export const LOW_ZOOM_CLUSTER_COLLAPSE = 0.55;
+
 const TIER_RANK: Record<string, number> = {
   xxl: 0,
   xl: 1,
@@ -13,6 +16,22 @@ const TIER_RANK: Record<string, number> = {
 
 function tierRank(entity: StarEntityView): number {
   return TIER_RANK[entity.tier] ?? 5;
+}
+
+function isProtectedEntity(
+  entity: StarEntityView,
+  options: {
+    rootId: string | null;
+    selectedNodeId?: string | null;
+    relatedNodeIds?: ReadonlySet<string>;
+  },
+): boolean {
+  if (options.rootId && entity.id === options.rootId) return true;
+  if (options.selectedNodeId && entity.id === options.selectedNodeId) return true;
+  if (options.relatedNodeIds?.has(entity.id)) return true;
+  if (entity.view.state === "run") return true;
+  if (entity.view.state === "failed" || entity.view.state === "restart") return true;
+  return false;
 }
 
 function retentionScore(
@@ -32,9 +51,25 @@ function retentionScore(
 }
 
 /**
+ * Scale the DOM budget down at low zoom so cluster summaries carry detail instead
+ * of unreadable 248px circles.
+ */
+export function effectiveEntityBudget(
+  baseBudget: number,
+  zoom: number,
+): number {
+  if (zoom >= 1) return baseBudget;
+  if (zoom >= 0.75) return Math.max(60, Math.round(baseBudget * 0.85));
+  if (zoom >= LOW_ZOOM_CLUSTER_COLLAPSE) {
+    return Math.max(40, Math.round(baseBudget * 0.65));
+  }
+  return Math.max(24, Math.round(baseBudget * 0.45));
+}
+
+/**
  * Select which star-graph entities may mount as DOM nodes under the D5 budget.
- * Protected ids (root, selection, one-hop lineage) are kept first; the rest are
- * ranked by tier and runtime state.
+ * Protected ids (root, selection, one-hop lineage, running/failed) are kept
+ * first; at low zoom only one representative per cluster is retained for the rest.
  */
 export function selectVisibleEntityIds(
   entities: readonly StarEntityView[],
@@ -43,10 +78,19 @@ export function selectVisibleEntityIds(
     selectedNodeId?: string | null;
     relatedNodeIds?: ReadonlySet<string>;
     budget?: number;
+    zoom?: number;
   },
 ): Set<string> {
-  const budget = options.budget ?? STAR_GRAPH_DOM_BUDGET;
-  if (entities.length <= budget) {
+  const baseBudget = options.budget ?? STAR_GRAPH_DOM_BUDGET;
+  const budget =
+    options.zoom != null
+      ? effectiveEntityBudget(baseBudget, options.zoom)
+      : baseBudget;
+
+  const collapseClusters =
+    options.zoom != null && options.zoom < LOW_ZOOM_CLUSTER_COLLAPSE;
+
+  if (!collapseClusters && entities.length <= budget) {
     return new Set(entities.map((entity) => entity.id));
   }
 
@@ -55,11 +99,54 @@ export function selectVisibleEntityIds(
   );
 
   const visible = new Set<string>();
+  const clustersRepresented = new Set<string>();
+
   for (const entity of ranked) {
+    if (!collapseClusters && visible.size >= budget) break;
+    if (collapseClusters && visible.size >= budget && !isProtectedEntity(entity, options)) {
+      break;
+    }
+
+    if (isProtectedEntity(entity, options)) {
+      visible.add(entity.id);
+      if (entity.clusterId) clustersRepresented.add(entity.clusterId);
+      continue;
+    }
+
+    if (collapseClusters && entity.clusterId) {
+      if (clustersRepresented.has(entity.clusterId)) continue;
+      clustersRepresented.add(entity.clusterId);
+    }
+
     visible.add(entity.id);
-    if (visible.size >= budget) break;
   }
+
   return visible;
+}
+
+/** Hidden node counts per cluster for low-zoom cluster summary badges. */
+export function computeClusterHiddenCounts(
+  entities: readonly StarEntityView[],
+  visibleEntityIds: ReadonlySet<string>,
+): ReadonlyMap<string, number> {
+  const totals = new Map<string, number>();
+  for (const entity of entities) {
+    if (!entity.clusterId) continue;
+    totals.set(entity.clusterId, (totals.get(entity.clusterId) ?? 0) + 1);
+  }
+
+  const hidden = new Map<string, number>();
+  for (const [clusterId, total] of totals) {
+    let visibleCount = 0;
+    for (const entity of entities) {
+      if (entity.clusterId === clusterId && visibleEntityIds.has(entity.id)) {
+        visibleCount += 1;
+      }
+    }
+    const hiddenCount = total - visibleCount;
+    if (hiddenCount > 0) hidden.set(clusterId, hiddenCount);
+  }
+  return hidden;
 }
 
 export function filterRelationsToVisibleEntities<

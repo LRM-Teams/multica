@@ -991,6 +991,11 @@
       "title": "Constellation · {{loaded}} loaded directions",
       "detail": "{{stable}} stable · {{active}} active · {{newDir}} new · {{stopped}} stopped"
     },
+    "cluster_hidden": "+{{count}} hidden",
+    "graph_live": {
+      "updating": "Constellation reorganizing (v{{version}})…",
+      "updated": "Constellation updated to v{{version}}"
+    },
     "new_frontier_label": "NEW FRONTIERS",
     "canvas": {
       "loading": "Loading constellation…",

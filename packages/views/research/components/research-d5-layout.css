@@ -151,8 +151,21 @@
   border-top: 1px solid #213043;
 }
 @media (max-width: 767px) {
+  .d5-chrome-top {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 12px;
+    min-height: auto;
+    padding: 10px 12px 8px;
+  }
   .d5-workspace {
     flex-direction: column;
+  }
+  .d5-goal-slot {
+    order: 10;
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    padding: 0;
   }
   .d5-rail {
     position: absolute;

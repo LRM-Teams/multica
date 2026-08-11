@@ -32,7 +32,7 @@ type inboxRegistryDependencies struct {
 }
 
 // InboxRegistry owns every in-memory Message coordinator for one immutable
-// Workspace Runner scope. AgentAttachmentRegistry remains the authority for
+// Workspace Runner scope. The Attachment registry remains the authority for
 // whether an Inbox may be opened and which Runtime it belongs to.
 type InboxRegistry struct {
 	workspaceID string

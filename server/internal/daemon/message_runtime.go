@@ -2,12 +2,8 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -53,18 +49,7 @@ func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID st
 	if err != nil {
 		return false, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
 	}
-	if runner.inboxes == nil {
-		return false, fmt.Errorf("Workspace Runner %q has no Inbox registry", workspaceID)
-	}
-	created, err := runner.inboxes.Ensure(agentID)
-	if err != nil {
-		return false, err
-	}
-	_, currentRuntimeID, ok := runner.inboxes.Resolve(agentID)
-	if !ok || currentRuntimeID != runtimeID {
-		return false, fmt.Errorf("Message Inbox for agent %q resolved Runtime %q, want %q", agentID, currentRuntimeID, runtimeID)
-	}
-	return created, nil
+	return runner.ensureMessageInbox(agentID, runtimeID)
 }
 
 // ensureIdleMessageCoordinatorForDelivery repairs restart-time coordinator
@@ -78,10 +63,10 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 		return errors.New("workspace and agent ids are required")
 	}
 	runner := d.currentWorkspaceRunner(workspaceID)
-	if runner == nil || runner.inboxes == nil {
+	if runner == nil {
 		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
 	}
-	if _, _, ok := runner.inboxes.Resolve(agentID); ok {
+	if runner.hasMessageInbox(agentID) {
 		return nil
 	}
 	registry := d.attachmentRegistry()
@@ -103,7 +88,7 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 		return fmt.Errorf("repair Agent Message coordinator: %w", err)
 	}
 	if created {
-		d.beginAgentMessageRecovery(workspaceID, agentID)
+		runner.beginMessageRecovery(agentID)
 	}
 	return nil
 }
@@ -143,17 +128,18 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
+	runner, _ := d.ensureWorkspaceRunner(workspaceID)
 	preparedMessages, memoryTask, err := d.prepareResidentMessageBatch(ctx, agentID, runtimeID, messages)
 	if err != nil {
 		return err
 	}
 	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
-		d.emitMessageLifecycleActivity(agentID, runtimeID)
+		runner.observeMessageLifecycle(agentID, runtimeID)
 	}, func() {
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
-		d.emitMessageReceivedActivity(agentID, runtimeID, preparedMessages)
+		runner.observeMessageAccepted(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
-		d.emitResidentMessageRuntimeActivity(agentID, runtimeID, message)
+		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64) {
 		outcome, reasonCode := "completed", ""
 		if turnErr != nil {
@@ -169,15 +155,9 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// the prior turn finished. If Pending remains, schedule a content-free
 		// Notice; body handoff waits for idle Accept→Flush, recovery Flush, or
 		// agent `message check`.
-		runner := d.currentWorkspaceRunner(workspaceID)
-		if runner != nil && runner.inboxes != nil {
-			coordinator, _, ok := runner.inboxes.Resolve(agentID)
-			if ok {
-				coordinator.NotifyPendingAfterTurn()
-			}
-		}
+		runner.notifyPendingMessagesAfterTurn(agentID)
 		d.canonicalRuntimes.publishIfMessageTurnStillIdle(agentID, runtimeID, generation, func() {
-			d.emitMessageTurnCompletionActivity(agentID, runtimeID, turnErr)
+			runner.observeMessageTurnCompletion(agentID, runtimeID, turnErr)
 		})
 	})
 	if err != nil {
@@ -192,7 +172,7 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		// receipt exists, so the onComplete path above cannot publish them.
 		// Project the failure explicitly instead of leaving it only in daemon
 		// logs while the user waits for an Agent response that cannot arrive.
-		d.emitMessageTurnCompletionActivity(agentID, runtimeID, err)
+		runner.observeMessageTurnCompletion(agentID, runtimeID, err)
 	}
 	return err
 }
@@ -273,175 +253,6 @@ func convertResidentMessageMemoriesForEnv(memories []protocol.AgentMessageMemory
 		})
 	}
 	return result
-}
-
-func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID string) {
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err == nil && runner.activity != nil {
-		if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
-			if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting, Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC()}); err != nil && d.logger != nil {
-				d.logger.Debug("workspace Runner Message lifecycle Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
-			}
-		}
-	}
-}
-
-func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, message agent.Message) {
-	if message.Type == agent.MessageDiagnostic {
-		d.emitResidentRuntimeDiagnostic(agentID, runtimeID, message)
-		return
-	}
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
-	if workspaceID == "" {
-		return
-	}
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil || runner.activity == nil {
-		return
-	}
-	launch, found := runner.processes.Snapshot(agentID)
-	if !found || launch.RuntimeID != runtimeID {
-		return
-	}
-
-	at := time.Now().UTC()
-	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
-	switch message.Type {
-	case agent.MessageThinking, agent.MessageText, agent.MessageToolUse:
-		_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
-	case agent.MessageError:
-		runner.activity.InterruptCompactionIfActive(agentID, launch.LaunchID)
-	}
-
-	var observationKind AgentObservationKind
-	switch message.Type {
-	case agent.MessageThinking:
-		observationKind = AgentObservationRuntimeThinking
-	case agent.MessageCompactionStarted:
-		observationKind = AgentObservationRuntimeCompacting
-	case agent.MessageCompactionFinished:
-		observationKind = AgentObservationRuntimeCompacted
-	case agent.MessageError:
-		observationKind = AgentObservationError
-	case agent.MessageToolUse:
-		observationKind = AgentObservationRuntimeTool
-	}
-	if observationKind == "" {
-		return
-	}
-	var data AgentObservationData = stage
-	if observationKind == AgentObservationError {
-		data = AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_failed"}
-	} else if observationKind == AgentObservationRuntimeTool {
-		data = AgentRuntimeStageObservationData{RuntimeID: runtimeID, ToolName: message.Tool, ToolCallID: message.CallID, ToolInput: message.Input}
-	}
-	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: observationKind, Data: data, At: at}); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner runtime Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
-	}
-}
-func (d *Daemon) emitResidentRuntimeDiagnostic(agentID, runtimeID string, message agent.Message) {
-	if message.Level != "warning" || strings.TrimSpace(message.Title) == "" || strings.TrimSpace(message.Content) == "" {
-		return
-	}
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
-	if workspaceID == "" {
-		return
-	}
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil || runner.activity == nil {
-		return
-	}
-	launch, found := runner.processes.Snapshot(agentID)
-	if !found || launch.RuntimeID != runtimeID {
-		return
-	}
-	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeDiagnostic, Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC()}); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner runtime diagnostic Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
-	}
-}
-
-func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, turnErr error) {
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
-	if workspaceID == "" {
-		return
-	}
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil || runner.activity == nil {
-		return
-	}
-	launch, found := runner.processes.Snapshot(agentID)
-	if !found || launch.RuntimeID != runtimeID {
-		return
-	}
-
-	at := time.Now().UTC()
-	stage := AgentRuntimeStageObservationData{RuntimeID: runtimeID}
-	kind, data := AgentObservationRuntimeIdle, AgentObservationData(stage)
-	if turnErr != nil {
-		runner.activity.InterruptCompactionIfActive(agentID, launch.LaunchID)
-		kind, data = AgentObservationError, AgentErrorObservationData{RuntimeID: runtimeID, ReasonCode: "provider_turn_failed"}
-	} else {
-		_, _ = runner.activity.CompleteCompactionIfActive(agentID, launch.LaunchID, stage, at)
-	}
-	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: kind, Data: data, At: at}); err != nil && d.logger != nil {
-		d.logger.Debug("workspace Runner Message completion Activity publish deferred", "error", err, "agent_id", agentID)
-	}
-}
-func runtimeErrorNarrative(reason string) string {
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return "Runtime error"
-	}
-	return truncateRunes(reason, 400)
-}
-
-func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages []protocol.AgentMessageProjection) {
-	if len(messages) == 0 {
-		return
-	}
-	targetSet := make(map[string]struct{})
-	identity := make([]string, 0, len(messages))
-	for _, message := range messages {
-		targetSet[message.Target] = struct{}{}
-		identity = append(identity, message.ID+"\x00"+message.Target+"\x00"+strconv.FormatInt(message.Seq, 10))
-	}
-	sort.Strings(identity)
-	sum := sha256.Sum256([]byte(strings.Join(identity, "\x01")))
-	targets := make([]string, 0, len(targetSet))
-	for target := range targetSet {
-		targets = append(targets, target)
-	}
-	sort.Strings(targets)
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
-	if workspaceID != "" {
-		runner, err := d.ensureWorkspaceRunner(workspaceID)
-		if err == nil && runner.activity != nil {
-			if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
-				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID, HandoffID: hex.EncodeToString(sum[:]), MessageCount: len(messages)}, At: time.Now().UTC()}); err != nil && d.logger != nil {
-					d.logger.Debug("workspace Runner Message Activity publish deferred", "error", err, "agent_id", agentID)
-				}
-			}
-		}
-	}
-	payload := protocol.AgentMessageHandoffPayload{
-		AgentID: agentID, RuntimeID: runtimeID, HandoffID: hex.EncodeToString(sum[:]), Count: len(messages), Targets: targets,
-	}
-	// Handoff is an observation after concrete bodies crossed the local
-	// boundary. It belongs to the same Workspace Runner as delivery/recovery;
-	// if the Runner is absent we intentionally drop this best-effort fact rather
-	// than revive the retired runtime socket path.
-	d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentMessageHandoff, payload)
 }
 
 // CredentialProxy is the machine-local freshness boundary. The first repair

@@ -1300,15 +1300,15 @@ func TestCheckResidentLivenessSupportsMultipleSubscribers(t *testing.T) {
 	}
 }
 
-func TestCanonicalAgentRuntimePoolIsActivatedForMessageCoordinator(t *testing.T) {
-	// The coordinator must establish a resident provider before accepting a
-	// canonical Delivery, otherwise an ACK could outrun local durability.
-	raw, err := os.ReadFile("daemon.go")
+func TestCanonicalAgentRuntimePoolIsActivatedByWorkspaceRunnerMessageDelivery(t *testing.T) {
+	// Resident Runtime activation belongs to the same Runner method that owns
+	// Message acceptance, acknowledgement, and handoff ordering.
+	raw, err := os.ReadFile("workspace_runner_message.go")
 	if err != nil {
-		t.Fatalf("read daemon.go: %v", err)
+		t.Fatalf("read workspace_runner_message.go: %v", err)
 	}
-	if !strings.Contains(string(raw), "ensureResidentMessageRuntime(") {
-		t.Fatal("Message delivery must ensure its resident runtime before acceptance")
+	if !strings.Contains(string(raw), "runner.ensureResidentRuntime(") {
+		t.Fatal("Workspace Runner Message delivery does not activate its resident Runtime")
 	}
 }
 

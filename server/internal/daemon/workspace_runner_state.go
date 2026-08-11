@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -34,34 +35,58 @@ func (config WorkspaceRunnerConfig) validate() (WorkspaceRunnerConfig, error) {
 // workspaceRunnerDependencies are machine-wide owners. WorkspaceRunner keeps
 // their references but never copies their state or changes their lifetime.
 type workspaceRunnerDependencies struct {
-	daemon       *Daemon
-	attachments  AgentAttachmentRegistry
-	runtimes     *canonicalAgentRuntimePool
-	credentials  *CredentialProxy
-	diagnostics  *runnerDiagnosticRegistry
-	openInbox    inboxCoordinatorFactory
-	now          func() time.Time
-	onTransition func(agentLifecycleTransition)
+	client                      *Client
+	serverBaseURL               string
+	workspacesRoot              string
+	logger                      *slog.Logger
+	attachments                 *localAgentAttachmentRegistry
+	runtimes                    *canonicalAgentRuntimePool
+	diagnostics                 *runnerDiagnosticRegistry
+	openInbox                   inboxCoordinatorFactory
+	runtimeSet                  func() AgentAttachmentRuntimeSet
+	ensureResidentRuntime       func(context.Context, string, string) error
+	requestReminderSnapshot     func(string)
+	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
+	removeDetachedReminderAgent func(string) error
+	now                         func() time.Time
+	onTransition                func(agentLifecycleTransition)
 }
 
 // WorkspaceRunner is one long-lived orchestration boundary for an
-// authenticated Computer-Workspace Binding. It owns socket lifecycle while
-// frame business handlers continue delegating to machine-wide Daemon services.
+// authenticated Computer-Workspace Binding. Callers interact through Runner
+// methods; its Inbox, process, Activity, Attachment, and socket state never
+// escape to the machine-wide Daemon lifecycle owner.
 type WorkspaceRunner struct {
 	config WorkspaceRunnerConfig
-	daemon *Daemon
+	client *Client
+	logger *slog.Logger
+
+	serverBaseURL  string
+	workspacesRoot string
 
 	processes *agentProcessManager
 	activity  *agentActivityProducer
 	inboxes   *InboxRegistry
 
-	attachments AgentAttachmentRegistry
+	attachments *localAgentAttachmentRegistry
 	runtimes    *canonicalAgentRuntimePool
-	credentials *CredentialProxy
 	diagnostics *runnerDiagnosticRegistry
+
+	runtimeSet                  func() AgentAttachmentRuntimeSet
+	ensureResidentRuntime       func(context.Context, string, string) error
+	requestReminderSnapshot     func(string)
+	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
+	removeDetachedReminderAgent func(string) error
 
 	connectionMu sync.Mutex
 	connection   *workspaceRunnerConnection
+}
+
+func (runner *WorkspaceRunner) WorkspaceID() string {
+	if runner == nil {
+		return ""
+	}
+	return runner.config.WorkspaceID
 }
 
 func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunnerDependencies) (*WorkspaceRunner, error) {
@@ -69,61 +94,67 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 	if err != nil {
 		return nil, err
 	}
-	if dependencies.daemon == nil || dependencies.attachments == nil || dependencies.runtimes == nil || dependencies.credentials == nil {
-		return nil, errors.New("Workspace Runner Daemon, Attachment registry, Runtime pool, and Credential Proxy are required")
+	if dependencies.client == nil || dependencies.attachments == nil || dependencies.runtimes == nil || dependencies.openInbox == nil || dependencies.runtimeSet == nil || dependencies.ensureResidentRuntime == nil {
+		return nil, errors.New("Workspace Runner client, Attachment registry, Runtime pool, Inbox factory, Runtime scope, and resident Runtime are required")
 	}
 	now := dependencies.now
 	if now == nil {
 		now = time.Now
 	}
-	openInbox := dependencies.openInbox
-	if openInbox == nil {
-		openInbox = dependencies.daemon.openMessageCoordinator
-	}
 	inboxes, err := newInboxRegistry(config.WorkspaceID, inboxRegistryDependencies{
 		attachments: dependencies.attachments,
 		ownsRuntime: func(runtimeID string) bool {
-			return dependencies.daemon.ownsWorkspaceRunnerRuntime(config.WorkspaceID, runtimeID)
+			for _, current := range dependencies.runtimeSet().RuntimeIDs {
+				if current == runtimeID {
+					return true
+				}
+			}
+			return false
 		},
-		open:   openInbox,
-		logger: dependencies.daemon.logger,
+		open:   dependencies.openInbox,
+		logger: dependencies.logger,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &WorkspaceRunner{
-		config: config,
-		daemon: dependencies.daemon,
+		config:         config,
+		client:         dependencies.client,
+		logger:         dependencies.logger,
+		serverBaseURL:  dependencies.serverBaseURL,
+		workspacesRoot: dependencies.workspacesRoot,
 		processes: newAgentProcessManager(
 			config.WorkspaceID,
 			dependencies.runtimes.managedProcessAdmission(),
 			now,
 			dependencies.onTransition,
 		),
-		activity:    newAgentActivityProducer(config.DaemonInstanceID, now, nil),
-		inboxes:     inboxes,
-		attachments: dependencies.attachments,
-		runtimes:    dependencies.runtimes,
-		credentials: dependencies.credentials,
-		diagnostics: dependencies.diagnostics,
+		activity:                    newAgentActivityProducer(config.DaemonInstanceID, now, nil),
+		inboxes:                     inboxes,
+		attachments:                 dependencies.attachments,
+		runtimes:                    dependencies.runtimes,
+		diagnostics:                 dependencies.diagnostics,
+		runtimeSet:                  dependencies.runtimeSet,
+		ensureResidentRuntime:       dependencies.ensureResidentRuntime,
+		requestReminderSnapshot:     dependencies.requestReminderSnapshot,
+		handleReminderInput:         dependencies.handleReminderInput,
+		removeDetachedReminderAgent: dependencies.removeDetachedReminderAgent,
 	}, nil
 }
 
 func (runner *WorkspaceRunner) Run(ctx context.Context) {
-	if runner == nil || runner.daemon == nil {
+	if runner == nil || runner.client == nil {
 		return
 	}
-	runner.daemon.attachWorkspaceRunner(runner)
 	defer func() {
-		runner.daemon.detachWorkspaceRunner(runner)
 		runner.inboxes.Close()
 		runner.processes.Close()
 		runner.activity.Close()
 	}()
 	backoff := time.Second
 	for ctx.Err() == nil {
-		if err := runner.runConnection(ctx); err != nil && ctx.Err() == nil && runner.daemon.logger != nil {
-			runner.daemon.logger.Debug("workspace runner disconnected", "workspace_id", runner.config.WorkspaceID, "error", err)
+		if err := runner.runConnection(ctx); err != nil && ctx.Err() == nil && runner.logger != nil {
+			runner.logger.Debug("workspace runner disconnected", "workspace_id", runner.config.WorkspaceID, "error", err)
 		}
 		timer := time.NewTimer(backoff)
 		select {
@@ -205,28 +236,27 @@ func (runner *WorkspaceRunner) releaseConnection(current *workspaceRunnerConnect
 }
 
 func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
-	d := runner.daemon
-	if d.client == nil {
+	if runner.client == nil {
 		return fmt.Errorf("daemon client unavailable")
 	}
 	workspaceID := runner.config.WorkspaceID
-	token := d.client.WorkspaceDaemonToken(workspaceID, time.Now())
+	token := runner.client.WorkspaceDaemonToken(workspaceID, time.Now())
 	if token == "" {
 		return fmt.Errorf("workspace daemon token unavailable")
 	}
-	wsURL, err := workspaceRunnerURL(d.cfg.ServerBaseURL, workspaceID)
+	wsURL, err := workspaceRunnerURL(runner.serverBaseURL, workspaceID)
 	if err != nil {
 		return err
 	}
 	headers := http.Header{"Authorization": []string{"Bearer " + token}}
-	if d.client.platform != "" {
-		headers.Set("X-Client-Platform", d.client.platform)
+	if runner.client.platform != "" {
+		headers.Set("X-Client-Platform", runner.client.platform)
 	}
-	if d.client.version != "" {
-		headers.Set("X-Client-Version", d.client.version)
+	if runner.client.version != "" {
+		headers.Set("X-Client-Version", runner.client.version)
 	}
-	if d.client.os != "" {
-		headers.Set("X-Client-OS", d.client.os)
+	if runner.client.os != "" {
+		headers.Set("X-Client-OS", runner.client.os)
 	}
 	dialer := taskWakeupDialer()
 	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
@@ -271,12 +301,26 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		DaemonInstanceID: d.runnerInstanceID,
 		WorkspaceID:      workspaceID,
 	}, workspaceRunnerDependencies{
-		daemon:       d,
-		attachments:  d.attachmentRegistry(),
-		runtimes:     d.canonicalRuntimes,
-		credentials:  d.CredentialProxy(),
-		diagnostics:  d.runnerDiagnostics,
-		now:          time.Now,
-		onTransition: onTransition,
+		client:         d.client,
+		serverBaseURL:  d.cfg.ServerBaseURL,
+		workspacesRoot: d.cfg.WorkspacesRoot,
+		logger:         d.logger,
+		attachments:    d.attachmentRegistry(),
+		runtimes:       d.canonicalRuntimes,
+		diagnostics:    d.runnerDiagnostics,
+		openInbox:      d.openMessageCoordinator,
+		runtimeSet: func() AgentAttachmentRuntimeSet {
+			return d.attachmentRuntimeSet(workspaceID)
+		},
+		ensureResidentRuntime: d.ensureResidentMessageRuntime,
+		requestReminderSnapshot: func(agentID string) {
+			d.requestReminderSnapshot(workspaceID, agentID)
+		},
+		handleReminderInput: func(ctx context.Context, payload protocol.ReminderOwnerInputPayload) {
+			d.handleReminderOwnerInput(ctx, payload)
+		},
+		removeDetachedReminderAgent: d.removeDetachedReminderAgent,
+		now:                         time.Now,
+		onTransition:                onTransition,
 	})
 }

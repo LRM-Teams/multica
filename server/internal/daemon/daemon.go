@@ -135,7 +135,7 @@ type Daemon struct {
 	wsConnState   string
 
 	reminderCache                    *reminderCache
-	agentAttachments                 AgentAttachmentRegistry
+	agentAttachments                 *localAgentAttachmentRegistry
 	reminderWSMu                     sync.RWMutex
 	reminderWrites                   chan<- []byte
 	reminderWSDone                   <-chan struct{}
@@ -260,114 +260,6 @@ type Daemon struct {
 	// canonicalResidentFactoryOverride is test-only; production uses
 	// defaultCanonicalRuntimeFactory for resident Message adapters.
 	canonicalResidentFactoryOverride canonicalRuntimeBackendFactory
-}
-
-func (d *Daemon) removeIdleMessageCoordinator(workspaceID, agentID, runtimeID string) {
-	runner := d.currentWorkspaceRunner(workspaceID)
-	if runner == nil || runner.inboxes == nil {
-		return
-	}
-	runner.inboxes.Remove(agentID, runtimeID)
-}
-
-func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, workspaceID string, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil {
-		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("ensure Workspace Runner %q: %w", workspaceID, err)
-	}
-	if runner.inboxes == nil {
-		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("Workspace Runner %q has no Inbox registry", workspaceID)
-	}
-	coordinator, runtimeID, ok := runner.inboxes.Resolve(delivery.AgentID)
-	if !ok {
-		if err := d.ensureIdleMessageCoordinatorForDelivery(workspaceID, delivery.AgentID); err != nil {
-			return protocol.AgentDeliverAckPayload{}, err
-		}
-		coordinator, runtimeID, ok = runner.inboxes.Resolve(delivery.AgentID)
-		if !ok {
-			return protocol.AgentDeliverAckPayload{}, fmt.Errorf("no idle Message coordinator for agent %q", delivery.AgentID)
-		}
-	}
-	accepted, err := coordinator.Accept(ctx, delivery)
-	if err != nil {
-		return protocol.AgentDeliverAckPayload{}, err
-	}
-	outcome := "accepted"
-	if !accepted {
-		outcome = "deduplicated"
-	}
-	d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
-		workspaceID, runtimeID, delivery, "coordinator_accepted", outcome, "",
-	))
-	return coordinator.Acknowledgement(delivery), nil
-}
-
-func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, workspaceID, agentID string) error {
-	runner := d.currentWorkspaceRunner(workspaceID)
-	if runner == nil || runner.inboxes == nil {
-		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
-	}
-	coordinator, _, ok := runner.inboxes.Resolve(agentID)
-	if !ok {
-		return fmt.Errorf("no idle Message coordinator for agent %q", agentID)
-	}
-	return coordinator.Flush(ctx)
-}
-
-func (d *Daemon) beginAgentMessageRecovery(workspaceID, agentID string) {
-	runner := d.currentWorkspaceRunner(workspaceID)
-	if runner == nil || runner.inboxes == nil {
-		return
-	}
-	coordinator, _, ok := runner.inboxes.Resolve(agentID)
-	if !ok {
-		return
-	}
-	request := coordinator.BeginRecovery(agentID, 100)
-	if err := runner.sendOnCurrentConnection(protocol.EventAgentRecoveryRequest, request); err != nil && d.logger != nil {
-		d.logger.Warn("agent Message recovery request failed", "error", err, "workspace_id", workspaceID, "agent_id", agentID, "reason", "runner_connection_write_failed")
-	}
-}
-
-func (d *Daemon) handleMessageRecoveryPageWithSend(ctx context.Context, workspaceID string, page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
-	if send == nil {
-		return errors.New("Message recovery sender is unavailable")
-	}
-	runner := d.currentWorkspaceRunner(workspaceID)
-	if runner == nil || runner.inboxes == nil {
-		return fmt.Errorf("Workspace Runner %q is unavailable", workspaceID)
-	}
-	coordinator, runtimeID, ok := runner.inboxes.Resolve(page.AgentID)
-	if !ok {
-		return fmt.Errorf("no Message coordinator for recovery agent %q", page.AgentID)
-	}
-	if err := coordinator.MergeRecoveryPage(page); err != nil {
-		return err
-	}
-	if page.HasMore {
-		return send(coordinator.RecoveryRequest(page.AgentID, 100))
-	}
-	// A terminal page establishes canonical freshness when it is merged above.
-	// Runtime availability is a separate concern: recovered bodies remain
-	// Pending until this best-effort handoff, a later idle delivery, message
-	// check, or a send freshness hold consumes them. Runtime work stays off the
-	// workspace runner read loop and cannot roll recovery back from ready.
-	flushCtx, cancel := context.WithTimeout(context.Background(), recoveryFlushTimeout)
-	go func() {
-		defer cancel()
-		if err := d.ensureResidentMessageRuntime(flushCtx, page.AgentID, runtimeID); err != nil {
-			if d.logger != nil {
-				d.logger.Warn("workspace Runner Message recovery runtime unavailable",
-					"error", err, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
-			}
-			return
-		}
-		if err := coordinator.Flush(flushCtx); err != nil && d.logger != nil {
-			d.logger.Warn("workspace Runner Message recovery flush deferred",
-				"error", err, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
-		}
-	}()
-	return nil
 }
 
 // New creates a new Daemon instance.

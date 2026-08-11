@@ -192,9 +192,9 @@ func TestMessageRecoveryMergesTerminalSnapshotBeforeCreatingResidentRuntime(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	registerTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, runtimeID, coordinator)
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, runtimeID, coordinator)
 	request := coordinator.BeginRecovery(agentID, 100)
-	err = d.handleMessageRecoveryPageWithSend(context.Background(), workspaceID, protocol.AgentRecoveryPage{
+	err = runner.mergeMessageRecoveryPage(protocol.AgentRecoveryPage{
 		AgentID: agentID, RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "snapshot-1",
 		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:user-1", Seq: 1, Content: "hello"}},
 	}, func(protocol.AgentRecoveryRequest) error { return nil })
@@ -235,9 +235,9 @@ func TestMessageRecoveryCompletesWithoutResidentRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	registerTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, "missing-runtime", coordinator)
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID}, "missing-runtime", coordinator)
 	request := coordinator.BeginRecovery(agentID, 100)
-	err = d.handleMessageRecoveryPageWithSend(context.Background(), workspaceID, protocol.AgentRecoveryPage{
+	err = runner.mergeMessageRecoveryPage(protocol.AgentRecoveryPage{
 		AgentID: agentID, RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "snapshot-1",
 		Messages: []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:user-1", Seq: 1, Content: "hello"}},
 	}, func(protocol.AgentRecoveryRequest) error { return nil })

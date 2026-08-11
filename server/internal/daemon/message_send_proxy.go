@@ -407,18 +407,9 @@ func (d *Daemon) observeOverlappingMessageSend(agentID, target string) func() {
 }
 
 func (d *Daemon) observeMessageSendHold(agentID, workspaceID, target string, newer int64, reason string) {
-	if d.logger != nil {
-		d.logger.Info("Credential Proxy message send held", "agent_id", agentID, "workspace_id", workspaceID, "target", target, "new_message_count", newer, "reason", reason)
-	}
 	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil || runner.activity == nil {
+	if err != nil {
 		return
 	}
-	launch, found := runner.processes.Snapshot(agentID)
-	if !found {
-		return
-	}
-	if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationFreshnessHeld, Data: AgentFreshnessHoldObservationData{RuntimeID: launch.RuntimeID, Target: target, NewMessageCount: int(newer), ReasonCode: reason}, At: time.Now().UTC()}); err != nil && d.logger != nil {
-		d.logger.Debug("send-hold Runner Activity publish deferred", "error", err, "agent_id", agentID, "target", target)
-	}
+	runner.observeMessageSendHold(agentID, target, newer, reason)
 }

@@ -9,7 +9,7 @@ import (
 )
 
 func (runner *WorkspaceRunner) attachmentReplayRequest(runtimeSet AgentAttachmentRuntimeSet) (protocol.WorkspaceRunnerAttachmentReplayRequest, error) {
-	if runner == nil || runner.daemon == nil || runner.attachments == nil {
+	if runner == nil || runner.attachments == nil {
 		return protocol.WorkspaceRunnerAttachmentReplayRequest{}, errors.New("Workspace Runner Attachment replay dependencies are unavailable")
 	}
 	state, err := runner.attachments.RecoveryState(runtimeSet)
@@ -50,15 +50,10 @@ func (runner *WorkspaceRunner) completeAttachmentReplay(runtimeSet AgentAttachme
 }
 
 func (runner *WorkspaceRunner) attachmentRuntimeSet() AgentAttachmentRuntimeSet {
-	if runner == nil || runner.daemon == nil {
+	if runner == nil || runner.runtimeSet == nil {
 		return AgentAttachmentRuntimeSet{}
 	}
-	for _, runtimeSet := range runner.daemon.attachmentRuntimeSets() {
-		if runtimeSet.WorkspaceID == runner.config.WorkspaceID {
-			return runtimeSet
-		}
-	}
-	return AgentAttachmentRuntimeSet{WorkspaceID: runner.config.WorkspaceID}
+	return runner.runtimeSet()
 }
 
 // startManagedAgent is deliberately stricter than process manager admission:
@@ -66,14 +61,14 @@ func (runner *WorkspaceRunner) attachmentRuntimeSet() AgentAttachmentRuntimeSet 
 // its exact Attachment. A stale or cross-Runtime start must not revive an Agent
 // after it was detached or moved.
 func (runner *WorkspaceRunner) startManagedAgent(payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, protocol.AgentStatusPayload, protocol.AgentSessionPayload, error) {
-	if runner == nil || runner.daemon == nil || runner.attachments == nil || runner.processes == nil || runner.activity == nil {
+	if runner == nil || runner.attachments == nil || runner.processes == nil || runner.activity == nil {
 		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, errors.New("Workspace Runner launch dependencies are unavailable")
 	}
 	if err := payload.Validate(); err != nil {
 		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("validate managed start: %w", err)
 	}
 	workspaceID := runner.config.WorkspaceID
-	if !runner.daemon.ownsWorkspaceRunnerRuntime(workspaceID, payload.RuntimeID) {
+	if !runner.hasRuntime(payload.RuntimeID) {
 		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, errors.New("managed start Runtime is outside Workspace Runner scope")
 	}
 	attachment, attached := runner.attachments.Resolve(workspaceID, payload.AgentID)
@@ -97,14 +92,14 @@ func (runner *WorkspaceRunner) startManagedAgent(payload protocol.WorkspaceRunne
 // provider launch: it only prepares the persistent AgentRoot and Inbox owned
 // by this Workspace Runner.
 func (runner *WorkspaceRunner) applyAttachmentAttach(payload protocol.WorkspaceRunnerAgentAttachPayload) (protocol.WorkspaceRunnerAgentAttachedPayload, error) {
-	if runner == nil || runner.daemon == nil || runner.attachments == nil || runner.inboxes == nil {
+	if runner == nil || runner.attachments == nil || runner.inboxes == nil {
 		return protocol.WorkspaceRunnerAgentAttachedPayload{}, errors.New("Workspace Runner Attachment dependencies are unavailable")
 	}
 	if err := payload.Validate(); err != nil {
 		return protocol.WorkspaceRunnerAgentAttachedPayload{}, fmt.Errorf("validate Attachment attach: %w", err)
 	}
 	workspaceID := runner.config.WorkspaceID
-	if !runner.daemon.ownsWorkspaceRunnerRuntime(workspaceID, payload.RuntimeID) {
+	if !runner.hasRuntime(payload.RuntimeID) {
 		return protocol.WorkspaceRunnerAgentAttachedPayload{}, errors.New("Attachment Runtime is outside Workspace Runner scope")
 	}
 	if _, err := runner.attachments.Apply(workspaceID, AgentAttachmentEvent{
@@ -120,7 +115,7 @@ func (runner *WorkspaceRunner) applyAttachmentAttach(payload protocol.WorkspaceR
 	if !attached || attachment.RuntimeID != payload.RuntimeID || int64(attachment.AttachmentGeneration) != payload.AttachmentGeneration {
 		return protocol.WorkspaceRunnerAgentAttachedPayload{}, errors.New("Attachment attach was superseded by a newer generation")
 	}
-	agentRoot := agentworkspace.Root(runner.daemon.cfg.WorkspacesRoot, workspaceID, payload.AgentID)
+	agentRoot := agentworkspace.Root(runner.workspacesRoot, workspaceID, payload.AgentID)
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		return protocol.WorkspaceRunnerAgentAttachedPayload{}, fmt.Errorf("create Attachment AgentRoot: %w", err)
 	}
@@ -135,14 +130,14 @@ func (runner *WorkspaceRunner) applyAttachmentAttach(payload protocol.WorkspaceR
 // only stops a launch, resident Runtime, or Inbox when the pre-commit durable
 // Attachment exactly matches the command being detached.
 func (runner *WorkspaceRunner) applyAttachmentDetach(payload protocol.WorkspaceRunnerAgentDetachPayload) (protocol.WorkspaceRunnerAgentDetachedPayload, error) {
-	if runner == nil || runner.daemon == nil || runner.attachments == nil || runner.inboxes == nil || runner.processes == nil {
+	if runner == nil || runner.attachments == nil || runner.inboxes == nil || runner.processes == nil {
 		return protocol.WorkspaceRunnerAgentDetachedPayload{}, errors.New("Workspace Runner Attachment dependencies are unavailable")
 	}
 	if err := payload.Validate(); err != nil {
 		return protocol.WorkspaceRunnerAgentDetachedPayload{}, fmt.Errorf("validate Attachment detach: %w", err)
 	}
 	workspaceID := runner.config.WorkspaceID
-	if !runner.daemon.ownsWorkspaceRunnerRuntime(workspaceID, payload.RuntimeID) {
+	if !runner.hasRuntime(payload.RuntimeID) {
 		return protocol.WorkspaceRunnerAgentDetachedPayload{}, errors.New("Attachment Runtime is outside Workspace Runner scope")
 	}
 	if _, err := runner.attachments.Apply(workspaceID, AgentAttachmentEvent{

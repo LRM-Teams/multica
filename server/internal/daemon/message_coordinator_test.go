@@ -1567,8 +1567,8 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 	daemon.mu.Lock()
 	daemon.runtimeIndex = map[string]Runtime{"runtime-1": {ID: "runtime-1", WorkspaceID: "workspace-1"}}
 	daemon.mu.Unlock()
-	registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
-	ack, err := daemon.acceptIdleAgentDelivery(context.Background(), "workspace-1", delivery)
+	runner := registerTestInbox(t, daemon, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	ack, err := runner.acceptMessageDelivery(context.Background(), delivery)
 	if err != nil {
 		t.Fatalf("acceptIdleAgentDelivery: %v", err)
 	}
@@ -1581,7 +1581,7 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 	if got := coordinator.Boundaries()["channel-1"]; got != 0 {
 		t.Fatalf("boundary = %d, want 0 before handoff", got)
 	}
-	if err := daemon.flushIdleAgentDelivery(context.Background(), "workspace-1", "agent-1"); err != nil {
+	if err := runner.flushMessageDelivery(context.Background(), "agent-1"); err != nil {
 		t.Fatalf("flushIdleAgentDelivery: %v", err)
 	}
 	if handoffs != 1 {
@@ -1621,7 +1621,7 @@ func TestCoordinatorReplacementInvalidatesInFlightHandoff(t *testing.T) {
 		return NewMessageCoordinator(key, newRoot, func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	}
 	flushDone := make(chan error, 1)
-	go func() { flushDone <- daemon.flushIdleAgentDelivery(context.Background(), "workspace-test", "agent-1") }()
+	go func() { flushDone <- runner.flushMessageDelivery(context.Background(), "agent-1") }()
 	<-handoffStarted
 
 	replacementDone := make(chan error, 1)

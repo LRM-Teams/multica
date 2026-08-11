@@ -75,6 +75,16 @@ func (d *Daemon) recordRunnerDiagnostic(workspaceID string, event diagnosticlog.
 	}
 }
 
+func (runner *WorkspaceRunner) recordDiagnostic(event diagnosticlog.Event) {
+	if runner == nil || runner.diagnostics == nil {
+		return
+	}
+	if err := runner.diagnostics.record(runner.config.WorkspaceID, event); err != nil && runner.logger != nil {
+		// Diagnostic persistence never changes product control flow.
+		runner.logger.Warn("Workspace Runner diagnostic record dropped", "reason", "sink_unavailable")
+	}
+}
+
 func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlog.Event) error {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if r == nil || r.store == nil {
@@ -107,6 +117,14 @@ func (r *runnerDiagnosticRegistry) record(workspaceID string, event diagnosticlo
 }
 
 func (d *Daemon) canonicalMessageDiagnosticEvent(
+	workspaceID, runtimeID string,
+	delivery protocol.AgentDeliverPayload,
+	phase, outcome, reasonCode string,
+) diagnosticlog.Event {
+	return canonicalMessageDiagnosticEvent(workspaceID, runtimeID, delivery, phase, outcome, reasonCode)
+}
+
+func canonicalMessageDiagnosticEvent(
 	workspaceID, runtimeID string,
 	delivery protocol.AgentDeliverPayload,
 	phase, outcome, reasonCode string,
@@ -159,8 +177,8 @@ func (d *Daemon) recordAgentMessageResponse(
 		return
 	}
 	runtimeID := ""
-	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil && runner.inboxes != nil {
-		_, runtimeID, _ = runner.inboxes.Resolve(agentID)
+	if runner := d.currentWorkspaceRunner(workspaceID); runner != nil {
+		runtimeID = runner.messageRuntimeID(agentID)
 	}
 	messageID, channelID := responseMessageIdentity(response)
 	if channelID == "" {

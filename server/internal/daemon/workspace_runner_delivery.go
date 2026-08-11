@@ -75,14 +75,14 @@ func (d *workspaceRunnerDeliveryDispatcher) drain(agentID string) {
 }
 
 func (d *Daemon) attachWorkspaceRunner(runner *WorkspaceRunner) {
-	if d == nil || runner == nil || runner.config.WorkspaceID == "" {
+	if d == nil || runner == nil || runner.WorkspaceID() == "" {
 		return
 	}
 	d.workspaceRunnerMu.Lock()
 	if d.workspaceRunners == nil {
 		d.workspaceRunners = make(map[string]*WorkspaceRunner)
 	}
-	d.workspaceRunners[runner.config.WorkspaceID] = runner
+	d.workspaceRunners[runner.WorkspaceID()] = runner
 	d.workspaceRunnerMu.Unlock()
 }
 
@@ -91,8 +91,8 @@ func (d *Daemon) detachWorkspaceRunner(runner *WorkspaceRunner) {
 		return
 	}
 	d.workspaceRunnerMu.Lock()
-	if d.workspaceRunners[runner.config.WorkspaceID] == runner {
-		delete(d.workspaceRunners, runner.config.WorkspaceID)
+	if d.workspaceRunners[runner.WorkspaceID()] == runner {
+		delete(d.workspaceRunners, runner.WorkspaceID())
 	}
 	d.workspaceRunnerMu.Unlock()
 }
@@ -167,10 +167,7 @@ func (d *Daemon) resolveInboxByAgent(agentID string) (*WorkspaceRunner, *Message
 	var matchedCoordinator *MessageCoordinator
 	var matchedRuntimeID string
 	for _, runner := range d.currentWorkspaceRunners() {
-		if runner.inboxes == nil {
-			continue
-		}
-		coordinator, runtimeID, ok := runner.inboxes.Resolve(agentID)
+		coordinator, runtimeID, ok := runner.messageCoordinator(agentID)
 		if !ok {
 			continue
 		}
@@ -201,5 +198,5 @@ func (d *Daemon) sendWorkspaceRunnerAgentFrame(agentID, eventType string, payloa
 	if err != nil {
 		return false
 	}
-	return runner.sendOnCurrentConnection(eventType, payload) == nil
+	return runner.sendAgentFrame(eventType, payload)
 }

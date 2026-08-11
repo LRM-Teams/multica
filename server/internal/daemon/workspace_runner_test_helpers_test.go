@@ -53,18 +53,8 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 	if send == nil {
 		send = func(string, any) error { return nil }
 	}
-	attachments := d.attachmentRegistry()
-	if attachments == nil {
-		attachments = newLocalAgentAttachmentRegistry("", nil)
-	}
-	inboxes, err := newInboxRegistry(workspaceID, inboxRegistryDependencies{
-		attachments: attachments,
-		ownsRuntime: func(runtimeID string) bool {
-			return d.ownsWorkspaceRunnerRuntime(workspaceID, runtimeID)
-		},
-		open:   d.openMessageCoordinator,
-		logger: d.logger,
-	})
+	prepareHeadlessWorkspaceRunnerTestDaemon(d, "")
+	runner, err := d.newWorkspaceRunner(workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,15 +65,6 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 		cancel:      cancel,
 		write:       send,
 		close:       func() {},
-	}
-	runner := &WorkspaceRunner{
-		config:      WorkspaceRunnerConfig{WorkspaceID: workspaceID},
-		daemon:      d,
-		processes:   newAgentProcessManager(workspaceID, d.canonicalRuntimes.managedProcessAdmission(), nil, nil),
-		activity:    newAgentActivityProducer(d.runnerInstanceID, nil, nil),
-		inboxes:     inboxes,
-		attachments: attachments,
-		runtimes:    d.canonicalRuntimes,
 	}
 	runner.replaceConnection(connection)
 	d.attachWorkspaceRunner(runner)
@@ -156,6 +137,15 @@ func prepareHeadlessWorkspaceRunnerTestDaemon(d *Daemon, workspacesRoot string) 
 	}
 	if d.canonicalRuntimes == nil {
 		d.canonicalRuntimes = newCanonicalAgentRuntimePool()
+	}
+	if d.client == nil {
+		d.client = NewClient("")
+	}
+	if d.runtimeIndex == nil {
+		d.runtimeIndex = make(map[string]Runtime)
+	}
+	if d.workspaces == nil {
+		d.workspaces = make(map[string]*workspaceState)
 	}
 	if d.agentAttachments == nil {
 		d.agentAttachments = newLocalAgentAttachmentRegistry(workspacesRoot, d.logger)

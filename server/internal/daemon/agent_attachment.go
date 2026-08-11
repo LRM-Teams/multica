@@ -52,7 +52,7 @@ func (kind AgentAttachmentEventKind) Validate() error {
 }
 
 // AgentAttachmentEvent deliberately omits WorkspaceID. The authenticated
-// Workspace scope is a separate AgentAttachmentRegistry method argument and
+// Workspace scope is a separate registry method argument and
 // cannot be supplied or changed by the event payload.
 type AgentAttachmentEvent struct {
 	Kind                 AgentAttachmentEventKind
@@ -158,17 +158,4 @@ func (runtimeSet AgentAttachmentRuntimeSet) runtimeIDs() map[string]struct{} {
 type AgentAttachmentRecoveryState struct {
 	WorkspaceID string
 	Cursors     []AgentAttachmentRecoveryCursor
-}
-
-// AgentAttachmentRegistry is the Workspace-scoped seam for durable Attachment
-// state, generation fencing, replay cursors, and tombstones.
-type AgentAttachmentRegistry interface {
-	Apply(workspaceID string, event AgentAttachmentEvent) (AgentAttachmentChange, error)
-	Resolve(workspaceID, agentID string) (AgentAttachment, bool)
-	List(workspaceID string) []AgentAttachment
-	WorkspaceIDs() []string
-	DetachedAgentIDs() []string
-	RecoveryState(runtimeSet AgentAttachmentRuntimeSet) (AgentAttachmentRecoveryState, error)
-	AdvanceRecovery(runtimeSet AgentAttachmentRuntimeSet, cursors []AgentAttachmentRecoveryCursor) error
-	Reconcile(runtimeSet AgentAttachmentRuntimeSet) ([]AgentAttachmentChange, error)
 }

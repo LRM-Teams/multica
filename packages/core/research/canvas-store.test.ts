@@ -3,6 +3,7 @@ import {
   countHiddenByFilter,
   emptyCanvasFilter,
   isBlankFilter,
+  matchesResearchCanvasFilter,
   useResearchCanvasStore,
 } from "./canvas-store";
 
@@ -78,5 +79,20 @@ describe("countHiddenByFilter (LRM-1497 hidden-count helper)", () => {
     const snapshot = JSON.stringify(NODES);
     countHiddenByFilter(NODES, { cluster: "alpha", status: "completed" });
     expect(JSON.stringify(NODES)).toBe(snapshot);
+  });
+
+  it("matches typed graph level as tier filter", () => {
+    expect(
+      matchesResearchCanvasFilter(
+        { id: "x", level: "l", status: "completed" },
+        { tier: "l" },
+      ),
+    ).toBe(true);
+    expect(
+      matchesResearchCanvasFilter(
+        { id: "x", level: "m", status: "completed" },
+        { tier: "l" },
+      ),
+    ).toBe(false);
   });
 });

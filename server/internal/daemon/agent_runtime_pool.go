@@ -222,9 +222,11 @@ type canonicalAgentRuntimeAcquireRequest struct {
 type ResidentRuntimeRecoveredSubscriber func(agentID, runtimeID string)
 
 type canonicalAgentRuntimePool struct {
-	mu                   sync.Mutex
-	slots                map[string]*canonicalAgentRuntimeSlot
-	managedProcessGrants map[string]agentProcessCapacityGrant
+	mu                      sync.Mutex
+	slots                   map[string]*canonicalAgentRuntimeSlot
+	managedProcessGrants    map[string]agentProcessCapacityGrant
+	pendingManagedProcesses map[string]pendingManagedProcess
+	pendingManagedOrder     []string
 
 	// maxAgentProcesses bounds distinct agents with a live resident backend
 	// (backend != nil). 0 = unlimited. See #35 / resolveMaxAgentProcesses.
@@ -267,9 +269,10 @@ type canonicalAgentRuntimeSlot struct {
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
 	p := &canonicalAgentRuntimePool{
-		slots:                make(map[string]*canonicalAgentRuntimeSlot),
-		managedProcessGrants: make(map[string]agentProcessCapacityGrant),
-		pendingAgents:        make(map[string]struct{}),
+		slots:                   make(map[string]*canonicalAgentRuntimeSlot),
+		managedProcessGrants:    make(map[string]agentProcessCapacityGrant),
+		pendingManagedProcesses: make(map[string]pendingManagedProcess),
+		pendingAgents:           make(map[string]struct{}),
 	}
 	p.capacityCond = sync.NewCond(&p.mu)
 	return p
@@ -282,12 +285,14 @@ func (p *canonicalAgentRuntimePool) setMaxAgentProcesses(n int) {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if n < 0 {
 		n = 0
 	}
 	p.maxAgentProcesses = n
 	p.capacityCond.Broadcast()
+	wakeups := p.promoteManagedProcessesLocked()
+	p.mu.Unlock()
+	invokeManagedProcessGrantWakeups(wakeups)
 }
 
 // LiveAgentProcessCount returns the last published distinct-agent live count.

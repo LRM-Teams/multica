@@ -118,12 +118,12 @@ func (m *agentProcessManager) Close() {
 		return
 	}
 	m.mu.Lock()
-	m.agents = nil
-	m.dispatches = nil
-	m.queued = nil
 	for _, managed := range m.agents {
 		m.releaseLocked(managed)
 	}
+	m.agents = nil
+	m.dispatches = nil
+	m.queued = nil
 	m.mu.Unlock()
 }
 
@@ -417,19 +417,48 @@ func (m *agentProcessManager) acquireLocked(managed *managedAgentProcess) bool {
 	if m.admission == nil {
 		return false
 	}
-	grant, admitted := m.admission.Acquire(agentProcessCapacityRequest{WorkspaceID: m.workspaceID, AgentID: managed.agentID, RuntimeID: managed.runtimeID, LaunchID: managed.launchID})
+	grant, admitted := m.admission.Acquire(agentProcessCapacityRequest{
+		WorkspaceID: m.workspaceID,
+		AgentID:     managed.agentID,
+		RuntimeID:   managed.runtimeID,
+		LaunchID:    managed.launchID,
+		Waiter: func(grant agentProcessCapacityGrant) {
+			m.onCapacityGranted(grant)
+		},
+	})
+	managed.capacityGrant = grant
 	if !admitted {
 		return false
 	}
-	managed.capacityGrant = grant
 	return true
 }
 
 func (m *agentProcessManager) releaseLocked(managed *managedAgentProcess) {
 	if m.admission != nil && managed.capacityGrant.LaunchID != "" {
-		m.admission.Release(managed.capacityGrant)
+		m.admission.Cancel(managed.capacityGrant)
 	}
 	managed.capacityGrant = agentProcessCapacityGrant{}
+}
+
+// onCapacityGranted is called by the pool after it has atomically recorded a
+// global grant. The local launch and its opaque queued token must still match;
+// otherwise a stop, detach, or replacement won the race and the callback is a
+// harmless no-op.
+func (m *agentProcessManager) onCapacityGranted(grant agentProcessCapacityGrant) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed := m.agents[grant.AgentID]
+	if managed == nil || !managed.managed || managed.launchID != grant.LaunchID ||
+		managed.queueState != protocol.AgentStartQueueQueued || managed.capacityGrant != grant ||
+		m.admission == nil || !m.admission.Active(grant) {
+		return
+	}
+	m.queued = removeQueuedAgent(m.queued, managed.agentID)
+	m.closeLocked(managed, "process_residency", "advanced")
+	m.beginProcessLocked(managed)
 }
 
 func (m *agentProcessManager) currentLocked(callback agentProcessCallback, requireProcess bool) (*managedAgentProcess, error) {

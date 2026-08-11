@@ -103,6 +103,95 @@ func TestAgentProcessManagerRejectsRevokedCapacityGrant(t *testing.T) {
 	}
 }
 
+func TestAgentProcessManagerSharesCanonicalCapacityAcrossRunners(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	pool.setMaxAgentProcesses(1)
+	first := newAgentProcessManager("workspace-a", pool.managedProcessAdmission(), time.Now, nil)
+	second := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
+
+	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", StartDispatchID: "dispatch-a"})
+	if err != nil || firstAck.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("Start(first) = %+v, %v; want starting", firstAck, err)
+	}
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	if err != nil || secondAck.QueueState != protocol.AgentStartQueueQueued {
+		t.Fatalf("Start(second) = %+v, %v; want globally queued", secondAck, err)
+	}
+
+	if err := first.Stop(agentProcessCallback{AgentID: "agent-a", LaunchID: firstAck.LaunchID}); err != nil {
+		t.Fatalf("Stop(first): %v", err)
+	}
+	waitForProcessQueueState(t, second, "agent-b", protocol.AgentStartQueueStarting)
+	pool.mu.Lock()
+	grants := len(pool.managedProcessGrants)
+	pending := len(pool.pendingManagedProcesses)
+	pool.mu.Unlock()
+	if grants != 1 || pending != 0 {
+		t.Fatalf("global capacity after release: grants=%d pending=%d, want 1/0", grants, pending)
+	}
+}
+
+func TestAgentProcessManagerCancelsGloballyQueuedLaunch(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	pool.setMaxAgentProcesses(1)
+	first := newAgentProcessManager("workspace-a", pool.managedProcessAdmission(), time.Now, nil)
+	second := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
+	third := newAgentProcessManager("workspace-c", pool.managedProcessAdmission(), time.Now, nil)
+
+	firstAck, _ := first.Start(agentProcessStartRequest{AgentID: "agent-a", RuntimeID: "runtime-a", StartDispatchID: "dispatch-a"})
+	secondAck, err := second.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	if err != nil || secondAck.QueueState != protocol.AgentStartQueueQueued {
+		t.Fatalf("Start(second) = %+v, %v; want queued", secondAck, err)
+	}
+	if err := second.Stop(agentProcessCallback{AgentID: "agent-b", LaunchID: secondAck.LaunchID}); err != nil {
+		t.Fatalf("Stop(queued): %v", err)
+	}
+	thirdAck, err := third.Start(agentProcessStartRequest{AgentID: "agent-c", RuntimeID: "runtime-c", StartDispatchID: "dispatch-c"})
+	if err != nil || thirdAck.QueueState != protocol.AgentStartQueueQueued {
+		t.Fatalf("Start(third) = %+v, %v; want queued", thirdAck, err)
+	}
+	if err := first.Stop(agentProcessCallback{AgentID: "agent-a", LaunchID: firstAck.LaunchID}); err != nil {
+		t.Fatalf("Stop(first): %v", err)
+	}
+	waitForProcessQueueState(t, third, "agent-c", protocol.AgentStartQueueStarting)
+	if _, found := second.Snapshot("agent-b"); found {
+		t.Fatal("cancelled queued launch was retained")
+	}
+}
+
+func TestManagedCapacityCountsResidentProcessAndEvictsOnlyIdle(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	pool.setMaxAgentProcesses(1)
+	probe := &canonicalRuntimeFactoryProbe{}
+	lease := acquireResident(t, pool, probe, "agent-a", "runtime-a", nil)
+	lease.release(true) // resident but idle: safe capacity eviction candidate.
+
+	manager := newAgentProcessManager("workspace-b", pool.managedProcessAdmission(), time.Now, nil)
+	ack, err := manager.Start(agentProcessStartRequest{AgentID: "agent-b", RuntimeID: "runtime-b", StartDispatchID: "dispatch-b"})
+	if err != nil || ack.QueueState != protocol.AgentStartQueueStarting {
+		t.Fatalf("managed Start = %+v, %v; want starting after idle eviction", ack, err)
+	}
+	if pool.agentHasLiveForTest("agent-a") {
+		t.Fatal("idle resident survived a managed-capacity admission")
+	}
+	if got := pool.EvictForCapTotal(); got != 1 {
+		t.Fatalf("idle evictions = %d, want 1", got)
+	}
+}
+
+func waitForProcessQueueState(t *testing.T, manager *agentProcessManager, agentID, want string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if snapshot, ok := manager.Snapshot(agentID); ok && snapshot.QueueState == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	snapshot, ok := manager.Snapshot(agentID)
+	t.Fatalf("queue state for %s = %+v, exists=%v; want %q", agentID, snapshot, ok, want)
+}
+
 func TestAgentProcessManagerReassignsToNewRuntimeWithNewLaunch(t *testing.T) {
 	manager := newAgentProcessManager("workspace-1", newCanonicalAgentRuntimePool().managedProcessAdmission(), time.Now, nil)
 	manager.newID = sequentialIDs()

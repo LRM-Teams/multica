@@ -50,9 +50,7 @@ func (p *canonicalAgentRuntimePool) reserveAgentProcessCapacity(ctx context.Cont
 			return nil
 		}
 
-		live := p.countLiveAgentsLocked()
-		pending := len(p.pendingAgents)
-		if live+pending < max {
+		if p.countCapAgentsLocked() < max {
 			p.pendingAgents[agentID] = struct{}{}
 			return nil
 		}
@@ -111,9 +109,11 @@ func (p *canonicalAgentRuntimePool) signalAgentProcessCapacityFreed() {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.publishLiveAgentProcessCountLocked()
 	p.capacityCond.Broadcast()
+	wakeups := p.promoteManagedProcessesLocked()
+	p.mu.Unlock()
+	invokeManagedProcessGrantWakeups(wakeups)
 }
 
 func (p *canonicalAgentRuntimePool) publishLiveAgentProcessCount() {
@@ -129,13 +129,48 @@ func (p *canonicalAgentRuntimePool) publishLiveAgentProcessCountLocked() {
 	p.liveAgentProcesses.Store(int64(p.countLiveAgentsLocked()))
 }
 
-// agentCountsTowardCapLocked is true when agent already has a live backend or
-// a pending create reservation. Caller must hold p.mu.
+// agentCountsTowardCapLocked is true when agent already has a live backend, a
+// pending create, or a managed launch grant. Caller must hold p.mu.
 func (p *canonicalAgentRuntimePool) agentCountsTowardCapLocked(agentID string) bool {
 	if _, ok := p.pendingAgents[agentID]; ok {
 		return true
 	}
-	return p.agentHasLiveBackendLocked(agentID)
+	if p.agentHasLiveBackendLocked(agentID) {
+		return true
+	}
+	for _, grant := range p.managedProcessGrants {
+		if grant.AgentID == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+// countCapAgentsLocked is the physical-cap accounting set: an Agent is
+// counted once even when its managed launch and resident backend coexist.
+// Caller must hold p.mu.
+func (p *canonicalAgentRuntimePool) countCapAgentsLocked() int {
+	agents := make(map[string]struct{})
+	for agentID := range p.pendingAgents {
+		agents[agentID] = struct{}{}
+	}
+	for _, grant := range p.managedProcessGrants {
+		if grant.AgentID != "" {
+			agents[grant.AgentID] = struct{}{}
+		}
+	}
+	for key, slot := range p.slots {
+		slot.mu.Lock()
+		live := slot.backend != nil
+		slot.mu.Unlock()
+		if live {
+			agentID, _ := splitCanonicalSlotKey(key)
+			if agentID != "" {
+				agents[agentID] = struct{}{}
+			}
+		}
+	}
+	return len(agents)
 }
 
 // agentHasLiveBackendLocked reports whether any slot for agentID holds a

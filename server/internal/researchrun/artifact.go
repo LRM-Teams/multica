@@ -139,3 +139,15 @@ func ReciprocalArtifactPassportGuardTriggerNames() []string {
 		"research_graph_edge_artifact_passport_guard",
 	}
 }
+
+// PolicyCouplingGuardTriggerNames lists migration 321 verification/grant policy guards.
+func PolicyCouplingGuardTriggerNames() []string {
+	return []string{
+		"research_source_snapshot_verification_to_policy_guard",
+		"research_observation_verification_to_policy_guard",
+		"research_claim_evidence_verification_to_policy_guard",
+		"research_artifact_policy_mutation_to_verification_guard",
+		"research_artifact_policy_grant_to_mutation_guard",
+		"research_artifact_policy_mutation_to_grant_guard",
+	}
+}

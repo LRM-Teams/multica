@@ -43,7 +43,7 @@ import { Label } from "@multica/ui/components/ui/label";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { CharCounter } from "./char-counter";
-import { randomPickedAvatarSelection } from "./avatar-preset";
+import { randomAgentAvatarPresetUrl } from "./avatar-preset";
 import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { useT } from "../../i18n";
 
@@ -125,27 +125,51 @@ export function CreateAgentDialog({
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
   // #599: never submit draft.avatar_url as a raw client URL. Preview it when
   // present; create with draft_id lets the server apply it as assigned. User
-  // uploads go through avatar_selection; clearing a draft preview sends a
-  // random picked preset so create does not re-apply the draft face.
-  // Proposals have no avatar payload — server assigns a preset.
+  // choices go through avatar_selection (picked preset or uploaded file).
+  // Manual/proposal create seeds a random system face so the 15 built-in
+  // presets show immediately; clear re-seeds another random face (and
+  // overrides draft_id face application when the preview came from a draft).
+  const seededAvatarRef = useRef<{
+    preview: string | null;
+    selection: AgentAvatarSelection | null;
+  } | null>(null);
+  if (seededAvatarRef.current === null) {
+    const draftUrl = draft?.avatar_url?.trim() || null;
+    const templateUrl = template?.avatar_url?.trim() || null;
+    if (draftUrl) {
+      seededAvatarRef.current = { preview: draftUrl, selection: null };
+    } else if (templateUrl) {
+      // Duplicate keeps the source face as preview only; server assigns a
+      // fresh durable face unless the user explicitly re-picks / uploads.
+      seededAvatarRef.current = { preview: templateUrl, selection: null };
+    } else {
+      const presetUrl = randomAgentAvatarPresetUrl();
+      seededAvatarRef.current = {
+        preview: presetUrl,
+        selection: { kind: "picked", preset_url: presetUrl },
+      };
+    }
+  }
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(
-    () => (draft?.avatar_url?.trim() ? draft.avatar_url : null),
+    () => seededAvatarRef.current!.preview,
   );
   // Never rendered — only read at submit time — so a ref avoids a redraw
   // on every avatar change.
-  const avatarSelectionRef = useRef<AgentAvatarSelection | null>(null);
-  const draftAvatarUrl = draft?.avatar_url?.trim() || null;
+  const avatarSelectionRef = useRef<AgentAvatarSelection | null>(
+    seededAvatarRef.current!.selection,
+  );
   const handleAvatarChange = (selection: AvatarPickerSelection | null) => {
     if (selection) {
       setAvatarPreviewUrl(selection.previewUrl);
-      avatarSelectionRef.current = { kind: "uploaded", attachment_id: selection.attachmentId };
+      avatarSelectionRef.current =
+        selection.kind === "uploaded"
+          ? { kind: "uploaded", attachment_id: selection.attachmentId }
+          : { kind: "picked", preset_url: selection.presetUrl };
       return;
     }
-    setAvatarPreviewUrl(null);
-    // Clearing a draft-seeded face must override draft_id avatar application.
-    avatarSelectionRef.current = draftAvatarUrl
-      ? randomPickedAvatarSelection()
-      : null;
+    const presetUrl = randomAgentAvatarPresetUrl();
+    setAvatarPreviewUrl(presetUrl);
+    avatarSelectionRef.current = { kind: "picked", preset_url: presetUrl };
   };
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
     () => new Set(template?.skills.map((s) => s.id) ?? []),

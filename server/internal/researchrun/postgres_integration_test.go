@@ -1119,7 +1119,10 @@ func TestPostgresStoreBlocksTasksWhoseDependencyIsTerminal(t *testing.T) {
 		  ($1::uuid, $3::uuid, $4::uuid, 'parent', 'discover', 'parent', 'lead', 'research_evidence_v1', 'ready', $5, $6, 2, 300, now()),
 		  ($2::uuid, $3::uuid, $4::uuid, 'child', 'verify', 'child', 'lead', 'research_evidence_v1', 'pending', $5, $6, 1, 300, NULL)
 	`, []any{parentID, childID, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion}, []string{parentID, childID})
-	if _, err = pool.Exec(ctx, `INSERT INTO research_task_dependency (task_id, depends_on_task_id) VALUES ($1::uuid, $2::uuid)`, childID, parentID); err != nil {
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid)
+	`, fixture.workspaceID, fixture.sessionID, childID, parentID); err != nil {
 		t.Fatal(err)
 	}
 	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, parentID, fixture.agentID))

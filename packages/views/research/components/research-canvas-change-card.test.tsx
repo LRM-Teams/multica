@@ -32,12 +32,14 @@ function processMessage(op: string): ResearchMessage {
   return {
     id: "m1",
     session_id: "s1",
+    sender_type: "system",
+    sender_id: null,
+    target_agent_id: null,
     card_kind: "process",
     body: "detail body",
     meta: { op, title: "Merged conclusion" },
     created_at: "",
-    updated_at: "",
-  } as ResearchMessage;
+  };
 }
 
 describe("ResearchCanvasChangeCard (Slice F)", () => {

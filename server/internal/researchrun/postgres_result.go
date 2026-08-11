@@ -609,9 +609,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 				return 0, fmt.Errorf("%w: task %q references unknown dependency %q", ErrInvalidResult, proposal.ClientKey, dependencyKey)
 			}
 			if _, err = tx.Exec(ctx, `
-				INSERT INTO research_task_dependency (task_id, depends_on_task_id)
-				VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING
-			`, taskIDs[proposal.ClientKey], dependencyID); err != nil {
+				INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
+				VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid) ON CONFLICT DO NOTHING
+			`, state.workspaceID, state.run.SessionID, taskIDs[proposal.ClientKey], dependencyID); err != nil {
 				return 0, err
 			}
 		}
@@ -619,9 +619,9 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 	if usesEvidenceFitnessContract(state.run.OrchestratorVersion) {
 		for _, proposal := range result.ProposedTasks {
 			if _, err = tx.Exec(ctx, `
-				INSERT INTO research_task_dependency (task_id, depends_on_task_id)
-				VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING
-			`, taskIDs[proposal.ClientKey], state.task.ID); err != nil {
+				INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
+				VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid) ON CONFLICT DO NOTHING
+			`, state.workspaceID, state.run.SessionID, taskIDs[proposal.ClientKey], state.task.ID); err != nil {
 				return 0, err
 			}
 		}
@@ -679,9 +679,9 @@ func attachV4ProposedWorkToDelivery(ctx context.Context, tx pgx.Tx, state accept
 	for _, deliveryTaskID := range deliveryTaskIDs {
 		for _, blockingTaskID := range blockingTaskIDs {
 			if _, err = tx.Exec(ctx, `
-				INSERT INTO research_task_dependency (task_id, depends_on_task_id)
-				VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING
-			`, deliveryTaskID, blockingTaskID); err != nil {
+				INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
+				VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid) ON CONFLICT DO NOTHING
+			`, state.workspaceID, state.run.SessionID, deliveryTaskID, blockingTaskID); err != nil {
 				return err
 			}
 		}

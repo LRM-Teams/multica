@@ -1,25 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { emptyCanvasFilter, useResearchCanvasStore } from "@multica/core/research";
+import type { ResearchCanvasFilter } from "@multica/core/research";
 import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
 const { storeState, setFilter, clearFilter } = vi.hoisted(() => {
-  const storeState = {
-    filter: {
-      status: null as string | null,
-      tier: null as string | null,
-      round: null as string | null,
-      cluster: null as string | null,
-      query: "",
-    },
+  // Inline empty filter — vi.hoisted runs before module imports initialize.
+  const emptyFilter = (): ResearchCanvasFilter => ({
+    status: null,
+    tier: null,
+    round: null,
+    cluster: null,
+    query: "",
+  });
+  const storeState: { filter: ResearchCanvasFilter } = {
+    filter: emptyFilter(),
   };
-  const setFilter = vi.fn((partial: Partial<typeof storeState.filter>) => {
+  const setFilter = vi.fn((partial: Partial<ResearchCanvasFilter>) => {
     storeState.filter = { ...storeState.filter, ...partial };
   });
   const clearFilter = vi.fn(() => {
-    storeState.filter = emptyCanvasFilter();
+    storeState.filter = emptyFilter();
   });
-  return { storeState, setFilter, clearFilter };
+  return { storeState, setFilter, clearFilter, emptyFilter };
 });
 
 vi.mock("@multica/core/research", async (importOriginal) => {
@@ -43,7 +45,13 @@ vi.mock("@multica/core/research", async (importOriginal) => {
 
 describe("ResearchD5CanvasFilter", () => {
   beforeEach(() => {
-    storeState.filter = emptyCanvasFilter();
+    storeState.filter = {
+      status: null,
+      tier: null,
+      round: null,
+      cluster: null,
+      query: "",
+    };
     setFilter.mockClear();
     clearFilter.mockClear();
   });
@@ -70,7 +78,13 @@ describe("ResearchD5CanvasFilter", () => {
   });
 
   it("clears an active filter", () => {
-    storeState.filter = { ...emptyCanvasFilter(), status: "running" };
+    storeState.filter = {
+      status: "running",
+      tier: null,
+      round: null,
+      cluster: null,
+      query: "",
+    };
     render(
       <ResearchD5CanvasFilter
         options={{

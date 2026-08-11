@@ -9,7 +9,8 @@ SELECT EXISTS(
     FROM agent_memory_write_event
     WHERE agent_id = $1
       AND rel_path = $2
-      AND created_at > $3
+      AND content_hash = $3
+      AND created_at > $4
 ) AS exists;
 
 -- name: InsertAgentMemoryWriteEvent :one

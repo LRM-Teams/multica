@@ -1188,6 +1188,10 @@ func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []Ski
 		return
 	}
 	agentSkillDir = strings.TrimSpace(agentSkillDir)
+	var durableSlugs []string
+	if agentSkillDir != "" {
+		durableSlugs = planBoundSkillMirrorSlugs(filepath.Join(agentSkillDir, "enabled"), skills)
+	}
 	b.WriteString("## Skills\n\n")
 	b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context.\n\n")
 	b.WriteString("Progressive loading is required: when a skill's name or description matches the current task, open that `SKILL.md` and follow it before answering. Native runtime discovery (when available) is a convenience only — never skip reading the file just because the skill appears in this index.\n\n")
@@ -1205,9 +1209,11 @@ func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []Ski
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
 		}
 	}
-	for _, skill := range skills {
+	for i, skill := range skills {
 		slug := sanitizeSkillName(skill.Name)
-		if actualDirSlugByName != nil {
+		if len(durableSlugs) == len(skills) {
+			slug = durableSlugs[i]
+		} else if actualDirSlugByName != nil {
 			if s, ok := actualDirSlugByName[skill.Name]; ok && s != "" {
 				slug = s
 			}

@@ -197,10 +197,6 @@ func ShouldReportEvenWithoutWrites(triggerText string, signals []Signal) bool {
 // DetectMissedWrite returns a candidate when trigger/signal asked for durable
 // memory but no durable file write landed. Daily-only writes still count as miss.
 func DetectMissedWrite(triggerText string, signals []Signal, writes []WriteEntry, defaultSubjectID string) (MissedWrite, bool) {
-	if HasDurableWrite(writes) {
-		return MissedWrite{}, false
-	}
-
 	var writeSignals []Signal
 	for _, s := range signals {
 		if s.Action == ActionWrite {
@@ -221,6 +217,10 @@ func DetectMissedWrite(triggerText string, signals []Signal, writes []WriteEntry
 	}
 
 	scope := firstNonEmpty(sig.Scope, "user")
+	subject := firstNonEmpty(sig.SubjectID, defaultSubjectID)
+	if hasMatchingDurableWrite(writes, scope, subject) {
+		return MissedWrite{}, false
+	}
 	kind := firstNonEmpty(sig.Kind, KindFeedback)
 	topic := sig.Topic
 	if topic == "" {
@@ -230,7 +230,6 @@ func DetectMissedWrite(triggerText string, signals []Signal, writes []WriteEntry
 	if summary == "" {
 		summary = "User expressed a durable preference that was not written this turn"
 	}
-	subject := firstNonEmpty(sig.SubjectID, defaultSubjectID)
 	title := "Missed durable memory write"
 	if LooksLikeExplicitRemember(triggerText) {
 		title = "Missed explicit remember request"
@@ -246,6 +245,37 @@ func DetectMissedWrite(triggerText string, signals []Signal, writes []WriteEntry
 		Source:        source,
 		DedupeKey:     DedupeKey(scope, subject, kind, topic),
 	}, true
+}
+
+func hasMatchingDurableWrite(writes []WriteEntry, scope, subjectID string) bool {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	subjectID = strings.TrimSpace(subjectID)
+	for _, write := range writes {
+		if !IsDurableWrite(write) {
+			continue
+		}
+		rel := strings.TrimPrefix(strings.ReplaceAll(strings.TrimSpace(write.RelPath), "\\", "/"), "./")
+		parts := strings.Split(rel, "/")
+		switch scope {
+		case "user":
+			if len(parts) == 3 && parts[0] == "users" && (subjectID == "" || parts[1] == subjectID) {
+				return true
+			}
+		case "project":
+			if len(parts) == 3 && parts[0] == "projects" && (subjectID == "" || parts[1] == subjectID) {
+				return true
+			}
+		case "channel":
+			if len(parts) == 3 && parts[0] == "channels" && (subjectID == "" || parts[1] == subjectID) {
+				return true
+			}
+		case "agent", "workspace", "team":
+			if write.ScopeType == "agent_global" || write.ScopeType == "agent_notes" || rel == "memory/MEMORY.md" || strings.HasPrefix(rel, "notes/") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func candidateTypeForKind(kind string) string {

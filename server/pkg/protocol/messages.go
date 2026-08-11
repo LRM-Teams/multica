@@ -986,11 +986,14 @@ type DaemonMemoryCurationEvidenceBundle struct {
 }
 
 type DaemonMemoryCurationEvidenceItem struct {
-	Kind      string `json:"kind"`
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Snippet   string `json:"snippet"`
-	CreatedAt string `json:"created_at"`
+	Kind      string          `json:"kind"`
+	ID        string          `json:"id"`
+	Title     string          `json:"title"`
+	Snippet   string          `json:"snippet"`
+	Scope     string          `json:"scope,omitempty"`
+	SubjectID string          `json:"subject_id,omitempty"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt string          `json:"created_at"`
 }
 
 // AgentMemoryWriteReport is sent by the daemon after a task when whitelisted

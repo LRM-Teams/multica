@@ -127,8 +127,11 @@ func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	if agent.evidenceCounts[1] != 0 {
 		t.Fatalf("team curation must not receive raw chat DB evidence: %#v", agent.evidenceCounts)
 	}
-	if len(agent.localFileCounts) < 2 || agent.localFileCounts[1] == 0 {
-		t.Fatalf("team curation should receive self-review local files: %#v", agent.localFileCounts)
+	if len(agent.localFileCounts) < 2 || agent.localFileCounts[1] != 0 {
+		t.Fatalf("team curation must not receive agent-local files: %#v", agent.localFileCounts)
+	}
+	if len(agent.agentRoots) < 2 || strings.HasPrefix(agent.agentRoots[1], root) {
+		t.Fatalf("team curation must run outside the agents workspace: %#v", agent.agentRoots)
 	}
 	if res.DailyFilesWritten != 1 || res.ReviewCandidatesAdded != 1 || res.SharedCandidatesAdded != 1 {
 		t.Fatalf("agentic run stats = %#v", res)
@@ -141,6 +144,34 @@ func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	if !hasRunEvent(res.Events, "read_local_files", "agent-1", "done") || !hasRunEvent(res.Events, "invoked_curator", "agent-1", "done") || !hasRunEvent(res.Events, "invoked_curator", "team", "done") {
 		t.Fatalf("missing fine-grained completion events: %#v", res.Events)
 	}
+}
+
+func TestAgentSelfReviewRejectsClaimedWriteWithoutDiskChange(t *testing.T) {
+	root := t.TempDir()
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewEngine().Run(Options{
+		WorkspacesRoot: root, WorkspaceID: "ws-1", AgentIDs: []string{"agent-1"},
+		Stage: StageAgentSelfReview, Since: mustDate("2026-07-08"), Until: mustDate("2026-07-08"),
+		Now: mustDateTime("2026-07-09T05:00:00Z"), StageAgent: claimedWriteStageAgent{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0].Error, "did not change") {
+		t.Fatalf("errors = %#v, want claimed-write verification failure", result.Errors)
+	}
+	if len(result.AgentResults) != 1 || result.AgentResults[0].CuratorOutput != "" {
+		t.Fatalf("failed self-review output must not be persisted: %#v", result.AgentResults)
+	}
+}
+
+type claimedWriteStageAgent struct{}
+
+func (claimedWriteStageAgent) RunStage(_ context.Context, _ StageAgentInput) (StageAgentOutput, error) {
+	return StageAgentOutput{Content: `{"summary":"claimed","local_writes":[{"file":"memory/MEMORY.md"}],"candidates":[]}`}, nil
 }
 
 func TestTeamCurationUsesPendingCandidatesNotRawChat(t *testing.T) {
@@ -158,6 +189,12 @@ func TestTeamCurationUsesPendingCandidatesNotRawChat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agentRoot, "skills", "drafts", "shareable-runbook", "SKILL.md"), []byte("# Shareable Runbook\n\nSteps...\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(agentRoot, "users", "member-private"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentRoot, "users", "member-private", "USER.md"), []byte("# Private user preference\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	agent := &recordingStageAgent{}
 	_, err := NewEngine().Run(Options{
 		WorkspacesRoot: root,
@@ -170,7 +207,8 @@ func TestTeamCurationUsesPendingCandidatesNotRawChat(t *testing.T) {
 		Mode:           "auto",
 		DBEvidence: map[string][]EvidenceItem{
 			"agent-1": {
-				{Kind: "curation_candidate", ID: "cand-1", Title: "Pending", Snippet: "promote me"},
+				{Kind: "curation_candidate", ID: "cand-1", Title: "Pending", Snippet: "promote me", Scope: "team", Metadata: []byte(`{"shareable":true}`)},
+				{Kind: "curation_candidate", ID: "private", Title: "Private", Snippet: "do not promote", Scope: "user", Metadata: []byte(`{"shareable":true}`)},
 				{Kind: "channel_message", ID: "msg-should-not-matter", Title: "Raw chat", Snippet: "should still be passed if server sent it, but product path should not collect these"},
 			},
 		},
@@ -182,21 +220,14 @@ func TestTeamCurationUsesPendingCandidatesNotRawChat(t *testing.T) {
 	if len(agent.calls) != 1 || agent.calls[0] != StageTeamCuration {
 		t.Fatalf("calls = %v", agent.calls)
 	}
-	if agent.localFileCounts[0] < 2 {
-		t.Fatalf("expected MEMORY + skill draft in local files, got %#v", agent.localFileCounts)
+	if agent.localFileCounts[0] != 0 {
+		t.Fatalf("team curation must receive no agent-local files, got %#v", agent.localFileCounts)
 	}
 	if agent.evidenceCounts[0] != 1 {
 		t.Fatalf("team curation should keep only curation_candidate rows, got %#v", agent.evidenceCounts)
 	}
-	foundSkill := false
 	for name := range agent.lastLocalFiles {
-		if strings.Contains(name, "skills/drafts/shareable-runbook/SKILL.md") {
-			foundSkill = true
-			break
-		}
-	}
-	if !foundSkill {
-		t.Fatalf("skill draft missing from team local files: %#v", agent.lastLocalFiles)
+		t.Fatalf("team curation received agent-local file: %s", name)
 	}
 }
 
@@ -211,6 +242,7 @@ func hasRunEvent(events []RunEvent, key, agentID, status string) bool {
 
 type recordingStageAgent struct {
 	calls           []Stage
+	agentRoots      []string
 	evidenceCounts  []int
 	localFileCounts []int
 	lastLocalFiles  map[string]string
@@ -218,12 +250,17 @@ type recordingStageAgent struct {
 
 func (r *recordingStageAgent) RunStage(_ context.Context, input StageAgentInput) (StageAgentOutput, error) {
 	r.calls = append(r.calls, input.Stage)
+	r.agentRoots = append(r.agentRoots, input.AgentRoot)
 	r.evidenceCounts = append(r.evidenceCounts, len(input.DBEvidence))
 	r.localFileCounts = append(r.localFileCounts, len(input.LocalFiles))
 	r.lastLocalFiles = input.LocalFiles
 	switch input.Stage {
 	case StageAgentSelfReview:
-		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"summary":"wrote daily","candidates":[{"type":"memory","scope":"agent","title":"Direct updates","content":"User likes direct updates.","confidence":0.95,"evidence_refs":["channel_message:msg-1"]}]}`}, nil
+		dailyRel := "memory/daily/" + input.DateTo + ".md"
+		if err := os.WriteFile(filepath.Join(input.AgentRoot, filepath.FromSlash(dailyRel)), []byte("# Daily\n\nReviewed.\n"), 0o644); err != nil {
+			return StageAgentOutput{}, err
+		}
+		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"summary":"wrote daily","local_writes":[{"file":"` + dailyRel + `"}],"candidates":[{"type":"memory","scope":"agent","title":"Direct updates","content":"User likes direct updates.","confidence":0.95,"evidence_refs":["channel_message:msg-1"]}]}`}, nil
 	case StageTeamCuration:
 		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"team_knowledge":[{"kind":"memory","title":"Direct updates","content":"User likes direct updates.","source_candidate_ids":[]}]}`}, nil
 	default:

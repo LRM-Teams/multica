@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkGraphEdge, WorkGraphNode } from "@multica/core/types";
-import { goalNodeVisualState, layoutGoalMiniGraph } from "./goal-mini-graph";
+import { goalNodeVisualState, layoutGoalMiniGraph } from "./goal-mini-graph-layout";
 
 function node(id: string, patch: Partial<WorkGraphNode> = {}): WorkGraphNode {
   return {

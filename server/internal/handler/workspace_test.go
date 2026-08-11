@@ -444,6 +444,11 @@ VALUES ($1, $2, 'owner')
 `, wsID, testUserID); err != nil {
 		t.Fatalf("create owner member: %v", err)
 	}
+	// Regression: the protected #general roster must not block the Workspace's
+	// own ON DELETE CASCADE with system_general_roster_managed.
+	if _, err := testPool.Exec(ctx, `SELECT ensure_system_general_channel($1, $2)`, wsID, testUserID); err != nil {
+		t.Fatalf("create system general channel: %v", err)
+	}
 
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `

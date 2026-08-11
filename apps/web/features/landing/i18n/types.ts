@@ -178,6 +178,8 @@ export type LandingDict = {
       installLabel: string;
       startLabel: string;
       sshNote: string;
+      testVersionFailed: string;
+      testVersionRetry: string;
       copyLabel: string;
       copiedLabel: string;
     };

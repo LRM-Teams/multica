@@ -73,6 +73,7 @@
     "./runtimes/mutations": "./runtimes/mutations.ts",
     "./runtimes/hooks": "./runtimes/hooks.ts",
     "./runtimes/custom-pricing-store": "./runtimes/custom-pricing-store.ts",
+    "./releases/computer-metainfo": "./releases/computer-metainfo.ts",
     "./sandboxes/queries": "./sandboxes/queries.ts",
     "./sandboxes/mutations": "./sandboxes/mutations.ts",
     "./sandboxes/utils": "./sandboxes/utils.ts",

@@ -74,22 +74,18 @@ for required in \
   fi
 done
 
-for required in \
+for forbidden in \
   'Resolve the Computer version pinned by test' \
-  '"${COMPUTER_FEED_URL}/metainfo.json"' \
-  '--retry-all-errors --connect-timeout 10 --max-time 30' \
-  "jq -er '.environments.test.tag'" \
-  'computer_version="${{ steps.computer_release.outputs.version }}"' \
-  'tag=sha-${sha}-computer-${computer_version}' \
-  'NEXT_PUBLIC_COMPUTER_VERSION=${{ steps.computer_release.outputs.version }}'; do
-  if ! grep -Fq -- "$required" <<<"$deploy_test_workflow"; then
-    echo "Test deployment is missing exact Computer release pinning: $required"
+  'COMPUTER_FEED_URL' \
+  'NEXT_PUBLIC_COMPUTER_VERSION'; do
+  if grep -Fq -- "$forbidden" <<<"$deploy_test_workflow"; then
+    echo "Test deployment must not depend on the mutable Computer feed: $forbidden"
     exit 1
   fi
 done
 
-if grep -Fq -- 'echo "tag=sha-${sha}"' <<<"$deploy_test_workflow"; then
-  echo "Test image tags must include the exact Computer version as well as the source SHA"
+if ! grep -Fq -- 'echo "tag=sha-${sha}"' <<<"$deploy_test_workflow"; then
+  echo "Test image tag must be derived only from the deployed source SHA"
   exit 1
 fi
 

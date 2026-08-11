@@ -128,6 +128,8 @@
       "windows-powershell": "Use this in PowerShell on Windows."
     },
     "step1_label": "Install the Multica CLI",
+    "test_release_failed": "Couldn’t load the Test version.",
+    "test_release_retry": "Retry loading the Test version",
     "step2_label": "Connect this Computer",
     "step2_hint_production": "Activates Production, connects this Workspace, and starts the Computer. Setup asks first if it needs to switch environments.",
     "step2_hint_test": "Activates Test, connects this Workspace, and starts the Computer. Setup asks first if it needs to switch environments.",

@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, Terminal } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Check, Copy, RefreshCw, Terminal } from "lucide-react";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useConfigStore } from "@multica/core/config";
+import { testComputerReleaseOptions } from "@multica/core/releases/computer-metainfo";
 import { useT } from "../../i18n/use-t";
 import {
   DAEMON_SETUP_MODES,
@@ -43,7 +45,23 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function Step({ n, label, cmd }: { n: number; label: string; cmd: string }) {
+function Step({
+  n,
+  label,
+  cmd,
+  releaseState,
+  releaseErrorLabel,
+  retryLabel,
+  onRetry,
+}: {
+  n: number;
+  label: string;
+  cmd: string;
+  releaseState?: "loading" | "error";
+  releaseErrorLabel?: string;
+  retryLabel?: string;
+  onRetry?: () => void;
+}) {
   return (
     <div>
       <p className="mb-1.5 text-xs font-medium text-foreground">
@@ -57,9 +75,31 @@ function Step({ n, label, cmd }: { n: number; label: string; cmd: string }) {
             CODE_LIGATURE_CLASS,
           )}
         >
-          {cmd}
+          {releaseState === "loading" ? (
+            <span
+              className="my-0.5 block h-4 w-48 animate-pulse rounded bg-muted-foreground/15"
+              aria-hidden
+            />
+          ) : releaseState === "error" ? (
+            releaseErrorLabel
+          ) : (
+            cmd
+          )}
         </code>
-        <CopyButton text={cmd} />
+        {releaseState ? (
+          onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              aria-label={retryLabel}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          )
+        ) : (
+          <CopyButton text={cmd} />
+        )}
       </div>
     </div>
   );
@@ -80,7 +120,24 @@ export function CliInstallInstructions({
   const environment = useConfigStore((state) => state.environment);
   const daemonServerUrl = useConfigStore((state) => state.daemonServerUrl);
   const daemonAppUrl = useConfigStore((state) => state.daemonAppUrl);
-  const computerVersion = useConfigStore((state) => state.computerVersion);
+  const configuredComputerVersion = useConfigStore(
+    (state) => state.computerVersion,
+  );
+  const {
+    data: testRelease,
+    isError: testReleaseError,
+    isFetching: testReleaseFetching,
+    refetch: refetchTestRelease,
+  } = useQuery(
+    testComputerReleaseOptions(environment === "test"),
+  );
+  const computerVersion =
+    environment === "test"
+      ? testRelease?.tag ?? ""
+      : configuredComputerVersion;
+  const testReleaseUnavailable =
+    environment === "test" &&
+    (!testRelease || testReleaseFetching);
   const [uncontrolledMode, setUncontrolledMode] = useState<DaemonSetupMode>(() =>
     defaultDaemonSetupMode(),
   );
@@ -101,7 +158,25 @@ export function CliInstallInstructions({
     <Card className="w-full">
       <CardContent className="space-y-4 pt-4">
         <SetupModeSelector mode={mode} onChange={setMode} />
-        <Step n={1} label={t(($) => $.cli_install.step1_label)} cmd={installCmd} />
+        <Step
+          n={1}
+          label={t(($) => $.cli_install.step1_label)}
+          cmd={installCmd}
+          releaseState={
+            testReleaseUnavailable
+              ? testReleaseError
+                ? "error"
+                : "loading"
+              : undefined
+          }
+          releaseErrorLabel={t(($) => $.cli_install.test_release_failed)}
+          retryLabel={t(($) => $.cli_install.test_release_retry)}
+          onRetry={
+            testReleaseError
+              ? () => void refetchTestRelease()
+              : undefined
+          }
+        />
         <div>
           <Step n={2} label={t(($) => $.cli_install.step2_label)} cmd={setupCmd} />
           <p className="mt-1.5 text-[11px] leading-[1.55] text-muted-foreground">

@@ -128,6 +128,8 @@
       "windows-powershell": "适用于 Windows PowerShell。"
     },
     "step1_label": "安装 Multica CLI",
+    "test_release_failed": "无法获取 Test 版本。",
+    "test_release_retry": "重新获取 Test 版本",
     "step2_label": "连接这台 Computer",
     "step2_hint_production": "激活正式环境、连接当前工作区并启动 Computer；需要切换环境时会先询问。",
     "step2_hint_test": "激活测试环境、连接当前工作区并启动 Computer；需要切换环境时会先询问。",

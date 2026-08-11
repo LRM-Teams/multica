@@ -95,35 +95,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Resolve the Computer version pinned by test
-        id: computer_release
-        env:
-          COMPUTER_FEED_URL: https://cdn.leagent.me/computer
-        run: |
-          set -euo pipefail
-          metainfo="${RUNNER_TEMP}/computer-metainfo.json"
-          curl --retry 4 --retry-all-errors --connect-timeout 10 --max-time 30 \
-            -fsSL "${COMPUTER_FEED_URL}/metainfo.json" -o "$metainfo"
-          tag="$(jq -er '.environments.test.tag' "$metainfo")"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]; then
-            echo "::error title=Invalid test Computer release::${tag}"
-            exit 1
-          fi
-          echo "version=$tag" >> "$GITHUB_OUTPUT"
-          echo "Test web will recommend exact Computer release ${tag}"
-
       - name: Compute immutable test image refs
         id: prep
         run: |
           set -euo pipefail
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
           sha="$(git rev-parse --short=7 HEAD)"
-          computer_version="${{ steps.computer_release.outputs.version }}"
-          computer_version="${computer_version#v}"
           {
             echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
             echo "web_image=ghcr.io/${owner_lc}/multica-web"
-            echo "tag=sha-${sha}-computer-${computer_version}"
+            echo "tag=sha-${sha}"
           } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
@@ -163,7 +144,6 @@ jobs:
             NEXT_PUBLIC_API_URL=${{ env.MULTICA_API_URL }}
             NEXT_PUBLIC_WS_URL=${{ env.MULTICA_WS_URL }}
             NEXT_PUBLIC_ENVIRONMENT=test
-            NEXT_PUBLIC_COMPUTER_VERSION=${{ steps.computer_release.outputs.version }}
             NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
           cache-from: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-test-amd64
           cache-to: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-test-amd64,mode=max

@@ -11,6 +11,8 @@ export const MULTICA_RELEASES_URL = `${MULTICA_GITHUB_URL}/releases`;
 // the Connect Computer dialog. Keep it aligned with scripts/install.sh.
 const MULTICA_RELEASE_CDN_BASE_URL =
   "https://cdn.leagent.me/computer";
+export const MULTICA_RELEASE_METAINFO_URL =
+  `${MULTICA_RELEASE_CDN_BASE_URL}/metainfo.json`;
 export const MULTICA_INSTALL_SCRIPT_URL =
   `${MULTICA_RELEASE_CDN_BASE_URL}/install.sh`;
 export const MULTICA_INSTALL_COMMAND =

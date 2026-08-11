@@ -63,7 +63,7 @@ flowchart LR
 | Production | `api.leagent.me` / `www.leagent.me` | stable | `/computer/metainfo.json` → `environments.production` |
 | Test | `https://82.157.184.89`；以后可通过部署配置切到 `test.leagent.me` | preview | `/computer/metainfo.json` → `environments.test` |
 
-Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url`、`daemon_app_url` 分别填入 Test API/Web origin。两个值今天可以相同，但协议允许以后拆成不同域名。页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令；Test Web 在构建时从 `metainfo.json` 锁定精确 Computer tag，并显示精确安装版本及完整环境/origin 命令。部署回滚到旧 Web 镜像时，页面推荐版本也一起回滚。
+Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url`、`daemon_app_url` 分别填入 Test API/Web origin。两个值今天可以相同，但协议允许以后拆成不同域名。页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令；Test 页面由浏览器直接读取 `https://cdn.leagent.me/computer/metainfo.json`，校验后显示 `environments.test.tag` 的精确安装版本及完整环境/origin 命令。CDN 暂时不可达时页面只允许重试，不能退回含糊版本，也不能阻塞应用构建或部署。
 
 第一次连接环境：
 

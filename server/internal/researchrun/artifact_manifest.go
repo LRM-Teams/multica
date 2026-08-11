@@ -77,17 +77,24 @@ func casArtifactVersionRepresentationTx(
 }
 
 func reservePolicyWatermarkCASTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, expected int64) (int64, error) {
-	var reserved int64
+	var current int64
 	err := tx.QueryRow(ctx, `
-		UPDATE research_artifact_policy_state
-		SET watermark = watermark + 1, updated_at = now()
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND watermark = $3
-		RETURNING watermark
-	`, workspaceID, sessionID, expected).Scan(&reserved)
+		SELECT watermark
+		FROM research_artifact_policy_state
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		FOR UPDATE
+	`, workspaceID, sessionID).Scan(&current)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return 0, fmt.Errorf("%w: policy watermark CAS failed", ErrInvalidTransition)
-		}
+		return 0, err
+	}
+	if current != expected {
+		return 0, fmt.Errorf("%w: policy watermark CAS failed", ErrInvalidTransition)
+	}
+	var reserved int64
+	err = tx.QueryRow(ctx, `
+		SELECT research_artifact_policy_watermark_for_tx($1::uuid, $2::uuid)
+	`, workspaceID, sessionID).Scan(&reserved)
+	if err != nil {
 		return 0, err
 	}
 	return reserved, nil
@@ -119,36 +126,21 @@ func persistManifestInputReferencesTx(
 	tx pgx.Tx,
 	workspaceID, sessionID, manifestID, manifestVersionRowID string,
 ) error {
-	rows, err := tx.Query(ctx, `
-		SELECT artifact_version_id::text, ordinal
-		FROM research_artifact_context_entry
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND manifest_id = $3::uuid
-		ORDER BY ordinal
-	`, workspaceID, sessionID, manifestID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var inputVersionID string
-		var ordinal int
-		if err := rows.Scan(&inputVersionID, &ordinal); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO research_artifact_input_reference (
-			  workspace_id, session_id, consumer_version_id, input_version_id,
-			  relation, manifest_id, explicitly_used, purpose, ordinal
-			) VALUES (
-			  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
-			  'manifest_input', $5::uuid, true, 'task_execution', $6
-			)
-			ON CONFLICT (workspace_id, session_id, consumer_version_id, input_version_id, relation) DO NOTHING
-		`, workspaceID, sessionID, manifestVersionRowID, inputVersionID, manifestID, ordinal); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
+	_, err := tx.Exec(ctx, `
+		INSERT INTO research_artifact_input_reference (
+		  workspace_id, session_id, consumer_version_id, input_version_id,
+		  relation, manifest_id, explicitly_used, purpose, ordinal
+		)
+		SELECT
+		  e.workspace_id, e.session_id, $4::uuid, e.artifact_version_id,
+		  'manifest_input', e.manifest_id, true, 'task_execution', e.ordinal
+		FROM research_artifact_context_entry e
+		WHERE e.workspace_id = $1::uuid
+		  AND e.session_id = $2::uuid
+		  AND e.manifest_id = $3::uuid
+		ON CONFLICT (workspace_id, session_id, consumer_version_id, input_version_id, relation) DO NOTHING
+	`, workspaceID, sessionID, manifestID, manifestVersionRowID)
+	return err
 }
 
 func persistResultArtifactInputReferencesTx(
@@ -168,36 +160,21 @@ func persistResultArtifactInputReferencesTx(
 		}
 		return err
 	}
-	rows, err := tx.Query(ctx, `
-		SELECT artifact_version_id::text, ordinal
-		FROM research_artifact_context_entry
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND manifest_id = $3::uuid
-		ORDER BY ordinal
-	`, workspaceID, sessionID, manifestID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var inputVersionID string
-		var ordinal int
-		if err := rows.Scan(&inputVersionID, &ordinal); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO research_artifact_input_reference (
-			  workspace_id, session_id, consumer_version_id, input_version_id,
-			  relation, manifest_id, explicitly_used, purpose, ordinal
-			) VALUES (
-			  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
-			  'acceptance_input', $5::uuid, true, 'result_acceptance', $6
-			)
-			ON CONFLICT (workspace_id, session_id, consumer_version_id, input_version_id, relation) DO NOTHING
-		`, workspaceID, sessionID, resultVersionRowID, inputVersionID, manifestID, ordinal); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO research_artifact_input_reference (
+		  workspace_id, session_id, consumer_version_id, input_version_id,
+		  relation, manifest_id, explicitly_used, purpose, ordinal
+		)
+		SELECT
+		  e.workspace_id, e.session_id, $4::uuid, e.artifact_version_id,
+		  'acceptance_input', e.manifest_id, true, 'result_acceptance', e.ordinal
+		FROM research_artifact_context_entry e
+		WHERE e.workspace_id = $1::uuid
+		  AND e.session_id = $2::uuid
+		  AND e.manifest_id = $3::uuid
+		ON CONFLICT (workspace_id, session_id, consumer_version_id, input_version_id, relation) DO NOTHING
+	`, workspaceID, sessionID, manifestID, resultVersionRowID)
+	return err
 }
 
 type manifestArtifactSet struct {
@@ -542,6 +519,7 @@ func loadManifestEntryCandidatesForAttemptTx(
 		  v.version,
 		  e.eligibility_revision,
 		  v.content_hash,
+		  e.representation,
 		  e.representation_hash,
 		  m.manifest_hash
 		FROM research_artifact_context_entry e
@@ -569,11 +547,10 @@ func loadManifestEntryCandidatesForAttemptTx(
 		var entry artifactVersionCandidate
 		if err = rows.Scan(
 			&entry.ArtifactID, &entry.Version, &entry.EligibilityRevision,
-			&entry.ContentHash, &entry.RepresentationHash, &storedHash,
+			&entry.ContentHash, &entry.Representation, &entry.RepresentationHash, &storedHash,
 		); err != nil {
 			return nil, "", err
 		}
-		entry.Representation = "raw"
 		entries = append(entries, entry)
 	}
 	if err = rows.Err(); err != nil {

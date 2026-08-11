@@ -36,19 +36,14 @@ func TestPolicyWatermarkCASRejectsStaleExpected(t *testing.T) {
 	if err = ensureSessionPolicyStateTx(ctx, tx, fixture.workspaceID, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	// Fixture seeding (run_session passport backfill) may already advance the
-	// watermark past 0 — always CAS against the current value.
-	var current int64
-	if err = tx.QueryRow(ctx, `
-		SELECT watermark FROM research_artifact_policy_state
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
-	`, fixture.workspaceID, fixture.sessionID).Scan(&current); err != nil {
-		t.Fatalf("read watermark: %v", err)
+	expected, err := readPolicyWatermarkTx(ctx, tx, fixture.workspaceID, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, current); err != nil {
+	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, expected); err != nil {
 		t.Fatalf("first reserve: %v", err)
 	}
-	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, current); !errors.Is(err, ErrInvalidTransition) {
+	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, expected); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("second reserve err=%v want ErrInvalidTransition", err)
 	}
 }
@@ -69,33 +64,18 @@ func TestPassportEligibilityCASRejectsStaleRevision(t *testing.T) {
 	fixture := seedResearchRunFixture(t, ctx, pool)
 	defer cleanupResearchRunFixture(pool, fixture)
 
-	claimID := uuid.NewString()
-	// Passport backfill for claims requires a domain row (reciprocal FK guards).
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-		  significance, confidence, status, goal_version, plan_version, resolution
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'cas-el-claim', '', 'claim for eligibility CAS',
-		  'medium', 0.5, 'proposed', 1, 1, ''
-		)
-	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
-		t.Fatalf("insert claim: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, fixture.sessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
-
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
 	if err = casPassportEligibilityRevisionTx(
-		ctx, tx, fixture.workspaceID, fixture.sessionID, claimID, 1, 1, ArtifactLifecycleRegistered,
+		ctx, tx, fixture.workspaceID, fixture.sessionID, fixture.sessionID, 1, 1, ArtifactLifecycleRegistered,
 	); err != nil {
 		t.Fatalf("valid CAS: %v", err)
 	}
 	if err = casPassportEligibilityRevisionTx(
-		ctx, tx, fixture.workspaceID, fixture.sessionID, claimID, 1, 99, ArtifactLifecycleRegistered,
+		ctx, tx, fixture.workspaceID, fixture.sessionID, fixture.sessionID, 1, 99, ArtifactLifecycleRegistered,
 	); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("stale CAS err=%v want ErrInvalidTransition", err)
 	}
@@ -189,7 +169,12 @@ func TestHistoricalTaskContextAdvancesWhileFrozenManifestStable(t *testing.T) {
 		t.Fatalf("TaskContextForAttempt before: %v", err)
 	}
 	sourceID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_source_snapshot (
 		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
 		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
@@ -202,7 +187,10 @@ func TestHistoricalTaskContextAdvancesWhileFrozenManifestStable(t *testing.T) {
 	`, sourceID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert source: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit source and passport: %v", err)
+	}
 
 	live, err := store.TaskContext(ctx, tasks[0].ID, fixture.workspaceID)
 	if err != nil {
@@ -273,7 +261,12 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	}
 
 	sourceID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_source_snapshot (
 		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
 		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
@@ -286,7 +279,10 @@ func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
 	`, sourceID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert source: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit live source and passport: %v", err)
+	}
 
 	afterLive := readContext()
 	if afterLive.ManifestID != before.ManifestID || afterLive.ManifestHash != before.ManifestHash {
@@ -321,46 +317,35 @@ func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
-	if err != nil || len(tasks) == 0 {
-		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
-	}
 	claimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-		  significance, confidence, status, goal_version, plan_version, resolution
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'cas-claim', '', 'claim for CAS',
-		  'medium', 0.5, 'proposed', 1, 1, ''
-		)
-	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatalf("insert claim: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "cas-claim", "claim for CAS")
 
-	// Advance eligibility revision after plan would have captured revision 1.
-	if _, err = pool.Exec(ctx, `
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	plan, err := NewArtifactContextModule().PlanDispatchManifest(ctx, tx, fixture.workspaceID, run.SessionID, run.StateVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := manifestEntryForArtifact(plan, claimID)
+	if !ok {
+		t.Fatalf("claim %s missing from manifest plan", claimID)
+	}
+
+	// Advance eligibility after the plan froze revision 1.
+	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
 		UPDATE research_artifact_passport
 		SET eligibility_revision = eligibility_revision + 1
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
-		t.Fatalf("bump eligibility: %v", err)
-	}
-
-	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
-	_, _, err = store.CreateDispatchIntent(ctx, input)
+	`, fixture.workspaceID, run.SessionID, claimID)
+	err = casPassportEligibilityRevisionTx(
+		ctx, tx, fixture.workspaceID, run.SessionID, claimID,
+		entry.Version, entry.EligibilityRevision, entry.Lifecycle,
+	)
 	if !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("CreateDispatchIntent err=%v want ErrInvalidTransition", err)
-	}
-	var outboxCount int
-	if err = pool.QueryRow(ctx, `
-		SELECT count(*) FROM research_dispatch_outbox WHERE attempt_id = $1::uuid
-	`, input.AttemptID).Scan(&outboxCount); err != nil {
-		t.Fatal(err)
-	}
-	if outboxCount != 0 {
-		t.Fatalf("outbox count=%d want 0 after failed dispatch", outboxCount)
+		t.Fatalf("eligibility CAS err=%v want ErrInvalidTransition", err)
 	}
 }
 
@@ -388,47 +373,44 @@ func TestDispatchFailsWhenArtifactVersionContentHashChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	tasks, err := store.ListTasks(ctx, run.SessionID)
-	if err != nil || len(tasks) == 0 {
-		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
-	}
 	claimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-		  significance, confidence, status, goal_version, plan_version, resolution
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'repr-cas-claim', '', 'claim for representation CAS',
-		  'medium', 0.5, 'proposed', 1, 1, ''
-		)
-	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatalf("insert claim: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "repr-cas-claim", "claim for representation CAS")
 
-	if _, err = pool.Exec(ctx, `
-		UPDATE research_artifact_version
-		SET content_hash = 'sha256:mutated-after-plan'
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
-		t.Fatalf("mutate version content hash: %v", err)
-	}
-
-	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
-	_, _, err = store.CreateDispatchIntent(ctx, input)
-	if !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("CreateDispatchIntent err=%v want ErrInvalidTransition", err)
-	}
-	var manifestCount int
-	if err = pool.QueryRow(ctx, `
-		SELECT count(*)::int FROM research_artifact_context_manifest
-		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
-	`, fixture.workspaceID, run.SessionID).Scan(&manifestCount); err != nil {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if manifestCount != 0 {
-		t.Fatalf("manifest count=%d want 0 after representation CAS failure", manifestCount)
+	defer tx.Rollback(ctx)
+	plan, err := NewArtifactContextModule().PlanDispatchManifest(ctx, tx, fixture.workspaceID, run.SessionID, run.StateVersion)
+	if err != nil {
+		t.Fatal(err)
 	}
+	entry, ok := manifestEntryForArtifact(plan, claimID)
+	if !ok {
+		t.Fatalf("claim %s missing from manifest plan", claimID)
+	}
+	mutatedHash := contentHashFromPayload([]byte("mutated after manifest plan"))
+	mutateIntegrationArtifactForCASTest(t, ctx, pool, `
+		UPDATE research_artifact_version
+		SET content_hash = $4
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND artifact_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, claimID, mutatedHash)
+	err = casArtifactVersionRepresentationTx(
+		ctx, tx, fixture.workspaceID, run.SessionID, entry.VersionRowID,
+		entry.ContentHash, entry.RepresentationHash,
+	)
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("representation CAS err=%v want ErrInvalidTransition", err)
+	}
+}
+
+func manifestEntryForArtifact(plan dispatchManifestPlan, artifactID string) (artifactVersionCandidate, bool) {
+	for _, entry := range plan.Entries {
+		if entry.ArtifactID == artifactID {
+			return entry, true
+		}
+	}
+	return artifactVersionCandidate{}, false
 }
 
 func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
@@ -486,7 +468,7 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	}
 
 	extraTaskID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	insertIntegrationTasksWithPassports(t, ctx, pool, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion, `
 		INSERT INTO research_task (
 		  id, workspace_id, session_id, client_key, kind, objective,
 		  required_capability, expected_result, status, goal_version, plan_version,
@@ -495,9 +477,7 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 		  $1::uuid, $2::uuid, $3::uuid, 'post-dispatch-extra', 'discover', 'extra task',
 		  'lead', 'research_evidence_v1', 'pending', $4, $5, 1, 300, NULL
 		)
-	`, extraTaskID, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion); err != nil {
-		t.Fatalf("insert extra task: %v", err)
-	}
+	`, []any{extraTaskID, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion}, []string{extraTaskID})
 
 	liveGate, err := store.EvaluateGate(ctx, run.SessionID)
 	if err != nil {

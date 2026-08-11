@@ -218,8 +218,13 @@ func seedShadowEquivalenceArtifacts(
 	stageEvalID := uuid.NewString()
 	now := time.Now().UTC()
 	gv, pv := 1, 1
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_source (
 		  id, workspace_id, session_id, url, title, source_class, summary, created_at, updated_at
 		) VALUES (
@@ -229,9 +234,9 @@ func seedShadowEquivalenceArtifacts(
 	`, legacySourceID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert legacy source: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, legacySourceID, string(ArtifactKindLegacySource), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, legacySourceID, string(ArtifactKindLegacySource), nil, nil)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_source_snapshot (
 		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
 		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
@@ -244,22 +249,22 @@ func seedShadowEquivalenceArtifacts(
 	`, sourceID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert source snapshot: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_observation (
 		  id, workspace_id, session_id, source_snapshot_id, quote, datum, locator,
-		  interpretation, verification_status, created_at
+		  interpretation, content_hash, verification_status, created_at
 		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'shadow quote', 'shadow datum', 'loc',
-		  '', 'verified', $5
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'shadow quote', '"shadow datum"'::jsonb, 'loc',
+		  '', 'sha256:shadow-observation', 'verified', $5
 		)
 	`, observationID, workspaceID, sessionID, sourceID, now); err != nil {
 		t.Fatalf("insert observation: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, observationID, string(ArtifactKindObservation), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, observationID, string(ArtifactKindObservation), nil, nil)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_claim (
 		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
 		  significance, confidence, status, goal_version, plan_version, resolution,
@@ -271,9 +276,9 @@ func seedShadowEquivalenceArtifacts(
 	`, claimID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert claim: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_claim_evidence (
 		  id, workspace_id, session_id, claim_id, observation_id, relation, strength,
 		  directness, method_fit, verification_status, rationale, created_at
@@ -284,9 +289,9 @@ func seedShadowEquivalenceArtifacts(
 	`, evidenceID, workspaceID, sessionID, claimID, observationID, now); err != nil {
 		t.Fatalf("insert claim evidence: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, evidenceID, string(ArtifactKindEvidenceLink), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, evidenceID, string(ArtifactKindEvidenceLink), nil, nil)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_graph_node (
 		  id, workspace_id, session_id, node_type, title, summary, status, payload, created_at, updated_at
 		) VALUES
@@ -295,17 +300,17 @@ func seedShadowEquivalenceArtifacts(
 	`, nodeFromID, nodeToID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert graph nodes: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, nodeFromID, string(ArtifactKindGraphNode), nil, nil)
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, nodeToID, string(ArtifactKindGraphNode), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, nodeFromID, string(ArtifactKindGraphNode), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, nodeToID, string(ArtifactKindGraphNode), nil, nil)
 
-	if _, err := pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_graph_edge (
 		  id, workspace_id, session_id, from_node_id, to_node_id, edge_type, created_at
 		) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'supports', $6)
 	`, edgeID, workspaceID, sessionID, nodeFromID, nodeToID, now); err != nil {
 		t.Fatalf("insert graph edge: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, edgeID, string(ArtifactKindGraphEdge), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, edgeID, string(ArtifactKindGraphEdge), nil, nil)
 
 	messageMeta, err := json.Marshal(map[string]any{
 		"match_decision": map[string]any{
@@ -318,25 +323,25 @@ func seedShadowEquivalenceArtifacts(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_message (
 		  id, workspace_id, session_id, sender_type, body, card_kind, meta, created_at
 		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'system', 'shadow match decision', 'process', $4::jsonb, $5)
 	`, messageID, workspaceID, sessionID, messageMeta, now); err != nil {
 		t.Fatalf("insert research message: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, messageID, string(ArtifactKindResearchMessage), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, messageID, string(ArtifactKindResearchMessage), nil, nil)
 
-	if _, err = pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_product_round_card (
 		  id, workspace_id, session_id, round_number, decision, budget_used, budget_remaining, created_at
 		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'continue', 1, 4, $4)
 	`, productRoundID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert product round card: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, productRoundID, string(ArtifactKindProductRoundDecision), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, productRoundID, string(ArtifactKindProductRoundDecision), nil, nil)
 
-	if _, err = pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_report (
 		  id, workspace_id, session_id, revision, content_md, structured,
 		  goal_version, plan_version, created_at, updated_at
@@ -344,22 +349,29 @@ func seedShadowEquivalenceArtifacts(
 	`, reportID, workspaceID, sessionID, gv, pv, now); err != nil {
 		t.Fatalf("insert report: %v", err)
 	}
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_report_claim (report_id, claim_id, section_id, anchor_quote)
-		VALUES ($1::uuid, $2::uuid, 'executive-summary', 'shadow claim appears in report')
-	`, reportID, claimID); err != nil {
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_report_claim (
+		  workspace_id, session_id, report_id, claim_id, section_id, anchor_quote
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, $4::uuid,
+		  'executive-summary', 'shadow claim appears in report'
+		)
+	`, workspaceID, sessionID, reportID, claimID); err != nil {
 		t.Fatalf("insert report claim: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, reportID, string(ArtifactKindReportRevision), intPtr(gv), intPtr(pv))
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, reportID, string(ArtifactKindReportRevision), intPtr(gv), intPtr(pv))
 
-	if _, err = pool.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_stage_eval (
 		  id, workspace_id, session_id, stage, passed, score, findings, remediation, created_at
 		) VALUES ($1::uuid, $2::uuid, $3::uuid, 's1_plan', true, 0.9, '[]'::jsonb, '', $4)
 	`, stageEvalID, workspaceID, sessionID, now); err != nil {
 		t.Fatalf("insert stage eval: %v", err)
 	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, stageEvalID, string(ArtifactKindStageEvaluation), nil, nil)
+	backfillIntegrationArtifactPassport(t, ctx, tx, workspaceID, sessionID, stageEvalID, string(ArtifactKindStageEvaluation), nil, nil)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit shadow artifacts and passports: %v", err)
+	}
 
 	return shadowEquivalenceSeed{
 		EntryArtifactIDs: []string{

@@ -36,7 +36,12 @@ func TestEvaluationPrivateStageEvalExcludedFromTaskExecutionManifest(t *testing.
 	}
 
 	stageEvalID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_stage_eval (
 		  id, workspace_id, session_id, stage, passed, score, findings, remediation
 		) VALUES (
@@ -48,24 +53,16 @@ func TestEvaluationPrivateStageEvalExcludedFromTaskExecutionManifest(t *testing.
 		t.Fatalf("insert stage eval: %v", err)
 	}
 	backfillIntegrationArtifactPassport(
-		t, ctx, pool, fixture.workspaceID, run.SessionID, stageEvalID, string(ArtifactKindStageEvaluation), nil, nil,
+		t, ctx, tx, fixture.workspaceID, run.SessionID, stageEvalID, string(ArtifactKindStageEvaluation), nil, nil,
 	)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit stage eval and passport: %v", err)
+	}
 
 	claimID := uuid.NewString()
-	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_claim (
-		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-		  significance, confidence, status, goal_version, plan_version, resolution
-		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'allowed-claim', '', 'ordinary task claim',
-		  0.5, 0.5, 'proposed', 1, 1, ''
-		)
-	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
-		t.Fatalf("insert claim: %v", err)
-	}
-	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "allowed-claim", "ordinary task claim")
 
-	tx, err := pool.Begin(ctx)
+	tx, err = pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

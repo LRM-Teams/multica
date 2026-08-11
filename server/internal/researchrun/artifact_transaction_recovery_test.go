@@ -7,10 +7,10 @@ import (
 )
 
 type dispatchArtifactRecoveryCounts struct {
-	manifests      int
-	entries        int
-	outboxes       int
-	boundOutboxes  int
+	manifests       int
+	entries         int
+	outboxes        int
+	boundOutboxes   int
 	passportEnabled bool
 }
 
@@ -44,7 +44,7 @@ func loadDispatchArtifactRecoveryCounts(t *testing.T, run *transactionRecoveryRu
 	}
 	if err := run.pool.QueryRow(run.ctx, `
 		SELECT count(*)::int FROM research_dispatch_outbox
-		WHERE attempt_id = $1::uuid AND manifest_id IS NOT NULL AND manifest_hash <> ''
+		WHERE attempt_id = NULLIF($1, '')::uuid AND manifest_id IS NOT NULL AND manifest_hash <> ''
 	`, attemptID).Scan(&counts.boundOutboxes); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestCreateDispatchIntentTransactionRecoveryCountsManifestArtifacts(t *testi
 		input := testDispatchIntentInput(
 			t, run.ctx, run.store, run.fixture.sessionID, run.fixture.workspaceID, run.taskID, run.fixture.agentID,
 		)
-		var committedAttemptID string
+		committedAttemptID := input.AttemptID
 		invoke := func() error {
 			attempt, _, err := run.store.CreateDispatchIntent(run.ctx, input)
 			if err == nil {
@@ -193,7 +193,7 @@ func TestAcceptResultTransactionRecoveryCountsResultArtifacts(t *testing.T) {
 			SessionID: run.fixture.sessionID, AttemptID: attempt.ID, AgentID: run.fixture.agentID,
 			InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
 		}
-		baselineMutations := loadResultArtifactRecoveryCounts(t, run, attempt.ID).policyMutations
+		baseline := loadResultArtifactRecoveryCounts(t, run, attempt.ID)
 		invoke := func() error {
 			_, invokeErr := run.store.AcceptResult(run.ctx, input)
 			return invokeErr
@@ -208,22 +208,22 @@ func TestAcceptResultTransactionRecoveryCountsResultArtifacts(t *testing.T) {
 				if counts.resultArtifacts != 0 {
 					t.Fatalf("rolled-back result artifacts=%d", counts.resultArtifacts)
 				}
-				if counts.inputReferences != 0 {
-					t.Fatalf("rolled-back input references=%d", counts.inputReferences)
+				if counts.inputReferences != baseline.inputReferences {
+					t.Fatalf("rolled-back input references=%d baseline=%d", counts.inputReferences, baseline.inputReferences)
 				}
-				if counts.policyMutations != baselineMutations {
-					t.Fatalf("rolled-back policy mutations=%d baseline=%d", counts.policyMutations, baselineMutations)
+				if counts.policyMutations != baseline.policyMutations {
+					t.Fatalf("rolled-back policy mutations=%d baseline=%d", counts.policyMutations, baseline.policyMutations)
 				}
 				return
 			}
 			if counts.resultArtifacts != 1 {
 				t.Fatalf("committed result artifacts=%d want 1", counts.resultArtifacts)
 			}
-			if counts.inputReferences == 0 {
+			if counts.inputReferences <= baseline.inputReferences {
 				t.Fatal("committed result acceptance must persist input references")
 			}
-			if counts.policyMutations <= baselineMutations {
-				t.Fatalf("committed policy mutations=%d baseline=%d", counts.policyMutations, baselineMutations)
+			if counts.policyMutations <= baseline.policyMutations {
+				t.Fatalf("committed policy mutations=%d baseline=%d", counts.policyMutations, baseline.policyMutations)
 			}
 		}
 		return transactionRecoveryOperation{

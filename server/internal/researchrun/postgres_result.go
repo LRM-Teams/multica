@@ -24,6 +24,7 @@ type acceptedResultState struct {
 }
 
 func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) (AcceptResultOutcome, error) {
+	in.Hash = normalizeArtifactContentHash(in.Hash)
 	tx, err := s.beginResearchTx(ctx, txOpResultAccept, pgx.TxOptions{})
 	if err != nil {
 		return AcceptResultOutcome{}, err
@@ -828,6 +829,9 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 				return nil, 0, err
 			}
 		}
+		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
+			return nil, 0, err
+		}
 		payload, _ := json.Marshal(map[string]any{
 			"snapshot_id": id, "publisher": source.Publisher,
 			"independence_key": source.IndependenceKey, "retrieved_at": source.RetrievedAt,
@@ -910,6 +914,9 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindObservation, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil); err != nil {
 				return nil, 0, err
 			}
+		}
+		if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, id); err != nil {
+			return nil, 0, err
 		}
 	}
 	return ids, created, nil
@@ -1015,6 +1022,9 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				return nil, 0, err
 			}
 			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID, evidenceID, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+				return nil, 0, err
+			}
+			if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, evidenceID); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -1128,9 +1138,12 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			}
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO research_report_claim (report_id, claim_id, section_id, anchor_quote)
-			VALUES ($1::uuid, $2::uuid, $3, $4) ON CONFLICT DO NOTHING
-		`, reportID, claimID, truncateBytes(link.SectionID, 160), truncateBytes(link.AnchorQuote, 8192)); err != nil {
+			INSERT INTO research_report_claim (
+				workspace_id, session_id, report_id, claim_id, section_id, anchor_quote
+			)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6) ON CONFLICT DO NOTHING
+		`, state.workspaceID, state.run.SessionID, reportID, claimID,
+			truncateBytes(link.SectionID, 160), truncateBytes(link.AnchorQuote, 8192)); err != nil {
 			return "", err
 		}
 	}

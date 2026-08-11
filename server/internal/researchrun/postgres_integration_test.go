@@ -308,11 +308,6 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 	}
 
 	input := testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
-	input.Request.Prompt = "immutable dispatch prompt"
-	input.Request.RequestHash, err = HashDispatchRequest(input.Request)
-	if err != nil {
-		t.Fatal(err)
-	}
 	attempt, _, err := store.CreateDispatchIntent(ctx, input)
 	if err != nil {
 		t.Fatal(err)
@@ -479,27 +474,128 @@ func (d *recordingCancellationDispatcher) Cancel(_ context.Context, ids []string
 
 func testDispatchIntentInput(t *testing.T, ctx context.Context, store *PostgresStore, sessionID, workspaceID, taskID, agentID string) CreateDispatchIntentInput {
 	t.Helper()
-	run, err := store.GetRun(ctx, sessionID, workspaceID)
-	if err != nil {
-		t.Fatalf("load run for test dispatch: %v", err)
-	}
 	task, err := store.GetTask(ctx, taskID, sessionID)
 	if err != nil {
 		t.Fatalf("load task for test dispatch: %v", err)
 	}
 	attemptID := uuid.NewString()
+	dispatchKey := "research-test:" + attemptID
+	request := testDispatchRequestForTarget(t, ctx, store, sessionID, workspaceID, task, agentID, ExecutionTarget{}, attemptID, dispatchKey)
+	return CreateDispatchIntentInput{
+		AttemptID: attemptID, SessionID: sessionID, TaskID: taskID, AgentID: agentID,
+		ExpectedStateVersion: request.Run.StateVersion, Request: request,
+	}
+}
+
+func seedIntegrationInboxEvent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, agentID string) string {
+	t.Helper()
+	inboxID := uuid.NewString()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'pending')
+	`, inboxID, workspaceID, agentID); err != nil {
+		t.Fatalf("insert integration inbox event: %v", err)
+	}
+	return inboxID
+}
+
+func seedIntegrationClaimArtifact(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, claimID, clientKey, claimText string,
+) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_claim (
+		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
+		  significance, confidence, status, goal_version, plan_version, resolution
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, $4, '', $5,
+		  'medium', 0.5, 'proposed', 1, 1, ''
+		)
+	`, claimID, workspaceID, sessionID, clientKey, claimText); err != nil {
+		t.Fatalf("insert integration claim: %v", err)
+	}
+	goalVersion, planVersion := 1, 1
+	backfillIntegrationArtifactPassport(
+		t, ctx, tx, workspaceID, sessionID, claimID, string(ArtifactKindClaim), &goalVersion, &planVersion,
+	)
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit integration claim and passport: %v", err)
+	}
+}
+
+// mutateIntegrationArtifactForCASTest bypasses policy-ledger and immutability
+// triggers so a test can model a stale manifest snapshot directly.
+func mutateIntegrationArtifactForCASTest(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	query string,
+	args ...any,
+) {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("disable integration artifact triggers: %v", err)
+	}
+	if _, err = tx.Exec(ctx, query, args...); err != nil {
+		t.Fatalf("mutate integration artifact for CAS test: %v", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit integration artifact mutation: %v", err)
+	}
+}
+
+func testDispatchRequestForTarget(
+	t *testing.T,
+	ctx context.Context,
+	store *PostgresStore,
+	sessionID, workspaceID string,
+	task Task,
+	agentID string,
+	target ExecutionTarget,
+	attemptID, dispatchKey string,
+) DispatchRequest {
+	t.Helper()
+	run, err := store.GetRun(ctx, sessionID, workspaceID)
+	if err != nil {
+		t.Fatalf("load run for test dispatch: %v", err)
+	}
+	snapshot, err := store.TaskContext(ctx, task.ID, workspaceID)
+	if err != nil {
+		t.Fatalf("load task context for test dispatch: %v", err)
+	}
+	members, err := store.ListFleetMembers(ctx, sessionID, workspaceID)
+	if err != nil {
+		t.Fatalf("load fleet members for test dispatch: %v", err)
+	}
+	prompt, err := buildTaskPrompt(run, task, Attempt{
+		ID: attemptID, SessionID: sessionID, WorkspaceID: workspaceID,
+		TaskID: task.ID, AssignedAgentID: agentID, ExecutionTarget: target, DispatchKey: dispatchKey,
+	}, snapshot, members)
+	if err != nil {
+		t.Fatalf("build test dispatch prompt: %v", err)
+	}
 	request := DispatchRequest{
 		Run: run, Task: task, AttemptID: attemptID, AgentID: agentID,
-		Prompt: "test dispatch", Key: "research-test:" + attemptID,
+		Target: target, Prompt: prompt, Key: dispatchKey,
 	}
 	request.RequestHash, err = HashDispatchRequest(request)
 	if err != nil {
 		t.Fatalf("hash test dispatch: %v", err)
 	}
-	return CreateDispatchIntentInput{
-		AttemptID: attemptID, SessionID: sessionID, TaskID: taskID, AgentID: agentID,
-		ExpectedStateVersion: run.StateVersion, Request: request,
-	}
+	return request
 }
 
 // Production regression: a deterministic SQL/adapter dispatch defect created
@@ -2171,9 +2267,11 @@ func TestV5EvaluationDefectsPersistAndReachRemediation(t *testing.T) {
 		return nil
 	})
 	if _, err = pool.Exec(ctx, `
-		INSERT INTO research_report_claim (report_id, claim_id, section_id, anchor_quote)
-		VALUES ($1::uuid, $2::uuid, 'section-alpha', 'The measured result applies everywhere without qualification.')
-	`, reportID, claimID); err != nil {
+		INSERT INTO research_report_claim (
+			workspace_id, session_id, report_id, claim_id, section_id, anchor_quote
+		)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'section-alpha', 'The measured result applies everywhere without qualification.')
+	`, fixture.workspaceID, fixture.sessionID, reportID, claimID); err != nil {
 		t.Fatal(err)
 	}
 	qualityTask, _, err := store.CreateControlTask(ctx, ControlTaskInput{
@@ -2411,6 +2509,10 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 		SessionID: fixture.sessionID, AttemptID: attempt.ID, AgentID: agentID,
 		InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
 	}); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			t.Fatalf("accept %s: %v (constraint=%s detail=%s)", clientKey, err, pgErr.ConstraintName, pgErr.Detail)
+		}
 		t.Fatalf("accept %s: %v", clientKey, err)
 	}
 }
@@ -2714,7 +2816,71 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit fixture tx: %v", err)
 	}
+	databaseURL := pool.Config().ConnString()
+	t.Cleanup(func() {
+		cleanupSeedResearchRunFixture(t, databaseURL, fixture)
+	})
 	return fixture
+}
+
+func cleanupSeedResearchRunFixture(t *testing.T, databaseURL string, fixture researchRunFixture) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Errorf("open research fixture cleanup pool: %v", err)
+		return
+	}
+	defer pool.Close()
+	for _, statement := range []string{
+		`ALTER TABLE research_artifact_version DISABLE TRIGGER research_artifact_version_immutable_guard`,
+		`ALTER TABLE research_artifact_policy_mutation DISABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
+		`ALTER TABLE research_artifact_lifecycle_event DISABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
+	} {
+		if _, err = pool.Exec(ctx, statement); err != nil {
+			t.Errorf("disable research append-only cleanup guard: %v", err)
+			return
+		}
+	}
+	cleanupErr := error(nil)
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_version
+		SET produced_by_task_id = NULL, produced_by_attempt_id = NULL, produced_by_agent_id = NULL
+		WHERE workspace_id = $1::uuid
+	`, fixture.workspaceID); err != nil {
+		cleanupErr = fmt.Errorf("clear research fixture artifact producers: %w", err)
+	}
+	if cleanupErr == nil {
+		_, err = pool.Exec(ctx, `DELETE FROM research_artifact_input_reference WHERE workspace_id = $1::uuid`, fixture.workspaceID)
+	}
+	if err != nil && cleanupErr == nil {
+		cleanupErr = fmt.Errorf("delete research fixture input references: %w", err)
+	}
+	if cleanupErr == nil {
+		_, err = pool.Exec(ctx, `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+	}
+	if err != nil && cleanupErr == nil {
+		cleanupErr = fmt.Errorf("delete research fixture workspace: %w", err)
+	}
+	if cleanupErr == nil {
+		if _, err = pool.Exec(ctx, `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID); err != nil {
+			cleanupErr = fmt.Errorf("delete research fixture user: %w", err)
+		}
+	}
+	for _, statement := range []string{
+		`ALTER TABLE research_artifact_version ENABLE TRIGGER research_artifact_version_immutable_guard`,
+		`ALTER TABLE research_artifact_policy_mutation ENABLE TRIGGER research_artifact_policy_mutation_append_only_guard`,
+		`ALTER TABLE research_artifact_lifecycle_event ENABLE TRIGGER research_artifact_lifecycle_event_append_only_guard`,
+	} {
+		if _, err = pool.Exec(ctx, statement); err != nil {
+			t.Errorf("restore research append-only cleanup guard: %v", err)
+			return
+		}
+	}
+	if cleanupErr != nil {
+		t.Error(cleanupErr)
+	}
 }
 
 func backfillIntegrationArtifactPassport(

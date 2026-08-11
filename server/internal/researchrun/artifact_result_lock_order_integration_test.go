@@ -53,11 +53,11 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent plan: %v", err)
 	}
-	planInboxID := uuid.NewString()
+	planInboxID := seedIntegrationInboxEvent(t, ctx, pool, fixture.workspaceID, fixture.agentID)
 	if _, _, err = store.AttachInboxTask(ctx, planAttempt.ID, planInboxID); err != nil {
 		t.Fatalf("AttachInboxTask plan: %v", err)
 	}
-	planRaw, err := json.Marshal(validPlanResult(t))
+	planRaw, err := json.Marshal(upgradeResultToV5(validV4PlanResult(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 	}
 	if len(discoverTasks) == 1 {
 		secondTaskID := uuid.NewString()
-		if _, err = pool.Exec(ctx, `
+		insertIntegrationTasksWithPassports(t, ctx, pool, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion, `
 			INSERT INTO research_task (
 			  id, workspace_id, session_id, client_key, kind, objective,
 			  required_capability, expected_result, status, goal_version, plan_version,
@@ -86,13 +86,11 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 			)
 			SELECT
 			  $1::uuid, t.workspace_id, t.session_id, 'discover-2', 'discover',
-			  'Second discover pass', 'scout', 'research_evidence_v1', 'ready',
+			  'Second discover pass', 'scout', t.expected_result, 'ready',
 			  t.goal_version, t.plan_version, 2, 300, now(), t.question_id
 			FROM research_task t
 			WHERE t.id = $2::uuid
-		`, secondTaskID, discoverTasks[0].ID); err != nil {
-			t.Fatalf("insert second discover task: %v", err)
-		}
+		`, []any{secondTaskID, discoverTasks[0].ID}, []string{secondTaskID})
 		discoverTasks, err = listDiscoverTasks(ctx, store, run.SessionID)
 		if err != nil || len(discoverTasks) < 2 {
 			t.Fatalf("listDiscoverTasks after insert: %v len=%d", err, len(discoverTasks))
@@ -112,11 +110,11 @@ func TestAcceptResultConcurrentOppositePayloadOrderNoDeadlock(t *testing.T) {
 		if dispatchErr != nil {
 			t.Fatalf("CreateDispatchIntent discover[%d]: %v", i, dispatchErr)
 		}
-		inboxID := uuid.NewString()
+		inboxID := seedIntegrationInboxEvent(t, ctx, pool, fixture.workspaceID, fixture.agentID)
 		if _, _, attachErr := store.AttachInboxTask(ctx, attempt.ID, inboxID); attachErr != nil {
 			t.Fatalf("AttachInboxTask discover[%d]: %v", i, attachErr)
 		}
-		evidence := evidenceResultWithReferenceOrder(i == 0)
+		evidence := upgradeResultToV5(evidenceResultWithReferenceOrder(i == 0))
 		raw, marshalErr := json.Marshal(evidence)
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
@@ -198,18 +196,7 @@ func insertLockOrderSharedClaims(
 		{lockOrderClaimLowID, "lock-order-claim-low", "low-order shared claim"},
 		{lockOrderClaimHighID, "lock-order-claim-high", "high-order shared claim"},
 	} {
-		if _, err := pool.Exec(ctx, `
-			INSERT INTO research_claim (
-			  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
-			  significance, confidence, status, goal_version, plan_version, resolution
-			) VALUES (
-			  $1::uuid, $2::uuid, $3::uuid, $4, '', $5,
-			  0.5, 0.5, 'proposed', 1, 1, ''
-			)
-		`, spec.id, workspaceID, sessionID, spec.clientKey, spec.text); err != nil {
-			t.Fatalf("insert claim %s: %v", spec.clientKey, err)
-		}
-		backfillIntegrationArtifactPassport(t, ctx, pool, workspaceID, sessionID, spec.id, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+		seedIntegrationClaimArtifact(t, ctx, pool, workspaceID, sessionID, spec.id, spec.clientKey, spec.text)
 	}
 	if lockOrderClaimLowID >= lockOrderClaimHighID {
 		t.Fatalf("fixture UUID order invalid: low=%q high=%q", lockOrderClaimLowID, lockOrderClaimHighID)
@@ -233,12 +220,12 @@ func listDiscoverTasks(ctx context.Context, store *PostgresStore, sessionID stri
 func evidenceResultWithReferenceOrder(lowBeforeHigh bool) ResultEnvelope {
 	sourceLow := SourceProposal{
 		ClientKey: "source-low", URL: "https://example.test/low", Title: "Low source",
-		Publisher: "example.test", SourceClass: "primary", IndependenceKey: "example-low",
+		Publisher: "example.test", SourceClass: "official", EvidenceTraits: []string{"official_record"}, IndependenceKey: "example-low",
 		RetrievedAt: time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC), SnapshotText: "Low source reports 1.",
 	}
 	sourceHigh := SourceProposal{
 		ClientKey: "source-high", URL: "https://example.test/high", Title: "High source",
-		Publisher: "example.test", SourceClass: "primary", IndependenceKey: "example-high",
+		Publisher: "example.test", SourceClass: "official", EvidenceTraits: []string{"official_record"}, IndependenceKey: "example-high",
 		RetrievedAt: time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC), SnapshotText: "High source reports 2.",
 	}
 	observationLow := ObservationProposal{
@@ -250,19 +237,20 @@ func evidenceResultWithReferenceOrder(lowBeforeHigh bool) ResultEnvelope {
 		Locator: "paragraph 1", Interpretation: "High reading.",
 	}
 	claimLow := ClaimProposal{
-		ClientKey: "claim-low", Text: "Low-order claim.", Significance: "medium",
+		ClientKey: "claim-low", EvidenceStandardKey: "authoritative-record", Text: "Low-order claim.", Significance: "medium",
 		Confidence: 0.7, Status: ClaimStatusSupported,
-		Evidence: []EvidenceProposal{{ObservationKey: "observation-low", Relation: "supports", Strength: 0.8}},
+		Evidence: []EvidenceProposal{{ObservationKey: "observation-low", Relation: "supports", Strength: 0.9, Directness: 0.9, MethodFit: 0.9}},
 	}
 	claimHigh := ClaimProposal{
-		ClientKey: "claim-high", Text: "High-order claim.", Significance: "medium",
+		ClientKey: "claim-high", EvidenceStandardKey: "authoritative-record", Text: "High-order claim.", Significance: "medium",
 		Confidence: 0.7, Status: ClaimStatusSupported,
-		Evidence: []EvidenceProposal{{ObservationKey: "observation-high", Relation: "supports", Strength: 0.8}},
+		Evidence: []EvidenceProposal{{ObservationKey: "observation-high", Relation: "supports", Strength: 0.9, Directness: 0.9, MethodFit: 0.9}},
 	}
 	result := ResultEnvelope{
 		SchemaVersion:   1,
 		ClientRequestID: uuid.NewString(),
 		Summary:         "evidence with ordered references",
+		AnswerClaimKey:  "claim-low",
 		CoverageDelta:   0.3,
 		Confidence:      0.7,
 	}

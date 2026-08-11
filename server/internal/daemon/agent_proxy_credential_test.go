@@ -4,7 +4,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,5 +81,45 @@ func TestAgentProxyCLITransportPinsAuthenticatedLaunchContext(t *testing.T) {
 	}
 	if err := transport.Close(); err != nil {
 		t.Fatalf("idempotent Agent Proxy CLI transport close: %v", err)
+	}
+}
+
+func TestAgentProxyCLIWrapperPreservesExistingTaskCredentialTransport(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX wrapper execution test")
+	}
+	root := t.TempDir()
+	realBinary := filepath.Join(root, "real-multica")
+	if err := os.WriteFile(realBinary, []byte("#!/bin/sh\nprintf 'agent=%s\\nworkspace=%s\\nproxy=%s\\nproxy_token_file=%s\\ntask_token_file=%s\\n' \"$MULTICA_AGENT_ID\" \"$MULTICA_WORKSPACE_ID\" \"$MULTICA_AGENT_PROXY_URL\" \"$MULTICA_AGENT_PROXY_TOKEN_FILE\" \"$MULTICA_TOKEN_FILE\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := New(Config{WorkspacesRoot: root, HealthPort: 19514}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	transport, err := d.prepareAgentProxyCLITransport(
+		InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"},
+		"runtime-1",
+		realBinary,
+	)
+	if err != nil {
+		t.Fatalf("prepare Agent Proxy CLI transport: %v", err)
+	}
+	t.Cleanup(func() { _ = transport.Close() })
+
+	command := exec.Command(transport.wrapperPath)
+	command.Env = append(os.Environ(), "MULTICA_TOKEN_FILE=/task/credential.token")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute Agent Proxy wrapper: %v: %s", err, output)
+	}
+	text := string(output)
+	for _, expected := range []string{
+		"agent=agent-1",
+		"workspace=workspace-1",
+		"proxy=http://127.0.0.1:19514",
+		"proxy_token_file=" + transport.tokenFile,
+		"task_token_file=/task/credential.token",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("Agent Proxy wrapper output omitted %q: %s", expected, text)
+		}
 	}
 }

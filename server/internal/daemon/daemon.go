@@ -3924,6 +3924,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
+	agentProxyWrapperDir := ""
 	transportAttemptPath := ""
 	resolveExecutable := d.resolveExecutable
 	if resolveExecutable == nil {
@@ -3941,6 +3942,24 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
 		} else {
 			cliBinDir = filepath.Dir(selfBin)
+			agentProxyTransport, proxyErr := d.prepareAgentProxyCLITransport(
+				InboxKey{WorkspaceID: task.WorkspaceID, AgentID: agentID},
+				task.RuntimeID,
+				selfBin,
+			)
+			if proxyErr != nil {
+				// Agent Proxy is additive for existing commands. Coverage-aware
+				// commands will fail safe after output when the local credential is
+				// unavailable; unrelated CLI commands retain their prior transport.
+				taskLog.Warn("agent proxy transport unavailable", "reason", "agent_proxy_credential_unavailable")
+			} else {
+				agentProxyWrapperDir = filepath.Dir(agentProxyTransport.wrapperPath)
+				defer func() {
+					if err := agentProxyTransport.Close(); err != nil {
+						taskLog.Warn("agent proxy transport cleanup degraded", "reason", "credential_file_cleanup_failed")
+					}
+				}()
+			}
 			if agentToken == "" {
 				taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
 			} else {
@@ -4059,12 +4078,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// `multica` resolves to the task-scoped transport wrapper first; keep the
 	// real binary directory after it as a fallback for explicit wrapper exec.
 	if cliBinDir != "" {
-		pathPrefix := cliBinDir
+		pathDirectories := make([]string, 0, 3)
+		if agentProxyWrapperDir != "" {
+			pathDirectories = append(pathDirectories, agentProxyWrapperDir)
+		}
 		if cliWrapperDir != "" {
 			agentEnv["MULTICA_TOKEN_FILE"] = cliTokenFile
-			pathPrefix = cliWrapperDir + string(os.PathListSeparator) + cliBinDir
+			pathDirectories = append(pathDirectories, cliWrapperDir)
 		}
-		agentEnv["PATH"] = pathPrefix + string(os.PathListSeparator) + os.Getenv("PATH")
+		pathDirectories = append(pathDirectories, cliBinDir, os.Getenv("PATH"))
+		agentEnv["PATH"] = strings.Join(pathDirectories, string(os.PathListSeparator))
 	}
 	// Point Codex to the Agent-scoped CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.

@@ -356,13 +356,8 @@ func TestResearchGraphMergeCrossWorkspaceRejected(t *testing.T) {
 	nA := makeTypedInputNode(t, sessionA, 1, "A")
 	nB := makeTypedInputNode(t, sessionA, 1, "B")
 
-	// Foreign node: belongs to sessionA id but is stored under a different
-	// workspace, so workspace-scoped lookup must not find it.
-	foreignID, err := uuid.NewUUID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	insertTestGraphNodeRaw(t, ctx, parseUUID(foreignID.String()), parseUUID(otherWSID.String()), sessionA, "finding", "foreign-ws", "foreign")
+	// Valid node in another workspace; merge in sessionA must not resolve it.
+	foreignID := createForeignWorkspaceFindingNode(t, ctx, parseUUID(otherWSID.String()))
 
 	code, body := doMerge(t, sessionA, agentID,
 		[]string{uuidToString(nA), uuidToString(nB), foreignID.String()},

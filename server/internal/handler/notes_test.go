@@ -97,9 +97,14 @@ func createNotePageForAITest(t *testing.T, title string) string {
 
 func createNoteAIJobForTest(t *testing.T, noteID, agentID string) NoteAIJobResponse {
 	t.Helper()
+	return createNoteAIJobWithPromptForTest(t, noteID, agentID, "rewrite this note excerpt")
+}
+
+func createNoteAIJobWithPromptForTest(t *testing.T, noteID, agentID, prompt string) NoteAIJobResponse {
+	t.Helper()
 	req := withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/ai-jobs", map[string]any{
 		"agent_id": agentID,
-		"prompt":   "rewrite this note excerpt",
+		"prompt":   prompt,
 		"title":    "Note AI Test",
 	}), "id", noteID)
 	w := httptest.NewRecorder()
@@ -201,6 +206,49 @@ func TestNoteAIJobCompletedReturnsAssistantResult(t *testing.T) {
 	}
 	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_selection" || resp.Result.Markdown != "improved note text" || resp.Result.Rationale == nil || *resp.Result.Rationale != "cleaner" {
 		t.Fatalf("completed job response = %#v", resp)
+	}
+}
+
+func TestNoteAIJobRepairsSelectedMarkdownOnlyResult(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Repair Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI repair note "+uuid.NewString())
+	prompt := `You are editing a selected Markdown excerpt inside a user's note.
+For selected Markdown excerpt edits, action MUST be "replace_selection". Do not use insert, replace_page, or patch.
+Selected Markdown excerpt to replace:
+<selection>
+old text
+</selection>`
+	job := createNoteAIJobWithPromptForTest(t, noteID, agentID, prompt)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now()
+		WHERE id = $1
+	`, job.TaskID); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO chat_message (chat_session_id, role, content, task_id)
+		VALUES ($1, 'assistant', $2, $3)
+	`, job.ChatSessionID, "**Improved** [text](https://example.com)", job.TaskID); err != nil {
+		t.Fatalf("insert assistant result: %v", err)
+	}
+
+	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/ai-jobs/"+job.ID, nil), "jobId", job.ID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteAIJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNoteAIJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode repaired job: %v", err)
+	}
+	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_selection" || resp.Result.Markdown != "**Improved** [text](https://example.com)" || resp.FailureReason != nil {
+		t.Fatalf("repaired job response = %#v, want completed replace_selection result", resp)
 	}
 }
 

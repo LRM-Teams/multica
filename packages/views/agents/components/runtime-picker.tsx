@@ -24,6 +24,7 @@ import {
   runtimePickerBrandLabel,
   runtimePickerHostSubtitle,
 } from "./runtime-picker-labels";
+import { isRuntimeUsableForUser } from "./runtime-usability";
 
 export function RuntimePicker({
   runtimes,
@@ -172,17 +173,6 @@ export function RuntimePicker({
       </Popover>
     </div>
   );
-}
-
-// Visibility gate exposed so the parent can defend Create against a locked
-// selection (e.g. duplicate of an agent whose runtime is now private).
-export function isRuntimeUsableForUser(
-  r: RuntimeDevice,
-  currentUserId: string | null,
-): boolean {
-  if (!currentUserId) return true;
-  if (r.owner_id === currentUserId) return true;
-  return r.visibility === "public";
 }
 
 // Others' private runtimes are excluded, not shown-disabled — a private

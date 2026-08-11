@@ -1,6 +1,6 @@
 import type { RuntimeDevice } from "@multica/core/types";
 import type { RuntimeMachine } from "../../runtimes/components/runtime-machines";
-import { isRuntimeUsableForUser } from "./runtime-picker";
+import { isRuntimeUsableForUser } from "./runtime-usability";
 
 export function machineForRuntime(
   runtime: RuntimeDevice | null | undefined,

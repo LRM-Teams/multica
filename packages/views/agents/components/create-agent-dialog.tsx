@@ -8,7 +8,7 @@ import {
   firstRuntimeIdOnMachine,
   machineForRuntime,
 } from "./computer-picker-utils";
-import { isRuntimeUsableForUser } from "./runtime-picker";
+import { isRuntimeUsableForUser } from "./runtime-usability";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";

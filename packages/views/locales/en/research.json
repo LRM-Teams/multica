@@ -989,7 +989,10 @@
     },
     "summary": {
       "title": "Constellation · {{loaded}} loaded directions",
-      "detail": "{{stable}} stable · {{active}} active · {{newDir}} new · {{stopped}} stopped"
+      "title_with_total": "Constellation · {{loaded}} / {{total}} directions",
+      "detail": "{{stable}} stable · {{active}} active · {{newDir}} new · {{stopped}} stopped",
+      "load_more": "Load more ({{count}} remaining)",
+      "load_more_pending": "Loading more…"
     },
     "cluster_hidden": "+{{count}} hidden",
     "graph_live": {

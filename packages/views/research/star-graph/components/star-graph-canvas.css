@@ -170,6 +170,22 @@
   color: var(--muted-foreground);
   font-size: 8px;
 }
+.sg-summary-load-more {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-size: 9px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.sg-summary-load-more:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
 .sg-lens-dim {
   opacity: 0.34;
   filter: saturate(0.55);

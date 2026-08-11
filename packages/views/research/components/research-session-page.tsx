@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
@@ -15,7 +15,8 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import {
   dedupeResearchFleetMembers,
   isResearchD5Lens,
-  researchGraphTypedOptions,
+  mergeTypedGraphPages,
+  researchGraphTypedInfiniteOptions,
   researchKeys,
   researchPresenceOptions,
   researchProductRoundsOptions,
@@ -185,10 +186,20 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const {
-    data: typedGraph,
+    data: typedGraphPages,
     isLoading: typedGraphLoading,
     isError: typedGraphError,
-  } = useQuery(researchGraphTypedOptions(wsId, sessionId));
+    fetchNextPage: fetchNextTypedGraphPage,
+    hasNextPage: typedGraphHasNextPage,
+    isFetchingNextPage: typedGraphFetchingNextPage,
+  } = useInfiniteQuery(researchGraphTypedInfiniteOptions(wsId, sessionId));
+  const typedGraph = useMemo(
+    () =>
+      typedGraphPages?.pages.length
+        ? mergeTypedGraphPages(typedGraphPages.pages)
+        : undefined,
+    [typedGraphPages],
+  );
   useEffect(() => {
     const fromUrl = nav.searchParams.get("lens");
     if (isResearchD5Lens(fromUrl) && fromUrl !== d5Lens) {
@@ -647,6 +658,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           typedGraph={typedGraph}
           typedLoading={typedGraphLoading}
           typedError={typedGraphError}
+          typedGraphHasNextPage={typedGraphHasNextPage === true}
+          typedGraphLoadMorePending={typedGraphFetchingNextPage}
+          onLoadMoreTypedGraph={
+            typedGraphHasNextPage ? () => void fetchNextTypedGraphPage() : undefined
+          }
           snapshotNodes={data.nodes}
           selectedNode={selectedNode}
           onSelectNode={handleSelectCanvasNode}

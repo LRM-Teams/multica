@@ -175,3 +175,79 @@ export function indexTypedGraphNodes(nodes: readonly TypedGraphNode[]): TypedGra
   }
   return index;
 }
+
+function mergeRecordOfString(
+  maps: readonly Record<string, string>[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const map of maps) {
+    for (const [key, value] of Object.entries(map)) {
+      if (!(key in out)) out[key] = value;
+    }
+  }
+  return out;
+}
+
+function mergeRecordOfStringArray(
+  maps: readonly Record<string, string[]>[],
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const map of maps) {
+    for (const [key, values] of Object.entries(map)) {
+      const bucket = out[key] ?? [];
+      const seen = new Set(bucket);
+      for (const value of values) {
+        if (seen.has(value)) continue;
+        bucket.push(value);
+        seen.add(value);
+      }
+      out[key] = bucket;
+    }
+  }
+  return out;
+}
+
+/** Merge paginated typed-graph pages into one render pass (deduped, stable order). */
+export function mergeTypedGraphPages(pages: readonly TypedGraphResponse[]): TypedGraphResponse {
+  if (pages.length === 0) return { ...EMPTY_TYPED_GRAPH };
+  const first = pages[0]!;
+  const nodeById = new Map<string, TypedGraphNode>();
+  const edgeByKey = new Map<string, TypedGraphEdge>();
+  const clusterById = new Map<string, TypedGraphCluster>();
+  let graphVersion = first.graph_version ?? 0;
+
+  for (const page of pages) {
+    graphVersion = Math.max(graphVersion, page.graph_version ?? 0);
+    for (const node of page.nodes ?? []) {
+      if (node?.id && !nodeById.has(node.id)) nodeById.set(node.id, node);
+    }
+    for (const edge of page.edges ?? []) {
+      const key =
+        edge.id ||
+        `${edge.from_node_id}:${edge.to_node_id}:${edge.edge_type ?? ""}`;
+      if (!edgeByKey.has(key)) edgeByKey.set(key, edge);
+    }
+    for (const cluster of page.clusters ?? []) {
+      const id = cluster.id || cluster.name;
+      if (id && !clusterById.has(id)) clusterById.set(id, cluster);
+    }
+  }
+
+  const lineagePages = pages.map((page) => page.lineage ?? EMPTY_TYPED_GRAPH.lineage);
+  return {
+    session_id: first.session_id,
+    graph_version: graphVersion,
+    total_node_count: first.total_node_count ?? null,
+    nodes: [...nodeById.values()],
+    edges: [...edgeByKey.values()],
+    clusters: [...clusterById.values()],
+    lineage: {
+      derived: mergeRecordOfString(lineagePages.map((l) => l.derived ?? {})),
+      merged: mergeRecordOfStringArray(lineagePages.map((l) => l.merged ?? {})),
+      superseded: mergeRecordOfString(lineagePages.map((l) => l.superseded ?? {})),
+      restarted: mergeRecordOfString(lineagePages.map((l) => l.restarted ?? {})),
+      invalidated: mergeRecordOfString(lineagePages.map((l) => l.invalidated ?? {})),
+      supersedes: mergeRecordOfStringArray(lineagePages.map((l) => l.supersedes ?? {})),
+    },
+  };
+}

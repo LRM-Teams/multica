@@ -1,0 +1,114 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  computeEntityBounds,
+  fitCameraToBounds,
+  quadraticEdgePath,
+  relationEdgeClass,
+  zoomCamera,
+  zoomPercent,
+} from "./star-graph-canvas-utils";
+
+describe("star-graph-canvas-utils", () => {
+  it("computes bounds from entity circles", () => {
+    const bounds = computeEntityBounds([
+      {
+        id: "a",
+        tier: "l",
+        x: 0,
+        y: 0,
+        radius: 84,
+        label: { halfWidth: 40, halfHeight: 20 },
+        clusterId: null,
+        angle: 0,
+        radiusOffset: 0,
+        parentId: null,
+        view: {
+          id: "a",
+          tier: "l",
+          tierSource: "typed",
+          state: "default",
+          title: "A",
+        },
+      },
+      {
+        id: "b",
+        tier: "s",
+        x: 200,
+        y: 100,
+        radius: 29,
+        label: { halfWidth: 20, halfHeight: 10 },
+        clusterId: null,
+        angle: 0,
+        radiusOffset: 0,
+        parentId: "a",
+        view: {
+          id: "b",
+          tier: "s",
+          tierSource: "typed",
+          state: "run",
+          title: "Probe",
+        },
+      },
+    ]);
+
+    expect(bounds).toEqual({
+      minX: -84,
+      minY: -84,
+      maxX: 229,
+      maxY: 129,
+      width: 313,
+      height: 213,
+      centerX: 72.5,
+      centerY: 22.5,
+    });
+  });
+
+  it("fits camera to bounds inside viewport", () => {
+    const bounds = computeEntityBounds([
+      {
+        id: "a",
+        tier: "m",
+        x: 0,
+        y: 0,
+        radius: 48,
+        label: { halfWidth: 24, halfHeight: 12 },
+        clusterId: null,
+        angle: 0,
+        radiusOffset: 0,
+        parentId: null,
+        view: {
+          id: "a",
+          tier: "m",
+          tierSource: "typed",
+          state: "default",
+          title: "A",
+        },
+      },
+    ])!;
+    const camera = fitCameraToBounds(bounds, { width: 800, height: 600 });
+    expect(camera.zoom).toBeGreaterThan(0);
+    expect(zoomPercent(camera)).toBeGreaterThan(0);
+  });
+
+  it("maps relation kinds to edge classes", () => {
+    expect(relationEdgeClass("decompose", "leads_to")).toBe("sg-edge-decompose");
+    expect(relationEdgeClass("support", "supports")).toBe("sg-edge-support");
+    expect(relationEdgeClass("challenge", "contradicts")).toBe("sg-edge-challenge");
+    expect(relationEdgeClass("newdir", "discussed_by")).toBe("sg-edge-newdir");
+    expect(relationEdgeClass("support", "merged_from")).toBe("sg-edge-merge");
+  });
+
+  it("builds a curved edge path", () => {
+    expect(
+      quadraticEdgePath({ x: 0, y: 0 }, { x: 100, y: 50 }),
+    ).toMatch(/^M 0\.0 0\.0 Q .+ .+ 100\.0 50\.0$/);
+  });
+
+  it("zooms around an anchor point", () => {
+    const next = zoomCamera({ x: 10, y: 20, zoom: 1 }, 2, { x: 100, y: 100 });
+    expect(next.zoom).toBe(2);
+    expect(next.x).not.toBe(10);
+    expect(next.y).not.toBe(20);
+  });
+});

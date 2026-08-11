@@ -14,6 +14,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
   dedupeResearchFleetMembers,
+  researchGraphTypedOptions,
   researchKeys,
   researchPresenceOptions,
   researchProductRoundsOptions,
@@ -26,7 +27,6 @@ import type {
   ResearchProductRoundCard,
 } from "@multica/core/types";
 import { memberListOptions } from "@multica/core/workspace/queries";
-import { createSafeId } from "@multica/core/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
@@ -63,14 +63,10 @@ import {
 import { deliveryContentCount } from "../lib/delivery-mode";
 import {
   buildHumanBoundary,
-  buildSourceStrategy,
   dimensionFamilyOf,
-  evidenceRevisionKey,
-  readErrorStatus,
-  resolveEvidenceOverviewMode,
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
-import { buildRunV2CanvasViewModel } from "../lib/run-v2-canvas-view-model";
+import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -85,16 +81,9 @@ import {
 import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
-import { TrajectoryExplorer } from "../trajectory-explorer";
-import { HumanBoundaryCard } from "./human-boundary-card";
-import { ResearchAuxDrawer } from "./research-aux-drawer";
-import { ResearchEvidencePulse } from "./research-evidence-pulse";
-import { ExecutionOverlayPanel } from "../execution-overlay/index";
-import { ResearchCanvas } from "./research-canvas";
-import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
-import { ResearchCanvasForming } from "./research-canvas-forming";
+import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
+import { ResearchD5Chrome } from "./research-d5-chrome";
 import { ResearchChatCard } from "./research-chat-card";
-import { ResearchChatDrawer } from "./research-chat-drawer";
 import {
   ResearchChatModeBody,
   ResearchChatModeChip,
@@ -104,11 +93,9 @@ import { ResearchConnectivityShell } from "./research-connectivity-shell";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
-import { type ResearchAuxPanelId } from "./research-module-rail";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchServerErrorPage } from "./research-server-error-page";
-import { ResearchSessionChrome } from "./research-session-chrome";
 import {
   ResearchSessionInterruptBanner,
   type InterruptBannerPhase,
@@ -118,7 +105,6 @@ import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import {
   ResearchStageChatMarker,
 } from "./research-stage-timeline";
-import { SourceStrategyStrip } from "./source-strategy-strip";
 
 type UiState = {
   selected: ResearchGraphNode | null;
@@ -187,11 +173,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
-  // LRM-1061 — one aux drawer at a time (trajectory | sources | detail).
-  const linkedPanel = nav.searchParams.get("panel");
-  const [auxPanel, setAuxPanel] = useState<ResearchAuxPanelId | null>(
-    linkedPanel === "trajectory" || linkedPanel === "sources" || linkedPanel === "detail" ? linkedPanel : null,
-  );
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
@@ -204,14 +185,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
   );
-  const {
-    data: presence = {},
-    isError: isPresenceError,
-    isFetching: isPresenceFetching,
-    refetch: refetchPresence,
-    dataUpdatedAt: presenceSyncTime,
-  } = useQuery(researchPresenceOptions(wsId, sessionId));
+  const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
+  const {
+    data: typedGraph,
+    isLoading: typedGraphLoading,
+    isError: typedGraphError,
+  } = useQuery(researchGraphTypedOptions(wsId, sessionId));
+  const [d5Lens, setD5Lens] = useState<ResearchD5Lens>("relations");
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
@@ -303,22 +284,13 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     onError: (err) => mutationErrorToast(t(($) => $.session_page.handoff_failed), err),
   });
 
-  // LRM-890 M2 visibility models — derived from graph nodes / sources / report.
-  const sourceStrategy = useMemo(
-    () => buildSourceStrategy(data?.sources ?? []),
-    [data?.sources],
-  );
+  // LRM-890 M2 visibility models — derived from graph nodes / report.
   const humanBoundary = useMemo(
     () => buildHumanBoundary(data?.nodes ?? [], data?.report),
     [data?.nodes, data?.report],
   );
 
   // LRM-824 — anchor targets (hooks must stay above the early returns below).
-  const runCanvas = useMemo(
-    () => buildRunV2CanvasViewModel(data?.nodes ?? [], data?.run, data?.fleet.members ?? []),
-    [data?.nodes, data?.run, data?.fleet.members],
-  );
-
   const stageFirstMessageId = useMemo(
     () => buildStageMessageAnchors(data?.messages ?? []),
     [data?.messages],
@@ -467,33 +439,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     nodes: data.nodes,
     run: data.run,
   });
-  const locateExecutionAgent = (agent: (typeof executionRows)[number]) => {
-    const node = agent.currentNodeId
-      ? data.nodes.find((candidate) => candidate.id === agent.currentNodeId)
-      : undefined;
-    if (!node) return;
-    dispatch({ type: "select", node });
-  };
-  // Bidirectional locate: when a canvas node is selected, highlight the agent
-  // row that owns it (node → agent), alongside agent → node (locate button).
-  const highlightAgentId =
-    selectedNode && selectedNode.id
-      ? (executionRows.find((row) => row.currentNodeId === selectedNode.id)?.id ?? null)
-      : null;
   // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
-  // Signal error with a non-empty token only — never pass raw API strings into
-  // the drawer (safe copy lives in EvidencePulse i18n / role=alert).
-  const evidenceFetchFailed = Boolean(isError && data);
-  const evidenceOverview = resolveEvidenceOverviewMode({
-    sourceModel: sourceStrategy,
-    boundaryModel: humanBoundary,
-    sessionStatus: session.status,
-    error: evidenceFetchFailed ? "evidence_unavailable" : null,
-    errorStatus: evidenceFetchFailed ? readErrorStatus(error) : null,
-  });
-  const evidenceRevision = evidenceRevisionKey(sourceStrategy, humanBoundary);
-  const hideEvidenceCards =
-    evidenceOverview === "error" || evidenceOverview === "permission";
   const canvasMode = resolveCanvasBodyMode({
     nodes: data.nodes,
     edges: data.edges,
@@ -600,7 +546,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     >
       {/* LRM-971: homepage-family shell atmosphere behind chrome + canvas. */}
       <ResearchShellAtmosphere heightClassName="h-[320px]" />
-      <ResearchSessionChrome
+      <ResearchD5Chrome
+        activeLens={d5Lens}
+        onLensChange={setD5Lens}
         session={session}
         contract={data.run?.contract}
         canConfirm={canConfirm}
@@ -644,186 +592,53 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
       {/* LRM-1112: S1–S4 timeline lives inside the single header surface (L2). */}
       <div className="relative flex min-h-0 flex-1">
-        <section
-          className="relative z-[1] min-h-0 min-w-0 flex-1"
-          data-testid="research-session-canvas-host"
-        >
-          <ResearchCanvas
-            nodes={runCanvas.nodes}
-            edges={data.edges}
-            sources={sources}
-            members={fleet.members}
-            run={data.run}
-            runBlockers={runCanvas.blockers}
-            runDegraded={runCanvas.degraded}
-            sessionStatus={session.status}
-            presence={presence}
-            selectedId={selectedNode?.id}
-            onSelect={(node) => dispatch({ type: "select", node })}
-            onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
-            onOpenChat={() => setChatOpen(true)}
-            chatOpen={chatOpen}
-            chatMode={chatMode}
-            detailPlacement="drawer"
-            auxPanel={auxPanel}
-            onAuxPanelSelect={(id) =>
-              setAuxPanel((prev) => (prev === id ? null : id))
-            }
-            onOpenDetail={(node) => {
-              dispatch({ type: "select", node });
-              setAuxPanel("detail");
-            }}
-            onNodeCommand={async (node, action) => {
-              await api.postResearchNodeCommand(sessionId, node.id, {
-                action,
-                client_request_id: createSafeId(),
-              });
-              await qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
-              dispatch({ type: "select", node });
-              toast.success(t(($) => $.ring.success));
-            }}
-          />
-          <div className="pointer-events-none absolute right-3 top-3 z-20 w-[min(22rem,calc(100%-1.5rem))]">
-            <ExecutionOverlayPanel
-              rows={executionRows}
-              className="pointer-events-auto max-h-[min(32rem,calc(100vh-12rem))] overflow-y-auto"
-              sync={{
-                disconnected: isPresenceError,
-                lastSyncedAt: presenceSyncTime,
-                onRetry: () => {
-                  void refetchPresence();
-                },
-                isRetrying: isPresenceFetching,
-              }}
-              onLocate={locateExecutionAgent}
-              highlightAgentId={highlightAgentId}
-            />
-          </div>
-          {canvasMode === "forming" || canvasMode === "stalled" ? (
-            <ResearchCanvasForming
-              mode={canvasMode}
-              stage={session.current_stage}
-              members={fleet.members}
-              tasks={data.run?.tasks ?? []}
-              messages={messages}
-            />
-          ) : null}
-          {canvasMode === "empty" ? <ResearchCanvasEmptyState /> : null}
-
-          <ResearchAuxDrawer
-            panel={auxPanel}
-            onClose={() => setAuxPanel(null)}
-          >
-            {auxPanel === "trajectory" ? (
-              <TrajectoryExplorer
-                nodes={data.nodes}
-                sessionStatus={session.status}
-                selectedId={selectedNode?.id ?? null}
-                onSelect={(id) => {
-                  const node = id
-                    ? data.nodes.find((n) => n.id === id) ?? null
-                    : null;
-                  dispatch({ type: "select", node });
-                }}
-                onJumpToCanvas={(id) => {
-                  const node = data.nodes.find((n) => n.id === id) ?? null;
-                  dispatch({ type: "select", node });
-                  setAuxPanel(null);
-                }}
-                onOpenNodeDetail={(id) => {
-                  const node = data.nodes.find((n) => n.id === id) ?? null;
-                  if (node) {
-                    dispatch({ type: "select", node });
-                    setAuxPanel("detail");
-                  }
-                }}
-                loading={isLoading || (isFetching && !data)}
-                error={error ? (error as Error).message || "Failed to load trajectory" : null}
-                onRetry={() => {
-                  void refetch();
-                }}
+        <ResearchConstellationWorkspace
+          className="min-h-0 flex-1"
+          typedGraph={typedGraph}
+          typedLoading={typedGraphLoading}
+          typedError={typedGraphError}
+          snapshotNodes={data.nodes}
+          selectedNode={selectedNode}
+          onSelectNode={(node) => dispatch({ type: "select", node })}
+          executionRows={executionRows}
+          onOpenAgentPanel={handleOpenAgentPanel}
+          canvasMode={canvasMode}
+          activeLens={d5Lens}
+          formingMode={
+            canvasMode === "forming" || canvasMode === "stalled" ? canvasMode : undefined
+          }
+          formingStage={session.current_stage}
+          formingMembers={fleet.members}
+          formingTasks={data.run?.tasks ?? []}
+          formingMessages={messages}
+          detailPanel={
+            selectedNode ? (
+              <ResearchNodeDetail
+                node={selectedNode}
+                sources={sources}
+                run={data.run}
+                members={fleet.members}
+                open
+                placement="inline"
+                onClose={() => dispatch({ type: "select", node: null })}
               />
-            ) : null}
-            {auxPanel === "sources" ? (
-              <div className="space-y-3">
-                <ResearchEvidencePulse
-                  mode={evidenceOverview}
-                  revisionKey={evidenceRevision}
-                  onRetry={
-                    evidenceOverview === "error"
-                      ? () => {
-                          void refetch();
-                        }
-                      : undefined
-                  }
-                  retryPending={evidenceFetchFailed && isFetching}
-                />
-                {hideEvidenceCards ? null : (
-                  <>
-                    <SourceStrategyStrip
-                      model={sourceStrategy}
-                      sessionStatus={session.status}
-                    />
-                    <HumanBoundaryCard
-                      model={humanBoundary}
-                      sessionStatus={session.status}
-                    />
-                  </>
-                )}
-              </div>
-            ) : null}
-            {auxPanel === "execution" ? (
-              <ExecutionOverlayPanel
-                rows={executionRows}
-                sync={{
-                  disconnected: isPresenceError,
-                  lastSyncedAt: presenceSyncTime,
-                  onRetry: () => {
-                    void refetchPresence();
-                  },
-                  isRetrying: isPresenceFetching,
-                }}
-                onLocate={locateExecutionAgent}
-                highlightAgentId={highlightAgentId}
-              />
-            ) : null}
-            {auxPanel === "detail" ? (
-              selectedNode ? (
-                <ResearchNodeDetail
-                  node={selectedNode}
-                  sources={sources}
-                  run={data.run}
-                  members={fleet.members}
-                  open
-                  placement="overlay-card"
-                  onClose={() => {
-                    dispatch({ type: "select", node: null });
-                    setAuxPanel(null);
-                  }}
-                />
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  {t(($) => $.panel.aux_detail_empty)}
-                </p>
-              )
-            ) : null}
-          </ResearchAuxDrawer>
-
-          <ResearchChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
+            ) : (
+              <p className="p-4 text-sm text-muted-foreground">
+                {t(($) => $.panel.aux_detail_empty)}
+              </p>
+            )
+          }
+          chatPanel={
+            <>
             <div
-              className="flex items-center justify-between gap-2 border-b px-3 py-2.5"
+              className="flex items-center gap-2 border-b px-3 py-2.5"
               data-testid="research-chat-header"
               data-chat-mode={chatMode}
             >
-              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                <div className="text-sm font-semibold text-foreground">
-                  {t(($) => $.panel.chat)}
-                </div>
-                <ResearchChatModeChip mode={chatMode} />
+              <div className="text-sm font-semibold text-foreground">
+                {t(($) => $.panel.chat)}
               </div>
-              <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
-                {t(($) => $.panel.hide_chat)}
-              </Button>
+              <ResearchChatModeChip mode={chatMode} />
             </div>
             <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
               {t(($) => $.panel.fleet)}:{" "}
@@ -1017,6 +832,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 <span className="text-muted-foreground">{t(($) => $.panel.paused_hint)}</span>
               </output>
             ) : null}
+            </>
+          }
+          composer={
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
                 <Textarea
@@ -1098,8 +916,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 </div>
               </div>
             </div>
-          </ResearchChatDrawer>
-        </section>
+          }
+        />
 
         {!isMobile && agentPanelNode ? (
           <div

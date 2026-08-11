@@ -6,3 +6,4 @@
  * shared across Web and Desktop. Business logic never enters `packages/ui`.
  */
 export * from "./lib";
+export * from "./components";

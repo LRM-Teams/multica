@@ -959,5 +959,42 @@
     "deadlock_reason": "Deadlock reason",
     "escalation_reason": "Escalation reason",
     "severity_label": "Severity"
+  },
+  "d5": {
+    "brand_title": "Research Constellation · D5",
+    "brand_subtitle": "XXL / XL / L / M results · S agent work nodes",
+    "lens_group": "Display lenses",
+    "lens": {
+      "relations": "Relations",
+      "confidence": "Confidence",
+      "agent": "Agent",
+      "lineage": "Lineage"
+    },
+    "rail": {
+      "chat_tab": "Chat with director",
+      "detail_tab": "Node detail"
+    },
+    "summary": {
+      "title": "Constellation · {{loaded}} loaded directions",
+      "detail": "{{stable}} stable · {{active}} active · {{newDir}} new · {{stopped}} stopped"
+    },
+    "new_frontier_label": "NEW FRONTIERS",
+    "canvas": {
+      "loading": "Loading constellation…",
+      "error": "Could not load the typed research graph."
+    },
+    "inspector": {
+      "close": "Close inspector",
+      "objective": "Current objective",
+      "no_task": "No active task",
+      "phase": "Phase · {{phase}}",
+      "completed": "Completed",
+      "current": "In progress",
+      "open_agent": "Open agent settings"
+    },
+    "report": {
+      "title": "Node report",
+      "empty_summary": "No report summary is available for this node yet."
+    }
   }
 }

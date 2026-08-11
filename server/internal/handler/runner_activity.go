@@ -70,7 +70,10 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID); err != nil {
 			return err
 		}
-		return h.dispatchPendingRunnerLaunches(ctx, identity)
+		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
+			return err
+		}
+		return h.dispatchPendingRunnerStops(ctx, identity)
 	case protocol.EventAgentStatus:
 		var status protocol.AgentStatusPayload
 		if err := json.Unmarshal(raw, &status); err != nil {

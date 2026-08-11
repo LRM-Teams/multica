@@ -305,6 +305,71 @@ func TestPendingRunnerLaunchDispatchUsesCurrentAttachmentAndStableIntentID(t *te
 	}
 }
 
+func TestPendingRunnerStopDispatchUsesCurrentLaunchID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID, runtimeID := createHandlerTestAgent(t, "runner-stop-"+uuid.NewString()[:8], nil), handlerTestRuntimeID(t)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_launch (
+			workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status
+		) VALUES ($1, $2, $3, 'daemon-1', 'instance-1', 'launch-current', 'active')`, testWorkspaceID, agentID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_lifecycle_operation (
+			workspace_id, agent_id, runtime_id, actor_user_id, idempotency_key,
+			action_kind, status, execution_mode, step, started_at
+		) VALUES ($1, $2, $3, $4, $5, 'restart', 'running', 'immediate', 'restart_runtime', now())`,
+		testWorkspaceID, agentID, runtimeID, testUserID, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	hub := daemonws.NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	readyPayload, _ := json.Marshal(protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})
+	ready, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: readyPayload})
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for hub.WorkspaceRunnerConnectionCount("daemon-1", testWorkspaceID) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("Runner did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h := *testHandler
+	h.DaemonHub = hub
+	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if err := h.dispatchPendingRunnerStops(ctx, identity); err != nil {
+		t.Fatalf("dispatch pending Runner stop: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frame protocol.Message
+	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStop {
+		t.Fatalf("Runner stop frame=%+v err=%v", frame, err)
+	}
+	var stop protocol.WorkspaceRunnerAgentStopPayload
+	if err := json.Unmarshal(frame.Payload, &stop); err != nil || stop.AgentID != agentID || stop.LaunchID != "launch-current" {
+		t.Fatalf("Runner stop payload=%+v err=%v", stop, err)
+	}
+}
+
 func TestRunnerDisconnectFencesExactInstanceAndPublishesOnce(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -87,6 +87,38 @@ func TestWorkspaceRunnerManagedStartRequiresMatchingAttachment(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerManagedStopRejectsStaleLaunchID(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+	}); err != nil {
+		t.Fatalf("attach Agent before start: %v", err)
+	}
+	first, _, _, err := runner.startManagedAgent(protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: "start-1"})
+	if err != nil {
+		t.Fatalf("start initial managed Agent: %v", err)
+	}
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: agentID, LaunchID: first.LaunchID}); err != nil {
+		t.Fatalf("stop initial managed launch: %v", err)
+	}
+	replacement, _, _, err := runner.startManagedAgent(protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: "start-2"})
+	if err != nil {
+		t.Fatalf("start replacement managed Agent: %v", err)
+	}
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: agentID, LaunchID: first.LaunchID}); err == nil {
+		t.Fatal("stale stop accepted after replacement launch")
+	}
+	current, found := runner.processes.Snapshot(agentID)
+	if !found || current.LaunchID != replacement.LaunchID {
+		t.Fatalf("stale stop changed replacement launch: found=%v current=%+v replacement=%+v", found, current, replacement)
+	}
+}
+
 func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, nil)

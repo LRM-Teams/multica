@@ -1175,6 +1175,9 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
 			return nil, err
 		}
+		if err := h.dispatchPendingRunnerStops(ctx, identity); err != nil {
+			return nil, err
+		}
 		ack.PendingAgentStartIntents = nil
 	}
 	return ack, nil

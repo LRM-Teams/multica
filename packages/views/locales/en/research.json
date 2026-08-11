@@ -972,7 +972,14 @@
     },
     "rail": {
       "chat_tab": "Chat with director",
-      "detail_tab": "Node detail"
+      "detail_tab": "Node detail",
+      "hide": "Hide panel",
+      "show": "Show panel"
+    },
+    "goal_panel": {
+      "title": "Goal versions",
+      "version": "v{{version}}",
+      "current": "Current"
     },
     "summary": {
       "title": "Constellation · {{loaded}} loaded directions",
@@ -994,7 +1001,12 @@
     },
     "report": {
       "title": "Node report",
-      "empty_summary": "No report summary is available for this node yet."
+      "empty_summary": "No report summary is available for this node yet.",
+      "lineage_title": "Merged inputs",
+      "goal_version": "Goal version {{version}}"
+    },
+    "change_receipt": {
+      "title": "Canvas update · {{op}}"
     }
   }
 }

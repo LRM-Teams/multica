@@ -972,7 +972,14 @@
     },
     "rail": {
       "chat_tab": "与调研主理人聊天",
-      "detail_tab": "节点详情"
+      "detail_tab": "节点详情",
+      "hide": "收起面板",
+      "show": "展开面板"
+    },
+    "goal_panel": {
+      "title": "目标版本",
+      "version": "v{{version}}",
+      "current": "当前"
     },
     "summary": {
       "title": "调研星图 · 已加载 {{loaded}} 条方向",
@@ -994,7 +1001,12 @@
     },
     "report": {
       "title": "节点报告",
-      "empty_summary": "该节点还没有可展示的报告摘要。"
+      "empty_summary": "该节点还没有可展示的报告摘要。",
+      "lineage_title": "融合输入",
+      "goal_version": "目标版本 {{version}}"
+    },
+    "change_receipt": {
+      "title": "画布变更 · {{op}}"
     }
   }
 }

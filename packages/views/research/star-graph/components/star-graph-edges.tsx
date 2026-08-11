@@ -1,5 +1,7 @@
 "use client";
 
+import { cn } from "@multica/ui/lib/utils";
+import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
 import type { StarRelationView } from "../lib/star-canvas-view-model";
 import { quadraticEdgePath, relationEdgeClass } from "./star-graph-canvas-utils";
 
@@ -7,10 +9,12 @@ export function StarGraphEdges({
   relations,
   width,
   height,
+  lensHints,
 }: {
   relations: readonly StarRelationView[];
   width: number;
   height: number;
+  lensHints?: D5LensDisplayHints;
 }) {
   if (relations.length === 0 || width <= 0 || height <= 0) return null;
 
@@ -34,7 +38,11 @@ export function StarGraphEdges({
           data-testid={`star-graph-edge-${relation.id}`}
           data-kind={relation.kind}
           data-edge-type={relation.edgeType}
-          className={relationEdgeClass(relation.kind, relation.edgeType)}
+          className={cn(
+            relationEdgeClass(relation.kind, relation.edgeType),
+            lensHints?.dimmedRelationIds.has(relation.id) && "sg-lens-dim",
+            lensHints?.emphasizedRelationIds.has(relation.id) && "sg-lens-emphasis",
+          )}
           d={quadraticEdgePath(relation.from, relation.to)}
         />
       ))}

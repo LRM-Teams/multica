@@ -9,16 +9,26 @@ import {
   type ReactNode,
 } from "react";
 import type { TypedGraphResponse } from "@multica/core/research";
-import type { ResearchGraphNode } from "@multica/core/types";
+import type {
+  ResearchFleetMember,
+  ResearchGraphNode,
+  ResearchRunSnapshot,
+  ResearchSource,
+} from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
+import { Button } from "@multica/ui/components/ui/button";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { buildD5SessionCanvasModel } from "../lib/build-d5-session-canvas";
+import { buildTypedGraphMotionEvents } from "../lib/build-typed-graph-motion-events";
+import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
 import type { CanvasBodyMode } from "../lib/canvas-body-mode";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import type { ExecutionRow } from "../execution-overlay";
+import { semanticMotionCss } from "../motion/directives";
+import { useSemanticTransition } from "../motion/use-semantic-transition";
 import { StarGraphCanvas } from "../star-graph";
 import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
@@ -38,6 +48,9 @@ export function ResearchConstellationWorkspace({
   onOpenAgentPanel,
   canvasMode,
   activeLens,
+  sources,
+  run,
+  members,
   formingMode,
   formingStage,
   formingMembers,
@@ -58,6 +71,9 @@ export function ResearchConstellationWorkspace({
   onOpenAgentPanel: OpenAgentPanelFn;
   canvasMode: CanvasBodyMode;
   activeLens: ResearchD5Lens;
+  sources: ResearchSource[];
+  run?: ResearchRunSnapshot;
+  members: ResearchFleetMember[];
   formingMode?: "forming" | "stalled";
   formingStage?: string;
   formingMembers?: Parameters<typeof ResearchCanvasForming>[0]["members"];
@@ -71,12 +87,24 @@ export function ResearchConstellationWorkspace({
   const { t } = useT("research");
   const isMobile = useIsMobile();
   const hostRef = useRef<HTMLDivElement>(null);
+  const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [railMode, setRailMode] = useState<ResearchD5RailMode>("chat");
+  const [railOpen, setRailOpen] = useState(true);
   const [inspectorAgentId, setInspectorAgentId] = useState<string | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
+  const motion = useSemanticTransition();
 
   const railWidth = isMobile ? 0 : viewport.width >= 1200 ? 360 : 320;
+
+  useEffect(() => {
+    const id = "research-semantic-motion-css";
+    if (document.getElementById(id)) return;
+    const style = document.createElement("style");
+    style.id = id;
+    style.textContent = semanticMotionCss();
+    document.head.appendChild(style);
+  }, []);
 
   useEffect(() => {
     const node = hostRef.current;
@@ -93,6 +121,17 @@ export function ResearchConstellationWorkspace({
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (!typedGraph) return;
+    if (!prevGraphRef.current) {
+      prevGraphRef.current = typedGraph;
+      return;
+    }
+    const events = buildTypedGraphMotionEvents(prevGraphRef.current, typedGraph);
+    for (const event of events) motion.enqueue(event);
+    prevGraphRef.current = typedGraph;
+  }, [typedGraph, motion.enqueue]);
+
   const canvasModel = useMemo(
     () =>
       buildD5SessionCanvasModel(typedGraph, viewport, {
@@ -100,6 +139,37 @@ export function ResearchConstellationWorkspace({
       }),
     [typedGraph, viewport, railWidth],
   );
+
+  const lensHints = useMemo(
+    () => buildD5LensDisplayHints(activeLens, typedGraph, canvasModel),
+    [activeLens, typedGraph, canvasModel],
+  );
+
+  const motionDirectives = useMemo(() => {
+    if (!canvasModel) return undefined;
+    const map = new Map<
+      string,
+      ReturnType<typeof motion.directiveFor>
+    >();
+    for (const entity of canvasModel.entities) {
+      const directive = motion.directiveFor(entity.id);
+      if (directive) {
+        map.set(entity.id, directive);
+        continue;
+      }
+      const marker = motion.markerFor(entity.id);
+      if (marker) {
+        map.set(entity.id, {
+          className: marker,
+          style: {},
+          markerClass: marker,
+          dataVerb: "reappear",
+          glowDisabled: motion.profile.lowPerformance,
+        });
+      }
+    }
+    return map;
+  }, [canvasModel, motion.queueSize, motion.directiveFor, motion.markerFor, motion.profile.lowPerformance]);
 
   const summary = useMemo(
     () => summarizeTypedGraph(typedGraph?.nodes ?? []),
@@ -122,11 +192,17 @@ export function ResearchConstellationWorkspace({
       ? executionRows.find((row) => row.id === inspectorAgentId) ?? null
       : null;
 
+  const selectedTypedNode =
+    selectedNode && typedGraph
+      ? typedGraph.nodes.find((node) => node.id === selectedNode.id) ?? null
+      : null;
+
   const handleCanvasSelect = useCallback(
     (nodeId: string) => {
       const snapshotNode = snapshotNodes.find((node) => node.id === nodeId) ?? null;
       onSelectNode(snapshotNode);
       setRailMode("detail");
+      if (isMobile) setRailOpen(true);
 
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
@@ -140,7 +216,7 @@ export function ResearchConstellationWorkspace({
         setReportOpen(true);
       }
     },
-    [onSelectNode, snapshotNodes, typedGraph?.nodes],
+    [isMobile, onSelectNode, snapshotNodes, typedGraph?.nodes],
   );
 
   const showEmpty = canvasMode === "empty" && !canvasModel;
@@ -175,6 +251,8 @@ export function ResearchConstellationWorkspace({
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
             newFrontierLabel={t(($) => $.d5.new_frontier_label)}
+            lensHints={lensHints}
+            motionDirectives={motionDirectives}
             showMapKey
           />
         ) : null}
@@ -206,9 +284,26 @@ export function ResearchConstellationWorkspace({
         <ResearchNodeReportModal
           open={reportOpen && Boolean(selectedNode)}
           node={selectedNode}
+          typedNode={selectedTypedNode}
+          sources={sources}
+          run={run}
+          members={members}
           onClose={() => setReportOpen(false)}
         />
       </section>
+
+      {isMobile ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="d5-rail-toggle"
+          data-testid="research-d5-rail-toggle"
+          onClick={() => setRailOpen((open) => !open)}
+        >
+          {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
+        </Button>
+      ) : null}
 
       <ResearchD5Rail
         mode={railMode}
@@ -216,6 +311,7 @@ export function ResearchConstellationWorkspace({
         chatPanel={chatPanel}
         detailPanel={detailPanel}
         composer={composer}
+        className={isMobile && !railOpen ? "d5-rail-collapsed" : undefined}
       />
       <span className="sr-only" data-testid="research-d5-active-lens">
         {activeLens}

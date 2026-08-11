@@ -20,6 +20,7 @@ import {
   writeGoalCardCollapsed,
   type SessionGoalVisualState,
 } from "../lib/session-goal";
+import type { GoalVersionEntry } from "../lib/research-d5-goal-history";
 
 const PULSE_MS = 2800;
 
@@ -49,6 +50,8 @@ export function ResearchSessionGoalCard({
   error = false,
   onRetry,
   onConfirmSubstantive,
+  goalVersion = null,
+  goalHistory = [],
   className,
   compact = false,
 }: {
@@ -59,6 +62,8 @@ export function ResearchSessionGoalCard({
   error?: boolean;
   onRetry?: () => void;
   onConfirmSubstantive?: (proposal: string) => void;
+  goalVersion?: number | null;
+  goalHistory?: readonly GoalVersionEntry[];
   className?: string;
   /** Frozen top-bar mode: keep GOAL at icon priority even on desktop (LRM-1112). */
   compact?: boolean;
@@ -276,6 +281,45 @@ export function ResearchSessionGoalCard({
                 </div>
                 <p className="text-muted-foreground">{model.substantiveProposal}</p>
               </div>
+            ) : null}
+
+            {goalVersion != null || goalHistory.length > 0 ? (
+              <section
+                data-testid="research-session-goal-versions"
+                className="rounded-lg border border-border/70 bg-muted/20 px-2.5 py-2"
+              >
+                <div className="mb-2 text-[11px] font-semibold text-foreground">
+                  {t(($) => $.d5.goal_panel.title)}
+                  {goalVersion != null
+                    ? ` · ${t(($) => $.d5.goal_panel.version, { version: goalVersion })}`
+                    : null}
+                </div>
+                <div className="space-y-2">
+                  {goalHistory.map((entry) => (
+                    <div
+                      key={entry.version}
+                      data-testid={`research-session-goal-version-${entry.version}`}
+                      className={cn(
+                        "rounded-md border px-2 py-1.5 text-[11px]",
+                        entry.isCurrent
+                          ? "border-brand/30 bg-brand/5"
+                          : "border-border/60 bg-background/40",
+                      )}
+                    >
+                      <div className="font-semibold text-foreground">
+                        {t(($) => $.d5.goal_panel.version, { version: entry.version })}
+                        {entry.isCurrent
+                          ? ` · ${t(($) => $.d5.goal_panel.current)}`
+                          : null}
+                      </div>
+                      <p className="mt-1 leading-relaxed text-muted-foreground">{entry.goal}</p>
+                      {entry.reason ? (
+                        <p className="mt-1 text-[10px] text-muted-foreground">{entry.reason}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </section>
             ) : null}
           </div>
 

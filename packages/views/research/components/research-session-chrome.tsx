@@ -87,6 +87,7 @@ export function ResearchSessionChrome({
   goalLoading = false,
   goalError = false,
   onGoalRetry,
+  hideGoalCard = false,
 }: {
   session: ResearchSession;
   contract?: ResearchRunContract | null;
@@ -114,6 +115,8 @@ export function ResearchSessionChrome({
   goalLoading?: boolean;
   goalError?: boolean;
   onGoalRetry?: () => void;
+  /** D5 chrome owns the primary Goal surface — hide duplicate in actions row. */
+  hideGoalCard?: boolean;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -237,16 +240,18 @@ export function ResearchSessionChrome({
         />
         <div className={cn("ml-auto flex shrink-0 items-center gap-2", hasPrimary && "pl-1")}>
           {/* LRM-1008 / LRM-898 D — compact Goal Card: GOAL stays an icon even on desktop. */}
-          <ResearchSessionGoalCard
-            sessionId={session.id}
-            goal={session.goal}
-            pendingSubstantive={pendingSubstantiveGoal}
-            onConfirmSubstantive={onConfirmSubstantiveGoal}
-            loading={goalLoading}
-            error={goalError}
-            onRetry={onGoalRetry}
-            compact
-          />
+          {!hideGoalCard ? (
+            <ResearchSessionGoalCard
+              sessionId={session.id}
+              goal={session.goal}
+              pendingSubstantive={pendingSubstantiveGoal}
+              onConfirmSubstantive={onConfirmSubstantiveGoal}
+              loading={goalLoading}
+              error={goalError}
+              onRetry={onGoalRetry}
+              compact
+            />
+          ) : null}
           {showConfirm ? (
             <Button
               size="sm"

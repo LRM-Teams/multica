@@ -11,6 +11,8 @@ import {
 } from "react";
 import { StarGraphMapKey } from "@multica/ui/components/star-graph";
 import { cn } from "@multica/ui/lib/utils";
+import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
+import type { MotionDirective } from "../../motion/directives";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import {
@@ -34,6 +36,8 @@ export interface StarGraphCanvasProps {
   summaryDetail?: string;
   showMapKey?: boolean;
   newFrontierLabel?: string;
+  lensHints?: D5LensDisplayHints;
+  motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
   onHelp?: () => void;
   className?: string;
 }
@@ -49,6 +53,8 @@ export function StarGraphCanvas({
   summaryDetail,
   showMapKey = true,
   newFrontierLabel,
+  lensHints,
+  motionDirectives,
   onHelp,
   className,
 }: StarGraphCanvasProps) {
@@ -164,7 +170,7 @@ export function StarGraphCanvas({
     <div
       ref={rootRef}
       data-testid="star-graph-canvas"
-      className={cn("sg-canvas-root", className)}
+      className={cn("sg-canvas-root research-semantic-motion", className)}
       aria-label="Research constellation canvas"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -197,10 +203,13 @@ export function StarGraphCanvas({
           relations={model.relations}
           width={worldSize.width}
           height={worldSize.height}
+          lensHints={lensHints}
         />
         <StarGraphEntityLayer
           entities={model.entities}
           selectedNodeId={selectedNodeId}
+          lensHints={lensHints}
+          motionDirectives={motionDirectives}
           onSelectNode={onSelectNode}
           onOpenNode={onOpenNode}
         />

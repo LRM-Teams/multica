@@ -748,26 +748,14 @@ func (d *Daemon) applyDaemonAgentStart(payload protocol.DaemonAgentStartPayload)
 	return coordinatorCreated, nil
 }
 
-// ensureWorkspaceRunnerManagedAgent makes durable local Agent residency
-// visible through the same Runner lifecycle projection used by Presence. The
-// producer retains the launch when the Runner transport is still connecting;
-// AttachTransport replays it on that connection instead of inventing a second
-// launch identity.
+// ensureWorkspaceRunnerManagedAgent only ensures the Runner exists. Launch
+// identity is owned exclusively by AgentProcessManager after a server start;
+// restoring an Attachment must not manufacture an Activity-only launch.
 func (d *Daemon) ensureWorkspaceRunnerManagedAgent(workspaceID, agentID string) error {
 	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil || runner.activity == nil {
-		return fmt.Errorf("Workspace Runner Activity is unavailable for %q", workspaceID)
+	if err != nil || runner == nil {
+		return fmt.Errorf("Workspace Runner is unavailable for %q", workspaceID)
 	}
-	producer := runner.activity
-	status, session, created, err := producer.EnsureManagedAgent(agentID)
-	if err != nil {
-		return err
-	}
-	if !created {
-		return nil
-	}
-	d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentStatus, status)
-	d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentSession, session)
 	return nil
 }
 

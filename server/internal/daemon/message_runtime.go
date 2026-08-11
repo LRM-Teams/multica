@@ -426,21 +426,11 @@ func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages
 	d.mu.Unlock()
 	if workspaceID != "" {
 		runner, err := d.ensureWorkspaceRunner(workspaceID)
-		if err != nil || runner.activity == nil {
-			return
-		}
-		producer := runner.activity
-		status, session, created, manageErr := producer.EnsureManagedAgent(agentID)
-		if manageErr == nil && created {
-			// Status must cross the same serialized Runner writer before Activity
-			// so the server can fence the new launch authoritatively.
-			d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentStatus, status)
-			d.sendWorkspaceRunnerAgentFrame(agentID, protocol.EventAgentSession, session)
-		}
-		entry, err := activityNarrativeEntry(protocol.ActivityKindWorking, "message_received", "Message received")
-		if err == nil {
-			if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, protocol.ActivityKindWorking, "message_received", []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
-				d.logger.Debug("workspace Runner Message Activity publish deferred", "error", err, "agent_id", agentID)
+		if err == nil && runner.activity != nil {
+			if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
+				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationMessageBodyAccepted, Data: AgentMessageAcceptanceObservationData{RuntimeID: runtimeID, HandoffID: hex.EncodeToString(sum[:]), MessageCount: len(messages)}, At: time.Now().UTC()}); err != nil && d.logger != nil {
+					d.logger.Debug("workspace Runner Message Activity publish deferred", "error", err, "agent_id", agentID)
+				}
 			}
 		}
 	}

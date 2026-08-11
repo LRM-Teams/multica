@@ -489,6 +489,12 @@
 - Agent 创建时 `name` 必填，使用 1–32 位小写字母、数字或连字符，并在创建后保持不变；`display_name` 创建时可省略，默认显示 `name`，后续只编辑 `display_name`。Wendy 的 Proposal `name` 与创建弹窗使用同一契约。
 - 完整契约、迁移矩阵与负向控制见 `docs/superpowers/specs/2026-08-06-workspace-onboarding-agent-boundary.md` 与 ADR-0012。
 
+### 4.22 Context compaction 是可见 Activity，不是 Message acceptance 或进程生命周期 — `可执行`（②统一 lifecycle event + ③单一 gate/投影 + ⑤状态机回归；owner: @Codex）
+- Provider 原生事件先归一成 `MessageCompactionStarted` / `MessageCompactionFinished`；resident runtime 的主动压缩必须在独立 `ResidentMessagePreparation` gate 完成，不能共享 20 秒 native Message acceptance timeout，也不能把压缩超时解释成进程重启。
+- Activity 必须按 Raft 阶段投影：开始写一次 `Working/compacting_context`，显式或推断完成写一次 `Working/compaction_finished`，5 分钟未见完成只写一次 `Working/compaction_stale`；之后每分钟 heartbeat 只更新 Snapshot、不追加 Timeline。只有 provider turn 完成才投影 `Online/idle`。
+- `thinking`、`text`、`tool_use` 与无错误 turn end 可推断遗漏的 finish；runtime error/失败 preparation 中断 active compaction 并向被阻塞的 Message turn 传播。compaction active 时 busy Notice 继续留在 Pending/retry，不得跨上下文重写边界注入。
+- **物**：`ResidentMessagePreparation`、`agentActivityCompactionState`、`TestRuntimePoolPreparesResidentInputOutsideNativeAcceptanceTimeout`、`TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput`、`TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary`。
+
 ---
 
 ### 4.15 Agent 临时协作空间必须保留人类所有权与幂等来源 — `可执行`（①数据库约束 + ③Agent 专用入口 + ⑤合同测试；owner: @Codex）

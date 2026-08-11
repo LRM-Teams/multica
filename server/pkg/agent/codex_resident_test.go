@@ -17,6 +17,9 @@ func TestNewCodexAppServerBackendImplementsResidentInterfaces(t *testing.T) {
 	if _, ok := b.(ResidentMessageInput); !ok {
 		t.Fatal("CodexAppServerBackend must implement idle Message input")
 	}
+	if _, ok := b.(ResidentMessagePreparation); !ok {
+		t.Fatal("CodexAppServerBackend must prepare context outside native Message acceptance")
+	}
 	if _, ok := b.(ResidentRuntimeForceKillable); !ok {
 		t.Fatal("CodexAppServerBackend must implement ResidentRuntimeForceKillable")
 	}
@@ -102,6 +105,65 @@ func TestCodexResidentAcceptsCanonicalMessageAtNativeTurnBoundary(t *testing.T) 
 	}
 	if !strings.Contains(string(raw), "leader message") {
 		t.Fatalf("native turn/start omitted canonical Message body: %s", raw)
+	}
+}
+
+func TestCodexResidentPreparesMessageInputWithNativeCompactionLifecycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	requestPath := t.TempDir() + "/compact-start.json"
+	fakePath := writeFakeCodexAppServer(t, ""+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
+		`read line`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-compact"}}}'`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr-compact","turn":{"id":"turn-compact"}}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":"thr-compact","tokenUsage":{"total":{"totalTokens":700},"modelContextWindow":1000}}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-compact","item":{"type":"agentMessage","id":"msg-compact","text":"ready"}}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-compact","turn":{"id":"turn-compact","status":"completed"}}}'`+"\n"+
+		`read line`+"\n"+
+		`printf '%s\n' "$line" > "$CODEX_RESIDENT_TEST_COMPACT"`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":4,"result":{}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thr-compact","item":{"id":"cmp-1","type":"contextCompaction"}}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-compact","item":{"id":"cmp-1","type":"contextCompaction"}}}'`+"\n"+
+		`while read line; do :; done`+"\n")
+
+	backend := NewCodexAppServerBackend(Config{
+		ExecutablePath: fakePath,
+		Logger:         slog.Default(),
+		Env:            map[string]string{"CODEX_RESIDENT_TEST_COMPACT": requestPath},
+	})
+	defer backend.Close()
+	session, err := backend.Execute(context.Background(), "initialize", ExecOptions{Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatalf("initialize Codex resident: %v", err)
+	}
+	for range session.Messages {
+	}
+	if result := <-session.Result; result.Status != "completed" {
+		t.Fatalf("initialize result = %+v", result)
+	}
+
+	var lifecycle []Message
+	if err := backend.PrepareMessageInput(context.Background(), func(message Message) {
+		lifecycle = append(lifecycle, message)
+	}); err != nil {
+		t.Fatalf("PrepareMessageInput: %v", err)
+	}
+	if len(lifecycle) != 2 || lifecycle[0].Type != MessageCompactionStarted || lifecycle[1].Type != MessageCompactionFinished {
+		t.Fatalf("preparation lifecycle = %+v, want started then finished", lifecycle)
+	}
+	raw, err := os.ReadFile(requestPath)
+	if err != nil {
+		t.Fatalf("read native compact request: %v", err)
+	}
+	if !strings.Contains(string(raw), `"method":"thread/compact/start"`) || !strings.Contains(string(raw), `"threadId":"thr-compact"`) {
+		t.Fatalf("native compact request = %s", raw)
 	}
 }
 

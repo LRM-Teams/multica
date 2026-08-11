@@ -31,7 +31,10 @@ func activitySystemEntry(title, text string) (protocol.AgentActivityEntry, error
 	return protocol.AgentActivityEntry{Kind: "system", Position: 0, Body: body}, nil
 }
 
-const agentActivityHeartbeatInterval = time.Minute
+const (
+	agentActivityHeartbeatInterval = time.Minute
+	compactionStaleTimeout         = 5 * time.Minute
+)
 
 // agentActivityProducer is a best-effort daemon-side Activity publisher. It
 // intentionally has no acknowledgement, durable outbox, HTTP upload, or
@@ -41,6 +44,7 @@ type agentActivityProducer struct {
 
 	now                 func() time.Time
 	newID               func() string
+	schedule            func(time.Duration, func()) func()
 	send                func(protocol.AgentActivityPayload)
 	transportGeneration uint64
 	states              map[agentActivityProducerKey]*agentActivityProducerState
@@ -58,6 +62,14 @@ type agentActivityProducerState struct {
 	connected          bool
 	lastHeartbeatAt    time.Time
 	lastClientSequence int64
+	compaction         agentActivityCompactionState
+}
+
+type agentActivityCompactionState struct {
+	active      bool
+	startedAt   time.Time
+	stale       bool
+	cancelStale func()
 }
 
 type agentActivityReconnectFrame struct {
@@ -69,7 +81,15 @@ func newAgentActivityProducer(now func() time.Time, send func(protocol.AgentActi
 	if now == nil {
 		now = time.Now
 	}
-	return &agentActivityProducer{now: now, newID: func() string { return uuid.NewString() }, send: send, states: make(map[agentActivityProducerKey]*agentActivityProducerState)}
+	return &agentActivityProducer{
+		now:   now,
+		newID: func() string { return uuid.NewString() },
+		schedule: func(delay time.Duration, callback func()) func() {
+			timer := time.AfterFunc(delay, callback)
+			return func() { timer.Stop() }
+		},
+		send: send, states: make(map[agentActivityProducerKey]*agentActivityProducerState),
+	}
 }
 
 func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, session protocol.AgentSessionPayload) error {
@@ -92,6 +112,7 @@ func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, s
 	// make PublishForManagedAgent choose a launch nondeterministically.
 	for existing := range p.states {
 		if existing.agentID == status.AgentID && existing.launchID != status.LaunchID {
+			clearAgentActivityCompaction(p.states[existing])
 			delete(p.states, existing)
 		}
 	}
@@ -154,7 +175,9 @@ func (p *agentActivityProducer) RemoveManaged(agentID, launchID string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.states, agentActivityProducerKey{agentID: agentID, launchID: launchID})
+	key := agentActivityProducerKey{agentID: agentID, launchID: launchID}
+	clearAgentActivityCompaction(p.states[key])
+	delete(p.states, key)
 }
 
 // AttachTransport makes a newly established Workspace Runner connection the
@@ -220,8 +243,12 @@ func (p *agentActivityProducer) PublishForManagedAgent(agentID, daemonInstanceID
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var snapshot protocol.AgentActivitySnapshot
+	var managedState *agentActivityProducerState
+	var managedKey agentActivityProducerKey
 	for key, state := range p.states {
 		if key.agentID == agentID {
+			managedKey = key
+			managedState = state
 			snapshot = state.snapshot
 			snapshot.AgentID = agentID
 			snapshot.LaunchID = key.launchID
@@ -241,7 +268,114 @@ func (p *agentActivityProducer) PublishForManagedAgent(agentID, daemonInstanceID
 	snapshot.ClientSequence = 0
 	snapshot.ProducerFactID = ""
 	snapshot.ObservedAt = time.Time{}
-	return p.publishLocked(snapshot, entries)
+	if err := p.publishLocked(snapshot, entries); err != nil {
+		return err
+	}
+	switch detailKind {
+	case "compacting_context":
+		clearAgentActivityCompaction(managedState)
+		startedAt := managedState.snapshot.ObservedAt
+		managedState.compaction = agentActivityCompactionState{active: true, startedAt: startedAt}
+		managedState.compaction.cancelStale = p.schedule(compactionStaleTimeout, func() {
+			p.markCompactionStale(managedKey, startedAt)
+		})
+	case "compaction_finished", "runtime_error":
+		clearAgentActivityCompaction(managedState)
+	}
+	return nil
+}
+
+// CompleteCompactionIfActive projects a missing provider finish at the first
+// runtime fact that proves output resumed. Explicit finish events still use
+// PublishForManagedAgent directly, matching Raft's provider-event path.
+func (p *agentActivityProducer) CompleteCompactionIfActive(agentID, daemonInstanceID, narrative string) (bool, error) {
+	if p == nil || agentID == "" || daemonInstanceID == "" {
+		return false, errors.New("Activity managed Agent identity is required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var snapshot protocol.AgentActivitySnapshot
+	var managedState *agentActivityProducerState
+	for key, state := range p.states {
+		if key.agentID == agentID {
+			managedState = state
+			snapshot = state.snapshot
+			snapshot.AgentID = agentID
+			snapshot.LaunchID = key.launchID
+			break
+		}
+	}
+	if managedState == nil || !managedState.compaction.active {
+		return false, nil
+	}
+	entry, err := activityNarrativeEntry(protocol.ActivityKindWorking, "compaction_finished", narrative)
+	if err != nil {
+		return false, err
+	}
+	snapshot.DaemonInstanceID = daemonInstanceID
+	snapshot.ActivityKind = protocol.ActivityKindWorking
+	snapshot.DetailKind = "compaction_finished"
+	snapshot.ClientSequence = 0
+	snapshot.ProducerFactID = ""
+	snapshot.ObservedAt = time.Time{}
+	snapshot.ProbeID = ""
+	if err := p.publishLocked(snapshot, []protocol.AgentActivityEntry{entry}); err != nil {
+		return false, err
+	}
+	clearAgentActivityCompaction(managedState)
+	return true, nil
+}
+
+func (p *agentActivityProducer) InterruptCompactionIfActive(agentID string) bool {
+	if p == nil || agentID == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, state := range p.states {
+		if key.agentID == agentID && state.compaction.active {
+			clearAgentActivityCompaction(state)
+			return true
+		}
+	}
+	return false
+}
+
+func clearAgentActivityCompaction(state *agentActivityProducerState) {
+	if state == nil {
+		return
+	}
+	if state.compaction.cancelStale != nil {
+		state.compaction.cancelStale()
+	}
+	state.compaction = agentActivityCompactionState{}
+}
+
+func (p *agentActivityProducer) markCompactionStale(key agentActivityProducerKey, startedAt time.Time) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state := p.states[key]
+	if state == nil || !state.compaction.active || state.compaction.stale || !state.compaction.startedAt.Equal(startedAt) {
+		return
+	}
+	state.compaction.cancelStale = nil
+	entry, err := activityNarrativeEntry(protocol.ActivityKindWorking, "compaction_stale", "Context compaction still running; no finish event observed")
+	if err != nil {
+		return
+	}
+	snapshot := state.snapshot
+	snapshot.ActivityKind = protocol.ActivityKindWorking
+	snapshot.DetailKind = "compaction_stale"
+	snapshot.ClientSequence = 0
+	snapshot.ProducerFactID = ""
+	snapshot.ObservedAt = time.Time{}
+	snapshot.ProbeID = ""
+	if p.publishLocked(snapshot, []protocol.AgentActivityEntry{entry}) == nil {
+		state.compaction.stale = true
+	}
 }
 
 // PublishEntryForManagedAgent appends a timeline fact without replacing the

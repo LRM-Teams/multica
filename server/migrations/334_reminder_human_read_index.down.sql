@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_agent_reminder_occurrence_human_history;
+DROP INDEX IF EXISTS idx_agent_reminder_human_upcoming;

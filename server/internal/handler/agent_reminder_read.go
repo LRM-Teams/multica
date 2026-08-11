@@ -273,37 +273,26 @@ func agentReminderRealtime(agentID string) AgentRealtimeContract {
 
 func (h *Handler) safeHumanReminderAnchor(r *http.Request, userID string, reminder agentReminder) humanReminderAnchor {
 	unavailable := humanReminderAnchor{Available: false}
-	if !reminder.AnchorChannelID.Valid {
-		return unavailable
-	}
-	var channelName, channelKind, workspaceSlug string
-	var archivedAt pgtype.Timestamptz
-	var member bool
-	if err := h.DB.QueryRow(r.Context(), `
-		SELECT channel.name, channel.kind, workspace.slug, channel.archived_at,
-		       EXISTS (
-		         SELECT 1 FROM channel_member
-		         WHERE channel_id = channel.id AND workspace_id = channel.workspace_id
-		           AND member_type = 'user' AND member_id = $3
-		       )
-		FROM channel
-		JOIN workspace ON workspace.id = channel.workspace_id
-		WHERE channel.id = $1 AND channel.workspace_id = $2`, reminder.AnchorChannelID, reminder.WorkspaceID, parseUUID(userID)).Scan(&channelName, &channelKind, &workspaceSlug, &archivedAt, &member); err != nil || archivedAt.Valid || !member {
+	viewerUserID := parseUUID(userID)
+	anchor, err := loadAuthorizedReminderAnchor(r.Context(), h.DB, reminder, viewerUserID)
+	if err != nil || !anchor.Available {
 		return unavailable
 	}
 	kind := "channel"
-	display := h.reminderAnchorDisplayName(r.Context(), reminder.WorkspaceID, reminder.AnchorChannelID, channelKind, channelName, parseUUID(userID))
-	if reminder.AnchorMessageID.Valid {
-		anchor, err := loadReminderAnchorSnapshot(r.Context(), h.DB, reminder)
-		if err != nil || !anchor.Available {
-			return unavailable
+	display := "# Unnamed channel"
+	if anchor.ChannelKind == "dm" {
+		display = strings.TrimSpace(anchor.DMPeerDisplay)
+		if display == "" {
+			display = "Unnamed direct message"
 		}
+	} else if name := strings.TrimSpace(anchor.ChannelName); name != "" {
+		display = "#" + name
 	}
 	if reminder.AnchorMessageID.Valid && reminder.AnchorThreadRootMessageID.Valid {
 		kind = "thread"
 		display = "Thread in " + display
 	}
-	href := fmt.Sprintf("/%s/channels/%s", url.PathEscape(workspaceSlug),
+	href := fmt.Sprintf("/%s/channels/%s", url.PathEscape(anchor.WorkspaceSlug),
 		url.PathEscape(uuidToString(reminder.AnchorChannelID)))
 	if reminder.AnchorMessageID.Valid {
 		href += "?message=" + url.QueryEscape(uuidToString(reminder.AnchorMessageID))
@@ -311,36 +300,12 @@ func (h *Handler) safeHumanReminderAnchor(r *http.Request, userID string, remind
 	if reminder.AnchorMessageID.Valid && reminder.AnchorThreadRootMessageID.Valid {
 		query := "thread=" + url.QueryEscape(uuidToString(reminder.AnchorThreadRootMessageID)) +
 			"&message=" + url.QueryEscape(uuidToString(reminder.AnchorMessageID))
-		href = fmt.Sprintf("/%s/channels/%s?%s", url.PathEscape(workspaceSlug),
+		href = fmt.Sprintf("/%s/channels/%s?%s", url.PathEscape(anchor.WorkspaceSlug),
 			url.PathEscape(uuidToString(reminder.AnchorChannelID)), query)
 	}
 	return humanReminderAnchor{
 		Available: true, Kind: &kind, Display: &display, DisplayName: &display, Href: &href,
 	}
-}
-
-func (h *Handler) reminderAnchorDisplayName(ctx context.Context, workspaceID, channelID pgtype.UUID, channelKind, channelName string, userID pgtype.UUID) string {
-	if channelKind != "dm" {
-		if name := strings.TrimSpace(channelName); name != "" {
-			return "#" + name
-		}
-		return "# Unnamed channel"
-	}
-	var peerName string
-	if err := h.DB.QueryRow(ctx, `
-		SELECT COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '')
-		FROM channel_member peer
-		LEFT JOIN "user" u ON peer.member_type = 'user' AND u.id = peer.member_id
-		LEFT JOIN agent a ON peer.member_type = 'agent' AND a.id = peer.member_id
-		WHERE peer.channel_id = $1 AND peer.workspace_id = $2
-		  AND NOT (peer.member_type = 'user' AND peer.member_id = $3)
-		ORDER BY peer.created_at ASC
-		LIMIT 1`, channelID, workspaceID, userID).Scan(&peerName); err == nil {
-		if name := strings.TrimSpace(peerName); name != "" {
-			return name
-		}
-	}
-	return "Unnamed direct message"
 }
 
 func encodeHumanReminderCursor(cursor humanReminderCursor) *string {

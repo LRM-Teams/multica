@@ -32,6 +32,7 @@ export function RuntimePicker({
   currentUserId,
   selectedRuntimeId,
   onSelect,
+  disabled = false,
   /**
    * Create-flow label override. After computer-first selection, the second
    * picker is the code agent on that computer — keep the default "Runtime"
@@ -45,6 +46,7 @@ export function RuntimePicker({
   currentUserId: string | null;
   selectedRuntimeId: string;
   onSelect: (id: string) => void;
+  disabled?: boolean;
   label?: string;
 }) {
   const { t } = useT("agents");
@@ -71,7 +73,8 @@ export function RuntimePicker({
       </Label>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          disabled={runtimes.length === 0 && !runtimesLoading}
+          disabled={disabled || (runtimes.length === 0 && !runtimesLoading)}
+          data-testid="runtime-picker-trigger"
           className={executionTriggerClass}
         >
           {runtimesLoading ? (
@@ -128,6 +131,7 @@ export function RuntimePicker({
                 <button
                   key={device.id}
                   type="button"
+                  data-testid={`runtime-picker-option-${device.id}`}
                   onClick={() => {
                     onSelect(device.id);
                     setOpen(false);

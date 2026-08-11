@@ -535,11 +535,6 @@ function AgentProfileTabContent({
               </button>
             ) : null}
           </div>
-          {canEditRuntime ? (
-            <p className="mt-2 text-[10px] leading-tight text-muted-foreground">
-              {t(($) => $.execution_config.applies_next_run)}
-            </p>
-          ) : null}
           <RuntimeConfigDialog
             agent={agent}
             open={runtimeDialogOpen}
@@ -547,7 +542,6 @@ function AgentProfileTabContent({
             runtimes={runtimes}
             members={[...members]}
             currentUserId={currentUserId}
-            runtimeOnline={isOnline}
             onSave={update}
           />
         </section>

@@ -233,7 +233,6 @@ export function AgentDetailInspector({
             runtimes={runtimes}
             members={members}
             currentUserId={currentUserId}
-            runtimeOnline={isOnline}
             onSave={update}
           />
         ) : null}

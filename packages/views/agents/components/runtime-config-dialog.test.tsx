@@ -202,7 +202,6 @@ describe("RuntimeConfigDialog — Computer → Runtime → Model → Reasoning",
         runtimes={runtimes}
         members={members}
         currentUserId="user-1"
-        runtimeOnline
         onSave={vi.fn()}
       />,
     );
@@ -225,7 +224,6 @@ describe("RuntimeConfigDialog — Computer → Runtime → Model → Reasoning",
         runtimes={runtimes}
         members={members}
         currentUserId="user-1"
-        runtimeOnline
         onSave={onSave}
       />,
     );
@@ -246,7 +244,6 @@ describe("RuntimeConfigDialog — Computer → Runtime → Model → Reasoning",
         runtimes={runtimes}
         members={members}
         currentUserId="user-1"
-        runtimeOnline
         onSave={onSave}
       />,
     );

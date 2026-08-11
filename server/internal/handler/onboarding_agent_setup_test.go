@@ -151,6 +151,51 @@ func TestEnsureWindy_IdempotentRetryRepairsMissingStartIntent(t *testing.T) {
 	}
 }
 
+func TestEnsureWindy_ValidatesAndPersistsThinkingLevel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	resetTestWorkspaceOnboardingAgent(t, ctx)
+	_ = ensureSystemGeneralForTest(t)
+	runtimeID := createCodexProviderRuntime(t)
+
+	call := func(thinkingLevel string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := newRequestAs(testUserID, http.MethodPost, "/api/agents/windy", map[string]string{
+			"runtime_id": runtimeID, "model": "gpt-5.6-sol", "thinking_level": thinkingLevel,
+		})
+		req.Header.Set("X-Workspace-ID", testWorkspaceID)
+		testHandler.EnsureWindy(rec, req)
+		return rec
+	}
+
+	if rec := call("supersonic"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid thinking_level=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec := call("high")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid thinking_level=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response WindyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, response.Agent.ID)
+	})
+	if response.Agent.ThinkingLevel != "high" {
+		t.Fatalf("response thinking_level=%q", response.Agent.ThinkingLevel)
+	}
+	var stored string
+	if err := testPool.QueryRow(ctx, `SELECT COALESCE(thinking_level, '') FROM agent WHERE id = $1`, response.Agent.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "high" {
+		t.Fatalf("stored thinking_level=%q", stored)
+	}
+}
+
 func TestEnsureWindy_DoesNotInferOnboardingIdentityFromAgentName(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -62,7 +62,11 @@ export function useExecutionSelection({
 
   const selectedMachine =
     machines.find((m) => m.id === pickedMachineId) ??
-    (autoSeedMachine && !pickedMachineId
+    machineForRuntime(
+      runtimes.find((runtime) => runtime.id === pickedRuntimeId),
+      machines,
+    ) ??
+    (autoSeedMachine && !pickedMachineId && !pickedRuntimeId
       ? firstRuntimeMachine(machines)
       : null) ??
     null;
@@ -71,7 +75,9 @@ export function useExecutionSelection({
 
   const runtimeId = runtimeBelongsToMachine(pickedRuntimeId, selectedMachine)
     ? pickedRuntimeId
-    : firstOnlineRuntimeIdOnMachine(selectedMachine);
+    : pickedRuntimeId && !selectedMachine
+      ? pickedRuntimeId
+      : firstOnlineRuntimeIdOnMachine(selectedMachine);
 
   const selectedRuntime =
     (runtimes.find((r) => r.id === runtimeId) as RuntimeDevice | undefined) ??
@@ -91,7 +97,7 @@ export function useExecutionSelection({
     modelScope.runtimeId === runtimeId ? modelScope.thinkingLevel : "";
 
   const selectMachine = (nextMachineId: string) => {
-    if (nextMachineId === pickedMachineId) return;
+    if (nextMachineId === machineId) return;
     setPickedMachineId(nextMachineId);
     const next = machines.find((m) => m.id === nextMachineId) ?? null;
     const nextRuntimeId = firstOnlineRuntimeIdOnMachine(next);
@@ -104,6 +110,7 @@ export function useExecutionSelection({
   };
 
   const selectRuntime = (nextRuntimeId: string) => {
+    if (nextRuntimeId === runtimeId) return;
     setPickedRuntimeId(nextRuntimeId);
     setModelScope({
       runtimeId: nextRuntimeId,
@@ -113,6 +120,7 @@ export function useExecutionSelection({
   };
 
   const selectModel = (nextModel: string) => {
+    if (nextModel === model) return;
     setModelScope({
       runtimeId,
       model: nextModel,

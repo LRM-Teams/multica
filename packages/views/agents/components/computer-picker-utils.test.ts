@@ -6,7 +6,7 @@ import {
 } from "./computer-picker-utils";
 
 function machine(
-  runtimes: Array<{ id: string; status: string }>,
+  runtimes: Array<{ id: string; status: string; last_seen_at?: string | null }>,
 ): RuntimeMachine {
   return {
     id: "m1",
@@ -35,15 +35,12 @@ function machine(
 
 describe("computer-picker-utils execution cascade helpers", () => {
   it("prefers an online runtime on the machine", () => {
+    const now = Date.now();
     const m = machine([
-      { id: "rt-offline", status: "offline" },
-      { id: "rt-online", status: "online" },
+      { id: "rt-offline", status: "offline", last_seen_at: null },
+      { id: "rt-online", status: "online", last_seen_at: new Date(now).toISOString() },
     ]);
-    // deriveRuntimeHealth uses last_seen_at + status — for bare status online
-    // fixture, first online by status may still need last_seen; use online first.
-    const id = firstOnlineRuntimeIdOnMachine(m, Date.now());
-    expect(["rt-offline", "rt-online"]).toContain(id);
-    expect(id).toBeTruthy();
+    expect(firstOnlineRuntimeIdOnMachine(m, now)).toBe("rt-online");
   });
 
   it("runtimeBelongsToMachine checks membership", () => {

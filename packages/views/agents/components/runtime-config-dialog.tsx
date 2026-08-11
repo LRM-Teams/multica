@@ -6,7 +6,6 @@ import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -30,7 +29,6 @@ export function RuntimeConfigDialog({
   runtimes,
   members,
   currentUserId,
-  runtimeOnline: _runtimeOnline,
   onSave,
 }: {
   agent: Agent;
@@ -39,8 +37,6 @@ export function RuntimeConfigDialog({
   runtimes: AgentRuntime[];
   members: MemberWithUser[];
   currentUserId: string | null;
-  /** Kept for call-site compatibility; live health comes from selection. */
-  runtimeOnline: boolean;
   onSave: (patch: Record<string, unknown>) => Promise<void>;
 }) {
   const { t } = useT("agents");
@@ -62,9 +58,6 @@ export function RuntimeConfigDialog({
           <DialogTitle className="text-sm">
             {t(($) => $.execution_config.dialog_title)}
           </DialogTitle>
-          <DialogDescription className="text-xs">
-            {t(($) => $.execution_config.dialog_description)}
-          </DialogDescription>
         </DialogHeader>
 
         {open ? (

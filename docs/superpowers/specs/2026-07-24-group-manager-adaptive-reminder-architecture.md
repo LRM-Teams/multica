@@ -1,6 +1,6 @@
 # Group-manager issue-progress Reminder architecture
 
-Status: implementation contract for tasks #680, #698, and #703
+Status: superseded by ADR 0013; retained as a historical implementation contract
 Date: 2026-07-24
 Related designs:
 
@@ -8,6 +8,12 @@ Related designs:
 - `2026-07-14-beckham-group-manager-design.md`
 - `2026-07-14-wendy-work-graph-supervisor-design.md`
 - `2026-07-22-raft-reminder-parity.md`
+
+The current domain has one Agent-created, Agent-owned Reminder mechanism. A
+Channel Manager Role injects responsibility and may tell its Agent to maintain
+ordinary Reminders; it does not create a managed patrol subtype or a
+server-owned schedule. The `group_manager_auto`/`patrol` design below is not a
+current product contract.
 
 ## 1. Decision
 

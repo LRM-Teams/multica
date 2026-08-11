@@ -99,6 +99,43 @@ All three preserve the server-side Agent identity, configuration, chat history,
 and Issues.
 _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
 
+## Agent Responsibilities
+
+### Reminder
+
+An Agent-created, Agent-owned persistent future wake anchored to conversational
+context. Every Reminder has the same ownership, lifecycle, and delivery
+semantics regardless of which Agent responsibility prompted its creation. Only
+the owner Agent schedules, snoozes, updates, or cancels it; humans may inspect
+it and ask the Agent to change it, but do not mutate it directly.
+_Avoid_: Managed Reminder, Managed Patrol, server-owned patrol
+
+### Reminder Anchor
+
+The immutable Message reference explicitly selected by the owner when creating
+a Reminder. It records why the Agent should return and supplies the original
+context and return surface; it does not cause a fire notice or any other Message
+to be inserted beside the referenced Message.
+_Avoid_: Reminder target message, fire receipt location, mutable return channel
+
+### Reminder Wake
+
+An owner-only transient system input attempted when a Reminder fire commits.
+It is injected only while the owner Agent is idle, carries the Anchor context
+into the Agent runtime, and is neither queued while the Agent is busy nor
+retried when idle injection fails. It is not inserted into channel, DM, or
+thread history. The Agent decides whether to send a Message after waking.
+_Avoid_: Reminder receipt, durable inbox item, retryable delivery, broadcast Message
+
+### Channel Manager Role
+
+A persistent responsibility assignment that tells an Agent to coordinate a
+channel using ordinary Agent capabilities. The Agent recovers this
+responsibility from its role context on every start; assignment may wake it once
+to take over and create or maintain ordinary Reminders, but it does not create
+role-specific scheduling state or a Reminder subtype.
+_Avoid_: Group-manager scheduler, automatic patrol mechanism, managed Reminder
+
 ## Agent Status Semantics
 
 ### Agent Presence
@@ -139,8 +176,9 @@ or thread. A Message has a stable identity, target sequence, and structured
 Parts independent of whether any Agent is online or has processed it; it owns
 the author's stable identity and may retain a fallback label, while the avatar
 is a current Identity Profile fact. It exists only on the service as the
-communication source of truth.
-_Avoid_: Inbox task, execution request, wake job, author appearance snapshot
+communication source of truth. The product exposes no per-Message delete
+operation; historical tombstones remain readable only for compatibility.
+_Avoid_: Inbox task, execution request, wake job, user-deleted Message
 
 ### Identity Profile
 

@@ -13,16 +13,16 @@ Multica Reminder must match both the user-visible Raft primitive and Raft's publ
 
 The merged V2 work supplies most of the data, permission, lifecycle, and read-model commitments, but it is not full parity because it retained a server-side due-row scanner. V3 moves normal timing to the owner daemon using the Raft `snapshot -> versioned cache -> local timer -> fire_attempt` contract. The server remains the durable authority and commit boundary; it does not poll for due Reminders as the normal trigger.
 
-Live Raft probe on this task (Reminder `ffee888c`, 2026-07-22 09:25–09:26 CST) confirmed the state boundary: the lifecycle log recorded `SCHEDULED` then `FIRED`, the one-shot moved to `fired`, and the author was woken at the anchor. Reading the thread afterward returned only ordinary discussion messages, not the fire notice as conversational history. Therefore V3 treats the receipt as a visible system projection and the lifecycle ledger as the durable source of truth.
+Live Raft probe on this task (Reminder `ffee888c`, 2026-07-22 09:25–09:26 CST) confirmed the state boundary: the lifecycle log recorded `SCHEDULED` then `FIRED`, the one-shot moved to `fired`, and the owner received a private system input at the anchor. Reading the thread afterward returned only ordinary discussion messages, not the fire input as conversational history. Therefore V3 keeps fire out of Message history; durable observability lives in the lifecycle ledger and Agent Card.
 
 ## Product boundaries
 
 1. **The Agent owns the Reminder.** Only the author Agent may schedule, snooze, update, cancel, or inspect its full CLI lifecycle log. Ownership never transfers.
 2. **Humans observe; they do not operate.** Agent Card is read-only in V3. It must not expose Schedule, Snooze, Update, Cancel, or Dismiss actions. A human who wants a change asks the Agent.
 3. **Every Agent-created Reminder has an immutable anchor.** Creation requires a `message_id` resolved to a readable channel message or thread. Schedule edits never retarget the anchor.
-4. **Reminder wakes are author-only.** Fire creates one directed durable wake for the author. It must not wake other Agents merely because they can see the anchored surface.
+4. **Reminder wakes are owner-only, idle-only, and non-retryable.** After fire commits, the platform attempts one directed transient private system input for the Reminder owner. It is discarded rather than queued when the Agent is busy, is not retried if idle runtime injection fails, and is not a channel, DM, or thread Message.
 5. **Reminder is not Autopilot.** Reminder is a self-owned follow-up signal tied to conversational context. Autopilot is a standing job/task. Scheduler mechanics may be reused; data, permissions, and surfaces must not be merged.
-6. **Fired is not completed work.** `fired` means the platform emitted the due wake and recorded it. It does not claim that the Agent produced the intended report, message, or external result.
+6. **Fired is not receipt or completed work.** `fired` means the due `(Reminder ID, version)` committed and its one transient owner-input attempt was made. It does not claim that the Agent received the input or produced the intended report, message, or external result.
 7. **The owner daemon owns time.** The server owns durable definitions, authorization, and commit-time idempotency; the daemon owns the versioned cache and timer. A periodic server scan is not an allowed normal fire path.
 8. **One schedule has one authority at each boundary.** Server mutations advance a monotonic Reminder version and project it to the daemon. The daemon never invents or edits durable Reminder state; the server never races a second timer against the daemon.
 
@@ -38,7 +38,7 @@ Live Raft probe on this task (Reminder `ffee888c`, 2026-07-22 09:25–09:26 CST)
 | log | Immutable lifecycle per Reminder | Dedicated lifecycle log exists | Preserve |
 | recurrence | `every:15m`, `every:2h`, `every:1d`, `daily@09:00`, `weekly:mon,fri@09:00` | Grammar and validation exist | Preserve; daemon times each projected occurrence |
 | timezone | Daily/weekly resolve in caller IANA timezone and lock at creation | Persisted Reminder-lifetime timezone exists | Preserve |
-| wake | Fires to author only; durable | Server scheduler commits author wake | Move trigger to daemon; preserve server commit and durable queue |
+| wake | Fires to owner only; transient system input is idle-only and busy-dropped | Server scheduler couples fire to a durable Message delivery | Move trigger to daemon; emit a post-commit transient owner input with no busy queue |
 | human UI | Agent detail/profile shows scheduled and fired; read-only | Human read API exists; frontend #656 is unshipped | Ship Agent Card Reminder tab after scheduler parity |
 | timer owner | Owner daemon holds a versioned cache and local timer | Server scans due rows | Move the normal trigger path to the owner daemon; remove the server due-row scan |
 | reconnect | Daemon requests an owner-scoped snapshot and rebuilds timers | Missing | Snapshot every running/idle Agent on connect/reconnect; reject cross-owner entries |
@@ -51,6 +51,7 @@ Live Raft probe on this task (Reminder `ffee888c`, 2026-07-22 09:25–09:26 CST)
 
 - Exactly one of `delay_seconds` or `fire_at` is required.
 - A successful fire makes the definition terminal `fired`.
+- Transient Wake loss does not undo that terminal transition or schedule an automatic retry.
 - Snoozing a fired one-shot re-arms the same Reminder ID and appends a `snoozed` lifecycle event.
 
 ### Recurring
@@ -71,6 +72,8 @@ Rules:
 - Updating with a one-shot schedule (`fire_at` / `delay_seconds`) replaces any recurring cadence: clear cadence and cadence-next state so the definition fires once. Preserve an already acquired calendar timezone as a hidden Reminder-lifetime lock, so daily(A zone) → one-shot → daily still uses A rather than the later updater's zone. The database constraint must therefore allow a one-shot definition to retain a non-null locked timezone.
 - Cancel is terminal and prevents future occurrences.
 - A recurring Reminder may not create overlapping wakes. The server does not project the next versioned upsert until the current fire attempt commits and the next occurrence is durable.
+- If the owner daemon was offline across multiple ideal recurrence times, snapshot restores only the one current due version. Its first accepted overdue fire attempts one idle-only owner wake, skips the other missed times without recording them as fired, and advances directly to the first future cadence time. If the owner is busy, the transient wake is discarded and not replayed.
+- Once a recurring fire commits, busy discard, idle injection failure, or post-commit transport loss never schedules a makeup occurrence. The definition remains on its ordinary cadence and the next version targets the next normal future time.
 
 ## State and lifecycle
 
@@ -94,6 +97,8 @@ Lifecycle event types:
 
 Each event records reminder ID, event time, actor, previous/next fire time when applicable, cadence/timezone snapshot, occurrence ID, and resulting state. The ledger is append-only and is the source for `reminder log`; Activity remains the user-facing narrative projection, not a substitute for the ledger.
 
+Transient delivery outcomes are intentionally outside this lifecycle. A busy discard, idle runtime-injection failure, or post-commit transport loss may be recorded in diagnostics and telemetry, but it does not add a lifecycle event, change `fired`, or appear in Activity, Agent Card, CLI output, or human read APIs.
+
 ## Daemon scheduling, fire, and recovery contract
 
 ### Server-to-daemon projection
@@ -110,28 +115,33 @@ Snapshot owner discovery comes only from a daemon-local running/idle AgentManage
 
 ### Server fire commit
 
-1. The server accepts only a fire attempt whose owner, active definition, and version still match durable state. Stale, cancelled, terminal, cross-owner, and duplicate attempts are harmless no-ops with a canonical result.
-2. The accepted attempt atomically claims one occurrence and emits one visible fire receipt in the anchored channel/thread as a typed, localized system event. It is not ordinary conversational content: it must not enter message search, unread counts, quote/reply, or reactions. When the anchor message is unavailable, both the canonical fallback and localized projection explicitly say `Anchor unavailable` without metadata. Durable observability lives in the lifecycle ledger and Agent Card history. The receipt itself dispatches zero ambient or directed wakes to other Agents.
-3. The same transaction enqueues one durable directed wake to the author with Reminder ID/title, exact target, anchor context, cadence/occurrence data, and the normal reply-target contract.
-4. The same transaction appends one `fired` lifecycle event and either terminalizes the one-shot definition or advances the recurring definition, increments version, and projects the next `reminder.upsert` after commit.
+1. The canonical fire identity is `(Reminder ID, version)`. The server accepts only an identity whose owner, active definition, and version still match durable state, and commits that identity at most once. Stale, cancelled, terminal, cross-owner, and duplicate attempts are harmless no-ops with a canonical result.
+2. The accepted attempt atomically claims one occurrence without creating a canonical channel, DM, or thread Message. No fire receipt enters conversation history, search, unread counts, quote/reply, reactions, realtime channel broadcast, or another Agent's delivery stream. Durable observability lives in the lifecycle ledger and Agent Card history.
+3. The same transaction appends one `fired` lifecycle event and either terminalizes the one-shot definition or advances the recurring definition and increments version.
+4. After commit, the server attempts one transient directed Reminder Wake to the owner and projects the next recurring `reminder.upsert` when applicable. The private system input carries the Reminder ID/title, exact return surface, Anchor context, cadence/occurrence data, and normal reply-target contract. When the Anchor Message is unavailable, the private input explicitly says `Anchor unavailable` and contains no unavailable-message metadata. If the owner Agent is busy, runtime delivery discards the Wake without a busy notice, pending inbox entry, or later replay. If the owner is idle but runtime injection fails, or if the post-commit transport cannot reach the owner daemon, the Wake is also discarded without retry or replay.
 
 ### Recovery boundary
 
-- Daemon restart or reconnect rebuilds local timers from an owner-scoped snapshot; a due Reminder is attempted immediately after restoration.
-- A Reminder scheduled while its owner daemon is offline remains durable on the server and enters the daemon cache on the next snapshot. The durable wake remains queued if the Agent becomes unavailable after the fire commit.
-- A lost, duplicate, or replayed fire attempt cannot duplicate the occurrence, receipt, lifecycle event, or wake. Reconnect snapshot reprojects every still-active definition whose attempt did not commit.
+- Daemon restart or reconnect rebuilds local timers from an owner-scoped snapshot; one current due version is attempted immediately after restoration. Multiple ideal recurrence times missed during the offline gap do not become a replay backlog.
+- A Reminder scheduled while its owner daemon is offline remains durable on the server and enters the daemon cache on the next snapshot. Once its fire commits, the transient Wake is attempted once and is not retained for later delivery if the Agent is busy, idle runtime injection fails, or post-commit transport is lost.
+- A lost, duplicate, or replayed fire attempt cannot duplicate the occurrence, lifecycle event, or Wake attempt. Reconnect snapshot reprojects every still-active definition whose attempt did not commit.
+- Recovery stops at the commit boundary. A `fire_attempt` lost before server commit leaves the version due and recoverable by the next owner snapshot; loss of the transient owner input after commit does not re-arm that version.
 - The server must not run a periodic due-row scan as the normal trigger or race its own timer against the daemon. Any temporary migration bridge must be separately approved, observable, time-bounded, and removed before parity release.
 
 Correctness gates:
 
-- Receipt projection, lifecycle persistence, and author wake must be idempotent by occurrence ID. A retry may finish missing steps but may not duplicate a receipt or wake.
+- Lifecycle persistence and the owner Wake attempt must be idempotent by `(Reminder ID, version)`. The service may assign an internal occurrence ID after accepting that identity, but a retry may not create another occurrence, lifecycle event, or delivery attempt.
 - Restart/reconnect snapshot recovers timers, and durable fire-attempt idempotency recovers partial commits. An occurrence already associated with a durable task must never be re-armed into a duplicate wake.
-- If the Agent is offline, the wake remains in the durable queue and is delivered on reconnect.
-- Before reading anchor content or creating receipt/session/task state, revalidate that the owning Agent is still an active member of the anchor channel. Hold the exact membership row (and channel/Agent eligibility) through the fire transaction commit so membership removal serializes either before fire (terminalize with zero receipt/task/wake) or after a committed fire; a stale member may never receive an anchor excerpt or wake.
-- Anchor availability is one server-owned predicate shared by fire prompt, typed receipt, and human read projection. For a thread, both the root and anchored reply must exist, be undeleted, and remain authorized. If either message was deleted, keep the still-valid channel Reminder and fire with `anchor_available=false`, no excerpt/target metadata, and an explicit unavailable-anchor marker. Do not silently cancel it or report the deleted thread root as available.
+- If the Agent is busy, the transient Wake is discarded as a successful delivery outcome: no busy notice, inbox row, parallel turn, or idle-boundary replay is created.
+- If the Agent is idle but runtime injection fails, the attempt is not placed in an inbox or retry queue and does not change the committed `fired` lifecycle.
+- If post-commit owner delivery is lost with the daemon transport, the server does not create a durable delivery row or replay it after reconnect.
+- Busy discard, idle injection failure, and post-commit transport loss are diagnostic/telemetry outcomes only. Reminder APIs, CLI, Activity, and Agent Card expose only the committed Reminder lifecycle and never synthesize `dropped_busy`, `injection_failed`, `transport_lost`, or equivalent user-visible states.
+- Before reading Anchor content or creating private wake/session/task state, revalidate that the owning Agent is still an active member of the Anchor channel. Hold the exact membership row (and channel/Agent eligibility) through the fire transaction commit so membership removal serializes either before fire (terminalize with zero task/wake) or after a committed fire; a stale member may never receive an Anchor excerpt or wake.
+- Anchor availability is one server-owned predicate shared by the private system input and human read projection. For a thread, both the root and anchored reply must exist, be live, and remain authorized. Message has no supported delete operation under ADR 0019; nevertheless, a historical tombstone or missing row degrades defensively to `anchor_available=false`, no excerpt/target metadata, and an explicit unavailable-anchor marker. Do not silently cancel it or report unavailable context as live.
 - If the channel is archived/deleted, or the Agent is archived/deleted, end the definition without a wake and append an explicit terminal lifecycle reason.
 - Mute does not suppress an Agent's own Reminder wake.
-- The existing active cap of 25 may remain as a bounded-load guard, but it is an implementation safety limit rather than a new user-facing Reminder concept.
+- Reminder creation has no fixed per-Agent active-count cap. Operational capacity controls must not reject an otherwise valid Reminder through a product-visible active Reminder quota.
+- No per-Agent, per-channel, or daily fire quota may suppress the single owner Wake attempt for an accepted Reminder version. `quota_coalesced` is not a valid successful fire outcome. Busy suppression is permitted only through the uniform idle-only transient runtime rule, after the fire commit and Wake attempt exist.
 
 ## CLI and agent transport
 
@@ -189,7 +199,7 @@ The dedicated realtime event is `agent_reminder:changed` with minimal payload `{
 
 ### Backend and CLI
 
-1. One-shot schedule → exactly one author wake and one fire ledger event.
+1. One-shot schedule with an idle owner → exactly one owner wake and one fire ledger event.
 2. Each supported repeat grammar computes the correct next occurrence; daily/weekly remain correct across DST using the locked IANA timezone.
 3. Recurring fire advances `next_fire_at` and does not terminally mark the definition fired.
 4. Snooze a scheduled or just-fired occurrence; recurring cadence resumes afterward.
@@ -199,15 +209,25 @@ The dedicated realtime event is `agent_reminder:changed` with minimal payload `{
 8. Server schedule/update/snooze/cancel advances a monotonic version and emits the exact post-commit `upsert` or `cancel`; transaction rollback emits nothing.
 9. Daemon cache ignores stale/equal upserts, ignores stale cancels, replaces only the requested owner's entries on snapshot, and rejects cross-owner snapshot jobs.
 10. Daemon restart/reconnect requests snapshots for running and idle Agents, rebuilds timers, and a past-due job produces one fire attempt without a server poll.
-11. Current, duplicate, stale-version, cancelled, terminal, and cross-owner fire attempts produce exact canonical outcomes; only the current attempt can create one occurrence, receipt, lifecycle event, and author wake.
+11. Current, duplicate, stale-version, cancelled, terminal, and cross-owner fire attempts produce exact canonical outcomes keyed by `(Reminder ID, version)`; only the first accepted current identity can create one occurrence, lifecycle event, and post-commit owner Wake attempt.
 12. Update-vs-fire and cancel-vs-fire races are version-fenced with one deterministic winner; no old timer can fire a newer definition and no stale cancel can delete it.
-13. Recurring fire commits the occurrence before the next versioned upsert. Reconnect/replay never overlaps occurrences or duplicates wake delivery.
-14. Offline owner receives the Reminder through snapshot on reconnect, and an already committed durable wake remains deliverable after Agent reconnect.
+13. Recurring fire commits the occurrence before the next versioned upsert. Reconnect/replay never overlaps occurrences or duplicates the transient Wake attempt.
+14. An offline owner daemon recovers the due Reminder through snapshot on reconnect; the resulting Wake is injected only if the owner Agent is idle at delivery time.
 15. Executable integration evidence proves the server has no periodic due-row Reminder scan registered as the normal trigger.
-16. Receipt is visibly projected in the correct main timeline or thread as a non-conversational `author_type=system` event and creates zero search hits, channel unread increments, quote/reply/reaction surface, or other-Agent wake/inbox/task increments; these properties are bound in a Reminder-specific regression, not only inferred from global guards.
-17. Deleted anchor or deleted thread root degrades safely with `anchor_available=false` and no excerpt; archived/deleted channel or Agent, or an Agent removed from the anchor channel, terminates with an explicit lifecycle reason and zero receipt/task/wake. A remove-vs-fire concurrency fixture proves serialization.
+16. Fire creates no `channel_message`, DM Message, thread Message, realtime channel broadcast, search hit, unread increment, quote/reply/reaction surface, or other-Agent wake/inbox/task increment. A Reminder-specific regression binds these properties rather than inferring them from global guards.
+17. A historical tombstone or missing Anchor/thread root degrades safely with `anchor_available=false` and no excerpt; archived/deleted channel or Agent, or an Agent removed from the Anchor channel, terminates with an explicit lifecycle reason and zero task/wake. A remove-vs-fire concurrency fixture proves serialization.
 18. Existing one-shot Reminders migrate without ID, anchor, fire time, status, snooze count, or timestamp loss. A committed executable migration fixture covers the previous schema → current four-state preservation and down/up round trip; hand-run evidence alone is not a release gate.
 19. Recurring → one-shot update clears cadence and fires once; a later calendar update reuses the original hidden timezone lock.
+20. Every first accepted `(Reminder ID, version)` makes exactly one owner Wake attempt regardless of other Reminders fired for that Agent or channel that day; no quota path may suppress it. If the owner is busy, only the uniform transient-delivery rule may discard the attempted Wake.
+21. An owner daemon reconnecting after five missed hourly times restores one due version and makes at most one overdue Wake attempt; the next projected version targets the first future cadence time, with no fired occurrence for the four skipped times.
+22. A Reminder firing while its owner Agent is busy records exactly one `fired` lifecycle event but creates no busy stdin notice, pending inbox item, parallel turn, or later idle replay. The same fixture with an idle owner injects exactly one private system input.
+23. If the owner is idle but the runtime rejects or fails the Reminder stdin write, the occurrence remains `fired` and no inbox item, retry timer, reconnect replay, or second delivery attempt is created.
+24. Busy-discard and idle-injection-failure fixtures emit diagnostic/telemetry evidence while Reminder log, Activity, Agent Card, and human read API remain indistinguishable from any other committed `fired` occurrence.
+25. A disconnect before the server accepts `fire_attempt` leaves the due version snapshot-recoverable; a disconnect after fire commit but before transient owner delivery does not create a durable delivery, retry, or reconnect replay, and the occurrence remains `fired`.
+26. An hourly Reminder whose 10:00 Wake is discarded while the owner is busy advances to 11:00; becoming idle at 10:20 does not produce a makeup Wake. Idle injection failure and post-commit transport loss follow the same cadence rule.
+27. A one-shot Reminder whose transient Wake is discarded remains terminal `fired` forever unless an explicit snooze re-arms it; no runtime state change, reconnect, or timer recovery automatically retries it.
+28. An Agent with 25 active Reminders can create a 26th valid Reminder; no fixed per-Agent active-count quota rejects it.
+29. The main API router exposes no `DELETE /api/channels/{channelId}/messages/{messageId}` route. Historical tombstones remain safe to read but cannot be created through a per-Message product API.
 
 ### Agent Card
 

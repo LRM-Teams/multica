@@ -496,8 +496,11 @@ migration drops:
 - its CHECK constraint and partial index.
 
 `channel.group_manager_agent_id`, Reminder `origin_kind`, and the group-manager
-persona are not permission sources. Their naming can remain for automation
-semantics without creating an agent-only authorization role.
+persona are not permission sources or a separate automation mechanism. The
+Channel Manager Role is a persistent responsibility: assignment tells the Agent
+to manage ordinary self-owned Reminders, and removal durably tells the Agent to
+cancel those it no longer needs. The service does not create, classify, or
+cancel a role-specific Reminder subtype.
 
 No dual-read, dual-write, or fallback to `managed_role` is permitted.
 

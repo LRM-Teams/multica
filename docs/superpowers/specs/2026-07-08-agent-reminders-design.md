@@ -4,6 +4,10 @@
 - Source: PRD `docs/product-conversation-model-prd.md` §6.4 (时间驱动唤醒 / Reminder, P2 候选, Frank 已点头方向; 2026-07-08 Frank 批准实施)
 - Raft parity reference: `raft reminder schedule/list/snooze/update/cancel` (observed on raft-daemon 0.71.0)
 
+> Historical baseline only. The active-count cap, visible fire receipt, durable
+> owner queue, and other superseded delivery semantics in this V1 document are
+> replaced by `2026-07-22-raft-reminder-parity.md` and ADRs 0014, 0016, and 0018.
+
 ## Problem
 
 The Wake matrix (§6) is entirely message-driven — an agent cannot "follow up at a future time"

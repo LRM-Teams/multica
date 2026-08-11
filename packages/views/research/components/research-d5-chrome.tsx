@@ -1,7 +1,8 @@
 "use client";
 
-import type { ComponentProps } from "react";
+import { useMemo, type ComponentProps } from "react";
 import { ChevronDown } from "lucide-react";
+import type { TypedGraphNode } from "@multica/core/research";
 import {
   Popover,
   PopoverContent,
@@ -15,7 +16,9 @@ import {
   RESEARCH_D5_LENSES,
   type ResearchD5Lens,
 } from "../lib/research-d5-lens";
+import { buildD5FilterOptions } from "../lib/research-d5-filter-options";
 import type { GoalVersionEntry } from "../lib/research-d5-goal-history";
+import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
 type ChromeProps = ComponentProps<typeof ResearchSessionChrome>;
 
@@ -25,6 +28,7 @@ export function ResearchD5Chrome({
   goalVersion,
   goalHistory = [],
   goalImpact = null,
+  typedGraphNodes = [],
   className,
   ...chromeProps
 }: ChromeProps & {
@@ -33,9 +37,14 @@ export function ResearchD5Chrome({
   goalVersion?: number | null;
   goalHistory?: readonly GoalVersionEntry[];
   goalImpact?: { labeledNodes: number; totalNodes: number } | null;
+  typedGraphNodes?: readonly TypedGraphNode[];
   className?: string;
 }) {
   const { t } = useT("research");
+  const filterOptions = useMemo(
+    () => buildD5FilterOptions(typedGraphNodes),
+    [typedGraphNodes],
+  );
   const { session, pendingSubstantiveGoal, onConfirmSubstantiveGoal, goalLoading, goalError, onGoalRetry } =
     chromeProps;
 
@@ -69,7 +78,10 @@ export function ResearchD5Chrome({
           />
         </div>
 
-        <div className="d5-lens-group" role="tablist" aria-label={t(($) => $.d5.lens_group)}>
+        <div className="d5-chrome-controls">
+          <ResearchD5CanvasFilter options={filterOptions} />
+
+          <div className="d5-lens-group" role="tablist" aria-label={t(($) => $.d5.lens_group)}>
           {RESEARCH_D5_LENSES.map((lens) => (
             <button
               key={lens}
@@ -113,6 +125,7 @@ export function ResearchD5Chrome({
             ))}
           </PopoverContent>
         </Popover>
+        </div>
       </div>
 
       <ResearchSessionChrome {...chromeProps} hideGoalCard />

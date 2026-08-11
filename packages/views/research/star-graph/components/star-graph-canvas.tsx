@@ -54,6 +54,7 @@ export interface StarGraphCanvasProps {
   onOpenNode?: (nodeId: string) => void;
   summaryTitle?: string;
   summaryDetail?: string;
+  filterHiddenNote?: string;
   showMapKey?: boolean;
   newFrontierLabel?: string;
   lensHints?: D5LensDisplayHints;
@@ -83,6 +84,7 @@ export function StarGraphCanvas({
   onOpenNode,
   summaryTitle,
   summaryDetail,
+  filterHiddenNote,
   showMapKey = true,
   newFrontierLabel,
   lensHints,
@@ -391,10 +393,13 @@ export function StarGraphCanvas({
           {liveText}
         </div>
       ) : null}
-      {(summaryTitle || summaryDetail || hiddenEntityCount > 0) && (
+      {(summaryTitle || summaryDetail || filterHiddenNote || hiddenEntityCount > 0) && (
         <div data-testid="star-graph-summary" className="sg-summary-label pointer-events-none">
           {summaryTitle && <b>{summaryTitle}</b>}
           {summaryDetail && <span>{summaryDetail}</span>}
+          {filterHiddenNote ? (
+            <span data-testid="star-graph-filter-note">{filterHiddenNote}</span>
+          ) : null}
           {hiddenEntityCount > 0 ? (
             <span data-testid="star-graph-budget-note">
               · {visibleEntities.length}/{displayEntities.length}

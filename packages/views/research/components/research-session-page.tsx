@@ -210,9 +210,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const selectedNodeId = useResearchCanvasStore((s) => s.selectedNodeId);
   const selectCanvasNode = useResearchCanvasStore((s) => s.selectNode);
   const clearCanvasSelection = useResearchCanvasStore((s) => s.clearSelection);
+  const clearCanvasFilter = useResearchCanvasStore((s) => s.clearFilter);
   useEffect(() => {
     clearCanvasSelection();
-  }, [sessionId, clearCanvasSelection]);
+    clearCanvasFilter();
+  }, [sessionId, clearCanvasFilter, clearCanvasSelection]);
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
       selectCanvasNode(node?.id ?? null);
@@ -596,6 +598,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         goalVersion={goalVersion}
         goalHistory={goalHistory}
         goalImpact={goalImpact}
+        typedGraphNodes={typedGraph?.nodes ?? []}
         session={session}
         contract={data.run?.contract}
         canConfirm={canConfirm}

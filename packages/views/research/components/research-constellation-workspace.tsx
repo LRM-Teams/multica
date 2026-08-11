@@ -8,9 +8,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { TypedGraphResponse } from "@multica/core/research";
-import type { StarGraphLayoutResult } from "@multica/core/research";
-import { useResearchUiStore } from "@multica/core/research";
+import type { TypedGraphResponse, StarGraphLayoutResult } from "@multica/core/research";
+import {
+  countHiddenByFilter,
+  isBlankFilter,
+  useResearchCanvasStore,
+  useResearchUiStore,
+} from "@multica/core/research";
 import type {
   ResearchFleetMember,
   ResearchGraphNode,
@@ -101,6 +105,7 @@ export function ResearchConstellationWorkspace({
   const setRailOpen = useResearchUiStore((s) => s.setD5RailOpen);
   const railMode = useResearchUiStore((s) => s.d5RailMode);
   const setRailMode = useResearchUiStore((s) => s.setD5RailMode);
+  const canvasFilter = useResearchCanvasStore((s) => s.filter);
   const hostRef = useRef<HTMLDivElement>(null);
   const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
   const previousLayoutRef = useRef<StarGraphLayoutResult | undefined>(undefined);
@@ -238,6 +243,14 @@ export function ResearchConstellationWorkspace({
     newDir: summary.newFrontiers,
     stopped: summary.stoppedDirections,
   });
+  const filterHiddenCount = useMemo(() => {
+    if (!typedGraph?.nodes.length || isBlankFilter(canvasFilter)) return 0;
+    return countHiddenByFilter(typedGraph.nodes, canvasFilter).hidden;
+  }, [canvasFilter, typedGraph?.nodes]);
+  const filterHiddenNote =
+    filterHiddenCount > 0
+      ? t(($) => $.d5.filter.hidden_count, { count: filterHiddenCount })
+      : undefined;
 
   const nodeAccessibleNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -344,6 +357,7 @@ export function ResearchConstellationWorkspace({
             onOpenNode={handleCanvasSelect}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
+            filterHiddenNote={filterHiddenNote}
             newFrontierLabel={t(($) => $.d5.new_frontier_label)}
             lensHints={lensHints}
             motionDirectives={motionDirectives}

@@ -54,6 +54,18 @@
   display: flex;
   justify-content: center;
 }
+.d5-chrome-controls {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.d5-filter-trigger-active {
+  border-color: #337584;
+  color: #c6f6fb;
+  background: #10252c;
+}
 .d5-rail-collapsed {
   transform: translateY(calc(100% - 44px));
 }
@@ -170,6 +182,11 @@
     flex: 1 1 100%;
     justify-content: flex-start;
     padding: 0;
+  }
+  .d5-chrome-controls {
+    order: 11;
+    flex: 1 1 100%;
+    justify-content: flex-end;
   }
   .d5-rail {
     position: absolute;

@@ -996,6 +996,19 @@
       "updating": "星图正在重组（v{{version}}）…",
       "updated": "星图已更新至 v{{version}}"
     },
+    "filter": {
+      "trigger": "筛选",
+      "active": "已筛选",
+      "clear": "清除筛选",
+      "status": "状态",
+      "tier": "等级",
+      "round": "轮次",
+      "cluster": "主题簇",
+      "query": "搜索",
+      "query_placeholder": "标题、Agent 或摘要…",
+      "all": "全部",
+      "hidden_count": "筛选隐藏 {{count}} 个"
+    },
     "new_frontier_label": "全新方向",
     "canvas": {
       "loading": "正在加载调研星图…",

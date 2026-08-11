@@ -174,13 +174,13 @@ func RequireAgentPrincipal(next http.Handler) http.Handler {
 // agentSelfManagePath allows AgentPrincipal onto the human agent resource
 // routes used for self-only profile updates (task #125 / Raft align).
 // Handler canUpdateAgent / canManageAgent still require path id == principal.
-// Everything else under /api/agents/* remains blocked.
+// Everything else under /api/agents/* and /api/members/agents/* remains blocked.
 //
-// Matches:
-//   PUT  /api/agents/{uuid}
-//   POST /api/agents/{uuid}/archive
-//   POST /api/agents/{uuid}/restore
-var agentSelfManagePath = regexp.MustCompile(`(?i)^/api/agents/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:/(?:archive|restore))?$`)
+// Matches (legacy and Members Directory primary, ADR 0013):
+//   PUT  /api/agents/{uuid} | /api/members/agents/{uuid}
+//   POST .../{uuid}/archive
+//   POST .../{uuid}/restore
+var agentSelfManagePath = regexp.MustCompile(`(?i)^/api/(?:members/)?agents/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:/(?:archive|restore))?$`)
 
 func agentPrincipalMayUseHumanAgentPath(method, path string) bool {
 	if !agentSelfManagePath.MatchString(path) {

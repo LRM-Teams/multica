@@ -87,7 +87,9 @@ func (k InboxKey) normalized() (InboxKey, error) {
 }
 
 // MessageCoordinator owns the receive-side state for one Workspace/Agent root.
-// Its callers send agent:deliver:ack only after Accept returns successfully.
+// Accept makes Pending responsible for a valid delivery. The Workspace Runner
+// may ACK only after its deeper acceptance seam has either handed that body to
+// the provider, retained it in Pending, or identified it as a duplicate.
 type MessageCoordinator struct {
 	mu                  sync.Mutex
 	boundaryCommitMu    sync.Mutex
@@ -788,8 +790,9 @@ func (c *MessageCoordinator) Boundaries() map[string]int64 {
 	return cloneBoundaries(c.boundaries)
 }
 
-// Acknowledgement returns the wire receipt permitted after Accept succeeds.
-// It intentionally has no boundary, runtime, or execution fields.
+// Acknowledgement constructs the wire receipt after Accept succeeds. Emission
+// remains the Workspace Runner acceptance seam's responsibility, after it has
+// classified provider acceptance, Pending retention, or deduplication.
 func (c *MessageCoordinator) Acknowledgement(delivery protocol.AgentDeliverPayload) protocol.AgentDeliverAckPayload {
 	return protocol.AgentDeliverAckPayload{
 		AgentID: delivery.AgentID, Seq: delivery.Seq, DeliveryID: delivery.DeliveryID, Traceparent: delivery.Traceparent,

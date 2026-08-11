@@ -255,7 +255,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				runner.requestReminderSnapshot(attach.AgentID)
 			}
 			if attachmentReplayComplete {
-				runner.beginMessageRecoveryForAll(func(request protocol.AgentRecoveryRequest) error {
+				runner.beginMessageRecoveryForAgent(attach.AgentID, func(request protocol.AgentRecoveryRequest) error {
 					return writeFrame(protocol.EventAgentRecoveryRequest, request)
 				})
 			}
@@ -316,7 +316,9 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {
 				continue
 			}
-			connection.deliveries.Enqueue(delivery)
+			if !connection.deliveries.Enqueue(delivery) && runner.logger != nil {
+				runner.logger.Warn("Workspace Runner Agent delivery was not queued", "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "reason", "connection_delivery_dispatcher_unavailable")
+			}
 		case protocol.EventAgentRecoveryPage:
 			var page protocol.AgentRecoveryPage
 			if json.Unmarshal(message.Payload, &page) != nil {

@@ -167,8 +167,12 @@ func (registry *InboxRegistry) BeginRecovery(send func(protocol.AgentRecoveryReq
 	registry.mu.RUnlock()
 	sort.Strings(agentIDs)
 	for _, agentID := range agentIDs {
-		if err := send(coordinators[agentID].BeginRecovery(agentID, 100)); err != nil && registry.logger != nil {
-			registry.logger.Warn("workspace Runner Inbox recovery request failed", "error", err, "workspace_id", registry.workspaceID, "agent_id", agentID, "reason", "runner_connection_write_failed")
+		request := coordinators[agentID].BeginRecovery(agentID, 100)
+		if registry.logger != nil {
+			registry.logger.Info("Agent Message recovery started", "workspace_id", registry.workspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_reconnect")
+		}
+		if err := send(request); err != nil && registry.logger != nil {
+			registry.logger.Warn("workspace Runner Inbox recovery request failed", "error", err, "workspace_id", registry.workspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_connection_write_failed")
 		}
 	}
 }

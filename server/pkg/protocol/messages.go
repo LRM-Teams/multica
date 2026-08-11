@@ -226,8 +226,9 @@ type AgentDeliverPayload struct {
 	Traceparent string                 `json:"traceparent,omitempty"`
 }
 
-// AgentDeliverAckPayload confirms only local coordinator acceptance or
-// deduplication. It is intentionally not a read receipt.
+// AgentDeliverAckPayload confirms only per-Agent provider acceptance, Pending
+// retention, or deduplication. It is intentionally not a read or completion
+// receipt; the outcome stays daemon-local diagnostic state.
 type AgentDeliverAckPayload struct {
 	AgentID     string `json:"agentId"`
 	Seq         int64  `json:"seq"`

@@ -646,7 +646,6 @@
     "save_edit": "保存",
     "cancel_edit": "取消",
     "edit_failed_toast": "无法编辑消息",
-    "delete_failed_toast": "无法删除消息",
     "system_event": {
       "member_added": "{actor} 邀请 {target} 加入了频道",
       "member_added_no_actor": "{target} 加入了频道",

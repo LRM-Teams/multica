@@ -646,7 +646,6 @@
     "save_edit": "Save",
     "cancel_edit": "Cancel",
     "edit_failed_toast": "Couldn't edit message",
-    "delete_failed_toast": "Couldn't delete message",
     "system_event": {
       "member_added": "{target} was added to this channel by {actor}",
       "member_added_no_actor": "{target} joined this channel",

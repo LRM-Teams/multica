@@ -3263,15 +3263,15 @@ func TestChannelMessageReactionCanBeRemoved(t *testing.T) {
 	}
 }
 
-func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
+func TestChannelMessageEditOwnOnlyNoWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
 	otherUserID := createWorkspaceMemberUser(t, "Message Editor Other", "message-editor-other-"+randomID()+"@multica.test")
-	agentID := createHandlerTestAgent(t, "Message Edit Delete Agent "+randomID(), nil)
-	channelID := seedChannelForTest(t, "message-edit-delete-"+uuid.NewString(), testUserID, otherUserID)
+	agentID := createHandlerTestAgent(t, "Message Edit Agent "+randomID(), nil)
+	channelID := seedChannelForTest(t, "message-edit-"+uuid.NewString(), testUserID, otherUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)
@@ -3280,7 +3280,7 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 	}
 	msg, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "original", []protocol.MessagePart{
 		{Type: protocol.MessagePartTypeText, Text: "original"},
-	}, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("edit-delete-thread"), 0)
+	}, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("edit-thread"), 0)
 	if err != nil {
 		t.Fatalf("insert channel message: %v", err)
 	}
@@ -3295,9 +3295,6 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
 		VALUES ($1, $2, $3)`, testWorkspaceID, msg.ID, attachmentID); err != nil {
 		t.Fatalf("seed channel message attachment reference: %v", err)
-	}
-	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(otherUserID), "Other", "thread reply", "multica", nil, pgtype.UUID{}, parseUUID(msg.ID), msg.ThreadID, 0); err != nil {
-		t.Fatalf("insert thread reply: %v", err)
 	}
 	eventsSeen := make(chan events.Event, 4)
 	testHandler.Bus.Subscribe(protocol.EventChannelMessage, func(e events.Event) {
@@ -3350,89 +3347,6 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 		t.Fatalf("edit event payload = %#v", editEvent.Payload)
 	}
 
-	req = newRequestAs(otherUserID, http.MethodDelete, "/api/channels/"+channelID+"/messages/"+msg.ID, nil)
-	req = withChannelTestWorkspaceCtx(t, req, otherUserID)
-	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
-	rec = httptest.NewRecorder()
-	testHandler.DeleteChannelMessage(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("non-owner delete: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	req = newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+msg.ID+"/reactions", map[string]string{"emoji": "👍"})
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
-	rec = httptest.NewRecorder()
-	testHandler.AddChannelMessageReaction(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("add reaction before delete: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	req = newRequest(http.MethodDelete, "/api/channels/"+channelID+"/messages/"+msg.ID, nil)
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
-	rec = httptest.NewRecorder()
-	testHandler.DeleteChannelMessage(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("owner delete: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var deleteEvent events.Event
-	select {
-	case deleteEvent = <-eventsSeen:
-	default:
-		t.Fatal("expected delete channel:message event")
-	}
-	deletePayload, ok := deleteEvent.Payload.(ChannelMessageResponse)
-	if !ok || deletePayload.ID != msg.ID || deletePayload.Content != "" || len(deletePayload.Parts) != 0 || deletePayload.DeletedAt == nil {
-		t.Fatalf("delete event payload = %#v", deleteEvent.Payload)
-	}
-	if len(deletePayload.Attachments) != 0 || len(deletePayload.Reactions) != 0 || deletePayload.ReplyTo != nil || deletePayload.ThreadRoot != nil {
-		t.Fatalf("delete event leaked satellites: %#v", deletePayload)
-	}
-	if deletePayload.ThreadReplyCount != 1 {
-		t.Fatalf("delete event thread_reply_count = %d, want 1", deletePayload.ThreadReplyCount)
-	}
-
-	req = newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages/"+msg.ID+"/reactions", map[string]string{"emoji": "👍"})
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
-	rec = httptest.NewRecorder()
-	testHandler.AddChannelMessageReaction(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("add reaction after delete: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	req = withURLParam(req, "channelId", channelID)
-	rec = httptest.NewRecorder()
-	testHandler.ListChannelMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("list messages after delete: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var page ChannelMessagesPageResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
-		t.Fatalf("decode messages after delete: %v", err)
-	}
-	var tombstone *ChannelMessageResponse
-	for i := range page.Messages {
-		if page.Messages[i].ID == msg.ID {
-			tombstone = &page.Messages[i]
-			break
-		}
-	}
-	if tombstone == nil || tombstone.Content != "" || len(tombstone.Parts) != 0 || tombstone.EditedAt == nil || tombstone.DeletedAt == nil {
-		t.Fatalf("tombstone message = %#v, want empty content/parts with edited_at and deleted_at", tombstone)
-	}
-	if len(tombstone.Reactions) != 0 {
-		t.Fatalf("tombstone reactions = %#v, want cleared", tombstone.Reactions)
-	}
-	if len(tombstone.Attachments) != 0 {
-		t.Fatalf("tombstone attachments = %#v, want clipped", tombstone.Attachments)
-	}
-	if tombstone.ThreadReplyCount != 1 {
-		t.Fatalf("tombstone thread_reply_count = %d, want 1", tombstone.ThreadReplyCount)
-	}
 	var stillBound int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
@@ -3445,48 +3359,7 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 	}
 	sessionsAfter, tasksAfter := channelAgentRunCountsForTest(t, channelID)
 	if sessionsAfter != sessionsBefore || tasksAfter != tasksBefore {
-		t.Fatalf("edit/delete should not enqueue or open agent sessions: sessions %d->%d tasks %d->%d", sessionsBefore, sessionsAfter, tasksBefore, tasksAfter)
-	}
-}
-
-func TestChannelMessageDeleteWithoutRepliesDisappearsFromReadModel(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	channelID := seedChannelForTest(t, "message-delete-hide-"+uuid.NewString(), testUserID)
-	msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "remove me", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("delete-hide-thread"), 0)
-	if err != nil {
-		t.Fatalf("insert channel message: %v", err)
-	}
-	var attachmentID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
-		VALUES ($1, $2, 'member', $3, 'secret.txt', 's3://secret.txt', 'text/plain', 9)
-		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
-		t.Fatalf("seed attachment: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_message_attachment (workspace_id, channel_message_id, attachment_id)
-		VALUES ($1, $2, $3)`, testWorkspaceID, msg.ID, attachmentID); err != nil {
-		t.Fatalf("seed attachment reference: %v", err)
-	}
-
-	req := newRequest(http.MethodDelete, "/api/channels/"+channelID+"/messages/"+msg.ID, nil)
-	req = withChannelTestWorkspaceCtx(t, req, testUserID)
-	req = withRouteParams(req, "channelId", channelID, "messageId", msg.ID)
-	rec := httptest.NewRecorder()
-	testHandler.DeleteChannelMessage(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("delete: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	messages := listedMessagesForUser(t, channelID, testUserID)
-	for _, listed := range messages {
-		if listed.ID == msg.ID {
-			t.Fatalf("deleted message without replies still listed: %#v", listed)
-		}
+		t.Fatalf("edit should not enqueue or open agent sessions: sessions %d->%d tasks %d->%d", sessionsBefore, sessionsAfter, tasksBefore, tasksAfter)
 	}
 }
 

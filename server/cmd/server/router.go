@@ -1530,7 +1530,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)
 					r.Patch("/messages/{messageId}", h.UpdateChannelMessage)
-					r.Delete("/messages/{messageId}", h.DeleteChannelMessage)
 					r.Get("/messages/{messageId}/thread", h.ListChannelMessageThread)
 					r.Post("/messages/{messageId}/reactions", h.AddChannelMessageReaction)
 					r.Delete("/messages/{messageId}/reactions", h.RemoveChannelMessageReaction)

@@ -58,6 +58,8 @@ export function RuntimePicker({
     return members.find((m) => m.user_id === ownerId) ?? null;
   };
 
+  // Others' private runtimes are excluded outright, not shown-disabled —
+  // a private runtime that isn't mine has nothing for me to do with it.
   const sortedRuntimes = useMemo(
     () => sortRuntimesForPicker(runtimes, currentUserId),
     [runtimes, currentUserId],
@@ -172,15 +174,30 @@ export function RuntimePicker({
   );
 }
 
+// Visibility gate exposed so the parent can defend Create against a locked
+// selection (e.g. duplicate of an agent whose runtime is now private).
+export function isRuntimeUsableForUser(
+  r: RuntimeDevice,
+  currentUserId: string | null,
+): boolean {
+  if (!currentUserId) return true;
+  if (r.owner_id === currentUserId) return true;
+  return r.visibility === "public";
+}
+
+// Others' private runtimes are excluded, not shown-disabled — a private
+// runtime that isn't mine and isn't public has nothing for me to do with it.
 function sortRuntimesForPicker(
   runtimes: RuntimeDevice[],
   currentUserId: string | null,
 ): RuntimeDevice[] {
-  return runtimes.toSorted((a, b) => {
-    const aMine = a.owner_id === currentUserId;
-    const bMine = b.owner_id === currentUserId;
-    if (aMine && !bMine) return -1;
-    if (!aMine && bMine) return 1;
-    return 0;
-  });
+  return runtimes
+    .filter((r) => isRuntimeUsableForUser(r, currentUserId))
+    .toSorted((a, b) => {
+      const aMine = a.owner_id === currentUserId;
+      const bMine = b.owner_id === currentUserId;
+      if (aMine && !bMine) return -1;
+      if (!aMine && bMine) return 1;
+      return 0;
+    });
 }

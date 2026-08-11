@@ -8,6 +8,7 @@ import {
   firstRuntimeIdOnMachine,
   machineForRuntime,
 } from "./computer-picker-utils";
+import { isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
@@ -185,7 +186,10 @@ export function CreateAgentDialog({
     const templateRuntime = template?.runtime_id
       ? runtimes.find((r) => r.id === template.runtime_id)
       : undefined;
-    if (templateRuntime) {
+    if (
+      templateRuntime &&
+      isRuntimeUsableForUser(templateRuntime, currentUserId)
+    ) {
       return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
     }
     if (defaultMachineId && initialMachines.some((m) => m.id === defaultMachineId)) {
@@ -197,7 +201,10 @@ export function CreateAgentDialog({
     const templateRuntime = template?.runtime_id
       ? runtimes.find((r) => r.id === template.runtime_id)
       : undefined;
-    if (templateRuntime) {
+    if (
+      templateRuntime &&
+      isRuntimeUsableForUser(templateRuntime, currentUserId)
+    ) {
       return templateRuntime.id;
     }
     return "";
@@ -220,7 +227,7 @@ export function CreateAgentDialog({
     selectedMachineId ||
     (creationProposal?.preferred_computer
       ? preferredMachine?.id ?? ""
-      : firstRuntimeMachine(machines)?.id || "") ||
+      : firstRuntimeMachine(machines, currentUserId)?.id || "") ||
     "";
   const selectedMachine =
     machines.find((m) => m.id === effectiveMachineId) ?? null;
@@ -229,13 +236,13 @@ export function CreateAgentDialog({
   const machineRuntimes = selectedMachine?.runtimes ?? [];
   const effectiveRuntimeId =
     selectedRuntimeId ||
-    firstRuntimeIdOnMachine(selectedMachine);
+    firstRuntimeIdOnMachine(selectedMachine, currentUserId);
 
   const handleMachineSelect = (machineId: string) => {
     if (machineId === effectiveMachineId) return;
     setSelectedMachineId(machineId);
     const next = machines.find((m) => m.id === machineId) ?? null;
-    setSelectedRuntimeId(firstRuntimeIdOnMachine(next));
+    setSelectedRuntimeId(firstRuntimeIdOnMachine(next, currentUserId));
     setModel("");
     setThinkingLevel("");
   };

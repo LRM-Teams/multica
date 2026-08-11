@@ -149,6 +149,12 @@ export interface RuntimeDevice {
   auto_update?: DaemonUpdateStatus | null;
   owner_id: string | null;
   /**
+   * "private" (default) — only the owner / workspace admins can bind agents.
+   * "public" — any workspace member can bind agents. Older servers may omit
+   * the field; treat missing as private (fail closed for binding UI).
+   */
+  visibility?: "private" | "public";
+  /**
    * Task #81 — non-null when the daemon's `MULTICA_PINNED_VERSION` reported
    * this machine as pinned. This only reflects the daemon's local intent —
    * the server does not yet enforce it against a server-initiated update

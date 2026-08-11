@@ -60,8 +60,8 @@ export function useArchiveAgentsAndDeleteRuntime(wsId: string) {
   });
 }
 
-// useUpdateRuntime patches the user-editable runtime display name.
-// Invalidates runtime and agent projections that render the machine label.
+// useUpdateRuntime patches editable fields on a runtime (visibility, display_name).
+// Invalidates the runtime list so the picker disabled-state recomputes.
 export function useUpdateRuntime(wsId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -71,12 +71,13 @@ export function useUpdateRuntime(wsId: string) {
     }: {
       runtimeId: string;
       patch: {
+        visibility?: "private" | "public";
         display_name?: string | null;
       };
     }) => api.updateRuntime(runtimeId, patch),
     onSettled: () => {
-      // Keep Profile/create runtime pickers in sync when display_name changes
-      // on the Runtimes page (LRM-925).
+      // Keep Profile/create runtime pickers in sync when visibility or
+      // display_name changes on the Runtimes page (LRM-925 / restore visibility).
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     },

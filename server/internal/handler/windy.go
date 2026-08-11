@@ -343,6 +343,25 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 			writeError(w, http.StatusBadRequest, "invalid runtime_id")
 			return db.AgentRuntime{}, false
 		}
+		// pickWindyRuntime is only called after EnsureWindy already resolved
+		// the member; re-load for the visibility gate so a private foreign
+		// runtime cannot be forced through an explicit runtime_id.
+		userID, ok := requireUserID(w, r)
+		if !ok {
+			return db.AgentRuntime{}, false
+		}
+		member, err := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+			UserID:      parseUUID(userID),
+			WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			writeError(w, http.StatusForbidden, "not a member of this workspace")
+			return db.AgentRuntime{}, false
+		}
+		if !canUseRuntimeForAgent(member, runtime) {
+			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
+			return db.AgentRuntime{}, false
+		}
 		// Task #123 L1: explicit runtime_id still must be heartbeat-fresh.
 		// Otherwise a client can bind Wendy to a dead "online" row for ~150s.
 		if !runtimeIsPickableOnline(runtime, time.Now()) {

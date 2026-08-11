@@ -584,6 +584,20 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			return nil
 		}
 	}
+	waitBoundary := func(target string, want int64) map[string]int64 {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			boundaries := readBoundary()
+			if boundaries[target] == want {
+				return boundaries
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("Context Boundary did not reach %d for %s: %v", want, target, boundaries)
+				return boundaries
+			}
+			runtime.Gosched()
+		}
+	}
 
 	// Phase A — crashed coordinator. Recovery completes, a canonical Message is
 	// server-acked, then the runtime handoff fails inside the pre-persist
@@ -612,7 +626,9 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	if got := waitBatch(observedB, batchesB, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("restarted runtime batches = %+v, want canonical Message %s handed off", got, idA)
 	}
-	if got := readBoundary(); got[target] != seqA {
+	// Runtime observation proves only that native handoff started. Boundary
+	// persistence is a separate commit stage and may finish just afterward.
+	if got := waitBoundary(target, seqA); got[target] != seqA {
 		t.Fatalf("restarted boundary = %v, want %d", got, seqA)
 	}
 	teardownB()

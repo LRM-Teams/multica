@@ -277,6 +277,20 @@ func convertResidentMessageMemoriesForEnv(memories []protocol.AgentMessageMemory
 }
 
 func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID, activityKind, detailKind, narrative string) {
+	if activityKind == protocol.ActivityKindWorking && detailKind == "starting" {
+		d.mu.Lock()
+		workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+		d.mu.Unlock()
+		runner, err := d.ensureWorkspaceRunner(workspaceID)
+		if err == nil && runner.activity != nil {
+			if launch, found := runner.processes.Snapshot(agentID); found && launch.RuntimeID == runtimeID {
+				if err := runner.activity.Observe(AgentObservation{AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeWorking, Data: AgentRuntimeObservationData{RuntimeID: runtimeID}, At: time.Now().UTC()}); err != nil && d.logger != nil {
+					d.logger.Debug("workspace Runner Message lifecycle Activity observation deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
+				}
+			}
+		}
+		return
+	}
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()

@@ -312,19 +312,24 @@ func TestRuntimeListCoalescesNewestUpdateByDaemon(t *testing.T) {
 	}
 }
 
-func TestRuntimeReleaseFromManifestRequiresStableReleaseWithPlatforms(t *testing.T) {
-	valid := cli.ReleaseManifest{
+func TestRuntimeReleaseFromManifestRequiresPublishedReleaseWithPlatforms(t *testing.T) {
+	stable := cli.ReleaseManifest{
 		TagName: "v0.3.1",
 		Platforms: map[string]cli.ReleaseAsset{
 			"darwin-arm64": {URL: "https://example/multica-cli-0.3.1-darwin-arm64.tar.gz", SHA256: "deadbeef"},
 		},
 	}
-	if release, err := runtimeReleaseFromManifest(&valid); err != nil || release == nil || release.TagName != "v0.3.1" {
-		t.Fatalf("runtimeReleaseFromManifest(valid) = %+v err=%v, want v0.3.1", release, err)
+	prerelease := stable
+	prerelease.TagName = "v0.3.2-alpha.1"
+	for _, manifest := range []cli.ReleaseManifest{stable, prerelease} {
+		release, err := runtimeReleaseFromManifest(&manifest)
+		if err != nil || release == nil || release.TagName != manifest.TagName {
+			t.Fatalf("runtimeReleaseFromManifest(%+v) = %+v err=%v, want %s", manifest, release, err, manifest.TagName)
+		}
 	}
 
 	for _, manifest := range []cli.ReleaseManifest{
-		{TagName: "v0.3.1-beta.1", Platforms: valid.Platforms},
+		{TagName: "v0.3.1-preview.1", Platforms: stable.Platforms},
 		{TagName: "v0.3.1", Platforms: map[string]cli.ReleaseAsset{}},
 	} {
 		if got, err := runtimeReleaseFromManifest(&manifest); err == nil || got != nil {

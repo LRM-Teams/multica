@@ -30,9 +30,11 @@ func casPassportEligibilityRevisionTx(
 	eligibilityRevision int64,
 	lifecycle ArtifactLifecycleStatus,
 ) error {
+	// Passport has no updated_at column (318 schema). CAS is a pure predicate
+	// match: rewrite a column to itself so RowsAffected reports the lock result.
 	tag, err := tx.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET updated_at = now()
+		SET eligibility_revision = eligibility_revision
 		WHERE workspace_id = $1::uuid
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid
@@ -439,6 +441,9 @@ func loadLegacyManifestVisibleArtifactIDsTx(
 	purpose := manifestPurposeForTask()
 	ids := make(map[string]struct{})
 	for _, candidate := range candidates {
+		if module.policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
+			continue
+		}
 		admitted, _ := module.policy.LegacyAdmissionAllowed(
 			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
 		)
@@ -510,14 +515,225 @@ func verifyAcceptanceManifestEntryEligibilityTx(
 		  WHERE m.workspace_id = $1::uuid
 		    AND m.session_id = $2::uuid
 		    AND m.attempt_id = $3::uuid
-		    AND e.eligibility_revision <> p.eligibility_revision
+		    AND (
+		      e.eligibility_revision <> p.eligibility_revision
+		      OR p.lifecycle_status NOT IN ('registered', 'accepted')
+		      OR v.content_hash <> convert_from(e.representation_bytes, 'UTF8')
+		    )
 		)
 	`, workspaceID, sessionID, attemptID).Scan(&stale)
 	if err != nil {
 		return err
 	}
 	if stale {
-		return fmt.Errorf("%w: acceptance manifest entry eligibility stale", ErrInvalidTransition)
+		return fmt.Errorf("%w: acceptance manifest entry stale", ErrInvalidTransition)
+	}
+	return nil
+}
+
+func loadManifestEntryCandidatesForAttemptTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) ([]artifactVersionCandidate, string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT
+		  v.artifact_id::text,
+		  v.version,
+		  e.eligibility_revision,
+		  v.content_hash,
+		  e.representation_hash,
+		  m.manifest_hash
+		FROM research_artifact_context_entry e
+		JOIN research_artifact_context_manifest m
+		  ON m.workspace_id = e.workspace_id
+		 AND m.session_id = e.session_id
+		 AND m.id = e.manifest_id
+		JOIN research_artifact_version v
+		  ON v.workspace_id = e.workspace_id
+		 AND v.session_id = e.session_id
+		 AND v.id = e.artifact_version_id
+		WHERE m.workspace_id = $1::uuid
+		  AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+		ORDER BY e.ordinal
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	var entries []artifactVersionCandidate
+	var storedHash string
+	for rows.Next() {
+		var entry artifactVersionCandidate
+		if err = rows.Scan(
+			&entry.ArtifactID, &entry.Version, &entry.EligibilityRevision,
+			&entry.ContentHash, &entry.RepresentationHash, &storedHash,
+		); err != nil {
+			return nil, "", err
+		}
+		entry.Representation = "raw"
+		entries = append(entries, entry)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, "", err
+	}
+	return entries, storedHash, nil
+}
+
+func verifyAcceptanceManifestHashTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	entries, storedHash, err := loadManifestEntryCandidatesForAttemptTx(ctx, tx, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(storedHash) == "" {
+		return fmt.Errorf("%w: acceptance manifest hash missing", ErrInvalidTransition)
+	}
+	if hashManifestEntries(entries) != storedHash {
+		return fmt.Errorf("%w: acceptance manifest hash mismatch", ErrInvalidTransition)
+	}
+	return nil
+}
+
+type acceptanceManifestLockTarget struct {
+	Kind         ArtifactEntityKind
+	ArtifactID   string
+	VersionRowID string
+}
+
+func loadAcceptanceManifestLockTargetsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) ([]acceptanceManifestLockTarget, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT p.entity_kind, v.artifact_id::text, v.id::text
+		FROM research_artifact_context_entry e
+		JOIN research_artifact_context_manifest m
+		  ON m.workspace_id = e.workspace_id
+		 AND m.session_id = e.session_id
+		 AND m.id = e.manifest_id
+		JOIN research_artifact_version v
+		  ON v.workspace_id = e.workspace_id
+		 AND v.session_id = e.session_id
+		 AND v.id = e.artifact_version_id
+		JOIN research_artifact_passport p
+		  ON p.workspace_id = v.workspace_id
+		 AND p.session_id = v.session_id
+		 AND p.id = v.artifact_id
+		WHERE m.workspace_id = $1::uuid
+		  AND m.session_id = $2::uuid
+		  AND m.attempt_id = $3::uuid
+	`, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var targets []acceptanceManifestLockTarget
+	for rows.Next() {
+		var target acceptanceManifestLockTarget
+		if err = rows.Scan(&target.Kind, &target.ArtifactID, &target.VersionRowID); err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, rows.Err()
+}
+
+func sortAcceptanceManifestLockTargets(targets []acceptanceManifestLockTarget) {
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].Kind != targets[j].Kind {
+			return targets[i].Kind < targets[j].Kind
+		}
+		return targets[i].ArtifactID < targets[j].ArtifactID
+	})
+}
+
+func lockArtifactPassportRowTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, artifactID string,
+) error {
+	var locked bool
+	err := tx.QueryRow(ctx, `
+		SELECT true
+		FROM research_artifact_passport
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		FOR UPDATE
+	`, workspaceID, sessionID, artifactID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: acceptance manifest passport missing", ErrInvalidTransition)
+	}
+	return err
+}
+
+func lockArtifactVersionRowTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, versionRowID string,
+) error {
+	var locked bool
+	err := tx.QueryRow(ctx, `
+		SELECT true
+		FROM research_artifact_version
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND id = $3::uuid
+		FOR UPDATE
+	`, workspaceID, sessionID, versionRowID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: acceptance manifest version missing", ErrInvalidTransition)
+	}
+	return err
+}
+
+func lockAcceptanceManifestAuthorizationTargetsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var locked bool
+	err := tx.QueryRow(ctx, `
+		SELECT true
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid
+		  AND session_id = $2::uuid
+		  AND attempt_id = $3::uuid
+		FOR UPDATE
+	`, workspaceID, sessionID, attemptID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: acceptance requires dispatch manifest", ErrInvalidTransition)
+	}
+	if err != nil {
+		return err
+	}
+	targets, err := loadAcceptanceManifestLockTargetsTx(ctx, tx, workspaceID, sessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	sortAcceptanceManifestLockTargets(targets)
+	for _, target := range targets {
+		if err = lockArtifactPassportRowTx(ctx, tx, workspaceID, sessionID, target.ArtifactID); err != nil {
+			return err
+		}
+	}
+	versionRowIDs := make([]string, 0, len(targets))
+	for _, target := range targets {
+		versionRowIDs = append(versionRowIDs, target.VersionRowID)
+	}
+	sort.Strings(versionRowIDs)
+	for _, versionRowID := range versionRowIDs {
+		if err = lockArtifactVersionRowTx(ctx, tx, workspaceID, sessionID, versionRowID); err != nil {
+			return err
+		}
 	}
 	return nil
 }

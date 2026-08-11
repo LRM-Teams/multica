@@ -97,6 +97,15 @@ type ResidentMessageInput interface {
 	AcceptMessageBatch(context.Context, []ResidentMessage) (ResidentMessageAcceptance, error)
 }
 
+// ResidentMessagePreparation is an optional pre-input gate for resident
+// backends that must finish provider maintenance, such as context compaction,
+// before native Message acceptance may begin. The daemon calls this with the
+// parent handoff context before adding its bounded native-acceptance timeout.
+// emit reports normalized runtime lifecycle events while the gate is active.
+type ResidentMessagePreparation interface {
+	PrepareMessageInput(context.Context, func(Message)) error
+}
+
 // ResidentMessageAcceptance separates native input acceptance from the
 // provider turn it may start. Done reports that the runtime is idle again;
 // callers must keep turn admission closed until it resolves. Messages exposes

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, ChevronDown, ChevronUp, Clock, Copy } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, ArrowDown, Clock, Copy } from "lucide-react";
 import { useRunnerActivity } from "@multica/core/agents";
 import type { Agent, RunnerActivityTimelineRow } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -10,6 +10,10 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { useT } from "../../../i18n";
+import {
+  foldActivityCommandPreview,
+  isLongActivityCommand,
+} from "./activity-command-body";
 
 const TONE_DOT: Record<string, string> = {
   neutral: "bg-muted-foreground/40",
@@ -23,6 +27,9 @@ const TONE_DOT: Record<string, string> = {
 const TIMESTAMP_CLASS =
   "ml-auto shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/55";
 const LOADING_SKELETON_WIDTHS = ["w-[72%]", "w-[58%]", "w-[81%]", "w-[45%]", "w-[66%]"] as const;
+
+/** Pathological body dumps only — normal length never hits this scroller. */
+const ACTIVITY_BODY_FULL_SCROLL_CLASS = "max-h-[min(60vh,480px)] overflow-y-auto";
 
 function formatRelativeTime(value: string, now = Date.now()): string {
   const occurredAt = Date.parse(value);
@@ -41,13 +48,60 @@ function formatExactTime(value: string, formatter: Intl.DateTimeFormat): string 
   return formatter.format(occurredAt);
 }
 
+/**
+ * Body-bearing rows (commands / expandable detail): default-full body + always
+ * visible Copy. Soft fold only for pathological length — no chevron, no
+ * line-clamp-2 (2026-08-11 command readability; timeline shell unchanged).
+ */
+function TimelineBodyBlock({
+  body,
+  copied,
+  copyLabel,
+  onCopy,
+  scrollable,
+}: {
+  body: string;
+  copied: boolean;
+  copyLabel: string;
+  onCopy: () => void;
+  scrollable: boolean;
+}) {
+  return (
+    <div className="relative mt-1 rounded-md bg-muted" data-testid="activity-command-block">
+      <pre
+        className={cn(
+          "overflow-x-auto px-2.5 py-1.5 pr-9 font-mono text-xs leading-5 break-words whitespace-pre-wrap text-foreground",
+          scrollable && ACTIVITY_BODY_FULL_SCROLL_CLASS,
+        )}
+      >
+        <code>{body}</code>
+      </pre>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onCopy();
+        }}
+        aria-label={copyLabel}
+        className="absolute right-1.5 top-1.5 rounded border border-border bg-background p-1 text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Copy className="size-3.5" aria-hidden />
+      </button>
+      {copied ? <span className="sr-only">{copyLabel}</span> : null}
+    </div>
+  );
+}
+
 function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineRow; exactTimeFormatter: Intl.DateTimeFormat }) {
   const { t } = useT("agents");
-  const detailId = useId();
-  const [expanded, setExpanded] = useState(false);
+  const [bodyExpanded, setBodyExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const body = row.body?.trim();
+  const bodyIsLong = Boolean(body && isLongActivityCommand(body));
   const exactTime = formatExactTime(row.occurred_at, exactTimeFormatter);
+  const copyLabel = copied
+    ? t(($) => $.tab_body.activity.command_copied)
+    : t(($) => $.tab_body.activity.copy_command);
 
   const copy = async () => {
     if (!body || !(await copyText(body))) return;
@@ -56,7 +110,11 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
   };
 
   return (
-    <article className="relative flex items-start gap-2 py-1" data-testid="runner-activity-row">
+    <article
+      className="relative flex items-start gap-2 py-1"
+      data-testid="runner-activity-row"
+      data-command-long={bodyIsLong ? "true" : "false"}
+    >
       <span className="flex w-3 shrink-0 justify-center">
         <span
           className={cn(
@@ -67,66 +125,49 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
         />
       </span>
       <div className="min-w-0 flex-1 pt-0.5">
+        <div className="flex min-h-0 w-full items-start gap-2">
+          <span className="min-w-0 flex-1 text-[13.5px] font-semibold leading-snug text-foreground">
+            {row.title}
+          </span>
+          <time className={cn(TIMESTAMP_CLASS, "pt-0.5")} dateTime={row.occurred_at} title={exactTime}>
+            {formatRelativeTime(row.occurred_at)}
+          </time>
+        </div>
         {body ? (
-          <button
-            type="button"
-            className="group flex min-h-11 w-full items-start gap-2 rounded-md text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
-            aria-expanded={expanded}
-            aria-controls={detailId}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block text-[13.5px] font-semibold leading-snug text-foreground">
-                {row.title}
-              </span>
-              {!expanded && row.subtext ? (
-                <span data-testid="runner-activity-subtext" className="mt-0.5 block line-clamp-2 whitespace-pre-wrap break-words text-[13px] text-muted-foreground">
-                  {row.subtext}
-                </span>
-              ) : null}
-            </span>
-            <time className={cn(TIMESTAMP_CLASS, "pt-0.5")} dateTime={row.occurred_at} title={exactTime}>
-              {formatRelativeTime(row.occurred_at)}
-            </time>
-            <span className="mt-0.5 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground" aria-hidden>
-              {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-            </span>
-          </button>
-        ) : (
-          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3">
-            <div className="min-w-0">
-              <span className="block text-[13.5px] font-semibold leading-snug text-foreground">{row.title}</span>
-              {row.subtext ? (
-                <span data-testid="runner-activity-subtext" className="mt-0.5 block whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted-foreground">
-                  {row.subtext}
-                </span>
-              ) : null}
-            </div>
-            <time className={cn(TIMESTAMP_CLASS, "pt-0.5")} dateTime={row.occurred_at} title={exactTime}>
-              {formatRelativeTime(row.occurred_at)}
-            </time>
-          </div>
-        )}
-        {body && expanded ? (
-          <div
-            id={detailId}
-            className="mt-1 rounded-r-md border-l-2 border-brand bg-muted px-2.5 py-2 text-xs text-foreground"
-          >
-            <p className="whitespace-pre-wrap break-words leading-5">{body}</p>
-            <button
-              type="button"
-              className="mt-1 inline-flex items-center gap-1 font-medium text-muted-foreground hover:text-foreground"
-              onClick={(event) => {
-                event.stopPropagation();
+          <>
+            <TimelineBodyBlock
+              body={
+                bodyIsLong && !bodyExpanded
+                  ? foldActivityCommandPreview(body)
+                  : body
+              }
+              copied={copied}
+              copyLabel={copyLabel}
+              onCopy={() => {
                 void copy();
               }}
-            >
-              <Copy className="size-3" aria-hidden />
-              {copied
-                ? t(($) => $.tab_body.activity.command_copied)
-                : t(($) => $.tab_body.activity.copy_command)}
-            </button>
-          </div>
+              scrollable={bodyIsLong && bodyExpanded}
+            />
+            {bodyIsLong ? (
+              <button
+                type="button"
+                onClick={() => setBodyExpanded((value) => !value)}
+                className="mt-1 text-xs font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                data-testid="activity-command-fold-toggle"
+              >
+                {bodyExpanded
+                  ? t(($) => $.tab_body.activity.show_less_command)
+                  : t(($) => $.tab_body.activity.show_full_command)}
+              </button>
+            ) : null}
+          </>
+        ) : row.subtext ? (
+          <span
+            data-testid="runner-activity-subtext"
+            className="mt-0.5 block whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted-foreground"
+          >
+            {row.subtext}
+          </span>
         ) : null}
       </div>
     </article>

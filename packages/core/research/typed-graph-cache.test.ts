@@ -66,11 +66,12 @@ describe("typed-graph-cache", () => {
       makePage({
         session_id: "s1",
         graph_version: 3,
+        total_node_count: 1,
         nodes: [{ id: "n1", title: "Old", node_type: "finding" }],
       }),
     ]);
     const result = patchTypedGraphInfiniteData(data, {
-      node: { id: "n1", title: "New", node_type: "finding", payload: { details: { x: 1 } } },
+      node: { id: "n1", title: "New", node_type: "finding", payload: { details: { x: 1 } } } as never,
       graphVersion: 4,
     });
     expect(result.patched).toBe(true);
@@ -84,10 +85,12 @@ describe("typed-graph-cache", () => {
       makePage({
         session_id: "s1",
         graph_version: 3,
+        total_node_count: 0,
+        nodes: [],
       }),
     ]);
     const result = patchTypedGraphInfiniteData(data, {
-      node: { id: "n2", title: "Late", node_type: "probe" },
+      node: { id: "n2", title: "Late", node_type: "probe" } as never,
       graphVersion: 10,
     });
     expect(result.needsResync).toBe(true);

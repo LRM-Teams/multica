@@ -51,7 +51,7 @@ export function RuntimeConfigDialog({
       }}
     >
       <DialogContent
-        className="max-w-md"
+        className="max-w-md overflow-hidden"
         data-testid="agent-runtime-config-dialog"
       >
         <DialogHeader>
@@ -142,7 +142,7 @@ function RuntimeConfigDialogBody({
 
   return (
     <>
-      <div className="py-1">
+      <div className="min-w-0 py-1">
         <ExecutionConfigFields
           runtimes={runtimes}
           members={members}

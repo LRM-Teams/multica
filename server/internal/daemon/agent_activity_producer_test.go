@@ -192,6 +192,86 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	}
 }
 
+func TestResidentCompactionPublishesOneStaleEntryAndFinishesBeforeResumedOutput(t *testing.T) {
+	now := time.Date(2026, time.August, 11, 6, 0, 0, 0, time.UTC)
+	var activities []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) {
+		activities = append(activities, payload)
+	})
+	var staleDelay time.Duration
+	var fireStale func()
+	producer.schedule = func(delay time.Duration, callback func()) func() {
+		staleDelay = delay
+		fireStale = callback
+		return func() { fireStale = nil }
+	}
+	installActivityProducerAgent(t, producer)
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	d.agentActivityProducers["workspace-1"] = producer
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[0].Snapshot.DetailKind != "compacting_context" || len(activities[0].Entries) != 1 {
+		t.Fatalf("compaction start Activity = %+v", activities)
+	}
+	if staleDelay != 5*time.Minute || fireStale == nil {
+		t.Fatalf("compaction watchdog = %v callback_present=%v, want one five-minute timer", staleDelay, fireStale != nil)
+	}
+
+	now = now.Add(5 * time.Minute)
+	fireStale()
+	if len(activities) != 2 || activities[1].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[1].Snapshot.DetailKind != "compaction_stale" || len(activities[1].Entries) != 1 {
+		t.Fatalf("stale compaction Activity = %+v, want one Timeline entry after five minutes", activities)
+	}
+
+	now = now.Add(time.Minute)
+	producer.Tick()
+	if len(activities) != 3 || activities[2].Snapshot.DetailKind != "compaction_stale" || len(activities[2].Entries) != 0 {
+		t.Fatalf("post-stale heartbeat = %+v, want Snapshot-only heartbeat", activities)
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
+	if len(activities) != 5 {
+		t.Fatalf("Activity count after resumed output = %d, want inferred finish plus thinking", len(activities))
+	}
+	finish := activities[3]
+	if finish.Snapshot.ActivityKind != protocol.ActivityKindWorking || finish.Snapshot.DetailKind != "compaction_finished" || len(finish.Entries) != 1 {
+		t.Fatalf("inferred compaction finish = %+v", finish)
+	}
+	if thinking := activities[4]; thinking.Snapshot.ActivityKind != protocol.ActivityKindThinking || len(thinking.Entries) != 0 {
+		t.Fatalf("resumed thinking Activity = %+v", thinking)
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
+	if len(activities) != 6 || activities[5].Snapshot.ActivityKind != protocol.ActivityKindWorking || activities[5].Snapshot.DetailKind != "compaction_finished" {
+		t.Fatalf("late explicit provider finish Activity = %+v", activities)
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionFinished})
+	if len(activities) != 8 {
+		t.Fatalf("explicit compaction lifecycle Activity count = %d, want 8", len(activities))
+	}
+	explicitFinish := activities[7]
+	if explicitFinish.Snapshot.ActivityKind != protocol.ActivityKindWorking || explicitFinish.Snapshot.DetailKind != "compaction_finished" || len(explicitFinish.Entries) != 1 {
+		t.Fatalf("explicit compaction finish = %+v", explicitFinish)
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageError, Content: "compaction failed"})
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageThinking})
+	if len(activities) != 11 || activities[9].Snapshot.ActivityKind != protocol.ActivityKindError || activities[10].Snapshot.ActivityKind != protocol.ActivityKindThinking {
+		t.Fatalf("interrupted compaction Activity = %+v", activities[8:])
+	}
+
+	d.emitResidentMessageRuntimeActivity("agent-a", "runtime-1", agent.Message{Type: agent.MessageCompactionStarted})
+	d.emitMessageTurnCompletionActivity("agent-a", "runtime-1", nil)
+	if len(activities) != 14 || activities[12].Snapshot.DetailKind != "compaction_finished" || activities[13].Snapshot.ActivityKind != protocol.ActivityKindOnline || activities[13].Snapshot.DetailKind != "idle" {
+		t.Fatalf("turn-end compaction completion Activity = %+v", activities[11:])
+	}
+}
+
 func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T) {
 	var activities []protocol.AgentActivityPayload
 	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) {
@@ -249,6 +329,29 @@ func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
 	}
 	if body.Text != "Running command" || body.ActivityKind != protocol.ActivityKindWorking || body.DetailKind != "running_command" {
 		t.Fatalf("task Activity body = %+v", body)
+	}
+}
+
+func TestTaskRunnerCompactionUsesSameRaftLifecycleProjection(t *testing.T) {
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	installActivityProducerAgent(t, producer)
+	d := New(Config{}, nil)
+	d.runnerInstanceID = "daemon-1"
+	d.agentActivityProducers["workspace-1"] = producer
+	task := Task{ID: "task-1", AgentID: "agent-a", WorkspaceID: "workspace-1"}
+
+	d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compacting_context", "Compacting context")
+	d.completeTaskRunnerCompactionIfActive(task, "Context compaction finished (inferred from resumed output)")
+	if len(sent) != 2 || sent[1].Snapshot.ActivityKind != protocol.ActivityKindWorking || sent[1].Snapshot.DetailKind != "compaction_finished" || len(sent[1].Entries) != 1 {
+		t.Fatalf("task compaction lifecycle Activity = %+v", sent)
+	}
+
+	d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compacting_context", "Compacting context")
+	d.interruptTaskRunnerCompactionIfActive(task)
+	d.completeTaskRunnerCompactionIfActive(task, "must not be published")
+	if len(sent) != 3 {
+		t.Fatalf("interrupted task compaction produced inferred finish: %+v", sent[3:])
 	}
 }
 

@@ -126,6 +126,16 @@ recently did. Activity may be Idle, Thinking, Working, or Error while Presence
 remains Online. Idle is Activity and never means Offline.
 _Avoid_: Presence, liveness heartbeat, management ownership
 
+### Context Compaction
+
+A provider-runtime maintenance operation that rewrites an Agent session's
+context while preserving the logical launch, provider process, Message turn,
+and Agent identity. Compaction is user-visible Activity (`started`, `finished`,
+one stale observation, or interruption), but it is not Message acceptance,
+turn completion, process restart, or Idle. Pending runtime input waits at the
+compaction boundary and resumes after completion or interruption.
+_Avoid_: Session restart, turn restart, Message processing, silent maintenance
+
 ### Agent Management State
 
 The internal active/inactive Manager ownership fact for a concrete Agent

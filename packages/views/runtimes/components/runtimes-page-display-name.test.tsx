@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -16,6 +16,10 @@ import type { RuntimeMachine } from "./runtime-machines";
 const TEST_RESOURCES = {
   en: { common: enCommon, runtimes: enRuntimes, agents: enAgents },
 };
+
+const { refetchWorkspaces } = vi.hoisted(() => ({
+  refetchWorkspaces: vi.fn(),
+}));
 
 vi.mock("@multica/core/auth", () => ({
   useAuthStore: (sel: (s: { user: { id: string } }) => unknown) =>
@@ -32,7 +36,11 @@ vi.mock("@multica/core/agents/stores", () => ({
 }));
 
 vi.mock("@multica/core/runtimes/mutations", () => ({
-  useRuntimeAgentWorkspaces: () => ({ data: [], isFetching: false }),
+  useRuntimeAgentWorkspaces: () => ({
+    data: undefined,
+    isFetching: false,
+    refetch: refetchWorkspaces,
+  }),
   useDeleteRuntimeAgentWorkspace: () => ({
     isPending: false,
     mutate: vi.fn(),
@@ -216,5 +224,40 @@ describe("ComputersMachineDetail — display name rename entry", () => {
     expect(screen.getByTestId("machine-basics-computer-id-copy")).toBeInTheDocument();
     // Truncated short form must not be the only representation.
     expect(screen.queryByText(/daemon-1…|…daemon/)).toBeNull();
+  });
+});
+
+describe("ComputersMachineDetail — Agent Workspace scan", () => {
+  it("refetches on every Rescan click after the initial scan", () => {
+    refetchWorkspaces.mockClear();
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <ComputersMachineDetail
+            machine={makeMachine()}
+            agents={[]}
+            snapshot={[]}
+            now={Date.parse("2026-08-01T00:00:05Z")}
+            wsId="ws-1"
+            isMobile={false}
+            actions={null}
+            onBack={() => {}}
+            headerActions={null}
+            showBack={false}
+            showListActions={false}
+          />
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+
+    const rescan = screen.getByTestId("machine-scan-workspaces");
+    fireEvent.click(rescan);
+    fireEvent.click(rescan);
+    fireEvent.click(rescan);
+
+    expect(refetchWorkspaces).toHaveBeenCalledTimes(2);
   });
 });

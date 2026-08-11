@@ -2,6 +2,7 @@ package researchrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -35,10 +36,19 @@ func TestPolicyWatermarkCASRejectsStaleExpected(t *testing.T) {
 	if err = ensureSessionPolicyStateTx(ctx, tx, fixture.workspaceID, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, 0); err != nil {
+	// Fixture seeding (run_session passport backfill) may already advance the
+	// watermark past 0 — always CAS against the current value.
+	var current int64
+	if err = tx.QueryRow(ctx, `
+		SELECT watermark FROM research_artifact_policy_state
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, fixture.workspaceID, fixture.sessionID).Scan(&current); err != nil {
+		t.Fatalf("read watermark: %v", err)
+	}
+	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, current); err != nil {
 		t.Fatalf("first reserve: %v", err)
 	}
-	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, 0); !errors.Is(err, ErrInvalidTransition) {
+	if _, err = reservePolicyWatermarkCASTx(ctx, tx, fixture.workspaceID, fixture.sessionID, current); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("second reserve err=%v want ErrInvalidTransition", err)
 	}
 }
@@ -60,6 +70,18 @@ func TestPassportEligibilityCASRejectsStaleRevision(t *testing.T) {
 	defer cleanupResearchRunFixture(pool, fixture)
 
 	claimID := uuid.NewString()
+	// Passport backfill for claims requires a domain row (reciprocal FK guards).
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_claim (
+		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
+		  significance, confidence, status, goal_version, plan_version, resolution
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'cas-el-claim', '', 'claim for eligibility CAS',
+		  'medium', 0.5, 'proposed', 1, 1, ''
+		)
+	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
+		t.Fatalf("insert claim: %v", err)
+	}
 	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, fixture.sessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
 
 	tx, err := pool.Begin(ctx)
@@ -198,6 +220,83 @@ func TestHistoricalTaskContextAdvancesWhileFrozenManifestStable(t *testing.T) {
 	}
 }
 
+func TestAttemptContextManifestMetadataStableAcrossLiveMutation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Stable attempt context", Title: "Stable attempt context",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+
+	readContext := func() AttemptArtifactContext {
+		t.Helper()
+		snapshot, readErr := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+		if readErr != nil {
+			t.Fatalf("TaskContextForAttempt: %v", readErr)
+		}
+		if snapshot.AttemptContext == nil {
+			t.Fatal("expected attempt_context")
+		}
+		return *snapshot.AttemptContext
+	}
+
+	before := readContext()
+	replayed := readContext()
+	if before.ManifestID != replayed.ManifestID || before.ManifestHash != replayed.ManifestHash {
+		t.Fatalf("replay drift before=%+v replayed=%+v", before, replayed)
+	}
+
+	sourceID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_source_snapshot (
+		  id, workspace_id, session_id, canonical_url, title, publisher, source_class,
+		  evidence_traits, independence_key, retrieved_at, content_hash, snapshot_text, metadata,
+		  verification_status
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'https://example.test/post-live', 'Post live', 'example.test',
+		  'primary', '{}'::text[], 'example.test', now(), 'sha256:post-live', 'post live snapshot', '{}'::jsonb,
+		  'verified'
+		)
+	`, sourceID, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, sourceID, string(ArtifactKindSourceSnapshot), nil, nil)
+
+	afterLive := readContext()
+	if afterLive.ManifestID != before.ManifestID || afterLive.ManifestHash != before.ManifestHash {
+		t.Fatalf("live mutation changed manifest metadata before=%+v after=%+v", before, afterLive)
+	}
+	if !afterLive.ManifestFiltered {
+		t.Fatal("expected manifest-filtered attempt context after live mutation")
+	}
+}
+
 func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -233,7 +332,7 @@ func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 		  significance, confidence, status, goal_version, plan_version, resolution
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, 'cas-claim', '', 'claim for CAS',
-		  0.5, 0.5, 'proposed', 1, 1, ''
+		  'medium', 0.5, 'proposed', 1, 1, ''
 		)
 	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert claim: %v", err)
@@ -243,7 +342,7 @@ func TestDispatchFailsWhenPassportEligibilityAdvances(t *testing.T) {
 	// Advance eligibility revision after plan would have captured revision 1.
 	if _, err = pool.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET eligibility_revision = eligibility_revision + 1, updated_at = now()
+		SET eligibility_revision = eligibility_revision + 1
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
 		t.Fatalf("bump eligibility: %v", err)
@@ -300,7 +399,7 @@ func TestDispatchFailsWhenArtifactVersionContentHashChanges(t *testing.T) {
 		  significance, confidence, status, goal_version, plan_version, resolution
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, 'repr-cas-claim', '', 'claim for representation CAS',
-		  0.5, 0.5, 'proposed', 1, 1, ''
+		  'medium', 0.5, 'proposed', 1, 1, ''
 		)
 	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert claim: %v", err)
@@ -330,6 +429,133 @@ func TestDispatchFailsWhenArtifactVersionContentHashChanges(t *testing.T) {
 	if manifestCount != 0 {
 		t.Fatalf("manifest count=%d want 0 after representation CAS failure", manifestCount)
 	}
+}
+
+func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Frozen gate snapshot", Title: "Frozen gate",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	var headerBytes []byte
+	if err = pool.QueryRow(ctx, `
+		SELECT principal_header_bytes
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&headerBytes); err != nil {
+		t.Fatalf("load gate snapshot: %v", err)
+	}
+	if len(headerBytes) == 0 {
+		t.Fatal("expected frozen gate snapshot bytes on manifest")
+	}
+
+	frozen, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt: %v", err)
+	}
+	frozenCount, ok := gateFindingCount(frozen.Gate, "tasks_incomplete")
+	if !ok {
+		t.Fatalf("frozen gate missing tasks_incomplete: %+v", frozen.Gate)
+	}
+
+	extraTaskID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_task (
+		  id, workspace_id, session_id, client_key, kind, objective,
+		  required_capability, expected_result, status, goal_version, plan_version,
+		  max_attempts, timeout_seconds, ready_at
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'post-dispatch-extra', 'discover', 'extra task',
+		  'lead', 'research_evidence_v1', 'pending', $4, $5, 1, 300, NULL
+		)
+	`, extraTaskID, fixture.workspaceID, run.SessionID, run.GoalVersion, run.PlanVersion); err != nil {
+		t.Fatalf("insert extra task: %v", err)
+	}
+
+	liveGate, err := store.EvaluateGate(ctx, run.SessionID)
+	if err != nil {
+		t.Fatalf("EvaluateGate: %v", err)
+	}
+	liveCount, ok := gateFindingCount(liveGate, "tasks_incomplete")
+	if !ok {
+		t.Fatalf("live gate missing tasks_incomplete: %+v", liveGate)
+	}
+	if liveCount <= frozenCount {
+		t.Fatalf("live unfinished=%d frozen=%d want live > frozen", liveCount, frozenCount)
+	}
+
+	frozenAfter, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
+	if err != nil {
+		t.Fatalf("TaskContextForAttempt after mutation: %v", err)
+	}
+	if !gateResultsEqual(frozen.Gate, frozenAfter.Gate) {
+		t.Fatalf("frozen gate drifted before=%+v after=%+v", frozen.Gate, frozenAfter.Gate)
+	}
+	if gateResultsEqual(frozenAfter.Gate, liveGate) {
+		t.Fatalf("frozen gate should differ from live gate after mutation")
+	}
+}
+
+func gateFindingCount(gate GateResult, code string) (int, bool) {
+	for _, finding := range gate.Findings {
+		if finding.Code != code {
+			continue
+		}
+		raw, ok := finding.Metadata["count"]
+		if !ok {
+			return 0, true
+		}
+		switch v := raw.(type) {
+		case float64:
+			return int(v), true
+		case int:
+			return v, true
+		case int64:
+			return int(v), true
+		default:
+			return 0, true
+		}
+	}
+	return 0, false
+}
+
+func gateResultsEqual(a, b GateResult) bool {
+	left, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	right, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(left) == string(right)
 }
 
 func cleanupResearchRunFixture(pool *pgxpool.Pool, fixture researchRunFixture) {

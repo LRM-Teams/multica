@@ -128,6 +128,117 @@ func (r *activityResidentMessageRuntime) AcceptMessageBatch(context.Context, []a
 
 func (r *activityResidentMessageRuntime) RuntimeAlive() (bool, bool) { return false, false }
 
+type preparingResidentMessageRuntime struct {
+	mu       sync.Mutex
+	prepared bool
+}
+
+func (r *preparingResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *preparingResidentMessageRuntime) PrepareMessageInput(ctx context.Context, emit func(agent.Message)) error {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return errors.New("resident Message preparation inherited the native acceptance deadline")
+	}
+	if emit != nil {
+		emit(agent.Message{Type: agent.MessageCompactionStarted})
+		emit(agent.Message{Type: agent.MessageCompactionFinished})
+	}
+	r.mu.Lock()
+	r.prepared = true
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *preparingResidentMessageRuntime) AcceptMessageBatch(ctx context.Context, _ []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	prepared := r.prepared
+	r.mu.Unlock()
+	if !prepared {
+		return agent.ResidentMessageAcceptance{}, errors.New("native acceptance started before resident Message preparation")
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		return agent.ResidentMessageAcceptance{}, errors.New("native acceptance is not bounded")
+	}
+	done := make(chan error)
+	close(done)
+	return agent.ResidentMessageAcceptance{Done: done}, nil
+}
+
+func TestRuntimePoolPreparesResidentInputOutsideNativeAcceptanceTimeout(t *testing.T) {
+	backend := &preparingResidentMessageRuntime{}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	var observed []agent.MessageType
+	if err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1",
+		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
+		nil, nil,
+		func(message agent.Message) { observed = append(observed, message.Type) },
+		nil,
+	); err != nil {
+		t.Fatalf("handoffIdleMessages: %v", err)
+	}
+	want := []agent.MessageType{agent.MessageCompactionStarted, agent.MessageCompactionFinished}
+	if !reflect.DeepEqual(observed, want) {
+		t.Fatalf("preparation Activity = %v, want %v", observed, want)
+	}
+}
+
+type failingCompactionPreparationRuntime struct {
+	killCalls int
+}
+
+func (r *failingCompactionPreparationRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *failingCompactionPreparationRuntime) PrepareMessageInput(_ context.Context, emit func(agent.Message)) error {
+	if emit != nil {
+		emit(agent.Message{Type: agent.MessageCompactionStarted})
+	}
+	return errors.New("context compaction failed")
+}
+
+func (r *failingCompactionPreparationRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	return agent.ResidentMessageAcceptance{}, errors.New("native acceptance must not run after failed compaction")
+}
+
+func (r *failingCompactionPreparationRuntime) ForceKill() error {
+	r.killCalls++
+	return nil
+}
+
+func TestRuntimePoolCompactionPreparationFailureDoesNotRestartResidentProcess(t *testing.T) {
+	backend := &failingCompactionPreparationRuntime{}
+	pool := newCanonicalAgentRuntimePool()
+	slot := &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
+	pool.slots["agent-1\x00runtime-1"] = slot
+	var observed []agent.MessageType
+	err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1",
+		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
+		nil, nil,
+		func(message agent.Message) { observed = append(observed, message.Type) },
+		nil,
+	)
+	if err == nil || err.Error() != "context compaction failed" {
+		t.Fatalf("handoff error = %v, want compaction failure", err)
+	}
+	if !reflect.DeepEqual(observed, []agent.MessageType{agent.MessageCompactionStarted}) {
+		t.Fatalf("compaction failure Activity = %v", observed)
+	}
+	slot.mu.Lock()
+	running, retained := slot.running, slot.backend == backend
+	slot.mu.Unlock()
+	if running || !retained || backend.killCalls != 0 {
+		t.Fatalf("failed compaction changed process lifecycle: running=%v retained=%v kill_calls=%d", running, retained, backend.killCalls)
+	}
+}
+
 type pendingNoticeRuntime struct {
 	mu      sync.Mutex
 	notices []agent.ResidentPendingNotice
@@ -470,6 +581,34 @@ func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTar
 	}
 	if want := []agent.ResidentPendingTarget{{Target: "channel:one", PendingCount: 2}}; !reflect.DeepEqual(got[1].ChangedTargets, want) {
 		t.Fatalf("second changed targets = %+v, want %+v", got[1].ChangedTargets, want)
+	}
+}
+
+func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
+	backend := &pendingNoticeRuntime{}
+	pool := newCanonicalAgentRuntimePool()
+	slot := &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend, running: true}
+	pool.slots["agent-1\x00runtime-1"] = slot
+	snapshot := PendingNoticeSnapshot{
+		Notice:             agent.ResidentPendingNotice{TotalPending: 1, ChangedTargets: []agent.ResidentPendingTarget{{Target: "dm:one", PendingCount: 1}}},
+		Fingerprint:        "all-v1",
+		TargetFingerprints: map[string]string{"dm:one": "one-v1"},
+	}
+
+	pool.observeResidentRuntimeMessage(slot, agent.Message{Type: agent.MessageCompactionStarted})
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", snapshot); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("Notice during compaction error = %v, want busy deferral", err)
+	}
+	if got := backend.snapshot(); len(got) != 0 {
+		t.Fatalf("Notice crossed active compaction boundary: %+v", got)
+	}
+
+	pool.observeResidentRuntimeMessage(slot, agent.Message{Type: agent.MessageCompactionFinished})
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", snapshot); err != nil {
+		t.Fatalf("Notice after compaction finish: %v", err)
+	}
+	if got := backend.snapshot(); len(got) != 1 {
+		t.Fatalf("Notices after compaction finish = %+v, want one", got)
 	}
 }
 

@@ -148,4 +148,17 @@ func TestArtifactPolicyManifestOmissionReasons(t *testing.T) {
 	if policy.ManifestOmissionReason(ArtifactDenyInsufficientClearance) != "insufficient_clearance" {
 		t.Fatal("expected insufficient_clearance omission reason")
 	}
+	if policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment) != "evaluation_compartment" {
+		t.Fatal("expected evaluation_compartment omission reason")
+	}
+}
+
+func TestArtifactPolicyEvaluationPrivateKinds(t *testing.T) {
+	policy := ArtifactPolicy{}
+	if !policy.EvaluationPrivateKind(ArtifactKindStageEvaluation) {
+		t.Fatal("stage_evaluation must be evaluation-private")
+	}
+	if policy.EvaluationPrivateKind(ArtifactKindClaim) {
+		t.Fatal("ordinary claim must not be evaluation-private")
+	}
 }

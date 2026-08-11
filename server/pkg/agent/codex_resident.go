@@ -25,6 +25,7 @@ var ErrCodexResidentTurnBusy = errors.New("codex app-server turn busy")
 type CodexAppServerBackend interface {
 	Backend
 	ResidentMessageInput
+	ResidentMessagePreparation
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -101,7 +102,7 @@ func (b *codexAppServerBackend) Execute(ctx context.Context, prompt string, opts
 		defer close(msgCh)
 		defer close(resCh)
 		started := time.Now()
-		result := b.executeTurn(ctx, prompt, opts, msgCh, nil)
+		result := b.executeTurn(ctx, prompt, opts, msgCh, nil, true)
 		result.DurationMs = time.Since(started).Milliseconds()
 		// Release before publish so an immediate follow-up turn does not race
 		// a still-true running flag (same ordering as cursor/pi residents).
@@ -109,6 +110,21 @@ func (b *codexAppServerBackend) Execute(ctx context.Context, prompt string, opts
 		resCh <- result
 	}()
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
+}
+
+// PrepareMessageInput completes proactive context compaction before the daemon
+// starts its bounded native-acceptance window. This gate is deliberately
+// separate from turn/start: a slow compaction is runtime progress, not failed
+// Message acceptance and not a reason to replace the Codex process.
+func (b *codexAppServerBackend) PrepareMessageInput(ctx context.Context, emit func(Message)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p := b.process.Load()
+	if p == nil || !shouldProactivelyCompact(p.client.currentRuntimeStats()) {
+		return nil
+	}
+	return b.compactRuntime(ctx, p, emit)
 }
 
 // AcceptMessageBatch starts one native Codex app-server turn for canonical
@@ -137,7 +153,7 @@ func (b *codexAppServerBackend) AcceptMessageBatch(ctx context.Context, messages
 		defer cancelTurn()
 		result := b.executeTurn(turnCtx, prompt, b.cfg.ResidentOptions, msgCh, func(err error) {
 			accepted <- err
-		})
+		}, false)
 		close(msgCh)
 		b.running.Store(false)
 		if result.Status == "completed" {
@@ -182,7 +198,7 @@ func (b *codexAppServerBackend) runtimeAlive() (bool, bool) {
 	return processAlive(p.cmd.Process)
 }
 
-func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message, reportAcceptance func(error)) Result {
+func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message, reportAcceptance func(error), allowProactiveCompaction bool) Result {
 	hadResidentProcess := b.process.Load() != nil
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
@@ -194,8 +210,8 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 		}
 		return Result{Status: "failed", Error: err.Error()}
 	}
-	if hadResidentProcess && shouldProactivelyCompact(p.client.currentRuntimeStats()) {
-		if err := b.compactRuntime(ctx, p, msgCh); err != nil {
+	if allowProactiveCompaction && hadResidentProcess && shouldProactivelyCompact(p.client.currentRuntimeStats()) {
+		if err := b.compactRuntime(ctx, p, func(message Message) { trySend(msgCh, message) }); err != nil {
 			b.cfg.Logger.Warn("proactive runtime context compaction failed; continuing turn", "provider", "codex", "error", err)
 		}
 	}
@@ -462,13 +478,15 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 	}
 }
 
-func (b *codexAppServerBackend) compactRuntime(ctx context.Context, p *codexAppServerProcess, msgCh chan<- Message) error {
+func (b *codexAppServerBackend) compactRuntime(ctx context.Context, p *codexAppServerProcess, emit func(Message)) error {
 	finished := make(chan struct{}, 1)
 	p.client.onMessage = func(msg Message) {
 		if msg.Type != MessageCompactionStarted && msg.Type != MessageCompactionFinished {
 			return
 		}
-		trySend(msgCh, msg)
+		if emit != nil {
+			emit(msg)
+		}
 		if msg.Type == MessageCompactionFinished {
 			select {
 			case finished <- struct{}{}:

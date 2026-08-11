@@ -7,24 +7,20 @@ import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { ChannelsPage } from "./channels-page";
 
-// B3 (#241) — the live edit/delete bug lived in the PARENT wiring: the bubble
-// fully supported edit/delete, but ChannelsPage rendered the message list
-// without `onEditMessage` / `onDeleteMessage`, so the affordances were dead on
-// every real row. The bubble/list unit tests all hand the callbacks in
-// directly, so none of them exercised the parent that must supply them. This
-// test renders the real ChannelsPage and asserts the message region actually
-// receives working edit/delete handlers, and that an edit is a PATCH
-// (editChannelMessage) — never a re-send (H5).
+// B3 (#241) — the live edit bug lived in the PARENT wiring: the bubble fully
+// supported edit, but ChannelsPage rendered the message list without
+// `onEditMessage`, so the affordance was dead on every real row. The bubble/list
+// unit tests hand the callback in directly, so none of them exercised the
+// parent that must supply it. This test renders the real ChannelsPage and
+// asserts that an edit is a PATCH (editChannelMessage) — never a re-send (H5).
 
-// The api client is what the real edit/delete/send mutation hooks call; spy on
-// it so we can assert edit == PATCH and never a send.
+// The api client is what the real edit/send mutation hooks call; spy on it so
+// we can assert edit == PATCH and never a send.
 const apiMock = vi.hoisted(() => {
   const editChannelMessage = vi.fn();
-  const deleteChannelMessage = vi.fn();
   const sendChannelMessage = vi.fn();
   const known: Record<string, unknown> = {
     editChannelMessage,
-    deleteChannelMessage,
     sendChannelMessage,
   };
   const proxy = new Proxy(known, {
@@ -34,7 +30,7 @@ const apiMock = vi.hoisted(() => {
       return target[prop];
     },
   });
-  return { proxy, editChannelMessage, deleteChannelMessage, sendChannelMessage };
+  return { proxy, editChannelMessage, sendChannelMessage };
 });
 vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 
@@ -172,14 +168,12 @@ vi.mock("./channel-files-panel", () => ({ ChannelFilesPanel: () => <div /> }));
 const listProps = vi.hoisted(() => ({
   current: null as {
     onEditMessage?: (m: ChannelMessage, content: string) => void;
-    onDeleteMessage?: (m: ChannelMessage) => void;
     onOpenThread?: (m: ChannelMessage) => void;
   } | null,
 }));
 vi.mock("./channel-message-list", () => ({
   ChannelMessageList: (props: {
     onEditMessage?: (m: ChannelMessage, content: string) => void;
-    onDeleteMessage?: (m: ChannelMessage) => void;
     onOpenThread?: (m: ChannelMessage) => void;
   }) => {
     listProps.current = props;

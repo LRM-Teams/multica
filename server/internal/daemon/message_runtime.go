@@ -280,6 +280,22 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 		d.emitResidentRuntimeDiagnostic(agentID, runtimeID, message)
 		return
 	}
+	d.mu.Lock()
+	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
+	d.mu.Unlock()
+	if workspaceID == "" {
+		return
+	}
+	producer := d.workspaceAgentActivityProducer(workspaceID)
+	switch message.Type {
+	case agent.MessageThinking, agent.MessageText:
+		_, _ = producer.CompleteCompactionIfActive(agentID, d.runnerInstanceID, "Context compaction finished (inferred from resumed output)")
+	case agent.MessageToolUse:
+		_, _ = producer.CompleteCompactionIfActive(agentID, d.runnerInstanceID, "Context compaction finished (inferred from resumed tool use)")
+	case agent.MessageError:
+		producer.InterruptCompactionIfActive(agentID)
+	}
+
 	activityKind, detailKind, narrative := "", "", ""
 	switch message.Type {
 	case agent.MessageThinking:
@@ -294,17 +310,11 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 	case agent.MessageCompactionStarted:
 		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "compacting_context", "Compacting context"
 	case agent.MessageCompactionFinished:
-		activityKind, detailKind, narrative = protocol.ActivityKindOnline, "idle", "Context compaction finished"
+		activityKind, detailKind, narrative = protocol.ActivityKindWorking, "compaction_finished", "Context compaction finished"
 	case agent.MessageError:
 		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(message.Content)
 	}
 	if activityKind == "" {
-		return
-	}
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
-	if workspaceID == "" {
 		return
 	}
 	var entries []protocol.AgentActivityEntry
@@ -315,7 +325,6 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 		}
 		entries = []protocol.AgentActivityEntry{entry}
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
 	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner resident runtime Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
@@ -351,7 +360,10 @@ func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, tu
 	producer := d.workspaceAgentActivityProducer(workspaceID)
 	activityKind, detailKind, narrative := protocol.ActivityKindOnline, "idle", "Idle"
 	if turnErr != nil {
+		producer.InterruptCompactionIfActive(agentID)
 		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(turnErr.Error())
+	} else {
+		_, _ = producer.CompleteCompactionIfActive(agentID, d.runnerInstanceID, "Context compaction finished (inferred from turn end)")
 	}
 	entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)
 	if err != nil {

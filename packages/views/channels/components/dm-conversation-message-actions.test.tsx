@@ -10,32 +10,20 @@ import enChannels from "../../locales/en/channels.json";
 import { DmConversation } from "./dm-conversation";
 
 // B3 (#241) — the same dead-affordance wiring gap the channel path had also
-// lived in the DM path: `dm-conversation` rendered the shared ChannelMessageList
-// (which forwards onEditMessage/onDeleteMessage into the bubble) but never
-// supplied those callbacks, so a user's OWN DM messages showed no edit/delete.
-// This test renders the REAL DmConversation with the REAL ChannelMessageList and
-// bubble — the affordances only appear if the DM parent actually wires the
-// handlers (it does NOT pass onEdit/onDelete to the bubble directly). It also
-// proves an edit is a PATCH (editChannelMessage), never a re-send (H5), and a
-// delete is a soft-delete that renders a tombstone.
+// lived in the DM path. This test renders the REAL DmConversation with the REAL
+// ChannelMessageList and bubble. It proves an edit is a PATCH
+// (editChannelMessage), never a re-send (H5), and keeps the removed Delete UI
+// guarded as absent.
 
-// Spy on the api client the real edit/delete/send mutation hooks call, so we can
-// assert edit == PATCH and never a send. A module-level `deleted` flag lets the
-// message page query re-resolve the row as soft-deleted after a delete, so the
-// invalidation-driven refetch renders the tombstone.
+// Spy on the api client the real edit/send mutation hooks call, so we can assert
+// edit == PATCH and never a send.
 const apiMock = vi.hoisted(() => {
-  const state = { deleted: false };
   const editChannelMessage = vi.fn();
-  const deleteChannelMessage = vi.fn(async () => {
-    state.deleted = true;
-    return undefined;
-  });
   const sendChannelMessage = vi.fn();
   const followChannelThread = vi.fn();
   const unfollowChannelThread = vi.fn();
   const known: Record<string, unknown> = {
     editChannelMessage,
-    deleteChannelMessage,
     sendChannelMessage,
     followChannelThread,
     unfollowChannelThread,
@@ -49,9 +37,7 @@ const apiMock = vi.hoisted(() => {
   });
   return {
     proxy,
-    state,
     editChannelMessage,
-    deleteChannelMessage,
     sendChannelMessage,
     followChannelThread,
     unfollowChannelThread,
@@ -115,10 +101,8 @@ vi.mock("react-virtuoso", async () => {
   return { Virtuoso: MockVirtuoso };
 });
 
-// Keep the real mutation hooks (so edit/delete really route through the api
-// client), but stub the query options to fixtures so the pane resolves without
-// any network. The message page re-resolves the own row as soft-deleted once a
-// delete has been issued, so the invalidation-driven refetch shows the tombstone.
+// Keep the real mutation hooks (so edit really routes through the api client),
+// but stub the query options to fixtures so the pane resolves without network.
 vi.mock("@multica/core/channels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/channels")>();
   return {
@@ -132,13 +116,9 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
       }),
     }),
     channelMessagesPageOptions: () => ({
-      queryKey: ["dm-messages", apiMock.state.deleted],
+      queryKey: ["dm-messages"],
       queryFn: async () => ({
-        messages: currentPageMessages.map((m) =>
-          apiMock.state.deleted && m.author_id === "user-1"
-            ? { ...m, deleted_at: "2026-06-17T09:30:00Z" }
-            : m,
-        ),
+        messages: currentPageMessages,
         next_cursor: null,
       }),
       initialPageParam: null,
@@ -320,16 +300,14 @@ function renderSupervisedDm(dmItem: DMItem = supervisedDm) {
   );
 }
 
-describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () => {
+describe.sequential("DmConversation message action wiring (#241 B3)", () => {
   beforeEach(() => {
-    apiMock.state.deleted = false;
     currentPageMessages = [ownMessage()];
     apiMock.editChannelMessage.mockReset().mockResolvedValue({
       ...ownMessage(),
       content: "Corrected",
       edited_at: "2026-06-17T09:20:00Z",
     });
-    apiMock.deleteChannelMessage.mockClear();
     apiMock.sendChannelMessage.mockReset().mockResolvedValue(ownMessage());
     apiMock.followChannelThread.mockReset().mockResolvedValue(undefined);
     apiMock.unfollowChannelThread.mockReset().mockResolvedValue(undefined);
@@ -363,9 +341,8 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     renderDm();
     await screen.findByTestId("message-bubble");
 
-    // LRM-695: delete removed from the UI; the soft-delete wiring stays dormant.
+    // LRM-695: delete was removed from the UI.
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
-    expect(apiMock.deleteChannelMessage).not.toHaveBeenCalled();
   });
 
   // #568 reaction-sheet exclusivity + LRM-495 (no permanent More): DM still

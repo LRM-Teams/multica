@@ -125,14 +125,16 @@ func TestMachineUpgradeJournalRestoresHandoffGeneration(t *testing.T) {
 	previousRoot := versionStoreRootFn
 	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
-	d := &Daemon{cfg: Config{CLIVersion: "v10.0.0"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := &Daemon{cfg: Config{CLIVersion: "v10.0.0"}, logger: logger}
 	journal := &machineUpgradeJournal{
 		ID: "upgrade-1", Generation: "generation-successor", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0", RuntimeIDs: []string{"runtime-1", "runtime-2"}, Phase: "handoff",
 	}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		t.Fatal(err)
 	}
-	if got := d.machineUpgradeGenerationID(); got != "generation-successor" {
+	successor := New(Config{CLIVersion: "v10.0.0"}, logger)
+	if got := successor.machineUpgradeGenerationID(); got != "generation-successor" {
 		t.Fatalf("successor generation = %q, want journal generation", got)
 	}
 }

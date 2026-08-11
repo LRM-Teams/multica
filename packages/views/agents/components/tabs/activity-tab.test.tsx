@@ -30,7 +30,15 @@ describe("ActivityTab", () => {
         summary: { label: "Running command...", tone: "active", visibility: "visible" },
         timeline: [
           { id: "row-2", occurred_at: "2026-08-06T12:01:00Z", title: "Idle", tone: "success", body_kind: "none" },
-          { id: "row-1", occurred_at: "2026-08-06T12:00:00Z", title: "Running command...", subtext: "Safe detail", tone: "active", body_kind: "text", body: "sanitized body" },
+          {
+            id: "row-1",
+            occurred_at: "2026-08-06T12:00:00Z",
+            title: "Running command...",
+            subtext: "Safe detail",
+            tone: "active",
+            body_kind: "text",
+            body: "sanitized body",
+          },
         ],
       },
       isLoading: false,
@@ -45,9 +53,10 @@ describe("ActivityTab", () => {
       expect.stringContaining("Idle"),
     ]);
     expect(screen.getAllByText("Running command...")).toHaveLength(1);
-    expect(screen.getByText("Safe detail")).toHaveClass("block", "break-words");
-    fireEvent.click(screen.getByText("Running command..."));
+    // Default-full: body visible without expand (2026-08-11).
     expect(screen.getByText("sanitized body")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-command-block")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-command-fold-toggle")).toBeNull();
   });
 
   it("renders a server-projected soft-hold row (warning tone) with its reason subtext", () => {
@@ -85,13 +94,20 @@ describe("ActivityTab", () => {
     expect(screen.getByText("No activity yet")).toBeInTheDocument();
   });
 
-  it("safely renders unknown server presentation and supports expand and copy", async () => {
+  it("shows body by default with always-visible Copy (no expand required)", async () => {
     vi.mocked(copyText).mockResolvedValue(true);
-    const body = "safe detail ".repeat(30);
+    const body = "safe detail ".repeat(30).trim();
     runnerActivity.mockReturnValue({
       data: {
         summary: { label: "Future status", tone: "future-tone", visibility: "visible" },
-        timeline: [{ id: "row-2", occurred_at: "not-a-date", title: "Future event", tone: "future-tone", body_kind: "future-body", body }],
+        timeline: [{
+          id: "row-2",
+          occurred_at: "not-a-date",
+          title: "Future event",
+          tone: "future-tone",
+          body_kind: "future-body",
+          body,
+        }],
       },
       isLoading: false,
       isError: false,
@@ -102,12 +118,53 @@ describe("ActivityTab", () => {
     expect(screen.queryByText("Future status")).not.toBeInTheDocument();
     expect(screen.getByText("not-a-date")).toBeInTheDocument();
     expect(screen.getByText("Future event")).toBeInTheDocument();
-    const rowToggle = screen.getByRole("button", { name: /Future event/ });
-    expect(rowToggle).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(rowToggle);
-    expect(rowToggle).toHaveAttribute("aria-expanded", "true");
-    fireEvent.click(screen.getByText("Copy"));
-    await waitFor(() => expect(copyText).toHaveBeenCalledWith(body.trim()));
-    expect(screen.getByText("Copied")).toBeInTheDocument();
+    // Full body on first paint — no expand chrome for normal length.
+    expect(screen.getByTestId("activity-command-block").querySelector("code")?.textContent).toBe(body);
+    expect(screen.queryByRole("button", { name: /Future event/ })).toBeNull();
+    expect(screen.queryByTestId("activity-command-fold-toggle")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(body));
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
+  it("soft-folds a long body and copies the full text on Copy", async () => {
+    vi.mocked(copyText).mockResolvedValue(true);
+    const lines = Array.from({ length: 20 }, (_, i) => `echo line-${i + 1}`);
+    const full = lines.join("\n");
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Running command...", tone: "active", visibility: "visible" },
+        timeline: [{
+          id: "row-long",
+          occurred_at: "2026-08-06T12:00:00Z",
+          title: "Running command...",
+          tone: "active",
+          body_kind: "text",
+          body: full,
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderActivityTab();
+    const row = screen.getByTestId("runner-activity-row");
+    expect(row).toHaveAttribute("data-command-long", "true");
+    const code = screen.getByTestId("activity-command-block").querySelector("code");
+    expect(code?.textContent).toBe(lines.slice(0, 8).join("\n"));
+    expect(code?.textContent).not.toContain("echo line-20");
+
+    const toggle = screen.getByTestId("activity-command-fold-toggle");
+    expect(toggle).toHaveTextContent("Show full command");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveTextContent("Show less");
+    expect(
+      screen.getByTestId("activity-command-block").querySelector("code")?.textContent,
+    ).toBe(full);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(full));
   });
 });

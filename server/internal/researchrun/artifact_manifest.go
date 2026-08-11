@@ -484,3 +484,40 @@ func verifyAcceptanceManifestPolicyTx(
 	}
 	return manifestWatermark, reserved, nil
 }
+
+func verifyAcceptanceManifestEntryEligibilityTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var stale bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM research_artifact_context_entry e
+		  JOIN research_artifact_context_manifest m
+		    ON m.workspace_id = e.workspace_id
+		   AND m.session_id = e.session_id
+		   AND m.id = e.manifest_id
+		  JOIN research_artifact_version v
+		    ON v.workspace_id = e.workspace_id
+		   AND v.session_id = e.session_id
+		   AND v.id = e.artifact_version_id
+		  JOIN research_artifact_passport p
+		    ON p.workspace_id = v.workspace_id
+		   AND p.session_id = v.session_id
+		   AND p.id = v.artifact_id
+		  WHERE m.workspace_id = $1::uuid
+		    AND m.session_id = $2::uuid
+		    AND m.attempt_id = $3::uuid
+		    AND e.eligibility_revision <> p.eligibility_revision
+		)
+	`, workspaceID, sessionID, attemptID).Scan(&stale)
+	if err != nil {
+		return err
+	}
+	if stale {
+		return fmt.Errorf("%w: acceptance manifest entry eligibility stale", ErrInvalidTransition)
+	}
+	return nil
+}

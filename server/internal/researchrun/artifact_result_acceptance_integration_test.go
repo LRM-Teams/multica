@@ -157,6 +157,92 @@ func TestAcceptResultReplayRequiresMatchingHash(t *testing.T) {
 	}
 }
 
+func TestAcceptResultRejectsWhenManifestEntryEligibilityAdvances(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchRunFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+
+	run, _, err := store.CreateRun(ctx, StartInput{
+		WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID, CreatedBy: fixture.userID,
+		LeadAgentID: fixture.agentID, Goal: "Affected eligibility gate", Title: "Affected eligibility",
+		DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx, run.SessionID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ListTasks: %v len=%d", err, len(tasks))
+	}
+	claimID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_claim (
+		  id, workspace_id, session_id, client_key, evidence_standard_key, claim_text,
+		  significance, confidence, status, goal_version, plan_version, resolution
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 'accept-eligibility-claim', '', 'claim for accept eligibility',
+		  0.5, 0.5, 'proposed', 1, 1, ''
+		)
+	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatalf("insert claim: %v", err)
+	}
+	backfillIntegrationArtifactPassport(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, string(ArtifactKindClaim), intPtr(1), intPtr(1))
+
+	input := testDispatchIntentInput(t, ctx, store, run.SessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID)
+	attempt, _, err := store.CreateDispatchIntent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateDispatchIntent: %v", err)
+	}
+	inboxID := uuid.NewString()
+	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
+		t.Fatalf("AttachInboxTask: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET eligibility_revision = eligibility_revision + 1, updated_at = now()
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
+		t.Fatalf("advance eligibility: %v", err)
+	}
+
+	raw, err := json.Marshal(validPlanResult(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, tasks[0], run.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.AcceptResult(ctx, AcceptResultInput{
+		SessionID: run.SessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
+		InboxTaskID: inboxID, Raw: raw, Result: result, Hash: hash,
+	})
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("AcceptResult err=%v want ErrInvalidTransition", err)
+	}
+	var attemptStatus string
+	if err = pool.QueryRow(ctx, `
+		SELECT status FROM research_task_attempt WHERE id = $1::uuid
+	`, attempt.ID).Scan(&attemptStatus); err != nil {
+		t.Fatal(err)
+	}
+	if attemptStatus != "dispatching" {
+		t.Fatalf("attempt status=%q want dispatching after failed accept", attemptStatus)
+	}
+}
+
 func setupRunningPlanAttempt(
 	t *testing.T,
 	ctx context.Context,

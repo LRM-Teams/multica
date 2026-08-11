@@ -384,6 +384,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       });
   }, [sessionInterrupt, sessionId, qc, wsId, t]);
 
+  // LRM-1497 goal version history — hoisted above the early returns so the
+  // hook call order is stable across the loading → data transition
+  // (rules-of-hooks). Computed from `data?.` like the sibling hooks above.
+  const goalVersion =
+    data?.run?.run?.goal_version ?? data?.run?.contract?.goal_version ?? null;
+  const goalHistory = useMemo(
+    () =>
+      buildGoalVersionHistory({
+        currentGoal: data?.session?.goal ?? "",
+        currentVersion: goalVersion,
+        messages: data?.messages ?? [],
+      }),
+    [data, goalVersion],
+  );
+
   // LRM-799: never keep a permanent skeleton on failure — only while loading.
   // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
   // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
@@ -477,17 +492,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   ];
 
   const postUser = (body: string) => send.mutate(body);
-
-  const goalVersion = data.run?.run?.goal_version ?? data.run?.contract?.goal_version ?? null;
-  const goalHistory = useMemo(
-    () =>
-      buildGoalVersionHistory({
-        currentGoal: session.goal,
-        currentVersion: goalVersion,
-        messages,
-      }),
-    [session.goal, goalVersion, messages],
-  );
 
   const onClarificationOption = (
     question: ResearchClarificationQuestion,

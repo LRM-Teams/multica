@@ -75,6 +75,18 @@ describe("selectVisibleEntityIds", () => {
     expect(STAR_GRAPH_DOM_BUDGET).toBe(220);
   });
 
+  it("caps visible entities at the desktop DOM budget", () => {
+    const entities = [
+      entity({ id: "goal", tier: "xxl" }),
+      ...Array.from({ length: 250 }, (_, index) =>
+        entity({ id: `node-${index}`, tier: index % 3 === 0 ? "l" : "s" }),
+      ),
+    ];
+    const visible = selectVisibleEntityIds(entities, { rootId: "goal" });
+    expect(visible.size).toBeLessThanOrEqual(STAR_GRAPH_DOM_BUDGET);
+    expect(visible.has("goal")).toBe(true);
+  });
+
   it("reduces budget at low zoom", () => {
     expect(effectiveEntityBudget(220, 0.4)).toBeLessThan(220);
     expect(effectiveEntityBudget(220, 1)).toBe(220);

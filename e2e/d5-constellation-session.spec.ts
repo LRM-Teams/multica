@@ -2,7 +2,9 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   deleteD5ConstellationSession,
   seedD5ConstellationSession,
+  seedD5FormingConstellationSession,
   seedD5LargeConstellationSession,
+  seedD5SparseConstellationSession,
   type D5ConstellationSeed,
 } from "./fixtures/d5-constellation-seed";
 
@@ -33,7 +35,14 @@ async function dismissOnboarding(page: Page) {
   }
 }
 
-async function openSession(page: Page, seeded: D5ConstellationSeed, width: number, height: number) {
+async function openSession(
+  page: Page,
+  seeded: D5ConstellationSeed,
+  width: number,
+  height: number,
+  options: { expectCanvas?: boolean } = {},
+) {
+  const expectCanvas = options.expectCanvas ?? true;
   await page.setViewportSize({ width, height });
   await authenticate(page, seeded.api);
   await page.goto(`/${seeded.slug}/research/${seeded.sessionId}`, {
@@ -41,7 +50,9 @@ async function openSession(page: Page, seeded: D5ConstellationSeed, width: numbe
     timeout: 60_000,
   });
   await dismissOnboarding(page);
-  await expect(page.getByTestId("star-graph-canvas")).toBeVisible({ timeout: 60_000 });
+  if (expectCanvas) {
+    await expect(page.getByTestId("star-graph-canvas")).toBeVisible({ timeout: 60_000 });
+  }
 }
 
 async function readZoomPercent(page: Page): Promise<number> {
@@ -145,6 +156,9 @@ test.describe.serial("D5 constellation session canvas gate", () => {
     await page.getByTestId("research-d5-lens-confidence").click();
     await expect(page.getByTestId("research-d5-active-lens")).toHaveText("confidence");
 
+    await page.getByTestId("research-d5-lens-agent").click();
+    await expect(page.getByTestId("research-d5-active-lens")).toHaveText("agent");
+
     await page.getByTestId("research-d5-lens-lineage").click();
     await expect(page.getByTestId("research-d5-active-lens")).toHaveText("lineage");
 
@@ -154,6 +168,91 @@ test.describe.serial("D5 constellation session canvas gate", () => {
     const goal = page.getByRole("button", { name: new RegExp(seeded.nodeTitles.goal, "i") }).first();
     await expect(stable).toHaveClass(/sg-lens-emphasis/);
     await expect(goal).toHaveClass(/sg-lens-dim/);
+  });
+
+  test("desktop: goal card opens the version panel with the session goal", async ({ page }) => {
+    await openSession(page, seeded, 1440, 900);
+    await page.getByTestId("research-session-goal-card").click();
+    await expect(page.getByTestId("research-session-goal-popover")).toBeVisible();
+    await expect(page.getByTestId("research-session-goal-full")).toContainText(
+      "Verify the D5 star-map session canvas",
+    );
+    await page.screenshot({
+      path: "e2e/artifacts/d5-constellation-goal-panel-1440.png",
+      fullPage: true,
+    });
+  });
+
+  test("desktop: L node opens the node report modal with merge lineage", async ({ page }) => {
+    await openSession(page, seeded, 1440, 900);
+    await page
+      .getByRole("button", { name: new RegExp(seeded.nodeTitles.stable, "i") })
+      .first()
+      .click();
+    await expect(page.getByTestId("research-node-report-modal")).toBeVisible();
+    if (seeded.nodeTitles.prior) {
+      await expect(
+        page.locator(`[data-testid^="research-node-report-lineage-"]`).first(),
+      ).toBeVisible();
+    }
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("research-node-report-modal")).toHaveCount(0);
+  });
+
+  test("desktop: S agent node opens Agent Inspector", async ({ page }) => {
+    test.skip(!seeded.fleetAgentId, "Fleet agent id unavailable in seed");
+    await openSession(page, seeded, 1440, 900);
+    await page
+      .getByRole("button", { name: new RegExp(seeded.nodeTitles.probe, "i") })
+      .first()
+      .click();
+    await expect(page.getByTestId("research-agent-inspector")).toBeVisible();
+    await page.getByLabel(/关闭|Close/i).first().click();
+    await expect(page.getByTestId("research-agent-inspector")).toHaveCount(0);
+  });
+
+  test("desktop: rail switches between chat and detail panels", async ({ page }) => {
+    await openSession(page, seeded, 1440, 900);
+    await page
+      .getByRole("button", { name: new RegExp(seeded.nodeTitles.stable, "i") })
+      .first()
+      .click();
+    await expect(page.getByTestId("research-d5-rail")).toHaveAttribute("data-rail-mode", "detail");
+
+    await page.getByRole("button", { name: /聊天|Chat/i }).click();
+    await expect(page.getByTestId("research-d5-rail")).toHaveAttribute("data-rail-mode", "chat");
+
+    await page.getByRole("button", { name: /节点详情|Node detail/i }).click();
+    await expect(page.getByTestId("research-d5-rail")).toHaveAttribute("data-rail-mode", "detail");
+  });
+
+  test("desktop: canvas filter round narrows visible nodes", async ({ page }) => {
+    await openSession(page, seeded, 1440, 900);
+    await page.getByTestId("research-d5-filter-trigger").click();
+    await expect(page.getByTestId("research-d5-filter-popover")).toBeVisible();
+    await page.getByTestId("research-d5-filter-round").selectOption("1");
+    await page.getByTestId("research-d5-lens-lineage").click();
+    const prior = seeded.nodeTitles.prior
+      ? page.getByRole("button", { name: new RegExp(seeded.nodeTitles.prior, "i") }).first()
+      : null;
+    const stable = page
+      .getByRole("button", { name: new RegExp(seeded.nodeTitles.stable, "i") })
+      .first();
+    if (prior) await expect(prior).toHaveClass(/sg-lens-emphasis/);
+    await expect(stable).toHaveClass(/sg-lens-dim/);
+  });
+
+  test("desktop: keyboard Home focuses the goal node", async ({ page }) => {
+    await openSession(page, seeded, 1440, 900);
+    await page
+      .getByRole("button", { name: new RegExp(seeded.nodeTitles.stable, "i") })
+      .first()
+      .click();
+    await page.getByTestId("star-graph-canvas").focus();
+    await page.keyboard.press("Home");
+    await expect(
+      page.getByRole("button", { name: new RegExp(seeded.nodeTitles.goal, "i") }).first(),
+    ).toBeFocused();
   });
 
   test("desktop: reduced motion preference keeps the canvas usable", async ({ page }) => {
@@ -230,6 +329,69 @@ test.describe.serial("D5 large graph budget gate", () => {
     ).toBeVisible();
     await page.screenshot({
       path: "e2e/artifacts/d5-constellation-large-low-zoom.png",
+      fullPage: true,
+    });
+  });
+
+  test("keeps mounted entity controls within the desktop DOM budget at fit zoom", async ({ page }) => {
+    await openSession(page, largeSeed, 1440, 900);
+    await setZoomApprox(page, 100);
+    const mounted = await page.getByTestId("star-graph-entities").locator("button").count();
+    expect(mounted).toBeLessThanOrEqual(220);
+  });
+});
+
+test.describe.serial("D5 sparse metrics gate", () => {
+  test.skip(!runIntegration, "Set D5_CONSTELLATION_E2E=1 with backend + frontend running");
+  test.setTimeout(180_000);
+
+  let sparseSeed: D5ConstellationSeed;
+
+  test.beforeAll(async () => {
+    sparseSeed = await seedD5SparseConstellationSession("D5 Sparse Metrics E2E");
+  });
+
+  test.afterAll(async () => {
+    await deleteD5ConstellationSession(sparseSeed?.sessionId);
+  });
+
+  test("does not render fabricated zero metric placeholders", async ({ page }) => {
+    await openSession(page, sparseSeed, 1440, 900);
+    const finding = page
+      .getByRole("button", { name: new RegExp(sparseSeed.nodeTitles.stable, "i") })
+      .first();
+    await expect(finding).toBeVisible();
+    await expect(finding).not.toContainText(/^0$/);
+    await expect(finding).not.toContainText(/0%/);
+    await page.screenshot({
+      path: "e2e/artifacts/d5-constellation-sparse-metrics-1440.png",
+      fullPage: true,
+    });
+  });
+});
+
+test.describe.serial("D5 forming session gate", () => {
+  test.skip(!runIntegration, "Set D5_CONSTELLATION_E2E=1 with backend + frontend running");
+  test.setTimeout(180_000);
+
+  let formingSeed: D5ConstellationSeed;
+
+  test.beforeAll(async () => {
+    formingSeed = await seedD5FormingConstellationSession("D5 Forming E2E");
+  });
+
+  test.afterAll(async () => {
+    await deleteD5ConstellationSession(formingSeed?.sessionId);
+  });
+
+  test("shows the forming scaffold before business edges exist", async ({ page }) => {
+    await openSession(page, formingSeed, 1440, 900, { expectCanvas: false });
+    await expect(page.getByTestId("research-session-canvas-forming")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.getByTestId("star-graph-canvas")).toHaveCount(0);
+    await page.screenshot({
+      path: "e2e/artifacts/d5-constellation-forming-1440.png",
       fullPage: true,
     });
   });

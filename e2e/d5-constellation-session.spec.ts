@@ -304,6 +304,31 @@ test.describe.serial("D5 constellation session canvas gate", () => {
       fullPage: true,
     });
   });
+
+  test("mobile: S agent node opens inspector sheet", async ({ page }) => {
+    test.skip(!seeded.fleetAgentId, "Fleet agent id unavailable in seed");
+    await openSession(page, seeded, 390, 844);
+    await page
+      .getByRole("button", { name: new RegExp(seeded.nodeTitles.probe, "i") })
+      .first()
+      .click();
+    await expect(page.getByTestId("research-agent-inspector")).toBeVisible();
+    await expect(page.getByTestId("research-agent-inspector")).toHaveAttribute(
+      "data-placement",
+      "sheet",
+    );
+  });
+
+  test("mobile: L node opens report modal over the canvas", async ({ page }) => {
+    await openSession(page, seeded, 390, 844);
+    await page
+      .getByRole("button", { name: new RegExp(seeded.nodeTitles.stable, "i") })
+      .first()
+      .click();
+    await expect(page.getByTestId("research-node-report-modal")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("research-node-report-modal")).toHaveCount(0);
+  });
 });
 
 test.describe.serial("D5 large graph budget gate", () => {

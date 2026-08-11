@@ -1015,7 +1015,10 @@
     "new_frontier_label": "全新方向",
     "canvas": {
       "loading": "正在加载调研星图…",
-      "error": "无法加载 typed 调研图。"
+      "error": "无法加载 typed 调研图。",
+      "projection_mismatch_title": "星图投影暂不可用",
+      "projection_mismatch_body": "会话快照已有图节点，但 typed 星图投影尚未就绪。请重试或等待下一次同步。",
+      "projection_mismatch_diagnostics": "快照节点：{{snapshotCount}} · Typed 节点：{{typedCount}}"
     },
     "inspector": {
       "close": "关闭检查器",

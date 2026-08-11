@@ -1,9 +1,32 @@
+.research-d5-theme {
+  --background: #08121d;
+  --foreground: #e8f1f7;
+  --muted-foreground: #8fa0b3;
+  --border: #29394b;
+  --primary: #48d3e4;
+  --primary-foreground: #041018;
+  --secondary: #111b27;
+  --secondary-foreground: #c2f1f6;
+  --accent: #10252c;
+  --accent-foreground: #c6f6fb;
+  --card: #0d1723;
+  --card-foreground: #e8f1f7;
+  --popover: #0d1723;
+  --popover-foreground: #e8f1f7;
+  --destructive: #f87171;
+  --destructive-foreground: #fff1f2;
+  --input: #29394b;
+  --ring: #48d3e4;
+  color: var(--foreground);
+  background: var(--background);
+}
+
 .d5-chrome-shell {
   position: relative;
   z-index: 2;
   flex-shrink: 0;
-  border-bottom: 1px solid #1f2d3d;
-  background: #090f17;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
 }
 .d5-chrome-top {
   display: flex;
@@ -133,14 +156,17 @@
   position: relative;
   min-width: 0;
   flex: 1;
+  background: var(--background);
+  color: var(--foreground);
 }
 .d5-rail {
   display: grid;
   grid-template-rows: auto 1fr auto;
   width: 360px;
   flex-shrink: 0;
-  border-left: 1px solid #223043;
-  background: #0b131d;
+  border-left: 1px solid var(--border);
+  background: var(--card);
+  color: var(--foreground);
   min-height: 0;
 }
 .d5-rail-tabs {
@@ -151,17 +177,17 @@
 }
 .d5-rail-tab {
   flex: 1;
-  border: 1px solid #29394b;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #111b27;
-  color: #8292a5;
+  background: var(--secondary);
+  color: var(--muted-foreground);
   padding: 7px;
   font-size: 11px;
 }
 .d5-rail-tab-active {
   border-color: #347486;
-  background: #10252c;
-  color: #c2f1f6;
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 .d5-rail-body {
   min-height: 0;

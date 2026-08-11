@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -129,6 +130,31 @@ func (h *Handler) GetResearchGraphTyped(w http.ResponseWriter, r *http.Request) 
 
 	limit, offset, paginated, ok := parseTypedGraphPagination(w, r)
 	if !ok {
+		return
+	}
+
+	durableRun, ownershipErr := h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
+	if ownershipErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
+		return
+	}
+	if durableRun {
+		if h.ResearchRun == nil {
+			writeError(w, http.StatusServiceUnavailable, "research run engine is unavailable")
+			return
+		}
+		workspaceID := h.resolveWorkspaceID(r)
+		snapshot, runErr := h.ResearchRun.Snapshot(r.Context(), uuidToString(sessionID), workspaceID)
+		if runErr != nil {
+			if errors.Is(runErr, researchrun.ErrRunNotFound) {
+				writeError(w, http.StatusNotFound, "research session not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to load research run state")
+			return
+		}
+		resp := projectRunV2TypedGraph(snapshot, limit, offset, paginated)
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 

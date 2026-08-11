@@ -198,6 +198,73 @@ func TestProjectRunV2GraphDeterministicReplay(t *testing.T) {
 	}
 }
 
+func TestProjectRunV2TypedGraphMatchesCanvasProjection(t *testing.T) {
+	snap := fixtureSevenQuestionSession()
+	canvasNodes, canvasEdges := projectRunV2Graph(snap)
+	typed := projectRunV2TypedGraph(snap, 0, 0, false)
+
+	if typed.GraphVersion != snap.Run.StateVersion {
+		t.Fatalf("graph_version=%d, want state_version=%d", typed.GraphVersion, snap.Run.StateVersion)
+	}
+	if len(typed.Nodes) != len(canvasNodes) {
+		t.Fatalf("typed nodes=%d, canvas nodes=%d", len(typed.Nodes), len(canvasNodes))
+	}
+	if len(typed.Edges) != len(canvasEdges) {
+		t.Fatalf("typed edges=%d, canvas edges=%d", len(typed.Edges), len(canvasEdges))
+	}
+	canvasIDs := make(map[string]ResearchGraphNodeResp, len(canvasNodes))
+	for _, n := range canvasNodes {
+		canvasIDs[n.ID] = n
+	}
+	for _, tn := range typed.Nodes {
+		cn, ok := canvasIDs[tn.ID]
+		if !ok {
+			t.Fatalf("typed node %q missing from canvas projection", tn.ID)
+		}
+		if tn.NodeType != cn.NodeType || tn.Title != cn.Title || tn.Status != cn.Status {
+			t.Fatalf("typed node %q drifted from canvas: %+v vs %+v", tn.ID, tn, cn)
+		}
+		if tn.Level == "" || !validResearchNodeLevel(tn.Level) {
+			t.Fatalf("typed node %q has invalid level %q", tn.ID, tn.Level)
+		}
+	}
+	root := findNodeByPayload(t, canvasNodes, "kind", runGraphKindRoot)
+	rootTyped := typed.Nodes[0]
+	for _, n := range typed.Nodes {
+		if n.ID == root.ID {
+			rootTyped = n
+			break
+		}
+	}
+	if rootTyped.Level != "XXL" {
+		t.Fatalf("root level=%q, want XXL", rootTyped.Level)
+	}
+}
+
+func TestProjectRunV2TypedGraphPaginationFiltersCrossPageEdges(t *testing.T) {
+	snap := fixtureSevenQuestionSession()
+	full := projectRunV2TypedGraph(snap, 0, 0, false)
+	if len(full.Nodes) < 3 {
+		t.Fatalf("fixture nodes=%d, need pagination sample", len(full.Nodes))
+	}
+	page := projectRunV2TypedGraph(snap, 2, 1, true)
+	if page.TotalNodeCount == nil || *page.TotalNodeCount != int64(len(full.Nodes)) {
+		t.Fatalf("total_node_count=%v, want %d", page.TotalNodeCount, len(full.Nodes))
+	}
+	if len(page.Nodes) != 2 {
+		t.Fatalf("page nodes=%d, want 2", len(page.Nodes))
+	}
+	pageIDs := runV2TypedNodeIDSet(page.Nodes)
+	for _, edge := range page.Edges {
+		if _, ok := pageIDs[edge.FromNodeID]; !ok {
+			t.Fatalf("edge from %q not in page", edge.FromNodeID)
+		}
+		if _, ok := pageIDs[edge.ToNodeID]; !ok {
+			t.Fatalf("edge to %q not in page", edge.ToNodeID)
+		}
+	}
+}
+
 func assertUniqueGraphIdentities(t *testing.T, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) {
 	t.Helper()
 	nodeIDs := make(map[string]struct{}, len(nodes))

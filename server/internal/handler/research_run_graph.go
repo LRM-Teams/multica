@@ -731,3 +731,289 @@ func nullIfEmpty(v string) any {
 	}
 	return v
 }
+
+// projectRunV2TypedGraph maps the canonical run-v2 ledger projection onto the
+// LRM-1505 typed graph contract. Snapshot and GET /graph/typed must share this
+// surface so D5 never sees divergent node IDs or graph_version values.
+func projectRunV2TypedGraph(
+	snap researchrun.RunSnapshot,
+	limit, offset int,
+	paginated bool,
+) ResearchGraphTypedResp {
+	sessionID := strings.TrimSpace(snap.Run.SessionID)
+	canvasNodes, canvasEdges := projectRunV2Graph(snap)
+	graphVersion := snap.Run.StateVersion
+	if graphVersion < 0 {
+		graphVersion = 0
+	}
+
+	round := int32(1)
+	if snap.Run.GoalVersion > 0 {
+		round = int32(snap.Run.GoalVersion)
+	}
+	var goalVersionID *string
+	if snap.Run.GoalVersion > 0 {
+		gv := strconv.Itoa(snap.Run.GoalVersion)
+		goalVersionID = &gv
+	}
+
+	parentOf, _ := buildResearchTreeIndexFromRespEdges(canvasEdges)
+	clusterByTheme := buildRunV2TypedClusters(sessionID, canvasNodes, goalVersionID, round)
+
+	typedNodes := make([]ResearchGraphTypedNodeResp, 0, len(canvasNodes))
+	for _, n := range canvasNodes {
+		kind := runGraphPayloadKind(n.Payload)
+		level := runV2TypedLevel(n, kind)
+		var clusterID *string
+		if theme := strings.TrimSpace(n.ThemeKey); theme != "" && theme != "type:goal" {
+			id := runGraphClusterID(sessionID, theme)
+			clusterID = &id
+		}
+		docCount := int32(0)
+		conclusionCount := int32(0)
+		if kind == runGraphKindClaim && n.NodeType == "finding" {
+			conclusionCount = 1
+		}
+		childIDs := n.ChildIDs
+		if childIDs == nil {
+			childIDs = []string{}
+		}
+		var parentID *string
+		if p := parentOf[n.ID]; p != "" {
+			parentID = &p
+		}
+		typedNodes = append(typedNodes, ResearchGraphTypedNodeResp{
+			ID:              n.ID,
+			SessionID:       sessionID,
+			NodeType:        n.NodeType,
+			Title:           n.Title,
+			Summary:         n.Summary,
+			Status:          n.Status,
+			ActorAgentID:    n.ActorAgentID,
+			Payload:         n.Payload,
+			Level:           level,
+			Round:           round,
+			ClusterID:       clusterID,
+			Confidence:      n.Confidence,
+			DocumentCount:   docCount,
+			ConclusionCount: conclusionCount,
+			GoalVersionID:   goalVersionID,
+			MergedFrom:      []string{},
+			ChildIDs:        childIDs,
+			ChildrenOf:      []string{},
+			ParentID:        parentID,
+			CreatedAt:       n.CreatedAt,
+			UpdatedAt:       n.UpdatedAt,
+		})
+	}
+
+	lineage := ResearchGraphLineageResp{
+		Derived:     map[string]string{},
+		Merged:      map[string][]string{},
+		Superseded:  map[string]string{},
+		Restarted:   map[string]string{},
+		Invalidated: map[string]string{},
+		Supersedes:  map[string][]string{},
+	}
+
+	clusters := make([]ResearchGraphClusterResp, 0, len(clusterByTheme))
+	for _, c := range clusterByTheme {
+		clusters = append(clusters, c)
+	}
+	sort.SliceStable(clusters, func(i, j int) bool { return clusters[i].ID < clusters[j].ID })
+
+	totalCount := int64(len(typedNodes))
+	pageNodes := typedNodes
+	pageEdges := canvasEdges
+	pageClusters := clusters
+	if paginated {
+		if offset > len(typedNodes) {
+			offset = len(typedNodes)
+		}
+		end := offset + limit
+		if end > len(typedNodes) {
+			end = len(typedNodes)
+		}
+		pageNodes = typedNodes[offset:end]
+		nodeIDs := runV2TypedNodeIDSet(pageNodes)
+		pageEdges = filterRunV2TypedEdges(canvasEdges, nodeIDs)
+		pageClusters = filterRunV2TypedClusters(clusters, pageNodes)
+	}
+
+	resp := ResearchGraphTypedResp{
+		SessionID:    sessionID,
+		GraphVersion: graphVersion,
+		Nodes:        pageNodes,
+		Edges:        pageEdges,
+		Clusters:     pageClusters,
+		Lineage:      lineage,
+	}
+	if paginated {
+		resp.TotalNodeCount = &totalCount
+	}
+	return resp
+}
+
+func runGraphPayloadKind(payload json.RawMessage) string {
+	obj := payloadObjectFromRaw(payload)
+	kind, _ := obj["kind"].(string)
+	return strings.TrimSpace(kind)
+}
+
+func payloadObjectFromRaw(payload json.RawMessage) map[string]any {
+	if len(payload) == 0 {
+		return map[string]any{}
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(payload, &obj); err != nil || obj == nil {
+		return map[string]any{}
+	}
+	return obj
+}
+
+func runV2TypedLevel(node ResearchGraphNodeResp, kind string) string {
+	switch kind {
+	case runGraphKindRoot:
+		return "XXL"
+	case runGraphKindQuestion:
+		return "M"
+	case runGraphKindTask, runGraphKindAttempt:
+		if node.ActorAgentID != nil && strings.TrimSpace(*node.ActorAgentID) != "" {
+			return "S"
+		}
+		return "M"
+	case runGraphKindClaim:
+		switch node.NodeType {
+		case "finding":
+			return "L"
+		default:
+			return "M"
+		}
+	case runGraphKindGate:
+		return "L"
+	}
+	switch node.NodeType {
+	case "goal":
+		return "XXL"
+	case "subquestion":
+		return "M"
+	case "finding", "stage_gate":
+		return "L"
+	case "probe", "dead_end":
+		if node.ActorAgentID != nil && strings.TrimSpace(*node.ActorAgentID) != "" {
+			return "S"
+		}
+		return "M"
+	default:
+		return "M"
+	}
+}
+
+func runGraphClusterID(sessionID, themeKey string) string {
+	return uuid.NewSHA1(researchRunGraphNamespace, []byte("cluster|"+sessionID+"|"+themeKey)).String()
+}
+
+func buildRunV2TypedClusters(
+	sessionID string,
+	nodes []ResearchGraphNodeResp,
+	goalVersionID *string,
+	round int32,
+) map[string]ResearchGraphClusterResp {
+	out := map[string]ResearchGraphClusterResp{}
+	for _, n := range nodes {
+		theme := strings.TrimSpace(n.ThemeKey)
+		if theme == "" || theme == "type:goal" {
+			continue
+		}
+		if _, ok := out[theme]; ok {
+			continue
+		}
+		id := runGraphClusterID(sessionID, theme)
+		label := theme
+		if i := strings.Index(label, ":"); i >= 0 && i+1 < len(label) {
+			label = label[i+1:]
+		}
+		clusterType := "topic"
+		if i := strings.Index(theme, ":"); i > 0 {
+			clusterType = theme[:i]
+		}
+		out[theme] = ResearchGraphClusterResp{
+			ID:            id,
+			SessionID:     sessionID,
+			Name:          theme,
+			Label:         label,
+			Level:         "M",
+			ClusterType:   clusterType,
+			GoalVersionID: goalVersionID,
+			Payload:       runGraphPayload(map[string]any{"theme_key": theme, "round": round}),
+			CreatedAt:     n.CreatedAt,
+			UpdatedAt:     n.UpdatedAt,
+		}
+	}
+	return out
+}
+
+func buildResearchTreeIndexFromRespEdges(edges []ResearchGraphEdgeResp) (parentOf map[string]string, childrenOf map[string][]string) {
+	parentOf = map[string]string{}
+	childrenOf = map[string][]string{}
+	for _, e := range edges {
+		if e.EdgeType != researchTreeEdgeType {
+			continue
+		}
+		if _, exists := parentOf[e.ToNodeID]; exists {
+			continue
+		}
+		parentOf[e.ToNodeID] = e.FromNodeID
+		childrenOf[e.FromNodeID] = append(childrenOf[e.FromNodeID], e.ToNodeID)
+	}
+	return parentOf, childrenOf
+}
+
+func runV2TypedNodeIDSet(nodes []ResearchGraphTypedNodeResp) map[string]struct{} {
+	ids := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		if node.ID != "" {
+			ids[node.ID] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func filterRunV2TypedEdges(edges []ResearchGraphEdgeResp, nodeIDs map[string]struct{}) []ResearchGraphEdgeResp {
+	if len(nodeIDs) == 0 {
+		return nil
+	}
+	filtered := make([]ResearchGraphEdgeResp, 0, len(edges))
+	for _, edge := range edges {
+		if _, ok := nodeIDs[edge.FromNodeID]; !ok {
+			continue
+		}
+		if _, ok := nodeIDs[edge.ToNodeID]; !ok {
+			continue
+		}
+		filtered = append(filtered, edge)
+	}
+	return filtered
+}
+
+func filterRunV2TypedClusters(clusters []ResearchGraphClusterResp, nodes []ResearchGraphTypedNodeResp) []ResearchGraphClusterResp {
+	if len(nodes) == 0 {
+		return nil
+	}
+	clusterIDs := make(map[string]struct{})
+	for _, node := range nodes {
+		if node.ClusterID != nil && *node.ClusterID != "" {
+			clusterIDs[*node.ClusterID] = struct{}{}
+		}
+	}
+	if len(clusterIDs) == 0 {
+		return nil
+	}
+	filtered := make([]ResearchGraphClusterResp, 0, len(clusters))
+	for _, cluster := range clusters {
+		if _, ok := clusterIDs[cluster.ID]; ok {
+			filtered = append(filtered, cluster)
+		}
+	}
+	return filtered
+}

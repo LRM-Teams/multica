@@ -70,8 +70,12 @@ func TestAutoUpdateLoopSkipsWhenIntervalDisabled(t *testing.T) {
 func TestAutoUpdateDetectionRecordsNewerTarget(t *testing.T) {
 	// Fake release feed serving a newer release than the running CLI version.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metainfo.json" {
+			http.Error(w, "wrong release document", http.StatusNotFound)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"version":"v9.9.10","tag":"v9.9.10","platforms":{}}`))
+		_, _ = w.Write([]byte(`{"schema_version":1,"environments":{"production":{"version":"9.9.10","tag":"v9.9.10","platforms":{}},"test":{"version":"9.9.11-alpha.1","tag":"v9.9.11-alpha.1","platforms":{}}}}`))
 	}))
 	defer srv.Close()
 	t.Setenv(cli.ReleaseManifestBaseURLEnv, srv.URL)
@@ -95,15 +99,15 @@ func TestAutoUpdateDetectionRecordsNewerTarget(t *testing.T) {
 	}
 }
 
-func TestAutoUpdateDetectionReadsOnlyAlphaPointer(t *testing.T) {
+func TestAutoUpdateDetectionReadsTestFromCanonicalMetainfo(t *testing.T) {
 	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
-		if r.URL.Path != "/alpha.json" {
+		if r.URL.Path != "/metainfo.json" {
 			http.Error(w, "wrong channel", http.StatusInternalServerError)
 			return
 		}
-		_, _ = w.Write([]byte(`{"version":"v10.0.0-alpha.2","tag":"v10.0.0-alpha.2","platforms":{}}`))
+		_, _ = w.Write([]byte(`{"schema_version":1,"environments":{"production":{"version":"9.9.9","tag":"v9.9.9","platforms":{}},"test":{"version":"10.0.0-alpha.2","tag":"v10.0.0-alpha.2","platforms":{}}}}`))
 	}))
 	defer srv.Close()
 	t.Setenv(cli.ReleaseManifestBaseURLEnv, srv.URL)
@@ -117,7 +121,7 @@ func TestAutoUpdateDetectionReadsOnlyAlphaPointer(t *testing.T) {
 	if got := coordinator.Snapshot().TargetVersion; got != "v10.0.0-alpha.2" {
 		t.Fatalf("TargetVersion = %q", got)
 	}
-	if len(paths) != 1 || paths[0] != "/alpha.json" {
+	if len(paths) != 1 || paths[0] != "/metainfo.json" {
 		t.Fatalf("paths = %v", paths)
 	}
 }

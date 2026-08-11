@@ -4,6 +4,7 @@ import {
   seedD5ConstellationSession,
   seedD5FormingConstellationSession,
   seedD5LargeConstellationSession,
+  seedD5PaginatedConstellationSession,
   seedD5SparseConstellationSession,
   type D5ConstellationSeed,
 } from "./fixtures/d5-constellation-seed";
@@ -417,6 +418,43 @@ test.describe.serial("D5 forming session gate", () => {
     await expect(page.getByTestId("star-graph-canvas")).toHaveCount(0);
     await page.screenshot({
       path: "e2e/artifacts/d5-constellation-forming-1440.png",
+      fullPage: true,
+    });
+  });
+});
+
+test.describe.serial("D5 paginated typed-graph gate", () => {
+  test.skip(!runIntegration, "Set D5_CONSTELLATION_E2E=1 with backend + frontend running");
+  test.setTimeout(300_000);
+
+  let paginatedSeed: Awaited<ReturnType<typeof seedD5PaginatedConstellationSession>>;
+
+  test.beforeAll(async () => {
+    paginatedSeed = await seedD5PaginatedConstellationSession("D5 Paginated E2E");
+  });
+
+  test.afterAll(async () => {
+    await deleteD5ConstellationSession(paginatedSeed?.sessionId);
+  });
+
+  test("first page shows load-more while DOM stays within budget", async ({ page }) => {
+    await openSession(page, paginatedSeed, 1440, 900);
+    const loadMore = page.getByTestId("star-graph-load-more");
+    await expect(loadMore).toBeVisible({ timeout: 60_000 });
+    await expect(loadMore).toContainText(/21|加载更多|Load more/i);
+    const mounted = await page.getByTestId("star-graph-entities").locator("button").count();
+    expect(mounted).toBeLessThanOrEqual(220);
+    await expect(page.getByTestId("star-graph-budget-note")).toBeVisible();
+  });
+
+  test("load-more fetches the remaining canonical page", async ({ page }) => {
+    await openSession(page, paginatedSeed, 1440, 900);
+    const loadMore = page.getByTestId("star-graph-load-more");
+    await expect(loadMore).toBeVisible({ timeout: 60_000 });
+    await loadMore.click();
+    await expect(loadMore).toHaveCount(0, { timeout: 60_000 });
+    await page.screenshot({
+      path: "e2e/artifacts/d5-constellation-paginated-loaded-1440.png",
       fullPage: true,
     });
   });

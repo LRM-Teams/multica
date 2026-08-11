@@ -384,3 +384,81 @@ export async function seedD5LargeConstellationSession(
     clusterIds: [clusterAId, clusterBId],
   };
 }
+
+/** Seed 521 nodes so the typed-graph infinite query paginates at limit 500. */
+export async function seedD5PaginatedConstellationSession(
+  label: string,
+): Promise<D5ConstellationSeed & { totalNodes: number }> {
+  const workspace = await setupD5Workspace(label, "d5-paginated");
+  const satelliteCount = 520;
+
+  const session = await db(
+    `INSERT INTO research_session (workspace_id, fleet_id, created_by, title, goal, status, current_stage)
+     VALUES ($1, $2, $3, $4, $5, 'running', 's2_sources')
+     RETURNING id`,
+    [
+      workspace.workspaceId,
+      workspace.fleetId,
+      workspace.userId,
+      "D5 paginated constellation gate",
+      "Verify typed-graph pagination and load-more on the session canvas",
+    ],
+  );
+  const sessionId = session.rows[0].id as string;
+
+  const nodeTitles = {
+    goal: "D5 paginated research goal",
+    stable: "",
+    probe: "",
+  };
+
+  const goalRow = await db(
+    `INSERT INTO research_graph_node (
+       workspace_id, session_id, node_type, title, summary, status,
+       level, round, document_count, conclusion_count, payload
+     ) VALUES ($1, $2, 'goal', $3, '', 'active', 'XXL', 1, 1, 0, '{}'::jsonb)
+     RETURNING id`,
+    [workspace.workspaceId, sessionId, nodeTitles.goal],
+  );
+  const goalId = goalRow.rows[0].id as string;
+
+  await db(
+    `WITH inserted AS (
+       INSERT INTO research_graph_node (
+         workspace_id, session_id, node_type, title, summary, status,
+         level, round, payload
+       )
+       SELECT
+         $1,
+         $2,
+         'finding',
+         'Paginated leaf ' || gs,
+         '',
+         'done',
+         'S',
+         1,
+         '{}'::jsonb
+       FROM generate_series(1, $3) AS gs
+       RETURNING id
+     )
+     INSERT INTO research_graph_edge (workspace_id, session_id, from_node_id, to_node_id, edge_type)
+     SELECT $1, $2, $4, inserted.id, 'leads_to'
+     FROM inserted`,
+    [workspace.workspaceId, sessionId, satelliteCount, goalId],
+  );
+
+  await db(
+    `UPDATE research_session SET graph_version = 1 WHERE id = $1 AND workspace_id = $2`,
+    [sessionId, workspace.workspaceId],
+  );
+
+  return {
+    api: workspace.api,
+    slug: workspace.slug,
+    workspaceId: workspace.workspaceId,
+    sessionId,
+    fleetAgentId: workspace.fleetAgentId,
+    nodeTitles,
+    totalNodes: satelliteCount + 1,
+  };
+}

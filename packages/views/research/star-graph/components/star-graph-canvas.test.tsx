@@ -247,4 +247,23 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(onSelectNode).toHaveBeenCalledWith("goal");
     expect(screen.getByTestId("star-graph-canvas-live").textContent).toContain("Research goal");
   });
+
+  it("renders the load-more control when pagination is available", () => {
+    const onLoadMore = vi.fn();
+    render(
+      <StarGraphCanvas
+        model={buildStarCanvasViewModel({
+          nodes: [node({ id: "goal", node_type: "goal", title: "Goal", level: "xxl" })],
+          edges: [],
+        })}
+        loadMoreLabel="Load more (21 remaining)"
+        onLoadMore={onLoadMore}
+      />,
+    );
+
+    const loadMore = screen.getByTestId("star-graph-load-more");
+    expect(loadMore.textContent).toContain("Load more");
+    fireEvent.click(loadMore);
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
 });

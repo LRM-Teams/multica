@@ -23,6 +23,20 @@ export interface CliVersionCheck {
 }
 
 const SEMVER_RE = /v?(\d+)\.(\d+)\.(\d+)/;
+const RELEASE_VERSION_RE =
+  /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.(0|[1-9]\d*))?$/;
+
+type ReleaseStage = "alpha" | "beta" | "rc";
+const RELEASE_STAGE_RANK: Record<ReleaseStage, number> = {
+  alpha: 0,
+  beta: 1,
+  rc: 2,
+};
+
+interface ParsedReleaseVersion {
+  core: [bigint, bigint, bigint];
+  prerelease: { stage: ReleaseStage; sequence: bigint } | null;
+}
 
 // Matches the `git describe --tags --always --dirty` output for a build past
 // the latest tag, e.g. `v0.2.15-235-gdaf0e935` or `v0.2.15-235-gdaf0e935-dirty`.
@@ -42,6 +56,43 @@ function lessThan(a: [number, number, number], b: [number, number, number]) {
   if (a[0] !== b[0]) return a[0] < b[0];
   if (a[1] !== b[1]) return a[1] < b[1];
   return a[2] < b[2];
+}
+
+function parseReleaseVersion(raw: string): ParsedReleaseVersion | null {
+  const match = RELEASE_VERSION_RE.exec(raw.trim());
+  if (!match) return null;
+  const stage = (match[4] as ReleaseStage | undefined) ?? null;
+  return {
+    core: [BigInt(match[1]!), BigInt(match[2]!), BigInt(match[3]!)],
+    prerelease: stage
+      ? { stage, sequence: BigInt(match[5]!) }
+      : null,
+  };
+}
+
+function compareReleaseVersions(
+  candidate: ParsedReleaseVersion,
+  current: ParsedReleaseVersion,
+): number {
+  for (let index = 0; index < candidate.core.length; index += 1) {
+    const candidatePart = candidate.core[index]!;
+    const currentPart = current.core[index]!;
+    if (candidatePart !== currentPart) {
+      return candidatePart > currentPart ? 1 : -1;
+    }
+  }
+  if (candidate.prerelease === null || current.prerelease === null) {
+    if (candidate.prerelease === current.prerelease) return 0;
+    return candidate.prerelease === null ? 1 : -1;
+  }
+  if (candidate.prerelease.stage !== current.prerelease.stage) {
+    return RELEASE_STAGE_RANK[candidate.prerelease.stage] >
+      RELEASE_STAGE_RANK[current.prerelease.stage]
+      ? 1
+      : -1;
+  }
+  if (candidate.prerelease.sequence === current.prerelease.sequence) return 0;
+  return candidate.prerelease.sequence > current.prerelease.sequence ? 1 : -1;
 }
 
 /**
@@ -74,13 +125,16 @@ export function readRuntimeCliVersion(metadata: Record<string, unknown> | undefi
 }
 
 /**
- * Frontend mirror of server cli.IsNewerVersion: true when candidate is a
- * strictly newer stable three-part semver than current. Used to gate upgrade
- * buttons so equal/older/stale targets never light "upgrade".
+ * Frontend mirror of server cli.IsNewerVersion. It accepts only versions the
+ * release workflow can publish: stable X.Y.Z or (alpha|beta|rc).N. Invalid
+ * and development versions fail closed so stale targets never light Upgrade.
  */
-export function isNewerCliVersion(candidate: string | null | undefined, current: string | null | undefined): boolean {
-  const c = parseSemver(candidate ?? "");
-  const cur = parseSemver(current ?? "");
-  if (!c || !cur) return false;
-  return lessThan(cur, c);
+export function isNewerCliVersion(
+  candidate: string | null | undefined,
+  current: string | null | undefined,
+): boolean {
+  const parsedCandidate = parseReleaseVersion(candidate ?? "");
+  const parsedCurrent = parseReleaseVersion(current ?? "");
+  if (!parsedCandidate || !parsedCurrent) return false;
+  return compareReleaseVersions(parsedCandidate, parsedCurrent) > 0;
 }

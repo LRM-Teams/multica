@@ -36,7 +36,7 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 	runner := &WorkspaceRunner{
 		config:      WorkspaceRunnerConfig{WorkspaceID: workspaceID},
 		daemon:      d,
-		processes:   newAgentProcessManager(d.cfg.MaxAgentProcesses, nil, nil),
+		processes:   newAgentProcessManager(workspaceID, d.canonicalRuntimes.managedProcessAdmission(), nil, nil),
 		activity:    newAgentActivityProducer(d.runnerInstanceID, nil, nil),
 		inboxes:     inboxes,
 		attachments: attachments,

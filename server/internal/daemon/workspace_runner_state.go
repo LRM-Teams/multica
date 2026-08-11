@@ -16,10 +16,9 @@ import (
 // reconnects. Runtime membership is deliberately absent because it is mutable
 // input, not Runner identity.
 type WorkspaceRunnerConfig struct {
-	DaemonID          string
-	DaemonInstanceID  string
-	WorkspaceID       string
-	MaxAgentProcesses int
+	DaemonID         string
+	DaemonInstanceID string
+	WorkspaceID      string
 }
 
 func (config WorkspaceRunnerConfig) validate() (WorkspaceRunnerConfig, error) {
@@ -96,7 +95,8 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		config: config,
 		daemon: dependencies.daemon,
 		processes: newAgentProcessManager(
-			config.MaxAgentProcesses,
+			config.WorkspaceID,
+			dependencies.runtimes.managedProcessAdmission(),
 			now,
 			dependencies.onTransition,
 		),
@@ -264,10 +264,9 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 		}
 	}
 	return newWorkspaceRunner(WorkspaceRunnerConfig{
-		DaemonID:          d.cfg.DaemonID,
-		DaemonInstanceID:  d.runnerInstanceID,
-		WorkspaceID:       workspaceID,
-		MaxAgentProcesses: d.cfg.MaxAgentProcesses,
+		DaemonID:         d.cfg.DaemonID,
+		DaemonInstanceID: d.runnerInstanceID,
+		WorkspaceID:      workspaceID,
 	}, workspaceRunnerDependencies{
 		daemon:       d,
 		attachments:  d.attachmentRegistry(),

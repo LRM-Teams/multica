@@ -222,8 +222,9 @@ type canonicalAgentRuntimeAcquireRequest struct {
 type ResidentRuntimeRecoveredSubscriber func(agentID, runtimeID string)
 
 type canonicalAgentRuntimePool struct {
-	mu    sync.Mutex
-	slots map[string]*canonicalAgentRuntimeSlot
+	mu                   sync.Mutex
+	slots                map[string]*canonicalAgentRuntimeSlot
+	managedProcessGrants map[string]agentProcessCapacityGrant
 
 	// maxAgentProcesses bounds distinct agents with a live resident backend
 	// (backend != nil). 0 = unlimited. See #35 / resolveMaxAgentProcesses.
@@ -266,8 +267,9 @@ type canonicalAgentRuntimeSlot struct {
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
 	p := &canonicalAgentRuntimePool{
-		slots:         make(map[string]*canonicalAgentRuntimeSlot),
-		pendingAgents: make(map[string]struct{}),
+		slots:                make(map[string]*canonicalAgentRuntimeSlot),
+		managedProcessGrants: make(map[string]agentProcessCapacityGrant),
+		pendingAgents:        make(map[string]struct{}),
 	}
 	p.capacityCond = sync.NewCond(&p.mu)
 	return p

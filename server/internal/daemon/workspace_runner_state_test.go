@@ -159,13 +159,13 @@ func TestWorkspaceRunnerOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 		credentials: credentials, diagnostics: diagnostics,
 	}
 	first, err := newWorkspaceRunner(WorkspaceRunnerConfig{
-		DaemonID: "daemon-1", DaemonInstanceID: "instance-1", WorkspaceID: "workspace-1", MaxAgentProcesses: 2,
+		DaemonID: "daemon-1", DaemonInstanceID: "instance-1", WorkspaceID: "workspace-1",
 	}, dependencies)
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := newWorkspaceRunner(WorkspaceRunnerConfig{
-		DaemonID: "daemon-1", DaemonInstanceID: "instance-1", WorkspaceID: "workspace-2", MaxAgentProcesses: 2,
+		DaemonID: "daemon-1", DaemonInstanceID: "instance-1", WorkspaceID: "workspace-2",
 	}, dependencies)
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestDaemonBuildsWorkspaceRunnerFromSharedOwners(t *testing.T) {
 	if runner.attachments != d.agentAttachments || runner.runtimes != d.canonicalRuntimes || runner.credentials.daemon != d || runner.diagnostics != d.runnerDiagnostics {
 		t.Fatal("Daemon did not inject its machine-wide owners")
 	}
-	if runner.config.MaxAgentProcesses != 3 {
-		t.Fatalf("Runner process cap = %d, want 3", runner.config.MaxAgentProcesses)
+	if runner.processes.admission == nil {
+		t.Fatal("Daemon did not inject machine-wide process admission")
 	}
 }

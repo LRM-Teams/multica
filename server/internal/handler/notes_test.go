@@ -210,8 +210,8 @@ func TestNoteAIJobCompletedReturnsAssistantResult(t *testing.T) {
 }
 
 func noteAIPagePromptForTest(instruction string) string {
-	return `You are editing a user's Notion-style note page.
-The user pressed Space on an empty line and asked AI to edit the current page from that cursor position.
+	return `You are the in-note AI assistant for a user's Notion-style note page.
+The user pressed Space on an empty line and is talking to you at that cursor.
 Return ONLY a valid JSON object.
 Full current page Markdown:
 <page>
@@ -348,6 +348,82 @@ func TestNoteAIJobInvalidStructuredResultFails(t *testing.T) {
 	}
 	if resp.Status != "failed" || resp.Result != nil || resp.FailureReason == nil || resp.FailureCode == nil || *resp.FailureCode != noteAIFailureInvalidOutput {
 		t.Fatalf("invalid structured result response = %#v, want failed without result", resp)
+	}
+}
+
+func TestNoteAIJobFallsBackToCompletionOutputWithoutChatMessage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Fallback Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI fallback note "+uuid.NewString())
+	job := createNoteAIJobForTest(t, noteID, agentID)
+	completion := map[string]any{
+		"type":   "message",
+		"action": "",
+		"output": `{"action":"insert","markdown":"hi","target":null,"title":null,"rationale":"greeting"}`,
+	}
+	raw, err := json.Marshal(completion)
+	if err != nil {
+		t.Fatalf("marshal completion: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_inbox_event
+		SET status = 'acked',
+		    terminal_outcome = 'replied',
+		    result = $2::jsonb,
+		    terminal_at = now(),
+		    acked_at = now(),
+		    completed_at = now()
+		WHERE id = $1
+	`, job.TaskID, raw); err != nil {
+		t.Fatalf("complete task with result only: %v", err)
+	}
+
+	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/ai-jobs/"+job.ID, nil), "jobId", job.ID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteAIJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNoteAIJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode fallback job: %v", err)
+	}
+	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "insert" || resp.Result.Markdown != "hi" {
+		t.Fatalf("fallback job response = %#v, want completed insert hi", resp)
+	}
+}
+
+func TestNoteAIJobEmptyCompletionFails(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note AI Empty Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "AI empty note "+uuid.NewString())
+	job := createNoteAIJobForTest(t, noteID, agentID)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'replied', terminal_at = now(), acked_at = now(), completed_at = now()
+		WHERE id = $1
+	`, job.TaskID); err != nil {
+		t.Fatalf("complete empty task: %v", err)
+	}
+
+	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/ai-jobs/"+job.ID, nil), "jobId", job.ID)
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteAIJob(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNoteAIJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp NoteAIJobResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode empty job: %v", err)
+	}
+	if resp.Status != "failed" || resp.Result != nil || resp.FailureCode == nil || *resp.FailureCode != noteAIFailureEmptyOutput {
+		t.Fatalf("empty completion response = %#v, want failed empty_structured_output", resp)
 	}
 }
 

@@ -533,3 +533,23 @@ func TestNormalizeAgentCreateProposalReference(t *testing.T) {
 		t.Fatal("expected agent:create ref_subtype rejection")
 	}
 }
+
+func TestUnwrapStructuredMessageSendLeavesNoteAIEditJSONAlone(t *testing.T) {
+	for _, raw := range []string{
+		`{"action":"insert","markdown":"hi","target":null,"title":null,"rationale":"x"}`,
+		`{"action":"replace_page","markdown":"# Title\n\nBody","target":null}`,
+		`{"action":"patch","markdown":"new","target":"old"}`,
+		`{"action":"replace_selection","markdown":"improved"}`,
+	} {
+		content, parts, unwrapped, err := UnwrapStructuredMessageSend(raw, nil)
+		if err != nil {
+			t.Fatalf("UnwrapStructuredMessageSend(%s) error: %v", raw, err)
+		}
+		if unwrapped {
+			t.Fatalf("note AI edit JSON must not unwrap: %s", raw)
+		}
+		if content != raw || len(parts) != 0 {
+			t.Fatalf("content=%q parts=%+v, want unchanged note AI JSON", content, parts)
+		}
+	}
+}

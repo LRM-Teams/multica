@@ -127,7 +127,12 @@ func UnwrapStructuredMessageSend(content string, parts []protocol.MessagePart) (
 	if strings.TrimSpace(payload.Action) != "" {
 		action, err := protocol.NormalizeChatOutputAction(payload.Action)
 		if err != nil {
-			return content, parts, true, err
+			// Unknown actions (e.g. note AI "insert"/"patch"/"replace_page") are
+			// not chat message_send envelopes. Leave the payload alone so product
+			// surfaces can persist and parse their own structured JSON. Returning
+			// unwrapped=true here used to make callers wipe the body and drop the
+			// only copy of a successful note AI edit.
+			return content, parts, false, nil
 		}
 		if action != protocol.ChatOutputActionMessageSend {
 			return content, parts, false, nil

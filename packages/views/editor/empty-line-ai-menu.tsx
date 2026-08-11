@@ -7,7 +7,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import type { NoteAIEditResult, NoteAIJobStatus } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { ArrowUp, Loader2, Sparkles } from "lucide-react";
+import { ArrowUp, Sparkles, Square } from "lucide-react";
 import { useT } from "../i18n";
 import { NoteAIDiffPreview } from "./note-ai-diff";
 import { patchedDocumentMarkdown, replaceRangeWithMarkdown } from "./utils/note-ai-apply";
@@ -19,7 +19,11 @@ import {
 } from "./utils/note-ai-apply-undo";
 
 const PAGE_AI_CONTEXT_CHARS = 2400;
-const PROMPT_MAX_HEIGHT_PX = 96;
+/** Default prompt shell width — longer than the old 560px bar. */
+const PROMPT_MIN_WIDTH_PX = 720;
+const PROMPT_VIEWPORT_GUTTER_PX = 32;
+/** Left sparkles chip + gaps + right action button + horizontal padding. */
+const PROMPT_CHROME_PX = 88;
 
 export type PageEditAIRequest = {
   instruction: string;
@@ -54,29 +58,50 @@ function buildRequest(editor: Editor, state: EmptyLineAiState): PageEditAIReques
   };
 }
 
-function resizePromptField(el: HTMLTextAreaElement | null) {
-  if (!el) return;
-  el.style.height = "0px";
-  el.style.height = `${Math.min(el.scrollHeight, PROMPT_MAX_HEIGHT_PX)}px`;
+function measurePromptContentWidth(textarea: HTMLTextAreaElement): number {
+  const styles = window.getComputedStyle(textarea);
+  const mirror = document.createElement("div");
+  mirror.setAttribute("aria-hidden", "true");
+  mirror.style.cssText = [
+    "position:absolute",
+    "left:-9999px",
+    "top:0",
+    "visibility:hidden",
+    "white-space:pre",
+    "height:auto",
+    "width:auto",
+    `font:${styles.font}`,
+    `letter-spacing:${styles.letterSpacing}`,
+    `text-transform:${styles.textTransform}`,
+    `padding:${styles.paddingTop} ${styles.paddingRight} ${styles.paddingBottom} ${styles.paddingLeft}`,
+    `border-left-width:${styles.borderLeftWidth}`,
+    `border-right-width:${styles.borderRightWidth}`,
+    `box-sizing:${styles.boxSizing}`,
+  ].join(";");
+  // Prefer live value; fall back to placeholder so empty prompts keep the default width.
+  mirror.textContent = textarea.value.length > 0 ? textarea.value : (textarea.placeholder || " ");
+  document.body.appendChild(mirror);
+  const width = mirror.scrollWidth;
+  mirror.remove();
+  return width;
 }
 
-function noteAIStatusLabel(status: NoteAIJobStatus | undefined, t: any) {
-  switch (status) {
-  case "queued":
-    return t(($: any) => $.page_ai.status_queued);
-  case "dispatched":
-    return t(($: any) => $.page_ai.status_dispatched);
-  case "running":
-    return t(($: any) => $.page_ai.status_running);
-  case "completed":
-    return t(($: any) => $.page_ai.status_completed);
-  case "failed":
-    return t(($: any) => $.page_ai.status_failed);
-  case "cancelled":
-    return t(($: any) => $.page_ai.status_cancelled);
-  default:
-    return t(($: any) => $.page_ai.status_starting);
-  }
+/**
+ * Grow the floating shell wider as the instruction lengthens (up to the
+ * viewport), then size the textarea height to its full scrollHeight so the
+ * field never needs an inner scrollbar.
+ */
+function resizePromptShell(textarea: HTMLTextAreaElement | null, shell: HTMLElement | null) {
+  if (!textarea || !shell) return;
+  const maxWidth = Math.max(280, window.innerWidth - PROMPT_VIEWPORT_GUTTER_PX);
+  const minWidth = Math.min(PROMPT_MIN_WIDTH_PX, maxWidth);
+  const contentWidth = measurePromptContentWidth(textarea);
+  const desiredWidth = Math.min(maxWidth, Math.max(minWidth, contentWidth + PROMPT_CHROME_PX));
+  shell.style.width = `${desiredWidth}px`;
+
+  textarea.style.overflow = "hidden";
+  textarea.style.height = "0px";
+  textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
 function insertSpaceAtCaret(editor: Editor, caretPos: number) {
@@ -108,7 +133,8 @@ function EmptyLineAiMenu({
   const closedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const loading = state.status === "loading";
-  const canSubmit = !loading;
+  const statusRef = useRef(state.status);
+  statusRef.current = state.status;
 
   const virtualRef = useMemo(
     () => ({
@@ -139,7 +165,8 @@ function EmptyLineAiMenu({
   }, []);
 
   useLayoutEffect(() => {
-    resizePromptField(textareaRef.current);
+    if (state.status === "review") return;
+    resizePromptShell(textareaRef.current, floatingRef.current);
   }, [state.instruction, state.status]);
 
   useEffect(() => {
@@ -173,11 +200,14 @@ function EmptyLineAiMenu({
   }, [close]);
 
   // Click / tap outside the floating bar dismisses it.
+  // While a job is in flight, outside clicks must not abort — only the stop
+  // control cancels. Accidental editor clicks were cancelling slow replies.
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
       const root = floatingRef.current;
       if (!root) return;
       if (root.contains(event.target as Node)) return;
+      if (statusRef.current === "loading") return;
       close();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
@@ -292,11 +322,6 @@ function EmptyLineAiMenu({
 
   const reviewResult = state.status === "review" ? state.result : null;
   const currentMarkdown = reviewResult ? editor.getMarkdown().trimEnd() : "";
-  const loadingLabel = state.status === "loading"
-    ? state.cancelling
-      ? t(($: any) => $.page_ai.status_cancelling)
-      : noteAIStatusLabel(state.jobStatus, t)
-    : null;
   const reviewTitle = reviewResult?.action === "insert"
     ? t(($) => $.page_ai.action_insert)
     : reviewResult?.action === "replace_selection"
@@ -311,8 +336,14 @@ function EmptyLineAiMenu({
     <div
       ref={floatingRef}
       data-testid="empty-line-ai-menu"
-      style={{ position: "fixed", zIndex: 55 }}
-      className="w-[min(560px,calc(100vw-32px))]"
+      style={{
+        position: "fixed",
+        zIndex: 55,
+        width: state.status === "review"
+          ? undefined
+          : `min(${PROMPT_MIN_WIDTH_PX}px, calc(100vw - ${PROMPT_VIEWPORT_GUTTER_PX}px))`,
+      }}
+      className={state.status === "review" ? "w-[min(720px,calc(100vw-32px))]" : undefined}
       onMouseDown={(event) => event.stopPropagation()}
     >
       {reviewResult ? (
@@ -406,31 +437,31 @@ function EmptyLineAiMenu({
             aria-label={t(($) => $.page_ai.trigger_label)}
             title={t(($) => $.page_ai.hint)}
             className={cn(
-              "min-h-8 max-h-24 flex-1 resize-none bg-transparent py-1.5 pr-1 text-sm leading-5 text-foreground outline-none",
+              "min-h-8 flex-1 resize-none overflow-hidden bg-transparent py-1.5 pr-1 text-sm leading-5 text-foreground outline-none",
               "placeholder:text-muted-foreground disabled:opacity-70",
             )}
           />
-          {loadingLabel && <span className="mb-1 hidden shrink-0 text-xs text-muted-foreground sm:inline">{loadingLabel}</span>}
-          {loading && (
-            <Button type="button" size="sm" variant="ghost" className="mb-0.5 h-8 shrink-0 px-2" onClick={cancelLoading} disabled={state.cancelling}>
-              {t(($) => $.page_ai.cancel)}
-            </Button>
-          )}
           <button
             type="button"
-            onClick={() => void submit()}
-            disabled={!canSubmit}
-            aria-label={t(($) => $.page_ai.send)}
-            title={t(($) => $.page_ai.hint)}
+            onClick={() => {
+              if (loading) {
+                cancelLoading();
+                return;
+              }
+              void submit();
+            }}
+            disabled={loading && state.cancelling}
+            aria-label={loading ? t(($) => $.page_ai.cancel) : t(($) => $.page_ai.send)}
+            aria-busy={loading || undefined}
+            title={loading ? t(($) => $.page_ai.cancel) : t(($) => $.page_ai.hint)}
             className={cn(
               "mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-full transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover",
-              loading
-                ? "bg-muted text-muted-foreground"
-                : "bg-foreground text-background hover:bg-foreground/90",
+              "bg-foreground text-background hover:bg-foreground/90",
+              loading && "animate-pulse",
             )}
           >
-            {loading ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowUp className="size-3.5" />}
+            {loading ? <Square className="size-2.5 fill-current" /> : <ArrowUp className="size-3.5" />}
           </button>
         </div>
       )}

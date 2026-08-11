@@ -479,15 +479,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const postUser = (body: string) => send.mutate(body);
 
   const goalVersion = data.run?.run?.goal_version ?? data.run?.contract?.goal_version ?? null;
-  const goalHistory = useMemo(
-    () =>
-      buildGoalVersionHistory({
-        currentGoal: session.goal,
-        currentVersion: goalVersion,
-        messages,
-      }),
-    [session.goal, goalVersion, messages],
-  );
+  const goalHistory = buildGoalVersionHistory({
+    currentGoal: session.goal,
+    currentVersion: goalVersion,
+    messages,
+  });
 
   const onClarificationOption = (
     question: ResearchClarificationQuestion,

@@ -91,6 +91,7 @@ describe("CliInstallInstructions", () => {
         "multica setup --environment test --server-url https://82.157.184.89 --app-url https://82.157.184.89 /lrm-team-test",
       ),
     ).toBeTruthy();
+    expect(screen.getByText(/Activates Test, connects this Workspace/)).toBeTruthy();
   });
 
   it("uses the deployment-pinned PowerShell installer in test", () => {
@@ -141,27 +142,15 @@ describe("CliInstallInstructions", () => {
     ).toBeTruthy();
   });
 
-  it("offers a troubleshooting disclosure with self-diagnosis steps, no invented contact", () => {
+  it("keeps the connect card focused on the two required commands", () => {
     render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <CliInstallInstructions />
       </I18nProvider>,
     );
 
-    // Collapsed by default — content is present in the DOM (native <details>)
-    // but the disclosure itself must be there to find.
-    expect(
-      screen.getByText("Having trouble?"),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(/Retry — a flaky connection/),
-    ).toBeTruthy();
-    expect(screen.getByText("multica computer status")).toBeTruthy();
-    expect(screen.getByText("multica computer logs -f")).toBeTruthy();
-
-    // No support email/Discord/etc. exists for this product yet — the
-    // section must not fabricate one.
-    expect(screen.queryByText(/contact support/i)).toBeNull();
-    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByText("Having trouble?")).toBeNull();
+    expect(screen.queryByText(/agent runtime on this computer/)).toBeNull();
+    expect(screen.queryByText(/Use this for macOS/)).toBeNull();
   });
 });

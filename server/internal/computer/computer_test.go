@@ -285,6 +285,35 @@ func TestStartBackgroundRefusesWhenAlreadyRunning(t *testing.T) {
 	}
 }
 
+func TestStartBackgroundRejectsAmbiguousIdentityBeforeSpawning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacyRoot := filepath.Join(home, ".multica", "profiles", "production")
+	if err := os.MkdirAll(legacyRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyRoot, "daemon.id"), []byte("019fa370-a2ab-71ad-b280-62ebe1f78f58\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lc := &Lifecycle{Probe: func(context.Context, int) map[string]any {
+		return map[string]any{"status": "stopped"}
+	}}
+	spawned := false
+	restore := setSpawnResident(func(string, []string, *os.File) (procHandle, error) {
+		spawned = true
+		return &fakeProc{pid: 1}, nil
+	})
+	defer restore()
+
+	_, err := lc.StartBackground(StartOptions{})
+	if err == nil || !strings.Contains(err.Error(), "computer identity ambiguous") {
+		t.Fatalf("StartBackground error = %v, want identity ambiguity", err)
+	}
+	if spawned {
+		t.Fatal("resident spawned even though identity preflight failed")
+	}
+}
+
 // setRequestShutdown temporarily replaces the graceful-shutdown transport.
 func setRequestShutdown(fn func(int) error) func() {
 	old := requestShutdown

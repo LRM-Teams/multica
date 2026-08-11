@@ -76,6 +76,8 @@ multica setup --environment test \
   /my-workspace
 ```
 
+setup 会直接激活目标环境、建立当前 Workspace connection 并启动 Computer；不需要随后再运行 `config use`。如果本机已有另一个 active environment，setup 会在写配置、登录和重启前询问是否切换；自动化可显式使用 `--yes`。
+
 以后切换环境：
 
 ```bash
@@ -90,7 +92,7 @@ multica config show
 
 一次成功的 `setup` 必须完成全部步骤：
 
-1. 校验环境和 origin。
+1. 校验环境和 origin；若会切换已有 active environment，先取得用户确认。
 2. 登录并把 slug 解析成不可变的 `workspace_id`。
 3. 由服务端授权 Computer connection 并签发 execution credential。
 4. 以 `(environment, workspace_id)` 原子 upsert 本地 connection；重复 setup 是修复，不制造副本。

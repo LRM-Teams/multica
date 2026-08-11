@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,9 @@ func TestEstablishWorkspaceBindingPersistsLocalBinding(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path == "" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("X-Workspace-ID"); got != "ws-123" {
+			t.Fatalf("X-Workspace-ID = %q, want ws-123", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true,"workspace_id":"ws-123","credential":"binding-token","credential_expires_at":"2030-01-02T03:04:05Z"}`))
@@ -110,6 +114,78 @@ func TestResolveSetupServiceTargetAcceptsExplicitTestOrigins(t *testing.T) {
 	}
 	if workspace, _ := cmd.Flags().GetString("workspace"); workspace != "lrm-team-test" {
 		t.Fatalf("workspace = %q, want lrm-team-test", workspace)
+	}
+}
+
+func TestResolveSetupServiceTargetReusesSavedTestOrigins(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := cli.CLIConfig{
+		Environment: string(cli.ServiceEnvironmentTest),
+		ServerURL:   "https://82.157.184.89",
+		AppURL:      "https://82.157.184.89",
+		Environments: map[string]cli.ServiceEnvironmentConfig{
+			string(cli.ServiceEnvironmentTest): {
+				ServerURL: "https://82.157.184.89",
+				AppURL:    "https://82.157.184.89",
+			},
+		},
+	}
+	if err := cli.SaveCLIConfigForProfile(cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &cobra.Command{Use: "setup"}
+	cmd.Flags().String("environment", "production", "")
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("app-url", "", "")
+	cmd.Flags().String("workspace", "", "")
+	if err := cmd.Flags().Set("environment", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	target, err := resolveSetupServiceTarget(cmd, []string{"/lrm-team-test"})
+	if err != nil {
+		t.Fatalf("resolve setup target: %v", err)
+	}
+	if target.Origin != "https://82.157.184.89" || target.AppOrigin != "https://82.157.184.89" {
+		t.Fatalf("target = %+v, want saved Test origins", target)
+	}
+}
+
+func TestConfirmSetupEnvironmentSwitchRequiresConsentBeforeChangingProduction(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("yes", false, "")
+	cmd.SetIn(bytes.NewBufferString("n\n"))
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	current := cli.CLIConfig{Environment: string(cli.ServiceEnvironmentProduction), ServerURL: cli.OfficialCloudAPIURL}
+	target, err := cli.NewServiceTarget("test", "https://82.157.184.89", "https://82.157.184.89")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	confirmed, err := confirmSetupEnvironmentSwitch(cmd, current, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmed {
+		t.Fatal("environment switch proceeded without consent")
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("production is currently active")) || !bytes.Contains(stderr.Bytes(), []byte("Continue? [y/N]")) {
+		t.Fatalf("prompt = %q", stderr.String())
+	}
+}
+
+func TestConfirmSetupEnvironmentSwitchSkipsPromptForSameEnvironment(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("yes", false, "")
+	current := cli.CLIConfig{Environment: string(cli.ServiceEnvironmentTest), ServerURL: "https://82.157.184.89"}
+	target, err := cli.NewServiceTarget("test", "https://82.157.184.89", "https://82.157.184.89")
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := confirmSetupEnvironmentSwitch(cmd, current, target)
+	if err != nil || !confirmed {
+		t.Fatalf("same-environment confirmation = %v, %v", confirmed, err)
 	}
 }
 

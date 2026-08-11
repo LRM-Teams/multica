@@ -24,6 +24,9 @@ type legacyProfileSnapshot struct {
 	Config     cli.CLIConfig
 }
 
+var newLegacyAdoptionAPIClient = cli.NewAPIClient
+var establishLegacyWorkspaceConnection = establishWorkspaceConnection
+
 func captureLegacyComputerEvidence() []legacyProfileSnapshot {
 	legacyRoot := filepath.Dir(computer.RootDir(""))
 	var out []legacyProfileSnapshot
@@ -72,7 +75,7 @@ func adoptVerifiedLegacyComputer(_ *cobra.Command, snapshots []legacyProfileSnap
 	}
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
-	currentUserID, err := verifiedUserID(ctx, cli.NewAPIClient(cli.OfficialCloudAPIURL, "", current.Token))
+	currentUserID, err := verifiedUserID(ctx, newLegacyAdoptionAPIClient(current.ServerURL, "", current.Token))
 	if err != nil {
 		return fmt.Errorf("verify current Computer user: %w", err)
 	}
@@ -91,7 +94,7 @@ func adoptVerifiedLegacyComputer(_ *cobra.Command, snapshots []legacyProfileSnap
 			evidence = append(evidence, item)
 			continue
 		}
-		legacyClient := cli.NewAPIClient(cli.OfficialCloudAPIURL, snapshot.Config.WorkspaceID, snapshot.Config.Token)
+		legacyClient := newLegacyAdoptionAPIClient(cli.OfficialCloudAPIURL, snapshot.Config.WorkspaceID, snapshot.Config.Token)
 		legacyUserID, userErr := verifiedUserID(ctx, legacyClient)
 		if userErr == nil {
 			item.SignedInUser = legacyUserID
@@ -120,7 +123,14 @@ func adoptVerifiedLegacyComputer(_ *cobra.Command, snapshots []legacyProfileSnap
 		return err
 	}
 	for _, connection := range plan.Connections {
-		if err := establishWorkspaceConnection(current, plan.ComputerID, connection.WorkspaceID, connection.WorkspaceSlug); err != nil {
+		var legacyConfig cli.CLIConfig
+		for _, snapshot := range snapshots {
+			if snapshot.Config.WorkspaceID == connection.WorkspaceID {
+				legacyConfig = snapshot.Config
+				break
+			}
+		}
+		if err := establishLegacyWorkspaceConnection(legacyConfig, plan.ComputerID, connection.WorkspaceID, connection.WorkspaceSlug); err != nil {
 			return fmt.Errorf("adopted Computer identity but could not restore Workspace %s connection: %w", connection.WorkspaceID, err)
 		}
 	}

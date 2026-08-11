@@ -979,7 +979,7 @@
     "setup_step_computer": "电脑",
     "setup_step_wendy": "Wendy",
     "setup_step1_title": "连接一台电脑",
-    "setup_step1_description": "第 1/2 步。安装 Multica Computer CLI，并对本工作区执行 setup。电脑上线后，下一步再创建 Wendy。",
+    "setup_step1_description": "运行下面两条命令。Computer 连接后会自动进入下一步。",
     "setup_step2_title": "认识 Wendy",
     "setup_step2_description": "第 2/2 步。选择在线 Runtime 和模型，然后创建工作区的 Onboarding Agent。",
     "setup_title": "认识 Wendy",

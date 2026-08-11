@@ -224,6 +224,9 @@ func (l *Lifecycle) StartBackground(options StartOptions) (StartResult, error) {
 		pid, _ := health["pid"].(float64)
 		return StartResult{}, fmt.Errorf("already running (pid %v)", int(pid))
 	}
+	if _, err := l.Identity(); err != nil {
+		return StartResult{}, fmt.Errorf("resolve Computer identity before start: %w", err)
+	}
 
 	exePath, err := v.executor()
 	if err != nil {

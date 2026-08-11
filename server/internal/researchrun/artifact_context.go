@@ -238,6 +238,10 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
 	}
 
+	if err := lockDispatchManifestCandidateRowsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
+		return dispatchManifestPlan{}, err
+	}
+
 	for _, entry := range plan.Entries {
 		if err := casPassportEligibilityRevisionTx(
 			ctx, tx, in.WorkspaceID, in.SessionID, entry.ArtifactID,
@@ -287,6 +291,35 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		return dispatchManifestPlan{}, err
 	}
 	return plan, nil
+}
+
+func lockDispatchManifestCandidateRowsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, sessionID string,
+	entries []artifactVersionCandidate,
+) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	sorted := append([]artifactVersionCandidate(nil), entries...)
+	sortManifestEntryCandidates(sorted)
+	for _, entry := range sorted {
+		if err := lockArtifactPassportRowTx(ctx, tx, workspaceID, sessionID, entry.ArtifactID); err != nil {
+			return err
+		}
+	}
+	versionRowIDs := make([]string, 0, len(sorted))
+	for _, entry := range sorted {
+		versionRowIDs = append(versionRowIDs, entry.VersionRowID)
+	}
+	sort.Strings(versionRowIDs)
+	for _, versionRowID := range versionRowIDs {
+		if err := lockArtifactVersionRowTx(ctx, tx, workspaceID, sessionID, versionRowID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func persistManifestGateSnapshotTx(

@@ -26,7 +26,7 @@ var chapterD15Coverage = map[int]string{
 	9:  "partial", // access matrix unit tests
 	10: "partial", // evaluation compartment integration + researcheval SubjectInput
 	11: "partial", // stale state version dispatch; not full race matrix
-	12: "partial", // canonical entry order; not concurrent inverse lock
+	12: "partial", // dispatch normalized locks + concurrent shared-candidate test
 	13: "partial", // eligibility + representation CAS
 	14: "covered", // replay/prompt/outbox binding tests
 	15: "partial", // dispatch transaction recovery matrix

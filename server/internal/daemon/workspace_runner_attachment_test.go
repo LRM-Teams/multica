@@ -59,6 +59,34 @@ func TestWorkspaceRunnerAttachmentAttachRejectsWrongRuntimeBeforeInboxCreation(t
 	}
 }
 
+func TestWorkspaceRunnerManagedStartRequiresMatchingAttachment(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: "start-1"}
+	if _, _, _, err := runner.startManagedAgent(start); err == nil {
+		t.Fatal("unattached Agent start was accepted")
+	}
+	if _, found := runner.processes.Snapshot(agentID); found {
+		t.Fatal("unattached Agent start created a managed launch")
+	}
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+	}); err != nil {
+		t.Fatalf("attach Agent before start: %v", err)
+	}
+	ack, status, session, err := runner.startManagedAgent(start)
+	if err != nil {
+		t.Fatalf("attached Agent start: %v", err)
+	}
+	if ack.AgentID != agentID || ack.LaunchID == "" || status.LaunchID != ack.LaunchID || session.LaunchID != ack.LaunchID {
+		t.Fatalf("managed start result ack=%+v status=%+v session=%+v", ack, status, session)
+	}
+}
+
 func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, nil)

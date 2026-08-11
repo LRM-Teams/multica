@@ -195,16 +195,14 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 		case protocol.EventDaemonAgentStart:
 			var start protocol.WorkspaceRunnerAgentStartPayload
-			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !d.ownsWorkspaceRunnerRuntime(workspaceID, start.RuntimeID) {
+			if json.Unmarshal(message.Payload, &start) != nil {
 				continue
 			}
-			ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: start.AgentID, RuntimeID: start.RuntimeID, StartDispatchID: start.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
+			ack, status, session, err := runner.startManagedAgent(start)
 			if err != nil {
-				continue
-			}
-			status := protocol.AgentStatusPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}
-			session := protocol.AgentSessionPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID}
-			if err := producer.SetManaged(status, session); err != nil {
+				if d.logger != nil {
+					d.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "start_rejected", "error", err)
+				}
 				continue
 			}
 			if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {

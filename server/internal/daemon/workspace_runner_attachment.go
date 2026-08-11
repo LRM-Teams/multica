@@ -8,6 +8,37 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+// startManagedAgent is deliberately stricter than process manager admission:
+// an Agent can run only when this Workspace Runner has already durably accepted
+// its exact Attachment. A stale or cross-Runtime start must not revive an Agent
+// after it was detached or moved.
+func (runner *WorkspaceRunner) startManagedAgent(payload protocol.WorkspaceRunnerAgentStartPayload) (protocol.AgentStartAckPayload, protocol.AgentStatusPayload, protocol.AgentSessionPayload, error) {
+	if runner == nil || runner.daemon == nil || runner.attachments == nil || runner.processes == nil || runner.activity == nil {
+		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, errors.New("Workspace Runner launch dependencies are unavailable")
+	}
+	if err := payload.Validate(); err != nil {
+		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("validate managed start: %w", err)
+	}
+	workspaceID := runner.config.WorkspaceID
+	if !runner.daemon.ownsWorkspaceRunnerRuntime(workspaceID, payload.RuntimeID) {
+		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, errors.New("managed start Runtime is outside Workspace Runner scope")
+	}
+	attachment, attached := runner.attachments.Resolve(workspaceID, payload.AgentID)
+	if !attached || attachment.RuntimeID != payload.RuntimeID {
+		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, errors.New("managed start requires a matching Attachment")
+	}
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, StartDispatchID: payload.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
+	if err != nil {
+		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("start managed Agent: %w", err)
+	}
+	status := protocol.AgentStatusPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID, Status: protocol.AgentStatusActive}
+	session := protocol.AgentSessionPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID}
+	if err := runner.activity.SetManaged(status, session); err != nil {
+		return protocol.AgentStartAckPayload{}, protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("record managed start: %w", err)
+	}
+	return ack, status, session, nil
+}
+
 // applyAttachmentAttach establishes a durable local responsibility before the
 // corresponding receipt leaves this Runner. Attachment is deliberately not a
 // provider launch: it only prepares the persistent AgentRoot and Inbox owned

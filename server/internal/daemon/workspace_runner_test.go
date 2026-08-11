@@ -155,7 +155,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		var accepted protocol.AgentStartAckPayload
-		for i := 0; i < 4; i++ {
+		for responses := 0; responses < 4; {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -172,7 +172,11 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 					return
 				}
 			}
+			if msg.Type == protocol.EventAgentRecoveryRequest {
+				continue
+			}
 			frames <- msg
+			responses++
 		}
 		stop, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStop, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStopPayload{AgentID: accepted.AgentID, LaunchID: accepted.LaunchID})})
 		if err := conn.WriteMessage(websocket.TextMessage, stop); err != nil {
@@ -194,7 +198,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		}
 	}))
 	defer server.Close()
-	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
@@ -205,6 +209,11 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	runner, err := d.newWorkspaceRunner("ws-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+	}); err != nil {
+		t.Fatalf("attach scoped Agent before start: %v", err)
 	}
 	d.attachWorkspaceRunner(runner)
 	t.Cleanup(func() {

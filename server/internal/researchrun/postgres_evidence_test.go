@@ -69,7 +69,7 @@ func TestListClaimsOrdersEvidenceByRelationAndID(t *testing.T) {
 		  created_at, updated_at
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, 'claim-tie', '', 'claim text',
-		  0.5, 0.5, 'proposed', 1, 1, '', $4, $4
+		  'medium', 0.5, 'proposed', 1, 1, '', $4, $4
 		)
 	`, claimID, fixture.workspaceID, fixture.sessionID, tieTime)
 	if err != nil {

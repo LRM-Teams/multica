@@ -8,7 +8,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// autoUpdateLoop periodically checks the release feed for a newer CLI version
+// releaseDetectionLoop periodically checks the release feed for a newer CLI version
 // and, when one exists, records it as the auto-detected target on the daemon's
 // update observation (which the heartbeat already reports to the server, so
 // the frontend can surface the "upgrade available" affordance).
@@ -21,18 +21,18 @@ import (
 // interval) and resilient: any transient fetch/parse error is logged and the
 // next tick retries; a fetch failure never blocks message delivery or agent
 // work.
-func (d *Daemon) autoUpdateLoop(ctx context.Context) {
-	if d.cfg.AutoUpdateCheckInterval <= 0 {
+func (d *Daemon) releaseDetectionLoop(ctx context.Context) {
+	if d.cfg.ReleaseDetectionInterval <= 0 {
 		return
 	}
 
 	// A short initial delay lets the daemon finish the most time-sensitive
 	// startup (registration, heartbeat, mailbox drain) before the first check;
 	// afterwards it repeats on the configured interval.
-	timer := time.NewTimer(d.autoUpdateInitialDelay())
+	timer := time.NewTimer(d.releaseDetectionInitialDelay())
 	defer timer.Stop()
 
-	ticker := time.NewTicker(d.cfg.AutoUpdateCheckInterval)
+	ticker := time.NewTicker(d.cfg.ReleaseDetectionInterval)
 	defer ticker.Stop()
 
 	for {
@@ -47,11 +47,11 @@ func (d *Daemon) autoUpdateLoop(ctx context.Context) {
 	}
 }
 
-// autoUpdateInitialDelay is the delay before the first detection check. It is a
+// releaseDetectionInitialDelay is the delay before the first detection check. It is a
 // method so tests can shorten it.
-func (d *Daemon) autoUpdateInitialDelay() time.Duration {
-	if d.cfg.AutoUpdateInitialDelay > 0 {
-		return d.cfg.AutoUpdateInitialDelay
+func (d *Daemon) releaseDetectionInitialDelay() time.Duration {
+	if d.cfg.ReleaseDetectionInitialDelay > 0 {
+		return d.cfg.ReleaseDetectionInitialDelay
 	}
 	return 2 * time.Minute
 }
@@ -63,9 +63,33 @@ func (d *Daemon) checkForNewerRelease(ctx context.Context) {
 	if d.updateObservation == nil {
 		return
 	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := d.updateObservation.Transition(func(obs *protocol.DaemonUpdateObservation) {
+		obs.Phase = "checking"
+		obs.AttemptSource = "auto"
+		obs.LastAttemptAt = now
+		obs.ErrorCode = ""
+		obs.ErrorMessage = ""
+	}); err != nil {
+		if d.logger != nil {
+			d.logger.Warn("release detection: could not persist checking state", "error", err)
+		}
+		return
+	}
 	manifest, err := fetchReleaseManifestForChannel(ctx, d.cfg.ReleaseChannel, d.releaseManifestBaseURLOverride())
 	if err != nil {
-		d.logger.Debug("auto-update detection: manifest fetch failed", "error", err)
+		transitionErr := d.updateObservation.Transition(func(obs *protocol.DaemonUpdateObservation) {
+			obs.Phase = "waiting"
+			obs.LastOutcome = "fetch_failed"
+			obs.ErrorCode = "release_fetch_failed"
+			obs.ErrorMessage = err.Error()
+		})
+		if d.logger != nil {
+			d.logger.Debug("release detection: manifest fetch failed", "error", err)
+			if transitionErr != nil {
+				d.logger.Warn("release detection: could not persist fetch failure", "error", transitionErr)
+			}
+		}
 		return
 	}
 	latest := manifest.Version
@@ -73,18 +97,35 @@ func (d *Daemon) checkForNewerRelease(ctx context.Context) {
 		latest = manifest.TagName
 	}
 	if !cli.IsReleaseVersion(latest) {
-		d.logger.Debug("auto-update detection: manifest version not a release tag", "version", latest)
+		transitionErr := d.updateObservation.Transition(func(obs *protocol.DaemonUpdateObservation) {
+			obs.Phase = "waiting"
+			obs.LastOutcome = "fetch_failed"
+			obs.ErrorCode = "release_fetch_failed"
+			obs.ErrorMessage = "release manifest did not contain a valid release version"
+		})
+		if d.logger != nil {
+			d.logger.Debug("release detection: manifest version not a release tag", "version", latest)
+			if transitionErr != nil {
+				d.logger.Warn("release detection: could not persist invalid manifest", "error", transitionErr)
+			}
+		}
 		return
 	}
 	current := d.cfg.CLIVersion
 	if !cli.IsNewerVersion(latest, current) {
 		// No newer release (or equal/older): clear any stale detected target so
 		// the frontend doesn't keep offering a version that's no longer newer.
-		if d.hasStaleDetectedTarget(current) {
-			d.updateObservation.Transition(func(obs *protocol.DaemonUpdateObservation) {
+		clearStaleTarget := d.hasStaleDetectedTarget(current)
+		if err := d.updateObservation.Transition(func(obs *protocol.DaemonUpdateObservation) {
+			obs.Phase = "waiting"
+			obs.LastOutcome = "up_to_date"
+			obs.ErrorCode = ""
+			obs.ErrorMessage = ""
+			if clearStaleTarget {
 				obs.TargetVersion = ""
-				obs.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			})
+			}
+		}); err != nil && d.logger != nil {
+			d.logger.Warn("release detection: could not persist up-to-date state", "error", err)
 		}
 		return
 	}
@@ -92,12 +133,20 @@ func (d *Daemon) checkForNewerRelease(ctx context.Context) {
 	if target == "" {
 		target = latest
 	}
-	d.updateObservation.Transition(func(obs *protocol.DaemonUpdateObservation) {
+	if err := d.updateObservation.Transition(func(obs *protocol.DaemonUpdateObservation) {
+		obs.Phase = "waiting"
+		obs.LastOutcome = "update_available"
 		obs.TargetVersion = target
-		obs.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	})
+		obs.ErrorCode = ""
+		obs.ErrorMessage = ""
+	}); err != nil {
+		if d.logger != nil {
+			d.logger.Warn("release detection: could not persist detected release", "target", target, "error", err)
+		}
+		return
+	}
 	if d.logger != nil {
-		d.logger.Info("auto-update detection: newer release found", "current", current, "target", target)
+		d.logger.Info("release detection: newer release found", "current", current, "target", target)
 	}
 }
 
@@ -113,13 +162,6 @@ func (d *Daemon) hasStaleDetectedTarget(current string) bool {
 		return false
 	}
 	return !cli.IsNewerVersion(obs.TargetVersion, current)
-}
-
-// tryAutoUpdate remains a private compatibility seam for older in-process
-// callers/tests. Detection is handled by autoUpdateLoop; this method performs
-// no mutation.
-func (d *Daemon) tryAutoUpdate(ctx context.Context) {
-	_ = ctx
 }
 
 // fetchReleaseManifest returns the Production entry from the canonical

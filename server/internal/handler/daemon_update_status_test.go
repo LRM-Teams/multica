@@ -207,6 +207,17 @@ func TestDaemonUpdateObservationRegisterAcceptsCurrentDaemonOutcomes(t *testing.
 			},
 		},
 		{
+			name: "detect only update available",
+			adjust: func(observation *protocol.DaemonUpdateObservation) {
+				observation.AutoUpdateEffectiveEnabled = false
+				observation.ConfigSource = "auto_detect"
+				observation.IneligibleReason = ""
+				observation.Phase = "waiting"
+				observation.LastOutcome = "update_available"
+				observation.TargetVersion = "v0.4.24-alpha.11"
+			},
+		},
+		{
 			name: "pinned",
 			adjust: func(observation *protocol.DaemonUpdateObservation) {
 				observation.LastOutcome = "pinned"

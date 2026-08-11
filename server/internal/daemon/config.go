@@ -52,8 +52,8 @@ const (
 	DefaultRuntimeName              = "Local Agent"
 	DefaultWorkspaceSyncInterval    = 30 * time.Second
 	DefaultHealthPort               = 19514
-	DefaultAutoUpdateCheckInterval  = 5 * time.Minute // detection-only poll (Frank approved 08-07); consumed by autoUpdateLoop
-	DefaultAutoUpdateInitialDelay   = 2 * time.Minute // initial delay before first detection check
+	DefaultReleaseDetectionInterval = 5 * time.Minute // detection-only poll (Frank approved 08-07)
+	DefaultReleaseDetectionDelay    = 2 * time.Minute // initial delay before first detection check
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
 	DefaultMemoryCurationRunTimeout = 10 * time.Minute
 	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
@@ -92,11 +92,10 @@ type Config struct {
 	// never from an environment variable or the unauthenticated health surface.
 	LocalControlToken             string
 	AgentWorkspaceQuotaBytes      int64         // per-agent cap on <workspace-id>/agents/<agent-id> total size, checked at turn-start; 0 = unlimited (default)
-	AutoUpdateEnabled             bool          // detection-only; never changes machine release state (Machine Upgrade stays explicit)
-	AutoUpdateConfigSource        string        // set to auto_detect when detection is active (was deprecated_noop)
-	AutoUpdateCheckInterval       time.Duration // detection poll interval (default DefaultAutoUpdateCheckInterval)
-	AutoUpdateInitialDelay        time.Duration // delay before the first detection check (default DefaultAutoUpdateInitialDelay)
-	PinnedVersion                 string        // when non-empty, the daemon stays on this version and never auto-upgrades (env: MULTICA_PINNED_VERSION)
+	ReleaseDetectionConfigSource  string        // set to auto_detect when detection is active (was deprecated_noop)
+	ReleaseDetectionInterval      time.Duration // detection poll interval (default DefaultReleaseDetectionInterval)
+	ReleaseDetectionInitialDelay  time.Duration // delay before the first detection check (default DefaultReleaseDetectionDelay)
+	PinnedVersion                 string        // when non-empty, the daemon stays on this version and rejects explicit upgrades (env: MULTICA_PINNED_VERSION)
 	UpdateObservationPath         string        // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
 	SharedSkillsDir               string        // optional global override; when empty each provider uses its own shared root
 	SharedSkillsSyncInterval      time.Duration // how often to scan and sync SharedSkillsDir
@@ -137,10 +136,10 @@ type Overrides struct {
 	RuntimeName                    string
 	Profile                        string // profile name (empty = default)
 	HealthPort                     int    // health check port (0 = use default)
-	// Legacy update flags remain accepted during the compatibility window. They
-	// are no-ops: no option or environment value can enable periodic mutation.
-	DisableAutoUpdate       bool
-	AutoUpdateCheckInterval time.Duration // 0 = use env/default
+	// Legacy update flags remain accepted during the compatibility window. The
+	// enable/disable flag is a no-op; the interval only adjusts release detection.
+	DisableAutoUpdate        bool
+	ReleaseDetectionInterval time.Duration // 0 = use env/default; populated by the legacy interval flag
 }
 
 // LoadConfig builds the daemon configuration from environment variables
@@ -458,19 +457,20 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		agentWorkspaceQuotaBytes = parsed
 	}
 
-	// #2379: retain all old settings in the public Config/CLI shape, but do
-	// not parse or schedule them. This makes an inherited malformed interval
-	// harmless instead of letting a retired background mechanism block startup.
+	// #2379 plus the later detect-only contract: automatic installation remains
+	// retired, while every daemon reports release availability every five
+	// minutes. Legacy enable/disable switches cannot re-enable mutation; an
+	// explicit interval override only adjusts the detection cadence.
 	_ = overrides.DisableAutoUpdate
-	autoUpdateEnabled := false
-	autoUpdateConfigSource := "auto_detect"
-	autoUpdateInterval := DefaultAutoUpdateCheckInterval
-	if overrides.AutoUpdateCheckInterval > 0 {
-		autoUpdateInterval = overrides.AutoUpdateCheckInterval
+	releaseDetectionConfigSource := "auto_detect"
+	releaseDetectionInterval := DefaultReleaseDetectionInterval
+	if overrides.ReleaseDetectionInterval > 0 {
+		releaseDetectionInterval = overrides.ReleaseDetectionInterval
 	}
 
-	// Pinned version: when set, the daemon stays on this version and never
-	// auto-upgrades. The value must be a valid release tag (e.g. "0.3.92").
+	// Pinned version: when set, the daemon stays on this version and rejects
+	// explicit Machine Upgrade requests. The value must be a valid release tag
+	// (e.g. "0.3.92").
 	// An invalid or non-release value is a configuration error — we fail
 	// loud rather than silently ignoring the pin and letting the daemon
 	// upgrade past the intended version.
@@ -536,9 +536,8 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		Agents:                         agents,
 		WorkspacesRoot:                 workspacesRoot,
 		AgentWorkspaceQuotaBytes:       agentWorkspaceQuotaBytes,
-		AutoUpdateEnabled:              autoUpdateEnabled,
-		AutoUpdateConfigSource:         autoUpdateConfigSource,
-		AutoUpdateCheckInterval:        autoUpdateInterval,
+		ReleaseDetectionConfigSource:   releaseDetectionConfigSource,
+		ReleaseDetectionInterval:       releaseDetectionInterval,
 		PinnedVersion:                  pinnedVersion,
 		UpdateObservationPath:          updateObservationPath,
 		SharedSkillsDir:                sharedSkillsDir,

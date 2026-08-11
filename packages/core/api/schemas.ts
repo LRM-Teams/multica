@@ -312,9 +312,11 @@ const DaemonUpdateStatusSchema = z.object({
     "env_enabled",
     "env_disabled",
     "cli_disabled",
+    "deprecated_noop",
+    "auto_detect",
   ]),
   ineligible_reason: z
-    .enum(["desktop_managed", "non_release_build"])
+    .enum(["desktop_managed", "non_release_build", "explicit_only"])
     .nullable()
     .default(null),
   check_interval_seconds: z.number().int().positive(),
@@ -330,12 +332,14 @@ const DaemonUpdateStatusSchema = z.object({
   last_outcome: z.enum([
     "never_checked",
     "up_to_date",
+    "update_available",
     "busy",
     "fetch_failed",
     "update_failed",
     "verification_failed",
     "update_succeeded",
     "interrupted",
+    "explicit_only",
   ]),
   target_version: z.string().nullable().default(null),
   error_code: z

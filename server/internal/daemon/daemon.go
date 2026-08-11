@@ -950,7 +950,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.residentCrashWatchLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
-	go d.autoUpdateLoop(ctx)
+	go d.releaseDetectionLoop(ctx)
 
 	// Preflight succeeded and the background loops are up: the daemon has
 	// registered its runtimes and can now claim and run tasks. Flip /health
@@ -958,7 +958,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// readiness wait blocks on, so success is reported only after startup
 	// actually completed, not merely because the health port came up.
 	d.ready.Store(true)
-	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, token-renewal, shared-skills, auto-update-detection); machine upgrades are explicit-only; health now reporting ready")
+	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, token-renewal, shared-skills, release-detection); machine upgrades are explicit-only; health now reporting ready")
 	err = d.pollLoop(ctx, taskWakeups)
 	d.logger.Debug("daemon main loop returning", "error", err)
 	return err
@@ -1765,7 +1765,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 // releaseManifestBaseURLOverride returns the most recent non-empty
 // server-dispatched release-manifest base URL seen on a heartbeat ack, or ""
 // if none has arrived yet. Passed to cli.releaseManifestBaseURLWithOverride
-// by the auto-update loop so a server-side domain change takes effect within
+// by the release-detection loop so a server-side domain change takes effect within
 // one heartbeat interval, no env var or redeploy required.
 func (d *Daemon) releaseManifestBaseURLOverride() string {
 	v, _ := d.serverReleaseManifestBaseURL.Load().(string)
@@ -2006,7 +2006,7 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		d.logger.Warn("update already in progress, refusing server request", "runtime_id", runtimeID, "update_id", update.ID)
 		// PopPending has already transitioned this request to running on the
 		// server. Terminate that canonical request without touching the
-		// current attempt owner's observation; otherwise an auto-update
+		// current attempt owner's observation; otherwise a release-detection
 		// metadata fetch can strand the request until its running timeout.
 		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 			"status": "failed",

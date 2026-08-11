@@ -41,11 +41,14 @@ export type DaemonUpdateConfigSource =
   | "self_host_default"
   | "env_enabled"
   | "env_disabled"
-  | "cli_disabled";
+  | "cli_disabled"
+  | "deprecated_noop"
+  | "auto_detect";
 
 export type DaemonUpdateIneligibleReason =
   | "desktop_managed"
-  | "non_release_build";
+  | "non_release_build"
+  | "explicit_only";
 
 export type DaemonUpdatePhase =
   | "disabled"
@@ -59,12 +62,14 @@ export type DaemonUpdateAttemptSource = "auto" | "server";
 export type DaemonUpdateOutcome =
   | "never_checked"
   | "up_to_date"
+  | "update_available"
   | "busy"
   | "fetch_failed"
   | "update_failed"
   | "verification_failed"
   | "update_succeeded"
-  | "interrupted";
+  | "interrupted"
+  | "explicit_only";
 
 export type DaemonUpdateErrorCode =
   | "daemon_restarted_during_update"

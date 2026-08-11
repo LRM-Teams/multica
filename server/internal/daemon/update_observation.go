@@ -61,23 +61,27 @@ func newUpdateObservationCoordinator(cfg Config, logger *slog.Logger) *updateObs
 
 func (c *updateObservationCoordinator) initialObservation(cfg Config) protocol.DaemonUpdateObservation {
 	now := c.now().UTC()
-	// The observation name and fields are retained for deployed servers, but
-	// must truthfully report that periodic auto-update is retired.
-	source := "deprecated_noop"
-	interval := DefaultAutoUpdateCheckInterval
-	effectiveEnabled := false
-	ineligibleReason := "explicit_only"
-	phase := "disabled"
+	// Automatic installation is retired, but release detection remains active.
+	// Keep AutoUpdateEffectiveEnabled false so old clients never infer mutation;
+	// the explicit auto_detect source and waiting phase describe the detector.
+	source := strings.TrimSpace(cfg.ReleaseDetectionConfigSource)
+	if source == "" {
+		source = "auto_detect"
+	}
+	interval := cfg.ReleaseDetectionInterval
+	if interval <= 0 {
+		interval = DefaultReleaseDetectionInterval
+	}
 	next := protocol.DaemonUpdateObservation{
 		SessionID:                  uuid.NewString(),
 		Revision:                   1,
 		ObservedAt:                 now.Format(time.RFC3339Nano),
-		AutoUpdateEffectiveEnabled: effectiveEnabled,
+		AutoUpdateEffectiveEnabled: false,
 		ConfigSource:               source,
-		IneligibleReason:           ineligibleReason,
+		IneligibleReason:           "",
 		CheckIntervalSeconds:       max(int64(interval/time.Second), 1),
-		Phase:                      phase,
-		LastOutcome:                "explicit_only",
+		Phase:                      "waiting",
+		LastOutcome:                "never_checked",
 	}
 
 	previous, err := readPersistedUpdateObservation(c.path)
@@ -95,6 +99,13 @@ func (c *updateObservationCoordinator) initialObservation(cfg Config) protocol.D
 	next.ErrorMessage = previous.ErrorMessage
 	next.StagedVersion = previous.StagedVersion
 	next.ActivationGeneration = previous.ActivationGeneration
+	if previous.ConfigSource == "deprecated_noop" && previous.LastOutcome == "explicit_only" {
+		next.AttemptSource = ""
+		next.LastAttemptAt = ""
+		next.LastOutcome = "never_checked"
+		next.ErrorCode = ""
+		next.ErrorMessage = ""
+	}
 	switch previous.Phase {
 	case "checking", "updating":
 		next.LastOutcome = "interrupted"
@@ -273,7 +284,7 @@ func validateDaemonUpdateObservation(observation protocol.DaemonUpdateObservatio
 	if _, err := time.Parse(time.RFC3339Nano, observation.ObservedAt); err != nil {
 		return errors.New("auto-update observation observed_at must be RFC3339")
 	}
-	if !oneOf(observation.ConfigSource, "official_host_default", "self_host_default", "env_enabled", "env_disabled", "cli_disabled", "deprecated_noop") {
+	if !oneOf(observation.ConfigSource, "official_host_default", "self_host_default", "env_enabled", "env_disabled", "cli_disabled", "deprecated_noop", "auto_detect") {
 		return fmt.Errorf("invalid auto-update config_source %q", observation.ConfigSource)
 	}
 	if observation.IneligibleReason != "" && !oneOf(observation.IneligibleReason, "desktop_managed", "non_release_build", "explicit_only") {
@@ -293,7 +304,7 @@ func validateDaemonUpdateObservation(observation protocol.DaemonUpdateObservatio
 			return errors.New("auto-update last_attempt_at must be RFC3339")
 		}
 	}
-	if !oneOf(observation.LastOutcome, "never_checked", "up_to_date", "busy", "pinned", "fetch_failed", "update_failed", "verification_failed", "update_succeeded", "interrupted", "explicit_only") {
+	if !oneOf(observation.LastOutcome, "never_checked", "up_to_date", "update_available", "busy", "pinned", "fetch_failed", "update_failed", "verification_failed", "update_succeeded", "interrupted", "explicit_only") {
 		return fmt.Errorf("invalid auto-update last_outcome %q", observation.LastOutcome)
 	}
 	if len(observation.ErrorCode) > 80 {
@@ -388,7 +399,11 @@ func (d *Daemon) finishUpdateObservation(phase, outcome, target, errorCode, erro
 }
 
 func (d *Daemon) idleUpdateObservationPhase() string {
-	if d.updateObservation == nil || d.updateObservation.Snapshot().AutoUpdateEffectiveEnabled {
+	if d.updateObservation == nil {
+		return "waiting"
+	}
+	observation := d.updateObservation.Snapshot()
+	if observation.AutoUpdateEffectiveEnabled || observation.ConfigSource == "auto_detect" {
 		return "waiting"
 	}
 	return "disabled"

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -15,11 +16,12 @@ import (
 func newTestUpdateObservationCoordinator(t *testing.T, path string) *updateObservationCoordinator {
 	t.Helper()
 	return newUpdateObservationCoordinator(Config{
-		ServerBaseURL:          "https://api.multica.ai",
-		CLIVersion:             "v0.3.72",
-		AutoUpdateEnabled:      true,
-		AutoUpdateConfigSource: "env_enabled",
-		UpdateObservationPath:  path,
+		ServerBaseURL:                "https://api.multica.ai",
+		CLIVersion:                   "v0.3.72",
+		ReleaseDetectionConfigSource: "auto_detect",
+		ReleaseDetectionInterval:     5 * time.Minute,
+		ReleaseDetectionInitialDelay: 2 * time.Minute,
+		UpdateObservationPath:        path,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
@@ -35,7 +37,7 @@ func TestUpdateObservationCoordinatorPersistsBeforePublishing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon-update-status.json")
 	coordinator := newTestUpdateObservationCoordinator(t, path)
 	initial := coordinator.Snapshot()
-	if initial.Revision != 1 || initial.Phase != "disabled" || initial.LastOutcome != "explicit_only" || initial.AutoUpdateEffectiveEnabled || initial.ConfigSource != "deprecated_noop" || initial.IneligibleReason != "explicit_only" {
+	if initial.Revision != 1 || initial.Phase != "waiting" || initial.LastOutcome != "never_checked" || initial.AutoUpdateEffectiveEnabled || initial.ConfigSource != "auto_detect" || initial.IneligibleReason != "" || initial.CheckIntervalSeconds != 300 {
 		t.Fatalf("initial observation = %+v", initial)
 	}
 
@@ -66,6 +68,39 @@ func TestUpdateObservationCoordinatorPersistsBeforePublishing(t *testing.T) {
 	}
 }
 
+func TestUpdateObservationCoordinatorReportsDetectOnlyContract(t *testing.T) {
+	coordinator := newUpdateObservationCoordinator(Config{
+		CLIVersion:                   "v0.4.24-alpha.11",
+		ReleaseDetectionConfigSource: "auto_detect",
+		ReleaseDetectionInterval:     5 * time.Minute,
+		ReleaseDetectionInitialDelay: 2 * time.Minute,
+		UpdateObservationPath:        filepath.Join(t.TempDir(), "daemon-update-status.json"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	observation := coordinator.Snapshot()
+	if observation.AutoUpdateEffectiveEnabled {
+		t.Fatal("detect-only observation claims automatic installation is enabled")
+	}
+	if observation.ConfigSource != "auto_detect" || observation.IneligibleReason != "" {
+		t.Fatalf("detect-only source/ineligible = %q/%q", observation.ConfigSource, observation.IneligibleReason)
+	}
+	if observation.CheckIntervalSeconds != 300 || observation.Phase != "waiting" || observation.LastOutcome != "never_checked" {
+		t.Fatalf("detect-only cadence/state = %+v", observation)
+	}
+}
+
+func TestIdleUpdateObservationPhaseKeepsDetectorWaiting(t *testing.T) {
+	d := &Daemon{updateObservation: newUpdateObservationCoordinator(Config{
+		ReleaseDetectionConfigSource: "auto_detect",
+		ReleaseDetectionInterval:     5 * time.Minute,
+		UpdateObservationPath:        filepath.Join(t.TempDir(), "daemon-update-status.json"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))}
+
+	if got := d.idleUpdateObservationPhase(); got != "waiting" {
+		t.Fatalf("idleUpdateObservationPhase() = %q, want waiting for detect-only daemon", got)
+	}
+}
+
 func TestUpdateObservationCoordinatorNormalizesInterruptedPredecessor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon-update-status.json")
 	first := newTestUpdateObservationCoordinator(t, path)
@@ -82,7 +117,7 @@ func TestUpdateObservationCoordinatorNormalizesInterruptedPredecessor(t *testing
 	if successor.SessionID == first.Snapshot().SessionID {
 		t.Fatal("successor reused predecessor session_id")
 	}
-	if successor.Revision != 1 || successor.Phase != "disabled" || successor.LastOutcome != "interrupted" {
+	if successor.Revision != 1 || successor.Phase != "waiting" || successor.LastOutcome != "interrupted" {
 		t.Fatalf("successor observation = %+v", successor)
 	}
 	if successor.ErrorCode != "daemon_restarted_during_update" || successor.TargetVersion != "v0.3.73" {
@@ -104,7 +139,7 @@ func TestUpdateObservationCoordinatorReplaysRestartPendingSuccess(t *testing.T) 
 	}
 
 	successor := newTestUpdateObservationCoordinator(t, path).Snapshot()
-	if successor.Phase != "disabled" ||
+	if successor.Phase != "waiting" ||
 		successor.LastOutcome != "update_succeeded" ||
 		successor.TargetVersion != "v0.3.73" {
 		t.Fatalf("successor replay = %+v", successor)

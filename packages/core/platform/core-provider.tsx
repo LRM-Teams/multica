@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { ApiClient } from "../api/client";
 import { setApiInstance, setSchemaLogger } from "../api";
 import { createAuthStore, registerAuthStore } from "../auth";
@@ -20,7 +19,7 @@ import { HonorPresenceHeartbeat } from "./honor-presence-heartbeat";
 import type { CoreProviderProps, ClientIdentity } from "./types";
 import type { StorageAdapter } from "../types/storage";
 import { configStore, type ServiceEnvironment } from "../config";
-import { testComputerReleaseOptions } from "../releases/computer-metainfo";
+import { useComputerReleaseVersion } from "../releases/computer-metainfo";
 
 // Module-level singletons — created once at first render, never recreated.
 // Vite HMR preserves module-level state, so these survive hot reloads.
@@ -33,7 +32,7 @@ function ComputerReleasePrefetch({
 }: {
   environment: ServiceEnvironment;
 }) {
-  useQuery(testComputerReleaseOptions(environment === "test"));
+  useComputerReleaseVersion(environment);
   return null;
 }
 

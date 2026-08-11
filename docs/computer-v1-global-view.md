@@ -63,7 +63,7 @@ flowchart LR
 | Production | `api.leagent.me` / `www.leagent.me` | stable | `/computer/metainfo.json` → `environments.production` |
 | Test | `https://82.157.184.89`；以后可通过部署配置切到 `test.leagent.me` | preview | `/computer/metainfo.json` → `environments.test` |
 
-Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url`、`daemon_app_url` 分别填入 Test API/Web origin。两个值今天可以相同，但协议允许以后拆成不同域名。页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令；Test 页面由浏览器直接读取 `https://cdn.leagent.me/computer/metainfo.json`，校验后显示 `environments.test.tag` 的精确安装版本及完整环境/origin 命令。CDN 暂时不可达时页面只允许重试，不能退回含糊版本，也不能阻塞应用构建或部署。
+Computer 页面从公共 `/api/config.environment` 读取服务端声明的 `production` 或 `test`，并使用 `daemon_server_url`、`daemon_app_url` 分别填入 Test API/Web origin。两个值今天可以相同，但协议允许以后拆成不同域名。页面不能根据域名或 IP 猜环境。Production 显示普通 setup 命令；Test 页面由浏览器直接读取 `https://cdn.leagent.me/computer/metainfo.json`，校验后优先显示 `environments.test.tag` 的精确安装版本及完整环境/origin 命令。元数据仍在加载或暂时不可达时回退到合法的 `test` selector，由安装脚本在执行时解析当前 Test preview；这不能阻塞应用构建、部署或用户复制命令。
 
 第一次连接环境：
 
@@ -208,7 +208,7 @@ curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version tes
 curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.5.0-rc.2
 ```
 
-Test 页面默认展示部署时锁定的精确版本，而不是可移动的 `test` selector；这样复制命令和部署产物是同一代。`--version latest|test` 只用于手工跟随环境推荐，精确 tag 用于页面安装、复现、恢复和排障。不存在 `alpha` selector 或根目录 channel JSON fallback。
+Test 页面优先展示从 canonical metainfo 解析出的精确版本，让复制命令明确且便于复现；元数据尚未解析或暂时不可达时可以展示可移动的 `test` selector，由安装脚本在执行时解析当前 Test preview。精确 tag 仍用于页面安装的首选展示、复现、恢复和排障。不存在 `alpha` selector 或根目录 channel JSON fallback。
 
 ## 8. 升级契约
 

@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Copy, RefreshCw, Terminal } from "lucide-react";
+import { Check, Copy, Terminal } from "lucide-react";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
+import { useComputerReleaseVersion } from "@multica/core/releases/computer-metainfo";
 import {
   type DaemonSetupTarget,
   type DaemonSetupMode,
@@ -47,19 +48,11 @@ function DaemonSetupCommandStep({
   label,
   command,
   copyAria,
-  state,
-  errorLabel,
-  retryLabel,
-  onRetry,
 }: {
   number: number;
   label: string;
   command: string;
   copyAria: string;
-  state?: "loading" | "error";
-  errorLabel?: string;
-  retryLabel?: string;
-  onRetry?: () => void;
 }) {
   return (
     <div>
@@ -77,31 +70,9 @@ function DaemonSetupCommandStep({
             CODE_LIGATURE_CLASS,
           )}
         >
-          {state === "loading" ? (
-            <span
-              className="my-0.5 block h-4 w-48 animate-pulse rounded bg-muted-foreground/15"
-              aria-hidden
-            />
-          ) : state === "error" ? (
-            errorLabel
-          ) : (
-            command
-          )}
+          {command}
         </code>
-        {state ? (
-          onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={retryLabel}
-            >
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-            </button>
-          )
-        ) : (
-          <CopyButton text={command} ariaLabel={copyAria} />
-        )}
+        <CopyButton text={command} ariaLabel={copyAria} />
       </div>
     </div>
   );
@@ -110,8 +81,9 @@ function DaemonSetupCommandStep({
 /**
  * Shared install + workspace-scoped setup command UI.
  *
- * Both onboarding and Connect computer intentionally use this component so a
- * CLI command or copy interaction change cannot drift between the two flows.
+ * Both onboarding and Connect computer intentionally use this component. It
+ * owns release resolution as well as command rendering so the two flows cannot
+ * drift between the preferred exact package and the valid `test` fallback.
  */
 export function DaemonSetupCommandSteps({
   mode,
@@ -121,10 +93,6 @@ export function DaemonSetupCommandSteps({
   setupLabel,
   setupHint,
   copyAria,
-  installState,
-  installErrorLabel,
-  installRetryLabel,
-  onInstallRetry,
 }: {
   mode: DaemonSetupMode;
   workspaceSlug?: string;
@@ -133,12 +101,15 @@ export function DaemonSetupCommandSteps({
   setupLabel: string;
   setupHint: string;
   copyAria: string;
-  installState?: "loading" | "error";
-  installErrorLabel?: string;
-  installRetryLabel?: string;
-  onInstallRetry?: () => void;
 }) {
-  const { installCmd, setupCmd } = daemonSetupCommands(mode, workspaceSlug, target);
+  const computerVersion = useComputerReleaseVersion(
+    target?.environment ?? "production",
+    target?.computerVersion,
+  );
+  const { installCmd, setupCmd } = daemonSetupCommands(mode, workspaceSlug, {
+    ...target,
+    computerVersion,
+  });
 
   return (
     <>
@@ -147,10 +118,6 @@ export function DaemonSetupCommandSteps({
         label={installLabel}
         command={installCmd}
         copyAria={copyAria}
-        state={installState}
-        errorLabel={installErrorLabel}
-        retryLabel={installRetryLabel}
-        onRetry={onInstallRetry}
       />
       <div>
         <DaemonSetupCommandStep

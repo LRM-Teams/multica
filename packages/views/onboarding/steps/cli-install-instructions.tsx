@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { cn } from "@multica/ui/lib/utils";
 import { useConfigStore } from "@multica/core/config";
-import { testComputerReleaseOptions } from "@multica/core/releases/computer-metainfo";
 import { useT } from "../../i18n/use-t";
 import {
   DAEMON_SETUP_MODES,
@@ -29,24 +27,7 @@ export function CliInstallInstructions({
   const environment = useConfigStore((state) => state.environment);
   const daemonServerUrl = useConfigStore((state) => state.daemonServerUrl);
   const daemonAppUrl = useConfigStore((state) => state.daemonAppUrl);
-  const configuredComputerVersion = useConfigStore(
-    (state) => state.computerVersion,
-  );
-  const {
-    data: testRelease,
-    isError: testReleaseError,
-    isFetching: testReleaseFetching,
-    refetch: refetchTestRelease,
-  } = useQuery(
-    testComputerReleaseOptions(environment === "test"),
-  );
-  const computerVersion =
-    environment === "test"
-      ? testRelease?.tag ?? ""
-      : configuredComputerVersion;
-  const testReleaseUnavailable =
-    environment === "test" &&
-    (!testRelease || testReleaseFetching);
+  const computerVersion = useConfigStore((state) => state.computerVersion);
   const [uncontrolledMode, setUncontrolledMode] = useState<DaemonSetupMode>(() =>
     defaultDaemonSetupMode(),
   );
@@ -78,20 +59,6 @@ export function CliInstallInstructions({
               : t(($) => $.cli_install.step2_hint_production)
           }
           copyAria={t(($) => $.cli_install.copy_aria)}
-          installState={
-            testReleaseUnavailable
-              ? testReleaseError
-                ? "error"
-                : "loading"
-              : undefined
-          }
-          installErrorLabel={t(($) => $.cli_install.test_release_failed)}
-          installRetryLabel={t(($) => $.cli_install.test_release_retry)}
-          onInstallRetry={
-            testReleaseError
-              ? () => void refetchTestRelease()
-              : undefined
-          }
         />
       </CardContent>
     </Card>

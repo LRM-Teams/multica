@@ -1698,8 +1698,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       installLabel: "安装",
       startLabel: "启动 daemon",
       sshNote: "已经在服务器上？通过 SSH 执行同样的命令即可。",
-      testVersionFailed: "无法获取 Test 版本。",
-      testVersionRetry: "重新获取 Test 版本",
       copyLabel: "复制",
       copiedLabel: "已复制",
     },

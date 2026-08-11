@@ -76,6 +76,14 @@ const ligatureClasses = [
 describe("ConnectRemoteDialog", () => {
   beforeEach(() => {
     wsHandlers.clear();
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          schema_version: 1,
+          environments: { test: { tag: "v0.4.24-alpha.2" } },
+        }),
+        { status: 200 },
+      );
   });
 
   it("uses the current workspace in the cloud setup command", () => {
@@ -98,23 +106,36 @@ describe("ConnectRemoteDialog", () => {
     expect(baseElement).not.toHaveTextContent("multica setup self-host");
   });
 
-  it("uses explicit test server and app URLs in the setup command", () => {
+  it("uses the canonical exact Test release and explicit setup URLs", async () => {
     const { baseElement } = renderDialog({
       environment: "test",
       daemonServerUrl: "https://api.test.leagent.me/",
       daemonAppUrl: "https://test.leagent.me/",
-      computerVersion: "v0.4.24-alpha.2",
     });
 
-    expect(baseElement).toHaveTextContent(
-      "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.4.24-alpha.2",
-    );
+    expect(
+      await screen.findByText(
+        "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version v0.4.24-alpha.2",
+      ),
+    ).toBeInTheDocument();
+    expect(baseElement).not.toHaveTextContent("--version test");
     expect(baseElement).toHaveTextContent(
       "multica setup --environment test --server-url https://api.test.leagent.me --app-url https://test.leagent.me /workspace-test",
     );
     expect(baseElement).not.toHaveTextContent("--test-url");
     expect(baseElement).not.toHaveTextContent("--url ");
     expect(baseElement).not.toHaveTextContent("multica setup /workspace-test");
+  });
+
+  it("falls back to the valid Test selector when metainfo is unavailable", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    globalThis.fetch = fetchMock;
+    const { baseElement } = renderDialog({ environment: "test" });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(baseElement).toHaveTextContent(
+      "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version test",
+    );
   });
 
   it("does not render the legacy Windows + WSL mode", () => {

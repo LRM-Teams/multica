@@ -1,5 +1,6 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
+import type { ServiceEnvironment } from "../config";
 import { MULTICA_RELEASE_METAINFO_URL } from "../constants/repository";
 
 const PreviewTagSchema = z.string().regex(
@@ -48,4 +49,24 @@ export function testComputerReleaseOptions(enabled = true) {
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
   });
+}
+
+/**
+ * Resolves the Computer release shown by every install-command surface.
+ * Test prefers canonical metainfo's exact preview tag and falls back to the
+ * valid moving `test` selector while it is loading or temporarily unavailable.
+ * Production keeps the host-provided stable version.
+ */
+export function useComputerReleaseVersion(
+  environment: ServiceEnvironment,
+  configuredVersion = "",
+): string {
+  const { data } = useQuery(
+    testComputerReleaseOptions(environment === "test"),
+  );
+
+  if (environment !== "test") {
+    return configuredVersion.trim();
+  }
+  return data?.tag ?? "test";
 }

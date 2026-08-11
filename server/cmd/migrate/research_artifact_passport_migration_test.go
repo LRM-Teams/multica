@@ -1452,3 +1452,94 @@ func TestResearchArtifactScopedRelationshipFKs326RoundTrips(t *testing.T) {
 		t.Fatalf("reapply 326 up: %v", err)
 	}
 }
+
+func TestResearchArtifactCanonicalizationRegistry327RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_c14n_327_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO research_session (id, workspace_id) VALUES ($1::uuid, $2::uuid)`, sessionID, workspaceID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
+	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
+	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
+	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
+	up322, _ := readMigrationPair(t, "322_research_artifact_policy_ledger_guards")
+	up323, _ := readMigrationPair(t, "323_research_artifact_integrity_guards")
+	up324, _ := readMigrationPair(t, "324_research_artifact_link_policy_guards")
+	up325, _ := readMigrationPair(t, "325_research_artifact_migration_diagnostics")
+	up327, down327 := readMigrationPair(t, "327_research_artifact_canonicalization_registry")
+	for _, upSQL := range []string{up318, up319, up320, up321, up322, up323, up324, up325, up327} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+
+	var allowed bool
+	if err = conn.QueryRow(ctx, `SELECT research_artifact_canonicalization_version_allowed('research-artifact-c14n-v1')`).Scan(&allowed); err != nil || !allowed {
+		t.Fatalf("canonicalization version allowed=%v err=%v", allowed, err)
+	}
+	if err = conn.QueryRow(ctx, `SELECT research_artifact_canonicalization_version_allowed('bogus-c14n')`).Scan(&allowed); err != nil || allowed {
+		t.Fatalf("unknown canonicalization version should fail closed: allowed=%v err=%v", allowed, err)
+	}
+	if err = conn.QueryRow(ctx, `
+		SELECT research_artifact_schema_family_allowed('run_session', 'legacy-v1', 'research-artifact-c14n-v1')
+	`).Scan(&allowed); err != nil || !allowed {
+		t.Fatalf("run_session schema family allowed=%v err=%v", allowed, err)
+	}
+	if err = conn.QueryRow(ctx, `
+		SELECT research_artifact_schema_family_allowed('run_session', 'v2', 'research-artifact-c14n-v1')
+	`).Scan(&allowed); err != nil || allowed {
+		t.Fatalf("unknown schema version should fail closed: allowed=%v err=%v", allowed, err)
+	}
+
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_artifact_version (
+		  workspace_id, session_id, artifact_id, version,
+		  schema_name, schema_version, canonicalization_version,
+		  content_hash, access_level
+		) VALUES (
+		  $1::uuid, $2::uuid, $2::uuid, 2,
+		  'hypothesis', 'legacy-v1', 'research-artifact-c14n-v1',
+		  'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'raw'
+		)
+	`, workspaceID, sessionID); err == nil {
+		t.Fatal("expected unknown schema family insert to fail")
+	}
+
+	if _, err = conn.Exec(ctx, down327); err != nil {
+		t.Fatalf("apply 327 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up327); err != nil {
+		t.Fatalf("reapply 327 up: %v", err)
+	}
+}

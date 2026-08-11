@@ -219,3 +219,13 @@ func TestScopedRelationshipFKNames(t *testing.T) {
 		t.Fatalf("scoped relationship fks=%v want=%v", got, want)
 	}
 }
+
+func TestCanonicalizationRegistryConstraintNames(t *testing.T) {
+	want := []string{"research_artifact_version_schema_family_check"}
+	got := CanonicalizationRegistryConstraintNames()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(want, got) {
+		t.Fatalf("canonicalization registry constraints=%v want=%v", got, want)
+	}
+}

@@ -218,3 +218,10 @@ func ScopedRelationshipFKNames() []string {
 		"research_source_source_snapshot_scoped_fkey",
 	}
 }
+
+// CanonicalizationRegistryConstraintNames lists migration 327 schema-family checks.
+func CanonicalizationRegistryConstraintNames() []string {
+	return []string{
+		"research_artifact_version_schema_family_check",
+	}
+}

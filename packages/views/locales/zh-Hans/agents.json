@@ -433,6 +433,8 @@
       },
       "copy_command": "复制",
       "command_copied": "已复制",
+      "show_full_command": "显示完整命令",
+      "show_less_command": "收起",
       "view_diagnostics": "查看诊断详情",
       "hide_diagnostics": "收起诊断详情",
       "section_now": "当前",

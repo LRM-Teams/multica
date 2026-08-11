@@ -87,7 +87,7 @@ func (m ArtifactContextModule) PlanDispatchManifest(
 			omissions = append(omissions, candidate)
 			continue
 		}
-		candidate.Representation = "raw"
+		candidate.Representation = "full"
 		candidate.RepresentationBytes = []byte(candidate.ContentHash)
 		candidate.RepresentationHash = contentHashFromPayload(candidate.RepresentationBytes)
 		entries = append(entries, candidate)

@@ -42,7 +42,7 @@ func TestWithdrawnPassportExcludedFromDispatchManifestPlan(t *testing.T) {
 		  significance, confidence, status, goal_version, plan_version, resolution
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, 'withdrawn-claim', '', 'withdrawn claim',
-		  0.5, 0.5, 'proposed', 1, 1, ''
+		  'medium', 0.5, 'proposed', 1, 1, ''
 		)
 	`, claimID, fixture.workspaceID, run.SessionID); err != nil {
 		t.Fatalf("insert claim: %v", err)
@@ -51,7 +51,7 @@ func TestWithdrawnPassportExcludedFromDispatchManifestPlan(t *testing.T) {
 
 	if _, err = pool.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET lifecycle_status = 'withdrawn', updated_at = now()
+		SET lifecycle_status = 'withdrawn'
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, claimID); err != nil {
 		t.Fatalf("withdraw passport: %v", err)

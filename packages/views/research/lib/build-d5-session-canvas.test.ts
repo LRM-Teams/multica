@@ -49,7 +49,16 @@ describe("buildD5SessionCanvasModel", () => {
   it("stores pre-rebase layout for incremental reuse", () => {
     const first = buildD5SessionCanvasModel(fixture(), viewport, { rightPanelWidth: 0 })!;
     const second = buildD5SessionCanvasModel(
-      fixture([{ id: "probe", level: "s", node_type: "probe", title: "Probe", status: "running", parent_id: "stable" }]),
+      fixture([
+        {
+          id: "probe",
+          level: "s",
+          node_type: "probe",
+          title: "Probe",
+          status: "running",
+          parent_id: "stable",
+        } as TypedGraphResponse["nodes"][number],
+      ]),
       viewport,
       { rightPanelWidth: 0, previousLayout: first.layoutForNext },
     )!;

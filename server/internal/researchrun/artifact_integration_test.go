@@ -18,14 +18,14 @@ func TestHashManifestEntriesDeterministic(t *testing.T) {
 			ArtifactID:          "30000000-0000-4000-8000-000000000001",
 			Version:             1,
 			EligibilityRevision: 1,
-			Representation:      "raw",
+			Representation:      "full",
 			RepresentationHash:  "sha256:aaaa",
 		},
 		{
 			ArtifactID:          "30000000-0000-4000-8000-000000000002",
 			Version:             1,
 			EligibilityRevision: 1,
-			Representation:      "raw",
+			Representation:      "full",
 			RepresentationHash:  "sha256:bbbb",
 		},
 	}

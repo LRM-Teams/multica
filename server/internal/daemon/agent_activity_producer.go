@@ -73,6 +73,18 @@ func newAgentActivityProducer(daemonInstanceID string, now func() time.Time, sen
 	return &agentActivityProducer{daemonInstanceID: daemonInstanceID, now: now, newID: func() string { return uuid.NewString() }, send: send, states: make(map[agentActivityProducerKey]*agentActivityProducerState)}
 }
 
+// Close releases activity sequence and managed-launch state with the owning
+// Workspace Runner. Reconnects deliberately use DetachTransport instead.
+func (p *agentActivityProducer) Close() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.send = nil
+	p.states = nil
+	p.mu.Unlock()
+}
+
 func (p *agentActivityProducer) SetManaged(status protocol.AgentStatusPayload, session protocol.AgentSessionPayload) error {
 	if p == nil {
 		return errors.New("Activity producer is not configured")

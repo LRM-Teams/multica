@@ -58,6 +58,16 @@ func registerTestInbox(t *testing.T, d *Daemon, key InboxKey, runtimeID string, 
 	return runner
 }
 
+func installTestRunnerActivity(t *testing.T, d *Daemon, workspaceID string, producer *agentActivityProducer) *WorkspaceRunner {
+	t.Helper()
+	runner := d.currentWorkspaceRunner(workspaceID)
+	if runner == nil {
+		runner, _ = attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	}
+	runner.activity = producer
+	return runner
+}
+
 func registerTestRunnerInbox(t *testing.T, runner *WorkspaceRunner, key InboxKey, runtimeID string, coordinator *MessageCoordinator) {
 	t.Helper()
 	if runner == nil || runner.inboxes == nil {

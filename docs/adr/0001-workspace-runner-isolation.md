@@ -39,3 +39,8 @@ shutdown detaches it from lookup and closes only that Runner's coordinators.
 Legacy machine-local callers that have only an Agent ID can resolve exactly one
 current Inbox, but an absent or ambiguous result fails closed rather than
 selecting a Workspace.
+
+`AgentProcessManager` and `AgentActivityProducer` are likewise created once by
+the Runner and never indexed separately by the Daemon. A socket reconnect only
+replaces Activity transport, preserving launch identity and Activity sequence.
+Binding teardown releases that Runner's process, Activity, and Inbox state.

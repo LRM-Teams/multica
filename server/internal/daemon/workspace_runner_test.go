@@ -97,13 +97,18 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 }
 
 func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
-	d := New(Config{MaxAgentProcesses: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	first := d.workspaceAgentProcessManager("ws-1")
-	if got := d.workspaceAgentProcessManager("ws-1"); got != first {
-		t.Fatal("same Workspace Runner did not retain its process manager")
+	d := New(Config{DaemonID: "daemon-1", MaxAgentProcesses: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	firstRunner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
 	}
-	second := d.workspaceAgentProcessManager("ws-2")
-	if second == first {
+	secondRunner, err := d.newWorkspaceRunner("ws-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := firstRunner.processes
+	second := secondRunner.processes
+	if first == nil || second == nil || second == first {
 		t.Fatal("different Workspace Runners unexpectedly share a process manager")
 	}
 	firstAck, err := first.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"})

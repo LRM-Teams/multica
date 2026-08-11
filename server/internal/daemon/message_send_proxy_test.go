@@ -120,7 +120,7 @@ func TestObserveMessageSendHoldPublishesSystemActivityEntry(t *testing.T) {
 
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-instance-1"
-	d.agentActivityProducers["workspace-1"] = producer
+	installTestRunnerActivity(t, d, "workspace-1", producer)
 
 	d.observeMessageSendHold("agent-a", "workspace-1", "#general", 3, "server_race")
 	if len(sent) != 1 {

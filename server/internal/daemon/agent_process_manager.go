@@ -114,6 +114,21 @@ func newAgentProcessManager(processCap int, now func() time.Time, onTransition f
 	}
 }
 
+// Close releases only this Runner's in-memory launch state when its Binding is
+// removed. It never reaches across Workspace boundaries or synthesizes a stop
+// command on a replacement Runner.
+func (m *agentProcessManager) Close() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.agents = nil
+	m.dispatches = nil
+	m.queued = nil
+	m.running = 0
+	m.mu.Unlock()
+}
+
 func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.AgentStartAckPayload, error) {
 	if err := validateAgentProcessStartRequest(request); err != nil {
 		return protocol.AgentStartAckPayload{}, err

@@ -117,6 +117,8 @@ func (runner *WorkspaceRunner) Run(ctx context.Context) {
 	defer func() {
 		runner.daemon.detachWorkspaceRunner(runner)
 		runner.inboxes.Close()
+		runner.processes.Close()
+		runner.activity.Close()
 	}()
 	backoff := time.Second
 	for ctx.Err() == nil {

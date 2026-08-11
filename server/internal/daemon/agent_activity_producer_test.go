@@ -232,14 +232,14 @@ func TestMessageHandoffEstablishesResidentManagedLaunchBeforeActivity(t *testing
 	})
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-instance-1"
-	d.agentActivityProducers["workspace-1"] = producer
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
 	var frames []string
-	attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, _ any) error {
+	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, _ any) error {
 		frames = append(frames, eventType)
 		return nil
 	})
+	runner.activity = producer
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestResidentRuntimeEventsPublishRaftActivityLifecycle(t *testing.T) {
 	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-1"
-	d.agentActivityProducers["workspace-1"] = producer
+	installTestRunnerActivity(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 
 	for _, message := range []agent.Message{
@@ -324,7 +324,7 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
 	d.runnerInstanceID = "daemon-1"
-	d.agentActivityProducers["workspace-1"] = producer
+	installTestRunnerActivity(t, d, "workspace-1", producer)
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
 	d.canonicalRuntimes.slots["agent-a\x00runtime-1"] = &canonicalAgentRuntimeSlot{
 		mode:    canonicalRuntimeResident,
@@ -358,7 +358,7 @@ func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
 	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
-	d.agentActivityProducers["workspace-1"] = producer
+	installTestRunnerActivity(t, d, "workspace-1", producer)
 	d.publishTaskRunnerActivity(Task{ID: "task-1", AgentID: "agent-a", WorkspaceID: "workspace-1"}, protocol.ActivityKindWorking, "running_command", "Running command")
 	if len(sent) != 1 {
 		t.Fatalf("sent = %d, want 1", len(sent))
@@ -381,8 +381,8 @@ func TestTaskFailurePublishesRunnerErrorWithoutRawFailureText(t *testing.T) {
 	producer := newAgentActivityProducer("daemon-1", time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
 	installActivityProducerAgent(t, producer)
 	d := New(Config{}, nil)
-	d.agentActivityProducers["workspace-1"] = producer
 	d.runnerInstanceID = "daemon-1"
+	installTestRunnerActivity(t, d, "workspace-1", producer)
 
 	d.reportTaskFailure(context.Background(), Task{ID: "task-1", AgentID: "agent-a", WorkspaceID: "workspace-1"}, "sensitive provider failure", "", "", "provider_error", slog.Default())
 

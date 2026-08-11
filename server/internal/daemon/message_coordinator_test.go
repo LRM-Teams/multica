@@ -320,7 +320,7 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	if _, err := d.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
 		t.Fatal(err)
 	}
-	attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, func(string, any) error { return nil })
 	backend := &sequencedResidentMessageRuntime{accepted: make(chan chan error, 2)}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
@@ -328,7 +328,7 @@ func TestResidentMessageTurnCompletionDoesNotAutoHandoffPending(t *testing.T) {
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensure coordinator: %v", err)
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	producer := runner.activity
 	activities := make(chan protocol.AgentActivityPayload, 8)
 	producer.AttachTransport(func(activity protocol.AgentActivityPayload) { activities <- activity })
 	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})

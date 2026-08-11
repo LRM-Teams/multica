@@ -107,8 +107,6 @@ type Daemon struct {
 	agentProxyCredentials  map[[32]byte]authenticatedAgentProxy
 	messageSendMu          sync.Mutex
 	messageSends           map[string]int
-	agentProcessManagers   map[string]*agentProcessManager
-	agentActivityProducers map[string]*agentActivityProducer
 	workspaceRunnerMu      sync.RWMutex
 	workspaceRunners       map[string]*WorkspaceRunner
 	lifecycleDiagnostics   *lifecycleDiagnosticWriter
@@ -396,8 +394,6 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		activeCurationRuns:        make(map[string]string),
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
 		messageDraftStore:         NewMessageDraftStore(cfg.WorkspacesRoot),
-		agentProcessManagers:      make(map[string]*agentProcessManager),
-		agentActivityProducers:    make(map[string]*agentActivityProducer),
 		workspaceRunners:          make(map[string]*WorkspaceRunner),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		machineUpgradeGeneration:  uuid.NewString(),
@@ -4625,12 +4621,11 @@ func (d *Daemon) publishTaskRunnerActivity(task Task, activityKind, detailKind, 
 	if d == nil || task.AgentID == "" || task.WorkspaceID == "" {
 		return
 	}
-	d.mu.Lock()
-	producer := d.agentActivityProducers[task.WorkspaceID]
-	d.mu.Unlock()
-	if producer == nil {
+	runner, err := d.ensureWorkspaceRunner(task.WorkspaceID)
+	if err != nil || runner.activity == nil {
 		return
 	}
+	producer := runner.activity
 	var entries []protocol.AgentActivityEntry
 	if narrative != "" {
 		entry, err := activityNarrativeEntry(activityKind, detailKind, narrative)

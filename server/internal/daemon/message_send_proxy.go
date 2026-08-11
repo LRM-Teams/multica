@@ -421,7 +421,11 @@ func (d *Daemon) observeMessageSendHold(agentID, workspaceID, target string, new
 	if err != nil {
 		return
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
+		return
+	}
+	producer := runner.activity
 	if err := producer.PublishHoldEntry(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
 		d.logger.Debug("send-hold Runner Activity publish deferred", "error", err, "agent_id", agentID, "target", target)
 	}

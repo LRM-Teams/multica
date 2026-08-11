@@ -288,7 +288,11 @@ func (d *Daemon) emitMessageLifecycleActivity(agentID, runtimeID, activityKind, 
 	if err != nil {
 		return
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
+		return
+	}
+	producer := runner.activity
 	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner Message lifecycle Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
@@ -334,7 +338,11 @@ func (d *Daemon) emitResidentMessageRuntimeActivity(agentID, runtimeID string, m
 		}
 		entries = []protocol.AgentActivityEntry{entry}
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
+		return
+	}
+	producer := runner.activity
 	if err := producer.PublishForManagedAgent(agentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner resident runtime Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
@@ -354,7 +362,11 @@ func (d *Daemon) emitResidentRuntimeDiagnostic(agentID, runtimeID string, messag
 	if err != nil {
 		return
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
+		return
+	}
+	producer := runner.activity
 	if err := producer.PublishEntryForManagedAgent(agentID, d.runnerInstanceID, []protocol.AgentActivityEntry{entry}); err != nil && d.logger != nil {
 		d.logger.Debug("workspace Runner runtime diagnostic Activity publish deferred", "error", err, "agent_id", agentID, "runtime_id", runtimeID)
 	}
@@ -367,7 +379,11 @@ func (d *Daemon) emitMessageTurnCompletionActivity(agentID, runtimeID string, tu
 	if workspaceID == "" {
 		return
 	}
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
+		return
+	}
+	producer := runner.activity
 	activityKind, detailKind, narrative := protocol.ActivityKindOnline, "idle", "Idle"
 	if turnErr != nil {
 		activityKind, detailKind, narrative = protocol.ActivityKindError, "runtime_error", runtimeErrorNarrative(turnErr.Error())
@@ -410,7 +426,11 @@ func (d *Daemon) emitMessageReceivedActivity(agentID, runtimeID string, messages
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
 	if workspaceID != "" {
-		producer := d.workspaceAgentActivityProducer(workspaceID)
+		runner, err := d.ensureWorkspaceRunner(workspaceID)
+		if err != nil || runner.activity == nil {
+			return
+		}
+		producer := runner.activity
 		status, session, created, manageErr := producer.EnsureManagedAgent(agentID)
 		if manageErr == nil && created {
 			// Status must cross the same serialized Runner writer before Activity

@@ -60,43 +60,6 @@ func (d *Daemon) workspaceRunnerWorkspaceIDs() []string {
 	return ids
 }
 
-// workspaceAgentProcessManager returns the sole lifecycle owner for one
-// Workspace Runner. Managers must not cross Workspace boundaries: their queue,
-// launch identities, process-cap accounting, and stale callbacks are local to
-// this Runner connection scope.
-func (d *Daemon) workspaceAgentProcessManager(workspaceID string) *agentProcessManager {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if manager := d.agentProcessManagers[workspaceID]; manager != nil {
-		return manager
-	}
-	manager := newAgentProcessManager(d.cfg.MaxAgentProcesses, time.Now, func(transition agentLifecycleTransition) {
-		if d.lifecycleDiagnostics == nil {
-			return
-		}
-		if err := d.lifecycleDiagnostics.Record(transition); err != nil && d.logger != nil {
-			// Local diagnostics are intentionally non-blocking for lifecycle.
-			d.logger.Debug("agent lifecycle diagnostic write failed", "error", err)
-		}
-	})
-	d.agentProcessManagers[workspaceID] = manager
-	return manager
-}
-
-func (d *Daemon) workspaceAgentActivityProducer(workspaceID string) *agentActivityProducer {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.agentActivityProducers == nil {
-		d.agentActivityProducers = make(map[string]*agentActivityProducer)
-	}
-	if producer := d.agentActivityProducers[workspaceID]; producer != nil {
-		return producer
-	}
-	producer := newAgentActivityProducer(d.runnerInstanceID, time.Now, nil)
-	d.agentActivityProducers[workspaceID] = producer
-	return producer
-}
-
 func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnection, conn *websocket.Conn) error {
 	d := runner.daemon
 	workspaceID := connection.workspaceID
@@ -117,7 +80,10 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			failConnection(err)
 		}
 	})
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	producer := runner.activity
+	if producer == nil || runner.processes == nil {
+		return errors.New("workspace Runner lifecycle owners are unavailable")
+	}
 	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && d.logger != nil {
 			d.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
@@ -169,7 +135,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !d.ownsWorkspaceRunnerRuntime(workspaceID, start.RuntimeID) {
 				continue
 			}
-			ack, err := d.workspaceAgentProcessManager(workspaceID).Start(agentProcessStartRequest{AgentID: start.AgentID, RuntimeID: start.RuntimeID, StartDispatchID: start.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
+			ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: start.AgentID, RuntimeID: start.RuntimeID, StartDispatchID: start.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
 			if err != nil {
 				continue
 			}
@@ -203,7 +169,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
 				continue
 			}
-			if err := d.workspaceAgentProcessManager(workspaceID).Stop(agentProcessCallback{AgentID: stop.AgentID, LaunchID: stop.LaunchID}); err != nil {
+			if err := runner.processes.Stop(agentProcessCallback{AgentID: stop.AgentID, LaunchID: stop.LaunchID}); err != nil {
 				continue
 			}
 			if entry, err := activityNarrativeEntry(protocol.ActivityKindOffline, "stopped", "Stopped"); err == nil {

@@ -39,7 +39,7 @@ execution roots and can run in parallel up to its concurrency cap.
 
 Use `worker_mode: derived_agent` only when the node needs strong identity or
 memory isolation: independent candidate implementations, blind/adversarial
-  review, replication, or experiments
+review, replication, or experiments
 whose observations must not mutate the source Agent. A derived node requires a
 concrete `clone_reason`. It copies approved configuration and skills plus a
 point-in-time memory snapshot, inherits no credentials or sessions, writes no
@@ -47,10 +47,37 @@ memory back to the source automatically, and remains available for review
 rework until its child Issue becomes `done` or `cancelled`, when it is archived.
 Ordinary parallelism stays `reuse_agent` (the default).
 
-Goal Graph nodes are stricter. A successful task or an Issue status is not
-completion. Workers must register a durable artifact; verifier nodes must also
-submit PASS evidence. Only kernel `effective_completion=satisfied` unlocks the
-next frontier. Do not manually promote graph-managed Issues.
+Goal Graph nodes are stricter. Every executable Goal Graph must include at
+least one verifier. A successful task, an Issue status, or a self-written
+`review_status` is not completion. A worker must register a durable immutable
+artifact revision, then every required direct verifier must submit a structured
+verdict for that exact latest revision. Only kernel
+`effective_completion=satisfied` unlocks ordinary downstream work and allows
+the Goal to close. A verifier is the one exception to ordinary dependency
+readiness: it starts after its single producer has succeeded with a valid
+artifact, while that producer remains pending review. Do not manually promote
+graph-managed Issues.
+
+The verifier must be a different canonical Agent from the producer. Reusing
+the same Agent through one of its derived identities is still self-review and
+the server rejects the Graph. Every verifier run uses a fresh provider session.
+For an ordinary trusted reviewer, use `worker_mode: reuse_agent`; its durable
+Agent identity remains but no prior Issue session is resumed. For blind,
+adversarial, sealed, or replication review, use
+`worker_mode: derived_agent` with a concrete `clone_reason`. A Goal reviewer
+clone copies the approved reviewer profile, runtime/model, instructions, and
+skills, but copies no Agent memory, credentials, custom environment/arguments,
+MCP configuration, or provider session. The kernel archives that clone after a
+terminal PASS or FAIL and creates another clean clone if a new artifact needs
+review. `BLOCKED` retains the reviewer so it can resume after the external
+blocker clears.
+
+`PASS` satisfies the verifier and its producer, closes both managed Issues,
+and wakes the Goal coordinator with a Graph Delta. `FAIL` records findings and
+evidence, invalidates approval, returns the producer Issue to `todo`, wakes the
+worker for rework, and wakes the coordinator. `BLOCKED` keeps both sides gated.
+Register rework as a new artifact revision; prior verification attempts become
+stale automatically.
 After delegating a bounded deliverable, the planner coordinates and integrates
 it rather than implementing the same deliverable again.
 
@@ -59,6 +86,10 @@ Each plan node requires `temp_id`, `role`, and either an existing backlog
 `objective`, `completion_contract`, `context_policy`, `depends_on`, and `budget`.
 The Goal Graph plan root supplies `anchor_kind: channel_goal`, the Goal ID as
 `anchor_id`, `admission_decision: GRAPH`, `reason`, and optional `budget_policy`.
+Each verifier has exactly one non-verifier `depends_on` target. Use an
+incremental graph revision for genuinely new work. Unchanged accepted nodes
+retain their satisfied state; changed nodes and their descendants are re-opened
+and their old evidence becomes stale.
 
 For a logically continuous Goal, operate bounded epochs:
 

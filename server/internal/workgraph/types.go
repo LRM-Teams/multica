@@ -50,6 +50,8 @@ type NodeSpec struct {
 	CompletionContract []string        `json:"completion_contract,omitempty"`
 	DependsOn          []string        `json:"depends_on,omitempty"`
 	Budget             json.RawMessage `json:"budget,omitempty"`
+	WorkerMode         string          `json:"worker_mode,omitempty"`
+	CloneReason        string          `json:"clone_reason,omitempty"`
 }
 
 type CreateInput struct {
@@ -181,6 +183,7 @@ type VerificationInput struct {
 	Verdict            string          `json:"verdict"`
 	Findings           json.RawMessage `json:"findings,omitempty"`
 	EvidenceRefs       json.RawMessage `json:"evidence_refs,omitempty"`
+	ReviewerAgentID    string          `json:"-"`
 }
 
 type ReviseInput struct {

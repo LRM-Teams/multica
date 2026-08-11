@@ -529,6 +529,14 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 	return s.enqueueIssueTask(ctx, issue, commentID, false)
 }
 
+// EnqueueFreshTaskForIssue dispatches an issue without resuming any prior
+// provider session. Work Graph verifier nodes use this boundary so review
+// starts from the server-authored evidence envelope, not a previous task's
+// conversational context.
+func (s *TaskService) EnqueueFreshTaskForIssue(ctx context.Context, issue db.Issue) (db.AgentInboxEvent, error) {
+	return s.enqueueIssueTask(ctx, issue, pgtype.UUID{}, true)
+}
+
 // enqueueIssueTask is the shared implementation behind EnqueueTaskForIssue
 // and the manual rerun path. forceFreshSession=true marks the task so the
 // daemon claim handler skips the (agent_id, issue_id) resume lookup — the

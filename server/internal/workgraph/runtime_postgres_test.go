@@ -2,6 +2,7 @@ package workgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -16,17 +17,21 @@ func TestCreateGraphAtomicallyCreatesIssuesAndSchedulesOnlyRoots(t *testing.T) {
 	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id=$1`, workspace) })
 	runtimeID := pgUUID(uuid.New())
 	agentID := pgUUID(uuid.New())
+	reviewerID := pgUUID(uuid.New())
 	if _, err := testPool.Exec(ctx, `INSERT INTO agent_runtime(id,workspace_id,name,runtime_mode,provider,metadata) VALUES($1,$2,$3,'local','test','{}')`, runtimeID, workspace, "runtime-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model) VALUES($1,$2,$3,'Worker','local','{}',$4,'composer-1.5')`, agentID, workspace, "agent-"+uuid.NewString(), runtimeID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model) VALUES($1,$2,$3,'Reviewer','local','{}',$4,'composer-1.5')`, reviewerID, workspace, "reviewer-"+uuid.NewString(), runtimeID); err != nil {
+		t.Fatal(err)
+	}
 	anchor := createGoalAnchor(t, ctx, workspace, agentID)
 	if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_counter=1 WHERE id=$1`, workspace); err != nil {
 		t.Fatal(err)
 	}
-	in := CreateInput{WorkspaceID: uuidToTestString(workspace), AnchorKind: AnchorChannelGoal, AnchorID: uuidToTestString(anchor), Admission: AdmissionGraph, Reason: "parallel and verify", ActorType: "agent", ActorID: uuidToTestString(agentID), IdempotencyKey: uuid.NewString(), Nodes: []NodeSpec{{TempID: "build", Title: "Build", AssigneeID: uuidToTestString(agentID), Role: "worker", CompletionContract: []string{"tests pass"}}, {TempID: "verify", Title: "Verify", AssigneeID: uuidToTestString(agentID), Role: "verifier", ContextPolicy: "blind", DependsOn: []string{"build"}}}}
+	in := CreateInput{WorkspaceID: uuidToTestString(workspace), AnchorKind: AnchorChannelGoal, AnchorID: uuidToTestString(anchor), Admission: AdmissionGraph, Reason: "parallel and verify", ActorType: "agent", ActorID: uuidToTestString(agentID), IdempotencyKey: uuid.NewString(), Nodes: []NodeSpec{{TempID: "build", Title: "Build", AssigneeID: uuidToTestString(agentID), Role: "worker", CompletionContract: []string{"tests pass"}}, {TempID: "verify", Title: "Verify", AssigneeID: uuidToTestString(reviewerID), Role: "verifier", ContextPolicy: "blind", DependsOn: []string{"build"}}}}
 	store := NewStore(testPool)
 	result, err := store.Create(ctx, in)
 	if err != nil {
@@ -87,10 +92,14 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id=$1`, workspace) })
 	runtimeID := pgUUID(uuid.New())
 	agentID := pgUUID(uuid.New())
+	reviewerID := pgUUID(uuid.New())
 	if _, err := testPool.Exec(ctx, `INSERT INTO agent_runtime(id,workspace_id,name,runtime_mode,provider,metadata) VALUES($1,$2,$3,'local','test','{}')`, runtimeID, workspace, "runtime-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model) VALUES($1,$2,$3,'Worker','local','{}',$4,'composer-1.5')`, agentID, workspace, "agent-"+uuid.NewString(), runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model) VALUES($1,$2,$3,'Reviewer','local','{}',$4,'composer-1.5')`, reviewerID, workspace, "reviewer-"+uuid.NewString(), runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	anchorA := createGoalAnchor(t, ctx, workspace, agentID)
@@ -109,7 +118,7 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 			IdempotencyKey: uuid.NewString(),
 			Nodes: []NodeSpec{
 				{TempID: "first", Title: prefix + " first", AssigneeID: uuidToTestString(agentID), Role: "worker", CompletionContract: []string{"old contract"}},
-				{TempID: "second", Title: prefix + " second", AssigneeID: uuidToTestString(agentID), Role: "verifier", DependsOn: []string{"first"}},
+				{TempID: "second", Title: prefix + " second", AssigneeID: uuidToTestString(reviewerID), Role: "verifier", DependsOn: []string{"first"}},
 			},
 		})
 		if err != nil {
@@ -120,7 +129,7 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 	graphA := create(anchorA, "A")
 	graphB := create(anchorB, "B")
 
-	if _, err := testPool.Exec(ctx, `UPDATE work_graph_node SET execution_status='succeeded' WHERE id=$1::uuid`, graphA.NodeIDs["second"]); err != nil {
+	if _, err := testPool.Exec(ctx, `UPDATE work_graph_node SET execution_status='succeeded',review_status='accepted',effective_completion='satisfied' WHERE id=$1::uuid`, graphA.NodeIDs["second"]); err != nil {
 		t.Fatal(err)
 	}
 	revised, err := store.Revise(ctx, ReviseInput{
@@ -128,8 +137,8 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 		ExpectedGraphVersion: 1, Reason: "change contract and dependencies",
 		ActorType: "agent", ActorID: uuidToTestString(agentID),
 		Nodes: []NodeSpec{
-			{TempID: "first", IssueID: graphA.IssueIDs["first"], Role: "worker", CompletionContract: []string{"new contract"}},
 			{TempID: "second", IssueID: graphA.IssueIDs["second"], Role: "verifier", DependsOn: []string{"first"}},
+			{TempID: "first", IssueID: graphA.IssueIDs["first"], Role: "worker", CompletionContract: []string{"new contract"}},
 		},
 	})
 	if err != nil {
@@ -144,6 +153,39 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 	}
 	if got := byIssue[graphA.IssueIDs["second"]]; got.ExecutionStatus != "queued" || got.ReviewStatus != "unreviewed" {
 		t.Fatalf("revised dependent node=%#v", got)
+	}
+
+	// Adding an unrelated reviewed lane must not erase already accepted work
+	// from the current plan. Revisions carry terminal state forward only when
+	// the node contract and all of its upstream semantics are unchanged.
+	if _, err = testPool.Exec(ctx, `UPDATE work_graph_node SET execution_status='succeeded',review_status='accepted',effective_completion='satisfied' WHERE id=ANY($1::uuid[])`, []string{graphA.NodeIDs["first"], graphA.NodeIDs["second"]}); err != nil {
+		t.Fatal(err)
+	}
+	thirdIssue := createWorkgraphIssue(t, ctx, workspace, agentID, 1001, "A third", "backlog")
+	fourthIssue := createWorkgraphIssue(t, ctx, workspace, reviewerID, 1002, "A fourth", "backlog")
+	revised, err = store.Revise(ctx, ReviseInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: graphA.Graph.ID,
+		ExpectedGraphVersion: 2, Reason: "add an unrelated reviewed lane",
+		ActorType: "agent", ActorID: uuidToTestString(agentID),
+		Nodes: []NodeSpec{
+			{TempID: "third", IssueID: uuidToTestString(thirdIssue.ID), Role: "worker", CompletionContract: []string{"new output"}},
+			{TempID: "fourth", IssueID: uuidToTestString(fourthIssue.ID), Role: "verifier", DependsOn: []string{"third"}},
+			{TempID: "second", IssueID: graphA.IssueIDs["second"], Role: "verifier", DependsOn: []string{"first"}},
+			{TempID: "first", IssueID: graphA.IssueIDs["first"], Role: "worker", CompletionContract: []string{"new contract"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byIssue = map[string]Node{}
+	for _, node := range revised.Nodes {
+		byIssue[node.IssueID] = node
+	}
+	if byIssue[graphA.IssueIDs["first"]].EffectiveCompletion != "satisfied" || byIssue[graphA.IssueIDs["second"]].EffectiveCompletion != "satisfied" {
+		t.Fatalf("unrelated revision revoked accepted nodes: first=%#v second=%#v", byIssue[graphA.IssueIDs["first"]], byIssue[graphA.IssueIDs["second"]])
+	}
+	if byIssue[uuidToTestString(thirdIssue.ID)].ExecutionStatus != "ready" || byIssue[uuidToTestString(fourthIssue.ID)].ExecutionStatus != "queued" {
+		t.Fatalf("new lane frontier incorrect: third=%#v fourth=%#v", byIssue[uuidToTestString(thirdIssue.ID)], byIssue[uuidToTestString(fourthIssue.ID)])
 	}
 
 	if _, err = store.AddArtifact(ctx, ArtifactInput{
@@ -162,7 +204,7 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 	if _, err = store.AddVerification(ctx, VerificationInput{
 		WorkspaceID: uuidToTestString(workspace), GraphID: graphA.Graph.ID,
 		VerifierNodeID: graphB.NodeIDs["second"], ArtifactRevisionID: artifact.ID,
-		ScopeDigest: uuid.NewString(), Verdict: "PASS",
+		ScopeDigest: uuid.NewString(), Verdict: "PASS", ReviewerAgentID: uuidToTestString(reviewerID),
 	}); !errors.Is(err, ErrInvalidGraph) {
 		t.Fatalf("cross-graph verification err=%v, want ErrInvalidGraph", err)
 	}
@@ -176,6 +218,162 @@ func TestRevisionAndGraphScopedWritesPreserveRuntimeConsistency(t *testing.T) {
 	}
 	if validity != "valid" {
 		t.Fatalf("cross-graph invalidation changed validity to %q", validity)
+	}
+}
+
+func TestIndependentReviewGatePassReworkAndReviewerRecycle(t *testing.T) {
+	ctx := t.Context()
+	workspace := pgUUID(uuid.New())
+	createWorkgraphWorkspace(t, ctx, workspace)
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id=$1`, workspace) })
+	runtimeID, workerID, reviewerProfileID := pgUUID(uuid.New()), pgUUID(uuid.New()), pgUUID(uuid.New())
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent_runtime(id,workspace_id,name,runtime_mode,provider,metadata) VALUES($1,$2,$3,'local','test','{}')`, runtimeID, workspace, "runtime-"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model,custom_env,custom_args,mcp_config) VALUES($1,$2,$3,'Worker','local','{}',$4,'composer-1.5','{"WORKER_SECRET":"not-for-review"}','["--worker-private"]','{"private":true}')`, workerID, workspace, "worker-"+uuid.NewString(), runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent(id,workspace_id,name,display_name,runtime_mode,runtime_config,runtime_id,model,custom_env,custom_args,mcp_config) VALUES($1,$2,$3,'Reviewer','local','{}',$4,'composer-1.5','{"REVIEW_SECRET":"not-cloned"}','["--review-private"]','{"private":true}')`, reviewerProfileID, workspace, "reviewer-"+uuid.NewString(), runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	anchor := createGoalAnchor(t, ctx, workspace, workerID)
+	store := NewStore(testPool)
+	ready := []string{}
+	store.OnNodesReady = func(_ context.Context, _ string, issueIDs []string) { ready = append(ready, issueIDs...) }
+	created, err := store.Create(ctx, CreateInput{
+		WorkspaceID: uuidToTestString(workspace), AnchorKind: AnchorChannelGoal, AnchorID: uuidToTestString(anchor),
+		Admission: AdmissionGraph, Reason: "implement then independently review", ActorType: "agent", ActorID: uuidToTestString(workerID), IdempotencyKey: uuid.NewString(),
+		Nodes: []NodeSpec{
+			{TempID: "work", Title: "Implement", AssigneeID: uuidToTestString(workerID), Role: "worker", CompletionContract: []string{"tests pass"}},
+			{TempID: "review", Title: "Review", AssigneeID: uuidToTestString(reviewerProfileID), Role: "verifier", ContextPolicy: "blind", WorkerMode: WorkerModeDerivedAgent, CloneReason: "clean-context independent review", DependsOn: []string{"work"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var derivedReviewer, sourceReviewer string
+	var customEnv, customArgs, mcpConfig []byte
+	if err = testPool.QueryRow(ctx, `SELECT item.assignee_id::text,agent.source_agent_id::text,agent.custom_env,agent.custom_args,agent.mcp_config
+		FROM issue item JOIN agent ON agent.id=item.assignee_id WHERE item.id=$1::uuid`, created.IssueIDs["review"]).Scan(&derivedReviewer, &sourceReviewer, &customEnv, &customArgs, &mcpConfig); err != nil {
+		t.Fatal(err)
+	}
+	if derivedReviewer == uuidToTestString(reviewerProfileID) || sourceReviewer != uuidToTestString(reviewerProfileID) {
+		t.Fatalf("review clone=%q source=%q", derivedReviewer, sourceReviewer)
+	}
+	if string(customEnv) != `{}` || string(customArgs) != `[]` || len(mcpConfig) != 0 {
+		t.Fatalf("review clone inherited private config: env=%s args=%s mcp=%s", customEnv, customArgs, mcpConfig)
+	}
+
+	artifact, err := store.AddArtifact(ctx, ArtifactInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: created.Graph.ID, ProducerNodeID: created.NodeIDs["work"],
+		Digest: uuid.NewString(), Kind: "patch", Locator: "artifact://review-gate/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.CompleteIssueNode(ctx, uuidToTestString(workspace), created.IssueIDs["work"]); err != nil {
+		t.Fatal(err)
+	}
+	var producerCompletion string
+	if err = testPool.QueryRow(ctx, `SELECT effective_completion FROM work_graph_node WHERE id=$1::uuid`, created.NodeIDs["work"]).Scan(&producerCompletion); err != nil {
+		t.Fatal(err)
+	}
+	if producerCompletion != "pending" {
+		t.Fatalf("producer completion before review=%q, want pending", producerCompletion)
+	}
+	if _, err = store.AddVerification(ctx, VerificationInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: created.Graph.ID, VerifierNodeID: created.NodeIDs["review"],
+		ArtifactRevisionID: artifact.ID, ReviewerAgentID: uuidToTestString(reviewerProfileID), ScopeDigest: uuid.NewString(), Verdict: "PASS",
+	}); !errors.Is(err, ErrInvalidGraph) {
+		t.Fatalf("unassigned reviewer err=%v, want ErrInvalidGraph", err)
+	}
+	if _, err = store.AddVerification(ctx, VerificationInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: created.Graph.ID, VerifierNodeID: created.NodeIDs["review"],
+		ArtifactRevisionID: artifact.ID, ReviewerAgentID: derivedReviewer, ScopeDigest: uuid.NewString(), Verdict: "BLOCKED",
+		Findings: json.RawMessage(`["waiting for external fixture"]`), EvidenceRefs: json.RawMessage(`[]`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ReconcileReady(ctx, uuidToTestString(workspace), created.Graph.ID); err != nil {
+		t.Fatal(err)
+	}
+	var blockedExecution string
+	if err = testPool.QueryRow(ctx, `SELECT execution_status FROM work_graph_node WHERE id=$1::uuid`, created.NodeIDs["review"]).Scan(&blockedExecution); err != nil {
+		t.Fatal(err)
+	}
+	if blockedExecution != "waiting" {
+		t.Fatalf("blocked reviewer execution=%q, want waiting", blockedExecution)
+	}
+	if _, err = store.AddVerification(ctx, VerificationInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: created.Graph.ID, VerifierNodeID: created.NodeIDs["review"],
+		ArtifactRevisionID: artifact.ID, ReviewerAgentID: derivedReviewer, ScopeDigest: uuid.NewString(), Verdict: "PASS",
+		Findings: json.RawMessage(`[]`), EvidenceRefs: json.RawMessage(`["test://pass"]`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var verifierCompletion, producerIssueStatus string
+	var archived bool
+	if err = testPool.QueryRow(ctx, `SELECT effective_completion FROM work_graph_node WHERE id=$1::uuid`, created.NodeIDs["work"]).Scan(&producerCompletion); err != nil {
+		t.Fatal(err)
+	}
+	if err = testPool.QueryRow(ctx, `SELECT effective_completion FROM work_graph_node WHERE id=$1::uuid`, created.NodeIDs["review"]).Scan(&verifierCompletion); err != nil {
+		t.Fatal(err)
+	}
+	if err = testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id=$1::uuid`, created.IssueIDs["work"]).Scan(&producerIssueStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err = testPool.QueryRow(ctx, `SELECT archived_at IS NOT NULL FROM agent WHERE id=$1::uuid`, derivedReviewer).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if producerCompletion != "satisfied" || verifierCompletion != "satisfied" || producerIssueStatus != "done" || !archived {
+		t.Fatalf("pass gate producer=%q verifier=%q issue=%q archived=%v", producerCompletion, verifierCompletion, producerIssueStatus, archived)
+	}
+	if _, err = store.AddVerification(ctx, VerificationInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: created.Graph.ID, VerifierNodeID: created.NodeIDs["review"],
+		ArtifactRevisionID: artifact.ID, ReviewerAgentID: derivedReviewer, ScopeDigest: uuid.NewString(), Verdict: "PASS",
+	}); !errors.Is(err, ErrInvalidGraph) {
+		t.Fatalf("terminal review replay err=%v, want ErrInvalidGraph", err)
+	}
+
+	second, err := store.AddArtifact(ctx, ArtifactInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: created.Graph.ID, ProducerNodeID: created.NodeIDs["work"], ArtifactID: artifact.ArtifactID,
+		Digest: uuid.NewString(), Kind: "patch", Locator: "artifact://review-gate/v2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var secondReviewer string
+	if err = testPool.QueryRow(ctx, `SELECT assignee_id::text FROM issue WHERE id=$1::uuid`, created.IssueIDs["review"]).Scan(&secondReviewer); err != nil {
+		t.Fatal(err)
+	}
+	if secondReviewer == derivedReviewer {
+		t.Fatal("new artifact reused archived review identity")
+	}
+	if _, err = store.AddVerification(ctx, VerificationInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: created.Graph.ID, VerifierNodeID: created.NodeIDs["review"],
+		ArtifactRevisionID: second.ID, ReviewerAgentID: secondReviewer, ScopeDigest: uuid.NewString(), Verdict: "FAIL",
+		Findings: json.RawMessage(`["missing regression test"]`), EvidenceRefs: json.RawMessage(`["test://failure"]`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var execution, rejectedArtifactValidity string
+	if err = testPool.QueryRow(ctx, `SELECT execution_status,effective_completion FROM work_graph_node WHERE id=$1::uuid`, created.NodeIDs["work"]).Scan(&execution, &producerCompletion); err != nil {
+		t.Fatal(err)
+	}
+	if err = testPool.QueryRow(ctx, `SELECT validity_status FROM work_artifact_revision WHERE id=$1::uuid`, second.ID).Scan(&rejectedArtifactValidity); err != nil {
+		t.Fatal(err)
+	}
+	if err = testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id=$1::uuid`, created.IssueIDs["work"]).Scan(&producerIssueStatus); err != nil {
+		t.Fatal(err)
+	}
+	if execution != "ready" || producerCompletion != "pending" || producerIssueStatus != "todo" || rejectedArtifactValidity != "stale" {
+		t.Fatalf("rework gate execution=%q completion=%q issue=%q artifact=%q ready=%v", execution, producerCompletion, producerIssueStatus, rejectedArtifactValidity, ready)
+	}
+	if _, err = store.AddVerification(ctx, VerificationInput{
+		WorkspaceID: uuidToTestString(workspace), GraphID: created.Graph.ID, VerifierNodeID: created.NodeIDs["review"],
+		ArtifactRevisionID: second.ID, ReviewerAgentID: secondReviewer, ScopeDigest: uuid.NewString(), Verdict: "PASS",
+	}); !errors.Is(err, ErrInvalidGraph) {
+		t.Fatalf("rejected artifact reused err=%v, want ErrInvalidGraph", err)
 	}
 }
 

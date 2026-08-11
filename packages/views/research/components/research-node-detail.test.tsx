@@ -144,7 +144,14 @@ vi.mock("@multica/ui/components/ui/sheet", () => ({
   SheetDescription: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
 }));
 
-const node: ResearchGraphNode = {
+const node: ResearchGraphNode & {
+  content: {
+    goal: string;
+    operation_approach: string;
+    research_approach: string;
+    result: string;
+  };
+} = {
   id: "n1",
   session_id: "s1",
   node_type: "finding",
@@ -153,6 +160,12 @@ const node: ResearchGraphNode = {
   status: "done",
   actor_agent_id: null,
   payload: { confidence: 0.82, source_id: "src1" },
+  content: {
+    goal: "",
+    operation_approach: "",
+    research_approach: "",
+    result: "挂牌中位价与成交价差约 8%。",
+  },
   created_at: "2026-07-06T09:00:00Z",
   updated_at: "2026-07-06T09:00:00Z",
 };
@@ -333,6 +346,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
           tasks_created: 4,
           questions_created: 2,
           report_id: "report-1",
+          result: "Pricing evidence now has independent corroboration.",
         },
       },
     };

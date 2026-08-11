@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "@multica/core/types";
 import { runtimePickerOptions } from "./runtime-picker-options";
 
-function runtime(id: string, daemonId: string, ownerId: string): AgentRuntime {
+function runtime(
+  id: string,
+  daemonId: string,
+  ownerId: string,
+  visibility: "public" | "private",
+): AgentRuntime {
   return {
     id,
     workspace_id: "workspace-1",
@@ -15,6 +20,7 @@ function runtime(id: string, daemonId: string, ownerId: string): AgentRuntime {
     device_info: "Linux",
     metadata: {},
     owner_id: ownerId,
+    visibility,
     last_seen_at: new Date().toISOString(),
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -27,20 +33,16 @@ function runtime(id: string, daemonId: string, ownerId: string): AgentRuntime {
 }
 
 describe("runtimePickerOptions", () => {
-  it("includes every workspace runtime and keeps the current user's runtimes first", () => {
+  it("filters other private runtimes and keeps the current user's usable runtimes first", () => {
     const options = runtimePickerOptions(
       [
-        runtime("teammate-a", "daemon-a", "teammate"),
-        runtime("mine", "daemon-b", "me"),
-        runtime("teammate-b", "daemon-c", "teammate"),
+        runtime("teammate-a", "daemon-a", "teammate", "public"),
+        runtime("mine", "daemon-b", "me", "private"),
+        runtime("teammate-b", "daemon-c", "teammate", "private"),
       ],
       "me",
     );
 
-    expect(options.map((option) => option.id)).toEqual([
-      "mine",
-      "teammate-a",
-      "teammate-b",
-    ]);
+    expect(options.map((option) => option.id)).toEqual(["mine", "teammate-a"]);
   });
 });

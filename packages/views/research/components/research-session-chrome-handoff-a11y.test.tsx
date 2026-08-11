@@ -11,7 +11,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const src = fs.readFileSync(path.join(here, "research-session-chrome.tsx"), "utf8");
+const src = fs.readFileSync(
+  path.join(here, "research-session-chrome-actions.tsx"),
+  "utf8",
+);
 
 function handoffBlock(): string {
   const start = src.indexOf("{showHandoff ? (");

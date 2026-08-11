@@ -216,6 +216,13 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     },
     [selectCanvasNode],
   );
+  useEffect(() => {
+    if (!data) return;
+    const linkedNodeId = nav.searchParams.get("node");
+    if (!linkedNodeId) return;
+    if (!data.nodes.some((node) => node.id === linkedNodeId)) return;
+    selectCanvasNode(linkedNodeId);
+  }, [data, nav.searchParams, selectCanvasNode]);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
     agentId: string;
@@ -451,16 +458,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
   const linkedNodeId = nav.searchParams.get("node");
-  useEffect(() => {
-    if (!linkedNodeId) return;
-    if (!data.nodes.some((node) => node.id === linkedNodeId)) return;
-    selectCanvasNode(linkedNodeId);
-  }, [data.nodes, linkedNodeId, selectCanvasNode]);
-  const selectedNode = useMemo(() => {
+  const selectedNode = (() => {
     const id = selectedNodeId ?? linkedNodeId;
     if (!id) return null;
     return data.nodes.find((node) => node.id === id) ?? null;
-  }, [data.nodes, linkedNodeId, selectedNodeId]);
+  })();
   const executionRows = buildExecutionOverlayRows({
     members: fleet.members,
     presence,

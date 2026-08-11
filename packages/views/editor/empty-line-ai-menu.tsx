@@ -11,6 +11,7 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUp, Loader2, Sparkles } from "lucide-react";
 import { useT } from "../i18n";
 import { NoteAIDiffPreview } from "./note-ai-diff";
+import { captureNoteAIApplyDiagnostic } from "./utils/note-ai-apply-diagnostics";
 import {
   captureNoteAIUndoSnapshot,
   setEditorMarkdown,
@@ -252,12 +253,14 @@ function EmptyLineAiMenu({
 
   const finishApply = (result: NoteAIEditResult, snapshot: ReturnType<typeof captureNoteAIUndoSnapshot>) => {
     if (result.title) onApplyTitle?.(result.title);
+    captureNoteAIApplyDiagnostic({ surface: "page", outcome: "applied", result });
     showNoteAIApplyUndoToast({
       editor,
       snapshot,
       onApplyTitle,
       message: t(($) => $.page_ai.applied),
       undoLabel: t(($) => $.page_ai.undo),
+      onUndo: () => captureNoteAIApplyDiagnostic({ surface: "page", outcome: "undo_clicked", result }),
     });
     close();
   };
@@ -269,6 +272,7 @@ function EmptyLineAiMenu({
     try {
       replaceRangeWithMarkdown(editor, state.from, state.to, result.markdown);
     } catch {
+      captureNoteAIApplyDiagnostic({ surface: "page", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.page_ai.invalid_markdown));
       return;
     }
@@ -282,6 +286,7 @@ function EmptyLineAiMenu({
     try {
       setEditorMarkdown(editor, result.markdown);
     } catch {
+      captureNoteAIApplyDiagnostic({ surface: "page", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.page_ai.invalid_markdown));
       return;
     }
@@ -294,12 +299,14 @@ function EmptyLineAiMenu({
     const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     const patched = patchedDocumentMarkdown(snapshot.markdown, result);
     if (!patched) {
+      captureNoteAIApplyDiagnostic({ surface: "page", outcome: "patch_target_missing", result });
       showErrorToast(t(($) => $.page_ai.patch_target_missing));
       return;
     }
     try {
       setEditorMarkdown(editor, patched);
     } catch {
+      captureNoteAIApplyDiagnostic({ surface: "page", outcome: "invalid_markdown", result });
       showErrorToast(t(($) => $.page_ai.invalid_markdown));
       return;
     }

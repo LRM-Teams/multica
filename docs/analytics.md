@@ -103,7 +103,7 @@ Every event is assigned to one dashboard category:
 
 | Category | Events |
 |---|---|
-| `core_loop` | `workspace_created`, `agent_created`, `issue_created`, `chat_message_sent`, `issue_executed`, `autopilot_created`, `squad_created` |
+| `core_loop` | `workspace_created`, `agent_created`, `issue_created`, `chat_message_sent`, `issue_executed`, `autopilot_created`, `squad_created`, `note_ai_edit_apply_result` |
 | `onboarding_support` | `onboarding_started`, `onboarding_questionnaire_submitted`, `onboarding_completed`, `onboarding_runtime_path_selected`, `onboarding_runtime_detected` |
 | `acquisition` | `signup`, `download_intent_expressed`, `download_page_viewed`, `download_initiated`, `cloud_waitlist_joined`, `contact_sales_submitted` |
 | `ops_feedback` | `feedback_opened`, `feedback_submitted` |
@@ -276,6 +276,19 @@ is queued.
 | `task_id` | string (UUID) | Queued agent task. |
 | `agent_id` | string (UUID) | Chat agent. |
 | `source` | string | Always `chat`. |
+
+### `note_ai_edit_apply_result`
+
+Fires from the editor when a reviewed Note AI edit is applied, undone, or fails at the client-side Markdown/apply boundary. The backend Note AI job lifecycle records generation/repair status; this event covers the final user-visible apply step that the backend cannot observe.
+
+| Property | Type | Description |
+|---|---|---|
+| `surface` | string | `selected_text` or `page`. |
+| `outcome` | string | `applied`, `undo_clicked`, `invalid_markdown`, or `patch_target_missing`. |
+| `action` | string | AI edit action: `insert`, `replace_selection`, `replace_page`, `patch`, or `unknown` if no result is available. |
+| `title_suggested` | bool | Whether the AI edit included a title suggestion. |
+| `has_patch_target` | bool | Whether the AI edit carried a patch target. |
+| `markdown_length` | int | Replacement Markdown length; no content is captured. |
 
 ### agent task lifecycle (Prometheus-only)
 

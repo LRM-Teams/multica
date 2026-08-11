@@ -36,17 +36,22 @@ export function showNoteAIApplyUndoToast({
   onApplyTitle,
   message,
   undoLabel,
+  onUndo,
 }: {
   editor: Editor;
   snapshot: NoteAIUndoSnapshot;
   onApplyTitle?: (title: string) => void;
   message: string;
   undoLabel: string;
+  onUndo?: () => void;
 }) {
   toast.success(message, {
     action: {
       label: undoLabel,
-      onClick: () => restoreNoteAIUndoSnapshot(editor, snapshot, onApplyTitle),
+      onClick: () => {
+        restoreNoteAIUndoSnapshot(editor, snapshot, onApplyTitle);
+        onUndo?.();
+      },
     },
   });
 }

@@ -22,7 +22,7 @@ var chapterD15Coverage = map[int]string{
 	5:  "partial", // immutability/watermark CAS tests
 	6:  "partial", // backfill diagnostic tests in migration 319
 	7:  "partial", // artifact_policy legacy admission matrix
-	8:  "partial", // shadow fixture + prompt hash; not full family matrix
+	8:  "partial", // full-family shadow fixture + prompt hash; tie-order matrix still open
 	9:  "partial", // access matrix unit tests
 	10: "partial", // evaluation compartment integration + researcheval SubjectInput
 	11: "partial", // stale state version dispatch; not full race matrix

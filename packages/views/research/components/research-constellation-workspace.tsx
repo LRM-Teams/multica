@@ -288,12 +288,26 @@ export function ResearchConstellationWorkspace({
             model={canvasModel}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasSelect}
+            onOpenNode={handleCanvasSelect}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
             newFrontierLabel={t(($) => $.d5.new_frontier_label)}
             lensHints={lensHints}
             motionDirectives={motionDirectives}
             showMapKey
+            keyboardNav={{
+              nodes: snapshotNodes,
+              edges: (typedGraph?.edges ?? []).map((edge) => ({
+                from_node_id: edge.from_node_id,
+                to_node_id: edge.to_node_id,
+                edge_type: edge.edge_type,
+              })),
+              overlay: reportOpen || inspectorRow ? "detail" : null,
+              onCloseOverlay: () => {
+                if (reportOpen) setReportOpen(false);
+                if (inspectorRow) setInspectorAgentId(null);
+              },
+            }}
           />
         ) : null}
         {showForming ? (

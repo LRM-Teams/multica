@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -19,6 +19,7 @@ import {
   researchPresenceOptions,
   researchProductRoundsOptions,
   researchSessionSnapshotOptions,
+  useResearchCanvasStore,
   useResearchUiStore,
 } from "@multica/core/research";
 import type {
@@ -110,7 +111,6 @@ import {
 } from "./research-stage-timeline";
 
 type UiState = {
-  selected: ResearchGraphNode | null;
   body: string;
   createProject: boolean;
   createChannel: boolean;
@@ -119,7 +119,6 @@ type UiState = {
 };
 
 type UiAction =
-  | { type: "select"; node: ResearchGraphNode | null }
   | { type: "setBody"; body: string }
   | { type: "setCreateProject"; value: boolean }
   | { type: "setCreateChannel"; value: boolean }
@@ -128,7 +127,6 @@ type UiAction =
   | { type: "clearBody" };
 
 const initialUi: UiState = {
-  selected: null,
   body: "",
   createProject: true,
   createChannel: true,
@@ -138,12 +136,6 @@ const initialUi: UiState = {
 
 function uiReducer(state: UiState, action: UiAction): UiState {
   switch (action.type) {
-    case "select":
-      return {
-        ...state,
-        selected: action.node,
-        selectedFamily: action.node ? dimensionFamilyOf(action.node) : state.selectedFamily,
-      };
     case "setBody":
       return { ...state, body: action.body };
     case "setCreateProject":
@@ -211,6 +203,19 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     [nav],
   );
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  const selectedNodeId = useResearchCanvasStore((s) => s.selectedNodeId);
+  const selectCanvasNode = useResearchCanvasStore((s) => s.selectNode);
+  const clearCanvasSelection = useResearchCanvasStore((s) => s.clearSelection);
+  useEffect(() => {
+    clearCanvasSelection();
+  }, [sessionId, clearCanvasSelection]);
+  const handleSelectCanvasNode = useCallback(
+    (node: ResearchGraphNode | null) => {
+      selectCanvasNode(node?.id ?? null);
+      if (node) dispatch({ type: "setFamily", family: dimensionFamilyOf(node) });
+    },
+    [selectCanvasNode],
+  );
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
     agentId: string;
@@ -445,11 +450,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
   const linkedNodeId = nav.searchParams.get("node");
-  const selectedNode = ui.selected
-    ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
-    : linkedNodeId
-      ? data.nodes.find((node) => node.id === linkedNodeId) ?? null
-      : null;
+  useEffect(() => {
+    if (!linkedNodeId) return;
+    if (!data.nodes.some((node) => node.id === linkedNodeId)) return;
+    selectCanvasNode(linkedNodeId);
+  }, [data.nodes, linkedNodeId, selectCanvasNode]);
+  const selectedNode = useMemo(() => {
+    const id = selectedNodeId ?? linkedNodeId;
+    if (!id) return null;
+    return data.nodes.find((node) => node.id === id) ?? null;
+  }, [data.nodes, linkedNodeId, selectedNodeId]);
   const executionRows = buildExecutionOverlayRows({
     members: fleet.members,
     presence,
@@ -635,7 +645,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           typedError={typedGraphError}
           snapshotNodes={data.nodes}
           selectedNode={selectedNode}
-          onSelectNode={(node) => dispatch({ type: "select", node })}
+          onSelectNode={handleSelectCanvasNode}
           executionRows={executionRows}
           onOpenAgentPanel={handleOpenAgentPanel}
           canvasMode={canvasMode}
@@ -662,7 +672,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 members={fleet.members}
                 open
                 placement="inline"
-                onClose={() => dispatch({ type: "select", node: null })}
+                onClose={() => handleSelectCanvasNode(null)}
                 onOpenReport={() => reportControllerRef.current?.open()}
                 onContinueDeepening={() =>
                   postUser(

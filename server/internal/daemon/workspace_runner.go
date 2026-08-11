@@ -26,26 +26,89 @@ func (d *Daemon) workspaceRunnerLoop(ctx context.Context) {
 	}
 	changes, unsub := d.runtimeSet.Subscribe()
 	defer unsub()
+	d.reconcileWorkspaceRunners(ctx)
 	for {
-		workspaceIDs := d.workspaceRunnerWorkspaceIDs()
-		child, cancel := context.WithCancel(ctx)
-		for _, workspaceID := range workspaceIDs {
-			runner, err := d.newWorkspaceRunner(workspaceID)
+		select {
+		case <-ctx.Done():
+			d.stopWorkspaceRunners()
+			return
+		case <-changes:
+			d.reconcileWorkspaceRunners(ctx)
+		}
+	}
+}
+
+// reconcileWorkspaceRunners treats a Binding as the Runner's sole identity.
+// Runtime changes merely wake reconciliation; they never replace an existing
+// Runner, its connection, or its locally owned Inbox/lifecycle state.
+func (d *Daemon) reconcileWorkspaceRunners(parent context.Context) {
+	desired := make(map[string]struct{})
+	for _, workspaceID := range d.workspaceRunnerWorkspaceIDs() {
+		desired[workspaceID] = struct{}{}
+	}
+	type start struct {
+		runner *WorkspaceRunner
+		ctx    context.Context
+	}
+	var starts []start
+	var stops []context.CancelFunc
+	d.workspaceRunnerMu.Lock()
+	if d.workspaceRunners == nil {
+		d.workspaceRunners = make(map[string]*WorkspaceRunner)
+	}
+	if d.workspaceRunnerCancels == nil {
+		d.workspaceRunnerCancels = make(map[string]context.CancelFunc)
+	}
+	for workspaceID, cancel := range d.workspaceRunnerCancels {
+		if _, ok := desired[workspaceID]; !ok {
+			delete(d.workspaceRunnerCancels, workspaceID)
+			delete(d.workspaceRunners, workspaceID)
+			stops = append(stops, cancel)
+		}
+	}
+	for workspaceID := range desired {
+		if _, running := d.workspaceRunnerCancels[workspaceID]; running {
+			continue
+		}
+		runner := d.workspaceRunners[workspaceID]
+		if runner == nil {
+			var err error
+			runner, err = d.newWorkspaceRunner(workspaceID)
 			if err != nil {
 				if d.logger != nil {
 					d.logger.Warn("Workspace Runner construction failed", "workspace_id", workspaceID, "reason", "invalid_runner_configuration", "error", err)
 				}
 				continue
 			}
-			go runner.Run(child)
+			d.workspaceRunners[workspaceID] = runner
 		}
-		select {
-		case <-ctx.Done():
-			cancel()
-			return
-		case <-changes:
-			cancel()
+		child, cancel := context.WithCancel(parent)
+		d.workspaceRunnerCancels[workspaceID] = cancel
+		starts = append(starts, start{runner: runner, ctx: child})
+	}
+	d.workspaceRunnerMu.Unlock()
+	for _, cancel := range stops {
+		cancel()
+	}
+	for _, next := range starts {
+		if d.workspaceRunnerRun != nil {
+			d.workspaceRunnerRun(next.runner, next.ctx)
+			continue
 		}
+		go next.runner.Run(next.ctx)
+	}
+}
+
+func (d *Daemon) stopWorkspaceRunners() {
+	d.workspaceRunnerMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(d.workspaceRunnerCancels))
+	for workspaceID, cancel := range d.workspaceRunnerCancels {
+		cancels = append(cancels, cancel)
+		delete(d.workspaceRunnerCancels, workspaceID)
+	}
+	d.workspaceRunnerMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
 	}
 }
 

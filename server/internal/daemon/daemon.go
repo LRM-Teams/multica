@@ -109,6 +109,8 @@ type Daemon struct {
 	messageSends           map[string]int
 	workspaceRunnerMu      sync.RWMutex
 	workspaceRunners       map[string]*WorkspaceRunner
+	workspaceRunnerCancels map[string]context.CancelFunc
+	workspaceRunnerRun     func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
 	lifecycleDiagnostics   *lifecycleDiagnosticWriter
 	machineUpgradeLog      *machineUpgradeEventLog
 	runnerInstanceID       string
@@ -395,6 +397,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
 		messageDraftStore:         NewMessageDraftStore(cfg.WorkspacesRoot),
 		workspaceRunners:          make(map[string]*WorkspaceRunner),
+		workspaceRunnerCancels:    make(map[string]context.CancelFunc),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		machineUpgradeGeneration:  uuid.NewString(),
 		runnerInstanceID:          uuid.NewString(),

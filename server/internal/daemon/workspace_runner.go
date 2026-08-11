@@ -173,7 +173,8 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			return err
 		}
 	}
-	attachmentReplay, err := runner.attachmentReplayRequest()
+	attachmentRuntimeSet := runner.attachmentRuntimeSet()
+	attachmentReplay, err := runner.attachmentReplayRequest(attachmentRuntimeSet)
 	if err != nil {
 		return err
 	}
@@ -251,6 +252,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentAttached, receipt); err != nil {
 				return err
 			}
+			d.requestReminderSnapshot(workspaceID, attach.AgentID)
 			if attachmentReplayComplete {
 				runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
 					return writeFrame(protocol.EventAgentRecoveryRequest, request)
@@ -271,12 +273,15 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentDetached, receipt); err != nil {
 				return err
 			}
+			if err := d.removeDetachedReminderAgent(detach.AgentID); err != nil {
+				return err
+			}
 		case protocol.EventAgentAttachmentReplayEnd:
 			var end protocol.WorkspaceRunnerAttachmentReplayEnd
 			if json.Unmarshal(message.Payload, &end) != nil {
 				continue
 			}
-			ack, err := runner.completeAttachmentReplay(end)
+			ack, err := runner.completeAttachmentReplay(attachmentRuntimeSet, end)
 			if err != nil {
 				if d.logger != nil {
 					d.logger.Warn("Workspace Runner Attachment replay rejected", "workspace_id", workspaceID, "reason", "invalid_replay_end", "error", err)

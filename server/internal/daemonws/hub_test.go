@@ -414,6 +414,45 @@ func TestWorkspaceRunnerRoutesAttachmentReplayFramesOnlyAfterReady(t *testing.T)
 	}
 }
 
+func TestWorkspaceRunnerReceivesLiveAttachmentCommandsOnRunnerScope(t *testing.T) {
+	hub := NewHub()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	attach := protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "correlation-1",
+	}
+	hub.NotifyAgentAttachmentAdded("workspace-1", "daemon-1", attach)
+	hub.NotifyAgentAttachmentRemoved("workspace-1", "daemon-1", protocol.WorkspaceRunnerAgentDetachPayload(attach))
+	for _, wantType := range []string{protocol.EventAgentAttach, protocol.EventAgentDetach} {
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var frame protocol.Message
+		if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != wantType {
+			t.Fatalf("live Attachment frame = %+v, want %q; err=%v", frame, wantType, err)
+		}
+	}
+}
+
 func TestCloseWorkspaceRunnerFencesReplacementDaemonInstance(t *testing.T) {
 	hub := NewHub()
 	var readyCount atomic.Int64
@@ -778,6 +817,25 @@ func TestRelayNotifierPublishesDaemonRuntimeScope(t *testing.T) {
 	}
 }
 
+func TestRelayNotifierPublishesAttachmentToWorkspaceRunnerScope(t *testing.T) {
+	relay := &recordingRelayPublisher{}
+	notifier := NewRelayNotifier(nil, relay)
+	payload := protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 2, LifecycleSeq: 3, CorrelationID: "correlation-1",
+	}
+	notifier.NotifyAgentAttachmentAdded("workspace-1", "daemon-1", payload)
+	if relay.scopeType != realtime.ScopeDaemonWorkspaceRunner || relay.scopeID != workspaceRunnerRelayScopeID("daemon-1", "workspace-1") {
+		t.Fatalf("Attachment relay scope = %q/%q", relay.scopeType, relay.scopeID)
+	}
+	if relay.eventID != payload.CorrelationID {
+		t.Fatalf("Attachment relay event ID = %q, want %q", relay.eventID, payload.CorrelationID)
+	}
+	var frame protocol.Message
+	if err := json.Unmarshal(relay.frame, &frame); err != nil || frame.Type != protocol.EventAgentAttach {
+		t.Fatalf("Attachment relay frame = %+v, err=%v", frame, err)
+	}
+}
+
 func TestRelayNotifierDedupsLocalRedisLoopback(t *testing.T) {
 	M.Reset()
 	defer M.Reset()
@@ -1045,7 +1103,7 @@ func TestReminderSnapshotTransientErrorClosesConnectionWithoutTerminalStop(t *te
 	hub := NewHub()
 	hub.SetReminderHandlers(func(context.Context, ClientIdentity, protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error) {
 		return nil, errors.New("transient snapshot query failure")
-	}, nil, nil, nil)
+	}, nil)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
 	}))
@@ -1090,7 +1148,7 @@ func TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry(t *te
 	hub := NewHub()
 	hub.SetReminderHandlers(nil, func(context.Context, ClientIdentity, protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error) {
 		return nil, errors.New("transient fire processing failure")
-	}, nil, nil)
+	})
 	hub.SetHeartbeatHandler(func(context.Context, ClientIdentity, protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
 		return &protocol.DaemonHeartbeatAckPayload{RuntimeID: "runtime-1", Status: "ok"}, nil
 	})
@@ -1144,9 +1202,11 @@ func TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry(t *te
 }
 
 func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
+	t.Skip("legacy wake-socket lifecycle replay was removed by the Workspace Runner hard cut")
 	hub := NewHub()
 	const eventCount = 40
-	hub.SetReminderHandlers(nil, nil, func(_ context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error) {
+	hub.SetReminderHandlers(nil, nil)
+	legacyHandler := func(_ context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error) {
 		if len(identity.RuntimeIDs) != 1 || identity.RuntimeIDs[0] != "runtime-1" {
 			t.Fatalf("identity runtimes = %#v", identity.RuntimeIDs)
 		}
@@ -1161,7 +1221,8 @@ func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
 			})
 		}
 		return events, map[string]int64{"runtime-1": eventCount}, nil
-	}, nil)
+	}
+	_ = legacyHandler
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})

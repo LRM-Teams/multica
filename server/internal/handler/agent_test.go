@@ -20,8 +20,8 @@ import (
 )
 
 type recordingReminderNotifier struct {
-	starts      []protocol.DaemonAgentStartPayload
-	stops       []protocol.DaemonAgentStopPayload
+	starts      []protocol.WorkspaceRunnerAgentAttachPayload
+	stops       []protocol.WorkspaceRunnerAgentDetachPayload
 	projections []protocol.ReminderProjectionEvent
 	order       []string
 }
@@ -30,11 +30,11 @@ func (n *recordingReminderNotifier) NotifyReminderProjection(_ string, payload p
 	n.projections = append(n.projections, payload)
 	n.order = append(n.order, "projection")
 }
-func (n *recordingReminderNotifier) NotifyReminderOwnerAdded(_ string, payload protocol.DaemonAgentStartPayload) {
+func (n *recordingReminderNotifier) NotifyAgentAttachmentAdded(_, _ string, payload protocol.WorkspaceRunnerAgentAttachPayload) {
 	n.starts = append(n.starts, payload)
 	n.order = append(n.order, "start")
 }
-func (n *recordingReminderNotifier) NotifyReminderOwnerRemoved(_ string, payload protocol.DaemonAgentStopPayload) {
+func (n *recordingReminderNotifier) NotifyAgentAttachmentRemoved(_, _ string, payload protocol.WorkspaceRunnerAgentDetachPayload) {
 	n.stops = append(n.stops, payload)
 	n.order = append(n.order, "stop")
 }
@@ -1823,6 +1823,13 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 	t.Cleanup(func() { testHandler.ReminderNotifier = previousNotifier })
 
 	agentID := createHandlerTestAgent(t, "archive-preserves-skills-agent", nil)
+	testDaemonID := uuid.NewString()
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET daemon_id = $2 WHERE id = (SELECT runtime_id FROM agent WHERE id = $1)`, agentID, testDaemonID); err != nil {
+		t.Fatalf("bind archive test Runtime daemon: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = NULL WHERE daemon_id = $1`, testDaemonID)
+	})
 	skillID, _ := insertHandlerTestSkill(t, "archive-preserve", "body")
 	if _, err := testPool.Exec(ctx,
 		`INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`,
@@ -1860,7 +1867,7 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 	if len(restored.Skills) != 1 || restored.Skills[0].ID != skillID {
 		t.Errorf("RestoreAgent: expected 1 skill %s, got %+v", skillID, restored.Skills)
 	}
-	if len(notifier.starts) != 1 || notifier.starts[0].AgentID != agentID || notifier.starts[0].LifecycleSeq < 1 || notifier.starts[0].PlacementGeneration < 1 {
+	if len(notifier.starts) != 1 || notifier.starts[0].AgentID != agentID || notifier.starts[0].LifecycleSeq < 1 || notifier.starts[0].AttachmentGeneration < 1 || notifier.starts[0].CorrelationID == "" {
 		t.Fatalf("RestoreAgent owner start projection = %+v", notifier.starts)
 	}
 }

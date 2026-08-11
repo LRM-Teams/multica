@@ -1713,6 +1713,13 @@ func seedReminderModernTransportFixture(t *testing.T) reminderModernTransportFix
 
 	agentName := "Reminder Modern Auth " + uuid.NewString()[:8]
 	agentID := createHandlerTestAgent(t, agentName, nil)
+	testDaemonID := uuid.NewString()
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET daemon_id = $2 WHERE id = (SELECT runtime_id FROM agent WHERE id = $1)`, agentID, testDaemonID); err != nil {
+		t.Fatalf("bind reminder test Runtime daemon: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = NULL WHERE daemon_id = $1`, testDaemonID)
+	})
 	channelID := seedChannelForTest(t, "reminder-modern-auth-"+uuid.NewString(), initiatorUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -1827,7 +1834,7 @@ func TestAgentReminderUpsertPublishesAuthoritativeOwnerBeforeProjection(t *testi
 	start := notifier.starts[0]
 	projection := notifier.projections[0]
 	if start.AgentID != fixture.agentID || start.RuntimeID != projection.RuntimeID ||
-		start.PlacementGeneration < 1 || start.PlacementGeneration != projection.PlacementGeneration ||
+		start.AttachmentGeneration < 1 || start.AttachmentGeneration != projection.PlacementGeneration || start.CorrelationID == "" ||
 		projection.AgentID != fixture.agentID || projection.ReminderID != scheduled.ID || projection.Terminal {
 		t.Fatalf("owner/projection mismatch start=%+v projection=%+v", start, projection)
 	}

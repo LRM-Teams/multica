@@ -1494,8 +1494,8 @@ func TestReminderProjectionCursorLossAtomicResetUsesOnlyLocalResidencies(t *test
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := mgr.localRecord("agent-stale"); ok {
-		t.Fatal("terminal local Attachment survived runtime reset")
+	if _, ok := mgr.localRecord("agent-stale"); !ok {
+		t.Fatal("Reminder runtime reset mutated native Attachment authority")
 	}
 	if _, ok := mgr.localRecord("agent-a"); !ok {
 		t.Fatal("canonical local Attachment was removed")
@@ -1889,7 +1889,7 @@ func TestReminderLifecycleProbeAgainstOldServerStaysFailClosedWithoutReconnect(t
 		t.Fatalf("old-server cache suspended=%v entries=%d", suspended, entries)
 	}
 	d.reminderGateMu.Lock()
-	inFlight := d.reminderLifecycleReplayInFlight
+	inFlight := false
 	replayComplete := d.reminderReplayComplete
 	d.reminderGateMu.Unlock()
 	if !inFlight || replayComplete {

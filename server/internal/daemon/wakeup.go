@@ -149,7 +149,9 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	writerDone := make(chan struct{})
 	go d.runWSWriter(conn, writes, writerDone)
 	d.setReminderWS(writes, writerDone, conn.Close)
-	d.requestAgentLifecycleReplay()
+	if !d.startReminderProjectionReplay() {
+		return errors.New("queue initial reminder projection replay")
+	}
 
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	hbDone := make(chan struct{})
@@ -442,7 +444,6 @@ func (d *Daemon) sendWSHeartbeats(ctx context.Context, runtimeIDs []string, writ
 			d.logger.Debug("ws heartbeat dropped: writer backlog", "runtime_id", rid)
 		}
 	}
-	d.requestAgentLifecycleReplay()
 }
 
 func marshalRaw(v any) json.RawMessage {
@@ -543,36 +544,6 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			if err := d.handleReminderSnapshot(payload); err != nil {
-				return err
-			}
-		case protocol.EventDaemonAgentStop:
-			var payload protocol.DaemonAgentStopPayload
-			if err := json.Unmarshal(msg.Payload, &payload); err != nil || strings.TrimSpace(payload.AgentID) == "" {
-				d.logger.Debug("daemon agent stop invalid payload", "error", err)
-				continue
-			}
-			if err := d.handleDaemonAgentStop(payload); err != nil {
-				d.logger.Warn("persist daemon agent stop failed; reconnecting", "error", err, "agent_id", payload.AgentID)
-				return err
-			}
-		case protocol.EventDaemonAgentStart:
-			var payload protocol.DaemonAgentStartPayload
-			if err := json.Unmarshal(msg.Payload, &payload); err != nil || strings.TrimSpace(payload.AgentID) == "" || strings.TrimSpace(payload.RuntimeID) == "" || strings.TrimSpace(payload.WorkspaceID) == "" {
-				d.logger.Debug("daemon agent start invalid payload", "error", err)
-				continue
-			}
-			if err := d.handleDaemonAgentStartFrame(payload); err != nil {
-				d.logger.Warn("persist daemon agent start failed; reconnecting", "error", err, "agent_id", payload.AgentID)
-				return err
-			}
-		case protocol.EventDaemonAgentLifecycleEnd:
-			var payload protocol.DaemonAgentLifecycleReplayEndPayload
-			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-				d.logger.Debug("daemon agent lifecycle replay end invalid payload", "error", err)
-				continue
-			}
-			if err := d.handleDaemonAgentLifecycleReplayEnd(payload); err != nil {
-				d.logger.Warn("persist daemon lifecycle cursor failed; reconnecting", "error", err)
 				return err
 			}
 		case protocol.EventReminderProjectionEnd:
@@ -678,114 +649,6 @@ func (d *Daemon) handleReminderProjection(payload protocol.ReminderProjectionEve
 	return d.ackReminderProjectionCursors(d.reminderCache.projectionCursors())
 }
 
-func (d *Daemon) handleDaemonAgentStop(payload protocol.DaemonAgentStopPayload) error {
-	if d == nil || strings.TrimSpace(payload.AgentID) == "" || strings.TrimSpace(payload.RuntimeID) == "" || payload.PlacementGeneration < 1 {
-		return nil
-	}
-	return d.removeReminderAgent(payload)
-}
-
-func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload) error {
-	_, err := d.applyDaemonAgentStart(payload)
-	return err
-}
-
-// handleDaemonAgentStartFrame starts Message recovery only when this lifecycle
-// frame creates or replaces the local Message coordinator. Replayed Task
-// lifecycle state must not restart recovery for every existing Agent: the
-// Workspace Runner connection owns reconnect recovery for chat.
-func (d *Daemon) handleDaemonAgentStartFrame(payload protocol.DaemonAgentStartPayload) error {
-	created, err := d.applyDaemonAgentStart(payload)
-	if err != nil {
-		return err
-	}
-	if created {
-		d.beginAgentMessageRecovery(payload.WorkspaceID, payload.AgentID)
-	}
-	return nil
-}
-
-func (d *Daemon) applyDaemonAgentStart(payload protocol.DaemonAgentStartPayload) (bool, error) {
-	if d == nil || d.localAttachmentRegistry() == nil {
-		return false, nil
-	}
-	// A server-originated owner frame is the capability proof. The registration
-	// response may predate a server upgrade, so only local runtime/workspace and
-	// placement-generation checks may reject this frame.
-	d.mu.Lock()
-	runtime, runtimeKnown := d.runtimeIndex[payload.RuntimeID]
-	d.mu.Unlock()
-	if !runtimeKnown || runtime.WorkspaceID != payload.WorkspaceID {
-		d.logger.Warn("daemon agent start rejected outside local runtime", "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID, "workspace_id", payload.WorkspaceID)
-		return false, nil
-	}
-	result, err := d.legacyAgentAttachmentAdapter().ApplyStart(payload)
-	if err != nil {
-		return false, err
-	}
-	changed := result.change.Kind == AgentAttachmentAttached || result.change.Kind == AgentAttachmentMoved
-	accepted := result.accepted
-	coordinatorCreated := false
-	if accepted {
-		coordinatorCreated, err = d.ensureIdleMessageCoordinator(payload.WorkspaceID, payload.AgentID, payload.RuntimeID)
-		if err != nil {
-			return false, fmt.Errorf("register Agent Message coordinator: %w", err)
-		}
-		if err := d.ensureWorkspaceRunnerManagedAgent(payload.WorkspaceID, payload.AgentID); err != nil {
-			return false, fmt.Errorf("register Agent Workspace Runner lifecycle: %w", err)
-		}
-	}
-	if accepted && changed && !payload.Replay {
-		d.requestReminderSnapshot(payload.WorkspaceID, payload.AgentID)
-	} else if accepted && changed {
-		d.reminderGateMu.Lock()
-		if d.reminderPendingSnapshots == nil {
-			d.reminderPendingSnapshots = make(map[string]struct{})
-		}
-		d.reminderPendingSnapshots[payload.AgentID] = struct{}{}
-		d.reminderGateMu.Unlock()
-	}
-	return coordinatorCreated, nil
-}
-
-// ensureWorkspaceRunnerManagedAgent only ensures the Runner exists. Launch
-// identity is owned exclusively by AgentProcessManager after a server start;
-// restoring an Attachment must not manufacture an Activity-only launch.
-func (d *Daemon) ensureWorkspaceRunnerManagedAgent(workspaceID, agentID string) error {
-	runner, err := d.ensureWorkspaceRunner(workspaceID)
-	if err != nil || runner == nil {
-		return fmt.Errorf("Workspace Runner is unavailable for %q", workspaceID)
-	}
-	return nil
-}
-
-func (d *Daemon) handleDaemonAgentLifecycleReplayEnd(payload protocol.DaemonAgentLifecycleReplayEndPayload) error {
-	if d == nil || d.localAttachmentRegistry() == nil {
-		return nil
-	}
-	d.mu.Lock()
-	for runtimeID := range payload.RuntimeCursors {
-		if _, ok := d.runtimeIndex[runtimeID]; !ok {
-			d.mu.Unlock()
-			return fmt.Errorf("agent lifecycle replay runtime outside current daemon set %s", runtimeID)
-		}
-	}
-	d.mu.Unlock()
-	if err := d.legacyAgentAttachmentAdapter().AdvanceRecovery(payload.RuntimeCursors); err != nil {
-		return err
-	}
-	if !d.queueReminderFrame(protocol.EventDaemonAgentLifecycleAck, protocol.DaemonAgentLifecycleAckPayload{RuntimeCursors: payload.RuntimeCursors}) {
-		return errors.New("queue reminder lifecycle ack")
-	}
-	if !d.startReminderProjectionReplay() {
-		return errors.New("queue reminder projection replay")
-	}
-	d.reminderGateMu.Lock()
-	d.reminderLifecycleReplayInFlight = false
-	d.reminderGateMu.Unlock()
-	return nil
-}
-
 func (d *Daemon) setReminderWS(writes chan<- []byte, done <-chan struct{}, closeFn func() error) {
 	d.reminderWSMu.Lock()
 	d.reminderWrites = writes
@@ -793,7 +656,6 @@ func (d *Daemon) setReminderWS(writes chan<- []byte, done <-chan struct{}, close
 	d.reminderClose = closeFn
 	d.reminderWSMu.Unlock()
 	d.reminderGateMu.Lock()
-	d.reminderLifecycleReplayInFlight = false
 	d.reminderReplayComplete = false
 	d.reminderProjectionReplayInFlight = false
 	d.reminderProjectionReplayPending = false
@@ -815,7 +677,6 @@ func (d *Daemon) clearReminderWS(writes chan<- []byte) {
 	}
 	d.reminderWSMu.Unlock()
 	d.reminderGateMu.Lock()
-	d.reminderLifecycleReplayInFlight = false
 	d.reminderReplayComplete = false
 	d.reminderProjectionReplayInFlight = false
 	d.reminderProjectionReplayPending = false
@@ -868,7 +729,7 @@ func (d *Daemon) requestReminderSnapshot(workspaceID, agentID string) {
 		return
 	}
 	d.reminderGateMu.Lock()
-	if !d.reminderReplayComplete || d.reminderLifecycleReplayInFlight || d.reminderProjectionReplayInFlight {
+	if !d.reminderReplayComplete || d.reminderProjectionReplayInFlight {
 		if d.reminderPendingSnapshots == nil {
 			d.reminderPendingSnapshots = make(map[string]struct{})
 		}
@@ -890,33 +751,6 @@ func (d *Daemon) requestReminderSnapshotNow(attachment AgentAttachment) bool {
 	return d.queueReminderFrame(protocol.EventReminderSnapshotRequest, protocol.ReminderSnapshotRequestPayload{
 		AgentID: attachment.AgentID, RuntimeID: attachment.RuntimeID, PlacementGeneration: int64(attachment.AttachmentGeneration),
 	})
-}
-
-func (d *Daemon) requestAgentLifecycleReplay() bool {
-	// This is an attach-time protocol probe. Old servers intentionally ignore
-	// unknown application frames, while upgraded servers can recover a daemon
-	// whose cached registration capabilities are stale.
-	d.reminderGateMu.Lock()
-	if d.reminderLifecycleReplayInFlight || d.reminderProjectionReplayInFlight {
-		d.reminderGateMu.Unlock()
-		return true
-	}
-	d.reminderLifecycleReplayInFlight = true
-	d.reminderGateMu.Unlock()
-	storedCursors := d.attachmentRecoveryCursors()
-	cursors := map[string]int64{}
-	d.mu.Lock()
-	for runtimeID := range d.runtimeIndex {
-		cursors[runtimeID] = storedCursors[runtimeID]
-	}
-	d.mu.Unlock()
-	if !d.queueReminderFrame(protocol.EventDaemonAgentLifecycleReq, protocol.DaemonAgentLifecycleRequestPayload{RuntimeCursors: cursors}) {
-		d.reminderGateMu.Lock()
-		d.reminderLifecycleReplayInFlight = false
-		d.reminderGateMu.Unlock()
-		return false
-	}
-	return true
 }
 
 func (d *Daemon) requestReminderSnapshots() {
@@ -985,7 +819,7 @@ func (d *Daemon) requestReminderProjectionReplay() {
 		d.reminderCache.suspend()
 	}
 	d.reminderGateMu.Lock()
-	ready := d.reminderReplayComplete && !d.reminderLifecycleReplayInFlight && !d.reminderProjectionReplayInFlight
+	ready := d.reminderReplayComplete && !d.reminderProjectionReplayInFlight
 	d.reminderReplayComplete = false
 	if !ready {
 		d.reminderProjectionReplayPending = true
@@ -1063,16 +897,6 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 		}
 		if err := d.reminderCache.resetRuntime(runtimeID, reset); err != nil {
 			return err
-		}
-		for _, owner := range reset.Owners {
-			if !owner.Terminal {
-				continue
-			}
-			if _, err := d.legacyAgentAttachmentAdapter().ApplyStop(protocol.DaemonAgentStopPayload{
-				AgentID: owner.AgentID, RuntimeID: runtimeID, PlacementGeneration: owner.PlacementGeneration,
-			}); err != nil {
-				return err
-			}
 		}
 	}
 	cursors := d.reminderCache.projectionCursors()

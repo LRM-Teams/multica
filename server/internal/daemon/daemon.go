@@ -141,7 +141,6 @@ type Daemon struct {
 	reminderWSDone                   <-chan struct{}
 	reminderClose                    func() error
 	reminderGateMu                   sync.Mutex
-	reminderLifecycleReplayInFlight  bool
 	reminderReplayComplete           bool
 	reminderProjectionReplayInFlight bool
 	reminderProjectionReplayPending  bool
@@ -450,23 +449,15 @@ func (d *Daemon) notifyRuntimeSetChanged() {
 	d.runtimeSet.notify()
 }
 
-func (d *Daemon) removeReminderAgent(payload protocol.DaemonAgentStopPayload) error {
-	result, err := d.legacyAgentAttachmentAdapter().ApplyStop(payload)
-	if err != nil {
-		return err
-	}
-	removed := result.change.Kind == AgentAttachmentDetached
-	if removed && d.reminderCache != nil {
-		if err := d.reminderCache.removeOwner(payload.AgentID); err != nil {
+func (d *Daemon) removeDetachedReminderAgent(agentID string) error {
+	if d.reminderCache != nil {
+		if err := d.reminderCache.removeOwner(agentID); err != nil {
 			return err
 		}
 	}
-	if removed {
-		d.removeIdleMessageCoordinator(result.change.Previous.WorkspaceID, payload.AgentID, payload.RuntimeID)
-		d.reminderGateMu.Lock()
-		delete(d.reminderPendingSnapshots, payload.AgentID)
-		d.reminderGateMu.Unlock()
-	}
+	d.reminderGateMu.Lock()
+	delete(d.reminderPendingSnapshots, agentID)
+	d.reminderGateMu.Unlock()
 	return nil
 }
 
@@ -1702,7 +1693,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.ReleaseManifestBaseURL != "" {
 		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
 	}
-	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 || len(resp.PendingAgentStartIntents) > 0 {
+	if resp.PendingUpdate != nil || resp.PendingMachineUpgrade != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentLifecycleOperations) > 0 {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
@@ -1713,7 +1704,6 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 			"memory_curation", resp.PendingMemoryCuration != nil,
 			"restart", resp.PendingRestart != nil,
 			"agent_lifecycle_operations", len(resp.PendingAgentLifecycleOperations),
-			"agent_start_intents", len(resp.PendingAgentStartIntents),
 		)
 	}
 	if resp.PendingUpdate != nil {
@@ -1728,9 +1718,6 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	}
 	for _, pending := range resp.PendingAgentLifecycleOperations {
 		go d.handleAgentLifecycleOperation(ctx, pending)
-	}
-	for _, pending := range resp.PendingAgentStartIntents {
-		go d.handleAgentStartIntent(ctx, pending)
 	}
 	if resp.PendingModelList != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {

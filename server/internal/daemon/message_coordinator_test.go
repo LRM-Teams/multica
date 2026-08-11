@@ -880,19 +880,19 @@ func TestMessageCoordinatorCoverageCheckRetainsPendingWhenCommitWriteFails(t *te
 	}
 }
 
-func TestDaemonAgentLifecycleRegistersCoordinatorAtAgentRoot(t *testing.T) {
+func TestWorkspaceRunnerAttachmentRegistersCoordinatorAtAgentRoot(t *testing.T) {
 	const workspaceID = "11111111-1111-4111-8111-111111111111"
 	const agentID = "22222222-2222-4222-8222-222222222222"
 	const runtimeID = "33333333-3333-4333-8333-333333333333"
 	root := t.TempDir()
 	daemon := New(Config{WorkspacesRoot: root}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	daemon.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
-	attachTestWorkspaceRunner(t, daemon, workspaceID, nil)
+	runner, _ := attachTestWorkspaceRunner(t, daemon, workspaceID, nil)
 
-	if err := daemon.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{
-		AgentID: agentID, RuntimeID: runtimeID, WorkspaceID: workspaceID, PlacementGeneration: 1,
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
 	}); err != nil {
-		t.Fatalf("handleDaemonAgentStart: %v", err)
+		t.Fatalf("applyAttachmentAttach: %v", err)
 	}
 	coordinator, registeredRuntimeID := resolveTestInbox(t, daemon, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	if coordinator == nil || registeredRuntimeID != runtimeID {
@@ -906,10 +906,10 @@ func TestDaemonAgentLifecycleRegistersCoordinatorAtAgentRoot(t *testing.T) {
 		t.Fatalf("Agent root was not provisioned: %v", err)
 	}
 
-	if err := daemon.handleDaemonAgentStop(protocol.DaemonAgentStopPayload{
-		AgentID: agentID, RuntimeID: runtimeID, PlacementGeneration: 1,
+	if _, err := runner.applyAttachmentDetach(protocol.WorkspaceRunnerAgentDetachPayload{
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2, CorrelationID: "detach-1",
 	}); err != nil {
-		t.Fatalf("handleDaemonAgentStop: %v", err)
+		t.Fatalf("applyAttachmentDetach: %v", err)
 	}
 	if runner := daemon.currentWorkspaceRunner(workspaceID); runner != nil {
 		if _, _, ok := runner.inboxes.Resolve(agentID); ok {

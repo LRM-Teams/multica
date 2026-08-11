@@ -26,6 +26,9 @@ func (h *Handler) replayAgentAttachmentCommands(ctx context.Context, identity da
 		return errors.New("Workspace Runner does not support Attachment replay")
 	}
 	allowed := runnerAttachmentRuntimeScope(identity)
+	if len(payload.RuntimeCursors) != len(allowed) {
+		return errors.New("Attachment replay request omitted a Runner Runtime cursor")
+	}
 	events := make([]agentAttachmentReplayEvent, 0)
 	end := make(map[string]int64, len(payload.RuntimeCursors))
 	for runtimeID, cursor := range payload.RuntimeCursors {

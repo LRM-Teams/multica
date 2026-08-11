@@ -1064,29 +1064,38 @@ func (h *Handler) publishLatestReminderProjection(ctx context.Context, reminder 
 	h.ReminderNotifier.NotifyReminderProjection(event.RuntimeID, event)
 }
 
-func (h *Handler) latestReminderOwnerLifecycle(ctx context.Context, agentID, runtimeID, eventType string) (protocol.DaemonAgentLifecycleEvent, bool) {
-	var event protocol.DaemonAgentLifecycleEvent
+type agentAttachmentCommand struct {
+	agentID, runtimeID, workspaceID, daemonID, correlationID string
+	attachmentGeneration, lifecycleSeq                       int64
+}
+
+func (h *Handler) latestAgentAttachmentCommand(ctx context.Context, agentID, runtimeID, eventType string) (agentAttachmentCommand, bool) {
+	var command agentAttachmentCommand
 	err := h.DB.QueryRow(ctx, `
-		SELECT event_type, agent_id::text, runtime_id::text, workspace_id::text, seq, placement_generation
-		FROM agent_reminder_daemon_owner_event
-		WHERE agent_id::text = $1 AND runtime_id::text = $2 AND event_type = $3
-		ORDER BY seq DESC LIMIT 1`, agentID, runtimeID, eventType).Scan(
-		&event.EventType, &event.AgentID, &event.RuntimeID, &event.WorkspaceID, &event.LifecycleSeq, &event.PlacementGeneration,
+		SELECT e.agent_id::text, e.runtime_id::text, e.workspace_id::text,
+		       r.daemon_id::text, e.attachment_generation, e.lifecycle_seq,
+		       e.correlation_id::text
+		FROM agent_attachment_projection_event e
+		JOIN agent_runtime r ON r.id = e.runtime_id
+		WHERE e.agent_id::text = $1 AND e.runtime_id::text = $2 AND e.event_type = $3
+		ORDER BY e.lifecycle_seq DESC LIMIT 1`, agentID, runtimeID, eventType).Scan(
+		&command.agentID, &command.runtimeID, &command.workspaceID, &command.daemonID,
+		&command.attachmentGeneration, &command.lifecycleSeq, &command.correlationID,
 	)
-	return event, err == nil
+	return command, err == nil
 }
 
 func (h *Handler) projectReminderOwnerStart(ctx context.Context, agentID, runtimeID string) {
 	if h == nil || h.ReminderNotifier == nil {
 		return
 	}
-	event, ok := h.latestReminderOwnerLifecycle(ctx, agentID, runtimeID, "start")
+	command, ok := h.latestAgentAttachmentCommand(ctx, agentID, runtimeID, "attach")
 	if !ok {
 		return
 	}
-	h.ReminderNotifier.NotifyReminderOwnerAdded(runtimeID, protocol.DaemonAgentStartPayload{
-		AgentID: event.AgentID, RuntimeID: event.RuntimeID, WorkspaceID: event.WorkspaceID,
-		PlacementGeneration: event.PlacementGeneration, LifecycleSeq: event.LifecycleSeq,
+	h.ReminderNotifier.NotifyAgentAttachmentAdded(command.workspaceID, command.daemonID, protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: command.agentID, RuntimeID: command.runtimeID, AttachmentGeneration: command.attachmentGeneration,
+		LifecycleSeq: command.lifecycleSeq, CorrelationID: command.correlationID,
 	})
 }
 
@@ -1094,13 +1103,13 @@ func (h *Handler) projectReminderOwnerStop(ctx context.Context, agentID, runtime
 	if h == nil || h.ReminderNotifier == nil {
 		return
 	}
-	event, ok := h.latestReminderOwnerLifecycle(ctx, agentID, runtimeID, "stop")
+	command, ok := h.latestAgentAttachmentCommand(ctx, agentID, runtimeID, "detach")
 	if !ok {
 		return
 	}
-	h.ReminderNotifier.NotifyReminderOwnerRemoved(runtimeID, protocol.DaemonAgentStopPayload{
-		AgentID: event.AgentID, RuntimeID: event.RuntimeID,
-		PlacementGeneration: event.PlacementGeneration, LifecycleSeq: event.LifecycleSeq,
+	h.ReminderNotifier.NotifyAgentAttachmentRemoved(command.workspaceID, command.daemonID, protocol.WorkspaceRunnerAgentDetachPayload{
+		AgentID: command.agentID, RuntimeID: command.runtimeID, AttachmentGeneration: command.attachmentGeneration,
+		LifecycleSeq: command.lifecycleSeq, CorrelationID: command.correlationID,
 	})
 }
 
@@ -1223,111 +1232,6 @@ func (h *Handler) HandleDaemonReminderSnapshot(ctx context.Context, identity dae
 		AgentID: payload.AgentID, RuntimeID: uuidToString(runtimeID), PlacementGeneration: placementGeneration,
 		ProjectionWatermark: projectionWatermark, Reminders: jobs,
 	}, nil
-}
-
-func (h *Handler) HandleDaemonReminderOwnerLifecycle(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error) {
-	if h == nil || len(identity.RuntimeIDs) == 0 {
-		return nil, map[string]int64{}, nil
-	}
-	allowed := make(map[string]bool, len(identity.RuntimeIDs))
-	for _, runtimeID := range identity.RuntimeIDs {
-		allowed[runtimeID] = true
-	}
-	events := make([]protocol.DaemonAgentLifecycleEvent, 0)
-	endCursors := make(map[string]int64, len(payload.RuntimeCursors))
-	for runtimeID, cursor := range payload.RuntimeCursors {
-		if !allowed[runtimeID] || cursor < 0 {
-			return nil, nil, fmt.Errorf("agent lifecycle cursor outside daemon scope")
-		}
-		// Lifecycle replay is both an incremental event tail and an
-		// authoritative checkpoint for current timer owners. Re-sending the
-		// latest start for agents that still have scheduled Reminders lets an
-		// existing daemon repair a locally bootstrapped generation-zero
-		// residency even after its lifecycle cursor has advanced past the
-		// original start. The scheduled-owner filter avoids replaying an
-		// unbounded history of terminal placements on every heartbeat.
-		query := `
-			WITH latest AS (
-				SELECT DISTINCT ON (agent_id)
-				       event_type, agent_id, runtime_id, workspace_id, seq, placement_generation
-				FROM agent_reminder_daemon_owner_event
-				WHERE ($1 = '' OR workspace_id::text = $1) AND runtime_id::text = $2
-				ORDER BY agent_id, seq DESC
-			)
-			SELECT event_type, agent_id::text, runtime_id::text, workspace_id::text, seq, placement_generation
-			FROM (
-				SELECT event_type, agent_id, runtime_id, workspace_id, seq, placement_generation
-				FROM agent_reminder_daemon_owner_event
-				WHERE ($1 = '' OR workspace_id::text = $1) AND runtime_id::text = $2 AND seq > $3
-				UNION ALL
-				SELECT event_type, agent_id, runtime_id, workspace_id, seq, placement_generation
-				FROM latest
-				WHERE event_type = 'start' AND seq <= $3
-				  AND EXISTS (
-					SELECT 1
-					FROM agent_reminder
-					WHERE agent_reminder.agent_id = latest.agent_id
-					  AND agent_reminder.status = 'scheduled'
-				  )
-			) replay
-			ORDER BY seq ASC`
-		rows, err := h.DB.Query(ctx, query, identity.WorkspaceID, runtimeID, cursor)
-		if err != nil {
-			return nil, nil, err
-		}
-		endCursor := cursor
-		for rows.Next() {
-			var event protocol.DaemonAgentLifecycleEvent
-			if err := rows.Scan(&event.EventType, &event.AgentID, &event.RuntimeID, &event.WorkspaceID, &event.LifecycleSeq, &event.PlacementGeneration); err != nil {
-				rows.Close()
-				return nil, nil, err
-			}
-			if event.LifecycleSeq > endCursor {
-				endCursor = event.LifecycleSeq
-			}
-			events = append(events, event)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		rows.Close()
-		endCursors[runtimeID] = endCursor
-	}
-	return events, endCursors, nil
-}
-
-func (h *Handler) HandleDaemonReminderOwnerLifecycleAck(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.DaemonAgentLifecycleAckPayload) error {
-	allowed := make(map[string]bool, len(identity.RuntimeIDs))
-	for _, runtimeID := range identity.RuntimeIDs {
-		allowed[runtimeID] = true
-	}
-	for runtimeID, seq := range payload.RuntimeCursors {
-		if !allowed[runtimeID] || seq < 0 {
-			return fmt.Errorf("agent lifecycle ack outside daemon scope")
-		}
-		result, err := h.DB.Exec(ctx, `
-			INSERT INTO agent_reminder_daemon_owner_cursor (runtime_id, ack_seq)
-			SELECT id, $2 FROM agent_runtime WHERE id::text = $1 AND ($3 = '' OR workspace_id::text = $3)
-			ON CONFLICT (runtime_id) DO UPDATE
-			SET ack_seq = GREATEST(agent_reminder_daemon_owner_cursor.ack_seq, EXCLUDED.ack_seq), updated_at = now()`, runtimeID, seq, identity.WorkspaceID)
-		if err != nil {
-			return err
-		}
-		if result.RowsAffected() != 1 {
-			return fmt.Errorf("agent lifecycle ack runtime outside workspace")
-		}
-		if _, err := h.DB.Exec(ctx, `
-			DELETE FROM agent_reminder_daemon_owner_event e
-			WHERE e.runtime_id::text = $1 AND e.seq <= $2
-			  AND EXISTS (
-				SELECT 1 FROM agent_reminder_daemon_owner_event newer
-				WHERE newer.runtime_id = e.runtime_id AND newer.agent_id = e.agent_id AND newer.seq > e.seq
-			  )`, runtimeID, seq); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error) {

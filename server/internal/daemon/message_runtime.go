@@ -108,10 +108,9 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	return nil
 }
 
-// restoreResidentAgents rebuilds the in-memory Message and Activity projections
-// for durable idle residents after a Computer process restart. The Workspace
-// Runner attaches later and replays both the managed launch and Message
-// recovery request on its new connection.
+// restoreResidentAgents rebuilds Inbox ownership for durable Attachments after
+// a Computer process restart. Provider launches are never reconstructed here;
+// the Workspace Runner receives an explicit managed start when work exists.
 func (d *Daemon) restoreResidentAgents() error {
 	if d == nil {
 		return nil
@@ -133,8 +132,8 @@ func (d *Daemon) restoreResidentAgents() error {
 		if _, err := d.ensureIdleMessageCoordinator(attachment.WorkspaceID, attachment.AgentID, attachment.RuntimeID); err != nil {
 			return fmt.Errorf("restore Agent Message coordinator %q: %w", attachment.AgentID, err)
 		}
-		if err := d.ensureWorkspaceRunnerManagedAgent(attachment.WorkspaceID, attachment.AgentID); err != nil {
-			return fmt.Errorf("restore Agent Workspace Runner lifecycle %q: %w", attachment.AgentID, err)
+		if _, err := d.ensureWorkspaceRunner(attachment.WorkspaceID); err != nil {
+			return fmt.Errorf("restore Agent Workspace Runner %q: %w", attachment.AgentID, err)
 		}
 	}
 	return nil

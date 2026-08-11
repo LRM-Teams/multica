@@ -14,8 +14,8 @@ import (
 
 type ReminderNotifier interface {
 	NotifyReminderProjection(runtimeID string, payload protocol.ReminderProjectionEvent)
-	NotifyReminderOwnerAdded(runtimeID string, payload protocol.DaemonAgentStartPayload)
-	NotifyReminderOwnerRemoved(runtimeID string, payload protocol.DaemonAgentStopPayload)
+	NotifyAgentAttachmentAdded(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentAttachPayload)
+	NotifyAgentAttachmentRemoved(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentDetachPayload)
 }
 
 // AgentDeliveryNotifier is the server-side transport boundary for canonical
@@ -127,16 +127,35 @@ func (n *RelayNotifier) NotifyReminderProjection(runtimeID string, payload proto
 	n.notifyReminderWithID(runtimeID, protocol.EventReminderProjection, payload, "reminder-projection:"+runtimeID+":"+strconv.FormatInt(payload.Seq, 10))
 }
 
-func (n *RelayNotifier) NotifyReminderOwnerRemoved(runtimeID string, payload protocol.DaemonAgentStopPayload) {
-	n.notifyReminder(runtimeID, protocol.EventDaemonAgentStop, payload)
+func (n *RelayNotifier) NotifyAgentAttachmentRemoved(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentDetachPayload) {
+	n.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentDetach, payload, payload.CorrelationID)
 }
 
-func (n *RelayNotifier) NotifyReminderOwnerAdded(runtimeID string, payload protocol.DaemonAgentStartPayload) {
-	n.notifyReminder(runtimeID, protocol.EventDaemonAgentStart, payload)
+func (n *RelayNotifier) NotifyAgentAttachmentAdded(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentAttachPayload) {
+	n.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentAttach, payload, payload.CorrelationID)
 }
 
-func (n *RelayNotifier) notifyReminder(runtimeID, eventType string, payload any) {
-	n.notifyReminderWithID(runtimeID, eventType, payload, ulid.Make().String())
+func (n *RelayNotifier) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType string, payload any, eventID string) {
+	if workspaceID == "" || daemonID == "" {
+		return
+	}
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return
+	}
+	if n.local != nil {
+		n.local.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
+	}
+	if n.relay == nil {
+		return
+	}
+	if eventID == "" {
+		eventID = ulid.Make().String()
+	}
+	scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
+	if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, eventID); err != nil {
+		slog.Warn("workspace Runner command relay publish failed", "error", err, "workspace_id", workspaceID, "daemon_id", daemonID, "type", eventType)
+	}
 }
 
 func (n *RelayNotifier) notifyReminderWithID(runtimeID, eventType string, payload any, eventID string) {

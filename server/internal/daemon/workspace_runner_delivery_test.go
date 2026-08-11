@@ -374,7 +374,7 @@ func TestAgentMessageRecoveryUsesCurrentWorkspaceRunnerConnection(t *testing.T) 
 	}
 }
 
-func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
+func TestAttachmentReplayStartsMessageRecoveryOnlyAfterCompletion(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, nil)
 	d.agentAttachments = newLocalAgentAttachmentRegistry(root, nil)
@@ -385,7 +385,7 @@ func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
 	requests := 0
 	statuses := 0
 	sessions := 0
-	attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, _ any) error {
+	runner, connection := attachTestWorkspaceRunner(t, d, "workspace-1", func(eventType string, _ any) error {
 		switch eventType {
 		case protocol.EventAgentRecoveryRequest:
 			requests++
@@ -396,16 +396,24 @@ func TestLifecycleReplayDoesNotRestartExistingMessageRecovery(t *testing.T) {
 		}
 		return nil
 	})
-	payload := protocol.DaemonAgentStartPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", WorkspaceID: "workspace-1",
-		PlacementGeneration: 1, LifecycleSeq: 1, Replay: true,
+	payload := protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
 	}
-	if err := d.handleDaemonAgentStartFrame(payload); err != nil {
+	if _, err := runner.applyAttachmentAttach(payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.handleDaemonAgentStartFrame(payload); err != nil {
+	if _, err := runner.applyAttachmentAttach(payload); err != nil {
 		t.Fatal(err)
 	}
+	if requests != 0 {
+		t.Fatalf("Attachment commands started Message recovery before replay end: %d", requests)
+	}
+	if _, err := runner.completeAttachmentReplay(runner.attachmentRuntimeSet(), protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: map[string]int64{"runtime-1": 1}}); err != nil {
+		t.Fatal(err)
+	}
+	runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
+		return runner.sendOnConnection(connection, protocol.EventAgentRecoveryRequest, request)
+	})
 	if requests != 1 {
 		t.Fatalf("Message recovery requests=%d, want one for the newly created coordinator", requests)
 	}

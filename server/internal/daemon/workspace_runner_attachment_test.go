@@ -23,7 +23,8 @@ func TestWorkspaceRunnerAttachmentReplayUsesExactWorkspaceRuntimeSet(t *testing.
 		t.Fatalf("seed Attachment replay cursor: %v", err)
 	}
 
-	request, err := runner.attachmentReplayRequest()
+	runtimeSet := runner.attachmentRuntimeSet()
+	request, err := runner.attachmentReplayRequest(runtimeSet)
 	if err != nil {
 		t.Fatalf("attachmentReplayRequest(): %v", err)
 	}
@@ -32,14 +33,14 @@ func TestWorkspaceRunnerAttachmentReplayUsesExactWorkspaceRuntimeSet(t *testing.
 	}
 
 	end := protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: map[string]int64{"runtime-1": 5, "runtime-2": 7}}
-	ack, err := runner.completeAttachmentReplay(end)
+	ack, err := runner.completeAttachmentReplay(runtimeSet, end)
 	if err != nil {
 		t.Fatalf("completeAttachmentReplay(): %v", err)
 	}
 	if !reflect.DeepEqual(ack.RuntimeCursors, end.RuntimeCursors) {
 		t.Fatalf("Attachment replay ack cursors = %v, want %v", ack.RuntimeCursors, end.RuntimeCursors)
 	}
-	request, err = runner.attachmentReplayRequest()
+	request, err = runner.attachmentReplayRequest(runtimeSet)
 	if err != nil {
 		t.Fatalf("attachmentReplayRequest() after completion: %v", err)
 	}
@@ -62,11 +63,11 @@ func TestWorkspaceRunnerAttachmentReplayRejectsIncompleteOrCrossWorkspaceEnd(t *
 		{RuntimeCursors: map[string]int64{"runtime-1": 1, "runtime-other": 1}},
 	}
 	for _, end := range invalid {
-		if _, err := runner.completeAttachmentReplay(end); err == nil {
+		if _, err := runner.completeAttachmentReplay(runner.attachmentRuntimeSet(), end); err == nil {
 			t.Fatalf("accepted invalid Attachment replay end: %+v", end)
 		}
 	}
-	request, err := runner.attachmentReplayRequest()
+	request, err := runner.attachmentReplayRequest(runner.attachmentRuntimeSet())
 	if err != nil {
 		t.Fatalf("attachmentReplayRequest(): %v", err)
 	}
@@ -78,14 +79,15 @@ func TestWorkspaceRunnerAttachmentReplayRejectsIncompleteOrCrossWorkspaceEnd(t *
 func TestWorkspaceRunnerAttachmentReplaySupportsWorkspaceWithoutRuntimes(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-empty", nil)
-	request, err := runner.attachmentReplayRequest()
+	runtimeSet := runner.attachmentRuntimeSet()
+	request, err := runner.attachmentReplayRequest(runtimeSet)
 	if err != nil {
 		t.Fatalf("attachmentReplayRequest(): %v", err)
 	}
 	if len(request.RuntimeCursors) != 0 {
 		t.Fatalf("zero-Runtime replay request cursors = %v", request.RuntimeCursors)
 	}
-	ack, err := runner.completeAttachmentReplay(protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: map[string]int64{}})
+	ack, err := runner.completeAttachmentReplay(runtimeSet, protocol.WorkspaceRunnerAttachmentReplayEnd{RuntimeCursors: map[string]int64{}})
 	if err != nil {
 		t.Fatalf("complete zero-Runtime replay: %v", err)
 	}

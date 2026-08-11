@@ -3,23 +3,22 @@ package daemon
 import (
 	"sort"
 	"strings"
-
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func (r *localAgentAttachmentRegistry) applyLegacyStart(agentID, runtimeID, workspaceID string, generation int64) (bool, bool, error) {
-	result, err := (legacyAgentAttachmentAdapter{registry: r}).ApplyStart(protocol.DaemonAgentStartPayload{
-		AgentID: agentID, RuntimeID: runtimeID, WorkspaceID: workspaceID,
-		PlacementGeneration: generation,
-	})
+	result, err := r.applyEvent(workspaceID, AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID,
+		AttachmentGeneration: AttachmentGeneration(generation),
+	}, false, true)
 	changed := result.change.Kind == AgentAttachmentAttached || result.change.Kind == AgentAttachmentMoved
 	return changed, result.accepted, err
 }
 
 func (r *localAgentAttachmentRegistry) applyLegacyStop(agentID, runtimeID string, generation int64) (bool, bool, error) {
-	result, err := (legacyAgentAttachmentAdapter{registry: r}).ApplyStop(protocol.DaemonAgentStopPayload{
-		AgentID: agentID, RuntimeID: runtimeID, PlacementGeneration: generation,
-	})
+	result, err := r.applyEvent("", AgentAttachmentEvent{
+		Kind: AgentAttachmentEventDetach, AgentID: agentID, RuntimeID: runtimeID,
+		AttachmentGeneration: AttachmentGeneration(generation),
+	}, false, false)
 	return result.change.Kind == AgentAttachmentDetached, result.accepted, err
 }
 
@@ -61,7 +60,7 @@ func (r *localAgentAttachmentRegistry) legacyRecoveryCursors() map[string]int64 
 }
 
 func (r *localAgentAttachmentRegistry) advanceLegacyRecovery(cursors map[string]int64) error {
-	return (legacyAgentAttachmentAdapter{registry: r}).AdvanceRecovery(cursors)
+	return r.advanceRecovery(nil, cursors)
 }
 
 func (r *localAgentAttachmentRegistry) reconcileLegacyRuntimeSet(allowed map[string]bool) (bool, error) {

@@ -8,11 +8,10 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (runner *WorkspaceRunner) attachmentReplayRequest() (protocol.WorkspaceRunnerAttachmentReplayRequest, error) {
+func (runner *WorkspaceRunner) attachmentReplayRequest(runtimeSet AgentAttachmentRuntimeSet) (protocol.WorkspaceRunnerAttachmentReplayRequest, error) {
 	if runner == nil || runner.daemon == nil || runner.attachments == nil {
 		return protocol.WorkspaceRunnerAttachmentReplayRequest{}, errors.New("Workspace Runner Attachment replay dependencies are unavailable")
 	}
-	runtimeSet := runner.attachmentRuntimeSet()
 	state, err := runner.attachments.RecoveryState(runtimeSet)
 	if err != nil {
 		return protocol.WorkspaceRunnerAttachmentReplayRequest{}, fmt.Errorf("read Attachment replay cursors: %w", err)
@@ -24,14 +23,13 @@ func (runner *WorkspaceRunner) attachmentReplayRequest() (protocol.WorkspaceRunn
 	return protocol.WorkspaceRunnerAttachmentReplayRequest{RuntimeCursors: cursors}, nil
 }
 
-func (runner *WorkspaceRunner) completeAttachmentReplay(end protocol.WorkspaceRunnerAttachmentReplayEnd) (protocol.WorkspaceRunnerAttachmentReplayAck, error) {
+func (runner *WorkspaceRunner) completeAttachmentReplay(runtimeSet AgentAttachmentRuntimeSet, end protocol.WorkspaceRunnerAttachmentReplayEnd) (protocol.WorkspaceRunnerAttachmentReplayAck, error) {
 	if runner == nil || runner.attachments == nil {
 		return protocol.WorkspaceRunnerAttachmentReplayAck{}, errors.New("Workspace Runner Attachment replay dependencies are unavailable")
 	}
 	if err := end.Validate(); err != nil {
 		return protocol.WorkspaceRunnerAttachmentReplayAck{}, fmt.Errorf("validate Attachment replay end: %w", err)
 	}
-	runtimeSet := runner.attachmentRuntimeSet()
 	allowed := runtimeSet.runtimeIDs()
 	if len(end.RuntimeCursors) != len(allowed) {
 		return protocol.WorkspaceRunnerAttachmentReplayAck{}, errors.New("Attachment replay end omitted a Runtime cursor")

@@ -30,9 +30,11 @@ func casPassportEligibilityRevisionTx(
 	eligibilityRevision int64,
 	lifecycle ArtifactLifecycleStatus,
 ) error {
+	// Passport has no updated_at column (318 schema). CAS is a pure predicate
+	// match: rewrite a column to itself so RowsAffected reports the lock result.
 	tag, err := tx.Exec(ctx, `
 		UPDATE research_artifact_passport
-		SET updated_at = now()
+		SET eligibility_revision = eligibility_revision
 		WHERE workspace_id = $1::uuid
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid

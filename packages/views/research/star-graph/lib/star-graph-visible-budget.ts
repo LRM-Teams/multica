@@ -5,6 +5,9 @@ import { isBlankFilter, matchesResearchCanvasFilter } from "@multica/core/resear
 /** D5 desktop hard DOM budget (viewport-performance §3). */
 export const STAR_GRAPH_DOM_BUDGET = 220;
 
+/** D5 narrow viewport hard DOM budget (viewport-performance §3). */
+export const STAR_GRAPH_MOBILE_DOM_BUDGET = 48;
+
 /** Below this zoom, non-protected nodes collapse to one representative per cluster. */
 export const LOW_ZOOM_CLUSTER_COLLAPSE = 0.55;
 

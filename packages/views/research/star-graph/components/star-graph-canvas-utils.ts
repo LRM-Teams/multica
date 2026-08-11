@@ -46,6 +46,13 @@ export function computeEntityBounds(entities: readonly StarEntityView[]): StarGr
   };
 }
 
+export function computeEntityBoundsForIds(
+  entities: readonly StarEntityView[],
+  ids: ReadonlySet<string>,
+): StarGraphBounds | null {
+  return computeEntityBounds(entities.filter((entity) => ids.has(entity.id)));
+}
+
 export function fitCameraToBounds(
   bounds: StarGraphBounds,
   viewport: { width: number; height: number },

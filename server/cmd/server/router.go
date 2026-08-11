@@ -1040,6 +1040,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Route("/sessions/{id}", func(r chi.Router) {
 					r.Get("/", h.GetResearchSessionSnapshot)
 					r.Get("/presence", h.GetResearchPresence)
+					r.Get("/work-projection", h.GetResearchWorkProjection)
 					r.Delete("/", h.DeleteResearchSession)
 					r.Post("/messages", h.PostResearchMessage)
 					r.Put("/messages/{messageId}/match-decision", h.PutResearchMessageMatchDecision)

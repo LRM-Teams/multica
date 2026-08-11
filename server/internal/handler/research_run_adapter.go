@@ -430,6 +430,11 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 		"run_event_id": event.ID,
 		"event_type":   event.Type,
 	})
+	// LRM-1507: push a scoped per-task work projection event on task lifecycle
+	// transitions so the canvas timeline refreshes without polling.
+	if isTaskLifecycleEvent(event.Type) {
+		publishWorkProjectionForEvent(ctx, h, event)
+	}
 	if event.Type == "task_result_accepted" {
 		if reportID, _ := payload["report_id"].(string); strings.TrimSpace(reportID) != "" {
 			if report, reportErr := h.Queries.GetLatestResearchReport(ctx, db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: workspaceID}); reportErr == nil {

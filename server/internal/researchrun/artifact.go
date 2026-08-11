@@ -177,3 +177,21 @@ func LinkPolicyGuardTriggerNames() []string {
 		"research_artifact_policy_mutation_to_lifecycle_event_guard",
 	}
 }
+
+// MigrationDiagnosticReasonCodes lists migration 325 diagnostic reason registry.
+func MigrationDiagnosticReasonCodes() []string {
+	return []string{
+		"cross_scope_reference",
+		"invalid_match_decision",
+		"malformed_uuid",
+		"unknown_schema",
+		"unresolved_reference",
+	}
+}
+
+// MigrationRelationshipParserNames lists migration 325 relationship parser registry.
+func MigrationRelationshipParserNames() []string {
+	return []string{
+		"research_message_match_decision",
+	}
+}

@@ -1148,3 +1148,163 @@ func TestResearchArtifactLinkPolicyGuards324RoundTrips(t *testing.T) {
 		t.Fatalf("reapply 324 up: %v", err)
 	}
 }
+
+const researchArtifactDiagnosticTestDDL = `
+ALTER TABLE research_message
+  ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;
+`
+
+func TestResearchArtifactMigrationDiagnostics325RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_diagnostic_325_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactDiagnosticTestDDL); err != nil {
+		t.Fatalf("extend message schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	otherSessionID := "20000000-0000-4000-8000-000000000002"
+	validNodeID := "30000000-0000-4000-8000-000000000010"
+	crossScopeNodeID := "30000000-0000-4000-8000-000000000011"
+	anchorMessageID := "30000000-0000-4000-8000-000000000020"
+	validMessageID := "30000000-0000-4000-8000-000000000030"
+	brokenMessageID := "30000000-0000-4000-8000-000000000031"
+	crossScopeMessageID := "30000000-0000-4000-8000-000000000032"
+	missingNodeID := "30000000-0000-4000-8000-000000000099"
+
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	for _, seed := range []struct {
+		id string
+	}{
+		{sessionID},
+		{otherSessionID},
+	} {
+		if _, err = conn.Exec(ctx, `INSERT INTO research_session (id, workspace_id) VALUES ($1::uuid, $2::uuid)`, seed.id, workspaceID); err != nil {
+			t.Fatalf("seed session %s: %v", seed.id, err)
+		}
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_graph_node (id, workspace_id, session_id)
+		VALUES ($1::uuid, $3::uuid, $4::uuid), ($2::uuid, $3::uuid, $5::uuid)
+	`, validNodeID, crossScopeNodeID, workspaceID, sessionID, otherSessionID); err != nil {
+		t.Fatalf("seed graph nodes: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_message (id, workspace_id, session_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid)
+	`, anchorMessageID, workspaceID, otherSessionID); err != nil {
+		t.Fatalf("seed anchor message: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_message (id, workspace_id, session_id, meta)
+		VALUES
+		  ($1::uuid, $4::uuid, $5::uuid, $6::jsonb),
+		  ($2::uuid, $4::uuid, $5::uuid, $7::jsonb),
+		  ($3::uuid, $4::uuid, $5::uuid, $8::jsonb)
+	`, validMessageID, brokenMessageID, crossScopeMessageID, workspaceID, sessionID,
+		fmt.Sprintf(`{"match_decision":{"matched_node_ids":["%s"],"decisions":[{"node_id":"%s","action":"continue"}]}}`, validNodeID, validNodeID),
+		fmt.Sprintf(`{"match_decision":{"matched_node_ids":["%s"],"decisions":[{"node_id":"%s","action":"continue"}]}}`, missingNodeID, missingNodeID),
+		fmt.Sprintf(`{"match_decision":{"utterance_id":"%s","matched_node_ids":["%s"],"decisions":[{"node_id":"%s","action":"continue"}]}}`, anchorMessageID, crossScopeNodeID, crossScopeNodeID),
+	); err != nil {
+		t.Fatalf("seed messages: %v", err)
+	}
+
+	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
+	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
+	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
+	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
+	up322, _ := readMigrationPair(t, "322_research_artifact_policy_ledger_guards")
+	up323, _ := readMigrationPair(t, "323_research_artifact_integrity_guards")
+	up324, _ := readMigrationPair(t, "324_research_artifact_link_policy_guards")
+	up325, down325 := readMigrationPair(t, "325_research_artifact_migration_diagnostics")
+	for _, upSQL := range []string{up318, up319, up320, up321, up322, up323, up324, up325} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+
+	var diagnosticCount int
+	if err = conn.QueryRow(ctx, `
+		SELECT research_artifact_scan_session_message_migration_diagnostics($1::uuid, $2::uuid)
+	`, workspaceID, sessionID).Scan(&diagnosticCount); err != nil {
+		t.Fatalf("scan session diagnostics: %v", err)
+	}
+	if diagnosticCount < 3 {
+		t.Fatalf("diagnostic count=%d want at least 3", diagnosticCount)
+	}
+
+	var brokenReason string
+	if err = conn.QueryRow(ctx, `
+		SELECT reason_code FROM research_artifact_migration_diagnostic
+		WHERE owner_id = $1::uuid AND field_path = '/meta/match_decision/matched_node_ids/0'
+	`, brokenMessageID).Scan(&brokenReason); err != nil || brokenReason != "unresolved_reference" {
+		t.Fatalf("broken reason=%q err=%v", brokenReason, err)
+	}
+
+	var crossScopeReason string
+	if err = conn.QueryRow(ctx, `
+		SELECT reason_code FROM research_artifact_migration_diagnostic
+		WHERE owner_id = $1::uuid AND field_path = '/meta/match_decision/utterance_id'
+	`, crossScopeMessageID).Scan(&crossScopeReason); err != nil || crossScopeReason != "cross_scope_reference" {
+		t.Fatalf("cross-scope reason=%q err=%v", crossScopeReason, err)
+	}
+
+	var validCount int
+	if err = conn.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_artifact_migration_diagnostic
+		WHERE owner_id = $1::uuid
+	`, validMessageID).Scan(&validCount); err != nil || validCount != 0 {
+		t.Fatalf("valid message diagnostics=%d err=%v", validCount, err)
+	}
+
+	if _, err = conn.Exec(ctx, `
+		UPDATE research_message
+		SET meta = $2::jsonb
+		WHERE workspace_id = $3::uuid AND session_id = $4::uuid AND id = $1::uuid
+	`, brokenMessageID,
+		fmt.Sprintf(`{"match_decision":{"matched_node_ids":["%s"],"decisions":[{"node_id":"%s","action":"continue"}]}}`, validNodeID, validNodeID),
+		workspaceID, sessionID,
+	); err != nil {
+		t.Fatalf("repair broken message: %v", err)
+	}
+	if err = conn.QueryRow(ctx, `
+		SELECT research_artifact_scan_research_message_migration_diagnostics($1::uuid, $2::uuid, $3::uuid)
+	`, workspaceID, sessionID, brokenMessageID).Scan(&diagnosticCount); err != nil {
+		t.Fatalf("rescan repaired message: %v", err)
+	}
+	if diagnosticCount != 0 {
+		t.Fatalf("repaired message diagnostics=%d want 0", diagnosticCount)
+	}
+
+	if _, err = conn.Exec(ctx, down325); err != nil {
+		t.Fatalf("apply 325 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up325); err != nil {
+		t.Fatalf("reapply 325 up: %v", err)
+	}
+}

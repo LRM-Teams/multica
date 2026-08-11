@@ -695,19 +695,18 @@ func (h *Hub) notifyWorkspaceRunnerCommand(workspaceID, daemonID, eventType stri
 	return h.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
 }
 
-// NotifyReminderOwnerInput attempts one in-memory transport write. It does not
-// enter pendingAgentDeliveries and deliberately has no retry timer or ACK.
-func (h *Hub) NotifyReminderOwnerInput(runtimeID string, payload protocol.ReminderOwnerInputPayload) bool {
-	if h == nil || strings.TrimSpace(runtimeID) == "" {
+// NotifyReminderOwnerInput attempts one in-memory Workspace Runner write. It
+// does not enter pendingAgentDeliveries and deliberately has no retry or ACK.
+func (h *Hub) NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool {
+	if h == nil || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonID) == "" {
 		return false
 	}
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventReminderOwnerInput, Payload: mustMarshalRaw(payload)})
-	if err != nil {
-		return false
+	input := protocol.AgentTransientDeliverPayload{
+		Kind: protocol.AgentTransientDeliverKindReminder, Transient: true, Reminder: payload,
 	}
-	delivered, _ := h.notifyFrame(runtimeID, frame, "")
+	delivered := h.notifyWorkspaceRunnerCommand(workspaceID, daemonID, protocol.EventAgentDeliver, input)
 	if !delivered {
-		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "runtime_id", runtimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
+		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", payload.RuntimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
 	}
 	return delivered
 }

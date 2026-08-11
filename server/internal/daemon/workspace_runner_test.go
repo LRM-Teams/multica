@@ -94,6 +94,13 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			if got.ready.WorkspaceID != "workspace-1" || got.ready.DaemonInstanceID != "instance-1" || got.pong.PingID != "ping-1" {
 				t.Fatalf("reconnect observation = %+v", got)
 			}
+			capabilities := make(map[string]bool, len(got.ready.ActiveCapabilities))
+			for _, capability := range got.ready.ActiveCapabilities {
+				capabilities[capability] = true
+			}
+			if !capabilities[protocol.DaemonCapabilityWorkspaceRunnerAttachment] || !capabilities[protocol.DaemonCapabilityReminderTransientInput] {
+				t.Fatalf("Runner capabilities = %v, want Attachment and Reminder transient input", got.ready.ActiveCapabilities)
+			}
 		case <-ctx.Done():
 			t.Fatalf("timed out waiting for Runner connection %d", attempt+1)
 		}

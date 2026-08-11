@@ -22,7 +22,7 @@ type ReminderNotifier interface {
 // private Reminder input. A false result is final; implementations must not
 // stage retries or reconnect replay.
 type ReminderOwnerInputNotifier interface {
-	NotifyReminderOwnerInput(runtimeID string, payload protocol.ReminderOwnerInputPayload) bool
+	NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool
 }
 
 // AgentDeliveryNotifier is the server-side transport boundary for canonical
@@ -165,28 +165,32 @@ func (n *RelayNotifier) notifyWorkspaceRunnerCommand(workspaceID, daemonID, even
 	}
 }
 
-func (n *RelayNotifier) NotifyReminderOwnerInput(runtimeID string, payload protocol.ReminderOwnerInputPayload) bool {
-	if runtimeID == "" {
+func (n *RelayNotifier) NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool {
+	if workspaceID == "" || daemonID == "" {
 		return false
 	}
-	frame, err := json.Marshal(protocol.Message{Type: protocol.EventReminderOwnerInput, Payload: mustMarshalRaw(payload)})
+	input := protocol.AgentTransientDeliverPayload{
+		Kind: protocol.AgentTransientDeliverKindReminder, Transient: true, Reminder: payload,
+	}
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliver, Payload: mustMarshalRaw(input)})
 	if err != nil {
 		return false
 	}
 	delivered := false
 	eventID := ulid.Make().String()
 	if n.local != nil {
-		delivered, _ = n.local.notifyFrame(runtimeID, frame, eventID)
+		delivered = n.local.notifyWorkspaceRunnerFrame(daemonID, workspaceID, frame)
 	}
 	if n.relay != nil {
-		if err := n.relay.PublishWithID(realtime.ScopeDaemonRuntime, runtimeID, "", frame, eventID); err != nil {
-			slog.Warn("daemon websocket Reminder owner input publish failed", "runtime_id", runtimeID, "error", err)
+		scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
+		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, eventID); err != nil {
+			slog.Warn("workspace Runner Reminder owner input publish failed", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", payload.RuntimeID, "error", err)
 		} else {
 			delivered = true
 		}
 	}
 	if !delivered {
-		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "runtime_id", runtimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
+		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", payload.RuntimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
 	}
 	return delivered
 }

@@ -582,6 +582,18 @@ type ReminderFireResultPayload struct {
 	Projection ReminderProjectionEvent `json:"projection"`
 }
 
+// AgentTransientDeliverPayload is the non-durable branch of the Workspace
+// Runner agent:deliver union. Canonical Messages keep AgentDeliverPayload;
+// transient inputs share transport and resident-turn admission without gaining
+// Message identity, cursor, replay, acknowledgement, or Activity semantics.
+type AgentTransientDeliverPayload struct {
+	Kind      string                    `json:"kind"`
+	Transient bool                      `json:"transient"`
+	Reminder  ReminderOwnerInputPayload `json:"reminder"`
+}
+
+const AgentTransientDeliverKindReminder = "reminder"
+
 // ReminderOwnerInputPayload is one post-commit, best-effort Reminder input for
 // the current owner placement. It is deliberately not a Message projection and
 // carries no delivery identity or acknowledgement contract.

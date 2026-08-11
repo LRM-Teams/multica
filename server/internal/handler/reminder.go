@@ -1547,7 +1547,7 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 	}
 	if committedFire != nil {
 		if h.ReminderOwnerInputNotifier != nil {
-			h.ReminderOwnerInputNotifier.NotifyReminderOwnerInput(uuidToString(runtimeID), committedFire.OwnerInput)
+			h.ReminderOwnerInputNotifier.NotifyReminderOwnerInput(uuidToString(workspaceID), identity.DaemonID, committedFire.OwnerInput)
 		}
 		h.publishAgentReminderChanged(ctx, committedFire.Reminder.WorkspaceID, committedFire.Reminder.AgentID)
 		if committedFire.Reminder.Status == "scheduled" {

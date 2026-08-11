@@ -836,6 +836,36 @@ func TestRelayNotifierPublishesAttachmentToWorkspaceRunnerScope(t *testing.T) {
 	}
 }
 
+func TestRelayNotifierPublishesReminderAsTransientAgentDeliveryToWorkspaceRunnerScope(t *testing.T) {
+	relay := &recordingRelayPublisher{}
+	notifier := NewRelayNotifier(nil, relay)
+	payload := protocol.ReminderOwnerInputPayload{
+		WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-1",
+		PlacementGeneration: 2, ReminderID: "reminder-1", Version: 3,
+	}
+
+	if !notifier.NotifyReminderOwnerInput("workspace-1", "daemon-1", payload) {
+		t.Fatal("Reminder transient delivery was not published")
+	}
+	if relay.scopeType != realtime.ScopeDaemonWorkspaceRunner || relay.scopeID != workspaceRunnerRelayScopeID("daemon-1", "workspace-1") {
+		t.Fatalf("Reminder relay scope = %q/%q", relay.scopeType, relay.scopeID)
+	}
+	var frame protocol.Message
+	if err := json.Unmarshal(relay.frame, &frame); err != nil {
+		t.Fatalf("unmarshal Reminder relay frame: %v", err)
+	}
+	if frame.Type != protocol.EventAgentDeliver {
+		t.Fatalf("Reminder relay event = %q, want %q", frame.Type, protocol.EventAgentDeliver)
+	}
+	var input protocol.AgentTransientDeliverPayload
+	if err := json.Unmarshal(frame.Payload, &input); err != nil {
+		t.Fatalf("unmarshal Reminder transient input: %v", err)
+	}
+	if input.Kind != protocol.AgentTransientDeliverKindReminder || !input.Transient || input.Reminder != payload {
+		t.Fatalf("Reminder transient input = %+v", input)
+	}
+}
+
 func TestRelayNotifierDedupsLocalRedisLoopback(t *testing.T) {
 	M.Reset()
 	defer M.Reset()

@@ -12,7 +12,7 @@ func TestReminderOwnerInputMissingTransportIsFinalAndUnstaged(t *testing.T) {
 		WorkspaceID: "workspace-a", AgentID: "agent-a", RuntimeID: "runtime-a",
 		PlacementGeneration: 1, ReminderID: "reminder-a", Version: 1, Title: "title",
 	}
-	if hub.NotifyReminderOwnerInput("runtime-a", payload) {
+	if hub.NotifyReminderOwnerInput("workspace-a", "daemon-a", payload) {
 		t.Fatal("missing transport reported Reminder owner input delivered")
 	}
 	hub.agentDeliveryMu.Lock()

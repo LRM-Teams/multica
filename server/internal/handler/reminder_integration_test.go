@@ -118,8 +118,10 @@ func reminderFireCounts(t *testing.T, reminderID string) (occurrences, receipts,
 }
 
 type capturedReminderOwnerInput struct {
-	runtimeID string
-	payload   protocol.ReminderOwnerInputPayload
+	workspaceID string
+	daemonID    string
+	runtimeID   string
+	payload     protocol.ReminderOwnerInputPayload
 }
 
 type capturedReminderOwnerInputNotifier struct {
@@ -128,10 +130,12 @@ type capturedReminderOwnerInputNotifier struct {
 	result bool
 }
 
-func (n *capturedReminderOwnerInputNotifier) NotifyReminderOwnerInput(runtimeID string, payload protocol.ReminderOwnerInputPayload) bool {
+func (n *capturedReminderOwnerInputNotifier) NotifyReminderOwnerInput(workspaceID, daemonID string, payload protocol.ReminderOwnerInputPayload) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.calls = append(n.calls, capturedReminderOwnerInput{runtimeID: runtimeID, payload: payload})
+	n.calls = append(n.calls, capturedReminderOwnerInput{
+		workspaceID: workspaceID, daemonID: daemonID, runtimeID: payload.RuntimeID, payload: payload,
+	})
 	return n.result
 }
 

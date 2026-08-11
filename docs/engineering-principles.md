@@ -496,6 +496,11 @@
 - `InboxRegistry` 固定一个 Workspace scope；仅在该 scope 内 `AgentAttachmentRegistry.Resolve` 成功且 Runtime ownership 匹配时创建 coordinator。Delivery、recovery page 与 reconnect recovery 只能经过 current Runner 的 registry；reconnect 保留 registry，Runner close 只关闭自己的 Inboxes。旧 machine-local 仅 Agent lookup 必须唯一，否则 fail closed，不能隐式选另一个 Workspace。
 - **物**：`workspace_runner_state.go` 的 constructor/connection ownership 与 current-connection fence；`workspace_runner.go` 的 Runner-owned frame loop/dispatcher；`inbox_registry.go` 的 scoped Inbox lifetime/Attachment fence/recovery；`workspace_runner_delivery.go` 的 current Runner resolution；`inbox_registry_test.go`、`workspace_runner_state_test.go`、`workspace_runner_test.go` 与 `workspace_runner_delivery_test.go` 的 identity、shared dependency、ready/ping/reconnect、serialized writer、FIFO/concurrency、stale callback、Inbox isolation/scoped recovery/scoped close、replacement cancellation、旧 map 不存在与 compile-time `Run(ctx)` guard。
 
+### 4.19.3 Reminder 控制面走专线，触发输入复用 Runner admission — `可执行`（①旧事件不存在 + ②discriminated payload + ⑤协议/transport/admission tests）
+- 对齐 Raft 的边界是两层：定时控制面保留 `reminder.upsert` / `reminder.cancel` / `reminder.snapshot` / `reminder.fire_attempt`；fire commit 后给 resident Agent 的一次性输入复用 Workspace Runner `agent:deliver`，以 `kind:"reminder", transient:true` 区分。不存在 `reminder.owner_input` 第二条唤醒专线。
+- transient Reminder 与 canonical Message 共用当前 Runner 连接和 resident-turn admission，但不获得 Message identity、cursor、replay、ACK、MessageCoordinator 或 Activity。Agent idle 时注入一次；busy/compacting、transport lost 或 native injection failure 都是最终丢弃，不能排队或在 reconnect/idle boundary 重放。
+- **物**：`AgentTransientDeliverPayload` 的协议形状与 golden；Workspace Runner 的 `agent:deliver` union dispatch；Reminder relay scope 回归；idle/busy/invalid placement/capability 回归；`EventReminderOwnerInput` 常量不存在。
+
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。
 - **物**：`CreateSandboxInstance` 写入 `metadata.docker_container_name` / job `docker_container_name`；`sandboxd` 使用该字段作为 `--name`，旧 payload 只回退到 instance-id 名称。

@@ -68,6 +68,8 @@ type RuntimePendingNoticeHandoff func(context.Context, PendingNoticeSnapshot) er
 type MessageCoordinator struct {
 	mu              sync.Mutex
 	draftMu         sync.Mutex
+	draftStore      *MessageDraftStore
+	draftKey        DraftKey
 	root            string
 	boundaries      map[string]int64
 	pending         map[string]map[int64]protocol.AgentMessageProjection
@@ -133,8 +135,9 @@ func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, acti
 	if err != nil {
 		return nil, err
 	}
+	draftStore, draftKey := coordinatorMessageDraftStore(agentRoot)
 	return &MessageCoordinator{
-		root: agentRoot, boundaries: boundaries,
+		root: agentRoot, boundaries: boundaries, draftStore: draftStore, draftKey: draftKey,
 		pending:  make(map[string]map[int64]protocol.AgentMessageProjection),
 		accepted: make(map[string]struct{}), handoff: handoff, activity: activity,
 		recovery:        messageRecoveryState{status: messageFreshnessUnknown},

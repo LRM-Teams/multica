@@ -52,6 +52,12 @@ export function applyResearchWSEvent(
           : prev.edges;
         return { ...prev, nodes, edges };
       });
+      void qc.invalidateQueries({
+        queryKey: researchKeys.graphTypedInfinite(wsId, sessionId),
+      });
+      void qc.invalidateQueries({
+        queryKey: ["research", wsId, "graph-typed", sessionId],
+      });
       break;
     }
     case "research_session:sources_updated": {

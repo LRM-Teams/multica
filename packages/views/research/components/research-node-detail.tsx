@@ -9,6 +9,7 @@ import type {
   ResearchSource,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
+import { Button } from "@multica/ui/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -1011,6 +1012,8 @@ export function ResearchNodeDetail({
   open = true,
   onClose,
   placement,
+  onOpenReport,
+  onContinueDeepening,
 }: {
   node: ResearchGraphNode;
   sources?: ResearchSource[];
@@ -1020,6 +1023,8 @@ export function ResearchNodeDetail({
   onClose?: () => void;
   /** Force placement; default: overlay-card on desktop, sheet on narrow. */
   placement?: "overlay-card" | "sheet" | "inline";
+  onOpenReport?: () => void;
+  onContinueDeepening?: () => void;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -1032,6 +1037,7 @@ export function ResearchNodeDetail({
   if (!open) return null;
 
   if (mode === "inline") {
+    const showActions = Boolean(onOpenReport || onContinueDeepening);
     return (
       <div
         data-testid="research-node-detail"
@@ -1046,6 +1052,23 @@ export function ResearchNodeDetail({
           onClose={onClose}
           showClose={Boolean(onClose)}
         />
+        {showActions ? (
+          <footer
+            data-testid="research-node-detail-actions"
+            className="flex shrink-0 gap-2 border-t border-border/70 bg-background/80 p-3"
+          >
+            {onOpenReport ? (
+              <Button type="button" size="sm" onClick={onOpenReport}>
+                {t(($) => $.d5.detail.open_report)}
+              </Button>
+            ) : null}
+            {onContinueDeepening ? (
+              <Button type="button" size="sm" variant="outline" onClick={onContinueDeepening}>
+                {t(($) => $.d5.detail.continue_deepening)}
+              </Button>
+            ) : null}
+          </footer>
+        ) : null}
       </div>
     );
   }

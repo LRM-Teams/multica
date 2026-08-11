@@ -18,6 +18,7 @@ export function ResearchD5Chrome({
   onLensChange,
   goalVersion,
   goalHistory = [],
+  goalImpact = null,
   className,
   ...chromeProps
 }: ChromeProps & {
@@ -25,6 +26,7 @@ export function ResearchD5Chrome({
   onLensChange: (lens: ResearchD5Lens) => void;
   goalVersion?: number | null;
   goalHistory?: readonly GoalVersionEntry[];
+  goalImpact?: { labeledNodes: number; totalNodes: number } | null;
   className?: string;
 }) {
   const { t } = useT("research");
@@ -55,6 +57,7 @@ export function ResearchD5Chrome({
             onRetry={onGoalRetry}
             goalVersion={goalVersion}
             goalHistory={goalHistory}
+            goalImpact={goalImpact}
             className="max-w-full"
           />
         </div>

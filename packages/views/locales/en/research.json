@@ -979,7 +979,13 @@
     "goal_panel": {
       "title": "Goal versions",
       "version": "v{{version}}",
-      "current": "Current"
+      "current": "Current",
+      "impact": "{{labeledNodes}} of {{totalNodes}} nodes tagged with a goal version"
+    },
+    "detail": {
+      "open_report": "Open full report",
+      "continue_deepening": "Continue deepening",
+      "continue_message": "Please continue deepening the research on: {{title}}"
     },
     "summary": {
       "title": "Constellation · {{loaded}} loaded directions",

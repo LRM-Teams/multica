@@ -37,6 +37,11 @@ import { ResearchD5Rail, type ResearchD5RailMode } from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
 import "./research-d5-layout.css";
 
+export type ResearchReportController = {
+  open: () => void;
+  close: () => void;
+};
+
 export function ResearchConstellationWorkspace({
   typedGraph,
   typedLoading,
@@ -59,6 +64,7 @@ export function ResearchConstellationWorkspace({
   chatPanel,
   detailPanel,
   composer,
+  registerReportController,
   className,
 }: {
   typedGraph: TypedGraphResponse | undefined;
@@ -82,6 +88,7 @@ export function ResearchConstellationWorkspace({
   chatPanel: ReactNode;
   detailPanel: ReactNode;
   composer: ReactNode;
+  registerReportController?: (controller: ResearchReportController) => void;
   className?: string;
 }) {
   const { t } = useT("research");
@@ -95,7 +102,26 @@ export function ResearchConstellationWorkspace({
   const [reportOpen, setReportOpen] = useState(false);
   const motion = useSemanticTransition();
 
-  const railWidth = isMobile ? 0 : viewport.width >= 1200 ? 360 : 320;
+  const railWidthBase = viewport.width >= 1200 ? 360 : 320;
+  const effectiveRailWidth =
+    isMobile || !railOpen ? 0 : railWidthBase;
+  const showDesktopRail = !isMobile && railOpen;
+  const backgroundInert = reportOpen;
+
+  const reportController = useMemo<ResearchReportController>(
+    () => ({
+      open: () => {
+        setInspectorAgentId(null);
+        setReportOpen(true);
+      },
+      close: () => setReportOpen(false),
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    registerReportController?.(reportController);
+  }, [registerReportController, reportController]);
 
   useEffect(() => {
     const id = "research-semantic-motion-css";
@@ -135,9 +161,9 @@ export function ResearchConstellationWorkspace({
   const canvasModel = useMemo(
     () =>
       buildD5SessionCanvasModel(typedGraph, viewport, {
-        rightPanelWidth: railWidth,
+        rightPanelWidth: effectiveRailWidth,
       }),
-    [typedGraph, viewport, railWidth],
+    [typedGraph, viewport, effectiveRailWidth],
   );
 
   const lensHints = useMemo(
@@ -219,6 +245,14 @@ export function ResearchConstellationWorkspace({
     [isMobile, onSelectNode, snapshotNodes, typedGraph?.nodes],
   );
 
+  const handleLineageSelect = useCallback(
+    (nodeId: string) => {
+      handleCanvasSelect(nodeId);
+      setReportOpen(false);
+    },
+    [handleCanvasSelect],
+  );
+
   const showEmpty = canvasMode === "empty" && !canvasModel;
   const showForming =
     (canvasMode === "forming" || canvasMode === "stalled") && !canvasModel;
@@ -228,8 +262,14 @@ export function ResearchConstellationWorkspace({
       className={cn("d5-workspace", className)}
       data-testid="research-constellation-workspace"
       data-d5-lens={activeLens}
+      data-d5-rail-open={showDesktopRail ? "true" : "false"}
     >
-      <section ref={hostRef} className="d5-canvas-host" data-testid="research-session-canvas-host">
+      <section
+        ref={hostRef}
+        className="d5-canvas-host"
+        data-testid="research-session-canvas-host"
+        {...(backgroundInert ? { inert: true } : {})}
+      >
         {typedLoading && !canvasModel ? (
           <div className="grid h-full place-items-center text-sm text-muted-foreground">
             {t(($) => $.d5.canvas.loading)}
@@ -269,7 +309,7 @@ export function ResearchConstellationWorkspace({
 
         <ResearchAgentInspector
           row={inspectorRow}
-          open={Boolean(inspectorRow)}
+          open={Boolean(inspectorRow) && !reportOpen}
           onClose={() => setInspectorAgentId(null)}
           onOpenAgentConfig={
             inspectorRow
@@ -281,37 +321,54 @@ export function ResearchConstellationWorkspace({
           }
           className={isMobile ? "research-agent-inspector-mobile" : undefined}
         />
-        <ResearchNodeReportModal
-          open={reportOpen && Boolean(selectedNode)}
-          node={selectedNode}
-          typedNode={selectedTypedNode}
-          sources={sources}
-          run={run}
-          members={members}
-          onClose={() => setReportOpen(false)}
-        />
       </section>
 
-      {isMobile ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          className="d5-rail-toggle"
-          data-testid="research-d5-rail-toggle"
-          onClick={() => setRailOpen((open) => !open)}
-        >
-          {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
-        </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        className={cn(
+          isMobile ? "d5-rail-toggle" : "d5-rail-toggle-desktop",
+        )}
+        data-testid="research-d5-rail-toggle"
+        onClick={() => setRailOpen((open) => !open)}
+      >
+        {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
+      </Button>
+
+      {showDesktopRail ? (
+        <ResearchD5Rail
+          mode={railMode}
+          onModeChange={setRailMode}
+          chatPanel={chatPanel}
+          detailPanel={detailPanel}
+          composer={composer}
+          onClose={() => setRailOpen(false)}
+          {...(backgroundInert ? { inert: true } : {})}
+        />
       ) : null}
 
-      <ResearchD5Rail
-        mode={railMode}
-        onModeChange={setRailMode}
-        chatPanel={chatPanel}
-        detailPanel={detailPanel}
-        composer={composer}
-        className={isMobile && !railOpen ? "d5-rail-collapsed" : undefined}
+      {isMobile ? (
+        <ResearchD5Rail
+          mode={railMode}
+          onModeChange={setRailMode}
+          chatPanel={chatPanel}
+          detailPanel={detailPanel}
+          composer={composer}
+          className={!railOpen ? "d5-rail-collapsed" : undefined}
+          {...(backgroundInert ? { inert: true } : {})}
+        />
+      ) : null}
+
+      <ResearchNodeReportModal
+        open={reportOpen && Boolean(selectedNode)}
+        node={selectedNode}
+        typedNode={selectedTypedNode}
+        sources={sources}
+        run={run}
+        members={members}
+        onClose={() => setReportOpen(false)}
+        onSelectLineageNode={handleLineageSelect}
       />
       <span className="sr-only" data-testid="research-d5-active-lens">
         {activeLens}

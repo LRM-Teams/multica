@@ -52,6 +52,7 @@ export function ResearchSessionGoalCard({
   onConfirmSubstantive,
   goalVersion = null,
   goalHistory = [],
+  goalImpact = null,
   className,
   compact = false,
 }: {
@@ -64,6 +65,7 @@ export function ResearchSessionGoalCard({
   onConfirmSubstantive?: (proposal: string) => void;
   goalVersion?: number | null;
   goalHistory?: readonly GoalVersionEntry[];
+  goalImpact?: { labeledNodes: number; totalNodes: number } | null;
   className?: string;
   /** Frozen top-bar mode: keep GOAL at icon priority even on desktop (LRM-1112). */
   compact?: boolean;
@@ -294,6 +296,14 @@ export function ResearchSessionGoalCard({
                     ? ` · ${t(($) => $.d5.goal_panel.version, { version: goalVersion })}`
                     : null}
                 </div>
+                {goalImpact && goalImpact.totalNodes > 0 ? (
+                  <p
+                    data-testid="research-session-goal-impact"
+                    className="mb-2 text-[10px] text-muted-foreground"
+                  >
+                    {t(($) => $.d5.goal_panel.impact, goalImpact)}
+                  </p>
+                ) : null}
                 <div className="space-y-2">
                   {goalHistory.map((entry) => (
                     <div

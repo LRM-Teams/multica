@@ -8,7 +8,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { TypedGraphResponse } from "@multica/core/research";
+import type { TypedGraphResponse, StarGraphLayoutResult } from "@multica/core/research";
+import {
+  countHiddenByFilter,
+  isBlankFilter,
+  useResearchCanvasStore,
+  useResearchUiStore,
+} from "@multica/core/research";
 import type {
   ResearchFleetMember,
   ResearchGraphNode,
@@ -21,21 +27,29 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { buildD5SessionCanvasModel } from "../lib/build-d5-session-canvas";
-import { buildTypedGraphMotionEvents } from "../lib/build-typed-graph-motion-events";
+import { extractLayoutResultFromViewModel } from "../star-graph/lib/star-canvas-view-model";
+import { buildTypedGraphMotionEvents, shouldSkipTypedGraphMotionCatchUp } from "../lib/build-typed-graph-motion-events";
 import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
+import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
 import { summarizeTypedGraph } from "../lib/research-d5-summary";
 import type { CanvasBodyMode } from "../lib/canvas-body-mode";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import type { ExecutionRow } from "../execution-overlay";
+import { capTransitionGlowDirectives } from "../motion/glow-budget";
 import { semanticMotionCss } from "../motion/directives";
 import { useSemanticTransition } from "../motion/use-semantic-transition";
 import { StarGraphCanvas } from "../star-graph";
 import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
-import { ResearchD5Rail, type ResearchD5RailMode } from "./research-d5-rail";
+import { ResearchD5Rail } from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
 import "./research-d5-layout.css";
+
+export type ResearchReportController = {
+  open: () => void;
+  close: () => void;
+};
 
 export function ResearchConstellationWorkspace({
   typedGraph,
@@ -59,11 +73,18 @@ export function ResearchConstellationWorkspace({
   chatPanel,
   detailPanel,
   composer,
+  registerReportController,
+  typedGraphHasNextPage = false,
+  typedGraphLoadMorePending = false,
+  onLoadMoreTypedGraph,
   className,
 }: {
   typedGraph: TypedGraphResponse | undefined;
   typedLoading: boolean;
   typedError: boolean;
+  typedGraphHasNextPage?: boolean;
+  typedGraphLoadMorePending?: boolean;
+  onLoadMoreTypedGraph?: () => void;
   snapshotNodes: ResearchGraphNode[];
   selectedNode: ResearchGraphNode | null;
   onSelectNode: (node: ResearchGraphNode | null) => void;
@@ -82,20 +103,45 @@ export function ResearchConstellationWorkspace({
   chatPanel: ReactNode;
   detailPanel: ReactNode;
   composer: ReactNode;
+  registerReportController?: (controller: ResearchReportController) => void;
   className?: string;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
+  const railOpen = useResearchUiStore((s) => s.d5RailOpen);
+  const setRailOpen = useResearchUiStore((s) => s.setD5RailOpen);
+  const railMode = useResearchUiStore((s) => s.d5RailMode);
+  const setRailMode = useResearchUiStore((s) => s.setD5RailMode);
+  const canvasFilter = useResearchCanvasStore((s) => s.filter);
   const hostRef = useRef<HTMLDivElement>(null);
   const prevGraphRef = useRef<TypedGraphResponse | undefined>(undefined);
+  const previousLayoutRef = useRef<StarGraphLayoutResult | undefined>(undefined);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  const [railMode, setRailMode] = useState<ResearchD5RailMode>("chat");
-  const [railOpen, setRailOpen] = useState(true);
+  const [graphLiveMessage, setGraphLiveMessage] = useState("");
   const [inspectorAgentId, setInspectorAgentId] = useState<string | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const motion = useSemanticTransition();
 
-  const railWidth = isMobile ? 0 : viewport.width >= 1200 ? 360 : 320;
+  const railWidthBase = viewport.width >= 1200 ? 360 : 320;
+  const effectiveRailWidth =
+    isMobile || !railOpen ? 0 : railWidthBase;
+  const showDesktopRail = !isMobile && railOpen;
+  const backgroundInert = reportOpen;
+
+  const reportController = useMemo<ResearchReportController>(
+    () => ({
+      open: () => {
+        setInspectorAgentId(null);
+        setReportOpen(true);
+      },
+      close: () => setReportOpen(false),
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    registerReportController?.(reportController);
+  }, [registerReportController, reportController]);
 
   useEffect(() => {
     const id = "research-semantic-motion-css";
@@ -123,22 +169,54 @@ export function ResearchConstellationWorkspace({
 
   useEffect(() => {
     if (!typedGraph) return;
+    if (
+      prevGraphRef.current &&
+      prevGraphRef.current.session_id &&
+      prevGraphRef.current.session_id !== typedGraph.session_id
+    ) {
+      prevGraphRef.current = typedGraph;
+      motion.settleNow();
+      return;
+    }
     if (!prevGraphRef.current) {
       prevGraphRef.current = typedGraph;
       return;
     }
-    const events = buildTypedGraphMotionEvents(prevGraphRef.current, typedGraph);
-    for (const event of events) motion.enqueue(event);
+    const previous = prevGraphRef.current;
+    const events = buildTypedGraphMotionEvents(previous, typedGraph);
+    const skipMotion = shouldSkipTypedGraphMotionCatchUp(previous, typedGraph, events);
+
+    if (events.length > 0 && !skipMotion) {
+      setGraphLiveMessage(
+        t(($) => $.d5.graph_live.updating, { version: typedGraph.graph_version }),
+      );
+    } else if (previous.graph_version !== typedGraph.graph_version) {
+      setGraphLiveMessage(
+        t(($) => $.d5.graph_live.updated, { version: typedGraph.graph_version }),
+      );
+    }
+
+    if (skipMotion) {
+      motion.settleNow();
+    } else {
+      for (const event of events) motion.enqueue(event);
+    }
     prevGraphRef.current = typedGraph;
-  }, [typedGraph, motion.enqueue]);
+  }, [typedGraph, motion.enqueue, motion.settleNow, t]);
 
   const canvasModel = useMemo(
     () =>
       buildD5SessionCanvasModel(typedGraph, viewport, {
-        rightPanelWidth: railWidth,
+        rightPanelWidth: effectiveRailWidth,
+        previousLayout: previousLayoutRef.current,
       }),
-    [typedGraph, viewport, railWidth],
+    [typedGraph, viewport, effectiveRailWidth],
   );
+
+  useEffect(() => {
+    if (!canvasModel) return;
+    previousLayoutRef.current = extractLayoutResultFromViewModel(canvasModel);
+  }, [canvasModel]);
 
   const lensHints = useMemo(
     () => buildD5LensDisplayHints(activeLens, typedGraph, canvasModel),
@@ -168,24 +246,67 @@ export function ResearchConstellationWorkspace({
         });
       }
     }
-    return map;
+    return capTransitionGlowDirectives(map);
   }, [canvasModel, motion.queueSize, motion.directiveFor, motion.markerFor, motion.profile.lowPerformance]);
 
   const summary = useMemo(
-    () => summarizeTypedGraph(typedGraph?.nodes ?? []),
-    [typedGraph?.nodes],
+    () =>
+      summarizeTypedGraph(typedGraph?.nodes ?? [], {
+        totalNodeCount: typedGraph?.total_node_count ?? null,
+      }),
+    [typedGraph?.nodes, typedGraph?.total_node_count],
   );
 
-  const summaryTitle = t(($) => $.d5.summary.title, {
-    loaded: summary.loadedDirections,
-    total: summary.totalDirections ?? summary.loadedDirections,
-  });
+  const summaryTitle =
+    summary.totalDirections != null
+      ? t(($) => $.d5.summary.title_with_total, {
+          loaded: summary.loadedDirections,
+          total: summary.totalDirections,
+        })
+      : t(($) => $.d5.summary.title, {
+          loaded: summary.loadedDirections,
+        });
   const summaryDetail = t(($) => $.d5.summary.detail, {
     stable: summary.stableResults,
     active: summary.activeProbes,
     newDir: summary.newFrontiers,
     stopped: summary.stoppedDirections,
   });
+  const filterHiddenCount = useMemo(() => {
+    if (!typedGraph?.nodes.length || isBlankFilter(canvasFilter)) return 0;
+    return countHiddenByFilter(typedGraph.nodes, canvasFilter).hidden;
+  }, [canvasFilter, typedGraph?.nodes]);
+  const filterHiddenNote =
+    filterHiddenCount > 0
+      ? t(($) => $.d5.filter.hidden_count, { count: filterHiddenCount })
+      : undefined;
+
+  const nodeAccessibleNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const node of snapshotNodes) {
+      map.set(node.id, buildNodeAccessibleName(node));
+    }
+    return map;
+  }, [snapshotNodes]);
+
+  const relatedNodeIds = useMemo(() => {
+    if (!selectedNode || !typedGraph) return undefined;
+    const typed = typedGraph.nodes.find((node) => node.id === selectedNode.id);
+    if (!typed) return undefined;
+    const ids = new Set<string>();
+    for (const id of typed.merged_from ?? []) {
+      if (id) ids.add(id);
+    }
+    if (typed.parent_id) ids.add(typed.parent_id);
+    for (const id of typed.child_ids ?? []) {
+      if (id) ids.add(id);
+    }
+    for (const edge of typedGraph.edges) {
+      if (edge.from_node_id === selectedNode.id) ids.add(edge.to_node_id);
+      if (edge.to_node_id === selectedNode.id) ids.add(edge.from_node_id);
+    }
+    return ids;
+  }, [selectedNode, typedGraph]);
 
   const inspectorRow =
     inspectorAgentId != null
@@ -219,6 +340,25 @@ export function ResearchConstellationWorkspace({
     [isMobile, onSelectNode, snapshotNodes, typedGraph?.nodes],
   );
 
+  const graphRemainingCount =
+    typedGraph?.total_node_count != null
+      ? Math.max(0, typedGraph.total_node_count - (typedGraph.nodes?.length ?? 0))
+      : 0;
+  const loadMoreLabel =
+    typedGraphHasNextPage && onLoadMoreTypedGraph
+      ? typedGraphLoadMorePending
+        ? t(($) => $.d5.summary.load_more_pending)
+        : t(($) => $.d5.summary.load_more, { count: graphRemainingCount })
+      : undefined;
+
+  const handleLineageSelect = useCallback(
+    (nodeId: string) => {
+      handleCanvasSelect(nodeId);
+      setReportOpen(false);
+    },
+    [handleCanvasSelect],
+  );
+
   const showEmpty = canvasMode === "empty" && !canvasModel;
   const showForming =
     (canvasMode === "forming" || canvasMode === "stalled") && !canvasModel;
@@ -228,8 +368,14 @@ export function ResearchConstellationWorkspace({
       className={cn("d5-workspace", className)}
       data-testid="research-constellation-workspace"
       data-d5-lens={activeLens}
+      data-d5-rail-open={showDesktopRail ? "true" : "false"}
     >
-      <section ref={hostRef} className="d5-canvas-host" data-testid="research-session-canvas-host">
+      <section
+        ref={hostRef}
+        className="d5-canvas-host"
+        data-testid="research-session-canvas-host"
+        {...(backgroundInert ? { inert: true } : {})}
+      >
         {typedLoading && !canvasModel ? (
           <div className="grid h-full place-items-center text-sm text-muted-foreground">
             {t(($) => $.d5.canvas.loading)}
@@ -248,12 +394,35 @@ export function ResearchConstellationWorkspace({
             model={canvasModel}
             selectedNodeId={selectedNode?.id ?? null}
             onSelectNode={handleCanvasSelect}
+            onOpenNode={handleCanvasSelect}
             summaryTitle={summaryTitle}
             summaryDetail={summaryDetail}
+            filterHiddenNote={filterHiddenNote}
             newFrontierLabel={t(($) => $.d5.new_frontier_label)}
             lensHints={lensHints}
             motionDirectives={motionDirectives}
             showMapKey
+            rightPanelWidth={effectiveRailWidth}
+            nodeAccessibleNames={nodeAccessibleNames}
+            relatedNodeIds={relatedNodeIds}
+            typedNodes={typedGraph?.nodes}
+            hiddenCountLabel={(count) => t(($) => $.d5.cluster_hidden, { count })}
+            loadMoreLabel={loadMoreLabel}
+            onLoadMore={onLoadMoreTypedGraph}
+            loadMorePending={typedGraphLoadMorePending}
+            keyboardNav={{
+              nodes: snapshotNodes,
+              edges: (typedGraph?.edges ?? []).map((edge) => ({
+                from_node_id: edge.from_node_id,
+                to_node_id: edge.to_node_id,
+                edge_type: edge.edge_type,
+              })),
+              overlay: reportOpen || inspectorRow ? "detail" : null,
+              onCloseOverlay: () => {
+                if (reportOpen) setReportOpen(false);
+                if (inspectorRow) setInspectorAgentId(null);
+              },
+            }}
           />
         ) : null}
         {showForming ? (
@@ -269,7 +438,7 @@ export function ResearchConstellationWorkspace({
 
         <ResearchAgentInspector
           row={inspectorRow}
-          open={Boolean(inspectorRow)}
+          open={Boolean(inspectorRow) && !reportOpen}
           onClose={() => setInspectorAgentId(null)}
           onOpenAgentConfig={
             inspectorRow
@@ -279,40 +448,59 @@ export function ResearchConstellationWorkspace({
                 }
               : undefined
           }
-          className={isMobile ? "research-agent-inspector-mobile" : undefined}
-        />
-        <ResearchNodeReportModal
-          open={reportOpen && Boolean(selectedNode)}
-          node={selectedNode}
-          typedNode={selectedTypedNode}
-          sources={sources}
-          run={run}
-          members={members}
-          onClose={() => setReportOpen(false)}
         />
       </section>
 
-      {isMobile ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          className="d5-rail-toggle"
-          data-testid="research-d5-rail-toggle"
-          onClick={() => setRailOpen((open) => !open)}
-        >
-          {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
-        </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        className={cn(
+          isMobile ? "d5-rail-toggle" : "d5-rail-toggle-desktop",
+        )}
+        data-testid="research-d5-rail-toggle"
+        onClick={() => setRailOpen(!railOpen)}
+      >
+        {railOpen ? t(($) => $.d5.rail.hide) : t(($) => $.d5.rail.show)}
+      </Button>
+
+      {showDesktopRail ? (
+        <ResearchD5Rail
+          mode={railMode}
+          onModeChange={setRailMode}
+          chatPanel={chatPanel}
+          detailPanel={detailPanel}
+          composer={composer}
+          onClose={() => setRailOpen(false)}
+          {...(backgroundInert ? { inert: true } : {})}
+        />
       ) : null}
 
-      <ResearchD5Rail
-        mode={railMode}
-        onModeChange={setRailMode}
-        chatPanel={chatPanel}
-        detailPanel={detailPanel}
-        composer={composer}
-        className={isMobile && !railOpen ? "d5-rail-collapsed" : undefined}
+      {isMobile ? (
+        <ResearchD5Rail
+          mode={railMode}
+          onModeChange={setRailMode}
+          chatPanel={chatPanel}
+          detailPanel={detailPanel}
+          composer={composer}
+          className={!railOpen ? "d5-rail-collapsed" : undefined}
+          {...(backgroundInert ? { inert: true } : {})}
+        />
+      ) : null}
+
+      <ResearchNodeReportModal
+        open={reportOpen && Boolean(selectedNode)}
+        node={selectedNode}
+        typedNode={selectedTypedNode}
+        sources={sources}
+        run={run}
+        members={members}
+        onClose={() => setReportOpen(false)}
+        onSelectLineageNode={handleLineageSelect}
       />
+      <span className="sr-only" aria-live="polite" data-testid="research-d5-graph-live">
+        {graphLiveMessage}
+      </span>
       <span className="sr-only" data-testid="research-d5-active-lens">
         {activeLens}
       </span>

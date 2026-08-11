@@ -1,0 +1,57 @@
+-- Roll back Chapter D1c reciprocal artifact passport guards.
+
+DROP FUNCTION IF EXISTS research_ensure_run_session_passport(UUID, UUID);
+
+DROP TRIGGER IF EXISTS research_graph_edge_artifact_passport_delete_guard ON research_graph_edge;
+DROP TRIGGER IF EXISTS research_graph_node_artifact_passport_delete_guard ON research_graph_node;
+DROP TRIGGER IF EXISTS research_run_event_artifact_passport_delete_guard ON research_run_event;
+DROP TRIGGER IF EXISTS research_artifact_context_manifest_artifact_passport_delete_guard ON research_artifact_context_manifest;
+DROP TRIGGER IF EXISTS research_product_round_card_artifact_passport_delete_guard ON research_product_round_card;
+DROP TRIGGER IF EXISTS research_message_artifact_passport_delete_guard ON research_message;
+DROP TRIGGER IF EXISTS research_stage_eval_artifact_passport_delete_guard ON research_stage_eval;
+DROP TRIGGER IF EXISTS research_report_artifact_passport_delete_guard ON research_report;
+DROP TRIGGER IF EXISTS research_claim_evidence_artifact_passport_delete_guard ON research_claim_evidence;
+DROP TRIGGER IF EXISTS research_claim_artifact_passport_delete_guard ON research_claim;
+DROP TRIGGER IF EXISTS research_observation_artifact_passport_delete_guard ON research_observation;
+DROP TRIGGER IF EXISTS research_source_snapshot_artifact_passport_delete_guard ON research_source_snapshot;
+DROP TRIGGER IF EXISTS research_source_artifact_passport_delete_guard ON research_source;
+DROP TRIGGER IF EXISTS research_result_artifact_artifact_passport_delete_guard ON research_result_artifact;
+DROP TRIGGER IF EXISTS research_task_attempt_artifact_passport_delete_guard ON research_task_attempt;
+DROP TRIGGER IF EXISTS research_task_artifact_passport_delete_guard ON research_task;
+DROP TRIGGER IF EXISTS research_question_artifact_passport_delete_guard ON research_question;
+DROP TRIGGER IF EXISTS research_decision_artifact_passport_delete_guard ON research_decision;
+DROP TRIGGER IF EXISTS research_contract_revision_artifact_passport_delete_guard ON research_contract_revision;
+DROP TRIGGER IF EXISTS research_session_artifact_passport_delete_guard ON research_session;
+
+DROP TRIGGER IF EXISTS research_graph_edge_artifact_passport_guard ON research_graph_edge;
+DROP TRIGGER IF EXISTS research_graph_node_artifact_passport_guard ON research_graph_node;
+DROP TRIGGER IF EXISTS research_run_event_artifact_passport_guard ON research_run_event;
+DROP TRIGGER IF EXISTS research_artifact_context_manifest_artifact_passport_guard ON research_artifact_context_manifest;
+DROP TRIGGER IF EXISTS research_product_round_card_artifact_passport_guard ON research_product_round_card;
+DROP TRIGGER IF EXISTS research_message_artifact_passport_guard ON research_message;
+DROP TRIGGER IF EXISTS research_stage_eval_artifact_passport_guard ON research_stage_eval;
+DROP TRIGGER IF EXISTS research_report_artifact_passport_guard ON research_report;
+DROP TRIGGER IF EXISTS research_claim_evidence_artifact_passport_guard ON research_claim_evidence;
+DROP TRIGGER IF EXISTS research_claim_artifact_passport_guard ON research_claim;
+DROP TRIGGER IF EXISTS research_observation_artifact_passport_guard ON research_observation;
+DROP TRIGGER IF EXISTS research_source_snapshot_artifact_passport_guard ON research_source_snapshot;
+DROP TRIGGER IF EXISTS research_source_artifact_passport_guard ON research_source;
+DROP TRIGGER IF EXISTS research_result_artifact_artifact_passport_guard ON research_result_artifact;
+DROP TRIGGER IF EXISTS research_task_attempt_artifact_passport_guard ON research_task_attempt;
+DROP TRIGGER IF EXISTS research_task_artifact_passport_guard ON research_task;
+DROP TRIGGER IF EXISTS research_question_artifact_passport_guard ON research_question;
+DROP TRIGGER IF EXISTS research_decision_artifact_passport_guard ON research_decision;
+DROP TRIGGER IF EXISTS research_contract_revision_artifact_passport_guard ON research_contract_revision;
+DROP TRIGGER IF EXISTS research_session_artifact_passport_guard ON research_session;
+
+DROP TRIGGER IF EXISTS research_artifact_passport_delete_guard ON research_artifact_passport;
+
+DROP FUNCTION IF EXISTS research_artifact_passport_delete_guard_fn();
+DROP FUNCTION IF EXISTS research_session_artifact_passport_delete_guard_fn();
+DROP FUNCTION IF EXISTS research_session_artifact_passport_guard_fn();
+DROP FUNCTION IF EXISTS research_decision_artifact_passport_delete_guard_fn();
+DROP FUNCTION IF EXISTS research_decision_artifact_passport_guard_fn();
+DROP FUNCTION IF EXISTS research_artifact_domain_passport_delete_guard_fn();
+DROP FUNCTION IF EXISTS research_artifact_domain_passport_guard_fn();
+DROP FUNCTION IF EXISTS research_artifact_require_matching_passport(TEXT, UUID, UUID, UUID);
+DROP FUNCTION IF EXISTS research_artifact_session_still_exists(UUID, UUID);

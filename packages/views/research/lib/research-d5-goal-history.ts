@@ -36,6 +36,17 @@ export function countNodesByGoalVersionId(
   return counts;
 }
 
+export function summarizeGoalImpact(nodes: readonly TypedGraphNode[]): {
+  labeledNodes: number;
+  totalNodes: number;
+} {
+  let labeledNodes = 0;
+  for (const node of nodes) {
+    if (node.goal_version_id?.trim()) labeledNodes += 1;
+  }
+  return { labeledNodes, totalNodes: nodes.length };
+}
+
 /**
  * Build read-only goal version history from process messages and the current run
  * contract. Never fabricates versions — only surfaces server-emitted facts.

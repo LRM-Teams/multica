@@ -37,11 +37,23 @@ func TestLegacyResearchMutationGuardRejectsInitializedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionID := uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_session (
 			id, workspace_id, fleet_id, created_by, title, goal, status, run_initialized_at
 		) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'guard', 'guard', 'running', now())
 	`, sessionID, testWorkspaceID, fleetID, testUserID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `SELECT research_ensure_run_session_passport($1::uuid, $2::uuid)`, testWorkspaceID, sessionID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

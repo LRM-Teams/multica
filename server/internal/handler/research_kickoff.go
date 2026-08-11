@@ -22,7 +22,7 @@ func (h *Handler) seedResearchSessionKickoff(
 	userID string,
 ) {
 	leadID := fleet.LeadAgentID
-	goal, err := h.Queries.CreateResearchGraphNode(ctx, db.CreateResearchGraphNodeParams{
+	goal, _, err := h.createResearchGraphNodeWithPassport(ctx, wsUUID, session.ID, db.CreateResearchGraphNodeParams{
 		WorkspaceID:  wsUUID,
 		SessionID:    session.ID,
 		NodeType:     "goal",
@@ -31,7 +31,7 @@ func (h *Handler) seedResearchSessionKickoff(
 		Status:       "active",
 		ActorAgentID: leadID,
 		Payload:      marshalJSONRaw(map[string]any{"phase": "kickoff"}),
-	})
+	}, pgtype.UUID{}, "")
 	if err != nil {
 		slog.Warn("research kickoff goal node failed", "error", err)
 		return

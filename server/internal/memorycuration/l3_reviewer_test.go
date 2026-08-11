@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/internal/memorypolicy"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -79,7 +80,7 @@ func TestAgentStageRunnerUsesPiToolsAndAgentRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := runner.RunStage(context.Background(), StageAgentInput{Stage: StageL1, WorkspaceID: "ws-1", AgentID: "agent-1", AgentRoot: root, DBEvidence: []EvidenceItem{{Kind: "task", ID: "task-1", Title: "Done"}}, OversizedFiles: []OversizedMemoryFile{{Path: "memory/MEMORY.md", SizeBytes: 20000, SoftLimit: durableMemorySoftLimit}}})
+	out, err := runner.RunStage(context.Background(), StageAgentInput{Stage: StageL1, WorkspaceID: "ws-1", AgentID: "agent-1", AgentRoot: root, DBEvidence: []EvidenceItem{{Kind: "task", ID: "task-1", Title: "Done"}}, OversizedFiles: []OversizedMemoryFile{{Path: "memory/MEMORY.md", SizeBytes: 20000, SoftLimit: memorypolicy.SoftFileLimit("memory/MEMORY.md")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,13 +93,28 @@ func TestAgentStageRunnerUsesPiToolsAndAgentRoot(t *testing.T) {
 	if !strings.Contains(backend.prompt, "db_evidence") || !strings.Contains(backend.opts.SystemPrompt, "available tools") {
 		t.Fatalf("stage prompt/options missing DB evidence or tool instruction: prompt=%s opts=%#v", backend.prompt, backend.opts)
 	}
-	for _, want := range []string{"oversized_files", "memory_maintenance", "read the complete file", "memory/MEMORY.md"} {
+	for _, want := range []string{"oversized_files", "memory_maintenance", "read the complete file", "below soft_limit_bytes", "Never truncate blindly", "memory/MEMORY.md"} {
 		if !strings.Contains(backend.prompt, want) {
 			t.Fatalf("stage prompt missing oversized-memory maintenance %q: %s", want, backend.prompt)
 		}
 	}
 	if !strings.Contains(backend.prompt, "都给我记住") || !strings.Contains(backend.prompt, "speaker as provenance") || !strings.Contains(backend.prompt, "collective wording alone is not evidence for workspace/team scope") {
 		t.Fatalf("stage prompt missing collective memory semantics: %s", backend.prompt)
+	}
+}
+
+func TestStageAgentContractsRequireConciseDailyAndMemory(t *testing.T) {
+	selfReview := stageAgentContract(StageAgentSelfReview)
+	for _, want := range []string{"terse event index", "at most 240 characters", "one stable fact or rule per bullet", "at most 180 characters", "never copy steps, logs, file lists, or chat"} {
+		if !strings.Contains(selfReview, want) {
+			t.Fatalf("self-review contract missing %q: %s", want, selfReview)
+		}
+	}
+	l1 := stageAgentContract(StageL1)
+	for _, want := range []string{"below 2048 bytes", "at most 240 characters", "omit narrative chronology"} {
+		if !strings.Contains(l1, want) {
+			t.Fatalf("L1 contract missing %q: %s", want, l1)
+		}
 	}
 }
 

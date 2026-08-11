@@ -95,7 +95,6 @@ function renderRow(
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
           <ThinkingPropRow
             runtimeId="runtime-1"
-            runtimeOnline
             model="claude-sonnet-4-6"
             value=""
             canEdit
@@ -119,16 +118,11 @@ describe("ThinkingPropRow", () => {
   afterEach(() => {
     cleanup();
   });
+  it("discovers thinking levels whenever a runtime is selected", async () => {
+    renderRow({ value: "" });
 
-
-
-  it("hides the row while the runtime is offline (no query fires)", () => {
-    renderRow({ runtimeOnline: false, value: "" });
-
-    // Query disabled when runtimeOnline=false, so no models, levels stay
-    // empty, value is empty → row stays hidden.
-    expect(screen.queryByText("Thinking")).toBeNull();
-    expect(mockInitiateListModels).not.toHaveBeenCalled();
+    await screen.findByText("Thinking");
+    expect(mockInitiateListModels).toHaveBeenCalled();
   });
 
   it("renders the row with the persisted raw token when levels are empty but value is set (stale orphan)", async () => {

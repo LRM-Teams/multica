@@ -44,7 +44,6 @@ function renderPicker() {
   render(
     <ModelPicker
       runtimeId="runtime-1"
-      runtimeOnline
       value="gpt-5.6-sol"
       onChange={vi.fn()}
     />,

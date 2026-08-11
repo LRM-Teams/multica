@@ -13,6 +13,7 @@ const runtimeState = vi.hoisted(() => ({
     daemon_id?: string;
     provider?: string;
     runtime_mode?: string;
+    computer_connected?: boolean;
   }>,
 }));
 
@@ -43,8 +44,6 @@ vi.mock("@multica/core/workspace/queries", () => ({
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: (wsId: string) => ({ queryKey: ["runtimes", wsId] }),
   runtimeKeys: { all: (wsId: string) => ["runtimes", wsId] },
-  deriveRuntimeHealth: (runtime: { status: string }) =>
-    runtime.status === "online" ? "online" : "offline",
   runtimeModelsOptions: () => ({ queryKey: ["models"] }),
   runtimeCurrentVersion: () => "1.0.0",
   aggregateRuntimeHealthPresentation: () => "ok",
@@ -55,7 +54,6 @@ vi.mock("../agents/components/use-execution-selection", () => ({
     machineId: "machine-1",
     machineRuntimes: runtimeState.runtimes,
     runtimeId: runtimeState.runtimes[0]?.id ?? "",
-    runtimeOnline: true,
     model: "",
     thinkingLevel: "",
     selectMachine: vi.fn(),
@@ -128,16 +126,17 @@ describe("OnboardingAgentSetup", () => {
     expect(screen.queryByTestId("execution-config-fields")).toBeNull();
   });
 
-  it("step 2: shows shared execution config (Computer→Runtime→Model→Reasoning)", () => {
+  it("step 2 follows server-owned Computer connectivity, not runtime timestamps", () => {
     runtimeState.runtimes = [
       {
         id: "rt-1",
         name: "My Mac Claude",
-        status: "online",
-        last_seen_at: new Date().toISOString(),
+        status: "offline",
+        last_seen_at: "2026-01-01T00:00:00Z",
         daemon_id: "daemon-1",
         provider: "claude",
         runtime_mode: "local",
+        computer_connected: true,
       },
     ];
     render(<OnboardingAgentSetup workspace={workspace} />);
@@ -147,5 +146,24 @@ describe("OnboardingAgentSetup", () => {
     expect(screen.getByTestId("execution-config-fields")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create Wendy" })).toBeInTheDocument();
     expect(screen.queryByTestId("onboarding-agent-connect-computer")).toBeNull();
+  });
+
+  it("does not treat a fresh runtime timestamp as a connected Computer", () => {
+    runtimeState.runtimes = [
+      {
+        id: "rt-1",
+        name: "My Mac Claude",
+        status: "online",
+        last_seen_at: new Date().toISOString(),
+        daemon_id: "daemon-1",
+        provider: "claude",
+        runtime_mode: "local",
+        computer_connected: false,
+      },
+    ];
+    render(<OnboardingAgentSetup workspace={workspace} />);
+
+    expect(screen.getByRole("heading", { name: "Connect a Computer" })).toBeInTheDocument();
+    expect(screen.queryByTestId("execution-config-fields")).toBeNull();
   });
 });

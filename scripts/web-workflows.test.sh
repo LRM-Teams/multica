@@ -122,7 +122,6 @@ for required in \
   's3://${OSS_BUCKET}/${canonical_prefix}/manifest.json' \
   'group: computer-release-feed' \
   'Build canonical environment metainfo' \
-  '--retry-all-errors --connect-timeout 10 --max-time 30' \
   's3://${OSS_BUCKET}/${RELEASE_PREFIX}/metainfo.json' \
   'verify_matches "${PUBLIC_BASE_URL}/metainfo.json"' \
   'Remove retired release metadata aliases' \
@@ -134,6 +133,27 @@ for required in \
   'Verify the published feed through the public CDN'; do
   if ! grep -Fq -- "$required" <<<"$release_workflow"; then
     echo "Canonical CDN release contract is missing: $required"
+    exit 1
+  fi
+done
+
+metainfo_build_step="$(awk '
+  /- name: Build canonical environment metainfo/ { capture = 1 }
+  /- name: Publish immutable per-version objects/ { capture = 0 }
+  capture
+' .github/workflows/release.yml)"
+
+if grep -Fq -- '${PUBLIC_BASE_URL}' <<<"$metainfo_build_step"; then
+  echo "Canonical metainfo generation must not read through the public CDN"
+  exit 1
+fi
+
+for required in \
+  's3api head-object' \
+  's3://${OSS_BUCKET}/${RELEASE_PREFIX}/metainfo.json' \
+  's3://${OSS_BUCKET}/${RELEASE_PREFIX}/${other_tag#v}/manifest.json'; do
+  if ! grep -Fq -- "$required" <<<"$metainfo_build_step"; then
+    echo "Canonical metainfo generation is missing its OSS source contract: $required"
     exit 1
   fi
 done

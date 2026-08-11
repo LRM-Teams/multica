@@ -125,6 +125,8 @@ export const TypedGraphResponseSchema = z
   .object({
     session_id: z.string().optional().default(""),
     graph_version: z.number().int().optional().default(0),
+    /** Server-side total when the graph is paginated (optional until BE ships). */
+    total_node_count: z.number().int().nullable().optional().default(null),
     nodes: z.array(TypedGraphNodeSchema).optional().default([]),
     edges: z.array(TypedGraphEdgeSchema).optional().default([]),
     clusters: z.array(TypedGraphClusterSchema).optional().default([]),
@@ -145,6 +147,7 @@ export type TypedGraphResponse = z.infer<typeof TypedGraphResponseSchema>;
 export const EMPTY_TYPED_GRAPH: TypedGraphResponse = {
   session_id: "",
   graph_version: 0,
+  total_node_count: null,
   nodes: [],
   edges: [],
   clusters: [],
@@ -171,4 +174,80 @@ export function indexTypedGraphNodes(nodes: readonly TypedGraphNode[]): TypedGra
     if (node && typeof node.id === "string" && node.id) index.set(node.id, node);
   }
   return index;
+}
+
+function mergeRecordOfString(
+  maps: readonly Record<string, string>[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const map of maps) {
+    for (const [key, value] of Object.entries(map)) {
+      if (!(key in out)) out[key] = value;
+    }
+  }
+  return out;
+}
+
+function mergeRecordOfStringArray(
+  maps: readonly Record<string, string[]>[],
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const map of maps) {
+    for (const [key, values] of Object.entries(map)) {
+      const bucket = out[key] ?? [];
+      const seen = new Set(bucket);
+      for (const value of values) {
+        if (seen.has(value)) continue;
+        bucket.push(value);
+        seen.add(value);
+      }
+      out[key] = bucket;
+    }
+  }
+  return out;
+}
+
+/** Merge paginated typed-graph pages into one render pass (deduped, stable order). */
+export function mergeTypedGraphPages(pages: readonly TypedGraphResponse[]): TypedGraphResponse {
+  if (pages.length === 0) return { ...EMPTY_TYPED_GRAPH };
+  const first = pages[0]!;
+  const nodeById = new Map<string, TypedGraphNode>();
+  const edgeByKey = new Map<string, TypedGraphEdge>();
+  const clusterById = new Map<string, TypedGraphCluster>();
+  let graphVersion = first.graph_version ?? 0;
+
+  for (const page of pages) {
+    graphVersion = Math.max(graphVersion, page.graph_version ?? 0);
+    for (const node of page.nodes ?? []) {
+      if (node?.id && !nodeById.has(node.id)) nodeById.set(node.id, node);
+    }
+    for (const edge of page.edges ?? []) {
+      const key =
+        edge.id ||
+        `${edge.from_node_id}:${edge.to_node_id}:${edge.edge_type ?? ""}`;
+      if (!edgeByKey.has(key)) edgeByKey.set(key, edge);
+    }
+    for (const cluster of page.clusters ?? []) {
+      const id = cluster.id || cluster.name;
+      if (id && !clusterById.has(id)) clusterById.set(id, cluster);
+    }
+  }
+
+  const lineagePages = pages.map((page) => page.lineage ?? EMPTY_TYPED_GRAPH.lineage);
+  return {
+    session_id: first.session_id,
+    graph_version: graphVersion,
+    total_node_count: first.total_node_count ?? null,
+    nodes: [...nodeById.values()],
+    edges: [...edgeByKey.values()],
+    clusters: [...clusterById.values()],
+    lineage: {
+      derived: mergeRecordOfString(lineagePages.map((l) => l.derived ?? {})),
+      merged: mergeRecordOfStringArray(lineagePages.map((l) => l.merged ?? {})),
+      superseded: mergeRecordOfString(lineagePages.map((l) => l.superseded ?? {})),
+      restarted: mergeRecordOfString(lineagePages.map((l) => l.restarted ?? {})),
+      invalidated: mergeRecordOfString(lineagePages.map((l) => l.invalidated ?? {})),
+      supersedes: mergeRecordOfStringArray(lineagePages.map((l) => l.supersedes ?? {})),
+    },
+  };
 }

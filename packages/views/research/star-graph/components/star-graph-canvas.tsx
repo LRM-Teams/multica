@@ -6,16 +6,36 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
+import { useResearchCanvasStore } from "@multica/core/research";
+import type { TypedGraphNode } from "@multica/core/research";
+import { indexTypedGraphNodes } from "@multica/core/research";
+import type { ResearchGraphNode } from "@multica/core/types";
 import { StarGraphMapKey } from "@multica/ui/components/star-graph";
 import { cn } from "@multica/ui/lib/utils";
 import type { D5LensDisplayHints } from "../../lib/research-d5-lens-display";
+import {
+  buildNodeAccessibleName,
+  resolveCanvasKeyEvent,
+  type CanvasKeyboardAction,
+  type CanvasOverlayLayer,
+  type GraphEdgeLike,
+} from "../../lib/canvas-keyboard-nav";
 import type { MotionDirective } from "../../motion/directives";
 import type { StarCanvasViewModel } from "../lib/star-canvas-view-model";
+import {
+  computeClusterHiddenCounts,
+  filterEntitiesForCanvasDisplay,
+  filterRelationsToVisibleEntities,
+  selectVisibleEntityIds,
+  STAR_GRAPH_DOM_BUDGET,
+} from "../lib/star-graph-visible-budget";
 import { StarGraphClusterLayer } from "./star-graph-cluster-layer";
 import {
+  centerCameraOnPoint,
   computeEntityBounds,
   fitCameraToBounds,
   zoomCamera,
@@ -34,11 +54,27 @@ export interface StarGraphCanvasProps {
   onOpenNode?: (nodeId: string) => void;
   summaryTitle?: string;
   summaryDetail?: string;
+  filterHiddenNote?: string;
   showMapKey?: boolean;
   newFrontierLabel?: string;
   lensHints?: D5LensDisplayHints;
   motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
   onHelp?: () => void;
+  keyboardNav?: {
+    nodes: ResearchGraphNode[];
+    edges: GraphEdgeLike[];
+    overlay?: CanvasOverlayLayer;
+    onCloseOverlay?: (layer: "ring" | "detail") => void;
+  };
+  rightPanelWidth?: number;
+  nodeAccessibleNames?: ReadonlyMap<string, string>;
+  relatedNodeIds?: ReadonlySet<string>;
+  entityBudget?: number;
+  hiddenCountLabel?: (count: number) => string;
+  loadMoreLabel?: string;
+  onLoadMore?: () => void;
+  loadMorePending?: boolean;
+  typedNodes?: readonly TypedGraphNode[];
   className?: string;
 }
 
@@ -51,21 +87,110 @@ export function StarGraphCanvas({
   onOpenNode,
   summaryTitle,
   summaryDetail,
+  filterHiddenNote,
   showMapKey = true,
   newFrontierLabel,
   lensHints,
   motionDirectives,
   onHelp,
+  keyboardNav,
+  rightPanelWidth = 0,
+  nodeAccessibleNames,
+  relatedNodeIds,
+  entityBudget = STAR_GRAPH_DOM_BUDGET,
+  hiddenCountLabel,
+  loadMoreLabel,
+  onLoadMore,
+  loadMorePending = false,
+  typedNodes,
   className,
 }: StarGraphCanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const initialCameraRef = useRef(false);
+  const storedViewport = useResearchCanvasStore((s) => s.viewport);
+  const setStoredViewport = useResearchCanvasStore((s) => s.setViewport);
+  const canvasFilter = useResearchCanvasStore((s) => s.filter);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  const [camera, setCamera] = useState<StarGraphCamera>(DEFAULT_CAMERA);
+  const [camera, setCameraState] = useState<StarGraphCamera>(
+    () => storedViewport ?? DEFAULT_CAMERA,
+  );
+  const [liveText, setLiveText] = useState("");
   const dragRef = useRef<{ startX: number; startY: number; cameraX: number; cameraY: number } | null>(
     null,
   );
 
+  const setCamera = useCallback(
+    (next: StarGraphCamera | ((current: StarGraphCamera) => StarGraphCamera)) => {
+      setCameraState((current) => {
+        const resolved = typeof next === "function" ? next(current) : next;
+        setStoredViewport(resolved);
+        return resolved;
+      });
+    },
+    [setStoredViewport],
+  );
+
   const bounds = useMemo(() => computeEntityBounds(model.entities), [model.entities]);
+
+  const typedNodeIndex = useMemo(
+    () => (typedNodes ? indexTypedGraphNodes(typedNodes) : new Map()),
+    [typedNodes],
+  );
+
+  const displayEntities = useMemo(
+    () =>
+      filterEntitiesForCanvasDisplay(model.entities, {
+        filter: canvasFilter,
+        nodeById: typedNodeIndex,
+        rootId: model.rootId,
+        selectedNodeId,
+        relatedNodeIds,
+      }),
+    [
+      canvasFilter,
+      model.entities,
+      model.rootId,
+      relatedNodeIds,
+      selectedNodeId,
+      typedNodeIndex,
+    ],
+  );
+
+  const visibleEntityIds = useMemo(
+    () =>
+      selectVisibleEntityIds(displayEntities, {
+        rootId: model.rootId,
+        selectedNodeId,
+        relatedNodeIds,
+        budget: entityBudget,
+        zoom: camera.zoom,
+      }),
+    [
+      camera.zoom,
+      displayEntities,
+      entityBudget,
+      model.rootId,
+      relatedNodeIds,
+      selectedNodeId,
+    ],
+  );
+
+  const clusterHiddenCounts = useMemo(
+    () => computeClusterHiddenCounts(displayEntities, visibleEntityIds),
+    [displayEntities, visibleEntityIds],
+  );
+
+  const visibleEntities = useMemo(
+    () => displayEntities.filter((entity) => visibleEntityIds.has(entity.id)),
+    [displayEntities, visibleEntityIds],
+  );
+
+  const visibleRelations = useMemo(
+    () => filterRelationsToVisibleEntities(model.relations, visibleEntityIds),
+    [model.relations, visibleEntityIds],
+  );
+
+  const hiddenEntityCount = displayEntities.length - visibleEntities.length;
 
   useEffect(() => {
     const node = rootRef.current;
@@ -85,11 +210,42 @@ export function StarGraphCanvas({
   const fitToContent = useCallback(() => {
     if (!bounds || viewport.width <= 0 || viewport.height <= 0) return;
     setCamera(fitCameraToBounds(bounds, viewport));
-  }, [bounds, viewport]);
+  }, [bounds, setCamera, viewport]);
 
   useEffect(() => {
-    fitToContent();
-  }, [fitToContent, model.version]);
+    if (!bounds || viewport.width <= 0 || viewport.height <= 0) return;
+    if (initialCameraRef.current) return;
+    if (storedViewport) {
+      setCameraState(storedViewport);
+      initialCameraRef.current = true;
+      return;
+    }
+    setCamera(fitCameraToBounds(bounds, viewport));
+    initialCameraRef.current = true;
+  }, [bounds, setCamera, storedViewport, viewport.height, viewport.width]);
+
+  const focusSelectedEntity = useCallback(
+    (nodeId: string | null) => {
+      if (!nodeId || viewport.width <= 0 || viewport.height <= 0) return;
+      const entity = model.entities.find((candidate) => candidate.id === nodeId);
+      if (!entity) return;
+      setCamera((current) =>
+        centerCameraOnPoint(
+          { x: entity.x, y: entity.y },
+          viewport,
+          current,
+          { rightPanelWidth },
+        ),
+      );
+      rootRef.current?.focus();
+    },
+    [model.entities, rightPanelWidth, setCamera, viewport],
+  );
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    focusSelectedEntity(selectedNodeId);
+  }, [focusSelectedEntity, rightPanelWidth, selectedNodeId]);
 
   const handleZoomIn = useCallback(() => {
     setCamera((current) =>
@@ -98,7 +254,7 @@ export function StarGraphCanvas({
         y: viewport.height / 2,
       }),
     );
-  }, [viewport.height, viewport.width]);
+  }, [setCamera, viewport.height, viewport.width]);
 
   const handleZoomOut = useCallback(() => {
     setCamera((current) =>
@@ -107,7 +263,7 @@ export function StarGraphCanvas({
         y: viewport.height / 2,
       }),
     );
-  }, [viewport.height, viewport.width]);
+  }, [setCamera, viewport.height, viewport.width]);
 
   const handleWheel = useCallback(
     (event: ReactWheelEvent<HTMLDivElement>) => {
@@ -121,7 +277,7 @@ export function StarGraphCanvas({
       const delta = event.deltaY > 0 ? 0.92 : 1.08;
       setCamera((current) => zoomCamera(current, current.zoom * delta, anchor));
     },
-    [],
+    [setCamera],
   );
 
   const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
@@ -146,7 +302,7 @@ export function StarGraphCanvas({
       x: drag.cameraX + (event.clientX - drag.startX),
       y: drag.cameraY + (event.clientY - drag.startY),
     }));
-  }, []);
+  }, [setCamera]);
 
   const handlePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     dragRef.current = null;
@@ -154,6 +310,63 @@ export function StarGraphCanvas({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }, []);
+
+  const applyKeyboardAction = useCallback(
+    (action: CanvasKeyboardAction, focusId: string | null) => {
+      switch (action.type) {
+        case "moveFocus": {
+          onSelectNode?.(action.nodeId);
+          const node = keyboardNav?.nodes.find((candidate) => candidate.id === action.nodeId);
+          if (node) setLiveText(buildNodeAccessibleName(node));
+          rootRef.current?.focus();
+          return;
+        }
+        case "openDetail":
+          if (focusId) onOpenNode?.(focusId);
+          return;
+        case "closeOverlay":
+          keyboardNav?.onCloseOverlay?.(action.layer);
+          rootRef.current?.focus();
+          return;
+        case "zoomIn":
+          handleZoomIn();
+          return;
+        case "zoomOut":
+          handleZoomOut();
+          return;
+        case "fitView":
+          fitToContent();
+          return;
+        default:
+          return;
+      }
+    },
+    [fitToContent, handleZoomIn, handleZoomOut, keyboardNav, onOpenNode, onSelectNode],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!keyboardNav) return;
+      const focusId = selectedNodeId ?? null;
+      if ((event.key === "f" || event.key === "F") && focusId) {
+        event.preventDefault();
+        focusSelectedEntity(focusId);
+        const node = keyboardNav.nodes.find((candidate) => candidate.id === focusId);
+        if (node) setLiveText(buildNodeAccessibleName(node));
+        return;
+      }
+      const action = resolveCanvasKeyEvent(event, {
+        focusId,
+        nodes: keyboardNav.nodes,
+        edges: keyboardNav.edges,
+        overlay: keyboardNav.overlay ?? null,
+      });
+      if (action.type === "noop") return;
+      event.preventDefault();
+      applyKeyboardAction(action, focusId);
+    },
+    [applyKeyboardAction, focusSelectedEntity, keyboardNav, selectedNodeId],
+  );
 
   const worldSize = useMemo(() => {
     if (!bounds) {
@@ -171,17 +384,44 @@ export function StarGraphCanvas({
       ref={rootRef}
       data-testid="star-graph-canvas"
       className={cn("sg-canvas-root research-semantic-motion", className)}
+      role="application"
+      tabIndex={keyboardNav ? -1 : undefined}
       aria-label="Research constellation canvas"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onWheel={handleWheel}
+      onKeyDown={handleKeyDown}
     >
-      {(summaryTitle || summaryDetail) && (
-        <div data-testid="star-graph-summary" className="sg-summary-label pointer-events-none">
+      {keyboardNav ? (
+        <div className="sr-only" aria-live="polite" data-testid="star-graph-canvas-live">
+          {liveText}
+        </div>
+      ) : null}
+      {(summaryTitle || summaryDetail || filterHiddenNote || hiddenEntityCount > 0 || onLoadMore) && (
+        <div data-testid="star-graph-summary" className="sg-summary-label">
           {summaryTitle && <b>{summaryTitle}</b>}
           {summaryDetail && <span>{summaryDetail}</span>}
+          {filterHiddenNote ? (
+            <span data-testid="star-graph-filter-note">{filterHiddenNote}</span>
+          ) : null}
+          {hiddenEntityCount > 0 ? (
+            <span data-testid="star-graph-budget-note">
+              · {visibleEntities.length}/{displayEntities.length}
+            </span>
+          ) : null}
+          {onLoadMore && loadMoreLabel ? (
+            <button
+              type="button"
+              data-testid="star-graph-load-more"
+              className="sg-summary-load-more"
+              disabled={loadMorePending}
+              onClick={onLoadMore}
+            >
+              {loadMoreLabel}
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -195,19 +435,22 @@ export function StarGraphCanvas({
       >
         <StarGraphClusterLayer
           clusters={model.clusters}
-          entities={model.entities}
+          entities={visibleEntities}
           rootId={model.rootId}
           newFrontierLabel={newFrontierLabel}
+          hiddenCounts={clusterHiddenCounts}
+          hiddenCountLabel={hiddenCountLabel}
         />
         <StarGraphEdges
-          relations={model.relations}
+          relations={visibleRelations}
           width={worldSize.width}
           height={worldSize.height}
           lensHints={lensHints}
         />
         <StarGraphEntityLayer
-          entities={model.entities}
+          entities={visibleEntities}
           selectedNodeId={selectedNodeId}
+          nodeAccessibleNames={nodeAccessibleNames}
           lensHints={lensHints}
           motionDirectives={motionDirectives}
           onSelectNode={onSelectNode}

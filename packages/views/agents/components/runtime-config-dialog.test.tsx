@@ -41,7 +41,6 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@multica/core/runtimes", () => ({
   runtimeModelsOptions: (id: string | null) => ({ queryKey: ["models", id] }),
-  deriveRuntimeHealth: () => "online",
 }));
 
 vi.mock("../../runtimes/components/runtime-machines", () => ({

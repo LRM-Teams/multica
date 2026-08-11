@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 
 export type ResearchPresencePhase =
@@ -57,8 +57,29 @@ export const researchKeys = {
     ["research", wsId, "presence", sessionId] as const,
   productRounds: (wsId: string, sessionId: string) =>
     ["research", wsId, "product-rounds", sessionId] as const,
-  graphTyped: (wsId: string, sessionId: string) =>
-    ["research", wsId, "graph-typed", sessionId] as const,
+  graphTyped: (
+    wsId: string,
+    sessionId: string,
+    pagination?: ResearchGraphTypedPagination,
+  ) =>
+    [
+      "research",
+      wsId,
+      "graph-typed",
+      sessionId,
+      pagination?.limit ?? null,
+      pagination?.offset ?? null,
+    ] as const,
+  graphTypedInfinite: (wsId: string, sessionId: string) =>
+    ["research", wsId, "graph-typed-infinite", sessionId] as const,
+};
+
+/** Default first-screen page size for D5 constellation canvas (G8). */
+export const RESEARCH_TYPED_GRAPH_PAGE_LIMIT = 500;
+
+export type ResearchGraphTypedPagination = {
+  limit?: number;
+  offset?: number;
 };
 
 /** Normalize GET /presence wire map (snake updated_at) → ResearchPresenceMap. */
@@ -153,10 +174,41 @@ export function researchProductRoundsOptions(wsId: string, sessionId: string) {
  * topology. `graph_updated`/`research_session` WS invalidations refresh the
  * same key (see `ws-updaters`).
  */
-export function researchGraphTypedOptions(wsId: string, sessionId: string) {
+export function researchGraphTypedOptions(
+  wsId: string,
+  sessionId: string,
+  pagination?: ResearchGraphTypedPagination,
+) {
+  const page = pagination ?? {
+    limit: RESEARCH_TYPED_GRAPH_PAGE_LIMIT,
+    offset: 0,
+  };
   return queryOptions({
-    queryKey: researchKeys.graphTyped(wsId, sessionId),
-    queryFn: () => api.getResearchGraphTyped(sessionId),
+    queryKey: researchKeys.graphTyped(wsId, sessionId, page),
+    queryFn: () => api.getResearchGraphTyped(sessionId, page),
+    enabled: !!wsId && !!sessionId,
+  });
+}
+
+/**
+ * Infinite typed-graph loader for large sessions (G8/G9). Pages merge via
+ * `mergeTypedGraphPages`; the canvas never fabricates nodes beyond what loaded.
+ */
+export function researchGraphTypedInfiniteOptions(wsId: string, sessionId: string) {
+  return infiniteQueryOptions({
+    queryKey: researchKeys.graphTypedInfinite(wsId, sessionId),
+    queryFn: ({ pageParam }) =>
+      api.getResearchGraphTyped(sessionId, {
+        limit: RESEARCH_TYPED_GRAPH_PAGE_LIMIT,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((count, page) => count + (page.nodes?.length ?? 0), 0);
+      const total = lastPage.total_node_count;
+      if (total != null && loaded < total) return loaded;
+      return undefined;
+    },
     enabled: !!wsId && !!sessionId,
   });
 }

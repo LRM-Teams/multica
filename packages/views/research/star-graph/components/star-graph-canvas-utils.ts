@@ -83,6 +83,24 @@ export function zoomPercent(camera: StarGraphCamera): number {
   return Math.round(camera.zoom * 100);
 }
 
+/** Pan the camera so a world point sits in the safe band (excluding right panel). */
+export function centerCameraOnPoint(
+  point: { x: number; y: number },
+  viewport: { width: number; height: number },
+  camera: StarGraphCamera,
+  options: { rightPanelWidth?: number; padding?: number } = {},
+): StarGraphCamera {
+  const panel = Math.max(0, options.rightPanelWidth ?? 0);
+  const padding = options.padding ?? 56;
+  const targetX = padding + Math.max(viewport.width - panel - padding * 2, 1) / 2;
+  const targetY = viewport.height / 2;
+  return {
+    zoom: camera.zoom,
+    x: targetX - point.x * camera.zoom,
+    y: targetY - point.y * camera.zoom,
+  };
+}
+
 export function relationEdgeClass(kind: string, edgeType: string): string {
   if (edgeType === "merged_from" || edgeType === "integration_formed") {
     return "sg-edge-merge";

@@ -4,6 +4,7 @@ import {
   EMPTY_TYPED_GRAPH,
   TypedGraphResponseSchema,
   indexTypedGraphNodes,
+  mergeTypedGraphPages,
 } from "./graph-typed";
 import type { TypedGraphResponse } from "./graph-typed";
 
@@ -115,6 +116,16 @@ describe("typed graph schema (LRM-1497 · fed by LRM-1505)", () => {
     expect(parsed.nodes).toHaveLength(0);
   });
 
+  it("parses total_node_count when the graph is paginated", () => {
+    const parsed = parseWithFallback(
+      { ...sampleTypedGraph(), total_node_count: 10_042 },
+      TypedGraphResponseSchema,
+      EMPTY_TYPED_GRAPH,
+      { endpoint: "test" },
+    ) as TypedGraphResponse;
+    expect(parsed.total_node_count).toBe(10_042);
+  });
+
   it("falls back to EMPTY_TYPED_GRAPH on a non-object response", () => {
     const parsed = parseWithFallback(
       null,
@@ -123,6 +134,55 @@ describe("typed graph schema (LRM-1497 · fed by LRM-1505)", () => {
       { endpoint: "test" },
     ) as TypedGraphResponse;
     expect(parsed.nodes).toEqual([]);
+  });
+});
+
+describe("mergeTypedGraphPages", () => {
+  it("dedupes nodes and merges lineage maps across pages", () => {
+    const page1 = parseWithFallback(
+      {
+        session_id: "s1",
+        graph_version: 3,
+        total_node_count: 4,
+        nodes: [
+          { id: "n1", title: "A", level: "m" },
+          { id: "n2", title: "B", level: "s" },
+        ],
+        edges: [{ from_node_id: "n1", to_node_id: "n2", edge_type: "derived" }],
+        clusters: [{ id: "c1", name: "Cluster" }],
+        lineage: { merged: { n1: ["n2"] }, derived: {}, superseded: {}, restarted: {}, invalidated: {}, supersedes: {} },
+      },
+      TypedGraphResponseSchema,
+      EMPTY_TYPED_GRAPH,
+      { endpoint: "test" },
+    ) as TypedGraphResponse;
+    const page2 = parseWithFallback(
+      {
+        session_id: "s1",
+        graph_version: 4,
+        total_node_count: 4,
+        nodes: [
+          { id: "n2", title: "B-updated", level: "s" },
+          { id: "n3", title: "C", level: "l" },
+        ],
+        edges: [{ from_node_id: "n2", to_node_id: "n3", edge_type: "derived" }],
+        clusters: [{ id: "c2", name: "Cluster 2" }],
+        lineage: { merged: { n3: ["n2"] }, derived: {}, superseded: {}, restarted: {}, invalidated: {}, supersedes: {} },
+      },
+      TypedGraphResponseSchema,
+      EMPTY_TYPED_GRAPH,
+      { endpoint: "test" },
+    ) as TypedGraphResponse;
+
+    const merged = mergeTypedGraphPages([page1, page2]);
+    expect(merged.graph_version).toBe(4);
+    expect(merged.total_node_count).toBe(4);
+    expect(merged.nodes.map((n) => n.id).sort()).toEqual(["n1", "n2", "n3"]);
+    expect(merged.nodes.find((n) => n.id === "n2")?.title).toBe("B");
+    expect(merged.edges).toHaveLength(2);
+    expect(merged.clusters.map((c) => c.id).sort()).toEqual(["c1", "c2"]);
+    expect(merged.lineage.merged.n1).toEqual(["n2"]);
+    expect(merged.lineage.merged.n3).toEqual(["n2"]);
   });
 });
 

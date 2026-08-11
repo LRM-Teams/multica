@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RuntimeMachine } from "../../runtimes/components/runtime-machines";
 import {
-  firstOnlineRuntimeIdOnMachine,
+  firstRuntimeIdOnMachine,
   runtimeBelongsToMachine,
 } from "./computer-picker-utils";
 
@@ -34,13 +34,12 @@ function machine(
 }
 
 describe("computer-picker-utils execution cascade helpers", () => {
-  it("prefers an online runtime on the machine", () => {
-    const now = Date.now();
+  it("selects the first runtime without inferring liveness from timestamps", () => {
     const m = machine([
       { id: "rt-offline", status: "offline", last_seen_at: null },
-      { id: "rt-online", status: "online", last_seen_at: new Date(now).toISOString() },
+      { id: "rt-online", status: "online", last_seen_at: new Date().toISOString() },
     ]);
-    expect(firstOnlineRuntimeIdOnMachine(m, now)).toBe("rt-online");
+    expect(firstRuntimeIdOnMachine(m)).toBe("rt-offline");
   });
 
   it("runtimeBelongsToMachine checks membership", () => {

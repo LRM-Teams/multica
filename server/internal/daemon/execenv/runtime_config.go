@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/multica-ai/multica/server/internal/memorypolicy"
 )
 
 // runtimeMarkerBegin and runtimeMarkerEnd delimit the Multica-managed brief
@@ -1037,7 +1039,7 @@ func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
 }
 
 func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
-	b.WriteString("### Memory Operating Guide (v0.11)\n\n")
+	b.WriteString("### Memory Operating Guide (v0.12)\n\n")
 	b.WriteString("All memory and skills move with this agent workspace. Resolve every path below relative to `MULTICA_AGENT_ROOT`; do not depend on separate memory, project, channel, user, device, or skill directory environment variables.\n\n")
 	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily notes → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`.\n")
 	b.WriteString("- **Scope and privacy**: source is provenance, not scope. Keep user, project, channel, and agent-wide facts separate. Never inspect another member's directory, invent IDs from display names, copy secrets, or broaden a private fact into shared memory. Project paths exist only for an explicitly bound project.\n")
@@ -1045,6 +1047,7 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString("- **Recall before action**: use only the member identity supplied by the current Message context when reading `users/<member-id>/`.\n")
 	}
 	b.WriteString("- **Durability bar**: record supported preferences, ownership, handoffs, corrections, reusable fixes, and standing process rules when they are likely to matter in a future run. Skip greetings, acknowledgements, jokes, raw transcripts, transient logs, guesses, and secrets. Prefer updating an existing entry over duplicating it.\n")
+	fmt.Fprintf(b, "- **Concision budget**: memory is an index, not a transcript. For one substantive closeout, append only 1-%d Daily bullets, each at most %d characters, covering outcome, durable decision, and next risk/action; omit steps, command output, file lists, and repeated context. Canonical memory uses one fact or rule per bullet, at most %d characters. Merge by topic instead of appending a near-duplicate. Keep detail in the source task/message and preserve only a short source reference when needed.\n", memorypolicy.DailyMaxNewEntriesPerTurn, memorypolicy.DailyEntryMaxRunes, memorypolicy.DurableEntryMaxRunes)
 	b.WriteString("- **Claiming memory**: say that you remembered something only after writing the intended durable path and then re-reading or stat-checking that exact path successfully. Daily-only notes do not count for a standing rule. Human and peer-agent durable instructions use the same bar.\n")
 	b.WriteString("- **Problem closeout**: after a meaningful bug, investigation, or outage, save reusable cause, fix, and commands under the bound project path; use agent-wide `memory/MEMORY.md` or `notes/` only when the lesson genuinely applies across projects.\n")
 	b.WriteString("- **Current state**: project blockers belong in `projects/<project-id>/STATE.md`; only cross-project state belongs in `memory/STATE.md`. Channel files contain non-secret purpose, language, routing, and collaboration defaults, not transcripts or private user facts.\n")

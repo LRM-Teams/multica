@@ -52,23 +52,31 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_fleet_member WHERE agent_id = $1`, leadID)
 	})
 
-	session, err := testHandler.Queries.CreateResearchSession(ctx, db.CreateResearchSessionParams{
-		WorkspaceID:        wsUUID,
-		FleetID:            fleetID,
-		CreatedBy:          userUUID,
-		Title:              "silent-evidence-" + suffix,
-		Goal:               "prove unattended nextstep emits ≥3 silent graph-append steps",
-		Status:             "running",
-		CurrentStage:       "s1_plan",
-		DepthTier:           "standard",
-		ProductRound:       1,
-		ProductRoundBudget: 5,
-	})
+	tx, err := testPool.Begin(ctx)
 	if err != nil {
+		t.Fatalf("begin session tx: %v", err)
+	}
+	var sessionID pgtype.UUID
+	if err = tx.QueryRow(ctx, `
+		INSERT INTO research_session (
+			workspace_id, fleet_id, created_by, title, goal, status, current_stage,
+			depth_tier, product_round, product_round_budget
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id
+	`, wsUUID, fleetID, userUUID, "silent-evidence-"+suffix,
+		"prove unattended nextstep emits ≥3 silent graph-append steps", "running", "s1_plan", "standard", int32(1), int32(5)).Scan(&sessionID); err != nil {
+		_ = tx.Rollback(ctx)
 		t.Fatalf("create research session: %v", err)
 	}
+	if _, err = tx.Exec(ctx, `SELECT research_ensure_run_session_passport($1, $2)`, wsUUID, sessionID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("ensure run session passport: %v", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit research session: %v", err)
+	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id = $1`, session.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id = $1`, sessionID)
 	})
 
 	// User has been silent (quiet_after=0s means any past activity counts as quiet).
@@ -80,27 +88,24 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 		    last_user_activity_at = $2,
 		    max_open_branches = 3
 		WHERE id = $1
-	`, session.ID, quietAt); err != nil {
+	`, sessionID, quietAt); err != nil {
 		t.Fatalf("mark session quiet: %v", err)
 	}
 
-	goal, err := testHandler.Queries.CreateResearchGraphNode(ctx, db.CreateResearchGraphNodeParams{
+	goal := createTestGraphNode(t, ctx, db.CreateResearchGraphNodeParams{
 		WorkspaceID:  wsUUID,
-		SessionID:    session.ID,
+		SessionID:    sessionID,
 		NodeType:     "goal",
 		Title:        "silent goal",
-		Summary:      session.Goal,
+		Summary:      "prove unattended nextstep emits ≥3 silent graph-append steps",
 		Status:       "active",
 		ActorAgentID: parseUUID(leadID),
 		Payload:      []byte(`{"seed":true}`),
 	})
-	if err != nil {
-		t.Fatalf("create goal node: %v", err)
-	}
 	for i := 0; i < 3; i++ {
-		sq, err := testHandler.Queries.CreateResearchGraphNode(ctx, db.CreateResearchGraphNodeParams{
+		sq := createTestGraphNode(t, ctx, db.CreateResearchGraphNodeParams{
 			WorkspaceID:  wsUUID,
-			SessionID:    session.ID,
+			SessionID:    sessionID,
 			NodeType:     "subquestion",
 			Title:        fmt.Sprintf("silent-sq-%s-%d", suffix, i),
 			Summary:      "childless dimension for nextstep scan",
@@ -108,18 +113,13 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 			ActorAgentID: parseUUID(leadID),
 			Payload:      marshalJSONRaw(map[string]any{"seed": true, "index": i}),
 		})
-		if err != nil {
-			t.Fatalf("create subquestion %d: %v", i, err)
-		}
-		if _, err := testHandler.Queries.CreateResearchGraphEdge(ctx, db.CreateResearchGraphEdgeParams{
+		createTestGraphEdge(t, ctx, db.CreateResearchGraphEdgeParams{
 			WorkspaceID: wsUUID,
-			SessionID:   session.ID,
+			SessionID:   sessionID,
 			FromNodeID:  goal.ID,
 			ToNodeID:    sq.ID,
 			EdgeType:    "leads_to",
-		}); err != nil {
-			t.Fatalf("create edge %d: %v", i, err)
-		}
+		})
 	}
 
 	emitted, err := testHandler.ProcessResearchNextSteps(ctx, 8)
@@ -131,7 +131,7 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 	}
 
 	got, err := testHandler.Queries.GetResearchSession(ctx, db.GetResearchSessionParams{
-		ID:          session.ID,
+		ID:          sessionID,
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
@@ -142,7 +142,7 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 	}
 
 	nodes, err := testHandler.Queries.ListResearchGraphNodes(ctx, db.ListResearchGraphNodesParams{
-		SessionID:   session.ID,
+		SessionID:   sessionID,
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
@@ -166,7 +166,7 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		SELECT COUNT(*)::int FROM research_scheduler_event
 		WHERE session_id = $1 AND event_type IN ('nextstep_enqueued', 'nextstep_wake_failed', 'unattended_auto_step')
-	`, session.ID).Scan(&eventCount); err != nil {
+	`, sessionID).Scan(&eventCount); err != nil {
 		t.Fatalf("count scheduler events: %v", err)
 	}
 	if eventCount < 3 {

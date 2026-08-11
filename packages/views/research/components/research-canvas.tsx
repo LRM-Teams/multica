@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * @deprecated Research sessions render D5 via `ResearchConstellationWorkspace`.
+ * Kept for canvas-plugin smoke coverage until the legacy React Flow host is removed.
+ */
+
 import { useCallback, useEffect, useMemo, useReducer, useRef, type KeyboardEvent } from "react";
 import {
   Background,

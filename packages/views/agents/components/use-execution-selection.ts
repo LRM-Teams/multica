@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type { RuntimeDevice } from "@multica/core/types";
 import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import {
-  firstOnlineRuntimeIdOnMachine,
+  firstRuntimeIdOnMachine,
   firstRuntimeMachine,
   machineForRuntime,
   runtimeBelongsToMachine,
@@ -77,16 +76,12 @@ export function useExecutionSelection({
     ? pickedRuntimeId
     : pickedRuntimeId && !selectedMachine
       ? pickedRuntimeId
-      : firstOnlineRuntimeIdOnMachine(selectedMachine);
+      : firstRuntimeIdOnMachine(selectedMachine);
 
   const selectedRuntime =
     (runtimes.find((r) => r.id === runtimeId) as RuntimeDevice | undefined) ??
     machineRuntimes.find((r) => r.id === runtimeId) ??
     null;
-  const runtimeOnline =
-    !!selectedRuntime &&
-    deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
-
   // Scope model/thinking to the effective runtime without an effect.
   if (modelScope.runtimeId !== runtimeId) {
     setModelScope({ runtimeId, model: "", thinkingLevel: "" });
@@ -100,7 +95,7 @@ export function useExecutionSelection({
     if (nextMachineId === machineId) return;
     setPickedMachineId(nextMachineId);
     const next = machines.find((m) => m.id === nextMachineId) ?? null;
-    const nextRuntimeId = firstOnlineRuntimeIdOnMachine(next);
+    const nextRuntimeId = firstRuntimeIdOnMachine(next);
     setPickedRuntimeId(nextRuntimeId);
     setModelScope({
       runtimeId: nextRuntimeId,
@@ -158,7 +153,6 @@ export function useExecutionSelection({
     machineRuntimes,
     runtimeId,
     selectedRuntime,
-    runtimeOnline,
     model,
     thinkingLevel,
     selectMachine,

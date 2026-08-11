@@ -84,25 +84,33 @@ func newMergableSession(t *testing.T, agentID, title string) pgtype.UUID {
 	`, testWorkspaceID).Scan(&fleetID); err != nil {
 		t.Fatalf("load research fleet: %v", err)
 	}
-	session, err := testHandler.Queries.CreateResearchSession(ctx, db.CreateResearchSessionParams{
-		WorkspaceID:        parseUUID(testWorkspaceID),
-		FleetID:            fleetID,
-		CreatedBy:          parseUUID(testUserID),
-		Title:              title + "-" + suffix,
-		Goal:               "prove LRM-1505 typed graph merge",
-		Status:             "running",
-		CurrentStage:       "s2_sources",
-		DepthTier:          "standard",
-		ProductRound:       1,
-		ProductRoundBudget: 5,
-	})
+	tx, err := testPool.Begin(ctx)
 	if err != nil {
+		t.Fatalf("begin session tx: %v", err)
+	}
+	var session pgtype.UUID
+	if err = tx.QueryRow(ctx, `
+		INSERT INTO research_session (
+			workspace_id, fleet_id, created_by, title, goal, status, current_stage,
+			depth_tier, product_round, product_round_budget
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id
+	`, parseUUID(testWorkspaceID), fleetID, parseUUID(testUserID), title+"-"+suffix,
+		"prove LRM-1505 typed graph merge", "running", "s2_sources", "standard", int32(1), int32(5)).Scan(&session); err != nil {
+		_ = tx.Rollback(ctx)
 		t.Fatalf("create research session: %v", err)
 	}
+	if _, err = tx.Exec(ctx, `SELECT research_ensure_run_session_passport($1, $2)`, parseUUID(testWorkspaceID), session); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("ensure run session passport: %v", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit research session: %v", err)
+	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id = $1`, session.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id = $1`, session)
 	})
-	return session.ID
+	return session
 }
 
 // helper to bootstrap a research session owned by an active fleet member in
@@ -117,7 +125,7 @@ func setupMergableResearchSession(t *testing.T, title string) (pgtype.UUID, stri
 // have real persisted results to fuse.
 func makeTypedInputNode(t *testing.T, sessionID pgtype.UUID, round int32, title string) pgtype.UUID {
 	t.Helper()
-	n, err := testHandler.Queries.CreateResearchGraphNodeTyped(context.Background(), db.CreateResearchGraphNodeTypedParams{
+	n := createTestGraphNodeTyped(t, context.Background(), db.CreateResearchGraphNodeTypedParams{
 		WorkspaceID:     parseUUID(testWorkspaceID),
 		SessionID:       sessionID,
 		NodeType:        "finding",
@@ -139,9 +147,6 @@ func makeTypedInputNode(t *testing.T, sessionID pgtype.UUID, round int32, title 
 		InvalidatedBy:   pgtype.UUID{},
 		Payload:         []byte(`{}`),
 	})
-	if err != nil {
-		t.Fatalf("create typed input node: %v", err)
-	}
 	return n.ID
 }
 
@@ -170,12 +175,106 @@ func doMerge(t *testing.T, sessionID pgtype.UUID, agentID string, inputIDs []str
 
 func doGetTyped(t *testing.T, sessionID pgtype.UUID) (int, ResearchGraphTypedResp) {
 	t.Helper()
-	req := newRequest(http.MethodGet, "/api/research/sessions/"+uuidToString(sessionID)+"/graph/typed", nil)
+	return doGetTypedQuery(t, sessionID, "")
+}
+
+func doGetTypedQuery(t *testing.T, sessionID pgtype.UUID, query string) (int, ResearchGraphTypedResp) {
+	t.Helper()
+	req := newRequest(http.MethodGet, "/api/research/sessions/"+uuidToString(sessionID)+"/graph/typed"+query, nil)
 	rec := httptest.NewRecorder()
 	testHandler.GetResearchGraphTyped(rec, withURLParam(req, "id", uuidToString(sessionID)))
 	var resp ResearchGraphTypedResp
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
 	return rec.Code, resp
+}
+
+func TestParseTypedGraphPagination(t *testing.T) {
+	t.Run("no query returns non-paginated", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graph/typed", nil)
+		limit, offset, paginated, ok := parseTypedGraphPagination(rec, req)
+		if !ok || paginated {
+			t.Fatalf("expected non-paginated ok=true, got paginated=%v ok=%v", paginated, ok)
+		}
+		if limit != 0 || offset != 0 {
+			t.Fatalf("limit=%d offset=%d", limit, offset)
+		}
+	})
+
+	t.Run("limit without offset defaults offset zero", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graph/typed?limit=50", nil)
+		limit, offset, paginated, ok := parseTypedGraphPagination(rec, req)
+		if !ok || !paginated {
+			t.Fatalf("expected paginated ok=true, got paginated=%v ok=%v", paginated, ok)
+		}
+		if limit != 50 || offset != 0 {
+			t.Fatalf("limit=%d offset=%d", limit, offset)
+		}
+	})
+
+	t.Run("offset without limit is bad request", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graph/typed?offset=10", nil)
+		_, _, _, ok := parseTypedGraphPagination(rec, req)
+		if ok {
+			t.Fatal("expected bad request when offset set without limit")
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d", rec.Code)
+		}
+	})
+
+	t.Run("limit above cap is clamped", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graph/typed?limit=99999", nil)
+		limit, _, paginated, ok := parseTypedGraphPagination(rec, req)
+		if !ok || !paginated {
+			t.Fatalf("expected paginated ok=true")
+		}
+		if limit != maxTypedGraphPageLimit {
+			t.Fatalf("limit=%d want %d", limit, maxTypedGraphPageLimit)
+		}
+	})
+}
+
+func TestResearchGraphTypedPaginationFiltersPage(t *testing.T) {
+	sessionID, _ := setupMergableResearchSession(t, "paginate")
+	makeTypedInputNode(t, sessionID, 1, "page-a")
+	makeTypedInputNode(t, sessionID, 1, "page-b")
+	makeTypedInputNode(t, sessionID, 1, "page-c")
+
+	code, page := doGetTypedQuery(t, sessionID, "?limit=2&offset=0")
+	if code != http.StatusOK {
+		t.Fatalf("paginated get status=%d", code)
+	}
+	if page.TotalNodeCount == nil || *page.TotalNodeCount != 3 {
+		t.Fatalf("total_node_count=%v want 3", page.TotalNodeCount)
+	}
+	if len(page.Nodes) != 2 {
+		t.Fatalf("nodes=%d want 2", len(page.Nodes))
+	}
+
+	code, full := doGetTyped(t, sessionID)
+	if code != http.StatusOK {
+		t.Fatalf("full get status=%d", code)
+	}
+	if full.TotalNodeCount != nil {
+		t.Fatalf("non-paginated response must omit total_node_count, got %v", full.TotalNodeCount)
+	}
+
+	loaded := make(map[string]struct{})
+	for _, n := range page.Nodes {
+		loaded[n.ID] = struct{}{}
+	}
+	for _, edge := range page.Edges {
+		if _, ok := loaded[edge.FromNodeID]; !ok {
+			t.Fatalf("edge from %s not in page nodes", edge.FromNodeID)
+		}
+		if _, ok := loaded[edge.ToNodeID]; !ok {
+			t.Fatalf("edge to %s not in page nodes", edge.ToNodeID)
+		}
+	}
 }
 
 // AC1: 两轮真实成果 + 一次三合一融合，刷新后等级/谱系/集群/旧节点状态完全一致。
@@ -351,18 +450,8 @@ func TestResearchGraphMergeCrossWorkspaceRejected(t *testing.T) {
 	nA := makeTypedInputNode(t, sessionA, 1, "A")
 	nB := makeTypedInputNode(t, sessionA, 1, "B")
 
-	// Foreign node: belongs to sessionA id but is stored under a different
-	// workspace, so workspace-scoped lookup must not find it.
-	foreignID, err := uuid.NewUUID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO research_graph_node (id, workspace_id, session_id, node_type, title, summary, status, payload)
-		VALUES ($1, $2, $3, 'finding', 'foreign-ws', 'foreign', 'active', '{}'::jsonb)
-	`, foreignID, otherWSID, sessionA); err != nil {
-		t.Fatalf("insert foreign-workspace node: %v", err)
-	}
+	// Valid node in another workspace; merge in sessionA must not resolve it.
+	foreignID := createForeignWorkspaceFindingNode(t, ctx, parseUUID(otherWSID.String()))
 
 	code, body := doMerge(t, sessionA, agentID,
 		[]string{uuidToString(nA), uuidToString(nB), foreignID.String()},

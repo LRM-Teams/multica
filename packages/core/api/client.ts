@@ -4502,12 +4502,19 @@ export class ApiClient {
    */
   async getResearchGraphTyped(
     id: string,
+    options?: { limit?: number; offset?: number },
   ): Promise<import("../research/graph-typed").TypedGraphResponse> {
     const {
       TypedGraphResponseSchema,
       EMPTY_TYPED_GRAPH,
     } = await import("../research/graph-typed");
-    const raw = await this.fetch(`/api/research/sessions/${id}/graph/typed`);
+    const params = new URLSearchParams();
+    if (options?.limit != null) params.set("limit", String(options.limit));
+    if (options?.offset != null) params.set("offset", String(options.offset));
+    const qs = params.toString();
+    const raw = await this.fetch(
+      `/api/research/sessions/${id}/graph/typed${qs ? `?${qs}` : ""}`,
+    );
     const parsed = parseWithFallback(
       raw,
       TypedGraphResponseSchema,

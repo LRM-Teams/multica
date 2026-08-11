@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,13 +92,16 @@ type ResearchGraphLineageResp struct {
 }
 
 type ResearchGraphTypedResp struct {
-	SessionID    string                       `json:"session_id"`
-	GraphVersion int64                        `json:"graph_version"`
-	Nodes        []ResearchGraphTypedNodeResp `json:"nodes"`
-	Edges        []ResearchGraphEdgeResp      `json:"edges"`
-	Clusters     []ResearchGraphClusterResp   `json:"clusters"`
-	Lineage      ResearchGraphLineageResp     `json:"lineage"`
+	SessionID      string                       `json:"session_id"`
+	GraphVersion   int64                        `json:"graph_version"`
+	TotalNodeCount *int64                       `json:"total_node_count,omitempty"`
+	Nodes          []ResearchGraphTypedNodeResp `json:"nodes"`
+	Edges          []ResearchGraphEdgeResp      `json:"edges"`
+	Clusters       []ResearchGraphClusterResp   `json:"clusters"`
+	Lineage        ResearchGraphLineageResp     `json:"lineage"`
 }
+
+const maxTypedGraphPageLimit = 2000
 
 // ---------------------------------------------------------------------------
 // Graph GET — typed nodes/edges/clusters/lineage for one render pass.
@@ -123,10 +127,35 @@ func (h *Handler) GetResearchGraphTyped(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	nodes, err := h.Queries.ListResearchGraphNodesTyped(r.Context(), db.ListResearchGraphNodesTypedParams{
-		SessionID:   sessionID,
-		WorkspaceID: wsUUID,
-	})
+	limit, offset, paginated, ok := parseTypedGraphPagination(w, r)
+	if !ok {
+		return
+	}
+
+	var totalCount int64
+	var nodes []db.ResearchGraphNode
+	var err error
+	if paginated {
+		totalCount, err = h.Queries.CountResearchGraphNodes(r.Context(), db.CountResearchGraphNodesParams{
+			SessionID:   sessionID,
+			WorkspaceID: wsUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to count research graph nodes")
+			return
+		}
+		nodes, err = h.Queries.ListResearchGraphNodesTypedPaginated(r.Context(), db.ListResearchGraphNodesTypedPaginatedParams{
+			SessionID:   sessionID,
+			WorkspaceID: wsUUID,
+			Limit:       int32(limit),
+			Offset:      int32(offset),
+		})
+	} else {
+		nodes, err = h.Queries.ListResearchGraphNodesTyped(r.Context(), db.ListResearchGraphNodesTypedParams{
+			SessionID:   sessionID,
+			WorkspaceID: wsUUID,
+		})
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load research graph nodes")
 		return
@@ -153,8 +182,97 @@ func (h *Handler) GetResearchGraphTyped(w http.ResponseWriter, r *http.Request) 
 		WorkspaceID: wsUUID,
 	})
 
+	if paginated {
+		nodeIDs := typedGraphNodeIDSet(nodes)
+		edges = filterResearchGraphEdgesForNodes(edges, nodeIDs)
+		clusters = filterResearchGraphClustersForNodes(clusters, nodes)
+	}
+
 	resp := buildResearchGraphTypedResp(uuidToString(sessionID), graphVersion, nodes, edges, clusters)
+	if paginated {
+		resp.TotalNodeCount = &totalCount
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func parseTypedGraphPagination(w http.ResponseWriter, r *http.Request) (limit int, offset int, paginated bool, ok bool) {
+	limitRaw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	offsetRaw := strings.TrimSpace(r.URL.Query().Get("offset"))
+	if limitRaw == "" && offsetRaw == "" {
+		return 0, 0, false, true
+	}
+	if limitRaw == "" {
+		writeError(w, http.StatusBadRequest, "limit is required when offset is set")
+		return 0, 0, false, false
+	}
+	parsedLimit, err := strconv.Atoi(limitRaw)
+	if err != nil || parsedLimit <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid limit")
+		return 0, 0, false, false
+	}
+	if parsedLimit > maxTypedGraphPageLimit {
+		parsedLimit = maxTypedGraphPageLimit
+	}
+	parsedOffset := 0
+	if offsetRaw != "" {
+		parsedOffset, err = strconv.Atoi(offsetRaw)
+		if err != nil || parsedOffset < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return 0, 0, false, false
+		}
+	}
+	return parsedLimit, parsedOffset, true, true
+}
+
+func typedGraphNodeIDSet(nodes []db.ResearchGraphNode) map[string]struct{} {
+	ids := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		if id := uuidToString(node.ID); id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func filterResearchGraphEdgesForNodes(edges []db.ResearchGraphEdge, nodeIDs map[string]struct{}) []db.ResearchGraphEdge {
+	if len(nodeIDs) == 0 {
+		return nil
+	}
+	filtered := make([]db.ResearchGraphEdge, 0, len(edges))
+	for _, edge := range edges {
+		fromID := uuidToString(edge.FromNodeID)
+		toID := uuidToString(edge.ToNodeID)
+		if _, ok := nodeIDs[fromID]; !ok {
+			continue
+		}
+		if _, ok := nodeIDs[toID]; !ok {
+			continue
+		}
+		filtered = append(filtered, edge)
+	}
+	return filtered
+}
+
+func filterResearchGraphClustersForNodes(clusters []db.ResearchGraphCluster, nodes []db.ResearchGraphNode) []db.ResearchGraphCluster {
+	if len(nodes) == 0 {
+		return nil
+	}
+	clusterIDs := make(map[string]struct{})
+	for _, node := range nodes {
+		if id := uuidToString(node.ClusterID); id != "" {
+			clusterIDs[id] = struct{}{}
+		}
+	}
+	if len(clusterIDs) == 0 {
+		return nil
+	}
+	filtered := make([]db.ResearchGraphCluster, 0, len(clusters))
+	for _, cluster := range clusters {
+		if _, ok := clusterIDs[uuidToString(cluster.ID)]; ok {
+			filtered = append(filtered, cluster)
+		}
+	}
+	return filtered
 }
 
 func mapTypedGraphNode(
@@ -553,6 +671,9 @@ func (h *Handler) mergeNodesAtomic(
 	if err != nil {
 		return db.ResearchGraphNode{}, nil, 0, false, pgErr("failed to create conclusion node", http.StatusInternalServerError)
 	}
+	if err := ensureGraphNodePassportTx(ctx, tx, wsUUID, sessionID, conclusion.ID); err != nil {
+		return db.ResearchGraphNode{}, nil, 0, false, pgErr("failed to register conclusion passport", http.StatusInternalServerError)
+	}
 
 	// Write merged_from edges (input -> conclusion) and mark each input superseded.
 	edgeIDs := make([]string, 0, len(inputIDs))
@@ -566,6 +687,9 @@ func (h *Handler) mergeNodesAtomic(
 		})
 		if eerr != nil {
 			return db.ResearchGraphNode{}, nil, 0, false, pgErr("failed to write merged_from edge", http.StatusInternalServerError)
+		}
+		if err := ensureGraphEdgePassportTx(ctx, tx, wsUUID, sessionID, e.ID); err != nil {
+			return db.ResearchGraphNode{}, nil, 0, false, pgErr("failed to register merge edge passport", http.StatusInternalServerError)
 		}
 		edgeIDs = append(edgeIDs, uuidToString(e.ID))
 

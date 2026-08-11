@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  centerCameraOnPoint,
   computeEntityBounds,
   fitCameraToBounds,
   quadraticEdgePath,
@@ -110,5 +111,18 @@ describe("star-graph-canvas-utils", () => {
     expect(next.zoom).toBe(2);
     expect(next.x).not.toBe(10);
     expect(next.y).not.toBe(20);
+  });
+
+  it("centers camera on a world point inside the safe band", () => {
+    const camera = centerCameraOnPoint(
+      { x: 400, y: 300 },
+      { width: 1200, height: 800 },
+      { x: 0, y: 0, zoom: 1 },
+      { rightPanelWidth: 360, padding: 56 },
+    );
+    expect(camera.zoom).toBe(1);
+    const safeCenterX = 56 + (1200 - 360 - 112) / 2;
+    expect(camera.x).toBeCloseTo(safeCenterX - 400, 0);
+    expect(camera.y).toBeCloseTo(400 - 300, 0);
   });
 });

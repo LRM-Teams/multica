@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResearchMessage } from "@multica/core/types";
-import { buildGoalVersionHistory } from "./research-d5-goal-history";
+import { buildGoalVersionHistory, summarizeGoalImpact } from "./research-d5-goal-history";
 
 function processMessage(
   partial: Partial<ResearchMessage> & Pick<ResearchMessage, "id">,
@@ -49,5 +49,17 @@ describe("buildGoalVersionHistory", () => {
     expect(history[0]?.isCurrent).toBe(true);
     expect(history[0]?.goal).toBe("Current goal");
     expect(history[1]?.version).toBe(1);
+  });
+});
+
+describe("summarizeGoalImpact", () => {
+  it("counts nodes with goal_version_id", () => {
+    expect(
+      summarizeGoalImpact([
+        { id: "a", goal_version_id: "v1" },
+        { id: "b", goal_version_id: "" },
+        { id: "c", goal_version_id: "v2" },
+      ] as unknown as Parameters<typeof summarizeGoalImpact>[0]),
+    ).toEqual({ labeledNodes: 2, totalNodes: 3 });
   });
 });

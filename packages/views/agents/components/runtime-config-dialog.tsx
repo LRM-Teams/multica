@@ -152,7 +152,6 @@ function RuntimeConfigDialogBody({
           machineRuntimes={selection.machineRuntimes}
           runtimeId={selection.runtimeId}
           onRuntimeSelect={selection.selectRuntime}
-          runtimeOnline={selection.runtimeOnline}
           model={selection.model}
           onModelChange={selection.selectModel}
           thinkingLevel={selection.thinkingLevel}

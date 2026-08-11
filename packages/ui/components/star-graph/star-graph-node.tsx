@@ -49,6 +49,8 @@ export interface StarGraphNodeProps {
   agentBadge?: string;
   /** Live metrics for XL/XXL/L. */
   metrics?: StarGraphNodeMetrics;
+  /** Override the computed accessible name (D5 keyboard/SR contract). */
+  accessibleName?: string;
   /** Explicitly busy (spinner/pulse). */
   busy?: boolean;
   /** Grid position on the canvas (left/top in % or px). Optional. */
@@ -70,6 +72,7 @@ export function StarGraphNode({
   agentBadge,
   metrics,
   busy,
+  accessibleName,
   style,
   onOpen,
   className,
@@ -78,9 +81,11 @@ export function StarGraphNode({
   const stateToken = starGraphStateToken(state);
 
   const readable =
+    accessibleName?.trim() ||
     [headerLabel, title, stateToken.ariaLabel, subLabel, agentBadge]
       .filter(Boolean)
-      .join("，") || title;
+      .join("，") ||
+    title;
 
   const size = `${token.sizePx}px`;
 

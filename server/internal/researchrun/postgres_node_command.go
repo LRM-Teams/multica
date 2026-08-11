@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -194,6 +195,9 @@ func (s *PostgresStore) nodeCommandContinueFork(
 		if err != nil {
 			return NodeCommandOutcome{}, err
 		}
+		if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindQuestion, workspaceID, in.SessionID, newQID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
+			return NodeCommandOutcome{}, err
+		}
 		q := Question{
 			ID:               newQID,
 			SessionID:        in.SessionID,
@@ -248,6 +252,9 @@ func (s *PostgresStore) nodeCommandContinueFork(
 		acceptance, goalVersion, planVersion,
 		maxAttempts, timeout).Scan(&taskID)
 	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindTask, workspaceID, in.SessionID, taskID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
 		return NodeCommandOutcome{}, err
 	}
 

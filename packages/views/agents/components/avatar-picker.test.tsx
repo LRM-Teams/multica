@@ -26,6 +26,8 @@ const { PRESETS, RESOURCES } = vi.hoisted(() => {
       avatar_system_choice_aria: "Choose system avatar",
       avatar_upload_custom: "Upload custom avatar",
       avatar_custom_selected: "Custom avatar selected",
+      avatar_picker_cancel: "Cancel",
+      avatar_picker_save: "Save",
       avatar_err_type: "Please choose a PNG or JPG image.",
       avatar_err_size: "Image must be 5 MB or smaller.",
       avatar_err_dimensions: "Image must be at least 256×256 pixels.",
@@ -55,7 +57,7 @@ describe("AvatarPicker", () => {
     vi.clearAllMocks();
   });
 
-  it("opens the system preset grid and commits a picked face", () => {
+  it("stages a system face and commits only after Save", () => {
     const onChange = vi.fn();
     render(<AvatarPicker value={null} onChange={onChange} />);
 
@@ -66,12 +68,26 @@ describe("AvatarPicker", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Choose system avatar 2" }));
+    expect(onChange).not.toHaveBeenCalled();
 
+    fireEvent.click(screen.getByTestId("avatar-picker-save"));
     expect(onChange).toHaveBeenCalledWith({
       kind: "picked",
       presetUrl: PRESETS[1],
       previewUrl: PRESETS[1],
     });
+  });
+
+  it("discards a staged face when Cancel is pressed", () => {
+    const onChange = vi.fn();
+    render(<AvatarPicker value={null} onChange={onChange} />);
+
+    fireEvent.click(screen.getByTestId("avatar-picker-trigger"));
+    fireEvent.click(screen.getByRole("button", { name: "Choose system avatar 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("avatar-picker-dialog")).toBeNull();
   });
 
   it("clears the current face when the remove control is used", () => {

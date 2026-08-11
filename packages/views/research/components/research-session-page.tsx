@@ -478,6 +478,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
   const postUser = (body: string) => send.mutate(body);
 
+  // Plain derivation after data-gated early returns — do not use hooks here
+  // (rules-of-hooks). goal history is cheap and only needed on the success path.
   const goalVersion = data.run?.run?.goal_version ?? data.run?.contract?.goal_version ?? null;
   const goalHistory = buildGoalVersionHistory({
     currentGoal: session.goal,

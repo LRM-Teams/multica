@@ -355,6 +355,11 @@ func timePtr(value time.Time) *time.Time {
 	return &value
 }
 
+func (s *PostgresStore) AttemptHasDispatchManifest(ctx context.Context, sessionID, workspaceID, attemptID string) (bool, error) {
+	_, _, _, ok, err := loadAttemptManifestSummaryPool(ctx, s.pool, workspaceID, sessionID, attemptID)
+	return ok, err
+}
+
 func (s *PostgresStore) SessionArtifactPassportEnabled(ctx context.Context, sessionID, workspaceID string) (bool, error) {
 	var enabled bool
 	err := s.pool.QueryRow(ctx, `

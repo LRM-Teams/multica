@@ -324,6 +324,16 @@ const ResearchClaimEvidenceSchema = z
   })
   .passthrough();
 
+const ResearchAttemptArtifactContextSchema = z
+  .object({
+    attempt_id: z.string(),
+    manifest_id: z.string().optional(),
+    manifest_hash: z.string().optional(),
+    policy_watermark: z.number().optional(),
+    manifest_filtered: z.boolean().optional().default(false),
+  })
+  .passthrough();
+
 const ResearchRunSnapshotSchema = z
   .object({
     run: ResearchRunSchema,
@@ -473,6 +483,7 @@ const ResearchRunSnapshotSchema = z
           .default([]),
       })
       .passthrough(),
+    attempt_context: ResearchAttemptArtifactContextSchema.optional(),
   })
   .passthrough();
 

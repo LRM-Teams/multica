@@ -29,6 +29,46 @@ describe("research schemas", () => {
     expect(parsed.fleet.id).toBe("f1");
   });
 
+  it("falls back on malformed attempt_context in run snapshot", () => {
+    const raw = {
+      session: { id: "s1", workspace_id: "w1", title: "t", goal: "g" },
+      fleet: { id: "f1", workspace_id: "w1", members: [] },
+      nodes: [],
+      edges: [],
+      sources: [],
+      report: null,
+      evals: [],
+      messages: [],
+      run: {
+        run: { session_id: "s1", workspace_id: "w1", goal: "g", status: "running", config: {} },
+        contract: {
+          goal_version: 1,
+          goal: "g",
+          scope: {},
+          audience: "team",
+          freshness: "recent",
+          language: "English",
+          source_policy: {},
+          run_limits: {},
+          reason: "",
+          created_at: "",
+        },
+        questions: [],
+        tasks: [],
+        attempts: [],
+        sources: [],
+        observations: [],
+        claims: [],
+        gate: { passed: false, findings: [] },
+        attempt_context: { attempt_id: 123, manifest_filtered: "yes" },
+      },
+    };
+    const parsed = parseWithFallback(raw, ResearchSessionSnapshotSchema, EMPTY_RESEARCH_SNAPSHOT, {
+      endpoint: "test",
+    });
+    expect(parsed.run?.attempt_context?.attempt_id).toBeUndefined();
+  });
+
   it("falls back on malformed list response", () => {
     const parsed = parseWithFallback(
       { sessions: "nope" },

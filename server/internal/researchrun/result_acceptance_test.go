@@ -71,6 +71,17 @@ func TestResultAcceptanceModuleRejectsUnsupportedRunVersion(t *testing.T) {
 	}
 }
 
+func TestResultAcceptanceModuleRejectsMissingDispatchManifestWhenPassportEnabled(t *testing.T) {
+	store, submission := validResultAcceptanceFixture(t)
+	store.passportEnabled = true
+	store.hasDispatchManifest = false
+
+	_, err := (resultAcceptanceModule{store: store}).Accept(context.Background(), submission)
+	if !errors.Is(err, ErrInvalidTransition) || store.accepted != nil {
+		t.Fatalf("error=%v accepted=%+v", err, store.accepted)
+	}
+}
+
 func validResultAcceptanceFixture(t *testing.T) (*resultAcceptanceTestStore, resultSubmission) {
 	t.Helper()
 	raw, err := json.Marshal(validPlanResult(t))
@@ -97,12 +108,14 @@ func validResultAcceptanceFixture(t *testing.T) (*resultAcceptanceTestStore, res
 }
 
 type resultAcceptanceTestStore struct {
-	run      Run
-	task     Task
-	attempts []Attempt
-	members  []FleetMember
-	outcome  AcceptResultOutcome
-	accepted *AcceptResultInput
+	run              Run
+	task             Task
+	attempts         []Attempt
+	members          []FleetMember
+	outcome          AcceptResultOutcome
+	accepted         *AcceptResultInput
+	passportEnabled  bool
+	hasDispatchManifest bool
 }
 
 func (store *resultAcceptanceTestStore) GetRun(context.Context, string, string) (Run, error) {
@@ -125,4 +138,12 @@ func (store *resultAcceptanceTestStore) AcceptResult(_ context.Context, input Ac
 	copy := input
 	store.accepted = &copy
 	return store.outcome, nil
+}
+
+func (store *resultAcceptanceTestStore) SessionArtifactPassportEnabled(context.Context, string, string) (bool, error) {
+	return store.passportEnabled, nil
+}
+
+func (store *resultAcceptanceTestStore) AttemptHasDispatchManifest(context.Context, string, string, string) (bool, error) {
+	return store.hasDispatchManifest, nil
 }

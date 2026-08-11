@@ -1124,6 +1124,7 @@ function NoteEditor({
         onOptimizeSelection={onOptimizeSelection}
         onEditPageWithAI={onEditPageWithAI}
         onApplyAITitle={(title) => setDraft((current) => ({ ...current, title }))}
+        currentAITitle={draft.title}
       />
     </div>
   );

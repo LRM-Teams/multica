@@ -40,6 +40,11 @@ import { useCreateIssue } from "@multica/core/issues/mutations";
 import { useT } from "../i18n";
 import { modKey } from "@multica/core/platform";
 import { NoteAIDiffPreview } from "./note-ai-diff";
+import {
+  captureNoteAIUndoSnapshot,
+  setEditorMarkdown,
+  showNoteAIApplyUndoToast,
+} from "./utils/note-ai-apply-undo";
 import { serializeSelectionToMarkdown } from "./utils/selection-markdown";
 import { Toggle } from "@multica/ui/components/ui/toggle";
 import { Separator } from "@multica/ui/components/ui/separator";
@@ -236,14 +241,6 @@ function replaceEditorRangeWithMarkdown(editor: Editor, from: number, to: number
     tr.replaceRange(from, to, slice);
     return true;
   }).run();
-}
-
-function replaceDocumentWithMarkdown(editor: Editor, markdown: string) {
-  if (editor.markdown) {
-    editor.commands.setContent(markdown, { contentType: "markdown" });
-    return;
-  }
-  editor.commands.setContent(markdown);
 }
 
 function patchedDocumentMarkdown(current: string, result: NoteAIEditResult) {
@@ -611,62 +608,72 @@ function TextOptimizationReview({
   editor,
   state,
   onApplyTitle,
+  currentTitle,
   onClose,
 }: {
   editor: Editor;
   state: Extract<TextOptimizationState, { status: "review" }>;
   onApplyTitle?: (title: string) => void;
+  currentTitle?: string;
   onClose: () => void;
 }) {
   const { t } = useT("editor");
   const { result } = state;
-  const applyTitle = () => {
+  const finishApply = (snapshot: ReturnType<typeof captureNoteAIUndoSnapshot>) => {
     if (result.title) onApplyTitle?.(result.title);
+    showNoteAIApplyUndoToast({
+      editor,
+      snapshot,
+      onApplyTitle,
+      message: t(($) => $.bubble_menu.optimize.applied),
+      undoLabel: t(($) => $.bubble_menu.optimize.undo),
+    });
+    onClose();
   };
   const replaceSelection = () => {
+    const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     try {
       replaceEditorRangeWithMarkdown(editor, state.from, state.to, result.markdown);
     } catch {
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
       return;
     }
-    applyTitle();
-    onClose();
+    finishApply(snapshot);
   };
   const insertAfter = () => {
+    const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     try {
       replaceEditorRangeWithMarkdown(editor, state.to, state.to, `\n\n${result.markdown}`);
     } catch {
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
       return;
     }
-    applyTitle();
-    onClose();
+    finishApply(snapshot);
   };
   const replacePage = () => {
+    const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
     try {
-      replaceDocumentWithMarkdown(editor, result.markdown);
+      setEditorMarkdown(editor, result.markdown);
     } catch {
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
       return;
     }
-    applyTitle();
-    onClose();
+    finishApply(snapshot);
   };
   const applyPatch = () => {
-    const patched = patchedDocumentMarkdown(editor.getMarkdown(), result);
+    const snapshot = captureNoteAIUndoSnapshot(editor, result.title ? currentTitle : undefined);
+    const patched = patchedDocumentMarkdown(snapshot.markdown, result);
     if (!patched) {
       showErrorToast(t(($) => $.bubble_menu.optimize.patch_target_missing));
       return;
     }
     try {
-      replaceDocumentWithMarkdown(editor, patched);
+      setEditorMarkdown(editor, patched);
     } catch {
       showErrorToast(t(($) => $.bubble_menu.optimize.invalid_markdown));
       return;
     }
-    applyTitle();
-    onClose();
+    finishApply(snapshot);
   };
   const copyPatch = () => {
     if (typeof navigator === "undefined") return;
@@ -830,11 +837,13 @@ function EditorBubbleMenu({
   currentIssueId,
   onOptimizeSelection,
   onApplyTitle,
+  currentTitle,
 }: {
   editor: Editor;
   currentIssueId?: string;
   onOptimizeSelection?: TextOptimizationAction;
   onApplyTitle?: (title: string) => void;
+  currentTitle?: string;
 }) {
   const { t } = useT("editor");
   const [visible, setVisible] = useState(false);
@@ -989,7 +998,7 @@ function EditorBubbleMenu({
       ) : optimizationState.status === "loading" ? (
         <TextOptimizationLoading state={optimizationState} onCancel={cancelOptimization} />
       ) : optimizationState.status === "review" ? (
-        <TextOptimizationReview editor={editor} state={optimizationState} onApplyTitle={onApplyTitle} onClose={() => { resetOptimization(); editor.commands.focus(); }} />
+        <TextOptimizationReview editor={editor} state={optimizationState} onApplyTitle={onApplyTitle} currentTitle={currentTitle} onClose={() => { resetOptimization(); editor.commands.focus(); }} />
       ) : mode === "link-edit" ? (
         <LinkEditBar editor={editor} onClose={() => { setMode("toolbar"); editor.commands.focus(); }} />
       ) : (

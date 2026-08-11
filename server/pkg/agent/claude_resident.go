@@ -24,6 +24,7 @@ var ErrClaudeResidentTurnBusy = errors.New("claude stream-json turn busy")
 type ClaudeStreamJSONBackend interface {
 	Backend
 	ResidentMessageInput
+	ResidentReminderInputReceiver
 	ResidentPendingNoticeInput
 	ResidentRuntimeLivenessChecker
 	ResidentRuntimeForceKillable
@@ -121,6 +122,18 @@ func (b *claudeStreamJSONBackend) AcceptMessageBatch(ctx context.Context, messag
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *claudeStreamJSONBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentReminderInput(input)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *claudeStreamJSONBackend) acceptIdleInputPrompt(ctx context.Context, prompt string) (ResidentMessageAcceptance, error) {
 	done := make(chan error, 1)
 	msgCh := make(chan Message, 256)
 	turn := &claudeStreamJSONTurn{started: time.Now(), done: done, msgCh: msgCh, completed: make(chan struct{}), usage: make(map[string]TokenUsage)}

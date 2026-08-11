@@ -70,7 +70,7 @@ func TestHandleAgentStartIntentReportsAcceptedThenIndependentReady(t *testing.T)
 		eventType string
 		payload   any
 	}
-	d.attachWorkspaceRunnerMessageTransport(workspaceID, func(eventType string, payload any) error {
+	attachTestWorkspaceRunner(t, d, workspaceID, func(eventType string, payload any) error {
 		frames = append(frames, struct {
 			eventType string
 			payload   any

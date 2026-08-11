@@ -754,7 +754,11 @@ func (d *Daemon) applyDaemonAgentStart(payload protocol.DaemonAgentStartPayload)
 // AttachTransport replays it on that connection instead of inventing a second
 // launch identity.
 func (d *Daemon) ensureWorkspaceRunnerManagedAgent(workspaceID, agentID string) error {
-	producer := d.workspaceAgentActivityProducer(workspaceID)
+	runner, err := d.ensureWorkspaceRunner(workspaceID)
+	if err != nil || runner.activity == nil {
+		return fmt.Errorf("Workspace Runner Activity is unavailable for %q", workspaceID)
+	}
+	producer := runner.activity
 	status, session, created, err := producer.EnsureManagedAgent(agentID)
 	if err != nil {
 		return err

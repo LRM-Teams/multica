@@ -113,29 +113,28 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 // Runner attaches later and replays both the managed launch and Message
 // recovery request on its new connection.
 func (d *Daemon) restoreResidentAgents() error {
-	if d == nil || d.reminderAgents == nil {
+	if d == nil {
 		return nil
 	}
-	for _, agentID := range d.reminderAgents.residentAgentIDs() {
-		residency, ok := d.reminderAgents.get(agentID)
-		if !ok || residency.RuntimeID == "" || residency.WorkspaceID == "" || residency.PlacementGeneration < 1 {
+	for _, attachment := range d.currentAttachments() {
+		if attachment.RuntimeID == "" || attachment.WorkspaceID == "" || attachment.AttachmentGeneration < 1 {
 			continue
 		}
 		d.mu.Lock()
-		runtime, runtimeKnown := d.runtimeIndex[residency.RuntimeID]
+		runtime, runtimeKnown := d.runtimeIndex[attachment.RuntimeID]
 		d.mu.Unlock()
-		if !runtimeKnown || runtime.WorkspaceID != residency.WorkspaceID {
+		if !runtimeKnown || runtime.WorkspaceID != attachment.WorkspaceID {
 			continue
 		}
-		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, residency.WorkspaceID, agentID)
+		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, attachment.WorkspaceID, attachment.AgentID)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
-			return fmt.Errorf("restore Agent root %q: %w", agentID, err)
+			return fmt.Errorf("restore Agent root %q: %w", attachment.AgentID, err)
 		}
-		if _, err := d.ensureIdleMessageCoordinator(agentID, residency.RuntimeID, agentRoot); err != nil {
-			return fmt.Errorf("restore Agent Message coordinator %q: %w", agentID, err)
+		if _, err := d.ensureIdleMessageCoordinator(attachment.WorkspaceID, attachment.AgentID, attachment.RuntimeID); err != nil {
+			return fmt.Errorf("restore Agent Message coordinator %q: %w", attachment.AgentID, err)
 		}
-		if err := d.ensureWorkspaceRunnerManagedAgent(residency.WorkspaceID, agentID); err != nil {
-			return fmt.Errorf("restore Agent Workspace Runner lifecycle %q: %w", agentID, err)
+		if err := d.ensureWorkspaceRunnerManagedAgent(attachment.WorkspaceID, attachment.AgentID); err != nil {
+			return fmt.Errorf("restore Agent Workspace Runner lifecycle %q: %w", attachment.AgentID, err)
 		}
 	}
 	return nil

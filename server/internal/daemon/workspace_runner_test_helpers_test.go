@@ -34,9 +34,11 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 		close:       func() {},
 	}
 	runner := &WorkspaceRunner{
-		config:  WorkspaceRunnerConfig{WorkspaceID: workspaceID},
-		daemon:  d,
-		inboxes: inboxes,
+		config:    WorkspaceRunnerConfig{WorkspaceID: workspaceID},
+		daemon:    d,
+		processes: newAgentProcessManager(d.cfg.MaxAgentProcesses, nil, nil),
+		activity:  newAgentActivityProducer(d.runnerInstanceID, nil, nil),
+		inboxes:   inboxes,
 	}
 	runner.replaceConnection(connection)
 	d.attachWorkspaceRunner(runner)

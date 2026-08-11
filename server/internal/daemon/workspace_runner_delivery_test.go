@@ -421,12 +421,12 @@ func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testin
 		runtimeID   = "33333333-3333-4333-8333-333333333333"
 	)
 	root := t.TempDir()
-	persisting := New(Config{WorkspacesRoot: root}, nil)
-	if _, accepted, err := persisting.reminderAgents.applyStart(agentID, runtimeID, workspaceID, 1); err != nil || !accepted {
-		t.Fatalf("persist residency accepted=%v err=%v", accepted, err)
+	persisting := New(Config{DaemonID: "daemon-test", WorkspacesRoot: root}, nil)
+	if _, err := persisting.agentAttachments.Apply(workspaceID, AgentAttachmentEvent{Kind: AgentAttachmentEventAttach, AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1}); err != nil {
+		t.Fatalf("persist Attachment: %v", err)
 	}
 
-	restarted := New(Config{WorkspacesRoot: root}, nil)
+	restarted := New(Config{DaemonID: "daemon-test", WorkspacesRoot: root}, nil)
 	restarted.mu.Lock()
 	restarted.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	restarted.mu.Unlock()
@@ -434,20 +434,21 @@ func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testin
 		t.Fatalf("restore residents: %v", err)
 	}
 
-	restarted.messageCoordinatorMu.RLock()
-	coordinator := restarted.messageCoordinators[agentID]
-	gotRuntimeID := restarted.messageRuntimeIDs[agentID]
-	restarted.messageCoordinatorMu.RUnlock()
+	runner := restarted.currentWorkspaceRunner(workspaceID)
+	if runner == nil {
+		t.Fatal("restore did not create Workspace Runner")
+	}
+	coordinator, gotRuntimeID, _ := runner.inboxes.Resolve(agentID)
 	if coordinator == nil || gotRuntimeID != runtimeID {
 		t.Fatalf("restored coordinator=%v runtime_id=%q", coordinator, gotRuntimeID)
 	}
-	producer := restarted.workspaceAgentActivityProducer(workspaceID)
+	producer := runner.activity
 	_, frames := producer.AttachTransport(func(protocol.AgentActivityPayload) {})
 	if len(frames) != 2 || frames[0].EventType != protocol.EventAgentStatus || frames[1].EventType != protocol.EventAgentSession {
 		t.Fatalf("restored Runner lifecycle frames = %#v, want status then session", frames)
 	}
 	var recovery protocol.AgentRecoveryRequest
-	restarted.beginMessageRecoveryWithSend(func(request protocol.AgentRecoveryRequest) error {
+	runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
 		recovery = request
 		return nil
 	})

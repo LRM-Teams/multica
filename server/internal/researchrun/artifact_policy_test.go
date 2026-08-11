@@ -115,6 +115,11 @@ func TestArtifactPolicyAccessMatrix(t *testing.T) {
 			wantOK: false, wantDeny: ArtifactDenyInsufficientClearance,
 		},
 		{
+			name: "unknown access denied", clearance: ArtifactClearanceRaw,
+			level: ArtifactAccessLevel("classified"), purpose: ArtifactPurposeTaskExecution,
+			wantOK: false, wantDeny: ArtifactDenyUnknownAccess,
+		},
+		{
 			name: "evaluation compartment blocks task execution", clearance: ArtifactClearanceRaw,
 			level: ArtifactAccessRaw, purpose: ArtifactPurposeTaskExecution, private: true,
 			wantOK: false, wantDeny: ArtifactDenyEvaluationCompartment,

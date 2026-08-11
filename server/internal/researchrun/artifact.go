@@ -195,3 +195,26 @@ func MigrationRelationshipParserNames() []string {
 		"research_message_match_decision",
 	}
 }
+
+// ScopedRelationshipFKNames lists migration 326 composite relationship FKs.
+func ScopedRelationshipFKNames() []string {
+	return []string{
+		"research_task_attempt_task_scoped_fkey",
+		"research_task_question_scoped_fkey",
+		"research_task_parent_task_scoped_fkey",
+		"research_question_parent_question_scoped_fkey",
+		"research_question_created_by_task_scoped_fkey",
+		"research_question_answer_claim_scoped_fkey",
+		"research_task_dependency_session_fkey",
+		"research_task_dependency_task_scoped_fkey",
+		"research_task_dependency_depends_on_scoped_fkey",
+		"research_source_snapshot_produced_by_task_scoped_fkey",
+		"research_observation_source_snapshot_scoped_fkey",
+		"research_observation_produced_by_task_scoped_fkey",
+		"research_claim_produced_by_task_scoped_fkey",
+		"research_claim_evidence_claim_scoped_fkey",
+		"research_claim_evidence_observation_scoped_fkey",
+		"research_claim_evidence_verified_by_task_scoped_fkey",
+		"research_source_source_snapshot_scoped_fkey",
+	}
+}

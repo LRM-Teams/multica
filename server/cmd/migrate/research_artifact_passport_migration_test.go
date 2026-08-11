@@ -1308,3 +1308,147 @@ func TestResearchArtifactMigrationDiagnostics325RoundTrips(t *testing.T) {
 		t.Fatalf("reapply 325 up: %v", err)
 	}
 }
+
+const researchArtifactScopedFKTestDDL = `
+CREATE TABLE IF NOT EXISTS research_task_dependency (
+  task_id UUID NOT NULL REFERENCES research_task(id) ON DELETE CASCADE,
+  depends_on_task_id UUID NOT NULL REFERENCES research_task(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (task_id, depends_on_task_id),
+  CHECK (task_id <> depends_on_task_id)
+);
+ALTER TABLE research_question
+  ADD COLUMN IF NOT EXISTS parent_question_id UUID REFERENCES research_question(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS created_by_task_id UUID REFERENCES research_task(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS answer_claim_id UUID REFERENCES research_claim(id) ON DELETE SET NULL;
+ALTER TABLE research_task
+  ADD COLUMN IF NOT EXISTS question_id UUID REFERENCES research_question(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS parent_task_id UUID REFERENCES research_task(id) ON DELETE SET NULL;
+ALTER TABLE research_source_snapshot
+  ADD COLUMN IF NOT EXISTS produced_by_task_id UUID REFERENCES research_task(id) ON DELETE SET NULL;
+ALTER TABLE research_observation
+  ADD COLUMN IF NOT EXISTS source_snapshot_id UUID REFERENCES research_source_snapshot(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS produced_by_task_id UUID REFERENCES research_task(id) ON DELETE SET NULL;
+ALTER TABLE research_claim
+  ADD COLUMN IF NOT EXISTS produced_by_task_id UUID REFERENCES research_task(id) ON DELETE SET NULL;
+ALTER TABLE research_claim_evidence
+  ADD COLUMN IF NOT EXISTS verified_by_task_id UUID REFERENCES research_task(id) ON DELETE SET NULL;
+ALTER TABLE research_source
+  ADD COLUMN IF NOT EXISTS source_snapshot_id UUID REFERENCES research_source_snapshot(id) ON DELETE SET NULL;
+ALTER TABLE research_task_attempt
+  ADD CONSTRAINT research_task_attempt_task_id_fkey
+  FOREIGN KEY (task_id) REFERENCES research_task(id) ON DELETE CASCADE;
+ALTER TABLE research_claim_evidence
+  ADD CONSTRAINT research_claim_evidence_claim_id_fkey
+  FOREIGN KEY (claim_id) REFERENCES research_claim(id) ON DELETE CASCADE;
+ALTER TABLE research_claim_evidence
+  ADD CONSTRAINT research_claim_evidence_observation_id_fkey
+  FOREIGN KEY (observation_id) REFERENCES research_observation(id) ON DELETE CASCADE;
+`
+
+func TestResearchArtifactScopedRelationshipFKs326RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_scoped_fk_326_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactScopedFKTestDDL); err != nil {
+		t.Fatalf("extend scoped fk schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	otherSessionID := "20000000-0000-4000-8000-000000000002"
+	localTaskID := "30000000-0000-4000-8000-000000000003"
+	localDependsTaskID := "30000000-0000-4000-8000-000000000004"
+	foreignTaskID := "30000000-0000-4000-8000-000000000005"
+
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	for _, id := range []string{sessionID, otherSessionID} {
+		if _, err = conn.Exec(ctx, `INSERT INTO research_session (id, workspace_id) VALUES ($1::uuid, $2::uuid)`, id, workspaceID); err != nil {
+			t.Fatalf("seed session %s: %v", id, err)
+		}
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES
+		  ($1::uuid, $4::uuid, $5::uuid, 'local-task', 1, 1),
+		  ($2::uuid, $4::uuid, $5::uuid, 'local-depends', 1, 1),
+		  ($3::uuid, $4::uuid, $6::uuid, 'foreign-task', 1, 1)
+	`, localTaskID, localDependsTaskID, foreignTaskID, workspaceID, sessionID, otherSessionID); err != nil {
+		t.Fatalf("seed tasks: %v", err)
+	}
+
+	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
+	up319, _ := readMigrationPair(t, "319_research_artifact_passport_backfill")
+	up320, _ := readMigrationPair(t, "320_research_artifact_reciprocal_guards")
+	up321, _ := readMigrationPair(t, "321_research_artifact_policy_coupling_guards")
+	up322, _ := readMigrationPair(t, "322_research_artifact_policy_ledger_guards")
+	up323, _ := readMigrationPair(t, "323_research_artifact_integrity_guards")
+	up324, _ := readMigrationPair(t, "324_research_artifact_link_policy_guards")
+	up325, _ := readMigrationPair(t, "325_research_artifact_migration_diagnostics")
+	up326, down326 := readMigrationPair(t, "326_research_artifact_scoped_relationship_fks")
+	for _, upSQL := range []string{up318, up319, up320, up321, up322, up323, up324, up325, up326} {
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
+	}
+
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid)
+	`, workspaceID, sessionID, localTaskID, localDependsTaskID); err != nil {
+		t.Fatalf("insert same-scope dependency: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		UPDATE research_task
+		SET parent_task_id = $4::uuid
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, localTaskID, localDependsTaskID); err != nil {
+		t.Fatalf("set same-scope parent task: %v", err)
+	}
+
+	if _, err = conn.Exec(ctx, `
+		UPDATE research_task
+		SET parent_task_id = $4::uuid
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, localTaskID, foreignTaskID); err == nil {
+		t.Fatal("expected cross-session parent_task_id update to fail")
+	}
+
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid)
+	`, workspaceID, sessionID, localTaskID, foreignTaskID); err == nil {
+		t.Fatal("expected cross-session dependency insert to fail")
+	}
+
+	if _, err = conn.Exec(ctx, down326); err != nil {
+		t.Fatalf("apply 326 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up326); err != nil {
+		t.Fatalf("reapply 326 up: %v", err)
+	}
+}

@@ -529,7 +529,7 @@ func (s *PostgresStore) loadLatestReportForGate(ctx context.Context, sessionID s
 }
 
 func (s *PostgresStore) RecordBudgetExhausted(ctx context.Context, sessionID, budgetKind, details string) (RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpBudgetExhausted, pgx.TxOptions{})
 	if err != nil {
 		return RunEvent{}, err
 	}
@@ -562,7 +562,7 @@ func (s *PostgresStore) RecordBudgetExhausted(ctx context.Context, sessionID, bu
 		&existing.Payload, &existing.ProjectionAttempts, &existing.CreatedAt,
 	)
 	if err == nil {
-		return existing, tx.Commit(ctx)
+		return existing, s.commitResearchTx(ctx, txOpBudgetExhausted, tx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return RunEvent{}, err
@@ -593,7 +593,7 @@ func (s *PostgresStore) RecordBudgetExhausted(ctx context.Context, sessionID, bu
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpBudgetExhausted, tx); err != nil {
 		return RunEvent{}, err
 	}
 	return event, nil
@@ -635,7 +635,7 @@ func (s *PostgresStore) ListUnprojectedEvents(ctx context.Context, sessionID str
 }
 
 func (s *PostgresStore) MarkEventProjected(ctx context.Context, eventID string) error {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpProjectionAcknowledge, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -656,11 +656,11 @@ func (s *PostgresStore) MarkEventProjected(ctx context.Context, eventID string) 
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return s.commitResearchTx(ctx, txOpProjectionAcknowledge, tx)
 }
 
 func (s *PostgresStore) MarkEventProjectionFailed(ctx context.Context, eventID, message string, next time.Time) error {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpProjectionRetry, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -681,7 +681,7 @@ func (s *PostgresStore) MarkEventProjectionFailed(ctx context.Context, eventID, 
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return s.commitResearchTx(ctx, txOpProjectionRetry, tx)
 }
 
 type activeAttempt struct {
@@ -738,7 +738,7 @@ func (s *PostgresStore) ReconcileAttempts(ctx context.Context, sessionID string,
 }
 
 func (s *PostgresStore) reconcileAttemptRuntime(ctx context.Context, observed activeAttempt, state InboxTaskState, found bool) ([]RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpAttemptRuntimeReconcile, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -881,7 +881,7 @@ func (s *PostgresStore) reconcileAttemptRuntime(ctx context.Context, observed ac
 			return nil, eventErr
 		}
 		events = append(events, event)
-		if err = tx.Commit(ctx); err != nil {
+		if err = s.commitResearchTx(ctx, txOpAttemptRuntimeReconcile, tx); err != nil {
 			return nil, err
 		}
 		return events, nil
@@ -889,7 +889,7 @@ func (s *PostgresStore) reconcileAttemptRuntime(ctx context.Context, observed ac
 		failure.FailureClass = string(FailureRuntimeLost)
 		failure.Diagnostics = "No durable inbox task could be found for the research attempt."
 	default:
-		if err = tx.Commit(ctx); err != nil {
+		if err = s.commitResearchTx(ctx, txOpAttemptRuntimeReconcile, tx); err != nil {
 			return nil, err
 		}
 		return events, nil
@@ -899,7 +899,7 @@ func (s *PostgresStore) reconcileAttemptRuntime(ctx context.Context, observed ac
 		return nil, failErr
 	}
 	events = append(events, event)
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpAttemptRuntimeReconcile, tx); err != nil {
 		return nil, err
 	}
 	return events, nil

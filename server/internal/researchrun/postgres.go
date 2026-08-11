@@ -72,7 +72,7 @@ func (s *PostgresStore) CreateRun(ctx context.Context, in StartInput, cfg RunCon
 			productRoundBudget = 5
 		}
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpRunCreate, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
@@ -95,7 +95,7 @@ func (s *PostgresStore) CreateRun(ctx context.Context, in StartInput, cfg RunCon
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpRunCreate, tx); err != nil {
 		return Run{}, RunEvent{}, err
 	}
 	return run, event, nil
@@ -106,7 +106,7 @@ func (s *PostgresStore) InitializeRun(ctx context.Context, in StartInput, cfg Ru
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpRunInitialize, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
@@ -117,7 +117,7 @@ func (s *PostgresStore) InitializeRun(ctx context.Context, in StartInput, cfg Ru
 		return Run{}, RunEvent{}, err
 	}
 	if run.InitializedAt != nil {
-		return run, RunEvent{}, tx.Commit(ctx)
+		return run, RunEvent{}, s.commitResearchTx(ctx, txOpRunInitialize, tx)
 	}
 	event, err := initializeRunTx(ctx, tx, in, cfg, sourcePolicy, configJSON)
 	if err != nil {
@@ -127,7 +127,7 @@ func (s *PostgresStore) InitializeRun(ctx context.Context, in StartInput, cfg Ru
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpRunInitialize, tx); err != nil {
 		return Run{}, RunEvent{}, err
 	}
 	return run, event, nil
@@ -677,7 +677,7 @@ func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, d
 	if duration <= 0 {
 		return Run{}, RunLease{}, false, fmt.Errorf("%w: reconcile lease duration must be positive", ErrInvalidTransition)
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpReconcileLeaseClaim, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, RunLease{}, false, err
 	}
@@ -719,7 +719,7 @@ func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, d
 	if err != nil {
 		return Run{}, RunLease{}, false, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpReconcileLeaseClaim, tx); err != nil {
 		return Run{}, RunLease{}, false, err
 	}
 	return run, lease, true, nil
@@ -729,8 +729,13 @@ func (s *PostgresStore) RenewRunLease(ctx context.Context, lease RunLease, durat
 	if duration <= 0 {
 		return RunLease{}, fmt.Errorf("%w: reconcile lease duration must be positive", ErrInvalidTransition)
 	}
+	tx, err := s.beginResearchTx(ctx, txOpReconcileLeaseRenew, pgx.TxOptions{})
+	if err != nil {
+		return RunLease{}, err
+	}
+	defer tx.Rollback(ctx)
 	renewed := lease
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_expires_at = now() + $4::interval,
 		    updated_at = now()
@@ -743,11 +748,22 @@ func (s *PostgresStore) RenewRunLease(ctx context.Context, lease RunLease, durat
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunLease{}, ErrRunLeaseLost
 	}
-	return renewed, err
+	if err != nil {
+		return RunLease{}, err
+	}
+	if err = s.commitResearchTx(ctx, txOpReconcileLeaseRenew, tx); err != nil {
+		return RunLease{}, err
+	}
+	return renewed, nil
 }
 
 func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time) error {
-	command, err := s.pool.Exec(ctx, `
+	tx, err := s.beginResearchTx(ctx, txOpReconcileLeaseRelease, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	command, err := tx.Exec(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_token = NULL, reconcile_lease_expires_at = NULL,
 		    next_reconcile_at = $4, updated_at = now()
@@ -762,7 +778,7 @@ func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next tim
 	if command.RowsAffected() != 1 {
 		return ErrRunLeaseLost
 	}
-	return nil
+	return s.commitResearchTx(ctx, txOpReconcileLeaseRelease, tx)
 }
 
 func (s *PostgresStore) ListDueRunIDs(ctx context.Context, limit int) ([]string, error) {

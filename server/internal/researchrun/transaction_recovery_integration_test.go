@@ -1106,3 +1106,168 @@ func TestNodeCommandTransactionRecovery(t *testing.T) {
 		})
 	}
 }
+
+func countSessionEvents(t *testing.T, run *transactionRecoveryRun, eventType string) int {
+	t.Helper()
+	var count int
+	if err := run.pool.QueryRow(run.ctx, `
+		SELECT count(*)::int FROM research_run_event
+		WHERE session_id = $1::uuid AND event_type = $2
+	`, run.fixture.sessionID, eventType).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func TestRecordBudgetExhaustedTransactionRecovery(t *testing.T) {
+	runTransactionRecoveryMatrix(t, txOpBudgetExhausted, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+		kind, details := "tasks", "task budget exhausted"
+		var firstEventID string
+		invoke := func() error {
+			event, err := run.store.RecordBudgetExhausted(run.ctx, run.fixture.sessionID, kind, details)
+			if err == nil {
+				if firstEventID == "" {
+					firstEventID = event.ID
+				} else if event.ID != firstEventID {
+					return fmt.Errorf("budget event id changed: %s -> %s", firstEventID, event.ID)
+				}
+			}
+			return err
+		}
+		return transactionRecoveryOperation{
+			invoke: invoke,
+			assertRolledBack: func() {
+				if count := countSessionEvents(t, run, "budget_exhausted"); count != 0 {
+					t.Fatalf("rolled back budget events=%d", count)
+				}
+			},
+			assertCommitted: func() {
+				if count := countSessionEvents(t, run, "budget_exhausted"); count != 1 {
+					t.Fatalf("committed budget events=%d", count)
+				}
+			},
+			recover: invoke,
+		}
+	})
+}
+
+func TestResumeTransactionRecovery(t *testing.T) {
+	runTransactionRecoveryMatrix(t, txOpRunResume, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+		if _, _, _, err := run.store.Pause(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, run.fixture.userID); err != nil {
+			t.Fatal(err)
+		}
+		invoke := func() error {
+			_, _, err := run.store.Resume(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, run.fixture.userID)
+			return err
+		}
+		return transactionRecoveryOperation{
+			invoke: invoke,
+			assertRolledBack: func() {
+				runRow, err := run.store.GetRun(run.ctx, run.fixture.sessionID, run.fixture.workspaceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if runRow.Status != RunStatusPaused {
+					t.Fatalf("rolled back status=%q", runRow.Status)
+				}
+			},
+			assertCommitted: func() {
+				runRow, err := run.store.GetRun(run.ctx, run.fixture.sessionID, run.fixture.workspaceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if runRow.Status != RunStatusRunning {
+					t.Fatalf("committed status=%q", runRow.Status)
+				}
+				if count := countSessionEvents(t, run, "run_resumed"); count != 1 {
+					t.Fatalf("resume events=%d", count)
+				}
+			},
+			recover: invoke,
+		}
+	})
+}
+
+func TestMarkEventProjectedTransactionRecovery(t *testing.T) {
+	runTransactionRecoveryMatrix(t, txOpProjectionAcknowledge, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+		events, err := run.store.ListRunEvents(run.ctx, run.fixture.sessionID, run.fixture.workspaceID, 0, 10)
+		if err != nil || len(events) == 0 {
+			t.Fatalf("events=%+v err=%v", events, err)
+		}
+		eventID := events[0].ID
+		invoke := func() error {
+			return run.store.MarkEventProjected(run.ctx, eventID)
+		}
+		return transactionRecoveryOperation{
+			invoke: invoke,
+			assertRolledBack: func() {
+				var projected bool
+				if err := run.pool.QueryRow(run.ctx, `
+					SELECT projected_at IS NOT NULL FROM research_run_event WHERE id = $1::uuid
+				`, eventID).Scan(&projected); err != nil {
+					t.Fatal(err)
+				}
+				if projected {
+					t.Fatal("event projected after rollback")
+				}
+			},
+			assertCommitted: func() {
+				var projected bool
+				if err := run.pool.QueryRow(run.ctx, `
+					SELECT projected_at IS NOT NULL FROM research_run_event WHERE id = $1::uuid
+				`, eventID).Scan(&projected); err != nil {
+					t.Fatal(err)
+				}
+				if !projected {
+					t.Fatal("event not projected after commit")
+				}
+			},
+			recover: invoke,
+		}
+	})
+}
+
+func TestClaimRunTransactionRecovery(t *testing.T) {
+	runTransactionRecoveryMatrix(t, txOpReconcileLeaseClaim, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
+		token := uuid.NewString()
+		invoke := func() error {
+			_, _, claimed, err := run.store.ClaimRun(run.ctx, run.fixture.sessionID, token, time.Minute)
+			if err == nil && !claimed {
+				return fmt.Errorf("expected claim success")
+			}
+			return err
+		}
+		return transactionRecoveryOperation{
+			invoke: invoke,
+			assertRolledBack: func() {
+				var leaseToken *string
+				if err := run.pool.QueryRow(run.ctx, `
+					SELECT reconcile_lease_token::text FROM research_session WHERE id = $1::uuid
+				`, run.fixture.sessionID).Scan(&leaseToken); err != nil {
+					t.Fatal(err)
+				}
+				if leaseToken != nil {
+					t.Fatalf("rolled back lease token=%v", *leaseToken)
+				}
+			},
+			assertCommitted: func() {
+				var leaseToken string
+				if err := run.pool.QueryRow(run.ctx, `
+					SELECT reconcile_lease_token::text FROM research_session WHERE id = $1::uuid
+				`, run.fixture.sessionID).Scan(&leaseToken); err != nil {
+					t.Fatal(err)
+				}
+				if leaseToken != token {
+					t.Fatalf("committed lease token=%q want %q", leaseToken, token)
+				}
+			},
+			recover: func() error {
+				_, _, claimed, err := run.store.ClaimRun(run.ctx, run.fixture.sessionID, uuid.NewString(), time.Minute)
+				if err == nil && claimed {
+					return fmt.Errorf("committed lease allowed second claim")
+				}
+				return err
+			},
+		}
+	})
+}

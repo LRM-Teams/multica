@@ -119,7 +119,7 @@ func earlierTime(current, candidate *time.Time) *time.Time {
 }
 
 func (s *PostgresStore) DeferTaskForExecutionTarget(ctx context.Context, sessionID, taskID string, retryAt *time.Time, health []ExecutionTargetHealth) (RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpExecutionTargetDefer, pgx.TxOptions{})
 	if err != nil {
 		return RunEvent{}, err
 	}
@@ -136,7 +136,7 @@ func (s *PostgresStore) DeferTaskForExecutionTarget(ctx context.Context, session
 		return RunEvent{}, err
 	}
 	if status != TaskStatusReady {
-		return RunEvent{}, tx.Commit(ctx)
+		return RunEvent{}, s.commitResearchTx(ctx, txOpExecutionTargetDefer, tx)
 	}
 	if retryAt != nil {
 		if _, err = tx.Exec(ctx, `
@@ -156,7 +156,7 @@ func (s *PostgresStore) DeferTaskForExecutionTarget(ctx context.Context, session
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpExecutionTargetDefer, tx); err != nil {
 		return RunEvent{}, err
 	}
 	return event, nil

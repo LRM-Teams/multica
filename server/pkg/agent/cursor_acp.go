@@ -31,6 +31,7 @@ var ErrCursorACPAuthRequired = errors.New(ProviderAuthRequiredMarker + ": cursor
 type CursorACPBackend interface {
 	Backend
 	ResidentMessageInput
+	ResidentReminderInputReceiver
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -184,8 +185,20 @@ func (b *cursorACPBackend) AcceptMessageBatch(ctx context.Context, messages []Re
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *cursorACPBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentReminderInput(input)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *cursorACPBackend) acceptIdleInputPrompt(ctx context.Context, prompt string) (ResidentMessageAcceptance, error) {
 	if !b.running.CompareAndSwap(false, true) {
-		return ResidentMessageAcceptance{}, fmt.Errorf("%w: canonical Message handoff overlaps an active turn", ErrCursorACPTurnBusy)
+		return ResidentMessageAcceptance{}, fmt.Errorf("%w: idle input overlaps an active turn", ErrCursorACPTurnBusy)
 	}
 
 	accepted := make(chan error, 1)

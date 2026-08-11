@@ -171,6 +171,7 @@ func main() {
 	daemonHub := daemonws.NewHub()
 	var daemonWakeup service.TaskWakeupNotifier = daemonHub
 	var reminderNotifier daemonws.ReminderNotifier = daemonHub
+	var reminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier = daemonHub
 	var agentDeliveryNotifier daemonws.AgentDeliveryNotifier = daemonHub
 
 	// MUL-1138: when REDIS_URL is set, route fanout through a Redis relay so
@@ -226,6 +227,7 @@ func main() {
 				relayNotifier := daemonws.NewRelayNotifier(daemonHub, sharded)
 				daemonWakeup = relayNotifier
 				reminderNotifier = relayNotifier
+				reminderOwnerInputNotifier = relayNotifier
 				agentDeliveryNotifier = relayNotifier
 			default:
 				relayReadRedis = newNamedRedisClient(opts, "realtime-read")
@@ -235,6 +237,7 @@ func main() {
 				relayNotifier := daemonws.NewRelayNotifier(daemonHub, sharded)
 				daemonWakeup = relayNotifier
 				reminderNotifier = relayNotifier
+				reminderOwnerInputNotifier = relayNotifier
 				agentDeliveryNotifier = relayNotifier
 			}
 			relay.Start(relayCtx)
@@ -360,6 +363,7 @@ func main() {
 		HeartbeatScheduler: heartbeatScheduler,
 	})
 	h.ReminderNotifier = reminderNotifier
+	h.ReminderOwnerInputNotifier = reminderOwnerInputNotifier
 	h.AgentDeliveryNotifier = agentDeliveryNotifier
 
 	srv := &http.Server{

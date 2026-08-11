@@ -28,6 +28,7 @@ type PiRPCBackend interface {
 	Backend
 	ResidentMessageInput
 	ResidentMessagePreparation
+	ResidentReminderInputReceiver
 	ResidentPendingNoticeInput
 	Close()
 	// Compact explicitly compacts the Pi session context with custom instructions.
@@ -324,8 +325,24 @@ func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []Reside
 		close(done)
 		return ResidentMessageAcceptance{Done: done}, nil
 	}
+	prompt, err := formatResidentMessageBatch(messages)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *piRPCBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentReminderInput(input)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string) (ResidentMessageAcceptance, error) {
 	if !b.running.CompareAndSwap(false, true) {
-		return ResidentMessageAcceptance{}, fmt.Errorf("%w: idle Message input overlaps an active Pi RPC turn", ErrPiRPCTurnBusy)
+		return ResidentMessageAcceptance{}, fmt.Errorf("%w: idle input overlaps an active Pi RPC turn", ErrPiRPCTurnBusy)
 	}
 	releaseAdmission := true
 	defer func() {
@@ -364,11 +381,6 @@ func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []Reside
 		p.stateMu.Unlock()
 	}
 
-	prompt, err := formatResidentMessageBatch(messages)
-	if err != nil {
-		clearIdleInput()
-		return ResidentMessageAcceptance{}, err
-	}
 	response, err := b.sendControlCommand(ctx, p, "multica-message-input", map[string]any{
 		"type": "prompt", "message": prompt,
 	})

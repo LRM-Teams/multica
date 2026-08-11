@@ -33,6 +33,7 @@ var ErrOpenCodeServeTurnBusy = errors.New("opencode serve turn busy")
 type OpenCodeServeBackend interface {
 	Backend
 	ResidentMessageInput
+	ResidentReminderInputReceiver
 	ResidentPendingNoticeInput
 	Close()
 }
@@ -172,6 +173,18 @@ func (b *opencodeServeBackend) AcceptMessageBatch(ctx context.Context, messages 
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *opencodeServeBackend) AcceptReminderInput(ctx context.Context, input ResidentReminderInput) (ResidentMessageAcceptance, error) {
+	prompt, err := formatResidentReminderInput(input)
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	return b.acceptIdleInputPrompt(ctx, prompt)
+}
+
+func (b *opencodeServeBackend) acceptIdleInputPrompt(ctx context.Context, prompt string) (ResidentMessageAcceptance, error) {
 	admitted := make(chan struct{})
 	var admittedOnce sync.Once
 	session, err := b.startTurn(ctx, prompt, b.cfg.ResidentOptions, func() {

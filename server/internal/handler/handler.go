@@ -120,6 +120,7 @@ type Handler struct {
 	RunnerPresenceSource        RunnerPresenceSource
 	RunnerPresenceMu            *sync.Mutex
 	ReminderNotifier            daemonws.ReminderNotifier
+	ReminderOwnerInputNotifier  daemonws.ReminderOwnerInputNotifier
 	AgentDeliveryNotifier       daemonws.AgentDeliveryNotifier
 	SandboxHub                  *sandboxws.Hub
 	Bus                         *events.Bus

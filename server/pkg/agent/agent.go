@@ -106,6 +106,42 @@ type ResidentMessagePreparation interface {
 	PrepareMessageInput(context.Context, func(Message)) error
 }
 
+// ResidentReminderInput is one private Reminder system input. It is separate
+// from ResidentMessage so provider adapters cannot accidentally give it
+// canonical Message, reply, persistence, or pending-queue semantics.
+type ResidentReminderInput struct {
+	ReminderID string
+	Version    int64
+	Title      string
+	Anchor     ResidentReminderAnchor
+	Occurrence ResidentReminderOccurrence
+}
+
+type ResidentReminderAnchor struct {
+	Available           bool
+	ChannelID           string
+	MessageID           string
+	ThreadRootMessageID string
+	Target              string
+	ReplyTarget         string
+	Excerpt             string
+}
+
+type ResidentReminderOccurrence struct {
+	OccurrenceID string
+	ScheduledFor string
+	DueAt        string
+	Cadence      string
+	Timezone     string
+}
+
+// ResidentReminderInputReceiver accepts a Reminder only at the provider's
+// native idle input boundary. Acceptance starts a turn, so Done retains the
+// same admission meaning as ResidentMessageAcceptance.
+type ResidentReminderInputReceiver interface {
+	AcceptReminderInput(context.Context, ResidentReminderInput) (ResidentMessageAcceptance, error)
+}
+
 // ResidentMessageAcceptance separates native input acceptance from the
 // provider turn it may start. Done reports that the runtime is idle again;
 // callers must keep turn admission closed until it resolves. Messages exposes

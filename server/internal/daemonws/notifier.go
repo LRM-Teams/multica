@@ -18,6 +18,13 @@ type ReminderNotifier interface {
 	NotifyReminderOwnerRemoved(runtimeID string, payload protocol.DaemonAgentStopPayload)
 }
 
+// ReminderOwnerInputNotifier is the non-durable post-commit transport for one
+// private Reminder input. A false result is final; implementations must not
+// stage retries or reconnect replay.
+type ReminderOwnerInputNotifier interface {
+	NotifyReminderOwnerInput(runtimeID string, payload protocol.ReminderOwnerInputPayload) bool
+}
+
 // AgentDeliveryNotifier is the server-side transport boundary for canonical
 // Agent Message deliveries. It intentionally exposes no task/lease concepts.
 type AgentDeliveryNotifier interface {
@@ -133,6 +140,32 @@ func (n *RelayNotifier) NotifyReminderOwnerRemoved(runtimeID string, payload pro
 
 func (n *RelayNotifier) NotifyReminderOwnerAdded(runtimeID string, payload protocol.DaemonAgentStartPayload) {
 	n.notifyReminder(runtimeID, protocol.EventDaemonAgentStart, payload)
+}
+
+func (n *RelayNotifier) NotifyReminderOwnerInput(runtimeID string, payload protocol.ReminderOwnerInputPayload) bool {
+	if runtimeID == "" {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventReminderOwnerInput, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	delivered := false
+	eventID := ulid.Make().String()
+	if n.local != nil {
+		delivered, _ = n.local.notifyFrame(runtimeID, frame, eventID)
+	}
+	if n.relay != nil {
+		if err := n.relay.PublishWithID(realtime.ScopeDaemonRuntime, runtimeID, "", frame, eventID); err != nil {
+			slog.Warn("daemon websocket Reminder owner input publish failed", "runtime_id", runtimeID, "error", err)
+		} else {
+			delivered = true
+		}
+	}
+	if !delivered {
+		slog.Info("transient Reminder owner input", "outcome", "transport_lost", "runtime_id", runtimeID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID, "version", payload.Version)
+	}
+	return delivered
 }
 
 func (n *RelayNotifier) notifyReminder(runtimeID, eventType string, payload any) {

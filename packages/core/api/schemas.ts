@@ -116,6 +116,8 @@ export const NoteAIJobSchema: z.ZodType<NoteAIJob> = z.object({
   status: z.enum(["queued", "dispatched", "running", "completed", "failed", "cancelled"]).catch("queued"),
   result: NoteAIEditResultSchema.nullable().optional(),
   failure_reason: z.string().nullable().optional(),
+  failure_code: z.enum(["invalid_structured_output", "assistant_failure", "task_failure", "task_error"]).nullable().optional(),
+  repair_code: z.enum(["repaired_selected_output", "repaired_page_output"]).nullable().optional(),
   created_at: z.string().default(""),
   updated_at: z.string().optional(),
 }).loose();
@@ -130,6 +132,8 @@ export const EMPTY_NOTE_AI_JOB: NoteAIJob = {
   status: "queued",
   result: null,
   failure_reason: null,
+  failure_code: null,
+  repair_code: null,
   created_at: "",
   updated_at: "",
 };

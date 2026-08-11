@@ -31,27 +31,23 @@ import { ThinkingPicker } from "./thinking-picker";
  */
 export function ThinkingPropRow({
   runtimeId,
-  runtimeOnline,
   model,
   value,
   canEdit,
   onChange,
 }: {
   runtimeId: string | null;
-  runtimeOnline: boolean;
   model: string;
   value: string;
   canEdit: boolean;
   onChange: (next: string) => Promise<void> | void;
 }) {
   const { t } = useT("agents");
-  const modelsQuery = useQuery(
-    runtimeModelsOptions(runtimeOnline ? runtimeId : null),
-  );
+  const { data: catalog } = useQuery(runtimeModelsOptions(runtimeId));
 
-  const models = modelsQuery.data?.models ?? [];
+  const models = catalog?.models ?? [];
   // Missing/undefined from older servers ⇒ false ⇒ row stays hidden (#59).
-  const thinkingDiscovery = modelsQuery.data?.thinkingDiscovery === true;
+  const thinkingDiscovery = catalog?.thinkingDiscovery === true;
   const entry = pickModelEntry(models, model);
   const levels = entry?.thinking?.supported_levels ?? [];
   if (!value && (!thinkingDiscovery || levels.length === 0)) return null;

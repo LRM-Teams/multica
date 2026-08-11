@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -94,20 +95,28 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create research fleet member: %v", err)
 	}
-	session, err := testHandler.Queries.CreateResearchSession(ctx, db.CreateResearchSessionParams{
-		WorkspaceID:        workspaceID,
-		FleetID:            fleet.ID,
-		CreatedBy:          creatorID,
-		Title:              "Typed dispatch context",
-		Goal:               "Verify the canonical dispatch metadata",
-		Status:             "running",
-		CurrentStage:       "s1_plan",
-		DepthTier:          "standard",
-		ProductRound:       1,
-		ProductRoundBudget: 5,
-	})
+	tx, err := testPool.Begin(ctx)
 	if err != nil {
+		t.Fatalf("begin session tx: %v", err)
+	}
+	var sessionID pgtype.UUID
+	if err = tx.QueryRow(ctx, `
+		INSERT INTO research_session (
+			workspace_id, fleet_id, created_by, title, goal, status, current_stage,
+			depth_tier, product_round, product_round_budget
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id
+	`, workspaceID, fleet.ID, creatorID, "Typed dispatch context",
+		"Verify the canonical dispatch metadata", "running", "s1_plan", "standard", int32(1), int32(5)).Scan(&sessionID); err != nil {
+		_ = tx.Rollback(ctx)
 		t.Fatalf("create research session: %v", err)
+	}
+	if _, err = tx.Exec(ctx, `SELECT research_ensure_run_session_passport($1, $2)`, workspaceID, sessionID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("ensure run session passport: %v", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit research session: %v", err)
 	}
 
 	dispatchKey := "research-dispatch-test:" + uuid.NewString()
@@ -115,14 +124,14 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 	attemptID := uuid.NewString()
 	criteria := json.RawMessage(`[{"criterion":"return a structured plan"}]`)
 	dispatcher := &researchRunDispatcher{handler: testHandler}
-	members, err := researchrun.NewPostgresStore(testPool).ListFleetMembers(ctx, uuidToString(session.ID), workspaceIDText)
+	members, err := researchrun.NewPostgresStore(testPool).ListFleetMembers(ctx, uuidToString(sessionID), workspaceIDText)
 	if err != nil || len(members) != 1 {
 		t.Fatalf("resolve dispatch target members=%+v err=%v", members, err)
 	}
 	target := members[0].ExecutionTarget
 	request := researchrun.DispatchRequest{
 		Run: researchrun.Run{
-			SessionID:   uuidToString(session.ID),
+			SessionID:   uuidToString(sessionID),
 			WorkspaceID: workspaceIDText,
 		},
 		Task: researchrun.Task{
@@ -163,7 +172,7 @@ func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
 	); err != nil {
 		t.Fatalf("load dispatched inbox context: %v", err)
 	}
-	if gotKey != dispatchKey || gotSessionID != uuidToString(session.ID) || gotTaskID != researchTaskID || gotAttemptID != attemptID {
+	if gotKey != dispatchKey || gotSessionID != uuidToString(sessionID) || gotTaskID != researchTaskID || gotAttemptID != attemptID {
 		t.Fatalf("dispatch context IDs = %q %q %q %q", gotKey, gotSessionID, gotTaskID, gotAttemptID)
 	}
 	wantRequestHash, hashErr := researchrun.HashDispatchRequest(request)

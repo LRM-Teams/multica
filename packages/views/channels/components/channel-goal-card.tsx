@@ -59,6 +59,7 @@ import { useT } from "../../i18n";
 import { GOAL_PROCESS_PANEL_ID, GoalProcessPanel } from "./goal-process-panel";
 import { GoalSubgoalPanel } from "./goal-subgoal-panel";
 import { countOpenSubgoals, GOAL_SUBGOAL_PANEL_ID } from "./goal-subgoal-utils";
+import { GoalMiniGraph } from "./goal-mini-graph";
 
 interface ChannelGoalCardProps {
   channelId: string;
@@ -242,6 +243,14 @@ export function ChannelGoalCard({
   const isMobile = useIsMobile();
   const { data, isPending, isError, refetch } = useQuery(channelGoalOptions(channelId));
   const goal = data?.goal ?? null;
+  const [ui, setUI] = useReducer(mergeState<GoalCardUIState>, {
+    expanded: false,
+    intentMode: null,
+    progressOpen: false,
+    confirmAction: null,
+    actionError: null,
+  });
+  const { expanded, intentMode, progressOpen, confirmAction, actionError } = ui;
   const { data: members = [] } = useQuery(channelMembersOptions(channelId));
   const { data: processesData } = useQuery({
     ...channelGoalProcessesOptions(channelId),
@@ -251,7 +260,15 @@ export function ChannelGoalCard({
     ...channelGoalSubgoalsOptions(channelId),
     enabled: !!goal,
   });
-  const { data: workGraph } = useQuery(workGraphOptions(goal?.work_graph?.id));
+  const {
+    data: workGraph,
+    isPending: isWorkGraphPending,
+    isError: isWorkGraphError,
+    refetch: refetchWorkGraph,
+  } = useQuery({
+    ...workGraphOptions(goal?.work_graph?.id),
+    enabled: expanded && !!goal?.work_graph?.id,
+  });
   const managers = useMemo(
     () =>
       members.filter(
@@ -266,15 +283,6 @@ export function ChannelGoalCard({
   const openSubgoalCount = countOpenSubgoals(subgoalsData?.subgoals ?? []);
   const createGoal = useCreateChannelGoal(channelId);
   const updateGoal = useUpdateChannelGoal(channelId);
-  const [ui, setUI] = useReducer(mergeState<GoalCardUIState>, {
-    expanded: false,
-    intentMode: null,
-    progressOpen: false,
-    confirmAction: null,
-    actionError: null,
-  });
-  const { expanded, intentMode, progressOpen, confirmAction, actionError } = ui;
-
   const runUpdate = (input: Omit<UpdateChannelGoalRequest, "expected_version">, close?: () => void) => {
     if (!goal) return;
     setUI({ actionError: null });
@@ -490,17 +498,22 @@ export function ChannelGoalCard({
               ))}
             </div>
             {goal.progress_summary ? <p><span className="font-medium">{t(($) => $.goal.progress)}:</span> {goal.progress_summary}</p> : null}
-            {workGraph ? (
-              <div className="space-y-1.5" data-testid="channel-goal-work-graph-detail">
-                {workGraph.nodes.map((node) => (
-                  <div key={node.id} className="flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-xs">
-                    <span className="min-w-0 flex-1 truncate">{node.objective || node.issue_id}</span>
-                    <span className="text-muted-foreground">{node.role}</span>
-                    <Badge variant={node.effective_completion === "satisfied" ? "secondary" : node.effective_completion === "pending" ? "outline" : "destructive"} className="h-5 px-1.5 text-[10px]">
-                      {node.effective_completion}
-                    </Badge>
+            {goal.work_graph ? (
+              <div className="space-y-2" data-testid="channel-goal-work-graph-detail">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-medium">{t(($) => $.goal.graph_title)}</p>
+                  <span className="text-[11px] text-muted-foreground">{workGraphSummary}</span>
+                </div>
+                {isWorkGraphPending ? <Skeleton className="h-32 w-full rounded-lg" /> : null}
+                {isWorkGraphError ? (
+                  <div className="flex h-20 items-center justify-center gap-2 rounded-lg border border-destructive/25 bg-destructive/5 text-xs text-destructive">
+                    <span>{t(($) => $.goal.graph_load_failed)}</span>
+                    <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => void refetchWorkGraph()}>
+                      {t(($) => $.goal.retry)}
+                    </Button>
                   </div>
-                ))}
+                ) : null}
+                {workGraph ? <GoalMiniGraph graph={workGraph} /> : null}
               </div>
             ) : null}
             {goal.blocker ? <p className="text-destructive"><span className="font-medium">{t(($) => $.goal.blocked)}:</span> {goal.blocker}</p> : null}

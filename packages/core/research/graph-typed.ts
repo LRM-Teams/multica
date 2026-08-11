@@ -125,6 +125,8 @@ export const TypedGraphResponseSchema = z
   .object({
     session_id: z.string().optional().default(""),
     graph_version: z.number().int().optional().default(0),
+    /** Server-side total when the graph is paginated (optional until BE ships). */
+    total_node_count: z.number().int().nullable().optional().default(null),
     nodes: z.array(TypedGraphNodeSchema).optional().default([]),
     edges: z.array(TypedGraphEdgeSchema).optional().default([]),
     clusters: z.array(TypedGraphClusterSchema).optional().default([]),
@@ -141,10 +143,21 @@ export const TypedGraphResponseSchema = z
 
 export type TypedGraphResponse = z.infer<typeof TypedGraphResponseSchema>;
 
+/** Retained-node budget for paginated typed-graph client cache (viewport-performance §3). */
+export const RESEARCH_TYPED_GRAPH_CACHE_NODE_BUDGET = 1500;
+
+export type MergeTypedGraphPagesOptions = {
+  /** Max nodes retained after merging pages; defaults to RESEARCH_TYPED_GRAPH_CACHE_NODE_BUDGET. */
+  nodeBudget?: number;
+  /** Node ids that stay loaded when trimming (e.g. canvas selection). */
+  pinNodeIds?: readonly string[];
+};
+
 /** Empty fallback — a POJO (no frozen object, so tests/normalizers can copy). */
 export const EMPTY_TYPED_GRAPH: TypedGraphResponse = {
   session_id: "",
   graph_version: 0,
+  total_node_count: null,
   nodes: [],
   edges: [],
   clusters: [],
@@ -171,4 +184,167 @@ export function indexTypedGraphNodes(nodes: readonly TypedGraphNode[]): TypedGra
     if (node && typeof node.id === "string" && node.id) index.set(node.id, node);
   }
   return index;
+}
+
+function mergeRecordOfString(
+  maps: readonly Record<string, string>[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const map of maps) {
+    for (const [key, value] of Object.entries(map)) {
+      if (!(key in out)) out[key] = value;
+    }
+  }
+  return out;
+}
+
+function mergeRecordOfStringArray(
+  maps: readonly Record<string, string[]>[],
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const map of maps) {
+    for (const [key, values] of Object.entries(map)) {
+      const bucket = out[key] ?? [];
+      const seen = new Set(bucket);
+      for (const value of values) {
+        if (seen.has(value)) continue;
+        bucket.push(value);
+        seen.add(value);
+      }
+      out[key] = bucket;
+    }
+  }
+  return out;
+}
+
+/** Merge paginated typed-graph pages into one render pass (deduped, stable order). */
+export function mergeTypedGraphPages(
+  pages: readonly TypedGraphResponse[],
+  options?: MergeTypedGraphPagesOptions,
+): TypedGraphResponse {
+  if (pages.length === 0) return { ...EMPTY_TYPED_GRAPH };
+
+  const orderedNodeIds: string[] = [];
+  const nodeById = new Map<string, TypedGraphNode>();
+  const edgeByKey = new Map<string, TypedGraphEdge>();
+  const clusterById = new Map<string, TypedGraphCluster>();
+  const first = pages[0]!;
+  let graphVersion = first.graph_version ?? 0;
+
+  for (const page of pages) {
+    graphVersion = Math.max(graphVersion, page.graph_version ?? 0);
+    for (const node of page.nodes ?? []) {
+      if (!node?.id) continue;
+      if (!nodeById.has(node.id)) orderedNodeIds.push(node.id);
+      else continue;
+      nodeById.set(node.id, node);
+    }
+    for (const edge of page.edges ?? []) {
+      const key =
+        edge.id ||
+        `${edge.from_node_id}:${edge.to_node_id}:${edge.edge_type ?? ""}`;
+      if (!edgeByKey.has(key)) edgeByKey.set(key, edge);
+    }
+    for (const cluster of page.clusters ?? []) {
+      const id = cluster.id || cluster.name;
+      if (id && !clusterById.has(id)) clusterById.set(id, cluster);
+    }
+  }
+
+  const lineagePages = pages.map((page) => page.lineage ?? EMPTY_TYPED_GRAPH.lineage);
+  const merged: TypedGraphResponse = {
+    session_id: first.session_id,
+    graph_version: graphVersion,
+    total_node_count: first.total_node_count ?? null,
+    nodes: orderedNodeIds.map((id) => nodeById.get(id)!),
+    edges: [...edgeByKey.values()],
+    clusters: [...clusterById.values()],
+    lineage: {
+      derived: mergeRecordOfString(lineagePages.map((l) => l.derived ?? {})),
+      merged: mergeRecordOfStringArray(lineagePages.map((l) => l.merged ?? {})),
+      superseded: mergeRecordOfString(lineagePages.map((l) => l.superseded ?? {})),
+      restarted: mergeRecordOfString(lineagePages.map((l) => l.restarted ?? {})),
+      invalidated: mergeRecordOfString(lineagePages.map((l) => l.invalidated ?? {})),
+      supersedes: mergeRecordOfStringArray(lineagePages.map((l) => l.supersedes ?? {})),
+    },
+  };
+
+  const budget = options?.nodeBudget ?? RESEARCH_TYPED_GRAPH_CACHE_NODE_BUDGET;
+  if (merged.nodes.length <= budget) return merged;
+
+  const keepIds = selectTypedGraphNodeIdsWithinBudget(
+    orderedNodeIds,
+    budget,
+    options?.pinNodeIds ?? [],
+  );
+  return filterTypedGraphToNodeIds(merged, keepIds);
+}
+
+function selectTypedGraphNodeIdsWithinBudget(
+  orderedNodeIds: readonly string[],
+  budget: number,
+  pinNodeIds: readonly string[],
+): Set<string> {
+  const keep = new Set(pinNodeIds.filter(Boolean));
+  for (let i = orderedNodeIds.length - 1; i >= 0 && keep.size < budget; i -= 1) {
+    keep.add(orderedNodeIds[i]!);
+  }
+  for (const pin of pinNodeIds) {
+    if (pin) keep.add(pin);
+  }
+  return keep;
+}
+
+function filterTypedGraphToNodeIds(
+  graph: TypedGraphResponse,
+  keepIds: Set<string>,
+): TypedGraphResponse {
+  const nodes = graph.nodes.filter((node) => keepIds.has(node.id));
+  const edges = graph.edges.filter(
+    (edge) => keepIds.has(edge.from_node_id) && keepIds.has(edge.to_node_id),
+  );
+
+  const clusterIds = new Set<string>();
+  for (const node of nodes) {
+    const clusterId = node.cluster_id?.trim();
+    if (clusterId) clusterIds.add(clusterId);
+  }
+  const clusters = graph.clusters.filter((cluster) => {
+    const id = cluster.id || cluster.name;
+    return id ? clusterIds.has(id) : false;
+  });
+
+  const filterStringMap = (map: Record<string, string>) => {
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(map)) {
+      if (!keepIds.has(key)) continue;
+      if (keepIds.has(value)) out[key] = value;
+    }
+    return out;
+  };
+
+  const filterStringArrayMap = (map: Record<string, string[]>) => {
+    const out: Record<string, string[]> = {};
+    for (const [key, values] of Object.entries(map)) {
+      if (!keepIds.has(key)) continue;
+      const filtered = values.filter((value) => keepIds.has(value));
+      if (filtered.length > 0) out[key] = filtered;
+    }
+    return out;
+  };
+
+  return {
+    ...graph,
+    nodes,
+    edges,
+    clusters,
+    lineage: {
+      derived: filterStringMap(graph.lineage.derived ?? {}),
+      merged: filterStringArrayMap(graph.lineage.merged ?? {}),
+      superseded: filterStringMap(graph.lineage.superseded ?? {}),
+      restarted: filterStringMap(graph.lineage.restarted ?? {}),
+      invalidated: filterStringMap(graph.lineage.invalidated ?? {}),
+      supersedes: filterStringArrayMap(graph.lineage.supersedes ?? {}),
+    },
+  };
 }

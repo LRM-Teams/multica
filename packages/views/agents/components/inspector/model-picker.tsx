@@ -28,13 +28,11 @@ import { useT } from "../../../i18n";
  */
 export function ModelPicker({
   runtimeId,
-  runtimeOnline,
   value,
   canEdit = true,
   onChange,
 }: {
   runtimeId: string | null;
-  runtimeOnline: boolean;
   value: string;
   /** When false, render a static read-only display and skip the popover. */
   canEdit?: boolean;
@@ -44,19 +42,21 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const modelsQuery = useQuery(
-    runtimeModelsOptions(runtimeOnline ? runtimeId : null),
-  );
-  const supported = modelsQuery.data?.supported ?? true;
+  const {
+    data: catalog,
+    isLoading: catalogLoading,
+    isSuccess: catalogSuccess,
+  } = useQuery(runtimeModelsOptions(runtimeId));
+  const supported = catalog?.supported ?? true;
   // Backend-owned capability — never infer from a frontend provider list.
   const customModelIdSupported =
-    modelsQuery.data?.customModelIdSupported === true;
+    catalog?.customModelIdSupported === true;
   // Memoise the model list so every downstream useMemo gets a stable
   // reference; `?? []` would mint a fresh array on every render and
   // invalidate filters needlessly.
   const models = useMemo(
-    () => modelsQuery.data?.models ?? [],
-    [modelsQuery.data],
+    () => catalog?.models ?? [],
+    [catalog],
   );
 
   const filtered = useMemo(() => {
@@ -77,7 +77,7 @@ export function ModelPicker({
     if (id !== value) await onChange(id);
   };
 
-  if (!supported && !modelsQuery.isLoading) {
+  if (!supported && !catalogLoading) {
     return (
       <span className="truncate italic text-muted-foreground">
         {t(($) => $.pickers.model_managed_by_runtime)}
@@ -127,14 +127,14 @@ export function ModelPicker({
         </div>
       }
     >
-      {modelsQuery.isLoading && (
+      {catalogLoading && (
         <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
           {t(($) => $.pickers.model_discovering)}
         </div>
       )}
 
-      {!modelsQuery.isLoading &&
+      {!catalogLoading &&
         filtered.map((m) => (
           <PickerItem
             key={m.id}
@@ -163,7 +163,7 @@ export function ModelPicker({
           </PickerItem>
         ))}
 
-      {modelsQuery.isSuccess && filtered.length === 0 && (
+      {catalogSuccess && filtered.length === 0 && (
         <p className="px-3 py-3 text-center text-xs text-muted-foreground">
           {customModelIdSupported
             ? t(($) => $.pickers.model_empty_custom_hint)
@@ -171,7 +171,7 @@ export function ModelPicker({
         </p>
       )}
 
-      {modelsQuery.isSuccess && customModelIdSupported && (
+      {catalogSuccess && customModelIdSupported && (
         <CustomModelIdRow dense onSubmit={(id) => void select(id)} />
       )}
 

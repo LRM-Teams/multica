@@ -37,6 +37,7 @@ export function ResearchNodeReportModal({
   run,
   members,
   onClose,
+  onSelectLineageNode,
 }: {
   open: boolean;
   node: ResearchGraphNode | null;
@@ -45,6 +46,7 @@ export function ResearchNodeReportModal({
   run?: ResearchRunSnapshot;
   members?: ResearchFleetMember[];
   onClose: () => void;
+  onSelectLineageNode?: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
   const mergedFrom = lineageInputs(typedNode ?? undefined, node);
@@ -97,7 +99,17 @@ export function ResearchNodeReportModal({
             <ul className="space-y-1 text-[12px] text-muted-foreground">
               {mergedFrom.map((id) => (
                 <li key={id} data-testid={`research-node-report-lineage-${id}`}>
-                  {id}
+                  {onSelectLineageNode ? (
+                    <button
+                      type="button"
+                      className="text-left text-primary underline-offset-2 hover:underline"
+                      onClick={() => onSelectLineageNode(id)}
+                    >
+                      {id}
+                    </button>
+                  ) : (
+                    id
+                  )}
                 </li>
               ))}
             </ul>

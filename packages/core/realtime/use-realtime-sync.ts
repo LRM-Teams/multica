@@ -685,7 +685,7 @@ export function useRealtimeSync(
         setTimeout(() => {
           timers.delete(prefix);
           fn();
-        }, DEBOUNCE_MS_BY_PREFIX[prefix] ?? 100),
+        }, prefix.startsWith("work-graph:") ? 300 : (DEBOUNCE_MS_BY_PREFIX[prefix] ?? 100)),
       );
     };
 
@@ -1373,13 +1373,28 @@ export function useRealtimeSync(
       );
     });
 
-    const unsubChannelUpdated = ws.on("channel:updated", () => {
+    const unsubChannelUpdated = ws.on("channel:updated", (rawPayload) => {
+      const payload = rawPayload && typeof rawPayload === "object"
+        ? rawPayload as { id?: unknown; work_graph_id?: unknown }
+        : {};
+      const channelId = typeof payload.id === "string" ? payload.id : "";
+      const graphId = typeof payload.work_graph_id === "string" ? payload.work_graph_id : "";
+      if (channelId && graphId) {
+        debouncedRefresh(`work-graph:${graphId}`, () => {
+          qc.invalidateQueries({ queryKey: channelGoalKeys.detail(channelId), exact: true });
+          qc.invalidateQueries({ queryKey: channelGoalKeys.workGraph(graphId), exact: true });
+        });
+        return;
+      }
       const id = getCurrentWsId();
       // Include archived-list (archive/restore) — list alone leaves Archived stale.
       if (id) qc.invalidateQueries({ queryKey: channelKeys.all(id) });
       if (id) qc.invalidateQueries({ queryKey: conversationKeys.list(id) });
-      qc.invalidateQueries({ queryKey: channelGoalKeys.all() });
-      qc.invalidateQueries({ queryKey: channelGoalKeys.workGraphs() });
+      if (channelId) {
+        qc.invalidateQueries({ queryKey: channelGoalKeys.detail(channelId), exact: true });
+      } else {
+        qc.invalidateQueries({ queryKey: channelGoalKeys.all() });
+      }
     });
 
     const unsubVoiceCallUpdated = ws.on("voice_call:updated", (payload) => {

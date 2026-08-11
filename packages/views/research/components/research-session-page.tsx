@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useReducer, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
@@ -14,11 +14,14 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
   dedupeResearchFleetMembers,
-  researchGraphTypedOptions,
+  isResearchD5Lens,
+  mergeTypedGraphPages,
+  researchGraphTypedInfiniteOptions,
   researchKeys,
   researchPresenceOptions,
   researchProductRoundsOptions,
   researchSessionSnapshotOptions,
+  useResearchCanvasStore,
   useResearchUiStore,
 } from "@multica/core/research";
 import type {
@@ -67,8 +70,7 @@ import {
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
-import { isResearchD5Lens } from "../lib/research-d5-lens-display";
-import { buildGoalVersionHistory } from "../lib/research-d5-goal-history";
+import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -110,7 +112,6 @@ import {
 } from "./research-stage-timeline";
 
 type UiState = {
-  selected: ResearchGraphNode | null;
   body: string;
   createProject: boolean;
   createChannel: boolean;
@@ -119,7 +120,6 @@ type UiState = {
 };
 
 type UiAction =
-  | { type: "select"; node: ResearchGraphNode | null }
   | { type: "setBody"; body: string }
   | { type: "setCreateProject"; value: boolean }
   | { type: "setCreateChannel"; value: boolean }
@@ -128,7 +128,6 @@ type UiAction =
   | { type: "clearBody" };
 
 const initialUi: UiState = {
-  selected: null,
   body: "",
   createProject: true,
   createChannel: true,
@@ -138,12 +137,6 @@ const initialUi: UiState = {
 
 function uiReducer(state: UiState, action: UiAction): UiState {
   switch (action.type) {
-    case "select":
-      return {
-        ...state,
-        selected: action.node,
-        selectedFamily: action.node ? dimensionFamilyOf(action.node) : state.selectedFamily,
-      };
     case "setBody":
       return { ...state, body: action.body };
     case "setCreateProject":
@@ -176,6 +169,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
+  const d5Lens = useResearchUiStore((s) => s.d5Lens);
+  const setD5Lens = useResearchUiStore((s) => s.setD5Lens);
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
@@ -191,14 +186,32 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const {
-    data: typedGraph,
+    data: typedGraphPages,
     isLoading: typedGraphLoading,
     isError: typedGraphError,
-  } = useQuery(researchGraphTypedOptions(wsId, sessionId));
-  const [d5Lens, setD5Lens] = useState<ResearchD5Lens>(() => {
+    fetchNextPage: fetchNextTypedGraphPage,
+    hasNextPage: typedGraphHasNextPage,
+    isFetchingNextPage: typedGraphFetchingNextPage,
+  } = useInfiniteQuery(researchGraphTypedInfiniteOptions(wsId, sessionId));
+  const selectedNodeId = useResearchCanvasStore((s) => s.selectedNodeId);
+  const selectCanvasNode = useResearchCanvasStore((s) => s.selectNode);
+  const clearCanvasSelection = useResearchCanvasStore((s) => s.clearSelection);
+  const clearCanvasFilter = useResearchCanvasStore((s) => s.clearFilter);
+  const typedGraph = useMemo(
+    () =>
+      typedGraphPages?.pages.length
+        ? mergeTypedGraphPages(typedGraphPages.pages, {
+            pinNodeIds: selectedNodeId ? [selectedNodeId] : [],
+          })
+        : undefined,
+    [typedGraphPages, selectedNodeId],
+  );
+  useEffect(() => {
     const fromUrl = nav.searchParams.get("lens");
-    return isResearchD5Lens(fromUrl) ? fromUrl : "relations";
-  });
+    if (isResearchD5Lens(fromUrl) && fromUrl !== d5Lens) {
+      setD5Lens(fromUrl);
+    }
+  }, [d5Lens, nav.searchParams, sessionId, setD5Lens]);
   const handleD5LensChange = useCallback(
     (lens: ResearchD5Lens) => {
       setD5Lens(lens);
@@ -208,9 +221,27 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       const qs = params.toString();
       nav.replace(qs ? `${nav.pathname}?${qs}` : nav.pathname);
     },
-    [nav],
+    [nav, setD5Lens],
   );
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  useEffect(() => {
+    clearCanvasSelection();
+    clearCanvasFilter();
+  }, [sessionId, clearCanvasFilter, clearCanvasSelection]);
+  const handleSelectCanvasNode = useCallback(
+    (node: ResearchGraphNode | null) => {
+      selectCanvasNode(node?.id ?? null);
+      if (node) dispatch({ type: "setFamily", family: dimensionFamilyOf(node) });
+    },
+    [selectCanvasNode],
+  );
+  useEffect(() => {
+    if (!data) return;
+    const linkedNodeId = nav.searchParams.get("node");
+    if (!linkedNodeId) return;
+    if (!data.nodes.some((node) => node.id === linkedNodeId)) return;
+    selectCanvasNode(linkedNodeId);
+  }, [data, nav.searchParams, selectCanvasNode]);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
     agentId: string;
@@ -230,6 +261,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const reportControllerRef = useRef<{ open: () => void } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
@@ -445,11 +477,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
   const linkedNodeId = nav.searchParams.get("node");
-  const selectedNode = ui.selected
-    ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
-    : linkedNodeId
-      ? data.nodes.find((node) => node.id === linkedNodeId) ?? null
-      : null;
+  const selectedNode = (() => {
+    const id = selectedNodeId ?? linkedNodeId;
+    if (!id) return null;
+    return data.nodes.find((node) => node.id === id) ?? null;
+  })();
   const executionRows = buildExecutionOverlayRows({
     members: fleet.members,
     presence,
@@ -486,6 +518,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     currentVersion: goalVersion,
     messages,
   });
+  const goalImpact = typedGraph?.nodes ? summarizeGoalImpact(typedGraph.nodes) : null;
 
   const onClarificationOption = (
     question: ResearchClarificationQuestion,
@@ -577,6 +610,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onLensChange={handleD5LensChange}
         goalVersion={goalVersion}
         goalHistory={goalHistory}
+        goalImpact={goalImpact}
+        typedGraphNodes={typedGraph?.nodes ?? []}
         session={session}
         contract={data.run?.contract}
         canConfirm={canConfirm}
@@ -625,9 +660,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           typedGraph={typedGraph}
           typedLoading={typedGraphLoading}
           typedError={typedGraphError}
+          typedGraphHasNextPage={typedGraphHasNextPage === true}
+          typedGraphLoadMorePending={typedGraphFetchingNextPage}
+          onLoadMoreTypedGraph={
+            typedGraphHasNextPage ? () => void fetchNextTypedGraphPage() : undefined
+          }
           snapshotNodes={data.nodes}
           selectedNode={selectedNode}
-          onSelectNode={(node) => dispatch({ type: "select", node })}
+          onSelectNode={handleSelectCanvasNode}
           executionRows={executionRows}
           onOpenAgentPanel={handleOpenAgentPanel}
           canvasMode={canvasMode}
@@ -642,6 +682,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           formingMembers={fleet.members}
           formingTasks={data.run?.tasks ?? []}
           formingMessages={messages}
+          registerReportController={(controller) => {
+            reportControllerRef.current = controller;
+          }}
           detailPanel={
             selectedNode ? (
               <ResearchNodeDetail
@@ -651,7 +694,13 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 members={fleet.members}
                 open
                 placement="inline"
-                onClose={() => dispatch({ type: "select", node: null })}
+                onClose={() => handleSelectCanvasNode(null)}
+                onOpenReport={() => reportControllerRef.current?.open()}
+                onContinueDeepening={() =>
+                  postUser(
+                    t(($) => $.d5.detail.continue_message, { title: selectedNode.title }),
+                  )
+                }
               />
             ) : (
               <p className="p-4 text-sm text-muted-foreground">

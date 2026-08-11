@@ -3,3 +3,4 @@ export * from "./star-graph-contract";
 export * from "./star-graph-adapter";
 /** LRM-1497 — D5 render-layer view-model (geometry-precise canvas wiring). */
 export * from "./star-canvas-view-model";
+export * from "./star-graph-visible-budget";

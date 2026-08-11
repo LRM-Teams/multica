@@ -5,11 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { useWSEvent } from "@multica/core/realtime";
-import {
-  deriveRuntimeHealth,
-  runtimeKeys,
-  runtimeListOptions,
-} from "@multica/core/runtimes";
+import { runtimeKeys, runtimeListOptions } from "@multica/core/runtimes";
 import type { Workspace } from "@multica/core/types";
 import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
@@ -36,17 +32,14 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
     ...runtimeListOptions(workspace.id),
     refetchInterval: (query) => {
       const list = query.state.data ?? [];
-      const hasOnline = list.some(
-        (runtime) => deriveRuntimeHealth(runtime, Date.now()) === "online",
+      const hasConnectedComputer = list.some(
+        (runtime) => runtime.computer_connected === true,
       );
-      return hasOnline ? false : 2000;
+      return hasConnectedComputer ? false : 2000;
     },
   });
-  const onlineRuntimes = useMemo(
-    () =>
-      runtimes.filter(
-        (runtime) => deriveRuntimeHealth(runtime, Date.now()) === "online",
-      ),
+  const connectedRuntimes = useMemo(
+    () => runtimes.filter((runtime) => runtime.computer_connected === true),
     [runtimes],
   );
   const isOwner = members.some(
@@ -76,8 +69,8 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
     );
   }
 
-  // Step 1 until at least one Runtime is online; only then Step 2.
-  const step: 1 | 2 = onlineRuntimes.length === 0 ? 1 : 2;
+  // Step 1 until the server reports a connected Computer; only then Step 2.
+  const step: 1 | 2 = connectedRuntimes.length === 0 ? 1 : 2;
 
   return (
     <div className="flex min-h-svh items-center justify-center p-6">
@@ -124,7 +117,7 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
           ) : (
             <WendyCreateForm
               workspaceId={workspace.id}
-              runtimes={onlineRuntimes}
+              runtimes={connectedRuntimes}
               members={members}
               currentUserId={currentUser?.id ?? null}
               submitting={submitting}
@@ -197,7 +190,6 @@ function WendyCreateForm({
         machineRuntimes={selection.machineRuntimes}
         runtimeId={selection.runtimeId}
         onRuntimeSelect={selection.selectRuntime}
-        runtimeOnline={selection.runtimeOnline}
         model={selection.model}
         onModelChange={selection.selectModel}
         thinkingLevel={selection.thinkingLevel}

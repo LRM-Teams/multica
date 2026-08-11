@@ -3,9 +3,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { TypedGraphEdge, TypedGraphNode } from "@multica/core/research";
+import type { ResearchGraphNode } from "@multica/core/types";
 
 import { buildStarCanvasViewModel } from "../lib/star-canvas-view-model";
 import { StarGraphCanvas } from "./star-graph-canvas";
+import { emptyCanvasFilter } from "@multica/core/research";
+
+const setViewport = vi.fn();
+
+vi.mock("@multica/core/research", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/research")>();
+  return {
+    ...actual,
+    useResearchCanvasStore: (selector: (state: {
+      viewport: null;
+      filter: ReturnType<typeof emptyCanvasFilter>;
+      setViewport: typeof setViewport;
+    }) => unknown) =>
+      selector({
+        viewport: null,
+        filter: emptyCanvasFilter(),
+        setViewport,
+      }),
+  };
+});
 
 class ResizeObserverMock {
   observe() {}
@@ -138,5 +159,92 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(screen.getByTestId("star-graph-canvas")).toBeTruthy();
     expect(screen.queryAllByTestId("star-graph-node")).toHaveLength(0);
     expect(screen.queryByTestId("star-graph-edges")).toBeNull();
+  });
+
+  it("shows a budget note when entities exceed the DOM cap", () => {
+    const nodes = [
+      node({ id: "goal", node_type: "goal", title: "Goal", level: "xxl" }),
+      ...Array.from({ length: 12 }, (_, index) =>
+        node({
+          id: `n-${index}`,
+          title: `Node ${index}`,
+          level: "s",
+          actor_agent_id: `agent-${index}`,
+        }),
+      ),
+    ];
+    const edges = nodes.slice(1).map((entry, index) =>
+      edge({
+        id: `e-${index}`,
+        from_node_id: "goal",
+        to_node_id: entry.id,
+        edge_type: "leads_to",
+      }),
+    );
+    render(
+      <StarGraphCanvas
+        model={buildStarCanvasViewModel({ nodes, edges })}
+        entityBudget={5}
+        selectedNodeId="n-0"
+        relatedNodeIds={new Set(["goal", "n-0"])}
+      />,
+    );
+
+    expect(screen.getAllByTestId("star-graph-node")).toHaveLength(5);
+    expect(screen.getByTestId("star-graph-budget-note").textContent).toContain("5/13");
+  });
+
+  it("supports keyboard navigation when keyboardNav is provided", () => {
+    const onSelectNode = vi.fn();
+    const keyboardNodes = [
+      {
+        id: "goal",
+        session_id: "session-1",
+        node_type: "goal",
+        title: "Research goal",
+        summary: "",
+        status: "active",
+        actor_agent_id: null,
+        created_at: "",
+        updated_at: "",
+        payload: null,
+      },
+      {
+        id: "stable-a",
+        session_id: "session-1",
+        node_type: "subquestion",
+        title: "Stable A",
+        summary: "",
+        status: "active",
+        actor_agent_id: null,
+        created_at: "",
+        updated_at: "",
+        payload: null,
+      },
+    ] satisfies ResearchGraphNode[];
+
+    render(
+      <StarGraphCanvas
+        model={fixtureModel()}
+        selectedNodeId="stable-a"
+        onSelectNode={onSelectNode}
+        keyboardNav={{
+          nodes: keyboardNodes,
+          edges: [
+            {
+              from_node_id: "goal",
+              to_node_id: "stable-a",
+              edge_type: "leads_to",
+            },
+          ],
+        }}
+      />,
+    );
+
+    const canvas = screen.getByTestId("star-graph-canvas");
+    canvas.focus();
+    fireEvent.keyDown(canvas, { key: "Home" });
+    expect(onSelectNode).toHaveBeenCalledWith("goal");
+    expect(screen.getByTestId("star-graph-canvas-live").textContent).toContain("Research goal");
   });
 });

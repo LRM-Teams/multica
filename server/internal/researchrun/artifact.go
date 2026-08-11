@@ -113,3 +113,121 @@ func RegisteredArtifactEntityKinds() []ArtifactEntityKind {
 	}
 	return out
 }
+
+// ReciprocalArtifactPassportGuardTriggerNames lists migration 320 deferred insert guards.
+func ReciprocalArtifactPassportGuardTriggerNames() []string {
+	return []string{
+		"research_session_artifact_passport_guard",
+		"research_contract_revision_artifact_passport_guard",
+		"research_decision_artifact_passport_guard",
+		"research_question_artifact_passport_guard",
+		"research_task_artifact_passport_guard",
+		"research_task_attempt_artifact_passport_guard",
+		"research_result_artifact_artifact_passport_guard",
+		"research_source_artifact_passport_guard",
+		"research_source_snapshot_artifact_passport_guard",
+		"research_observation_artifact_passport_guard",
+		"research_claim_artifact_passport_guard",
+		"research_claim_evidence_artifact_passport_guard",
+		"research_report_artifact_passport_guard",
+		"research_stage_eval_artifact_passport_guard",
+		"research_message_artifact_passport_guard",
+		"research_product_round_card_artifact_passport_guard",
+		"research_artifact_context_manifest_artifact_passport_guard",
+		"research_run_event_artifact_passport_guard",
+		"research_graph_node_artifact_passport_guard",
+		"research_graph_edge_artifact_passport_guard",
+	}
+}
+
+// PolicyCouplingGuardTriggerNames lists migration 321 verification/grant policy guards.
+func PolicyCouplingGuardTriggerNames() []string {
+	return []string{
+		"research_source_snapshot_verification_to_policy_guard",
+		"research_observation_verification_to_policy_guard",
+		"research_claim_evidence_verification_to_policy_guard",
+		"research_artifact_policy_mutation_to_verification_guard",
+		"research_artifact_policy_grant_to_mutation_guard",
+		"research_artifact_policy_mutation_to_grant_guard",
+	}
+}
+
+// PolicyLedgerGuardTriggerNames lists migration 322 generic policy ledger guards.
+func PolicyLedgerGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_passport_to_policy_mutation_guard",
+		"research_artifact_policy_mutation_to_passport_guard",
+	}
+}
+
+// IntegrityGuardTriggerNames lists migration 323 producer/projection guards.
+func IntegrityGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_version_producer_guard",
+		"research_result_attempt_projection_guard",
+	}
+}
+
+// LinkPolicyGuardTriggerNames lists migration 324 supersession/lifecycle policy guards.
+func LinkPolicyGuardTriggerNames() []string {
+	return []string{
+		"research_artifact_supersession_to_policy_guard",
+		"research_artifact_policy_mutation_to_supersession_guard",
+		"research_artifact_lifecycle_event_to_policy_guard",
+		"research_artifact_policy_mutation_to_lifecycle_event_guard",
+	}
+}
+
+// MigrationDiagnosticReasonCodes lists migration 325 diagnostic reason registry.
+func MigrationDiagnosticReasonCodes() []string {
+	return []string{
+		"cross_scope_reference",
+		"invalid_match_decision",
+		"malformed_uuid",
+		"unknown_schema",
+		"unresolved_reference",
+	}
+}
+
+// MigrationRelationshipParserNames lists migration 325 relationship parser registry.
+func MigrationRelationshipParserNames() []string {
+	return []string{
+		"research_message_match_decision",
+		"research_decision_inputs",
+		"research_run_event_payload",
+	}
+}
+
+// ScopedRelationshipFKNames lists migration 326 composite relationship FKs.
+func ScopedRelationshipFKNames() []string {
+	return []string{
+		"research_task_attempt_task_scoped_fkey",
+		"research_task_question_scoped_fkey",
+		"research_task_parent_task_scoped_fkey",
+		"research_question_parent_question_scoped_fkey",
+		"research_question_created_by_task_scoped_fkey",
+		"research_question_answer_claim_scoped_fkey",
+		"research_task_dependency_session_fkey",
+		"research_task_dependency_task_scoped_fkey",
+		"research_task_dependency_depends_on_scoped_fkey",
+		"research_source_snapshot_produced_by_task_scoped_fkey",
+		"research_observation_source_snapshot_scoped_fkey",
+		"research_observation_produced_by_task_scoped_fkey",
+		"research_claim_produced_by_task_scoped_fkey",
+		"research_claim_evidence_claim_scoped_fkey",
+		"research_claim_evidence_observation_scoped_fkey",
+		"research_claim_evidence_verified_by_task_scoped_fkey",
+		"research_source_source_snapshot_scoped_fkey",
+		"research_report_claim_report_scoped_fkey",
+		"research_report_claim_claim_scoped_fkey",
+		"research_graph_edge_from_node_scoped_fkey",
+		"research_graph_edge_to_node_scoped_fkey",
+	}
+}
+
+// CanonicalizationRegistryConstraintNames lists migration 327 schema-family checks.
+func CanonicalizationRegistryConstraintNames() []string {
+	return []string{
+		"research_artifact_version_schema_family_check",
+	}
+}

@@ -1,7 +1,7 @@
-import type { TypedGraphResponse } from "@multica/core/research";
+import type { TypedGraphResponse, ResearchD5Lens } from "@multica/core/research";
 import type { StarCanvasViewModel } from "../star-graph/lib/star-canvas-view-model";
-import type { ResearchD5Lens } from "./research-d5-lens";
-import { RESEARCH_D5_LENSES } from "./research-d5-lens";
+
+export { isResearchD5Lens } from "@multica/core/research";
 
 export interface D5LensDisplayHints {
   dimmedNodeIds: ReadonlySet<string>;
@@ -32,10 +32,6 @@ const LINEAGE_EDGE_TYPES = new Set([
 ]);
 
 const MERGE_RELATION_KINDS = new Set(["merge", "merged", "fusion"]);
-
-export function isResearchD5Lens(value: string | null | undefined): value is ResearchD5Lens {
-  return RESEARCH_D5_LENSES.includes(value as ResearchD5Lens);
-}
 
 function collectLineageNodeIds(typed: TypedGraphResponse): Set<string> {
   const ids = new Set<string>();

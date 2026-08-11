@@ -1,8 +1,2 @@
-export type ResearchD5Lens = "relations" | "confidence" | "agent" | "lineage";
-
-export const RESEARCH_D5_LENSES: readonly ResearchD5Lens[] = [
-  "relations",
-  "confidence",
-  "agent",
-  "lineage",
-];
+export type { ResearchD5Lens } from "@multica/core/research";
+export { DEFAULT_RESEARCH_D5_LENS, RESEARCH_D5_LENSES } from "@multica/core/research";

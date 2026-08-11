@@ -23,6 +23,8 @@ type registerArtifactPassportInput struct {
 	SchemaVersion          string
 	AccessLevel            ArtifactAccessLevel
 	HashOrigin             ArtifactHashOrigin
+	ContentHash            string
+	ProducedByAttemptID    string
 }
 
 func migrationArtifactContentHash(kind ArtifactEntityKind, workspaceID, sessionID, entityID string) string {
@@ -59,7 +61,10 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 	if in.SchemaVersion == "" {
 		in.SchemaVersion = "legacy-v1"
 	}
-	contentHash := migrationArtifactContentHash(in.Kind, in.WorkspaceID, in.SessionID, in.EntityID)
+	contentHash := in.ContentHash
+	if contentHash == "" {
+		contentHash = migrationArtifactContentHash(in.Kind, in.WorkspaceID, in.SessionID, in.EntityID)
+	}
 
 	tag, err := tx.Exec(ctx, `
 		INSERT INTO research_artifact_passport (
@@ -101,14 +106,14 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 			INSERT INTO research_artifact_version (
 				workspace_id, session_id, artifact_id, version, schema_name, schema_version,
 				canonicalization_version, content_hash, access_level, goal_version, plan_version,
-				hash_origin
+				hash_origin, produced_by_attempt_id
 			) VALUES (
 				$1::uuid, $2::uuid, $3::uuid, 1, $4, $5,
-				$6, $7, $8, $9, $10, $11
+				$6, $7, $8, $9, $10, $11, NULLIF($12, '')::uuid
 			)
 		`, in.WorkspaceID, in.SessionID, in.EntityID, in.SchemaName, in.SchemaVersion,
 			ArtifactCanonicalizationVersion, contentHash, string(in.AccessLevel),
-			in.GoalVersion, in.PlanVersion, string(in.HashOrigin)); err != nil {
+			in.GoalVersion, in.PlanVersion, string(in.HashOrigin), in.ProducedByAttemptID); err != nil {
 			return err
 		}
 	}
@@ -118,6 +123,12 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 		SET current_version = 1
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 		  AND current_version IS NULL
+	`, in.WorkspaceID, in.SessionID, in.EntityID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		SELECT research_artifact_record_artifact_create_mutation($1::uuid, $2::uuid, $3::uuid)
 	`, in.WorkspaceID, in.SessionID, in.EntityID)
 	return err
 }
@@ -202,5 +213,54 @@ func registerRunArtifactsAfterInitializationTx(ctx context.Context, tx pgx.Tx, w
 	if err := registerRunSessionArtifactTx(ctx, tx, workspaceID, sessionID, sessionCreatedAt); err != nil {
 		return err
 	}
-	return registerInitializedRunArtifactsTx(ctx, tx, workspaceID, sessionID)
+	if err := registerInitializedRunArtifactsTx(ctx, tx, workspaceID, sessionID); err != nil {
+		return err
+	}
+	var stateVersion int64
+	if err := tx.QueryRow(ctx, `
+		SELECT state_version
+		FROM research_session
+		WHERE workspace_id = $1::uuid AND id = $2::uuid
+	`, workspaceID, sessionID).Scan(&stateVersion); err != nil {
+		return err
+	}
+	if err := verifyShadowEquivalenceTx(ctx, tx, workspaceID, sessionID, stateVersion); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE research_session
+		SET artifact_passport_enabled = true
+		WHERE workspace_id = $1::uuid AND id = $2::uuid
+	`, workspaceID, sessionID)
+	return err
+}
+
+func artifactKindForDecision(decisionKind string) ArtifactEntityKind {
+	if decisionKind == "research_method" {
+		return ArtifactKindMethodDecision
+	}
+	return ArtifactKindEvaluationDecision
+}
+
+func int32Ptr(v int32) *int32 {
+	return &v
+}
+
+func ensureDomainArtifactPassportTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind ArtifactEntityKind,
+	workspaceID, sessionID, entityID string,
+	sourceCreatedAt time.Time,
+	goalVersion, planVersion *int32,
+) error {
+	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
+		WorkspaceID:     workspaceID,
+		SessionID:       sessionID,
+		EntityID:        entityID,
+		Kind:            kind,
+		SourceCreatedAt: &sourceCreatedAt,
+		GoalVersion:     goalVersion,
+		PlanVersion:     planVersion,
+	})
 }

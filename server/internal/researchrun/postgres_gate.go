@@ -568,12 +568,17 @@ func (s *PostgresStore) RecordBudgetExhausted(ctx context.Context, sessionID, bu
 		return RunEvent{}, err
 	}
 	inputs, _ := json.Marshal(map[string]any{"budget_kind": budgetKind, "details": details})
-	if _, err = tx.Exec(ctx, `
+	var decisionID string
+	if err = tx.QueryRow(ctx, `
 		INSERT INTO research_decision (
 			workspace_id, session_id, decision_kind, actor_type,
 			goal_version, plan_version, inputs, outcome, rationale
 		) VALUES ($1::uuid, $2::uuid, 'budget_exhausted', 'system', $3, $4, $5, '{}', $6)
-	`, workspaceID, sessionID, goalVersion, planVersion, inputs, truncateBytes(details, 4096)); err != nil {
+		RETURNING id::text
+	`, workspaceID, sessionID, goalVersion, planVersion, inputs, truncateBytes(details, 4096)).Scan(&decisionID); err != nil {
+		return RunEvent{}, err
+	}
+	if err = ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("budget_exhausted"), workspaceID, sessionID, decisionID, time.Now(), int32Ptr(int32(goalVersion)), int32Ptr(int32(planVersion))); err != nil {
 		return RunEvent{}, err
 	}
 	if _, err = tx.Exec(ctx, `

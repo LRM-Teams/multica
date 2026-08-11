@@ -6,6 +6,7 @@ import { useT } from "../../i18n/use-t";
 
 const CANVAS_CHANGE_OPS = new Set([
   "goal_steered",
+  "goal_modified",
   "integration_formed",
   "node_retired",
   "task_restarted",
@@ -39,6 +40,11 @@ export function ResearchCanvasChangeCard({
     metaString(message.meta, "goal") ||
     metaString(message.meta, "reason");
 
+  const opLabel = t(($) => {
+    const ops = $.d5.change_receipt.ops as Record<string, string> | undefined;
+    return ops?.[op] ?? op;
+  });
+
   return (
     <div
       data-testid="research-canvas-change-card"
@@ -49,7 +55,7 @@ export function ResearchCanvasChangeCard({
       )}
     >
       <div className="font-semibold text-brand">
-        {t(($) => $.d5.change_receipt.title, { op })}
+        {t(($) => $.d5.change_receipt.title, { label: opLabel })}
       </div>
       {title ? <div className="mt-1 font-medium text-foreground">{title}</div> : null}
       {detail ? <div className="mt-1 text-muted-foreground">{detail}</div> : null}

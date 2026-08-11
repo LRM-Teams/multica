@@ -23,14 +23,14 @@ import {
 } from "./execution-picker-styles";
 import { useT } from "../../i18n";
 
-// ModelDropdown: searchable model picker. Catalog fetch is gated on
-// `runtimeOnline` only (#124 / Frank+Parker 2026-08-04). Freeform model id
-// stays available when offline, discovery fails, or the catalog is empty —
+// ModelDropdown: searchable model picker. A selected runtime always starts
+// real catalog discovery; the request result, not cached heartbeat timestamps,
+// decides whether discovery succeeded. Freeform model id stays available when
+// discovery fails or the catalog is empty —
 // CreateAgent already accepts a plain model string without catalog_request_id.
 // Providers with supported=false still hide the picker (managed-by-runtime).
 export function ModelDropdown({
   runtimeId,
-  runtimeOnline,
   value,
   onChange,
   disabled,
@@ -41,7 +41,6 @@ export function ModelDropdown({
   autoSelectFirst = false,
 }: {
   runtimeId: string | null;
-  runtimeOnline: boolean;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
@@ -55,58 +54,58 @@ export function ModelDropdown({
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
-  // Catalog only while the runtime is online — never disable the control.
   // Query is enabled as soon as runtimeId is set (not on open), so selecting
   // a Runtime starts the daemon list-models scan immediately.
-  const modelsQuery = useQuery(
-    runtimeModelsOptions(runtimeOnline ? runtimeId : null),
-  );
+  const {
+    data: catalog,
+    isLoading: catalogLoading,
+    isFetching: catalogFetching,
+    isError: catalogError,
+  } =
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- this hook delivers the external catalog signal reconciled by the explicitly documented effects below.
+    useQuery(runtimeModelsOptions(runtimeId));
   // In-flight discovery (initial or user rescan).
   const isFetchingCatalog =
     !!runtimeId &&
-    runtimeOnline &&
-    (modelsQuery.isLoading || modelsQuery.isFetching);
+    (catalogLoading || catalogFetching);
   // First load only — replace trigger text with the scanning message.
-  const isInitialScan = isFetchingCatalog && !modelsQuery.data;
+  const isInitialScan = isFetchingCatalog && !catalog;
 
   const rescanModels = () => {
-    if (!runtimeId || !runtimeOnline || isFetchingCatalog || disabled) return;
+    if (!runtimeId || isFetchingCatalog || disabled) return;
     void queryClient.invalidateQueries({
       queryKey: runtimeModelsKeys.forRuntime(runtimeId),
     });
   };
 
-  const supported = modelsQuery.data?.supported ?? true;
+  const supported = catalog?.supported ?? true;
   // Backend-owned capability — never infer from a frontend provider list.
   const customModelIdSupported =
-    modelsQuery.data?.customModelIdSupported === true;
+    catalog?.customModelIdSupported === true;
   // Stable reference for the model list — `?? []` would mint a fresh
   // array each render and force every downstream useMemo to invalidate.
   const models = useMemo(
-    () => modelsQuery.data?.models ?? [],
-    [modelsQuery.data],
+    () => catalog?.models ?? [],
+    [catalog],
   );
   const grouped = useMemo(() => groupByProvider(models), [models]);
 
-  // No live catalog answer → still allow freeform (offline / error / empty).
-  // Online + capability false → keep freeform off (provider manages model).
-  const catalogSettled = !runtimeOnline || !modelsQuery.isLoading;
+  // No catalog answer → still allow freeform after an error or empty result.
+  // Capability false keeps freeform off (provider manages model).
+  const catalogSettled = !catalogLoading;
   const freeformAllowed =
     customModelIdSupported ||
-    !runtimeOnline ||
-    modelsQuery.isError ||
+    catalogError ||
     (catalogSettled && models.length === 0);
 
-  const catalogHint =
-    !runtimeOnline
-      ? t(($) => $.model_dropdown.catalog_unavailable_hint)
-      : modelsQuery.isError
-        ? t(($) => $.model_dropdown.discovery_failed)
-        : null;
+  const catalogHint = catalogError
+    ? t(($) => $.model_dropdown.discovery_failed)
+    : null;
 
   // When the selected runtime reports it doesn't support per-agent
   // model selection, clear any previously-saved value so we don't
   // persist a ghost configuration that never takes effect.
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- catalog capability is an external async signal; no local event owns this reconciliation.
   useEffect(() => {
     if (!supported && value !== "") {
       onChangeRef.current("");
@@ -115,18 +114,17 @@ export function ModelDropdown({
 
   // Seed a concrete catalog model on create/hire so "Create" does not
   // silently 400 with "model is required" while the trigger still reads
-  // like a default is already chosen. Skip when offline (no catalog).
+  // like a default is already chosen.
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- auto-selection reacts to the external catalog response, not a local event handler.
   useEffect(() => {
-    if (!autoSelectFirst || !supported || !runtimeOnline || modelsQuery.isLoading)
-      return;
+    if (!autoSelectFirst || !supported || catalogLoading) return;
     if (value.trim()) return;
     const first = models[0]?.id?.trim();
     if (first) onChangeRef.current(first);
   }, [
     autoSelectFirst,
     supported,
-    runtimeOnline,
-    modelsQuery.isLoading,
+    catalogLoading,
     models,
     value,
   ]);
@@ -162,7 +160,7 @@ export function ModelDropdown({
         ? t(($) => $.model_dropdown.select_required)
         : t(($) => $.model_dropdown.default_provider));
 
-  if (!supported && !modelsQuery.isLoading) {
+  if (!supported && !catalogLoading) {
     return (
       <div className={executionFieldClass}>
         <Label className="text-xs font-medium text-muted-foreground">
@@ -178,8 +176,7 @@ export function ModelDropdown({
     );
   }
 
-  const canRescan =
-    !!runtimeId && runtimeOnline && !disabled && !isFetchingCatalog;
+  const canRescan = !!runtimeId && !disabled && !isFetchingCatalog;
 
   return (
     <div className={executionFieldClass}>
@@ -264,14 +261,14 @@ export function ModelDropdown({
             />
           </div>
           <div className="max-h-72 overflow-y-auto p-1">
-            {runtimeOnline && isInitialScan && (
+            {isInitialScan && (
               <div className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {t(($) => $.model_dropdown.scanning_on_computer)}
               </div>
             )}
 
-            {(!runtimeOnline || !isInitialScan) &&
+            {!isInitialScan &&
               Object.entries(filtered).map(([provider, list]) => (
                 <div key={provider} className="mb-1">
                   {provider && (
@@ -304,7 +301,7 @@ export function ModelDropdown({
                 </div>
               ))}
 
-            {(!runtimeOnline || !isInitialScan) &&
+            {!isInitialScan &&
               Object.keys(filtered).length === 0 && (
               <div className="px-3 py-6 text-center text-sm text-muted-foreground">
                 {freeformAllowed
@@ -313,7 +310,7 @@ export function ModelDropdown({
               </div>
             )}
 
-            {(!runtimeOnline || !isInitialScan) && freeformAllowed && (
+            {!isInitialScan && freeformAllowed && (
               <CustomModelIdRow onSubmit={select} />
             )}
 

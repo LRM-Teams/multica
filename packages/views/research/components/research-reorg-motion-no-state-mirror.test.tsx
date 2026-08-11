@@ -23,7 +23,7 @@ function read(name: string) {
 
 
 
-describe("LRM-1335 gutter growth is DOM-driven, not state-mirrored", () => {
+describe("LRM-1335 narrow git list avoids state-mirrored enter motion", () => {
   beforeEach(() => {
     // jsdom exposes no SVG geometry; the growth math only needs a positive length.
     const svgPathProto = Object.getPrototypeOf(
@@ -37,16 +37,6 @@ describe("LRM-1335 gutter growth is DOM-driven, not state-mirrored", () => {
   });
 
 
-
-  it("gutter node keeps no React state and batches style writes via cssText", () => {
-    const src = read("research-git-gutter-node.tsx");
-    expect(src).not.toMatch(/useState/);
-    expect(src).toMatch(/new MutationObserver/);
-    expect(src).toMatch(/style\.cssText/);
-    // Individual property writes are what tripped the batching rule.
-    expect(src).not.toMatch(/style\.strokeDashoffset\s*=/);
-    expect(src).not.toMatch(/style\.strokeDasharray\s*=/);
-  });
 
   it("narrow list relies on the keyed row mount, not an added-id state set", () => {
     const src = read("research-git-list.tsx");

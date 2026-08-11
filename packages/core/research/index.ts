@@ -12,4 +12,5 @@ export * from "./star-graph-viewport";
 export * from "./trajectory-lane-layout";
 export * from "./ui-store";
 export * from "./canvas-store";
+export * from "./d5-lens";
 export * from "./ws-updaters";

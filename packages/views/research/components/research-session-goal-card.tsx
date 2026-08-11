@@ -7,10 +7,14 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@multica/ui/components/ui/popover";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
@@ -52,8 +56,10 @@ export function ResearchSessionGoalCard({
   onConfirmSubstantive,
   goalVersion = null,
   goalHistory = [],
+  goalImpact = null,
   className,
   compact = false,
+  panelPlacement = "dialog",
 }: {
   sessionId: string;
   goal: string;
@@ -64,9 +70,12 @@ export function ResearchSessionGoalCard({
   onConfirmSubstantive?: (proposal: string) => void;
   goalVersion?: number | null;
   goalHistory?: readonly GoalVersionEntry[];
+  goalImpact?: { labeledNodes: number; totalNodes: number } | null;
   className?: string;
   /** Frozen top-bar mode: keep GOAL at icon priority even on desktop (LRM-1112). */
   compact?: boolean;
+  /** D5 chrome: expand the version panel below the card instead of a centered modal. */
+  panelPlacement?: "dialog" | "below";
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -136,7 +145,7 @@ export function ResearchSessionGoalCard({
       data-testid="research-session-goal-card"
       data-state={model.state}
       data-collapsed="false"
-      onClick={() => setOpen(true)}
+      onClick={panelPlacement === "below" ? undefined : () => setOpen(true)}
       onContextMenu={(e) => {
         e.preventDefault();
         setCollapsedPersist(true);
@@ -177,7 +186,7 @@ export function ResearchSessionGoalCard({
       data-testid="research-session-goal-icon"
       data-state={model.state}
       data-collapsed="true"
-      onClick={() => setOpen(true)}
+      onClick={panelPlacement === "below" ? undefined : () => setOpen(true)}
       onContextMenu={(e) => {
         e.preventDefault();
         setCollapsedPersist(false);
@@ -207,37 +216,25 @@ export function ResearchSessionGoalCard({
   // `compact` forces desktop to the icon surface per the LRM-1112 frozen header.
   const showIcon = compact || isMobile || collapsed;
 
-  return (
+  const panelBody = (
     <>
-      {showIcon ? icon : card}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent
-          data-testid="research-session-goal-popover"
-          className="max-w-[calc(100vw-1.5rem)] gap-0 p-0 md:max-w-[26rem]"
-        >
-          <DialogHeader className="space-y-2 px-4 pt-4 pb-2 text-left">
-            <DialogTitle className="flex items-center gap-2 text-sm">
-              <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-brand/30 bg-brand/10 px-2 py-0.5">
-                <span className="shrink-0 text-[10px] font-extrabold tracking-wide text-brand">
-                  {t(($) => $.goal_card.label)}
-                </span>
-                <span className="min-w-0 truncate text-[11.5px] font-semibold">
-                  {t(($) => $.goal_card.final_title)}
-                </span>
-              </span>
-            </DialogTitle>
-            {model.note === "optimized" ? (
-              <DialogDescription className="text-[11px] text-brand">
-                {t(($) => $.goal_card.optimized_note)}
-              </DialogDescription>
-            ) : (
-              <DialogDescription className="sr-only">
-                {t(($) => $.goal_card.final_title)}
-              </DialogDescription>
-            )}
-          </DialogHeader>
+      <div className="space-y-2 px-4 pt-4 pb-2 text-left">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-brand/30 bg-brand/10 px-2 py-0.5">
+            <span className="shrink-0 text-[10px] font-extrabold tracking-wide text-brand">
+              {t(($) => $.goal_card.label)}
+            </span>
+            <span className="min-w-0 truncate text-[11.5px] font-semibold">
+              {t(($) => $.goal_card.final_title)}
+            </span>
+          </span>
+        </div>
+        {model.note === "optimized" ? (
+          <p className="text-[11px] text-brand">{t(($) => $.goal_card.optimized_note)}</p>
+        ) : null}
+      </div>
 
-          <div className="space-y-2.5 px-4 pb-3">
+      <div className="space-y-2.5 px-4 pb-3">
             {model.state === "loading" ? (
               <p className="text-[12.5px] text-muted-foreground">
                 {t(($) => $.goal_card.loading_body)}
@@ -294,6 +291,14 @@ export function ResearchSessionGoalCard({
                     ? ` · ${t(($) => $.d5.goal_panel.version, { version: goalVersion })}`
                     : null}
                 </div>
+                {goalImpact && goalImpact.totalNodes > 0 ? (
+                  <p
+                    data-testid="research-session-goal-impact"
+                    className="mb-2 text-[10px] text-muted-foreground"
+                  >
+                    {t(($) => $.d5.goal_panel.impact, goalImpact)}
+                  </p>
+                ) : null}
                 <div className="space-y-2">
                   {goalHistory.map((entry) => (
                     <div
@@ -323,7 +328,7 @@ export function ResearchSessionGoalCard({
             ) : null}
           </div>
 
-          <DialogFooter className="flex-row flex-wrap justify-between gap-2 border-t px-4 py-3 sm:justify-between">
+      <div className="flex flex-row flex-wrap justify-between gap-2 border-t px-4 py-3">
             <div className="flex gap-1.5">
               {/* Collapse toggle is desktop-only — narrow always uses the icon trigger. */}
               {!isMobile ? (
@@ -376,7 +381,40 @@ export function ResearchSessionGoalCard({
                 </Button>
               ) : null}
             </div>
-          </DialogFooter>
+          </div>
+    </>
+  );
+
+  if (panelPlacement === "below") {
+    return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger render={showIcon ? icon : card} />
+        <PopoverContent
+          side="bottom"
+          align="center"
+          keepMounted
+          data-testid="research-session-goal-popover"
+          className="max-w-[min(26rem,calc(100vw-1.5rem))] gap-0 p-0"
+        >
+          {panelBody}
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  return (
+    <>
+      {showIcon ? icon : card}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent
+          data-testid="research-session-goal-popover"
+          className="max-w-[calc(100vw-1.5rem)] gap-0 p-0 md:max-w-[26rem]"
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>{t(($) => $.goal_card.final_title)}</DialogTitle>
+            <DialogDescription>{t(($) => $.goal_card.final_title)}</DialogDescription>
+          </DialogHeader>
+          {panelBody}
         </DialogContent>
       </Dialog>
     </>

@@ -127,7 +127,13 @@ func (d *Daemon) handleMachineUpgrade(ctx context.Context, runtimeID string, upg
 			SourceVersion: d.cfg.CLIVersion,
 			TargetVersion: targetVersion,
 		})
-		d.reregisterMachineUpgrade(ctx, runtimeID, upgrade.ID)
+		if err := d.reregisterMachineUpgrade(ctx, runtimeID, upgrade.ID); err != nil {
+			d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "already_current_registration_failed", err)
+			return
+		}
+		if err := d.attestAlreadyCurrentMachineUpgrade(ctx, receipt); err != nil {
+			d.failMachineUpgrade(ctx, runtimeID, upgrade.ID, "already_current_attestation_failed", err)
+		}
 		return
 	}
 	journal, err := d.createMachineUpgradeJournal(receipt, d.cfg.CLIVersion, targetVersion)
@@ -363,15 +369,39 @@ func (d *Daemon) beginMachineUpgradeHandoff(ctx context.Context) error {
 	return nil
 }
 
-func (d *Daemon) reregisterMachineUpgrade(ctx context.Context, runtimeID, upgradeID string) {
+func (d *Daemon) reregisterMachineUpgrade(ctx context.Context, runtimeID, upgradeID string) error {
 	workspaceID := d.workspaceIDForRuntime(runtimeID)
 	if workspaceID == "" {
-		d.logger.Warn("machine upgrade accepted but runtime workspace is unavailable", "runtime_id", runtimeID, "upgrade_id", upgradeID)
-		return
+		return fmt.Errorf("machine upgrade accepted but runtime workspace is unavailable: runtime %s", runtimeID)
 	}
 	if _, err := d.registerRuntimesForWorkspace(ctx, workspaceID); err != nil {
-		d.logger.Warn("machine upgrade convergence registration failed", "workspace_id", workspaceID, "upgrade_id", upgradeID, "error", err)
+		return fmt.Errorf("machine upgrade convergence registration for Workspace %s: %w", workspaceID, err)
 	}
+	return nil
+}
+
+// attestAlreadyCurrentMachineUpgrade closes the generation-aware Computer
+// operation when the requested target already matches the resident. No new
+// process will start in this path, so the normal successor-startup attestation
+// cannot run. Runtime re-registration above proves the accepting Workspace;
+// this Computer-level proof covers the complete captured Workspace set,
+// including zero-Agent connections.
+func (d *Daemon) attestAlreadyCurrentMachineUpgrade(ctx context.Context, receipt *MachineUpgradeReceipt) error {
+	if receipt == nil || strings.TrimSpace(receipt.ID) == "" || receipt.AcceptedGeneration == nil || strings.TrimSpace(*receipt.AcceptedGeneration) == "" {
+		return fmt.Errorf("already-current machine upgrade acceptance receipt is incomplete")
+	}
+	workspaceIDs := d.workspaceRunnerWorkspaceIDs()
+	if !sameStringSet(receipt.AcceptedWorkspaceIDs, workspaceIDs) {
+		return fmt.Errorf("already-current Workspace connection set does not match accepted complete set")
+	}
+	return d.client.AttestComputerUpgrade(
+		ctx,
+		d.cfg.DaemonID,
+		receipt.ID,
+		strings.TrimSpace(*receipt.AcceptedGeneration),
+		d.cfg.CLIVersion,
+		workspaceIDs,
+	)
 }
 
 func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs []string) error {

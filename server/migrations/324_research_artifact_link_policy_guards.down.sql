@@ -1,0 +1,22 @@
+-- Roll back Chapter D1g link policy guards.
+
+DROP TRIGGER IF EXISTS research_artifact_policy_mutation_to_lifecycle_event_guard ON research_artifact_policy_mutation;
+DROP FUNCTION IF EXISTS research_artifact_policy_mutation_to_lifecycle_event_guard_fn();
+
+DROP TRIGGER IF EXISTS research_artifact_lifecycle_event_to_policy_guard ON research_artifact_lifecycle_event;
+DROP FUNCTION IF EXISTS research_artifact_lifecycle_event_to_policy_guard_fn();
+
+DROP TRIGGER IF EXISTS research_artifact_policy_mutation_to_supersession_guard ON research_artifact_policy_mutation;
+DROP FUNCTION IF EXISTS research_artifact_policy_mutation_to_supersession_guard_fn();
+
+DROP TRIGGER IF EXISTS research_artifact_supersession_to_policy_guard ON research_artifact_supersession;
+DROP FUNCTION IF EXISTS research_artifact_supersession_to_policy_guard_fn();
+
+ALTER TABLE research_artifact_lifecycle_event
+  DROP CONSTRAINT IF EXISTS research_artifact_lifecycle_event_policy_mutation_fkey;
+
+ALTER TABLE research_artifact_supersession
+  DROP CONSTRAINT IF EXISTS research_artifact_supersession_policy_mutation_fkey;
+
+ALTER TABLE research_artifact_policy_mutation
+  DROP CONSTRAINT IF EXISTS research_artifact_policy_mutation_artifact_target_uidx;

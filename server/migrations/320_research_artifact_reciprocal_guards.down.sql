@@ -1,5 +1,7 @@
 -- Roll back Chapter D1c reciprocal artifact passport guards.
 
+DROP FUNCTION IF EXISTS research_ensure_run_session_passport(UUID, UUID);
+
 DROP TRIGGER IF EXISTS research_graph_edge_artifact_passport_delete_guard ON research_graph_edge;
 DROP TRIGGER IF EXISTS research_graph_node_artifact_passport_delete_guard ON research_graph_node;
 DROP TRIGGER IF EXISTS research_run_event_artifact_passport_delete_guard ON research_run_event;

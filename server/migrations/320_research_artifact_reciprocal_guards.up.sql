@@ -515,3 +515,29 @@ FOR EACH ROW EXECUTE FUNCTION research_artifact_domain_passport_delete_guard_fn(
 CREATE TRIGGER research_graph_edge_artifact_passport_delete_guard
 BEFORE DELETE ON research_graph_edge
 FOR EACH ROW EXECUTE FUNCTION research_artifact_domain_passport_delete_guard_fn('graph_edge');
+
+CREATE OR REPLACE FUNCTION research_ensure_run_session_passport(
+  p_workspace_id UUID,
+  p_session_id UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO research_artifact_policy_state (workspace_id, session_id, policy_version, watermark)
+  VALUES (p_workspace_id, p_session_id, 'legacy-v1-v5-compat-v1', 0)
+  ON CONFLICT (workspace_id, session_id) DO NOTHING;
+  PERFORM research_artifact_backfill_registered(
+    p_workspace_id,
+    p_session_id,
+    p_session_id,
+    'run_session',
+    COALESCE(
+      (SELECT created_at FROM research_session s WHERE s.workspace_id = p_workspace_id AND s.id = p_session_id),
+      now()
+    ),
+    NULL,
+    NULL
+  );
+END;
+$$;

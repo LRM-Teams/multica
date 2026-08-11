@@ -84,25 +84,33 @@ func newMergableSession(t *testing.T, agentID, title string) pgtype.UUID {
 	`, testWorkspaceID).Scan(&fleetID); err != nil {
 		t.Fatalf("load research fleet: %v", err)
 	}
-	session, err := testHandler.Queries.CreateResearchSession(ctx, db.CreateResearchSessionParams{
-		WorkspaceID:        parseUUID(testWorkspaceID),
-		FleetID:            fleetID,
-		CreatedBy:          parseUUID(testUserID),
-		Title:              title + "-" + suffix,
-		Goal:               "prove LRM-1505 typed graph merge",
-		Status:             "running",
-		CurrentStage:       "s2_sources",
-		DepthTier:          "standard",
-		ProductRound:       1,
-		ProductRoundBudget: 5,
-	})
+	tx, err := testPool.Begin(ctx)
 	if err != nil {
+		t.Fatalf("begin session tx: %v", err)
+	}
+	var session pgtype.UUID
+	if err = tx.QueryRow(ctx, `
+		INSERT INTO research_session (
+			workspace_id, fleet_id, created_by, title, goal, status, current_stage,
+			depth_tier, product_round, product_round_budget
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id
+	`, parseUUID(testWorkspaceID), fleetID, parseUUID(testUserID), title+"-"+suffix,
+		"prove LRM-1505 typed graph merge", "running", "s2_sources", "standard", int32(1), int32(5)).Scan(&session); err != nil {
+		_ = tx.Rollback(ctx)
 		t.Fatalf("create research session: %v", err)
 	}
+	if _, err = tx.Exec(ctx, `SELECT research_ensure_run_session_passport($1, $2)`, parseUUID(testWorkspaceID), session); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("ensure run session passport: %v", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatalf("commit research session: %v", err)
+	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id = $1`, session.ID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM research_session WHERE id = $1`, session)
 	})
-	return session.ID
+	return session
 }
 
 // helper to bootstrap a research session owned by an active fleet member in

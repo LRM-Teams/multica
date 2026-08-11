@@ -418,7 +418,11 @@ func countAttemptEvents(t *testing.T, run *transactionRecoveryRun, attemptID, ev
 func TestActivateReadyTasksTransactionRecovery(t *testing.T) {
 	runTransactionRecoveryMatrix(t, txOpTaskActivateReady, func(t *testing.T, run *transactionRecoveryRun) transactionRecoveryOperation {
 		failedID, blockedID, readyID := uuid.NewString(), uuid.NewString(), uuid.NewString()
-		if _, err := run.pool.Exec(run.ctx, `
+		tx, err := run.pool.Begin(run.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(run.ctx, `
 			INSERT INTO research_task (
 			  id, workspace_id, session_id, client_key, kind, objective,
 			  required_capability, expected_result, status, terminal_reason,
@@ -431,11 +435,15 @@ func TestActivateReadyTasksTransactionRecovery(t *testing.T) {
 			  ($3::uuid, $4::uuid, $5::uuid, 'ready-child', 'discover', 'ready child',
 			   'lead', 'research_evidence_v1', 'pending', '', $6, $7, 1, 300, NULL)
 		`, failedID, blockedID, readyID, run.fixture.workspaceID, run.fixture.sessionID, run.goalVersion, run.planVersion); err != nil {
+			_ = tx.Rollback(run.ctx)
 			t.Fatal(err)
 		}
 		for _, taskID := range []string{failedID, blockedID, readyID} {
 			gv, pv := run.goalVersion, run.planVersion
-			backfillIntegrationArtifactPassport(t, run.ctx, run.pool, run.fixture.workspaceID, run.fixture.sessionID, taskID, string(ArtifactKindTask), &gv, &pv)
+			backfillIntegrationArtifactPassport(t, run.ctx, tx, run.fixture.workspaceID, run.fixture.sessionID, taskID, string(ArtifactKindTask), &gv, &pv)
+		}
+		if err = tx.Commit(run.ctx); err != nil {
+			t.Fatal(err)
 		}
 		if _, err := run.pool.Exec(run.ctx, `
 			INSERT INTO research_task_dependency (task_id, depends_on_task_id) VALUES ($1::uuid, $2::uuid)

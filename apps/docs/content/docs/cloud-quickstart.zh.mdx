@@ -52,10 +52,10 @@ multica setup /my-workspace
 5. **自动启动全机唯一 Computer resident**
 
 <Callout type="info">
-腾讯云测试阶段使用 `multica setup --environment test --server-url https://test.leagent.me --app-url https://test.leagent.me /my-workspace`。API 和 Web 地址分别显式填写；现在可以相同，以后也可以拆成不同域名而不用改 CLI 结构。DNS/TLS 还没准备好时也可以显式写 `http://IP:端口`。切环境仍是同一个 Computer，不会启动第二个。
+腾讯云测试阶段使用 `multica setup --environment test --server-url https://test.leagent.me --app-url https://test.leagent.me /my-workspace`。API 和 Web 地址分别显式填写；现在可以相同，以后也可以拆成不同域名而不用改 CLI 结构。DNS/TLS 还没准备好时也可以显式写 `http://IP:端口`。setup 会直接激活测试环境、连接工作区并启动同一个 Computer，不需要随后再运行 `config use test`；如果当前是另一个环境，setup 会先询问是否切换。
 </Callout>
 
-production 和 test 都 setup 过一次后，用 `multica config use test` 或 `multica config use production` 随时切换。production 自动使用 stable 包，test 自动使用 preview 包；两边的登录和 Workspace connections 都会保留。
+production 和 test 都 setup 过一次后，只有以后切换时才使用 `multica config use test` 或 `multica config use production`。production 自动使用 stable 包，test 自动使用 preview 包；两边的登录和 Workspace connections 都会保留。
 
 验证 Computer 在运行：
 

@@ -746,6 +746,37 @@ func TestMigration307ComputerWorkspaceBindingsForwardAndBackward(t *testing.T) {
 	}
 }
 
+func TestMigration316RepairsMissingComputerWorkspaceBindingTables(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "316_computer_workspace_bindings_repair.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"CREATE TABLE IF NOT EXISTS computer_identity_owner",
+		"CREATE TABLE IF NOT EXISTS computer_workspace_bindings",
+		"PRIMARY KEY (daemon_id, workspace_id)",
+		"computer identity has bindings owned by multiple users",
+		"computer identity owner conflicts with workspace connection owner",
+		"Deployment/apply notes",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Errorf("migration 316 up missing %q", required)
+		}
+	}
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "316_computer_workspace_bindings_repair.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(down), "DROP TABLE") {
+		t.Fatal("migration 316 down must not drop schema owned by migration 307")
+	}
+}
+
 func TestMigration314ComputerGenerationFenceAndWorkspaceAttestation(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

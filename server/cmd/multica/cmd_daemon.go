@@ -183,10 +183,11 @@ func printComputerStartResult(res computer.StartResult) error {
 	// Not ready within the startup window.
 	if res.LastStatus == "starting" {
 		fmt.Fprintf(os.Stderr, "Computer is still starting after %s (Agent detection / Workspace sync is taking longer than expected). Check logs:\n  %s\n", computer.StartupTimeout, res.LogPath)
+		return fmt.Errorf("Computer did not become ready before the startup timeout")
 	} else {
 		fmt.Fprintf(os.Stderr, "Computer may not have started successfully. Check logs:\n  %s\n", res.LogPath)
+		return fmt.Errorf("Computer exited or did not publish startup health")
 	}
-	return nil
 }
 
 func computerStartOptions(cmd *cobra.Command) computer.StartOptions {

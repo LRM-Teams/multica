@@ -991,7 +991,7 @@
     "setup_step_computer": "Computer",
     "setup_step_wendy": "Wendy",
     "setup_step1_title": "Connect a Computer",
-    "setup_step1_description": "Step 1 of 2. Install the Multica Computer CLI and run setup for this Workspace. When your Computer comes online, you will create Wendy next.",
+    "setup_step1_description": "Run these two commands. We’ll continue automatically when the Computer connects.",
     "setup_step2_title": "Meet Wendy",
     "setup_step2_description": "Step 2 of 2. Choose an online Runtime and Model, then create your Workspace Onboarding Agent.",
     "setup_title": "Meet Wendy",

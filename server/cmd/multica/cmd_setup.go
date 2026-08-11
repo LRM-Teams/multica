@@ -66,6 +66,7 @@ func init() {
 		command.Flags().String("environment", string(cli.ServiceEnvironmentProduction), "Service environment: production or test")
 		command.Flags().String("server-url", "", "Test API, auth, and WebSocket origin (required with --environment test)")
 		command.Flags().String("app-url", "", "Test Web app origin (required with --environment test)")
+		command.Flags().Bool("yes", false, "Confirm an environment switch without prompting")
 	}
 	setupCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
 	setupCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
@@ -175,6 +176,18 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	currentCfg, err := cli.LoadCLIConfigForProfile("")
+	if err != nil {
+		return fmt.Errorf("load current config: %w", err)
+	}
+	confirmed, err := confirmSetupEnvironmentSwitch(cmd, currentCfg, target)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Setup aborted; the active environment was not changed.")
+		return nil
+	}
 
 	// Create or repair the selected environment without erasing the inactive
 	// environment's session. PutServiceEnvironment projects only the target
@@ -199,10 +212,8 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 	if err := runLogin(cmd, args); err != nil {
 		return err
 	}
-	if target.Environment == cli.ServiceEnvironmentProduction {
-		if err := adoptVerifiedLegacyComputer(cmd, legacyEvidence); err != nil {
-			return fmt.Errorf("Setup incomplete (legacy Computer migration: %w)", err)
-		}
+	if err := adoptVerifiedLegacyComputer(cmd, legacyEvidence); err != nil {
+		return fmt.Errorf("Setup incomplete (legacy Computer migration: %w)", err)
 	}
 
 	if err := startDaemonAfterSetup(cmd); err != nil {
@@ -230,7 +241,42 @@ func resolveSetupServiceTarget(cmd *cobra.Command, args []string) (cli.ServiceTa
 	environment, _ := cmd.Flags().GetString("environment")
 	serverURL, _ := cmd.Flags().GetString("server-url")
 	appURL, _ := cmd.Flags().GetString("app-url")
+	if cli.ServiceEnvironment(strings.ToLower(strings.TrimSpace(environment))) == cli.ServiceEnvironmentTest && (serverURL == "" || appURL == "") {
+		cfg, err := cli.LoadCLIConfigForProfile("")
+		if err != nil {
+			return cli.ServiceTarget{}, fmt.Errorf("load saved Test environment: %w", err)
+		}
+		if saved, ok := cfg.Environments[string(cli.ServiceEnvironmentTest)]; ok {
+			if serverURL == "" {
+				serverURL = saved.ServerURL
+			}
+			if appURL == "" {
+				appURL = saved.AppURL
+			}
+		}
+	}
 	return cli.NewServiceTarget(environment, serverURL, appURL)
+}
+
+func confirmSetupEnvironmentSwitch(cmd *cobra.Command, current cli.CLIConfig, target cli.ServiceTarget) (bool, error) {
+	currentEnvironment := cli.ServiceEnvironment(strings.ToLower(strings.TrimSpace(current.Environment)))
+	if strings.TrimSpace(current.ServerURL) == "" || currentEnvironment == "" || currentEnvironment == target.Environment {
+		return true, nil
+	}
+	if yes, _ := cmd.Flags().GetBool("yes"); yes {
+		return true, nil
+	}
+	packageSource := "stable"
+	if target.Environment == cli.ServiceEnvironmentTest {
+		packageSource = "preview"
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s is currently active. Setup will switch this Computer to %s, use %s packages, and restart it. Continue? [y/N] ", currentEnvironment, target.Environment, packageSource)
+	answer, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil && strings.TrimSpace(answer) == "" {
+		return false, fmt.Errorf("read environment switch confirmation: %w", err)
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes", nil
 }
 
 func cloudCLIConfig() cli.CLIConfig {
@@ -427,7 +473,10 @@ func establishWorkspaceConnection(cfg cli.CLIConfig, identity, workspaceID, work
 	if err != nil {
 		return fmt.Errorf("resolve service environment: %w", err)
 	}
-	client := cli.NewAPIClient(cfg.ServerURL, "", cfg.Token)
+	// The connection endpoint is inside the authenticated Workspace scope: the
+	// immutable Workspace is carried both in the header for middleware
+	// authorization and in the body for the binding command itself.
+	client := cli.NewAPIClient(cfg.ServerURL, workspaceID, cfg.Token)
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 	var accepted struct {

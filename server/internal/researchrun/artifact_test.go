@@ -5,6 +5,17 @@ import (
 	"testing"
 )
 
+func TestMigrationArtifactContentHashMatchesSQL(t *testing.T) {
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000002"
+	entityID := "30000000-0000-4000-8000-000000000003"
+	got := migrationArtifactContentHash(ArtifactKindTask, workspaceID, sessionID, entityID)
+	want := "sha256:89a0eb387df6af5e0f77bcfe0452a48fd924d7377d69ff9b0e26d9afda5d47cf"
+	if got != want {
+		t.Fatalf("hash=%q want=%q", got, want)
+	}
+}
+
 func TestRegisteredArtifactEntityKindsMatchSpecInventory(t *testing.T) {
 	want := []ArtifactEntityKind{
 		ArtifactKindRunSession,

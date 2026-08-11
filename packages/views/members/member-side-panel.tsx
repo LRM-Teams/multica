@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Pencil } from "lucide-react";
+import { Loader2, MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { agentRunCounts30dOptions, agentFleetRankingsOptions } from "@multica/core/agents";
@@ -29,6 +29,16 @@ import {
 } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
 import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
 import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
@@ -39,15 +49,28 @@ import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ActorStyledName } from "../common/actor-styled-name";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
+import { useOpenDM } from "../common/use-open-dm";
 import { AppLink } from "../navigation";
 import { HonorWall } from "../honor/honor-wall";
 import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
+import { RolesDialog } from "../settings/components/roles-dialog";
 import { useT } from "../i18n/use-t";
 
 const MAX_PROFILE_DESCRIPTION_LEN = 2000;
 
 /** Stable shell leading slot — avoid jsx-as-prop redraw (react-doctor). */
 const MEMBER_PANEL_LOADING_LEADING = <Skeleton className="h-5 w-28" />;
+
+/** Directory-only manage surface (role pencil + Remove in Actions). */
+export type MemberDirectoryManage = {
+  member: MemberWithUser;
+  canEditRole: boolean;
+  canRemove: boolean;
+  roleOptions: MemberRole[];
+  busy: boolean;
+  onRoleChange: (role: MemberRole) => Promise<void>;
+  onRemove: () => Promise<void>;
+};
 
 interface MemberSidePanelProps {
   userId: string;
@@ -56,14 +79,16 @@ interface MemberSidePanelProps {
   variant?: "panel" | "page";
   /** LRM-877 — conversation Sheet trailing control (「回消息」). */
   doneLabel?: string;
-  /** Members Directory: hide dock Close/Done. */
+  /** Members Directory: hide dock Close/Done; identity is floating header. */
   hideDismiss?: boolean;
+  /** Members Directory manage affordances (no bolted footer). */
+  directoryManage?: MemberDirectoryManage | null;
 }
 
 /**
  * LRM-619 / LRM-614 lock A — human member Profile dock.
- * Five sections: chrome (Message+Close) → identity → DESCRIPTION → INFO →
- * CREATED AGENTS (full list). Never Agent-pill Role; never silent fake email.
+ * UI skeleton aligned with agent profile (identity → fields → honor → info →
+ * actions). No agent tabs (Activity/…). Never Agent-pill Role; never silent fake email.
  */
 export function MemberSidePanel({
   userId,
@@ -72,6 +97,7 @@ export function MemberSidePanel({
   variant = "panel",
   doneLabel,
   hideDismiss = false,
+  directoryManage = null,
 }: MemberSidePanelProps) {
   const { t } = useT("members");
   const { t: tChannels } = useT("channels");
@@ -88,18 +114,21 @@ export function MemberSidePanel({
   const isPending = (membersPending && !member) || (profilePending && !profile);
   const closeAriaLabel = tChannels(($) => $.profile_popover.close_aria);
   const unavailableLabel = t(($) => $.card.unavailable);
+  // Directory embeds use floating chrome (identity is the header), matching agent.
+  const shellHeader = hideDismiss ? "floating" : "bar";
 
   if (isPending) {
     return (
       <ConversationSidePanelShell
         variant={variant}
         hideDismiss={hideDismiss}
+        header={shellHeader}
         onClose={onClose}
         closeAriaLabel={closeAriaLabel}
-        leading={MEMBER_PANEL_LOADING_LEADING}
+        leading={hideDismiss ? undefined : MEMBER_PANEL_LOADING_LEADING}
       >
         <div className="space-y-3 p-4" data-testid="member-side-panel-loading">
-          <Skeleton className="h-16 w-16 rounded-[10px]" />
+          <Skeleton className="h-16 w-16 rounded-full" />
           <Skeleton className="h-4 w-40" />
           <Skeleton className="h-3 w-24" />
         </div>
@@ -131,6 +160,7 @@ export function MemberSidePanel({
       doneLabel={doneLabel}
       hideDismiss={hideDismiss}
       closeAriaLabel={closeAriaLabel}
+      directoryManage={directoryManage}
     />
   );
 }
@@ -176,6 +206,7 @@ function MemberSidePanelReady({
   doneLabel,
   hideDismiss = false,
   closeAriaLabel,
+  directoryManage = null,
 }: {
   userId: string;
   member: MemberWithUser | null;
@@ -187,15 +218,21 @@ function MemberSidePanelReady({
   variant: "panel" | "page";
   doneLabel?: string;
   closeAriaLabel: string;
+  directoryManage?: MemberDirectoryManage | null;
 }) {
   const { t } = useT("members");
   const { t: tChannels } = useT("channels");
+  const { t: tSettings } = useT("settings");
   const wsId = useWorkspaceId();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const paths = useWorkspacePaths();
   const qc = useQueryClient();
   const setUser = useAuthStore((s) => s.setUser);
   const openAgentFromContext = useOpenAgentPanel();
+  const { openDM, isPending: openingDM } = useOpenDM();
+  const [roleDialogOpen, setRoleDialogOpen] = useState(false);
+  const [roleSaving, setRoleSaving] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const { data: honorWall } = useQuery({
     queryKey: ["honor", "wall", userId],
     queryFn: () => api.getUserHonor(userId),
@@ -214,6 +251,7 @@ function MemberSidePanelReady({
     return m;
   }, [fleetRankings]);
   const messageAriaLabel = t(($) => $.panel.message_aria);
+  const shellHeader = hideDismiss ? "floating" : "bar";
 
   const displayName = useMemo(() => {
     if (member) return resolveActorDisplayName(member, member.name);
@@ -294,9 +332,7 @@ function MemberSidePanelReady({
       });
   }, [agents, runCountById, userId]);
 
-  // LRM-812: top bar carries the name text only — no 22px avatar, no handle.
-  // The single avatar lives in the body identity block (64px + presence +
-  // name + handle), matching the Agent card chrome (resolved-agent-side-panel).
+  // Dock chrome (conversation): name + Message. Directory: floating, no bar actions.
   const identityLeading = useMemo(
     () => (
       <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
@@ -304,9 +340,11 @@ function MemberSidePanelReady({
     [displayName],
   );
 
-  const messageActions = useMemo(
-    () =>
-      canMessage ? (
+  // Conversation dock keeps Message in chrome; directory moves Message into Actions.
+  const chromeActions = useMemo(() => {
+    if (hideDismiss) return null;
+    if (canMessage) {
+      return (
         <Button
           type="button"
           variant="ghost"
@@ -317,9 +355,10 @@ function MemberSidePanelReady({
         >
           <MessageSquare className="size-4" aria-hidden />
         </Button>
-      ) : isSelf ? (
-        // LRM-751 — own card keeps a settings-page escape hatch (design gate
-        // topbar「编辑资料」outline) alongside the inline entries.
+      );
+    }
+    if (isSelf) {
+      return (
         <AppLink href={`${paths.settings()}?tab=profile`}>
           <Button
             type="button"
@@ -332,9 +371,19 @@ function MemberSidePanelReady({
             {t(($) => $.panel.edit_profile)}
           </Button>
         </AppLink>
-      ) : null,
-    [canMessage, isSelf, messageAriaLabel, onMessage, paths, t, userId],
-  );
+      );
+    }
+    return null;
+  }, [
+    hideDismiss,
+    canMessage,
+    isSelf,
+    messageAriaLabel,
+    onMessage,
+    paths,
+    t,
+    userId,
+  ]);
 
   const invalidateProfileCaches = () => {
     void qc.invalidateQueries({
@@ -358,48 +407,116 @@ function MemberSidePanelReady({
     invalidateProfileCaches();
   };
 
+  const roleLabel =
+    role === "owner"
+      ? t(($) => $.role.owner)
+      : role === "admin"
+        ? t(($) => $.role.admin)
+        : t(($) => $.role.member);
+
+  const handleMessage = () => {
+    if (onMessage) {
+      onMessage(userId);
+      return;
+    }
+    void openDM({ peer_type: "user", peer_id: userId });
+  };
+
+  // Directory embed: Message (+ Remove) in Actions, matching agent profile.
+  // Conversation dock: Message stays in chrome only — do not double-render.
+  const canEditRole = directoryManage?.canEditRole === true;
+  const canRemove = directoryManage?.canRemove === true;
+  const showActionMessage = !isSelf && hideDismiss;
+  const showActions = showActionMessage || canRemove;
+
   return (
     <ConversationSidePanelShell
       variant={variant}
       hideDismiss={hideDismiss}
+      header={shellHeader}
       onClose={onClose}
       closeAriaLabel={closeAriaLabel}
       doneLabel={doneLabel}
-      leading={identityLeading}
-      actions={messageActions}
+      leading={hideDismiss ? undefined : identityLeading}
+      actions={chromeActions}
     >
       <div
         className={cn(
-          "min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-3",
-          variant === "page" && "px-0",
+          "min-h-0 flex-1 overflow-y-auto px-3 pb-5 pt-3 md:px-4",
+          variant === "page" && "px-4",
         )}
         data-testid="member-side-panel"
       >
+        {/* Identity — matches agent floating header row */}
         <div className="mb-1 flex items-start gap-3">
           {isSelf ? (
             <MemberSelfAvatarEditor userId={userId}>
               <ActorAvatar
                 actorType="member"
                 actorId={userId}
-                size={64}
+                size={56}
                 avatarUrlHint={member?.avatar_url ?? profile?.avatar_url}
                 showStatusDot
                 profileLink={false}
-                className="rounded-[10px]"
+                className="rounded-full"
               />
             </MemberSelfAvatarEditor>
           ) : (
             <ActorAvatar
               actorType="member"
               actorId={userId}
-              size={64}
+              size={56}
               avatarUrlHint={member?.avatar_url ?? profile?.avatar_url}
               showStatusDot
               profileLink={false}
-              className="rounded-[10px]"
+              className="rounded-full"
             />
           )}
           <div className="min-w-0 flex-1 pt-0.5">
+            <div className="flex min-w-0 items-center gap-1.5">
+              {isSelf ? (
+                <span
+                  className={cn(
+                    "truncate text-[17px] font-bold leading-tight",
+                    selfNameDisplay?.className,
+                  )}
+                  data-honor-glow-tier={
+                    selfNameDisplay?.["data-honor-glow-tier"]
+                  }
+                  style={selfNameDisplay?.style}
+                >
+                  {displayName}
+                  {youSuffix}
+                </span>
+              ) : (
+                <ActorStyledName
+                  displayName={displayName}
+                  honor={member?.honor}
+                  honorSurface="profile"
+                  className="text-[17px] font-bold leading-tight"
+                />
+              )}
+              {selfHonor ? (
+                <UserHonorLevelIcon
+                  level={selfHonor.level}
+                  title={tChannels(($) => $.profile_popover.honor.level_value, {
+                    level: selfHonor.level,
+                  })}
+                  className="size-6 shrink-0 drop-shadow-sm"
+                />
+              ) : null}
+            </div>
+            {showHandle && handle ? (
+              <p className="mt-0.5 truncate text-[13px] text-muted-foreground">
+                {handle}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-4">
+          {/* Display name + Description — agent ProfileField rhythm */}
+          <ProfileField label={t(($) => $.panel.display_name_label)}>
             {isSelf ? (
               <InlineFieldEditor
                 value={displayName}
@@ -411,167 +528,271 @@ function MemberSidePanelReady({
                 validate={(draft) =>
                   draft.trim() ? null : t(($) => $.panel.name_required)
                 }
-                displayContent={
-                  <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <span
-                      className={selfNameDisplay?.className}
-                      data-honor-glow-tier={
-                        selfNameDisplay?.["data-honor-glow-tier"]
-                      }
-                      style={selfNameDisplay?.style}
-                    >
-                      {displayName}
-                    </span>
-                    {selfHonor ? (
-                      <UserHonorLevelIcon
-                        level={selfHonor.level}
-                        title={tChannels(($) => $.profile_popover.honor.level_value, {
-                          level: selfHonor.level,
-                        })}
-                        className="size-6 drop-shadow-sm"
-                      />
-                    ) : null}
-                  </span>
-                }
-                displayClassName="truncate text-[15px] font-bold leading-tight"
+                displayClassName="text-[13px] leading-5"
                 testId="member-profile-name"
               />
             ) : (
-              <ActorStyledName
-                displayName={displayName}
-                honor={member?.honor}
-                honorSurface="profile"
-                className="text-[15px] font-bold leading-tight"
-              />
+              <p className="text-[13px] leading-5">{displayName}</p>
             )}
-            {(showHandle && handle) || youSuffix ? (
-              <p className="mt-1 truncate text-xs text-muted-foreground">
-                {showHandle && handle ? handle : null}
-                {youSuffix}
+          </ProfileField>
+
+          <ProfileField label={t(($) => $.panel.description)}>
+            {isSelf ? (
+              <InlineFieldEditor
+                value={description}
+                onSave={saveDescription}
+                kind="textarea"
+                label={t(($) => $.panel.description)}
+                emptyLabel={t(($) => $.panel.no_description)}
+                placeholder={t(($) => $.panel.description_placeholder)}
+                maxLength={MAX_PROFILE_DESCRIPTION_LEN}
+                displayClassName="text-[13px] leading-5 text-foreground/85"
+                testId="member-profile-description"
+              />
+            ) : (
+              <p className="text-[13px] leading-5 text-foreground/85">
+                {description || t(($) => $.panel.no_description)}
               </p>
-            ) : null}
-          </div>
-        </div>
+            )}
+          </ProfileField>
 
-        <section className="mt-3.5 border-t border-border pt-3">
-          <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-            {t(($) => $.panel.description)}
-          </h3>
-          {isSelf ? (
-            <InlineFieldEditor
-              value={description}
-              onSave={saveDescription}
-              kind="textarea"
-              label={t(($) => $.panel.description)}
-              emptyLabel={t(($) => $.panel.no_description)}
-              placeholder={t(($) => $.panel.description_placeholder)}
-              maxLength={MAX_PROFILE_DESCRIPTION_LEN}
-              displayClassName="text-sm leading-5 text-foreground/90"
-              testId="member-profile-description"
-            />
-          ) : description ? (
-            <p className="whitespace-pre-wrap break-words text-sm leading-5 text-foreground/90">
-              {description}
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {t(($) => $.panel.no_description)}
-            </p>
-          )}
-        </section>
+          {honorWall ? (
+            <section className="border-t border-border pt-3">
+              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {t(($) => $.panel.honor_title)}
+              </h3>
+              <HonorWall
+                wall={honorWall}
+                completionLabel={t(($) => $.panel.honor_completion, {
+                  unlocked:
+                    honorWall.badges_unlocked ??
+                    honorWall.unlocked_badges.length,
+                  total:
+                    honorWall.badges_total ?? honorWall.unlocked_badges.length,
+                })}
+                statsLabel={t(($) => $.panel.honor_stats, {
+                  unlocked:
+                    honorWall.badges_unlocked ??
+                    honorWall.unlocked_badges.length,
+                  total:
+                    honorWall.badges_total ?? honorWall.unlocked_badges.length,
+                  level: honorWall.level,
+                })}
+                showcaseTitle={t(($) => $.panel.honor_showcase)}
+                recentTitle={t(($) => $.panel.honor_recent)}
+                compare={honorCompare ?? null}
+                compareTitle={
+                  !isSelf ? t(($) => $.panel.honor_compare) : undefined
+                }
+                sharedTitle={t(($) => $.panel.honor_shared)}
+                youOnlyTitle={t(($) => $.panel.honor_you_only)}
+                themOnlyTitle={t(($) => $.panel.honor_them_only)}
+              />
+            </section>
+          ) : null}
 
-        {honorWall ? (
-          <section className="mt-3.5 border-t border-border pt-3">
-            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-              {t(($) => $.panel.honor_title)}
+          <section className="border-t border-border pt-3">
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {t(($) => $.panel.info)}
             </h3>
-            <HonorWall
-              wall={honorWall}
-              completionLabel={t(($) => $.panel.honor_completion, {
-                unlocked: honorWall.badges_unlocked ?? honorWall.unlocked_badges.length,
-                total: honorWall.badges_total ?? honorWall.unlocked_badges.length,
-              })}
-              statsLabel={t(($) => $.panel.honor_stats, {
-                unlocked: honorWall.badges_unlocked ?? honorWall.unlocked_badges.length,
-                total: honorWall.badges_total ?? honorWall.unlocked_badges.length,
-                level: honorWall.level,
-              })}
-              showcaseTitle={t(($) => $.panel.honor_showcase)}
-              recentTitle={t(($) => $.panel.honor_recent)}
-              compare={honorCompare ?? null}
-              compareTitle={!isSelf ? t(($) => $.panel.honor_compare) : undefined}
-              sharedTitle={t(($) => $.panel.honor_shared)}
-              youOnlyTitle={t(($) => $.panel.honor_you_only)}
-              themOnlyTitle={t(($) => $.panel.honor_them_only)}
-            />
-          </section>
-        ) : null}
-
-        <section className="mt-3.5 border-t border-border pt-3">
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-            {t(($) => $.panel.info)}
-          </h3>
-          <dl className="space-y-1.5 text-xs">
-            <InfoRow label={t(($) => $.panel.role)}>
-              <RoleSoftPill role={role} />
-            </InfoRow>
-            {email ? (
-              <InfoRow label={t(($) => $.panel.email)}>
-                <span className="break-all text-foreground">{email}</span>
-              </InfoRow>
-            ) : null}
-            {joinedAt ? (
-              <InfoRow label={t(($) => $.panel.joined)}>
-                <span className="text-foreground">
-                  {formatJoinedDate(joinedAt)}
+            <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
+              <span className="pt-0.5 text-muted-foreground">
+                {t(($) => $.panel.role)}
+              </span>
+              <div className="flex min-w-0 items-center gap-1">
+                <span
+                  className="truncate"
+                  data-testid="member-role-value"
+                >
+                  {roleLabel}
                 </span>
-              </InfoRow>
-            ) : null}
-          </dl>
-        </section>
+                {canEditRole ? (
+                  <button
+                    type="button"
+                    className="inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => setRoleDialogOpen(true)}
+                    aria-label={t(($) => $.panel.change_role_aria)}
+                    data-testid="member-role-edit"
+                  >
+                    <Pencil className="size-3.5" aria-hidden />
+                  </button>
+                ) : null}
+              </div>
+              {email ? (
+                <>
+                  <span className="text-muted-foreground">
+                    {t(($) => $.panel.email)}
+                  </span>
+                  <span className="min-w-0 break-all">{email}</span>
+                </>
+              ) : null}
+              {joinedAt ? (
+                <>
+                  <span className="text-muted-foreground">
+                    {t(($) => $.panel.joined)}
+                  </span>
+                  <span className="truncate">{formatJoinedDate(joinedAt)}</span>
+                </>
+              ) : null}
+            </div>
+          </section>
 
-        <section className="mt-3.5 border-t border-border pt-3">
-          <h3 className="mb-2 flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
-            <span>{t(($) => $.panel.created_agents)}</span>
-            <span className="font-medium tabular-nums">{ownedAgents.length}</span>
-          </h3>
-          {ownedAgents.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {t(($) => $.panel.no_agents)}
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-1.5">
-              {ownedAgents.map((agent) => (
-                <CreatedAgentRow
-                  key={agent.id}
-                  agent={agent}
-                  fleet={fleetByAgentId.get(agent.id)}
-                  href={paths.agentDetail(agent.id)}
-                  onOpenPanel={
-                    openAgentFromContext
-                      ? () =>
-                          openAgentFromContext(
-                            agent.id,
-                            {
-                              name: agent.name,
-                              display_name: agent.display_name,
-                              avatar_url: agent.avatar_url,
-                            },
-                            { returnToMemberId: userId },
-                          )
-                      : undefined
-                  }
-                />
-              ))}
-            </ul>
-          )}
-        </section>
+          <section className="border-t border-border pt-3">
+            <h3 className="mb-2 flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <span>{t(($) => $.panel.created_agents)}</span>
+              <span className="font-medium tabular-nums text-muted-foreground/80">
+                {ownedAgents.length}
+              </span>
+            </h3>
+            {ownedAgents.length === 0 ? (
+              <p className="text-[13px] text-muted-foreground">
+                {t(($) => $.panel.no_agents)}
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-1.5">
+                {ownedAgents.map((agent) => (
+                  <CreatedAgentRow
+                    key={agent.id}
+                    agent={agent}
+                    fleet={fleetByAgentId.get(agent.id)}
+                    href={paths.agentDetail(agent.id)}
+                    onOpenPanel={
+                      openAgentFromContext
+                        ? () =>
+                            openAgentFromContext(
+                              agent.id,
+                              {
+                                name: agent.name,
+                                display_name: agent.display_name,
+                                avatar_url: agent.avatar_url,
+                              },
+                              { returnToMemberId: userId },
+                            )
+                        : undefined
+                    }
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {showActions ? (
+            <section
+              className="border-t border-border pt-3"
+              aria-label={t(($) => $.panel.actions_section)}
+              data-testid="member-profile-actions"
+            >
+              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {t(($) => $.panel.actions_section)}
+              </h3>
+              <div className="flex flex-col gap-2">
+                {showActionMessage ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    className="w-full gap-2"
+                    data-testid="member-profile-action-message"
+                    disabled={openingDM}
+                    onClick={handleMessage}
+                  >
+                    {openingDM ? (
+                      <Loader2
+                        className="size-4 shrink-0 animate-spin"
+                        aria-hidden
+                      />
+                    ) : (
+                      <MessageSquare className="size-4 shrink-0" aria-hidden />
+                    )}
+                    {t(($) => $.panel.message_button)}
+                  </Button>
+                ) : null}
+                {canRemove ? (
+                  <div
+                    className={
+                      showActionMessage
+                        ? "mt-1 border-t border-border pt-3"
+                        : undefined
+                    }
+                  >
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="lg"
+                      className="w-full gap-2 bg-destructive text-white hover:bg-destructive/90"
+                      data-testid="member-directory-remove"
+                      disabled={directoryManage?.busy}
+                      onClick={() => setConfirmRemove(true)}
+                    >
+                      <Trash2 className="size-4 shrink-0" aria-hidden />
+                      {t(($) => $.directory.remove_member)}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
+        </div>
       </div>
+
+      {directoryManage && canEditRole ? (
+        <RolesDialog
+          open={roleDialogOpen}
+          onOpenChange={setRoleDialogOpen}
+          mode="select"
+          value={(directoryManage.member.role ?? "member") as MemberRole}
+          allowedRoles={directoryManage.roleOptions}
+          saving={roleSaving || directoryManage.busy}
+          onSave={async (next) => {
+            setRoleSaving(true);
+            try {
+              await directoryManage.onRoleChange(next);
+              setRoleDialogOpen(false);
+            } finally {
+              setRoleSaving(false);
+            }
+          }}
+          title={tSettings(($) => $.members.change_role)}
+          subtitle={t(($) => $.panel.role_dialog_subtitle)}
+        />
+      ) : null}
+
+      {directoryManage && canRemove ? (
+        <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {t(($) => $.directory.remove_confirm_title, {
+                  name: displayName,
+                })}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {t(($) => $.directory.remove_confirm_description)}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>
+                {t(($) => $.directory.cancel)}
+              </AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => {
+                  void directoryManage
+                    .onRemove()
+                    .finally(() => setConfirmRemove(false));
+                }}
+              >
+                {t(($) => $.directory.remove_member)}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
     </ConversationSidePanelShell>
   );
 }
 
-function InfoRow({
+function ProfileField({
   label,
   children,
 }: {
@@ -579,38 +800,12 @@ function InfoRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2">
-      <dt className="w-14 shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 flex-1">{children}</dd>
+    <div>
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      {children}
     </div>
-  );
-}
-
-function RoleSoftPill({ role }: { role: string }) {
-  const { t } = useT("members");
-  const normalized = role.toLowerCase();
-  const label =
-    normalized === "owner"
-      ? t(($) => $.role.owner)
-      : normalized === "admin"
-        ? t(($) => $.role.admin)
-        : t(($) => $.role.member);
-  const tone =
-    normalized === "owner"
-      ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-      : normalized === "admin"
-        ? "border-amber-500/20 bg-amber-500/5 text-amber-800/80 dark:text-amber-200/80"
-        : "border-border bg-muted/60 text-muted-foreground";
-  return (
-    <span
-      data-testid="member-role-soft-pill"
-      className={cn(
-        "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-        tone,
-      )}
-    >
-      {label}
-    </span>
   );
 }
 

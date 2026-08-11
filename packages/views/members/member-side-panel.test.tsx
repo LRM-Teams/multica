@@ -66,6 +66,10 @@ vi.mock("../common/agent-panel-context", () => ({
   useOpenAgentPanel: () => null,
 }));
 
+vi.mock("../common/use-open-dm", () => ({
+  useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
+}));
+
 vi.mock("../agents/components/inline-field-editor", () => ({
   InlineFieldEditor: ({
     value,
@@ -94,18 +98,23 @@ vi.mock("../i18n/use-t", () => ({
           description: "Description",
           no_description: "No description",
           description_placeholder: "Add…",
+          display_name_label: "Display name",
+          name_label: "Name",
+          name_placeholder: "Name",
+          name_required: "required",
           info: "Info",
           role: "Role",
           email: "Email",
           joined: "Joined",
+          actions_section: "Actions",
+          message_button: "Message",
+          change_role_aria: "Change role",
+          role_dialog_subtitle: "Pick a role",
           created_agents: "Created agents",
           no_agents: "No agents created yet",
           message_aria: "Send message",
           you_suffix: "(you)",
           edit_profile: "Edit profile",
-          name_label: "Name",
-          name_placeholder: "Enter your name",
-          name_required: "Name cannot be empty",
           change_avatar_aria: "Change avatar",
           avatar_updated_toast: "Avatar updated",
           avatar_upload_failed: "Avatar upload failed",
@@ -202,7 +211,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
     renderPanel("u-frank");
     expect(screen.getByTestId("member-side-panel")).toBeTruthy();
     expect(screen.getByText("No description")).toBeTruthy();
-    expect(screen.getByTestId("member-role-soft-pill").textContent).toContain("Owner");
+    expect(screen.getByTestId("member-role-value").textContent).toContain("Owner");
     expect(screen.getByText("me@example.com")).toBeTruthy();
     expect(screen.getAllByTestId("member-created-agent-row")).toHaveLength(2);
     expect(document.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();

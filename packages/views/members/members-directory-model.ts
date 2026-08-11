@@ -82,23 +82,71 @@ export function buildMembersDirectoryRoster(
       (machineOrder.indexOf(b) === -1 ? 999 : machineOrder.indexOf(b)),
   );
 
+  const currentUserId = options.currentUserId ?? null;
   for (const g of byMachine.values()) {
-    g.agents.sort((a, b) =>
-      resolveActorDisplayName(a, a.name).localeCompare(
+    // Mine first, then display name within each computer group.
+    g.agents.sort((a, b) => {
+      const mineA = currentUserId && a.owner_id === currentUserId ? 0 : 1;
+      const mineB = currentUserId && b.owner_id === currentUserId ? 0 : 1;
+      if (mineA !== mineB) return mineA - mineB;
+      return resolveActorDisplayName(a, a.name).localeCompare(
         resolveActorDisplayName(b, b.name),
-      ),
-    );
+      );
+    });
   }
 
   const computerGroups = order
     .map((id) => byMachine.get(id)!)
     .filter((g) => g.agents.length > 0);
 
-  const humans = [...members].sort((a, b) =>
-    resolveActorDisplayName(a, a.user_id).localeCompare(
+  // Current user first, then display name.
+  const humans = [...members].sort((a, b) => {
+    const selfA = currentUserId && a.user_id === currentUserId ? 0 : 1;
+    const selfB = currentUserId && b.user_id === currentUserId ? 0 : 1;
+    if (selfA !== selfB) return selfA - selfB;
+    return resolveActorDisplayName(a, a.user_id).localeCompare(
       resolveActorDisplayName(b, b.user_id),
-    ),
-  );
+    );
+  });
+
+  return {
+    computerGroups,
+    listedAgents: computerGroups.flatMap((g) => g.agents),
+    humans,
+  };
+}
+
+/**
+ * Client-side search over the directory roster.
+ * Matches agent name/description/machine title and human name/email.
+ * Empty / whitespace query returns the input roster unchanged.
+ */
+export function filterMembersDirectoryRoster(
+  roster: MembersDirectoryRoster,
+  query: string,
+): MembersDirectoryRoster {
+  const q = query.trim().toLowerCase();
+  if (!q) return roster;
+
+  const computerGroups = roster.computerGroups
+    .map((g) => {
+      const titleHit = g.title.toLowerCase().includes(q);
+      const agents = titleHit
+        ? g.agents
+        : g.agents.filter((a) => {
+            const name = resolveActorDisplayName(a, a.name).toLowerCase();
+            const desc = (a.description ?? "").toLowerCase();
+            return name.includes(q) || desc.includes(q);
+          });
+      return { ...g, agents };
+    })
+    .filter((g) => g.agents.length > 0);
+
+  const humans = roster.humans.filter((h) => {
+    const name = resolveActorDisplayName(h, h.user_id).toLowerCase();
+    const email = (h.email ?? "").toLowerCase();
+    return name.includes(q) || email.includes(q);
+  });
 
   return {
     computerGroups,

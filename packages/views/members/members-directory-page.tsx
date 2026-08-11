@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Monitor, Plus, Users } from "lucide-react";
+import { ChevronRight, Monitor, Plus, Users } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
@@ -24,6 +24,7 @@ import type {
 } from "@multica/core/types";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
+import { Input } from "@multica/ui/components/ui/input";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../common/actor-avatar";
 import { ResolvedAgentSidePanel } from "../common/resolved-agent-side-panel";
@@ -34,10 +35,10 @@ import { MemberSidePanel } from "./member-side-panel";
 import { InviteHumanDialog } from "./invite-human-dialog";
 import {
   buildMembersDirectoryRoster,
+  filterMembersDirectoryRoster,
   isMembersDirectoryRosterReady,
   resolveMembersSelection,
 } from "./members-directory-model";
-import { MemberDirectoryManageFooter } from "./member-directory-manage-footer";
 
 export interface MembersDirectoryPageProps {
   localDaemonId?: string | null;
@@ -71,9 +72,12 @@ export function MembersDirectoryPage({
     if (!currentUser) return null;
     return members.find((m) => m.user_id === currentUser.id)?.role ?? null;
   }, [members, currentUser]);
-  const canManageWorkspace =
-    myRole === "owner" || myRole === "admin";
+  const canManageWorkspace = myRole === "owner" || myRole === "admin";
   const isOwner = myRole === "owner";
+  const ownerCount = useMemo(
+    () => members.filter((m) => m.role === "owner").length,
+    [members],
+  );
 
   const roster = useMemo(
     () =>
@@ -94,13 +98,20 @@ export function MembersDirectoryPage({
     ],
   );
 
+  const [query, setQuery] = useState("");
+  // Agents collapsed by default; humans expanded.
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const [humansOpen, setHumansOpen] = useState(true);
+
+  const filtered = useMemo(
+    () => filterMembersDirectoryRoster(roster, query),
+    [roster, query],
+  );
+
   const urlSelection = parseMembersSelectionFromSearch(
     navigation.searchParams as { get(name: string): string | null },
   );
 
-  // Wait for runtimes too — otherwise agents with runtime_ids map to zero
-  // groups while runtimes=[], default becomes first human, and that wrong
-  // selection gets stamped into the URL before computers load (AC1 race).
   const rosterReady = isMembersDirectoryRosterReady({
     agentsLoading,
     membersLoading,
@@ -109,11 +120,14 @@ export function MembersDirectoryPage({
 
   const selection = useMemo(() => {
     if (!rosterReady && !urlSelection) return null;
+    // Resolve against full roster so URL selection survives search filter.
     return resolveMembersSelection(roster, urlSelection);
   }, [roster, urlSelection, rosterReady]);
 
   const setSelection = useCallback(
     (kind: "agent" | "user", id: string) => {
+      if (kind === "agent") setAgentsOpen(true);
+      if (kind === "user") setHumansOpen(true);
       navigation.replace(paths.members({ kind, id }));
     },
     [navigation, paths],
@@ -126,6 +140,13 @@ export function MembersDirectoryPage({
       paths.members({ kind: selection.kind, id: selection.id }),
     );
   }, [rosterReady, selection, urlSelection, navigation, paths]);
+
+  // Expand the section that holds the current selection (e.g. deep-linked agent).
+  useEffect(() => {
+    if (!selection) return;
+    if (selection.kind === "agent") setAgentsOpen(true);
+    if (selection.kind === "user") setHumansOpen(true);
+  }, [selection?.kind, selection?.id]);
 
   const [showCreate, setShowCreate] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
@@ -142,6 +163,7 @@ export function MembersDirectoryPage({
         : [...current, agent];
     });
     setShowCreate(false);
+    setAgentsOpen(true);
     navigation.replace(paths.members({ kind: "agent", id: agent.id }));
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     return agent;
@@ -186,6 +208,15 @@ export function MembersDirectoryPage({
       ? (roster.humans.find((h) => h.user_id === selection.id) ?? null)
       : null;
 
+  const manage =
+    selectedHuman && canManageWorkspace
+      ? directoryManageFor(selectedHuman, {
+          currentUserId: currentUser?.id ?? null,
+          isOwner,
+          ownerCount,
+        })
+      : null;
+
   const loading = !rosterReady;
 
   return (
@@ -196,10 +227,20 @@ export function MembersDirectoryPage({
       {/* Left rail */}
       <div className="flex w-[300px] shrink-0 flex-col border-r bg-background">
         <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-          <Users className="size-4 text-muted-foreground" />
+          <Users className="size-4 text-muted-foreground" aria-hidden />
           <h1 className="text-sm font-semibold">
             {t(($) => $.directory.title)}
           </h1>
+        </div>
+
+        <div className="shrink-0 border-b px-3 py-2.5">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t(($) => $.directory.search_placeholder)}
+            className="h-8"
+            data-testid="members-directory-search"
+          />
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto py-2">
@@ -211,95 +252,120 @@ export function MembersDirectoryPage({
             <>
               <SectionHeader
                 label={t(($) => $.directory.agents_section)}
-                count={roster.listedAgents.length}
+                count={filtered.listedAgents.length}
+                open={agentsOpen}
+                onToggle={() => setAgentsOpen((v) => !v)}
                 onAdd={() => setShowCreate(true)}
                 addAria={t(($) => $.directory.create_agent_aria)}
                 testId="members-agents-add"
+                toggleTestId="members-agents-toggle"
               />
-              {roster.computerGroups.length === 0 ? (
-                <p className="px-4 py-2 text-xs text-muted-foreground">
-                  {t(($) => $.directory.no_agents)}
-                </p>
-              ) : (
-                roster.computerGroups.map((group) => (
-                  <div key={group.machineId} className="mb-1">
-                    <div
-                      className="flex items-center gap-1.5 px-4 py-1 text-[11px] font-medium text-muted-foreground"
-                      data-testid="members-computer-label"
-                    >
-                      <Monitor className="size-3 shrink-0" />
-                      <span className="truncate">{group.title}</span>
-                    </div>
-                    {group.agents.map((a) => (
-                      <RailRow
-                        key={a.id}
-                        selected={
-                          selection?.kind === "agent" && selection.id === a.id
-                        }
-                        onClick={() => setSelection("agent", a.id)}
-                        avatar={
-                          <ActorAvatar
-                            actorType="agent"
-                            actorId={a.id}
-                            size={28}
-                            avatarUrlHint={a.avatar_url}
-                            profileLink={false}
+              {agentsOpen ? (
+                filtered.computerGroups.length === 0 ? (
+                  <p className="px-4 py-2 text-xs text-muted-foreground">
+                    {t(($) => $.directory.no_agents)}
+                  </p>
+                ) : (
+                  filtered.computerGroups.map((group) => (
+                    <div key={group.machineId} className="mb-1">
+                      <div
+                        className="flex items-center gap-1.5 px-4 py-1 text-[11px] font-medium text-muted-foreground"
+                        data-testid="members-computer-label"
+                      >
+                        <Monitor className="size-3 shrink-0" aria-hidden />
+                        <span className="truncate">{group.title}</span>
+                      </div>
+                      {group.agents.map((a) => {
+                        const isMine =
+                          !!currentUser?.id && a.owner_id === currentUser.id;
+                        return (
+                          <RailRow
+                            key={a.id}
+                            selected={
+                              selection?.kind === "agent" &&
+                              selection.id === a.id
+                            }
+                            onClick={() => setSelection("agent", a.id)}
+                            avatar={
+                              <ActorAvatar
+                                actorType="agent"
+                                actorId={a.id}
+                                size={28}
+                                avatarUrlHint={a.avatar_url}
+                                profileLink={false}
+                              />
+                            }
+                            title={resolveActorDisplayName(a, a.name)}
+                            subtitle={a.description?.trim() || null}
+                            badge={
+                              isMine ? (
+                                <span
+                                  className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300"
+                                  data-testid="members-mine-badge"
+                                >
+                                  {t(($) => $.directory.mine_badge)}
+                                </span>
+                              ) : null
+                            }
+                            testId={`members-agent-row-${a.id}`}
                           />
-                        }
-                        title={resolveActorDisplayName(a, a.name)}
-                        subtitle={a.description?.trim() || null}
-                        testId={`members-agent-row-${a.id}`}
-                      />
-                    ))}
-                  </div>
-                ))
-              )}
+                        );
+                      })}
+                    </div>
+                  ))
+                )
+              ) : null}
 
               <SectionHeader
                 label={t(($) => $.directory.humans_section)}
-                count={roster.humans.length}
+                count={filtered.humans.length}
+                open={humansOpen}
+                onToggle={() => setHumansOpen((v) => !v)}
                 onAdd={
                   canManageWorkspace ? () => setShowInvite(true) : undefined
                 }
                 addAria={t(($) => $.directory.invite_human_aria)}
                 testId="members-humans-add"
+                toggleTestId="members-humans-toggle"
               />
-              {roster.humans.length === 0 ? (
-                <p className="px-4 py-2 text-xs text-muted-foreground">
-                  {t(($) => $.directory.no_humans)}
-                </p>
-              ) : (
-                roster.humans.map((h) => {
-                  const isYou = currentUser?.id === h.user_id;
-                  return (
-                    <RailRow
-                      key={h.user_id}
-                      selected={
-                        selection?.kind === "user" &&
-                        selection.id === h.user_id
-                      }
-                      onClick={() => setSelection("user", h.user_id)}
-                      avatar={
-                        <ActorAvatar
-                          actorType="member"
-                          actorId={h.user_id}
-                          size={28}
-                          avatarUrlHint={h.avatar_url}
-                          profileLink={false}
-                          className="rounded-full"
-                        />
-                      }
-                      title={
-                        isYou
-                          ? `${resolveActorDisplayName(h, h.user_id)} ${t(($) => $.directory.you_suffix)}`
-                          : resolveActorDisplayName(h, h.user_id)
-                      }
-                      subtitle={null}
-                      testId={`members-human-row-${h.user_id}`}
-                    />
-                  );
-                })
-              )}
+              {humansOpen ? (
+                filtered.humans.length === 0 ? (
+                  <p className="px-4 py-2 text-xs text-muted-foreground">
+                    {t(($) => $.directory.no_humans)}
+                  </p>
+                ) : (
+                  filtered.humans.map((h) => {
+                    const isYou = currentUser?.id === h.user_id;
+                    return (
+                      <RailRow
+                        key={h.user_id}
+                        selected={
+                          selection?.kind === "user" &&
+                          selection.id === h.user_id
+                        }
+                        onClick={() => setSelection("user", h.user_id)}
+                        avatar={
+                          <ActorAvatar
+                            actorType="member"
+                            actorId={h.user_id}
+                            size={28}
+                            avatarUrlHint={h.avatar_url}
+                            profileLink={false}
+                            className="rounded-full"
+                          />
+                        }
+                        title={
+                          isYou
+                            ? `${resolveActorDisplayName(h, h.user_id)} ${t(($) => $.directory.you_suffix)}`
+                            : resolveActorDisplayName(h, h.user_id)
+                        }
+                        subtitle={null}
+                        testId={`members-human-row-${h.user_id}`}
+                      />
+                    );
+                  })
+                )
+              ) : null}
             </>
           )}
         </div>
@@ -321,34 +387,33 @@ export function MembersDirectoryPage({
             hideDismiss
           />
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <MemberSidePanel
-                userId={selection.id}
-                onClose={() => {}}
-                variant="page"
-                hideDismiss
-              />
-            </div>
-            {selectedHuman && canManageWorkspace ? (
-              <MemberDirectoryManageFooter
-                member={selectedHuman}
-                currentUserId={currentUser?.id ?? null}
-                isOwner={isOwner}
-                ownerCount={members.filter((m) => m.role === "owner").length}
-                busy={roleMutation.isPending || removeMutation.isPending}
-                onRoleChange={async (role: MemberRole) => {
-                  await roleMutation.mutateAsync({
-                    memberId: selectedHuman.id,
-                    role,
-                  });
-                }}
-                onRemove={async () => {
-                  await removeMutation.mutateAsync(selectedHuman.id);
-                }}
-              />
-            ) : null}
-          </div>
+          <MemberSidePanel
+            userId={selection.id}
+            onClose={() => {}}
+            variant="page"
+            hideDismiss
+            directoryManage={
+              manage && selectedHuman
+                ? {
+                    member: selectedHuman,
+                    canEditRole: manage.canEditRole,
+                    canRemove: manage.canRemove,
+                    roleOptions: manage.roleOptions,
+                    busy:
+                      roleMutation.isPending || removeMutation.isPending,
+                    onRoleChange: async (role: MemberRole) => {
+                      await roleMutation.mutateAsync({
+                        memberId: selectedHuman.id,
+                        role,
+                      });
+                    },
+                    onRemove: async () => {
+                      await removeMutation.mutateAsync(selectedHuman.id);
+                    },
+                  }
+                : null
+            }
+          />
         )}
       </div>
 
@@ -373,42 +438,86 @@ export function MembersDirectoryPage({
   );
 }
 
+function directoryManageFor(
+  member: MemberWithUser,
+  opts: {
+    currentUserId: string | null;
+    isOwner: boolean;
+    ownerCount: number;
+  },
+): {
+  canEditRole: boolean;
+  canRemove: boolean;
+  roleOptions: MemberRole[];
+} {
+  const isSelf = opts.currentUserId === member.user_id;
+  const isLastOwner = member.role === "owner" && opts.ownerCount <= 1;
+  const blocked =
+    isSelf || (member.role === "owner" && !opts.isOwner) || isLastOwner;
+  return {
+    canEditRole: !blocked,
+    canRemove: !blocked,
+    roleOptions: opts.isOwner
+      ? ["owner", "admin", "member"]
+      : ["admin", "member"],
+  };
+}
+
 function SectionHeader({
   label,
   count,
+  open,
+  onToggle,
   onAdd,
   addAria,
   testId,
+  toggleTestId,
 }: {
   label: string;
   count: number;
+  open: boolean;
+  onToggle: () => void;
   onAdd?: () => void;
   addAria: string;
   testId: string;
+  toggleTestId: string;
 }) {
   return (
-    <div className="mt-2 flex items-center gap-1 px-3 py-1.5">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </span>
-      <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
-        {count}
-      </span>
+    <div className="mt-2 flex items-center gap-1 px-2 py-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1 text-left hover:bg-muted/60"
+        aria-expanded={open}
+        data-testid={toggleTestId}
+      >
+        <ChevronRight
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-90",
+          )}
+          aria-hidden
+        />
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {label}
+        </span>
+        <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+          {count}
+        </span>
+      </button>
       {onAdd ? (
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="ml-auto size-6"
+          className="size-6 shrink-0"
           onClick={onAdd}
           aria-label={addAria}
           data-testid={testId}
         >
-          <Plus className="size-3.5" />
+          <Plus className="size-3.5" aria-hidden />
         </Button>
-      ) : (
-        <span className="ml-auto" />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -419,6 +528,7 @@ function RailRow({
   avatar,
   title,
   subtitle,
+  badge,
   testId,
 }: {
   selected: boolean;
@@ -426,6 +536,7 @@ function RailRow({
   avatar: React.ReactNode;
   title: string;
   subtitle: string | null;
+  badge?: React.ReactNode;
   testId: string;
 }) {
   return (
@@ -442,7 +553,10 @@ function RailRow({
     >
       <span className="shrink-0">{avatar}</span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{title}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{title}</span>
+          {badge}
+        </span>
         {subtitle ? (
           <span className="block truncate text-xs text-muted-foreground">
             {subtitle}

@@ -4,6 +4,7 @@ import {
   buildMembersDirectoryRoster,
   defaultMembersSelection,
   filterDirectoryAgents,
+  filterMembersDirectoryRoster,
   isMembersDirectoryRosterReady,
   resolveMembersSelection,
 } from "./members-directory-model";
@@ -93,11 +94,64 @@ describe("buildMembersDirectoryRoster", () => {
     expect(roster.computerGroups.length).toBeGreaterThanOrEqual(1);
     const allIds = roster.computerGroups.flatMap((g) => g.agents.map((a) => a.id));
     expect(allIds).not.toContain("a3");
-    // sorted by display name within group
+    // sorted by display name within group (no currentUser → alpha)
     const g0 = roster.computerGroups.find((g) =>
       g.agents.some((a) => a.id === "a1"),
     )!;
     expect(g0.agents.map((a) => a.name)).toEqual(["Alice", "Zed"]);
+  });
+
+  it("puts current user first among humans and mine agents first", () => {
+    const runtimes = [
+      runtime({ id: "rt-1", name: "Pi", daemon_id: "d1", device_name: "s144" }),
+    ];
+    const roster = buildMembersDirectoryRoster(
+      [
+        agent({ id: "a1", name: "Zebra", runtime_id: "rt-1", owner_id: "other" }),
+        agent({ id: "a2", name: "MineBot", runtime_id: "rt-1", owner_id: "me" }),
+      ],
+      [
+        member({ user_id: "z", name: "Zoe" }),
+        member({ user_id: "me", name: "Me" }),
+        member({ user_id: "a", name: "Ada" }),
+      ],
+      runtimes,
+      { currentUserId: "me" },
+    );
+    expect(roster.humans.map((h) => h.user_id)).toEqual(["me", "a", "z"]);
+    const agents = roster.computerGroups[0]!.agents;
+    expect(agents.map((a) => a.id)).toEqual(["a2", "a1"]);
+  });
+});
+
+describe("filterMembersDirectoryRoster", () => {
+  it("filters agents and humans by query", () => {
+    const runtimes = [
+      runtime({ id: "rt-1", name: "Pi", daemon_id: "d1", device_name: "s144" }),
+    ];
+    const roster = buildMembersDirectoryRoster(
+      [
+        agent({
+          id: "a1",
+          name: "AliceBot",
+          runtime_id: "rt-1",
+          description: "frontend helper",
+        }),
+        agent({ id: "a2", name: "Zed", runtime_id: "rt-1", description: "ops" }),
+      ],
+      [
+        member({ user_id: "u1", name: "Frank", email: "frank@ex.com" }),
+        member({ user_id: "u2", name: "Joyce", email: "joyce@ex.com" }),
+      ],
+      runtimes,
+    );
+    const byName = filterMembersDirectoryRoster(roster, "alice");
+    expect(byName.listedAgents.map((a) => a.id)).toEqual(["a1"]);
+    expect(byName.humans).toEqual([]);
+
+    const byEmail = filterMembersDirectoryRoster(roster, "joyce@");
+    expect(byEmail.humans.map((h) => h.user_id)).toEqual(["u2"]);
+    expect(byEmail.listedAgents).toEqual([]);
   });
 });
 

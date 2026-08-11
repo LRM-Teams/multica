@@ -49,10 +49,10 @@ export function MachineNameEditor({
   const visibleName = savedName || cloudCreateName || hostname;
   const isPlaceholder = !savedName;
   const canEdit = machine.runtimes.length > 0;
-  // List rows stay pure display (row click selects the machine). Detail title
-  // + Basics "Display name" are the two rename surfaces — both always show a
-  // pencil so the control is discoverable without hover.
-  const editable = variant === "title" || variant === "basics";
+  // List rows stay pure display (row click selects the machine). Detail
+  // rename is only on the hero title — a second Basics "Display name" pencil
+  // duplicated the same field.
+  const editable = variant === "title";
 
   const beginEdit = useCallback(
     (e?: MouseEvent) => {

@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 //
-// Regression: #1790 dropped the Basics "Display name" row while making
-// list/title variants display-only, which left zero rename entry points.
-// This pins the Basics row + basics editor variant on the machine detail.
+// Rename is a single entry point on the hero title (no second Basics
+// "Display name" pencil for the same display_name field).
 
 import { describe, it, expect, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -157,7 +156,7 @@ function makeMachine(): RuntimeMachine {
 }
 
 describe("ComputersMachineDetail — display name rename entry", () => {
-  it("keeps the Basics Display name row with the editable basics editor", () => {
+  it("keeps a single rename control on the hero title, not a Basics Display name row", () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -181,9 +180,41 @@ describe("ComputersMachineDetail — display name rename entry", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByText("Display name")).toBeInTheDocument();
-    // Title (hero) + Basics row — both rename surfaces stay mounted.
+    expect(screen.queryByText("Display name")).toBeNull();
     expect(screen.getByTestId("machine-name-editor-title")).toBeInTheDocument();
-    expect(screen.getByTestId("machine-name-editor-basics")).toBeInTheDocument();
+    expect(screen.queryByTestId("machine-name-editor-basics")).toBeNull();
+  });
+
+  it("shows the full Computer ID with a copy control (never truncated alone)", () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const machine = makeMachine();
+    render(
+      <QueryClientProvider client={client}>
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <ComputersMachineDetail
+            machine={machine}
+            agents={[]}
+            snapshot={[]}
+            now={Date.parse("2026-08-01T00:00:05Z")}
+            wsId="ws-1"
+            isMobile={false}
+            actions={null}
+            onBack={() => {}}
+            headerActions={null}
+            showBack={false}
+            showListActions={false}
+          />
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId("machine-basics-computer-id")).toHaveTextContent(
+      "daemon-1",
+    );
+    expect(screen.getByTestId("machine-basics-computer-id-copy")).toBeInTheDocument();
+    // Truncated short form must not be the only representation.
+    expect(screen.queryByText(/daemon-1…|…daemon/)).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -92,6 +93,8 @@ type NoteAIJobResponse struct {
 	Status        string            `json:"status"`
 	Result        *NoteAIEditResult `json:"result,omitempty"`
 	FailureReason *string           `json:"failure_reason,omitempty"`
+	FailureCode   *string           `json:"failure_code,omitempty"`
+	RepairCode    *string           `json:"repair_code,omitempty"`
 	CreatedAt     string            `json:"created_at"`
 	UpdatedAt     string            `json:"updated_at,omitempty"`
 }
@@ -1042,18 +1045,39 @@ func repairPageNoteAIEditResult(content, prompt string) (*NoteAIEditResult, erro
 	return validateNoteAIEditResult(result)
 }
 
-func parseNoteAIEditResultWithRepair(content, prompt string) (*NoteAIEditResult, error) {
+type noteAIParseOutcome struct {
+	Result     *NoteAIEditResult
+	RepairCode *string
+}
+
+const (
+	noteAIRepairSelectedOutput = "repaired_selected_output"
+	noteAIRepairPageOutput     = "repaired_page_output"
+	noteAIFailureInvalidOutput = "invalid_structured_output"
+	noteAIFailureAssistant     = "assistant_failure"
+	noteAIFailureTask          = "task_failure"
+	noteAIFailureTaskError     = "task_error"
+)
+
+func parseNoteAIEditResultWithRepairOutcome(content, prompt string) (noteAIParseOutcome, error) {
 	result, err := parseNoteAIEditResult(content)
 	if err == nil {
-		return result, nil
+		return noteAIParseOutcome{Result: result}, nil
 	}
 	if repaired, repairErr := repairSelectedNoteAIEditResult(content, prompt); repairErr == nil {
-		return repaired, nil
+		code := noteAIRepairSelectedOutput
+		return noteAIParseOutcome{Result: repaired, RepairCode: &code}, nil
 	}
 	if repaired, repairErr := repairPageNoteAIEditResult(content, prompt); repairErr == nil {
-		return repaired, nil
+		code := noteAIRepairPageOutput
+		return noteAIParseOutcome{Result: repaired, RepairCode: &code}, nil
 	}
-	return nil, err
+	return noteAIParseOutcome{}, err
+}
+
+func parseNoteAIEditResultWithRepair(content, prompt string) (*NoteAIEditResult, error) {
+	outcome, err := parseNoteAIEditResultWithRepairOutcome(content, prompt)
+	return outcome.Result, err
 }
 
 func noteAIStatusFromTask(status string, terminalOutcome pgtype.Text, startedAt pgtype.Timestamptz, result *NoteAIEditResult, failure *string) string {
@@ -1124,25 +1148,56 @@ WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspace
 	}
 	var result *NoteAIEditResult
 	var failure *string
+	var failureCode *string
+	var repairCode *string
 	if assistantContent.Valid && strings.TrimSpace(assistantContent.String) != "" {
-		parsed, err := parseNoteAIEditResultWithRepair(assistantContent.String, prompt)
+		outcome, err := parseNoteAIEditResultWithRepairOutcome(assistantContent.String, prompt)
 		if err != nil {
 			value := "agent returned invalid structured note AI edit"
+			code := noteAIFailureInvalidOutput
 			failure = &value
+			failureCode = &code
+			slog.Warn("note AI structured output invalid",
+				"workspace_id", uuidToString(workspaceID),
+				"page_id", uuidToString(pageID),
+				"job_id", uuidToString(jobID),
+				"task_id", uuidToString(taskID),
+				"agent_id", uuidToString(agentID),
+				"failure_code", code,
+				"error", err,
+			)
 		} else {
-			result = parsed
+			result = outcome.Result
+			repairCode = outcome.RepairCode
+			if repairCode != nil {
+				slog.Info("note AI output repaired",
+					"workspace_id", uuidToString(workspaceID),
+					"page_id", uuidToString(pageID),
+					"job_id", uuidToString(jobID),
+					"task_id", uuidToString(taskID),
+					"agent_id", uuidToString(agentID),
+					"repair_code", *repairCode,
+					"action", result.Action,
+				)
+			}
 		}
 	}
 	switch {
 	case assistantFailure.Valid && assistantFailure.String != "":
 		value := assistantFailure.String
+		code := noteAIFailureAssistant
 		failure = &value
+		failureCode = &code
 	case taskFailure.Valid && taskFailure.String != "":
 		value := taskFailure.String
+		code := noteAIFailureTask
 		failure = &value
+		failureCode = &code
 	case taskError.Valid && taskError.String != "":
 		value := taskError.String
+		code := noteAIFailureTaskError
 		failure = &value
+		failureCode = &code
 	}
 	resp = NoteAIJobResponse{
 		ID:            uuidToString(jobID),
@@ -1154,6 +1209,8 @@ WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspace
 		Status:        noteAIStatusFromTask(taskStatus, terminalOutcome, taskStartedAt, result, failure),
 		Result:        result,
 		FailureReason: failure,
+		FailureCode:   failureCode,
+		RepairCode:    repairCode,
 		CreatedAt:     timestampToString(createdAt),
 		UpdatedAt:     timestampToString(taskUpdatedAt),
 	}

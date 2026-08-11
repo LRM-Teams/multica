@@ -261,7 +261,7 @@ old text
 	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode repaired job: %v", err)
 	}
-	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_selection" || resp.Result.Markdown != "**Improved** [text](https://example.com)" || resp.FailureReason != nil {
+	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_selection" || resp.Result.Markdown != "**Improved** [text](https://example.com)" || resp.FailureReason != nil || resp.RepairCode == nil || *resp.RepairCode != noteAIRepairSelectedOutput {
 		t.Fatalf("repaired job response = %#v, want completed replace_selection result", resp)
 	}
 }
@@ -298,18 +298,19 @@ func TestNoteAIJobRepairsPageMarkdownOnlyResult(t *testing.T) {
 	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode repaired page job: %v", err)
 	}
-	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_page" || resp.Result.Markdown != "# Better Page\n\nImproved body." || resp.FailureReason != nil {
+	if resp.Status != "completed" || resp.Result == nil || resp.Result.Action != "replace_page" || resp.Result.Markdown != "# Better Page\n\nImproved body." || resp.FailureReason != nil || resp.RepairCode == nil || *resp.RepairCode != noteAIRepairPageOutput {
 		t.Fatalf("repaired page job response = %#v, want completed replace_page result", resp)
 	}
 }
 
 func TestParseNoteAIEditResultRepairsPageJSONWithoutAction(t *testing.T) {
-	result, err := parseNoteAIEditResultWithRepair(`{"markdown":"Inserted paragraph","title":"New title","rationale":"Continues the page."}`, noteAIPagePromptForTest("Continue this page from the cursor."))
+	outcome, err := parseNoteAIEditResultWithRepairOutcome(`{"markdown":"Inserted paragraph","title":"New title","rationale":"Continues the page."}`, noteAIPagePromptForTest("Continue this page from the cursor."))
 	if err != nil {
 		t.Fatalf("repair page JSON without action: %v", err)
 	}
-	if result.Action != "insert" || result.Markdown != "Inserted paragraph" || result.Title == nil || *result.Title != "New title" || result.Rationale == nil || *result.Rationale != "Continues the page." {
-		t.Fatalf("repaired page insert = %#v", result)
+	result := outcome.Result
+	if result.Action != "insert" || result.Markdown != "Inserted paragraph" || result.Title == nil || *result.Title != "New title" || result.Rationale == nil || *result.Rationale != "Continues the page." || outcome.RepairCode == nil || *outcome.RepairCode != noteAIRepairPageOutput {
+		t.Fatalf("repaired page insert = result:%#v repair:%v", result, outcome.RepairCode)
 	}
 }
 
@@ -345,7 +346,7 @@ func TestNoteAIJobInvalidStructuredResultFails(t *testing.T) {
 	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode invalid job: %v", err)
 	}
-	if resp.Status != "failed" || resp.Result != nil || resp.FailureReason == nil {
+	if resp.Status != "failed" || resp.Result != nil || resp.FailureReason == nil || resp.FailureCode == nil || *resp.FailureCode != noteAIFailureInvalidOutput {
 		t.Fatalf("invalid structured result response = %#v, want failed without result", resp)
 	}
 }

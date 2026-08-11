@@ -3,6 +3,7 @@ import {
   mergeResearchCanvasNodes,
   resolveResearchCanvasNode,
   typedNodeToSnapshotNode,
+  enrichResearchNodeForDetail,
 } from "./resolve-research-canvas-node";
 import type { ResearchGraphNode } from "@multica/core/types";
 
@@ -55,5 +56,32 @@ describe("resolveResearchCanvasNode", () => {
       payload: { dimension_family: "market" },
     });
     expect(node.payload).toEqual({ dimension_family: "market" });
+  });
+
+  it("enrichResearchNodeForDetail merges typed payload over snapshot", () => {
+    const snapshotNode = {
+      id: "n1",
+      session_id: "s1",
+      node_type: "finding",
+      title: "Snap title",
+      summary: "snap summary only",
+      status: "done",
+      actor_agent_id: null,
+      payload: {},
+      created_at: "",
+      updated_at: "",
+    } satisfies ResearchGraphNode;
+    const enriched = enrichResearchNodeForDetail(snapshotNode, {
+      nodes: [
+        {
+          id: "n1",
+          node_type: "finding",
+          title: "Typed title",
+          payload: { details: { result: "from backend" } },
+        },
+      ],
+    });
+    expect(enriched.payload).toEqual({ details: { result: "from backend" } });
+    expect(enriched.title).toBe("Typed title");
   });
 });

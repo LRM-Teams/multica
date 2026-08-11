@@ -321,7 +321,7 @@ messages`.
   server policy are designed and migration-tested. An incomplete allowlist
   such as only `message.read` and `message.send` is invalid. Agent Command
   Policy uses the additive rollout and single-state decision contract in
-  [ADR-0013](../../adr/0013-roll-out-agent-command-policy-additively.md):
+  [ADR-0014](../../adr/0014-roll-out-agent-command-policy-additively.md):
   existing unclassified commands retain legacy passthrough, explicit denial
   requires authoritative policy, and newly added Agent commands must declare
   their classification.

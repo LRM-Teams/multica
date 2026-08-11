@@ -45,3 +45,55 @@ func (runner *WorkspaceRunner) applyAttachmentAttach(payload protocol.WorkspaceR
 	}
 	return protocol.WorkspaceRunnerAgentAttachedPayload(payload), nil
 }
+
+// applyAttachmentDetach commits the tombstone before tearing down volatile
+// state. A replayed or stale detach is allowed to converge harmlessly, but it
+// only stops a launch, resident Runtime, or Inbox when the pre-commit durable
+// Attachment exactly matches the command being detached.
+func (runner *WorkspaceRunner) applyAttachmentDetach(payload protocol.WorkspaceRunnerAgentDetachPayload) (protocol.WorkspaceRunnerAgentDetachedPayload, error) {
+	if runner == nil || runner.daemon == nil || runner.attachments == nil || runner.inboxes == nil || runner.processes == nil {
+		return protocol.WorkspaceRunnerAgentDetachedPayload{}, errors.New("Workspace Runner Attachment dependencies are unavailable")
+	}
+	if err := payload.Validate(); err != nil {
+		return protocol.WorkspaceRunnerAgentDetachedPayload{}, fmt.Errorf("validate Attachment detach: %w", err)
+	}
+	workspaceID := runner.config.WorkspaceID
+	if !runner.daemon.ownsWorkspaceRunnerRuntime(workspaceID, payload.RuntimeID) {
+		return protocol.WorkspaceRunnerAgentDetachedPayload{}, errors.New("Attachment Runtime is outside Workspace Runner scope")
+	}
+	if _, err := runner.attachments.Apply(workspaceID, AgentAttachmentEvent{
+		Kind:                 AgentAttachmentEventDetach,
+		AgentID:              payload.AgentID,
+		RuntimeID:            payload.RuntimeID,
+		AttachmentGeneration: AttachmentGeneration(payload.AttachmentGeneration),
+		LifecycleSeq:         AttachmentLifecycleSequence(payload.LifecycleSeq),
+	}); err != nil {
+		return protocol.WorkspaceRunnerAgentDetachedPayload{}, fmt.Errorf("persist Attachment detach: %w", err)
+	}
+	// A newer current Attachment wins over a late detach. Conversely, when the
+	// tombstone is already durable we must still retry its volatile teardown:
+	// the previous attempt may have failed after persistence (for example while
+	// force-killing a busy resident Runtime).
+	if current, attached := runner.attachments.Resolve(workspaceID, payload.AgentID); attached {
+		if current.RuntimeID != payload.RuntimeID || int64(current.AttachmentGeneration) > payload.AttachmentGeneration {
+			return protocol.WorkspaceRunnerAgentDetachedPayload(payload), nil
+		}
+		return protocol.WorkspaceRunnerAgentDetachedPayload{}, errors.New("Attachment detach did not remove the current generation")
+	}
+	if launch, found := runner.processes.Snapshot(payload.AgentID); found && launch.RuntimeID == payload.RuntimeID {
+		if err := runner.processes.Stop(agentProcessCallback{AgentID: payload.AgentID, LaunchID: launch.LaunchID}); err != nil {
+			return protocol.WorkspaceRunnerAgentDetachedPayload{}, fmt.Errorf("stop detached Agent launch: %w", err)
+		}
+		if runner.activity != nil {
+			if err := runner.activity.PublishForManagedAgent(payload.AgentID, runner.daemon.runnerInstanceID, protocol.ActivityKindOffline, "detached", nil); err != nil && runner.daemon.logger != nil {
+				runner.daemon.logger.Debug("Workspace Runner detached Activity publish deferred", "workspace_id", workspaceID, "agent_id", payload.AgentID, "reason", "activity_not_managed", "error", err)
+			}
+			runner.activity.RemoveManaged(payload.AgentID, launch.LaunchID)
+		}
+	}
+	if err := runner.runtimes.forceInvalidateSession(payload.AgentID, payload.RuntimeID); err != nil {
+		return protocol.WorkspaceRunnerAgentDetachedPayload{}, fmt.Errorf("release detached Agent runtime: %w", err)
+	}
+	runner.inboxes.Remove(payload.AgentID, payload.RuntimeID)
+	return protocol.WorkspaceRunnerAgentDetachedPayload(payload), nil
+}

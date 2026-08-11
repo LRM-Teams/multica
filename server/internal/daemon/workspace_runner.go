@@ -259,6 +259,21 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentAttached, receipt); err != nil {
 				return err
 			}
+		case protocol.EventAgentDetach:
+			var detach protocol.WorkspaceRunnerAgentDetachPayload
+			if json.Unmarshal(message.Payload, &detach) != nil {
+				continue
+			}
+			receipt, err := runner.applyAttachmentDetach(detach)
+			if err != nil {
+				if d.logger != nil {
+					d.logger.Warn("Workspace Runner Attachment detach rejected", "workspace_id", workspaceID, "agent_id", detach.AgentID, "runtime_id", detach.RuntimeID, "reason", "detach_rejected", "error", err)
+				}
+				continue
+			}
+			if err := writeFrame(protocol.EventAgentDetached, receipt); err != nil {
+				return err
+			}
 		case protocol.EventAgentDeliver:
 			var delivery protocol.AgentDeliverPayload
 			if json.Unmarshal(message.Payload, &delivery) != nil || delivery.AgentID == "" || delivery.Target == "" || delivery.Seq <= 0 || delivery.DeliveryID == "" || delivery.Message.ID == "" || delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {

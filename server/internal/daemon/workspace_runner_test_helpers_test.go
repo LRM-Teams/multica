@@ -40,6 +40,7 @@ func attachTestWorkspaceRunner(t *testing.T, d *Daemon, workspaceID string, send
 		activity:    newAgentActivityProducer(d.runnerInstanceID, nil, nil),
 		inboxes:     inboxes,
 		attachments: attachments,
+		runtimes:    d.canonicalRuntimes,
 	}
 	runner.replaceConnection(connection)
 	d.attachWorkspaceRunner(runner)

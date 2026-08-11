@@ -1,19 +1,23 @@
 "use client";
 
-import { useMemo } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, type ReactNode } from "react";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Clock, Link2, Repeat } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ApiError } from "@multica/core/api";
 import {
   agentRemindersKeys,
+  agentRemindersHistoryOptions,
   agentRemindersUpcomingOptions,
 } from "@multica/core/agents/queries";
 import {
+  adaptFiredRow,
   adaptUpcomingRow,
+  type FiredReminderRow,
   type ReminderDefinitionRow,
   type ReminderCadence,
 } from "@multica/core/agents/reminder-view-model";
+import { Button } from "@multica/ui/components/ui/button";
 import { useT } from "../../../i18n";
 import { AppLink } from "../../../navigation/app-link";
 import { useOptionalNavigation } from "../../../navigation/context";
@@ -24,19 +28,18 @@ interface RemindersTabProps {
 }
 
 /**
- * Agent Card Reminders tab — human READ-ONLY per the V2 product contract
- * (docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). Zero mutation
- * affordances: no schedule/snooze/update/cancel/dismiss button, menu, or
- * inline form anywhere in this file. A human who wants a change asks the
+ * Agent Card Reminders tab — human READ-ONLY per Spec #2788. Zero mutation
+ * affordances: no schedule/snooze/update/cancel/dismiss/delete button, menu,
+ * or inline form anywhere in this file. A human who wants a change asks the
  * Agent; only the owning Agent may act, via its own CLI.
  *
- * One flat list of active reminder definitions ordered by next fire. There is
- * no Upcoming/History partition: once a one-shot fires it disappears and the
- * agent's resulting action is the user-visible record.
+ * Upcoming renders active definitions ordered by next fire; History renders
+ * immutable fired occurrences, newest first. Neither section reflects
+ * transient delivery results or offers human mutation controls.
  *
  * LRM-505 field/IA alignment (not neo-brutal skin): title; clock + relative
- * + absolute time; recurring cadence chip (one-shot: no chip); readable
- * anchor (bare `#workspace:shortId` suppressed upstream); status badge.
+ * + absolute time; one-shot/recurring kind; recurring cadence/timezone;
+ * readable anchor (bare `#workspace:shortId` suppressed upstream); status.
  */
 export function RemindersTab({ agent }: RemindersTabProps) {
   const { t } = useT("agents");
@@ -49,6 +52,15 @@ export function RemindersTab({ agent }: RemindersTabProps) {
     isError: upcomingIsError,
     error: upcomingError,
   } = useQuery(agentRemindersUpcomingOptions(agent.id));
+  const {
+    data: historyData,
+    isLoading: historyLoading,
+    isError: historyIsError,
+    error: historyError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery(agentRemindersHistoryOptions(agent.id));
   const upcomingRows = useMemo<ReminderDefinitionRow[]>(
     () =>
       (upcomingData?.definitions ?? [])
@@ -56,8 +68,23 @@ export function RemindersTab({ agent }: RemindersTabProps) {
         .filter((row): row is ReminderDefinitionRow => row !== null),
     [upcomingData],
   );
+  const historyRows = useMemo<FiredReminderRow[]>(
+    () => {
+      const rows: FiredReminderRow[] = [];
+      for (const page of historyData?.pages ?? []) {
+        for (const occurrence of page.occurrences) {
+          const row = adaptFiredRow(occurrence);
+          if (row) rows.push(row);
+        }
+      }
+      return rows;
+    },
+    [historyData],
+  );
 
-  const inaccessible = upcomingError instanceof ApiError && upcomingError.status === 403;
+  const inaccessible =
+    (upcomingError instanceof ApiError && upcomingError.status === 403) ||
+    (historyError instanceof ApiError && historyError.status === 403);
 
   if (inaccessible) {
     return (
@@ -71,29 +98,95 @@ export function RemindersTab({ agent }: RemindersTabProps) {
     void queryClient.invalidateQueries({ queryKey: agentRemindersKeys.all(agent.id) });
   };
 
-  if (!upcomingLoading && !upcomingIsError && upcomingRows.length === 0) {
-    return (
-      <div className="p-4 text-xs text-muted-foreground">{t(($) => $.reminders.empty_all)}</div>
-    );
-  }
-
   return (
-    <div className="flex min-w-0 flex-col" aria-label={t(($) => $.tabs.reminders)}>
-      {upcomingLoading ? (
-        <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
-          {t(($) => $.reminders.loading)}
-        </p>
-      ) : upcomingIsError ? (
-        <ErrorState onRetry={retry} label={t(($) => $.reminders.error_title)} retryLabel={t(($) => $.reminders.retry)} />
-      ) : (
-        <ul className="divide-y">
-          {upcomingRows.map((row) => (
-            <UpcomingRowView key={row.id} row={row} />
-          ))}
-        </ul>
-      )}
+    <div className="flex min-w-0 flex-col divide-y" aria-label={t(($) => $.tabs.reminders)}>
+      <ReminderSection id="reminder-upcoming" heading={t(($) => $.reminders.upcoming_heading)}>
+        {upcomingLoading ? (
+          <LoadingState label={t(($) => $.reminders.loading)} />
+        ) : upcomingIsError ? (
+          <ErrorState
+            onRetry={retry}
+            label={t(($) => $.reminders.error_title)}
+            retryLabel={t(($) => $.reminders.retry)}
+          />
+        ) : upcomingRows.length === 0 ? (
+          <EmptyState label={t(($) => $.reminders.empty_upcoming)} />
+        ) : (
+          <ul className="divide-y">
+            {upcomingRows.map((row) => (
+              <UpcomingRowView key={row.id} row={row} />
+            ))}
+          </ul>
+        )}
+      </ReminderSection>
+
+      <ReminderSection id="reminder-history" heading={t(($) => $.reminders.history_heading)}>
+        {historyLoading ? (
+          <LoadingState label={t(($) => $.reminders.loading)} />
+        ) : historyIsError ? (
+          <ErrorState
+            onRetry={retry}
+            label={t(($) => $.reminders.error_title)}
+            retryLabel={t(($) => $.reminders.retry)}
+          />
+        ) : historyRows.length === 0 ? (
+          <EmptyState label={t(($) => $.reminders.empty_history)} />
+        ) : (
+          <>
+            <ul className="divide-y">
+              {historyRows.map((row) => (
+                <HistoryRowView key={row.id} row={row} />
+              ))}
+            </ul>
+            {hasNextPage ? (
+              <div className="px-3 py-3 md:px-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isFetchingNextPage}
+                  onClick={() => void fetchNextPage()}
+                  className="w-full"
+                >
+                  {t(($) => $.reminders.load_more)}
+                </Button>
+              </div>
+            ) : null}
+          </>
+        )}
+      </ReminderSection>
     </div>
   );
+}
+
+function ReminderSection({
+  id,
+  heading,
+  children,
+}: {
+  id: string;
+  heading: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="min-w-0" aria-labelledby={id}>
+      <h3
+        id={id}
+        className="bg-muted/30 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground md:px-4"
+      >
+        {heading}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function LoadingState({ label }: { label: string }) {
+  return <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">{label}</p>;
+}
+
+function EmptyState({ label }: { label: string }) {
+  return <p className="px-3 py-4 text-xs text-muted-foreground md:px-4">{label}</p>;
 }
 
 function ErrorState({
@@ -138,8 +231,14 @@ function formatCadenceChipLabel(cadence: Extract<ReminderCadence, { kind: "recur
 }
 
 function RecurrenceChip({ cadence }: { cadence: ReminderCadence }) {
-  // AC: recurring shows one cadence+timezone chip; one-shot does not show it.
-  if (cadence.kind !== "recurring") return null;
+  const { t } = useT("agents");
+  if (cadence.kind === "one_shot") {
+    return (
+      <span className="inline-flex rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+        {t(($) => $.reminders.one_shot)}
+      </span>
+    );
+  }
   return (
     <span className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
       <Repeat className="size-3 shrink-0" aria-hidden />
@@ -284,6 +383,27 @@ function UpcomingRowView({ row }: { row: ReminderDefinitionRow }) {
         <StatusBadge status={displayStatus} />
       </div>
       <TimeRow iso={row.nextFireAt} label={t(($) => $.reminders.next_fire_label)} />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <RecurrenceChip cadence={row.cadence} />
+        <AnchorLink anchor={row.anchor} />
+      </div>
+    </li>
+  );
+}
+
+function HistoryRowView({ row }: { row: FiredReminderRow }) {
+  const { t } = useT("agents");
+  return (
+    <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
+      <div className="flex items-start justify-between gap-2">
+        <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
+          {row.title}
+        </p>
+        <span className="inline-flex shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+          {t(($) => $.reminders.status_fired)}
+        </span>
+      </div>
+      <TimeRow iso={row.firedAt} label={t(($) => $.reminders.fired_label)} />
       <div className="flex flex-wrap items-center gap-1.5">
         <RecurrenceChip cadence={row.cadence} />
         <AnchorLink anchor={row.anchor} />

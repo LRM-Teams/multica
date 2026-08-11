@@ -188,15 +188,41 @@ func TestMachineUpgradeEventLogBoundsError(t *testing.T) {
 func TestHandleMachineUpgradeAlreadyCurrentAppendsEvent(t *testing.T) {
 	root := t.TempDir()
 	overrideVersionStoreRoot(t, root)
+	previousDetect := detectAgentVersion
+	detectAgentVersion = func(context.Context, string) (string, error) { return "codex-cli 9.9.9", nil }
+	t.Cleanup(func() { detectAgentVersion = previousDetect })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"upgrade-1","phase":"accepted"}`))
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/accept"):
+			generation := "generation-1"
+			_ = json.NewEncoder(w).Encode(MachineUpgradeReceipt{
+				ID:                   "upgrade-1",
+				Phase:                "converging",
+				AcceptedGeneration:   &generation,
+				AcceptedRuntimeIDs:   []string{"runtime-1"},
+				AcceptedWorkspaceIDs: []string{"workspace-1"},
+			})
+		case r.URL.Path == "/api/daemon/register":
+			_ = json.NewEncoder(w).Encode(RegisterResponse{Runtimes: []Runtime{{
+				ID: "runtime-1", WorkspaceID: "workspace-1", Name: "Codex", Provider: "codex", Status: "online",
+			}}})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
 	}))
 	defer server.Close()
 	d := &Daemon{
-		cfg:    Config{CLIVersion: "v9.9.9"},
-		client: NewClient(server.URL),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cfg: Config{
+			CLIVersion: "v9.9.9", DaemonID: "computer-1",
+			Agents: map[string]AgentEntry{"codex": {Path: "codex"}},
+		},
+		client:        NewClient(server.URL),
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentVersions: make(map[string]string),
+		workspaces: map[string]*workspaceState{
+			"workspace-1": newWorkspaceState("workspace-1", []string{"runtime-1"}),
+		},
 	}
 	d.client.SetToken("test-token")
 	d.machineUpgradeLog = newMachineUpgradeEventLog(nil)

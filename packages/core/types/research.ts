@@ -633,6 +633,17 @@ export interface ResearchRunSnapshot {
   observations: ResearchRunObservation[];
   claims: ResearchRunClaim[];
   gate: { passed: boolean; findings: ResearchRunGateFinding[] };
+  /** Bounded passport summary when snapshot is manifest-filtered for an attempt. */
+  attempt_context?: ResearchAttemptArtifactContext;
+}
+
+/** Bounded passport metadata for D-enabled task-bound session reads. */
+export interface ResearchAttemptArtifactContext {
+  attempt_id: string;
+  manifest_id?: string;
+  manifest_hash?: string;
+  policy_watermark?: number;
+  manifest_filtered?: boolean;
 }
 
 export interface SteerResearchRunRequest {

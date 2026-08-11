@@ -190,6 +190,38 @@ func TestExecutionModuleDispatchReadyCreatesRuntimeTaskAndAttachesIdentity(t *te
 	}
 }
 
+func TestExecutionModuleSkipsCallerPromptWhenPassportEnabled(t *testing.T) {
+	run := Run{
+		SessionID: "session-1", WorkspaceID: "workspace-1", StateVersion: 1,
+		GoalVersion: 1, PlanVersion: 1, OrchestratorVersion: OrchestratorVersionV1,
+		Config: RunConfig{MaxParallelTasks: 1},
+	}
+	task := Task{
+		ID: "task-1", Kind: TaskKindDiscover, Objective: "collect evidence",
+		RequiredCapability: "scout", Status: TaskStatusReady, GoalVersion: 1, PlanVersion: 1,
+	}
+	store := &executionTestStore{
+		passportEnabled: true,
+		taskSnapshot:    RunSnapshot{Run: run, Tasks: []Task{task}, Contract: ResearchContract{Language: "English"}},
+	}
+	dispatcher := &executionTestDispatcher{dispatchResult: DispatchResult{InboxTaskID: "inbox-1"}}
+	module := executionModule{
+		store: store, dispatcher: dispatcher, clock: executionFixedClock{now: time.Now().UTC()}, prompts: taskPromptModule{},
+	}
+	members := []FleetMember{{AgentID: "scout-1", Role: "scout", Status: "active"}}
+
+	outcome, err := module.DispatchReady(context.Background(), run, []Task{task}, nil, members)
+	if err != nil || outcome.Dispatched != 1 {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if store.createdInput.Request.Prompt != "" {
+		t.Fatalf("prompt=%q want empty placeholder", store.createdInput.Request.Prompt)
+	}
+	if store.createdInput.Request.RequestHash != "" {
+		t.Fatalf("request hash=%q want empty until store rebind", store.createdInput.Request.RequestHash)
+	}
+}
+
 func TestExecutionModuleDispatchReadyLeavesExternalTaskForReplayWhenAcknowledgementFails(t *testing.T) {
 	acknowledgeErr := errors.New("database unavailable during acknowledgement")
 	run := Run{SessionID: "session-1", WorkspaceID: "workspace-1", Goal: "评估供应商", StateVersion: 3,
@@ -468,6 +500,7 @@ type executionTestStore struct {
 	deferredHealth          []ExecutionTargetHealth
 	createErrors            []error
 	createdInputs           []CreateDispatchIntentInput
+	passportEnabled         bool
 }
 
 func (store *executionTestStore) ListAttempts(context.Context, string) ([]Attempt, error) {
@@ -542,6 +575,10 @@ func (store *executionTestStore) CreateDispatchIntent(_ context.Context, in Crea
 
 func (store *executionTestStore) TaskContext(context.Context, string, string) (RunSnapshot, error) {
 	return store.taskSnapshot, nil
+}
+
+func (store *executionTestStore) SessionArtifactPassportEnabled(context.Context, string, string) (bool, error) {
+	return store.passportEnabled, nil
 }
 
 func (store *executionTestStore) ClaimDispatchIntents(_ context.Context, _ string, _ string, _ time.Duration, limit int) ([]DispatchIntent, error) {

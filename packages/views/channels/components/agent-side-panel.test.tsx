@@ -773,7 +773,7 @@ describe("AgentSidePanel", () => {
     expect(pageClose).toHaveAccessibleName("Close panel");
     expect(container.querySelector("aside")).toHaveClass("min-w-0", "w-full");
     expect(container.querySelector(".overflow-y-auto")).toHaveClass("min-w-0");
-    for (const tab of ["Profile", "Activity", "Files"]) {
+    for (const tab of ["Profile", "Activity", "Reminders", "Files"]) {
       expect(screen.getByRole("button", { name: tab })).toHaveClass(
         "min-h-11",
         "flex-1",
@@ -785,8 +785,12 @@ describe("AgentSidePanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Activity" }));
     expect(screen.getByText("Activity content")).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Reminders" }));
+    expect(screen.getByText("Reminders content")).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: "Profile" }));
     expect(screen.getByText("Activity content")).toBeInTheDocument();
+    expect(screen.getByText("Reminders content")).toBeInTheDocument();
   });
 
   it("restores a visited page tab's scroll position after switching tabs", () => {

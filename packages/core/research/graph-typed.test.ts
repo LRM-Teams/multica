@@ -184,6 +184,68 @@ describe("mergeTypedGraphPages", () => {
     expect(merged.lineage.merged.n1).toEqual(["n2"]);
     expect(merged.lineage.merged.n3).toEqual(["n2"]);
   });
+
+  it("evicts oldest page nodes when merged cache exceeds the node budget", () => {
+    const makePage = (offset: number, count: number): TypedGraphResponse =>
+      ({
+        session_id: "s1",
+        graph_version: 1,
+        total_node_count: 1600,
+        nodes: Array.from({ length: count }, (_, i) => ({
+          id: `n${offset + i}`,
+          title: `N${offset + i}`,
+          level: "s",
+        })),
+        edges: [],
+        clusters: [],
+        lineage: {
+          derived: {},
+          merged: {},
+          superseded: {},
+          restarted: {},
+          invalidated: {},
+          supersedes: {},
+        },
+      }) as TypedGraphResponse;
+
+    const merged = mergeTypedGraphPages([makePage(0, 800), makePage(800, 800)], {
+      nodeBudget: 1000,
+    });
+    expect(merged.nodes.length).toBeLessThanOrEqual(1000);
+    expect(merged.nodes.some((node) => node.id === "n0")).toBe(false);
+    expect(merged.nodes.some((node) => node.id === "n1599")).toBe(true);
+    expect(merged.total_node_count).toBe(1600);
+  });
+
+  it("keeps pinned nodes when trimming the merged cache", () => {
+    const page = {
+      session_id: "s1",
+      graph_version: 1,
+      total_node_count: 5,
+      nodes: Array.from({ length: 5 }, (_, i) => ({
+        id: `n${i}`,
+        title: `N${i}`,
+        level: "s",
+      })),
+      edges: [],
+      clusters: [],
+      lineage: {
+        derived: {},
+        merged: {},
+        superseded: {},
+        restarted: {},
+        invalidated: {},
+        supersedes: {},
+      },
+    } as TypedGraphResponse;
+
+    const merged = mergeTypedGraphPages([page], {
+      nodeBudget: 2,
+      pinNodeIds: ["n0"],
+    });
+    expect(merged.nodes.map((node) => node.id)).toContain("n0");
+    expect(merged.nodes.length).toBeLessThanOrEqual(2);
+  });
 });
 
 describe("indexTypedGraphNodes", () => {

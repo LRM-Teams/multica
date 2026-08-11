@@ -1220,6 +1220,30 @@ func (c *client) handleFrame(raw []byte) {
 			return
 		}
 		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventAgentAttachmentReplayReq:
+		var payload protocol.WorkspaceRunnerAttachmentReplayRequest
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventAgentAttached:
+		var payload protocol.WorkspaceRunnerAgentAttachedPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventAgentDetached:
+		var payload protocol.WorkspaceRunnerAgentDetachedPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventAgentAttachmentReplayAck:
+		var payload protocol.WorkspaceRunnerAttachmentReplayAck
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
 	case protocol.EventAgentWorkspaceFileTree,

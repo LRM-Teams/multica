@@ -1066,6 +1066,94 @@ func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHisto
 	}
 }
 
+func TestAgentAttachmentReplayReceiptsFenceStaleGenerationAndSurviveServerRestart(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	ctx := context.Background()
+	agentID, runtimeA := fixture.agentIDs[0], fixture.runtimeIDs[0]
+	var runtimeB string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, $2, 'cloud', 'pi', 'online', 'attachment replay target', $3, now())
+		RETURNING id`, testWorkspaceID, "attachment-replay-target-"+uuid.NewString(), []byte(`{"capabilities":["reminder_versioned_cache_v1"]}`)).Scan(&runtimeB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeA)
+		_, _ = testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeB)
+	})
+
+	type attachmentEvent struct {
+		runtimeID, kind, correlationID string
+		generation, seq                int64
+	}
+	load := func(runtimeID, kind string) attachmentEvent {
+		t.Helper()
+		var event attachmentEvent
+		if err := testPool.QueryRow(ctx, `
+			SELECT runtime_id::text, event_type, correlation_id::text, attachment_generation, lifecycle_seq
+			FROM agent_attachment_projection_event
+			WHERE agent_id = $1 AND runtime_id = $2 AND event_type = $3
+			ORDER BY lifecycle_seq DESC LIMIT 1`, agentID, runtimeID, kind).Scan(
+			&event.runtimeID, &event.kind, &event.correlationID, &event.generation, &event.seq,
+		); err != nil {
+			t.Fatal(err)
+		}
+		return event
+	}
+	receipt := func(event attachmentEvent) protocol.WorkspaceRunnerAgentAttachedPayload {
+		return protocol.WorkspaceRunnerAgentAttachedPayload{
+			AgentID: agentID, RuntimeID: event.runtimeID, AttachmentGeneration: event.generation,
+			LifecycleSeq: event.seq, CorrelationID: event.correlationID,
+		}
+	}
+
+	initial := load(runtimeA, "attach")
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeB); err != nil {
+		t.Fatal(err)
+	}
+	detachA, attachB := load(runtimeA, "detach"), load(runtimeB, "attach")
+	identityA := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeA}}
+	identityB := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeB}}
+
+	// A stale attach receipt is valid only for its exact old command. It cannot
+	// advance the cursor across the newer detach generation.
+	if err := fixture.handler.acknowledgeAgentAttachmentCommand(ctx, identityA, protocol.EventAgentAttached, receipt(initial)); err != nil {
+		t.Fatalf("record initial attach receipt: %v", err)
+	}
+	if err := fixture.handler.acknowledgeAgentAttachmentCommand(ctx, identityA, protocol.EventAgentAttached, receipt(initial)); err != nil {
+		t.Fatalf("idempotent initial attach receipt: %v", err)
+	}
+	if err := fixture.handler.acknowledgeAgentAttachmentReplay(ctx, identityA, protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{runtimeA: detachA.seq}}); err == nil {
+		t.Fatal("cursor ACK skipped newer detach receipt")
+	}
+	if err := fixture.handler.acknowledgeAgentAttachmentCommand(ctx, identityA, protocol.EventAgentDetached, receipt(detachA)); err != nil {
+		t.Fatalf("record detach receipt: %v", err)
+	}
+	if err := fixture.handler.acknowledgeAgentAttachmentReplay(ctx, identityA, protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{runtimeA: detachA.seq}}); err != nil {
+		t.Fatalf("acknowledge detached runtime: %v", err)
+	}
+	var cursor int64
+	if err := testPool.QueryRow(ctx, `SELECT ack_seq FROM agent_attachment_projection_cursor WHERE runtime_id = $1`, runtimeA).Scan(&cursor); err != nil || cursor != detachA.seq {
+		t.Fatalf("persisted attachment cursor=%d err=%v, want %d", cursor, err, detachA.seq)
+	}
+	if err := fixture.handler.acknowledgeAgentAttachmentCommand(ctx, identityA, protocol.EventAgentAttached, receipt(initial)); err == nil {
+		t.Fatal("compacted stale attach receipt was accepted")
+	}
+
+	// Reconstructing the Handler models a server restart: the durable receipt
+	// and cursor still converge the pending new-runtime command idempotently.
+	restarted := &Handler{DB: fixture.handler.DB}
+	if err := restarted.acknowledgeAgentAttachmentCommand(ctx, identityB, protocol.EventAgentAttached, receipt(attachB)); err != nil {
+		t.Fatalf("record new-runtime receipt after restart: %v", err)
+	}
+	if err := restarted.acknowledgeAgentAttachmentReplay(ctx, identityB, protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{runtimeB: attachB.seq}}); err != nil {
+		t.Fatalf("acknowledge new-runtime replay after restart: %v", err)
+	}
+	if err := restarted.acknowledgeAgentAttachmentReplay(ctx, identityB, protocol.WorkspaceRunnerAttachmentReplayAck{RuntimeCursors: map[string]int64{runtimeB: attachB.seq}}); err != nil {
+		t.Fatalf("idempotent new-runtime replay acknowledgement: %v", err)
+	}
+}
+
 func TestReminderCurrentOwnerCheckpointRecoversAckedDefinitionToOccurrenceHistory(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	agentID := fixture.agentIDs[0]

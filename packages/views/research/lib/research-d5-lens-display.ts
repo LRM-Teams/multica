@@ -10,6 +10,11 @@ export interface D5LensDisplayHints {
   emphasizedRelationIds: ReadonlySet<string>;
 }
 
+export interface D5LensDisplayOptions {
+  /** Display filter round; when set, the lineage lens emphasizes that round. */
+  filterRound?: string | null;
+}
+
 const EMPTY_HINTS: D5LensDisplayHints = {
   dimmedNodeIds: new Set(),
   emphasizedNodeIds: new Set(),
@@ -17,42 +22,11 @@ const EMPTY_HINTS: D5LensDisplayHints = {
   emphasizedRelationIds: new Set(),
 };
 
-const LINEAGE_EDGE_TYPES = new Set([
-  "merged",
-  "merged_from",
-  "merge",
-  "restart",
-  "restart_of",
-  "superseded",
-  "superseded_by",
-  "invalidated",
-  "invalidated_by",
-  "derived",
-  "lineage",
-]);
-
-const MERGE_RELATION_KINDS = new Set(["merge", "merged", "fusion"]);
-
-function collectLineageNodeIds(typed: TypedGraphResponse): Set<string> {
-  const ids = new Set<string>();
-  for (const node of typed.nodes) {
-    if (node.merged_from?.length) ids.add(node.id);
-    if (node.restart_of) ids.add(node.id);
-    if (node.superseded_by) ids.add(node.id);
-    if (node.invalidated_by) ids.add(node.id);
-    if (node.derived_from) ids.add(node.id);
-    for (const sourceId of node.merged_from ?? []) ids.add(sourceId);
-  }
-  for (const merged of Object.values(typed.lineage?.merged ?? {})) {
-    for (const id of merged) ids.add(id);
-  }
-  for (const derived of Object.values(typed.lineage?.derived ?? {})) {
-    if (typeof derived === "string") ids.add(derived);
-  }
-  for (const restarted of Object.values(typed.lineage?.restarted ?? {})) {
-    if (typeof restarted === "string") ids.add(restarted);
-  }
-  return ids;
+function parseFilterRound(round: string | null | undefined): number | null {
+  if (round == null || round.trim() === "") return null;
+  const parsed = Number(round);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.trunc(parsed);
 }
 
 function collectAgentNodeIds(typed: TypedGraphResponse): Set<string> {
@@ -100,10 +74,39 @@ function collectConfidenceEmphasis(typed: TypedGraphResponse): {
   return { emphasized, dimmed };
 }
 
+/** Round-spectrum emphasis for the 轮次谱系 lens (latest round by default). */
+function collectRoundEmphasis(
+  typed: TypedGraphResponse,
+  focusRound: number | null,
+): { emphasized: Set<string>; dimmed: Set<string> } {
+  const emphasized = new Set<string>();
+  const dimmed = new Set<string>();
+
+  const rounds = typed.nodes
+    .map((node) => node.round)
+    .filter((round): round is number => round != null && !Number.isNaN(round) && round > 0);
+
+  if (rounds.length === 0) return { emphasized, dimmed };
+
+  const targetRound = focusRound ?? Math.max(...rounds);
+
+  for (const node of typed.nodes) {
+    if (node.round == null || Number.isNaN(node.round) || node.round <= 0) {
+      dimmed.add(node.id);
+      continue;
+    }
+    if (node.round === targetRound) emphasized.add(node.id);
+    else dimmed.add(node.id);
+  }
+
+  return { emphasized, dimmed };
+}
+
 export function buildD5LensDisplayHints(
   lens: ResearchD5Lens,
   typed: TypedGraphResponse | undefined,
   model: StarCanvasViewModel | null,
+  options: D5LensDisplayOptions = {},
 ): D5LensDisplayHints {
   if (!typed || !model || lens === "relations") return EMPTY_HINTS;
 
@@ -133,27 +136,27 @@ export function buildD5LensDisplayHints(
     };
   }
 
-  const lineageNodes = collectLineageNodeIds(typed);
+  const focusRound = parseFilterRound(options.filterRound);
+  const { emphasized: roundNodes, dimmed: dimmedNodes } = collectRoundEmphasis(
+    typed,
+    focusRound,
+  );
+
+  if (roundNodes.size === 0 && dimmedNodes.size === 0) return EMPTY_HINTS;
+
   const emphasizedRelations = new Set<string>();
   const dimmedRelations = new Set<string>();
 
   for (const relation of model.relations) {
-    const lineageEdge =
-      MERGE_RELATION_KINDS.has(relation.kind) ||
-      LINEAGE_EDGE_TYPES.has(relation.edgeType.toLowerCase());
-    const touchesLineage =
-      lineageNodes.has(relation.fromNodeId) || lineageNodes.has(relation.toNodeId);
-    if (lineageEdge || touchesLineage) emphasizedRelations.add(relation.id);
+    const fromEmphasized = roundNodes.has(relation.fromNodeId);
+    const toEmphasized = roundNodes.has(relation.toNodeId);
+    if (fromEmphasized && toEmphasized) emphasizedRelations.add(relation.id);
+    else if (fromEmphasized || toEmphasized) emphasizedRelations.add(relation.id);
     else dimmedRelations.add(relation.id);
   }
 
-  const dimmedNodes = new Set<string>();
-  for (const id of allNodeIds) {
-    if (!lineageNodes.has(id)) dimmedNodes.add(id);
-  }
-
   return {
-    emphasizedNodeIds: lineageNodes,
+    emphasizedNodeIds: roundNodes,
     dimmedNodeIds: dimmedNodes,
     emphasizedRelationIds: emphasizedRelations,
     dimmedRelationIds: dimmedRelations,

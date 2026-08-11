@@ -7,19 +7,19 @@ const typed = {
   session_id: "s1",
   graph_version: 1,
   nodes: [
-    { id: "high", title: "High confidence", level: "l", confidence: 90 },
-    { id: "low", title: "Low confidence", level: "l", confidence: 20 },
-    { id: "unknown", title: "Unknown confidence", level: "m", confidence: null },
-    { id: "agent", title: "Agent task", level: "s", actor_agent_id: "a1" },
-    { id: "merge", title: "Merged", level: "xl", merged_from: ["high", "low"] },
+    { id: "high", title: "High confidence", level: "l", confidence: 90, round: 2 },
+    { id: "low", title: "Low confidence", level: "l", confidence: 20, round: 2 },
+    { id: "unknown", title: "Unknown confidence", level: "m", confidence: null, round: 1 },
+    { id: "agent", title: "Agent task", level: "s", actor_agent_id: "a1", round: 2 },
+    { id: "round1", title: "Round one", level: "xl", round: 1 },
   ],
   edges: [
-    { id: "e1", from_node_id: "high", to_node_id: "merge", edge_type: "merged_from" },
+    { id: "e1", from_node_id: "round1", to_node_id: "high", edge_type: "leads_to" },
     { id: "e2", from_node_id: "agent", to_node_id: "high", edge_type: "supports" },
   ],
   clusters: [],
   lineage: {
-    merged: { merge: ["high", "low"] },
+    merged: {},
     derived: {},
     restarted: {},
     superseded: {},
@@ -45,6 +45,23 @@ describe("buildD5LensDisplayHints", () => {
     const hints = buildD5LensDisplayHints("confidence", typed, model);
     expect(hints.emphasizedNodeIds.has("high")).toBe(true);
     expect(hints.dimmedNodeIds.has("unknown")).toBe(true);
+  });
+
+  it("emphasizes the latest round in the lineage lens", () => {
+    const hints = buildD5LensDisplayHints("lineage", typed, model);
+    expect(hints.emphasizedNodeIds.has("high")).toBe(true);
+    expect(hints.emphasizedNodeIds.has("agent")).toBe(true);
+    expect(hints.dimmedNodeIds.has("round1")).toBe(true);
+    expect(hints.dimmedNodeIds.has("unknown")).toBe(true);
+    expect(hints.emphasizedRelationIds.has("e2")).toBe(true);
+  });
+
+  it("honours filterRound override in the lineage lens", () => {
+    const hints = buildD5LensDisplayHints("lineage", typed, model, { filterRound: "1" });
+    expect(hints.emphasizedNodeIds.has("round1")).toBe(true);
+    expect(hints.emphasizedNodeIds.has("unknown")).toBe(true);
+    expect(hints.dimmedNodeIds.has("high")).toBe(true);
+    expect(hints.dimmedNodeIds.has("agent")).toBe(true);
   });
 });
 

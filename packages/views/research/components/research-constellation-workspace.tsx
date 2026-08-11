@@ -221,8 +221,11 @@ export function ResearchConstellationWorkspace({
   }, [canvasModel]);
 
   const lensHints = useMemo(
-    () => buildD5LensDisplayHints(activeLens, typedGraph, canvasModel),
-    [activeLens, typedGraph, canvasModel],
+    () =>
+      buildD5LensDisplayHints(activeLens, typedGraph, canvasModel, {
+        filterRound: canvasFilter.round,
+      }),
+    [activeLens, typedGraph, canvasModel, canvasFilter.round],
   );
 
   const motionDirectives = useMemo(() => {

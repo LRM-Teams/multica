@@ -108,7 +108,7 @@ export function ResearchAgentInspector({
           data-testid="research-agent-inspector"
           data-placement="sheet"
           className={cn(
-            "max-h-[min(72dvh,560px)] gap-0 overflow-y-auto rounded-t-2xl border-t border-border bg-[#0d1723] p-0 text-foreground",
+            "max-h-[min(72dvh,560px)] gap-0 overflow-y-auto rounded-t-2xl border-t border-border bg-[var(--sg-panel-solid)] p-0 text-foreground",
             className,
           )}
         >

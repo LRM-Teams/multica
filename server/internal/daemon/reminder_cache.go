@@ -89,7 +89,7 @@ func newReminderCache(clock reminderClock, logger *slog.Logger, onFire func(prot
 		clock:          clock,
 		onFire:         onFire,
 		logger:         logger,
-		writeState:     writeReminderAgentState,
+		writeState:     writeDaemonStateAtomically,
 	}
 }
 

@@ -138,7 +138,6 @@ type Daemon struct {
 
 	reminderCache                    *reminderCache
 	agentAttachments                 AgentAttachmentRegistry
-	reminderAgents                   *reminderAgentManager
 	reminderWSMu                     sync.RWMutex
 	reminderWrites                   chan<- []byte
 	reminderWSDone                   <-chan struct{}
@@ -303,13 +302,16 @@ func (d *Daemon) removeIdleMessageCoordinator(agentID, runtimeID string) {
 	}
 }
 
-func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {
+func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, workspaceID string, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {
 	d.messageCoordinatorMu.RLock()
 	coordinator := d.messageCoordinators[delivery.AgentID]
 	runtimeID := d.messageRuntimeIDs[delivery.AgentID]
 	d.messageCoordinatorMu.RUnlock()
+	if coordinator != nil && !d.ownsWorkspaceRunnerRuntime(workspaceID, runtimeID) {
+		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("Message coordinator for agent %q is outside Workspace %q", delivery.AgentID, workspaceID)
+	}
 	if coordinator == nil {
-		if err := d.ensureIdleMessageCoordinatorForDelivery(delivery.AgentID); err != nil {
+		if err := d.ensureIdleMessageCoordinatorForDelivery(workspaceID, delivery.AgentID); err != nil {
 			return protocol.AgentDeliverAckPayload{}, err
 		}
 		d.messageCoordinatorMu.RLock()
@@ -324,9 +326,6 @@ func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.
 	if err != nil {
 		return protocol.AgentDeliverAckPayload{}, err
 	}
-	d.mu.Lock()
-	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
-	d.mu.Unlock()
 	outcome := "accepted"
 	if !accepted {
 		outcome = "deduplicated"
@@ -474,8 +473,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
 	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
-	d.reminderAgents = newReminderAgentManager(cfg.WorkspacesRoot, logger)
-	d.agentAttachments = d.reminderAgents.localAgentAttachmentRegistry
+	d.agentAttachments = newLocalAgentAttachmentRegistry(cfg.WorkspacesRoot, logger)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	return d
@@ -3217,11 +3215,14 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 	ctx = executionCtx
 
-	if d.reminderAgents != nil {
-		if d.reminderAgents.markRunning(task.AgentID, task.RuntimeID, task.WorkspaceID) {
+	if registry := d.localAttachmentRegistry(); registry != nil {
+		createdProvisional, observed := registry.observeTaskStarted(task.AgentID, task.RuntimeID, task.WorkspaceID)
+		if createdProvisional {
 			d.requestReminderSnapshot(task.WorkspaceID, task.AgentID)
 		}
-		defer d.reminderAgents.markIdle(task.AgentID)
+		if observed {
+			defer registry.observeTaskFinished(task.AgentID)
+		}
 	}
 
 	// Create a cancellable context so we can interrupt the running agent

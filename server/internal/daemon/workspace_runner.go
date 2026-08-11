@@ -321,7 +321,7 @@ func (d *Daemon) handleWorkspaceRunnerDelivery(
 	d.recordRunnerDiagnostic(workspaceID, d.canonicalMessageDiagnosticEvent(
 		workspaceID, runtimeID, delivery, "runner_received", "accepted", "",
 	))
-	ack, err := d.acceptIdleAgentDelivery(ctx, delivery)
+	ack, err := d.acceptIdleAgentDelivery(ctx, workspaceID, delivery)
 	// Restart-time delivery may recreate the coordinator and discover its
 	// durable runtime during acceptance. Re-read routing identity so every
 	// later checkpoint joins the same runtime even when runner_received could

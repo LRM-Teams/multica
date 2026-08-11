@@ -1428,7 +1428,10 @@ func TestDaemonAcknowledgesAfterPendingAcceptanceBeforeIdleHandoff(t *testing.T)
 	}
 	completeCoordinatorRecovery(t, coordinator)
 	delivery := testDelivery("message-1", "channel-1", 1, "delivery-1")
-	ack, err := daemon.acceptIdleAgentDelivery(context.Background(), delivery)
+	daemon.mu.Lock()
+	daemon.runtimeIndex = map[string]Runtime{"runtime-1": {ID: "runtime-1", WorkspaceID: "workspace-1"}}
+	daemon.mu.Unlock()
+	ack, err := daemon.acceptIdleAgentDelivery(context.Background(), "workspace-1", delivery)
 	if err != nil {
 		t.Fatalf("acceptIdleAgentDelivery: %v", err)
 	}

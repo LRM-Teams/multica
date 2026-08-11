@@ -64,8 +64,5 @@ func unchangedAgentAttachmentApplyResult(reason string) agentAttachmentApplyResu
 }
 
 func (d *Daemon) legacyAgentAttachmentAdapter() legacyAgentAttachmentAdapter {
-	if d == nil || d.reminderAgents == nil {
-		return legacyAgentAttachmentAdapter{}
-	}
-	return legacyAgentAttachmentAdapter{registry: d.reminderAgents.localAgentAttachmentRegistry}
+	return legacyAgentAttachmentAdapter{registry: d.localAttachmentRegistry()}
 }

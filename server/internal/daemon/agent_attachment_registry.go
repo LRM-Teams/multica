@@ -14,32 +14,30 @@ import (
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
-const reminderAgentStateFile = "reminder_agents.json"
+const agentAttachmentStateFile = "reminder_agents.json"
 
 // These wire structs deliberately retain the existing reminder_agents.json
 // field names. Agent Attachment extraction must not require a state migration.
-type reminderAgentState struct {
-	Agents                  []reminderAgentResidency `json:"agents"`
-	RemovedAgentIDs         []string                 `json:"removed_agent_ids,omitempty"`
-	PlacementHighWatermarks map[string]int64         `json:"placement_high_watermarks,omitempty"`
-	RuntimeLifecycleCursors map[string]int64         `json:"runtime_lifecycle_cursors,omitempty"`
+type localAgentAttachmentState struct {
+	Agents                  []localAgentAttachmentRecord `json:"agents"`
+	RemovedAgentIDs         []string                     `json:"removed_agent_ids,omitempty"`
+	PlacementHighWatermarks map[string]int64             `json:"placement_high_watermarks,omitempty"`
+	RuntimeLifecycleCursors map[string]int64             `json:"runtime_lifecycle_cursors,omitempty"`
 }
 
-type reminderAgentResidency struct {
+type localAgentAttachmentRecord struct {
 	AgentID             string `json:"agent_id"`
 	RuntimeID           string `json:"runtime_id"`
 	WorkspaceID         string `json:"workspace_id"`
 	PlacementGeneration int64  `json:"placement_generation"`
-	Running             int    `json:"-"`
+	ActiveTasks         int    `json:"-"`
 }
 
-// localAgentAttachmentRegistry owns the durable state that predates the
-// Agent Attachment vocabulary. The reminderAgentManager facade remains during
-// caller migration, but persistence and local bootstrap no longer belong to
-// Reminder projection code.
+// localAgentAttachmentRegistry owns durable Attachment persistence, fencing,
+// recovery cursors, and compatibility bootstrap from pre-Attachment state.
 type localAgentAttachmentRegistry struct {
 	mu                      sync.Mutex
-	agents                  map[string]reminderAgentResidency
+	agents                  map[string]localAgentAttachmentRecord
 	placementHighWatermarks map[string]int64
 	runtimeLifecycleCursors map[string]int64
 	root                    string
@@ -50,15 +48,15 @@ type localAgentAttachmentRegistry struct {
 
 func newLocalAgentAttachmentRegistry(workspacesRoot string, logger *slog.Logger) *localAgentAttachmentRegistry {
 	registry := &localAgentAttachmentRegistry{
-		agents:                  make(map[string]reminderAgentResidency),
+		agents:                  make(map[string]localAgentAttachmentRecord),
 		placementHighWatermarks: make(map[string]int64),
 		runtimeLifecycleCursors: make(map[string]int64),
 		root:                    strings.TrimSpace(workspacesRoot),
 		logger:                  logger,
-		writeState:              writeReminderAgentState,
+		writeState:              writeDaemonStateAtomically,
 	}
 	if registry.root != "" {
-		registry.path = filepath.Join(registry.root, ".daemon", reminderAgentStateFile)
+		registry.path = filepath.Join(registry.root, ".daemon", agentAttachmentStateFile)
 		registry.load()
 		registry.bootstrapFromLocalAgentConfigs()
 		if err := registry.persistLocked(); err != nil && registry.logger != nil {
@@ -66,6 +64,68 @@ func newLocalAgentAttachmentRegistry(workspacesRoot string, logger *slog.Logger)
 		}
 	}
 	return registry
+}
+
+// observeTaskStarted preserves the pre-Attachment bootstrap behavior for a
+// daemon that executes work before receiving a generation-bearing lifecycle
+// event. Generation-zero records remain provisional: Resolve and List exclude
+// them, so they cannot authorize restart recovery.
+func (r *localAgentAttachmentRegistry) observeTaskStarted(agentID, runtimeID, workspaceID string) (bool, bool) {
+	if r == nil || strings.TrimSpace(agentID) == "" {
+		return false, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	previous, existed := r.agents[agentID]
+	entry := previous
+	if !existed && r.placementHighWatermarks[agentID] > 0 {
+		return false, false
+	}
+	if existed && entry.PlacementGeneration > 0 && (entry.RuntimeID != runtimeID || entry.WorkspaceID != workspaceID) {
+		if r.logger != nil {
+			r.logger.Warn("provisional task observation rejected outside Agent Attachment", "workspace_id", workspaceID, "runtime_id", runtimeID, "agent_id", agentID, "attachment_workspace_id", entry.WorkspaceID, "attachment_runtime_id", entry.RuntimeID, "attachment_generation", entry.PlacementGeneration, "reason", "attachment_identity_mismatch")
+		}
+		return false, false
+	}
+	entry.AgentID = agentID
+	entry.RuntimeID = runtimeID
+	entry.WorkspaceID = workspaceID
+	entry.ActiveTasks++
+	r.agents[agentID] = entry
+	if err := r.persistLocked(); err != nil {
+		if existed {
+			r.agents[agentID] = previous
+		} else {
+			delete(r.agents, agentID)
+		}
+		if r.logger != nil {
+			r.logger.Warn("persist provisional Agent Attachment task observation failed", "workspace_id", workspaceID, "runtime_id", runtimeID, "agent_id", agentID, "reason", "persist_failed", "error", err)
+		}
+		return false, false
+	}
+	return !existed, true
+}
+
+func (r *localAgentAttachmentRegistry) observeTaskFinished(agentID string) {
+	if r == nil || strings.TrimSpace(agentID) == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.agents[agentID]
+	previous := entry
+	if ok && entry.ActiveTasks > 0 {
+		entry.ActiveTasks--
+		r.agents[agentID] = entry
+	}
+	if err := r.persistLocked(); err != nil {
+		if ok {
+			r.agents[agentID] = previous
+		}
+		if r.logger != nil {
+			r.logger.Warn("persist provisional Agent Attachment task completion failed", "workspace_id", entry.WorkspaceID, "runtime_id", entry.RuntimeID, "agent_id", agentID, "reason", "persist_failed", "error", err)
+		}
+	}
 }
 
 type agentAttachmentApplyResult struct {
@@ -123,7 +183,7 @@ func (r *localAgentAttachmentRegistry) applyEvent(
 		result.reason = "duplicate_lifecycle_sequence"
 		if event.Kind == AgentAttachmentEventAttach && existed && entry.WorkspaceID == workspaceID && entry.RuntimeID == event.RuntimeID && entry.PlacementGeneration == int64(event.AttachmentGeneration) {
 			result.accepted = true
-			result.change.Current = residencyAttachment(entry)
+			result.change.Current = attachmentFromRecord(entry)
 		}
 		r.logApplyLocked(workspaceID, event, result, nil)
 		return result, nil
@@ -134,7 +194,7 @@ func (r *localAgentAttachmentRegistry) applyEvent(
 	stateChanged := false
 	generation := int64(event.AttachmentGeneration)
 	highWatermark := previousGeneration
-	current := residencyAttachment(entry)
+	current := attachmentFromRecord(entry)
 
 	switch event.Kind {
 	case AgentAttachmentEventAttach:
@@ -166,7 +226,7 @@ func (r *localAgentAttachmentRegistry) applyEvent(
 				result.change.Kind = AgentAttachmentAttached
 				result.reason = "attached"
 			}
-			r.agents[event.AgentID] = reminderAgentResidency{
+			r.agents[event.AgentID] = localAgentAttachmentRecord{
 				AgentID: event.AgentID, RuntimeID: event.RuntimeID, WorkspaceID: workspaceID,
 				PlacementGeneration: generation,
 			}
@@ -249,7 +309,7 @@ func (r *localAgentAttachmentRegistry) Resolve(workspaceID, agentID string) (Age
 	if !found || entry.WorkspaceID != workspaceID || entry.PlacementGeneration < 1 {
 		return AgentAttachment{}, false
 	}
-	return residencyAttachment(entry), true
+	return attachmentFromRecord(entry), true
 }
 
 func (r *localAgentAttachmentRegistry) List(workspaceID string) []AgentAttachment {
@@ -260,7 +320,7 @@ func (r *localAgentAttachmentRegistry) List(workspaceID string) []AgentAttachmen
 	attachments := make([]AgentAttachment, 0)
 	for _, entry := range r.agents {
 		if entry.WorkspaceID == workspaceID && entry.PlacementGeneration > 0 {
-			attachments = append(attachments, residencyAttachment(entry))
+			attachments = append(attachments, attachmentFromRecord(entry))
 		}
 	}
 	r.mu.Unlock()
@@ -415,7 +475,7 @@ func (r *localAgentAttachmentRegistry) reconcile(
 			return nil, false, err
 		}
 	}
-	previousAgents := cloneResidencyMap(r.agents)
+	previousAgents := cloneAttachmentRecordMap(r.agents)
 	previousHighWatermarks := cloneInt64Map(r.placementHighWatermarks)
 	previousCursors := cloneInt64Map(r.runtimeLifecycleCursors)
 	changes := make([]AgentAttachmentChange, 0)
@@ -436,7 +496,7 @@ func (r *localAgentAttachmentRegistry) reconcile(
 			r.placementHighWatermarks[agentID] = generation
 		}
 		removedRuntimeIDs[entry.RuntimeID] = struct{}{}
-		previous := residencyAttachment(entry)
+		previous := attachmentFromRecord(entry)
 		previous.AttachmentGeneration = AttachmentGeneration(generation)
 		changes = append(changes, AgentAttachmentChange{
 			Kind: AgentAttachmentDetached, Previous: previous,
@@ -524,15 +584,15 @@ func (r *localAgentAttachmentRegistry) logApplyLocked(workspaceID string, event 
 	r.logger.Info("Agent Attachment applied", args...)
 }
 
-func residencyAttachment(entry reminderAgentResidency) AgentAttachment {
+func attachmentFromRecord(entry localAgentAttachmentRecord) AgentAttachment {
 	return AgentAttachment{
 		WorkspaceID: entry.WorkspaceID, AgentID: entry.AgentID, RuntimeID: entry.RuntimeID,
 		AttachmentGeneration: AttachmentGeneration(entry.PlacementGeneration),
 	}
 }
 
-func cloneResidencyMap(source map[string]reminderAgentResidency) map[string]reminderAgentResidency {
-	clone := make(map[string]reminderAgentResidency, len(source))
+func cloneAttachmentRecordMap(source map[string]localAgentAttachmentRecord) map[string]localAgentAttachmentRecord {
+	clone := make(map[string]localAgentAttachmentRecord, len(source))
 	for key, value := range source {
 		clone[key] = value
 	}
@@ -555,7 +615,7 @@ func (r *localAgentAttachmentRegistry) load() {
 		}
 		return
 	}
-	var state reminderAgentState
+	var state localAgentAttachmentState
 	if err := json.Unmarshal(raw, &state); err != nil {
 		if r.logger != nil {
 			r.logger.Warn("decode Agent Attachment registry failed", "error", err)
@@ -566,7 +626,7 @@ func (r *localAgentAttachmentRegistry) load() {
 		if entry.AgentID == "" {
 			continue
 		}
-		entry.Running = 0
+		entry.ActiveTasks = 0
 		r.agents[entry.AgentID] = entry
 		if entry.PlacementGeneration > r.placementHighWatermarks[entry.AgentID] {
 			r.placementHighWatermarks[entry.AgentID] = entry.PlacementGeneration
@@ -631,7 +691,7 @@ func (r *localAgentAttachmentRegistry) bootstrapFromLocalAgentConfigs() {
 			if _, exists := r.agents[config.AgentID]; exists {
 				continue
 			}
-			r.agents[config.AgentID] = reminderAgentResidency{
+			r.agents[config.AgentID] = localAgentAttachmentRecord{
 				AgentID: config.AgentID, RuntimeID: config.RuntimeID, WorkspaceID: config.WorkspaceID,
 			}
 		}
@@ -642,9 +702,9 @@ func (r *localAgentAttachmentRegistry) persistLocked() error {
 	if r.path == "" {
 		return nil
 	}
-	entries := make([]reminderAgentResidency, 0, len(r.agents))
+	entries := make([]localAgentAttachmentRecord, 0, len(r.agents))
 	for _, entry := range r.agents {
-		entry.Running = 0
+		entry.ActiveTasks = 0
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].AgentID < entries[j].AgentID })
@@ -656,7 +716,7 @@ func (r *localAgentAttachmentRegistry) persistLocked() error {
 	for runtimeID, seq := range r.runtimeLifecycleCursors {
 		cursors[runtimeID] = seq
 	}
-	raw, err := json.Marshal(reminderAgentState{
+	raw, err := json.Marshal(localAgentAttachmentState{
 		Agents: entries, PlacementHighWatermarks: highWatermarks, RuntimeLifecycleCursors: cursors,
 	})
 	if err != nil {
@@ -668,7 +728,7 @@ func (r *localAgentAttachmentRegistry) persistLocked() error {
 	return r.writeState(r.path, raw)
 }
 
-func writeReminderAgentState(path string, raw []byte) error {
+func writeDaemonStateAtomically(path string, raw []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err

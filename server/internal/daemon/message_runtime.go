@@ -53,37 +53,44 @@ func (d *Daemon) ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID, a
 }
 
 // ensureIdleMessageCoordinatorForDelivery repairs restart-time coordinator
-// loss from the daemon's durable Agent placement. Runtime routing remains out
-// of the Message envelope; only an already-authorized local residency may
-// recreate this receive-side projection.
-func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(agentID string) error {
-	if d == nil || strings.TrimSpace(agentID) == "" {
-		return errors.New("agent id is required")
+// loss from the daemon's durable Agent Attachment. Runtime routing remains out
+// of the Message envelope; the fixed Runner Workspace scope and a matching
+// Attachment are both required to recreate this receive-side projection.
+func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	agentID = strings.TrimSpace(agentID)
+	if d == nil || workspaceID == "" || agentID == "" {
+		return errors.New("workspace and agent ids are required")
 	}
 	d.messageCoordinatorMu.RLock()
 	existing := d.messageCoordinators[agentID]
+	existingRuntimeID := d.messageRuntimeIDs[agentID]
 	d.messageCoordinatorMu.RUnlock()
 	if existing != nil {
+		if !d.ownsWorkspaceRunnerRuntime(workspaceID, existingRuntimeID) {
+			return fmt.Errorf("Message coordinator for agent %q is outside Workspace %q", agentID, workspaceID)
+		}
 		return nil
 	}
-	if d.reminderAgents == nil {
-		return fmt.Errorf("no durable Agent placement for %q", agentID)
+	registry := d.attachmentRegistry()
+	if registry == nil {
+		return fmt.Errorf("no durable Agent Attachment for %q in Workspace %q", agentID, workspaceID)
 	}
-	residency, ok := d.reminderAgents.get(agentID)
-	if !ok || residency.RuntimeID == "" || residency.WorkspaceID == "" || residency.PlacementGeneration < 1 {
-		return fmt.Errorf("no durable Agent placement for %q", agentID)
+	attachment, ok := registry.Resolve(workspaceID, agentID)
+	if !ok {
+		return fmt.Errorf("no durable Agent Attachment for %q in Workspace %q", agentID, workspaceID)
 	}
 	d.mu.Lock()
-	runtime, runtimeKnown := d.runtimeIndex[residency.RuntimeID]
+	runtime, runtimeKnown := d.runtimeIndex[attachment.RuntimeID]
 	d.mu.Unlock()
-	if !runtimeKnown || runtime.WorkspaceID != residency.WorkspaceID {
-		return fmt.Errorf("durable Agent placement for %q is not owned by this daemon", agentID)
+	if !runtimeKnown || runtime.WorkspaceID != workspaceID {
+		return fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, workspaceID)
 	}
-	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, residency.WorkspaceID, agentID)
+	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		return fmt.Errorf("create Agent root for Message coordinator: %w", err)
 	}
-	created, err := d.ensureIdleMessageCoordinator(residency.WorkspaceID, agentID, residency.RuntimeID, agentRoot)
+	created, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID, agentRoot)
 	if err != nil {
 		return fmt.Errorf("repair Agent Message coordinator: %w", err)
 	}

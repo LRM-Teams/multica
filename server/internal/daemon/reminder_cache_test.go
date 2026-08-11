@@ -296,7 +296,7 @@ func TestReminderCacheSnapshotPreservesInFlightRetry(t *testing.T) {
 
 // TestOnReminderTimerOwnerMissingLogsAndSelfHealsOnNextRetry pins task #69:
 // a due reminder timer firing while its owner is (transiently) absent from
-// the local residency map used to be a pure silent drop — armLocked already
+// the local Attachment map used to be a pure silent drop — armLocked already
 // deleted nothing (task #68 keeps the in-flight entry), but onReminderTimer
 // itself returned with zero trace: no fire_attempt queued, no error, no
 // reconnect forced. A perfectly healthy WS connection would show no symptom
@@ -313,13 +313,13 @@ func TestOnReminderTimerOwnerMissingLogsAndSelfHealsOnNextRetry(t *testing.T) {
 	var logBuf strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	mgr := newReminderAgentManager("", logger)
+	mgr := newLocalAgentAttachmentRegistry("", logger)
 	cache := newReminderCache(clock, logger, nil)
 	writes := make(chan []byte, 4)
 	var d *Daemon
 	cache.onFire = func(job protocol.ReminderTimerJob) { d.onReminderTimer(job) }
 	d = &Daemon{
-		logger: logger, reminderAgents: mgr, reminderCache: cache,
+		logger: logger, agentAttachments: mgr, reminderCache: cache,
 		runtimeIndex: map[string]Runtime{"runtime-x": {ID: "runtime-x", WorkspaceID: "workspace-x"}},
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
@@ -418,9 +418,9 @@ func TestReminderCacheCorruptDurableStateRecoversThroughCanonicalRuntimeReset(t 
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(root, logger)
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 3); err != nil || !changed || !accepted {
-		t.Fatalf("seed local residency changed=%v accepted=%v err=%v", changed, accepted, err)
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 3); err != nil || !changed || !accepted {
+		t.Fatalf("seed local Attachment changed=%v accepted=%v err=%v", changed, accepted, err)
 	}
 	writes := make(chan []byte, 8)
 	d := &Daemon{
@@ -428,9 +428,9 @@ func TestReminderCacheCorruptDurableStateRecoversThroughCanonicalRuntimeReset(t 
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 	if len(clock.timers) != 0 {
@@ -508,11 +508,11 @@ func TestReminderCacheCorruptDurableStateResetPersistFailureKeepsTimersAndProjec
 		if writesBeforeFailure == 2 {
 			return errors.New("injected canonical reset replacement failure")
 		}
-		return writeReminderAgentState(path, raw)
+		return writeDaemonStateAtomically(path, raw)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(root, logger)
-	if _, _, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 3); err != nil {
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
+	if _, _, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 3); err != nil {
 		t.Fatal(err)
 	}
 	writes := make(chan []byte, 8)
@@ -521,9 +521,9 @@ func TestReminderCacheCorruptDurableStateResetPersistFailureKeepsTimersAndProjec
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 	if err := d.handleDaemonAgentLifecycleReplayEnd(protocol.DaemonAgentLifecycleReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 9}}); err != nil {
@@ -628,7 +628,7 @@ func TestReminderCacheOwnerRemovalPersistFailureRestoresPendingFireFence(t *test
 	if fence := cache.highWatermark("r1"); fence.Version != 3 || fence.Terminal {
 		t.Fatalf("owner removal failure lost fence: %+v", fence)
 	}
-	cache.writeState = writeReminderAgentState
+	cache.writeState = writeDaemonStateAtomically
 	result := reminderProjection(2, "runtime-a", "fire_result", job, false)
 	if applied, err := cache.applyProjection(result); err != nil || !applied {
 		t.Fatalf("restored pending fire did not accept canonical result = %v, %v", applied, err)
@@ -640,16 +640,16 @@ func TestReminderProjectionStalePlacementOnlyAdvancesDurableCursor(t *testing.T)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cache := newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil)
 	cache.setPersistence(root)
-	mgr := newReminderAgentManager(t.TempDir(), logger)
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 2); err != nil || !changed || !accepted {
+	mgr := newLocalAgentAttachmentRegistry(t.TempDir(), logger)
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 2); err != nil || !changed || !accepted {
 		t.Fatal("seed placement")
 	}
 	writes := make(chan []byte, 2)
 	d := &Daemon{
-		logger:         logger,
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		logger:           logger,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 	job := reminderJob("r1", "agent-a", 1, time.Now().UTC().Add(time.Hour))
@@ -685,10 +685,10 @@ func TestReminderProjectionForDepartedOwnerPersistsCursorBeforeAck(t *testing.T)
 	writes := make(chan []byte, 1)
 	done := make(chan struct{})
 	d := &Daemon{
-		logger:         logger,
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: newReminderAgentManager(t.TempDir(), logger),
-		reminderCache:  cache,
+		logger:           logger,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: newLocalAgentAttachmentRegistry(t.TempDir(), logger),
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
 	job := reminderJob("departed", "agent-gone", 7, time.Now().UTC().Add(time.Hour))
@@ -721,15 +721,15 @@ func TestReminderProjectionLiveGapReplaysBeforeAckingHigherSequence(t *testing.T
 	now := time.Now().UTC()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cache := newReminderCache(&fakeReminderClock{now: now}, logger, nil)
-	mgr := newReminderAgentManager(t.TempDir(), logger)
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil || !changed || !accepted {
+	mgr := newLocalAgentAttachmentRegistry(t.TempDir(), logger)
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil || !changed || !accepted {
 		t.Fatal("seed placement")
 	}
 	writes := make(chan []byte, 8)
 	d := &Daemon{
 		logger:                 logger,
 		runtimeIndex:           map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents:         mgr,
+		agentAttachments:       mgr,
 		reminderCache:          cache,
 		reminderReplayComplete: true,
 	}
@@ -782,16 +782,16 @@ func TestReminderProjectionGapDuringReplayLatchesImmediateSuccessorBeforeOpening
 	clock := &fakeReminderClock{now: now}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cache := newReminderCache(clock, logger, nil)
-	mgr := newReminderAgentManager(t.TempDir(), logger)
-	if _, _, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil {
+	mgr := newLocalAgentAttachmentRegistry(t.TempDir(), logger)
+	if _, _, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil {
 		t.Fatal(err)
 	}
 	writes := make(chan []byte, 8)
 	d := &Daemon{
-		logger:         logger,
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		logger:           logger,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 	d.reminderGateMu.Lock()
@@ -853,29 +853,29 @@ func TestReminderProjectionGapDuringReplayLatchesImmediateSuccessorBeforeOpening
 	}
 }
 
-func TestReminderAgentManagerPersistsIdleResidency(t *testing.T) {
+func TestAgentAttachmentRegistryPersistsProvisionalTaskObservation(t *testing.T) {
 	root := t.TempDir()
-	mgr := newReminderAgentManager(root, nil)
-	if !mgr.markRunning("a1", "r1", "w1") {
-		t.Fatal("first local owner was not reported new")
+	mgr := newLocalAgentAttachmentRegistry(root, nil)
+	if created, observed := mgr.observeTaskStarted("a1", "r1", "w1"); !created || !observed {
+		t.Fatal("first local Attachment was not reported new")
 	}
-	if mgr.markRunning("a1", "r1", "w1") {
-		t.Fatal("existing local owner reported new")
+	if created, observed := mgr.observeTaskStarted("a1", "r1", "w1"); created || !observed {
+		t.Fatal("existing local Attachment reported new")
 	}
-	mgr.markIdle("a1")
-	mgr.markIdle("a1")
+	mgr.observeTaskFinished("a1")
+	mgr.observeTaskFinished("a1")
 
-	reloaded := newReminderAgentManager(root, nil)
-	entry, ok := reloaded.get("a1")
-	if !ok || entry.Running != 0 || entry.RuntimeID != "r1" || entry.WorkspaceID != "w1" {
-		t.Fatalf("reloaded residency = %+v, %v", entry, ok)
+	reloaded := newLocalAgentAttachmentRegistry(root, nil)
+	entry, ok := reloaded.localRecord("a1")
+	if !ok || entry.ActiveTasks != 0 || entry.RuntimeID != "r1" || entry.WorkspaceID != "w1" {
+		t.Fatalf("reloaded Attachment record = %+v, %v", entry, ok)
 	}
-	if removed, accepted, err := reloaded.applyStop("a1", "r1", 1); err != nil || !removed || !accepted || len(reloaded.residentAgentIDs()) != 0 {
-		t.Fatal("terminal removal did not clear local owner")
+	if removed, accepted, err := reloaded.applyLegacyStop("a1", "r1", 1); err != nil || !removed || !accepted || len(reloaded.localAgentIDs()) != 0 {
+		t.Fatal("terminal removal did not clear local Attachment")
 	}
 }
 
-func TestReminderAgentManagerBootstrapsRecoverableConfigAndKeepsRemovalTombstone(t *testing.T) {
+func TestAgentAttachmentRegistryBootstrapsRecoverableConfigAndKeepsRemovalTombstone(t *testing.T) {
 	root := t.TempDir()
 	config := cachedAgentCredential{
 		AgentID:     uuid.NewString(),
@@ -894,90 +894,90 @@ func TestReminderAgentManagerBootstrapsRecoverableConfigAndKeepsRemovalTombstone
 		t.Fatal(err)
 	}
 
-	mgr := newReminderAgentManager(root, nil)
-	entry, ok := mgr.get(config.AgentID)
-	if !ok || entry.RuntimeID != config.RuntimeID || entry.WorkspaceID != config.WorkspaceID || entry.Running != 0 {
-		t.Fatalf("bootstrapped residency = %+v, %v", entry, ok)
+	mgr := newLocalAgentAttachmentRegistry(root, nil)
+	entry, ok := mgr.localRecord(config.AgentID)
+	if !ok || entry.RuntimeID != config.RuntimeID || entry.WorkspaceID != config.WorkspaceID || entry.ActiveTasks != 0 {
+		t.Fatalf("bootstrapped Attachment record = %+v, %v", entry, ok)
 	}
-	if removed, accepted, err := mgr.applyStop(config.AgentID, config.RuntimeID, 1); err != nil || !removed || !accepted {
+	if removed, accepted, err := mgr.applyLegacyStop(config.AgentID, config.RuntimeID, 1); err != nil || !removed || !accepted {
 		t.Fatal("remove bootstrapped owner = false")
 	}
-	if _, ok := newReminderAgentManager(root, nil).get(config.AgentID); ok {
+	if _, ok := newLocalAgentAttachmentRegistry(root, nil).localRecord(config.AgentID); ok {
 		t.Fatal("removed owner was resurrected from stale local config")
 	}
 
-	reloaded := newReminderAgentManager(root, nil)
-	if changed, accepted, err := reloaded.applyStart(config.AgentID, "runtime-new", config.WorkspaceID, 2); err != nil || !changed || !accepted {
-		t.Fatal("local owner recreation was not reported as new")
+	reloaded := newLocalAgentAttachmentRegistry(root, nil)
+	if changed, accepted, err := reloaded.applyLegacyStart(config.AgentID, "runtime-new", config.WorkspaceID, 2); err != nil || !changed || !accepted {
+		t.Fatal("local Attachment recreation was not reported as new")
 	}
-	entry, ok = newReminderAgentManager(root, nil).get(config.AgentID)
+	entry, ok = newLocalAgentAttachmentRegistry(root, nil).localRecord(config.AgentID)
 	if !ok || entry.RuntimeID != "runtime-new" {
-		t.Fatalf("recreated residency = %+v, %v", entry, ok)
+		t.Fatalf("recreated Attachment record = %+v, %v", entry, ok)
 	}
 }
 
 func TestDaemonAgentStopClearsOwnerResidencyAndReminderCache(t *testing.T) {
 	clock := &fakeReminderClock{now: time.Now().UTC()}
 	d := &Daemon{
-		reminderAgents: newReminderAgentManager(t.TempDir(), nil),
-		reminderCache:  newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.ReminderTimerJob) {}),
+		agentAttachments: newLocalAgentAttachmentRegistry(t.TempDir(), nil),
+		reminderCache:    newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.ReminderTimerJob) {}),
 	}
-	d.reminderAgents.markRunning("agent-a", "runtime-a", "workspace-a")
-	d.reminderAgents.markIdle("agent-a")
-	d.reminderAgents.markRunning("agent-b", "runtime-a", "workspace-a")
-	d.reminderAgents.markIdle("agent-b")
+	d.localAttachmentRegistry().observeTaskStarted("agent-a", "runtime-a", "workspace-a")
+	d.localAttachmentRegistry().observeTaskFinished("agent-a")
+	d.localAttachmentRegistry().observeTaskStarted("agent-b", "runtime-a", "workspace-a")
+	d.localAttachmentRegistry().observeTaskFinished("agent-b")
 	d.reminderCache.upsert(reminderJob("reminder-a", "agent-a", 1, clock.now.Add(time.Hour)))
 	d.reminderCache.upsert(reminderJob("reminder-b", "agent-b", 1, clock.now.Add(time.Hour)))
 
 	d.handleDaemonAgentStop(protocol.DaemonAgentStopPayload{AgentID: "agent-a", RuntimeID: "runtime-a", PlacementGeneration: 1})
 
-	if _, ok := d.reminderAgents.get("agent-a"); ok {
+	if _, ok := d.localAttachmentRegistry().localRecord("agent-a"); ok {
 		t.Fatal("stopped owner remains resident")
 	}
 	if _, ok := d.reminderCache.get("reminder-a"); ok {
 		t.Fatal("stopped owner reminder remains cached")
 	}
-	if _, ok := d.reminderAgents.get("agent-b"); !ok {
-		t.Fatal("unrelated owner residency was removed")
+	if _, ok := d.localAttachmentRegistry().localRecord("agent-b"); !ok {
+		t.Fatal("unrelated Agent Attachment was removed")
 	}
 	if _, ok := d.reminderCache.get("reminder-b"); !ok {
 		t.Fatal("unrelated owner reminder was removed")
 	}
 }
 
-func TestReminderAgentPlacementGenerationFencesAtoBtoAOutOfOrder(t *testing.T) {
-	mgr := newReminderAgentManager(t.TempDir(), nil)
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil || !changed || !accepted {
+func TestAgentAttachmentGenerationFencesAtoBtoAOutOfOrder(t *testing.T) {
+	mgr := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil || !changed || !accepted {
 		t.Fatal("initial A start rejected")
 	}
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-b", "workspace-a", 2); err != nil || !changed || !accepted {
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-b", "workspace-a", 2); err != nil || !changed || !accepted {
 		t.Fatal("A to B start rejected")
 	}
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-b", "workspace-a", 2); err != nil || changed || !accepted {
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-b", "workspace-a", 2); err != nil || changed || !accepted {
 		t.Fatal("duplicate B start was not idempotent")
 	}
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-c", "workspace-a", 2); err != nil || changed || accepted {
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-c", "workspace-a", 2); err != nil || changed || accepted {
 		t.Fatal("same-generation conflicting runtime start was accepted")
 	}
-	if removed, accepted, err := mgr.applyStop("agent-a", "runtime-a", 2); err != nil || removed || !accepted {
+	if removed, accepted, err := mgr.applyLegacyStop("agent-a", "runtime-a", 2); err != nil || removed || !accepted {
 		t.Fatal("same-generation old-runtime stop removed B")
 	}
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 3); err != nil || !changed || !accepted {
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 3); err != nil || !changed || !accepted {
 		t.Fatal("B to A start rejected")
 	}
-	if removed, accepted, err := mgr.applyStop("agent-a", "runtime-b", 2); err != nil || removed || accepted {
+	if removed, accepted, err := mgr.applyLegacyStop("agent-a", "runtime-b", 2); err != nil || removed || accepted {
 		t.Fatal("stale B stop was accepted")
 	}
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-b", "workspace-a", 2); err != nil || changed || accepted {
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-b", "workspace-a", 2); err != nil || changed || accepted {
 		t.Fatal("stale B start was accepted")
 	}
-	entry, ok := mgr.get("agent-a")
+	entry, ok := mgr.localRecord("agent-a")
 	if !ok || entry.RuntimeID != "runtime-a" || entry.PlacementGeneration != 3 {
 		t.Fatalf("final placement = %+v, %v", entry, ok)
 	}
 
-	reloaded := newReminderAgentManager(mgr.root, nil)
-	entry, ok = reloaded.get("agent-a")
+	reloaded := newLocalAgentAttachmentRegistry(mgr.root, nil)
+	entry, ok = reloaded.localRecord("agent-a")
 	if !ok || entry.RuntimeID != "runtime-a" || entry.PlacementGeneration != 3 {
 		t.Fatalf("reloaded placement = %+v, %v", entry, ok)
 	}
@@ -986,7 +986,7 @@ func TestReminderAgentPlacementGenerationFencesAtoBtoAOutOfOrder(t *testing.T) {
 func TestReminderReconnectRequestsSnapshotForAttachedAgents(t *testing.T) {
 	root := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(root, logger)
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
 	if _, err := mgr.Apply("workspace-a", AgentAttachmentEvent{
 		Kind: AgentAttachmentEventAttach, AgentID: "agent-running", RuntimeID: "runtime-a",
 		AttachmentGeneration: 1, LifecycleSeq: 1,
@@ -1002,10 +1002,10 @@ func TestReminderReconnectRequestsSnapshotForAttachedAgents(t *testing.T) {
 	writes := make(chan []byte, 2)
 	done := make(chan struct{})
 	d := &Daemon{
-		logger:         logger,
-		workspaces:     map[string]*workspaceState{"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache)},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
+		logger:           logger,
+		workspaces:       map[string]*workspaceState{"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache)},
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
 	d.reminderGateMu.Lock()
@@ -1036,8 +1036,8 @@ func TestReminderReconnectRequestsSnapshotForAttachedAgents(t *testing.T) {
 func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testing.T) {
 	root := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(root, logger)
-	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 4); err != nil || !changed || !accepted {
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
+	if changed, accepted, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 4); err != nil || !changed || !accepted {
 		t.Fatal("seed placement failed")
 	}
 	writes := make(chan []byte, 4)
@@ -1047,9 +1047,9 @@ func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testin
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil),
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil),
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
 	d.handleDaemonAgentLifecycleReplayEnd(protocol.DaemonAgentLifecycleReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 9}})
@@ -1084,7 +1084,7 @@ func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testin
 	if snapshot.AgentID != "agent-a" || snapshot.RuntimeID != "runtime-a" || snapshot.PlacementGeneration != 4 {
 		t.Fatalf("snapshot placement = %+v", snapshot)
 	}
-	if got := newReminderAgentManager(root, nil).lifecycleCursors()["runtime-a"]; got != 9 {
+	if got := newLocalAgentAttachmentRegistry(root, nil).legacyRecoveryCursors()["runtime-a"]; got != 9 {
 		t.Fatalf("persisted ack cursor = %d, want 9", got)
 	}
 }
@@ -1092,9 +1092,9 @@ func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testin
 func TestReminderProjectionReplaySnapshotBurstWaitsForWriterCapacity(t *testing.T) {
 	root := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(root, logger)
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
 	for _, agentID := range []string{"agent-a", "agent-b", "agent-c"} {
-		if changed, accepted, err := mgr.applyStart(agentID, "runtime-a", "workspace-a", 1); err != nil || !changed || !accepted {
+		if changed, accepted, err := mgr.applyLegacyStart(agentID, "runtime-a", "workspace-a", 1); err != nil || !changed || !accepted {
 			t.Fatalf("seed %s: changed=%v accepted=%v err=%v", agentID, changed, accepted, err)
 		}
 	}
@@ -1102,10 +1102,10 @@ func TestReminderProjectionReplaySnapshotBurstWaitsForWriterCapacity(t *testing.
 	done := make(chan struct{})
 	closed := make(chan struct{}, 1)
 	d := &Daemon{
-		logger:         logger,
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil),
+		logger:           logger,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil),
 	}
 	d.setReminderWS(writes, done, func() error {
 		closed <- struct{}{}
@@ -1156,8 +1156,8 @@ func TestReminderLifecycleHeartbeatCatchupRecoversLostMoveWithoutReconnect(t *te
 	clock := &fakeReminderClock{now: now}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	root := t.TempDir()
-	mgr := newReminderAgentManager(root, logger)
-	if _, _, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil {
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
+	if _, _, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 1); err != nil {
 		t.Fatal(err)
 	}
 	cache := newReminderCache(clock, logger, nil)
@@ -1172,8 +1172,8 @@ func TestReminderLifecycleHeartbeatCatchupRecoversLostMoveWithoutReconnect(t *te
 			"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"},
 			"runtime-b": {ID: "runtime-b", WorkspaceID: "workspace-a"},
 		},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { closed++; return nil })
 	d.reminderGateMu.Lock()
@@ -1259,7 +1259,7 @@ func TestReminderLifecycleHeartbeatCatchupRecoversLostMoveWithoutReconnect(t *te
 	}); err != nil {
 		t.Fatal(err)
 	}
-	owner, ok := mgr.get("agent-a")
+	owner, ok := mgr.localRecord("agent-a")
 	if !ok || owner.RuntimeID != "runtime-b" || owner.PlacementGeneration != 2 {
 		t.Fatalf("recovered owner=%+v present=%v", owner, ok)
 	}
@@ -1282,11 +1282,11 @@ func TestReminderRuntimeSetReconcileRetiresOldStateBeforeNewLifecycleRecovery(t 
 	clock := &fakeReminderClock{now: now}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	root := t.TempDir()
-	mgr := newReminderAgentManager(root, logger)
-	if _, _, err := mgr.applyStart("agent-a", "runtime-old", "workspace-a", 1); err != nil {
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
+	if _, _, err := mgr.applyLegacyStart("agent-a", "runtime-old", "workspace-a", 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.advanceLifecycleCursors(map[string]int64{"runtime-old": 7}); err != nil {
+	if err := mgr.advanceLegacyRecovery(map[string]int64{"runtime-old": 7}); err != nil {
 		t.Fatal(err)
 	}
 	var fired []protocol.ReminderTimerJob
@@ -1305,18 +1305,18 @@ func TestReminderRuntimeSetReconcileRetiresOldStateBeforeNewLifecycleRecovery(t 
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-new"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-new": {ID: "runtime-new", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		runtimeIndex:     map[string]Runtime{"runtime-new": {ID: "runtime-new", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	if err := d.reconcileReminderRuntimeSet([]string{"runtime-new"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := mgr.get("agent-a"); ok {
+	if _, ok := mgr.localRecord("agent-a"); ok {
 		t.Fatal("retired runtime owner survived local reconciliation")
 	}
-	if _, ok := mgr.lifecycleCursors()["runtime-old"]; ok {
-		t.Fatalf("retired lifecycle cursor survived: %v", mgr.lifecycleCursors())
+	if _, ok := mgr.legacyRecoveryCursors()["runtime-old"]; ok {
+		t.Fatalf("retired lifecycle cursor survived: %v", mgr.legacyRecoveryCursors())
 	}
 	if _, ok := cache.get("old-runtime-timer"); ok {
 		t.Fatal("retired runtime timer survived local reconciliation")
@@ -1402,11 +1402,11 @@ func TestReminderRuntimeSetReconcilePersistFailureStartsNoWSAndKeepsTimersSuspen
 	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
 	clock := &fakeReminderClock{now: now}
 	root := t.TempDir()
-	mgr := newReminderAgentManager(root, nil)
-	if _, _, err := mgr.applyStart("agent-a", "runtime-old", "workspace-a", 1); err != nil {
+	mgr := newLocalAgentAttachmentRegistry(root, nil)
+	if _, _, err := mgr.applyLegacyStart("agent-a", "runtime-old", "workspace-a", 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.advanceLifecycleCursors(map[string]int64{"runtime-old": 7}); err != nil {
+	if err := mgr.advanceLegacyRecovery(map[string]int64{"runtime-old": 7}); err != nil {
 		t.Fatal(err)
 	}
 	var fired []protocol.ReminderTimerJob
@@ -1419,10 +1419,10 @@ func TestReminderRuntimeSetReconcilePersistFailureStartsNoWSAndKeepsTimersSuspen
 	}
 	cache.writeState = func(string, []byte) error { return errors.New("injected retired cache persist failure") }
 	d := &Daemon{
-		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		runtimeIndex:   map[string]Runtime{"runtime-new": {ID: "runtime-new", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runtimeIndex:     map[string]Runtime{"runtime-new": {ID: "runtime-new", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	if err := d.reconcileReminderRuntimeSet([]string{"runtime-new"}); err == nil {
 		t.Fatal("retired runtime cache persist unexpectedly succeeded")
@@ -1437,10 +1437,10 @@ func TestReminderRuntimeSetReconcilePersistFailureStartsNoWSAndKeepsTimersSuspen
 	if _, ok := cache.get("old"); !ok {
 		t.Fatal("failed cache persist did not roll back in-memory entry")
 	}
-	if _, ok := newReminderAgentManager(root, nil).get("agent-a"); ok {
+	if _, ok := newLocalAgentAttachmentRegistry(root, nil).localRecord("agent-a"); ok {
 		t.Fatal("persisted retired owner resurrected after partial reconciliation")
 	}
-	cache.writeState = writeReminderAgentState
+	cache.writeState = writeDaemonStateAtomically
 	if err := d.reconcileReminderRuntimeSet([]string{"runtime-new"}); err != nil {
 		t.Fatalf("retry retired runtime reconciliation: %v", err)
 	}
@@ -1456,9 +1456,9 @@ func TestReminderProjectionCursorLossAtomicResetUsesOnlyLocalResidencies(t *test
 	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
 	clock := &fakeReminderClock{now: now}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(t.TempDir(), logger)
-	mgr.applyStart("agent-a", "runtime-a", "workspace-a", 3)
-	mgr.applyStart("agent-stale", "runtime-a", "workspace-a", 4)
+	mgr := newLocalAgentAttachmentRegistry(t.TempDir(), logger)
+	mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 3)
+	mgr.applyLegacyStart("agent-stale", "runtime-a", "workspace-a", 4)
 	var fired []protocol.ReminderTimerJob
 	cache := newReminderCache(clock, logger, func(job protocol.ReminderTimerJob) { fired = append(fired, job) })
 	cache.upsert(reminderJob("stale-due", "agent-stale", 1, now.Add(-time.Minute)))
@@ -1469,9 +1469,9 @@ func TestReminderProjectionCursorLossAtomicResetUsesOnlyLocalResidencies(t *test
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
 	clock.fire(0)
@@ -1490,11 +1490,11 @@ func TestReminderProjectionCursorLossAtomicResetUsesOnlyLocalResidencies(t *test
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := mgr.get("agent-stale"); ok {
-		t.Fatal("terminal local owner survived runtime reset")
+	if _, ok := mgr.localRecord("agent-stale"); ok {
+		t.Fatal("terminal local Attachment survived runtime reset")
 	}
-	if _, ok := mgr.get("agent-a"); !ok {
-		t.Fatal("canonical local owner was removed")
+	if _, ok := mgr.localRecord("agent-a"); !ok {
+		t.Fatal("canonical local Attachment was removed")
 	}
 	if job, ok := cache.get("canonical"); !ok || job.Version != 2 {
 		t.Fatalf("canonical reset timer=%+v present=%v", job, ok)
@@ -1516,8 +1516,8 @@ func TestReminderProjectionCursorLossAtomicResetUsesOnlyLocalResidencies(t *test
 
 func TestReminderProjectionCursorLossResetPersistFailureKeepsGateClosedAndSendsNoAck(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(t.TempDir(), logger)
-	mgr.applyStart("agent-a", "runtime-a", "workspace-a", 3)
+	mgr := newLocalAgentAttachmentRegistry(t.TempDir(), logger)
+	mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 3)
 	cache := newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil)
 	cache.path = filepath.Join(t.TempDir(), "reminder-cache.json")
 	cache.writeState = func(string, []byte) error { return errors.New("injected reset persist failure") }
@@ -1528,9 +1528,9 @@ func TestReminderProjectionCursorLossResetPersistFailureKeepsGateClosedAndSendsN
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
 	err := d.handleReminderProjectionReplayEnd(protocol.ReminderProjectionReplayEndPayload{
@@ -1557,15 +1557,15 @@ func TestReminderProjectionCursorLossResetPersistFailureKeepsGateClosedAndSendsN
 func TestReminderLifecyclePersistFailureRollsBackAndSendsNoAckOrSnapshot(t *testing.T) {
 	root := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(root, logger)
-	if _, _, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 4); err != nil {
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
+	if _, _, err := mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 4); err != nil {
 		t.Fatal(err)
 	}
 	mgr.writeState = func(string, []byte) error { return errors.New("injected state write failure") }
-	if changed, accepted, err := mgr.applyStart("agent-b", "runtime-a", "workspace-a", 5); err == nil || changed || accepted {
+	if changed, accepted, err := mgr.applyLegacyStart("agent-b", "runtime-a", "workspace-a", 5); err == nil || changed || accepted {
 		t.Fatalf("failed placement persist = changed %v accepted %v err %v", changed, accepted, err)
 	}
-	if _, ok := mgr.get("agent-b"); ok {
+	if _, ok := mgr.localRecord("agent-b"); ok {
 		t.Fatal("failed placement persist leaked in-memory owner")
 	}
 
@@ -1576,8 +1576,8 @@ func TestReminderLifecyclePersistFailureRollsBackAndSendsNoAckOrSnapshot(t *test
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: mgr,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: mgr,
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
 	err := d.handleDaemonAgentLifecycleReplayEnd(protocol.DaemonAgentLifecycleReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 9}})
@@ -1587,10 +1587,10 @@ func TestReminderLifecyclePersistFailureRollsBackAndSendsNoAckOrSnapshot(t *test
 	if len(writes) != 0 {
 		t.Fatalf("persist failure queued %d ACK/snapshot frames", len(writes))
 	}
-	if got := mgr.lifecycleCursors()["runtime-a"]; got != 0 {
+	if got := mgr.legacyRecoveryCursors()["runtime-a"]; got != 0 {
 		t.Fatalf("failed cursor persist leaked in-memory cursor %d", got)
 	}
-	if got := newReminderAgentManager(root, nil).lifecycleCursors()["runtime-a"]; got != 0 {
+	if got := newLocalAgentAttachmentRegistry(root, nil).legacyRecoveryCursors()["runtime-a"]; got != 0 {
 		t.Fatalf("failed cursor persist leaked durable cursor %d", got)
 	}
 }
@@ -1605,9 +1605,9 @@ func TestServerOriginatedOwnerStartBypassesStaleCapabilityCacheAndSchedulesTimer
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: newReminderAgentManager(t.TempDir(), logger),
-		reminderCache:  newReminderCache(clock, logger, func(protocol.ReminderTimerJob) {}),
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: newLocalAgentAttachmentRegistry(t.TempDir(), logger),
+		reminderCache:    newReminderCache(clock, logger, func(protocol.ReminderTimerJob) {}),
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
 	d.reminderGateMu.Lock()
@@ -1658,8 +1658,8 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 		t.Fatal(err)
 	}
 
-	mgr := newReminderAgentManager(root, logger)
-	owner, ok := mgr.get(config.AgentID)
+	mgr := newLocalAgentAttachmentRegistry(root, logger)
+	owner, ok := mgr.localRecord(config.AgentID)
 	if !ok || owner.PlacementGeneration != 0 {
 		t.Fatalf("bootstrapped owner=%+v present=%v, want generation zero", owner, ok)
 	}
@@ -1673,9 +1673,9 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 		workspaces: map[string]*workspaceState{
 			config.WorkspaceID: newWorkspaceState(config.WorkspaceID, []string{config.RuntimeID}),
 		},
-		runtimeIndex:   map[string]Runtime{config.RuntimeID: {ID: config.RuntimeID, WorkspaceID: config.WorkspaceID}},
-		reminderAgents: mgr,
-		reminderCache:  cache,
+		runtimeIndex:     map[string]Runtime{config.RuntimeID: {ID: config.RuntimeID, WorkspaceID: config.WorkspaceID}},
+		agentAttachments: mgr,
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
 
@@ -1728,7 +1728,7 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	}); err != nil {
 		t.Fatal(err)
 	}
-	owner, ok = mgr.get(config.AgentID)
+	owner, ok = mgr.localRecord(config.AgentID)
 	if !ok || owner.PlacementGeneration != 1 {
 		t.Fatalf("authoritative checkpoint owner=%+v present=%v", owner, ok)
 	}
@@ -1851,9 +1851,9 @@ func TestReminderLifecycleProbeAgainstOldServerStaysFailClosedWithoutReconnect(t
 		workspaces: map[string]*workspaceState{
 			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}),
 		},
-		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
-		reminderAgents: newReminderAgentManager(t.TempDir(), nil),
-		reminderCache:  cache,
+		runtimeIndex:     map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		agentAttachments: newLocalAgentAttachmentRegistry(t.TempDir(), nil),
+		reminderCache:    cache,
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { closed++; return nil })
 	if !d.requestAgentLifecycleReplay() {
@@ -1894,20 +1894,20 @@ func TestReminderLifecycleProbeAgainstOldServerStaysFailClosedWithoutReconnect(t
 func TestReminderOldStopAndSnapshotCannotDeleteOrRestoreNewPlacement(t *testing.T) {
 	clock := &fakeReminderClock{now: time.Now().UTC()}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := newReminderAgentManager(t.TempDir(), logger)
-	mgr.applyStart("agent-a", "runtime-a", "workspace-a", 3)
+	mgr := newLocalAgentAttachmentRegistry(t.TempDir(), logger)
+	mgr.applyLegacyStart("agent-a", "runtime-a", "workspace-a", 3)
 	cache := newReminderCache(clock, logger, func(protocol.ReminderTimerJob) {})
 	cache.upsert(reminderJob("current", "agent-a", 5, clock.now.Add(time.Hour)))
-	d := &Daemon{reminderAgents: mgr, reminderCache: cache}
+	d := &Daemon{agentAttachments: mgr, reminderCache: cache}
 
 	d.handleDaemonAgentStop(protocol.DaemonAgentStopPayload{AgentID: "agent-a", RuntimeID: "runtime-b", PlacementGeneration: 2})
-	if _, ok := mgr.get("agent-a"); !ok {
+	if _, ok := mgr.localRecord("agent-a"); !ok {
 		t.Fatal("old stop removed new placement")
 	}
 	if _, ok := cache.get("current"); !ok {
 		t.Fatal("old stop removed new placement timer")
 	}
-	owner, _ := mgr.get("agent-a")
+	owner, _ := mgr.localRecord("agent-a")
 	if owner.RuntimeID == "runtime-b" || owner.PlacementGeneration != 3 {
 		t.Fatalf("owner changed by old frame: %+v", owner)
 	}

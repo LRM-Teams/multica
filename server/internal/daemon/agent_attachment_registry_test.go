@@ -131,6 +131,26 @@ func TestAgentAttachmentRegistryRejectsCrossWorkspaceApply(t *testing.T) {
 	}
 }
 
+func TestTaskObservationCannotRewriteGenerationBearingAttachment(t *testing.T) {
+	registry := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
+	if _, err := registry.Apply("workspace-a", AgentAttachmentEvent{
+		Kind: AgentAttachmentEventAttach, AgentID: "agent-a", RuntimeID: "runtime-a",
+		AttachmentGeneration: 4, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if created, observed := registry.observeTaskStarted("agent-a", "runtime-b", "workspace-b"); created || observed {
+		t.Fatal("task observation reported a generation-bearing Attachment as new")
+	}
+	attachment, found := registry.Resolve("workspace-a", "agent-a")
+	if !found || attachment.RuntimeID != "runtime-a" || attachment.AttachmentGeneration != 4 {
+		t.Fatalf("task observation rewrote Attachment = %+v found=%v", attachment, found)
+	}
+	if _, found := registry.Resolve("workspace-b", "agent-a"); found {
+		t.Fatal("task observation moved Attachment across Workspace")
+	}
+}
+
 func TestAgentAttachmentRegistryReconcilesOnlyExplicitWorkspaceRuntimeSet(t *testing.T) {
 	registry := AgentAttachmentRegistry(newLocalAgentAttachmentRegistry(t.TempDir(), nil))
 	attach := func(workspaceID, agentID, runtimeID string) {

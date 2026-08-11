@@ -50,11 +50,12 @@ missing suffix.
 
 The first extraction continues reading and writing the existing
 `.daemon/reminder_agents.json` path and JSON field names. There is one durable
-state, not a new Attachment file plus a Reminder file. Existing
-`reminderAgentManager` lifecycle methods remain as temporary adapters while
-legacy `daemon:agent_start`, `daemon:agent_stop`, and replay-end frames are
-routed to the registry. Those adapters retain their current acceptance results
-and cursor behavior but do not maintain parallel generation or tombstone maps.
+state, not a new Attachment file plus a Reminder file. The obsolete
+`reminderAgentManager` facade is removed. Legacy `daemon:agent_start`,
+`daemon:agent_stop`, and replay-end frames remain supported by a protocol
+translation adapter routed directly to the registry. The adapter retains the
+existing acceptance results and cursor behavior but does not maintain parallel
+generation or tombstone maps.
 
 A legacy live frame may omit `lifecycle_seq`; sequence zero is accepted only by
 the legacy translation adapter and applies no invented cursor. A legacy replay
@@ -65,9 +66,17 @@ committed, preserving mixed-version Server behavior while making a partially
 applied replay resumable from its durable prefix.
 
 Local credential bootstrap remains available for an upgraded daemon. A
-bootstrapped generation-zero legacy record is provisional and stays on the
-legacy facade until a generation-bearing lifecycle event establishes the
-formal Attachment. Tombstones always win over stale credential directories.
+bootstrapped or task-observed generation-zero record is provisional and cannot
+be returned by Workspace-scoped `Resolve` or authorize Inbox restart recovery.
+A generation-bearing lifecycle event establishes the formal Attachment.
+Tombstones always win over stale credential directories.
+
+Restart-time Message Delivery carries the authenticated Workspace Runner scope
+separately from its Message envelope. Recreating the local Inbox coordinator
+requires `Resolve(workspaceID, agentID)` and a Runtime owned by that same fixed
+Workspace. Runtime and Agent Root are derived only after those checks; an Agent
+attached in another Workspace or detached from this machine is rejected before
+ACK.
 
 ## Observability
 
@@ -86,4 +95,4 @@ state and its cursor before returning.
 - Workspace-scoped resolution cannot return an Agent attached in another
   Workspace.
 - Mixed old/new lifecycle frames converge through one registry core during the
-  migration; removing the adapters is a later cutover after their callers move.
+  migration; removing the protocol adapter is a later wire cutover.

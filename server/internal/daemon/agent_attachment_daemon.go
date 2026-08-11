@@ -10,13 +10,12 @@ func (d *Daemon) attachmentRegistry() AgentAttachmentRegistry {
 	if d == nil {
 		return nil
 	}
-	if d.agentAttachments != nil {
-		return d.agentAttachments
-	}
-	if d.reminderAgents != nil {
-		return d.reminderAgents.localAgentAttachmentRegistry
-	}
-	return nil
+	return d.agentAttachments
+}
+
+func (d *Daemon) localAttachmentRegistry() *localAgentAttachmentRegistry {
+	registry, _ := d.attachmentRegistry().(*localAgentAttachmentRegistry)
+	return registry
 }
 
 func (d *Daemon) attachmentRuntimeSets() []AgentAttachmentRuntimeSet {

@@ -79,11 +79,12 @@ func (d *Daemon) ownsAgentStartIntent(pending protocol.DaemonHeartbeatPendingAge
 // reported through the same sequence-guarded endpoint rather than re-running
 // the first-start provisioning work.
 func (d *Daemon) agentStartIntentReady(pending protocol.DaemonHeartbeatPendingAgentStartIntent) bool {
-	if !d.ownsAgentStartIntent(pending) || d.reminderAgents == nil {
+	registry := d.attachmentRegistry()
+	if !d.ownsAgentStartIntent(pending) || registry == nil {
 		return false
 	}
-	resident, ok := d.reminderAgents.get(pending.AgentID)
-	if !ok || resident.RuntimeID != pending.RuntimeID || resident.WorkspaceID != pending.WorkspaceID || resident.PlacementGeneration < 1 {
+	attachment, ok := registry.Resolve(pending.WorkspaceID, pending.AgentID)
+	if !ok || attachment.RuntimeID != pending.RuntimeID {
 		return false
 	}
 	root := agentworkspace.Root(d.cfg.WorkspacesRoot, pending.WorkspaceID, pending.AgentID)

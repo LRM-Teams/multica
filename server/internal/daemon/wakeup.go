@@ -707,7 +707,7 @@ func (d *Daemon) handleDaemonAgentStartFrame(payload protocol.DaemonAgentStartPa
 }
 
 func (d *Daemon) applyDaemonAgentStart(payload protocol.DaemonAgentStartPayload) (bool, error) {
-	if d == nil || d.reminderAgents == nil {
+	if d == nil || d.localAttachmentRegistry() == nil {
 		return false, nil
 	}
 	// A server-originated owner frame is the capability proof. The registration
@@ -773,7 +773,7 @@ func (d *Daemon) ensureWorkspaceRunnerManagedAgent(workspaceID, agentID string) 
 }
 
 func (d *Daemon) handleDaemonAgentLifecycleReplayEnd(payload protocol.DaemonAgentLifecycleReplayEndPayload) error {
-	if d == nil || d.reminderAgents == nil {
+	if d == nil || d.localAttachmentRegistry() == nil {
 		return nil
 	}
 	d.mu.Lock()

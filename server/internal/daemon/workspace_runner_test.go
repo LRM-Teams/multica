@@ -26,6 +26,76 @@ func TestWorkspaceRunnerURLIsScopedWithoutRuntimeIDs(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
+	type observation struct {
+		ready protocol.WorkspaceRunnerReadyPayload
+		pong  protocol.WorkspaceRunnerPongPayload
+	}
+	observations := make(chan observation, 2)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var readyFrame protocol.Message
+		if err := json.Unmarshal(raw, &readyFrame); err != nil {
+			t.Error(err)
+			return
+		}
+		var ready protocol.WorkspaceRunnerReadyPayload
+		if readyFrame.Type != protocol.EventWorkspaceRunnerReady || json.Unmarshal(readyFrame.Payload, &ready) != nil {
+			t.Errorf("invalid ready frame: %+v", readyFrame)
+			return
+		}
+		ping, _ := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerPing, Payload: marshalRaw(protocol.WorkspaceRunnerPingPayload{PingID: "ping-1"})})
+		if err := conn.WriteMessage(websocket.TextMessage, ping); err != nil {
+			t.Error(err)
+			return
+		}
+		_, raw, err = conn.ReadMessage()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var pongFrame protocol.Message
+		var pong protocol.WorkspaceRunnerPongPayload
+		if json.Unmarshal(raw, &pongFrame) != nil || pongFrame.Type != protocol.EventWorkspaceRunnerPong || json.Unmarshal(pongFrame.Payload, &pong) != nil {
+			t.Errorf("invalid pong frame: %s", raw)
+			return
+		}
+		observations <- observation{ready: ready, pong: pong}
+	}))
+	defer server.Close()
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.runnerInstanceID = "instance-1"
+	d.client.SetWorkspaceDaemonToken("workspace-1", "workspace-token", time.Now().Add(time.Minute))
+	runner, err := d.newWorkspaceRunner("workspace-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	go runner.Run(ctx)
+	for attempt := 0; attempt < 2; attempt++ {
+		select {
+		case got := <-observations:
+			if got.ready.WorkspaceID != "workspace-1" || got.ready.DaemonInstanceID != "instance-1" || got.pong.PingID != "ping-1" {
+				t.Fatalf("reconnect observation = %+v", got)
+			}
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for Runner connection %d", attempt+1)
+		}
+	}
+}
+
 func TestWorkspaceRunnerOwnsOneProcessManagerPerWorkspace(t *testing.T) {
 	d := New(Config{MaxAgentProcesses: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	first := d.workspaceAgentProcessManager("ws-1")
@@ -119,7 +189,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 		}
 	}))
 	defer server.Close()
-	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
@@ -127,7 +197,11 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	errCh := make(chan error, 1)
-	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, "ws-1") }()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { errCh <- runner.runConnection(ctx) }()
 	var ready, ack, status, inactive, session, initialActivity, stoppedActivity protocol.Message
 	for i := 0; i < 7; i++ {
 		select {
@@ -254,7 +328,7 @@ func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *te
 	}))
 	defer server.Close()
 
-	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
 	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
 		return errors.New("resident Runtime unavailable")
@@ -275,7 +349,11 @@ func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *te
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	errCh := make(chan error, 1)
-	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, "ws-1") }()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { errCh <- runner.runConnection(ctx) }()
 	for attempt := 0; attempt < 2; attempt++ {
 		var ack protocol.AgentDeliverAckPayload
 		select {

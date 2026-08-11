@@ -2,19 +2,18 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 var _ interface{ Run(context.Context) } = (*WorkspaceRunner)(nil)
 
-type workspaceRunnerHostFunc func(context.Context, string)
-
-func (f workspaceRunnerHostFunc) runWorkspaceRunner(ctx context.Context, workspaceID string) {
-	f(ctx, workspaceID)
-}
-
 func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
-	host := workspaceRunnerHostFunc(func(context.Context, string) {})
+	d := &Daemon{}
 	registry := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
 	runtimes := newCanonicalAgentRuntimePool()
 	credentials := &CredentialProxy{}
@@ -22,7 +21,7 @@ func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
 		DaemonID: "daemon-1", DaemonInstanceID: "daemon-instance-1", WorkspaceID: "workspace-1",
 	}
 	dependencies := workspaceRunnerDependencies{
-		host: host, attachments: registry, runtimes: runtimes, credentials: credentials,
+		daemon: d, attachments: registry, runtimes: runtimes, credentials: credentials,
 	}
 	for name, mutate := range map[string]func(*WorkspaceRunnerConfig){
 		"Daemon":          func(config *WorkspaceRunnerConfig) { config.DaemonID = "" },
@@ -38,7 +37,7 @@ func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
 		})
 	}
 	for name, mutate := range map[string]func(*workspaceRunnerDependencies){
-		"host":        func(dependencies *workspaceRunnerDependencies) { dependencies.host = nil },
+		"daemon":      func(dependencies *workspaceRunnerDependencies) { dependencies.daemon = nil },
 		"attachments": func(dependencies *workspaceRunnerDependencies) { dependencies.attachments = nil },
 		"runtimes":    func(dependencies *workspaceRunnerDependencies) { dependencies.runtimes = nil },
 		"credentials": func(dependencies *workspaceRunnerDependencies) { dependencies.credentials = nil },
@@ -53,14 +52,90 @@ func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerConnectionSerializesConcurrentWrites(t *testing.T) {
+	var active atomic.Int64
+	var maximum atomic.Int64
+	connection := &workspaceRunnerConnection{
+		write: func(string, any) error {
+			current := active.Add(1)
+			for current > maximum.Load() && !maximum.CompareAndSwap(maximum.Load(), current) {
+			}
+			time.Sleep(time.Millisecond)
+			active.Add(-1)
+			return nil
+		},
+	}
+	var writes sync.WaitGroup
+	for index := 0; index < 20; index++ {
+		writes.Add(1)
+		go func() {
+			defer writes.Done()
+			if err := connection.Write("test", nil); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	writes.Wait()
+	if got := maximum.Load(); got != 1 {
+		t.Fatalf("maximum concurrent socket writes = %d, want 1", got)
+	}
+}
+
+func TestWorkspaceRunnerReconnectReplacesConnectionContextAndWriter(t *testing.T) {
+	runner := &WorkspaceRunner{}
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	var firstClosed, secondClosed atomic.Int64
+	first := &workspaceRunnerConnection{ctx: firstCtx, cancel: firstCancel, write: func(string, any) error { return nil }, close: func() { firstClosed.Add(1) }}
+	second := &workspaceRunnerConnection{ctx: secondCtx, cancel: secondCancel, write: func(string, any) error { return nil }, close: func() { secondClosed.Add(1) }}
+	runner.replaceConnection(first)
+	runner.replaceConnection(second)
+	select {
+	case <-firstCtx.Done():
+	default:
+		t.Fatal("reconnect did not cancel the replaced connection context")
+	}
+	if firstClosed.Load() != 1 || runner.connection != second {
+		t.Fatalf("first close count=%d current=%p want second=%p", firstClosed.Load(), runner.connection, second)
+	}
+	runner.releaseConnection(second)
+	select {
+	case <-secondCtx.Done():
+	default:
+		t.Fatal("release did not cancel the current connection context")
+	}
+	if secondClosed.Load() != 1 || runner.connection != nil {
+		t.Fatalf("second close count=%d current=%p", secondClosed.Load(), runner.connection)
+	}
+}
+
+func TestDaemonStartsWorkspaceRunnerWithoutOwningSocketInternals(t *testing.T) {
+	raw, err := os.ReadFile("workspace_runner.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	if !strings.Contains(source, "go runner.Run(child)") {
+		t.Fatal("Daemon does not start WorkspaceRunner through Run(ctx)")
+	}
+	for _, forbidden := range []string{
+		"func (d *Daemon) runWorkspaceRunner(",
+		"func (d *Daemon) runWorkspaceRunnerConnection(",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("Daemon still owns Workspace Runner socket lifecycle %q", forbidden)
+		}
+	}
+}
+
 func TestWorkspaceRunnerOwnsLocalStateAndSharesMachineDependencies(t *testing.T) {
-	host := workspaceRunnerHostFunc(func(context.Context, string) {})
+	d := &Daemon{}
 	attachments := newLocalAgentAttachmentRegistry(t.TempDir(), nil)
 	runtimes := newCanonicalAgentRuntimePool()
 	credentials := &CredentialProxy{}
 	diagnostics := &runnerDiagnosticRegistry{}
 	dependencies := workspaceRunnerDependencies{
-		host: host, attachments: attachments, runtimes: runtimes,
+		daemon: d, attachments: attachments, runtimes: runtimes,
 		credentials: credentials, diagnostics: diagnostics,
 	}
 	first, err := newWorkspaceRunner(WorkspaceRunnerConfig{
@@ -89,28 +164,6 @@ func TestWorkspaceRunnerOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 	}
 	if first.activity.daemonInstanceID != "instance-1" {
 		t.Fatalf("Activity producer daemon instance = %q", first.activity.daemonInstanceID)
-	}
-}
-
-func TestWorkspaceRunnerRunUsesFixedWorkspaceIdentity(t *testing.T) {
-	called := make(chan string, 1)
-	host := workspaceRunnerHostFunc(func(_ context.Context, workspaceID string) { called <- workspaceID })
-	runner, err := newWorkspaceRunner(WorkspaceRunnerConfig{
-		DaemonID: "daemon-1", DaemonInstanceID: "instance-1", WorkspaceID: "workspace-1",
-	}, workspaceRunnerDependencies{
-		host:        host,
-		attachments: newLocalAgentAttachmentRegistry(t.TempDir(), nil),
-		runtimes:    newCanonicalAgentRuntimePool(),
-		credentials: &CredentialProxy{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	runner.Run(ctx)
-	if got := <-called; got != "workspace-1" {
-		t.Fatalf("Run Workspace = %q, want workspace-1", got)
 	}
 }
 

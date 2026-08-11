@@ -91,7 +91,7 @@ func TestWorkspaceRunnerCanonicalMessageDiagnosticsFollowRealDeliveryPath(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.runnerInstanceID = "runner-generation-1"
 	d.runnerDiagnostics = &runnerDiagnosticRegistry{
 		store: store, environment: diagnosticlog.EnvironmentProduction, runnerGeneration: d.runnerInstanceID,
@@ -114,7 +114,11 @@ func TestWorkspaceRunnerCanonicalMessageDiagnosticsFollowRealDeliveryPath(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	errCh := make(chan error, 1)
-	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, workspaceID) }()
+	runner, err := d.newWorkspaceRunner(workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { errCh <- runner.runConnection(ctx) }()
 	select {
 	case <-acknowledged:
 	case <-ctx.Done():

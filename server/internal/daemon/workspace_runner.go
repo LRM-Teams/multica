@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -32,7 +30,14 @@ func (d *Daemon) workspaceRunnerLoop(ctx context.Context) {
 		workspaceIDs := d.workspaceRunnerWorkspaceIDs()
 		child, cancel := context.WithCancel(ctx)
 		for _, workspaceID := range workspaceIDs {
-			go d.runWorkspaceRunner(child, workspaceID)
+			runner, err := d.newWorkspaceRunner(workspaceID)
+			if err != nil {
+				if d.logger != nil {
+					d.logger.Warn("Workspace Runner construction failed", "workspace_id", workspaceID, "reason", "invalid_runner_configuration", "error", err)
+				}
+				continue
+			}
+			go runner.Run(child)
 		}
 		select {
 		case <-ctx.Done():
@@ -92,72 +97,10 @@ func (d *Daemon) workspaceAgentActivityProducer(workspaceID string) *agentActivi
 	return producer
 }
 
-func (d *Daemon) runWorkspaceRunner(ctx context.Context, workspaceID string) {
-	backoff := time.Second
-	for ctx.Err() == nil {
-		if err := d.runWorkspaceRunnerConnection(ctx, workspaceID); err != nil && ctx.Err() == nil && d.logger != nil {
-			d.logger.Debug("workspace runner disconnected", "workspace_id", workspaceID, "error", err)
-		}
-		timer := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		if backoff < 15*time.Second {
-			backoff *= 2
-		}
-	}
-}
-
-func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID string) error {
-	if d.client == nil {
-		return fmt.Errorf("daemon client unavailable")
-	}
-	token := d.client.WorkspaceDaemonToken(workspaceID, time.Now())
-	if token == "" {
-		return fmt.Errorf("workspace daemon token unavailable")
-	}
-	wsURL, err := workspaceRunnerURL(d.cfg.ServerBaseURL, workspaceID)
-	if err != nil {
-		return err
-	}
-	headers := http.Header{"Authorization": []string{"Bearer " + token}}
-	if d.client.platform != "" {
-		headers.Set("X-Client-Platform", d.client.platform)
-	}
-	if d.client.version != "" {
-		headers.Set("X-Client-Version", d.client.version)
-	}
-	if d.client.os != "" {
-		headers.Set("X-Client-OS", d.client.os)
-	}
-	dialer := taskWakeupDialer()
-	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	connectionCtx, cancelConnection := context.WithCancel(ctx)
-	defer cancelConnection()
-	if err := conn.SetWriteDeadline(time.Now().Add(workspaceRunnerWriteTimeout)); err != nil {
-		return err
-	}
-	ready, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: marshalRaw(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: workspaceID, DaemonInstanceID: d.runnerInstanceID})})
-	if err != nil {
-		return err
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, ready); err != nil {
-		return err
-	}
-	var writeMu sync.Mutex
-	writeFrame := func(eventType string, payload any) error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		return writeWorkspaceRunnerFrame(conn, eventType, payload)
-	}
-	var closeConnectionOnce sync.Once
+func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnection, conn *websocket.Conn) error {
+	d := runner.daemon
+	workspaceID := connection.workspaceID
+	writeFrame := connection.Write
 	failConnection := func(err error) {
 		if err == nil {
 			return
@@ -165,10 +108,9 @@ func (d *Daemon) runWorkspaceRunnerConnection(ctx context.Context, workspaceID s
 		if d.logger != nil {
 			d.logger.Debug("workspace Runner delivery writer failed", "workspace_id", workspaceID, "error", err)
 		}
-		cancelConnection()
-		closeConnectionOnce.Do(func() { _ = conn.Close() })
+		connection.Close()
 	}
-	deliveryDispatcher := newWorkspaceRunnerDeliveryDispatcher(connectionCtx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
+	deliveryDispatcher := newWorkspaceRunnerDeliveryDispatcher(connection.ctx, func(deliveryCtx context.Context, delivery protocol.AgentDeliverPayload) {
 		if err := d.handleWorkspaceRunnerDelivery(deliveryCtx, workspaceID, delivery, writeFrame); err != nil {
 			failConnection(err)
 		}

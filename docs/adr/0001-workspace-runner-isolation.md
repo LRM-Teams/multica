@@ -14,3 +14,10 @@ Process Manager, Activity producer, and Workspace-scoped Inbox registry state.
 Machine-wide Agent Attachment, Runtime capacity, Credential Proxy, and
 diagnostic registries are injected references; constructing a Runner must not
 copy those owners or create another global singleton.
+
+`WorkspaceRunner.Run(ctx)` owns Workspace authentication, dial/reconnect
+backoff, ready identity, connection cancellation, ping/pong, and the single
+serialized frame writer. Reconnect replaces and closes the prior connection
+context before installing a new writer. Socket callbacks remain private Runner
+implementation details; there is no separately exposed `RunnerTransport`
+module.

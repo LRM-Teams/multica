@@ -351,9 +351,14 @@ func seedIdleMessageAcceptanceFixture(t *testing.T, pool *pgxpool.Pool) (workspa
 
 func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub, workspaceID, daemonID string) func() {
 	t.Helper()
+	d.cfg.DaemonID = daemonID
+	runner, err := d.newWorkspaceRunner(workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, workspaceID) }()
+	go func() { errCh <- runner.runConnection(ctx) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 && time.Now().Before(deadline) {
 		runtime.Gosched()

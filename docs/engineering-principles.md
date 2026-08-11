@@ -481,11 +481,11 @@
 - restart-time Message Delivery 只能从固定 Runner scope 调用 `Resolve(workspaceID, agentID)` 重建 Inbox coordinator；Runtime 与 AgentRoot 必须来自该 Attachment 且 Runtime 仍属于同一 Workspace。detached 或 wrong-Workspace Agent 在 ACK 前拒绝，已有 coordinator 也必须通过 Runner→Runtime Workspace proof。
 - **物**：`agent_attachment.go` 的 Workspace-scoped interface、`agent_attachment_registry.go` 的单一 generation/tombstone/cursor/reconcile 实现、`agent_attachment_daemon.go` 的 scoped Reminder projection、`message_runtime.go` 的 Workspace-scoped restart resolution，以及 registry/Reminder/Delivery restart 回归与旧 facade 不存在门禁。
 
-### 4.19.2 Workspace Runner identity 不随 Runtime 变化 — `可执行`（② constructor shape + ⑤ identity/dependency tests；行为迁移进行中）
+### 4.19.2 Workspace Runner identity 不随 Runtime 变化 — `可执行`（② constructor shape + ③ socket owner + ⑤ identity/reconnect/serialization tests；其余行为迁移进行中）
 - `WorkspaceRunnerConfig` 固定 `DaemonID + DaemonInstanceID + WorkspaceID`；Runtime set 是可变输入，不进入 Runner identity。缺任一 identity 或 machine-wide dependency 时 constructor fail closed。
 - Runner 本地构造并持有 Process Manager、Activity producer 与未来 InboxRegistry 的 Workspace slot；Agent Attachment、canonical Runtime pool、Credential Proxy、diagnostics 只注入同一 machine-wide owner 的引用，不复制状态、不另建 singleton。
-- 当前可执行边界只覆盖 construction 与 `Run(ctx)` interface；socket、Delivery、Inbox 与 Activity caller 尚未迁入时仍走既有 Daemon behavior，不得把目标 ownership 写成已完成 cutover。完整隔离决策见 [`ADR-0001`](adr/0001-workspace-runner-isolation.md)。
-- **物**：`workspace_runner_state.go` 的 constructor/state shape；`workspace_runner_state_test.go` 的 identity、shared dependency、owned state 与 compile-time `Run(ctx)` guard。
+- `WorkspaceRunner.Run(ctx)` 已唯一持有 Workspace auth、dial/reconnect backoff、ready identity、connection context/cancel、ping/pong 与 serialized frame writer；replacement 先 cancel/close 旧 connection。socket callback 是 private implementation，不引入 `RunnerTransport`。Delivery、Inbox 与 Activity caller 尚未迁入时仍委托既有 machine-wide service，不得把其 ownership 写成已完成 cutover。完整隔离决策见 [`ADR-0001`](adr/0001-workspace-runner-isolation.md)。
+- **物**：`workspace_runner_state.go` 的 constructor/connection ownership；`workspace_runner.go` 的 Runner-owned frame loop；`workspace_runner_state_test.go` 与 `workspace_runner_test.go` 的 identity、shared dependency、ready/ping/reconnect、serialized writer、replacement cancellation 与 compile-time `Run(ctx)` guard。
 
 ### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
 - 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。

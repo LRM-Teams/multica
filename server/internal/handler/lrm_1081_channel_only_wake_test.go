@@ -77,7 +77,7 @@ func TestChannelMentionEnqueueIsDeliveryOnly(t *testing.T) {
 	}
 }
 
-func TestReminderFireIsReceiptDeliveryWithoutInboxWake(t *testing.T) {
+func TestReminderFireIsTransientOwnerInputWithoutMessageOrInboxWake(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -85,43 +85,36 @@ func TestReminderFireIsReceiptDeliveryWithoutInboxWake(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+	notifier := &capturedReminderOwnerInputNotifier{}
+	fixture.handler.ReminderOwnerInputNotifier = notifier
+	var messagesBefore, deliveriesBefore, wakesBefore int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT
+		  (SELECT count(*) FROM channel_message WHERE channel_id = $1),
+		  (SELECT count(*) FROM agent_message_delivery WHERE agent_id = $2),
+		  (SELECT count(*) FROM agent_inbox_event WHERE agent_id = $2 AND requires_wake = true)`,
+		fixture.channel.ID, fixture.agentIDs[0]).Scan(&messagesBefore, &deliveriesBefore, &wakesBefore); err != nil {
+		t.Fatal(err)
+	}
 	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire reminder: %v", err)
 	}
 
-	var receiptID pgtype.UUID
-	var receiptChannelID pgtype.UUID
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT occurrence.receipt_message_id, receipt.channel_id
-		FROM agent_reminder_occurrence occurrence
-		JOIN channel_message receipt ON receipt.id = occurrence.receipt_message_id
-		WHERE occurrence.reminder_id = $1 AND occurrence.status = 'fired'`, reminderID,
-	).Scan(&receiptID, &receiptChannelID); err != nil {
-		t.Fatalf("load fired reminder receipt: %v", err)
-	}
-	if !receiptID.Valid {
-		t.Fatal("reminder fire must create a receipt message")
-	}
-	if uuidToString(receiptChannelID) != fixture.channel.ID {
-		t.Fatalf("receipt channel_id=%q, want %q", uuidToString(receiptChannelID), fixture.channel.ID)
-	}
-
-	var deliveryCount, wakeCount int
+	var messagesAfter, deliveriesAfter, wakesAfter int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT
-		  (SELECT count(*) FROM agent_message_delivery
-		   WHERE agent_id = $1 AND message_id = $2),
-		  (SELECT count(*) FROM agent_inbox_event
-		   WHERE agent_id = $1 AND requires_wake = true
-		     AND (source_message_id = $2 OR reason = 'reminder'))`,
-		fixture.agentIDs[0], receiptID,
-	).Scan(&deliveryCount, &wakeCount); err != nil {
-		t.Fatalf("count reminder delivery/wake: %v", err)
+		  (SELECT count(*) FROM channel_message WHERE channel_id = $1),
+		  (SELECT count(*) FROM agent_message_delivery WHERE agent_id = $2),
+		  (SELECT count(*) FROM agent_inbox_event WHERE agent_id = $2 AND requires_wake = true)`,
+		fixture.channel.ID, fixture.agentIDs[0]).Scan(&messagesAfter, &deliveriesAfter, &wakesAfter); err != nil {
+		t.Fatal(err)
 	}
-	if deliveryCount != 1 {
-		t.Fatalf("reminder author delivery count = %d, want 1", deliveryCount)
+	if messagesAfter != messagesBefore || deliveriesAfter != deliveriesBefore || wakesAfter != wakesBefore {
+		t.Fatalf("Reminder fire changed Message/delivery/inbox counts %d/%d/%d -> %d/%d/%d",
+			messagesBefore, deliveriesBefore, wakesBefore, messagesAfter, deliveriesAfter, wakesAfter)
 	}
-	if wakeCount != 0 {
-		t.Fatalf("reminder created %d inbox wakes, want delivery-only (no task-shaped wake)", wakeCount)
+	calls := notifier.snapshot()
+	if len(calls) != 1 || calls[0].payload.ReminderID != reminderID {
+		t.Fatalf("transient owner inputs=%+v, want one for %s", calls, reminderID)
 	}
 }

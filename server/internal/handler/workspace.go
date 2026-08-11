@@ -728,10 +728,33 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// At this point workspaceMember has resolved → workspaceID is a valid UUID
-	// (the lookup would have errored otherwise), so reuse the resolved value.
-	if err := h.Queries.DeleteWorkspace(r.Context(), requester.WorkspaceID); err != nil {
+	// Delete the Workspace in one transaction. Runtime update intents point to
+	// their creating member with ON DELETE RESTRICT, while both the member and
+	// runtime otherwise disappear through the Workspace cascade. Remove those
+	// Workspace-owned intents first so the cascade cannot be order-dependent.
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM daemon_runtime_update_intent
+		WHERE created_by IN (
+			SELECT id FROM member WHERE workspace_id = $1
+		)
+	`, requester.WorkspaceID); err != nil {
+		slog.Warn("delete workspace runtime update intents failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
+		return
+	}
+	if err := h.Queries.WithTx(tx).DeleteWorkspace(r.Context(), requester.WorkspaceID); err != nil {
 		slog.Warn("delete workspace failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Warn("commit workspace deletion failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
 		return
 	}

@@ -432,6 +432,9 @@ RETURNING id
 		t.Fatalf("create workspace: %v", err)
 	}
 	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE workspace SET onboarding_agent_id = NULL WHERE id = $1`, wsID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1`, wsID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE workspace_id = $1`, wsID)
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, wsID)
 	})
 
@@ -440,6 +443,38 @@ INSERT INTO member (workspace_id, user_id, role)
 VALUES ($1, $2, 'owner')
 `, wsID, testUserID); err != nil {
 		t.Fatalf("create owner member: %v", err)
+	}
+
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_runtime (
+  workspace_id, daemon_id, name, runtime_mode, provider, status,
+  device_info, metadata, owner_id, last_seen_at
+) VALUES ($1, $2, 'delete-runtime', 'local', 'codex', 'online',
+  '', '{}'::jsonb, $3, now())
+RETURNING id
+`, wsID, "delete-workspace-runtime-"+uuid.NewString(), testUserID).Scan(&runtimeID); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent (
+  workspace_id, name, display_name, runtime_mode, runtime_config,
+  runtime_id, max_concurrent_tasks, owner_id, model
+) VALUES ($1, $2, 'Delete Test Agent', 'local', '{}'::jsonb, $3, 1, $4, 'gpt-test')
+RETURNING id
+`, wsID, "delete-test-agent-"+uuid.NewString(), runtimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET onboarding_agent_id = $2 WHERE id = $1`, wsID, agentID); err != nil {
+		t.Fatalf("bind onboarding Agent: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO daemon_runtime_update_intent (runtime_id, created_by, expires_at)
+SELECT $1, id, now() + interval '1 day'
+FROM member WHERE workspace_id = $2 AND user_id = $3
+`, runtimeID, wsID, testUserID); err != nil {
+		t.Fatalf("create runtime update intent: %v", err)
 	}
 
 	w := httptest.NewRecorder()

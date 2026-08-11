@@ -168,7 +168,7 @@ const node: ResearchGraphNode & {
   },
   created_at: "2026-07-06T09:00:00Z",
   updated_at: "2026-07-06T09:00:00Z",
-} as ResearchGraphNode;
+};
 
 const sources: ResearchSource[] = [
   {
@@ -210,7 +210,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
       title: "法规路径不通",
       summary: "缺少本地条例全文。",
       payload: { reason: "权威源不可达" },
-    } as ResearchGraphNode;
+    };
     render(<ResearchNodeDetail node={dead} sources={[]} open />);
     expect(screen.getByText("Why blocked")).toBeInTheDocument();
     expect(screen.getByText("权威源不可达")).toBeInTheDocument();
@@ -350,7 +350,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
           result: "Pricing evidence now has independent corroboration.",
         },
       },
-    } as ResearchGraphNode;
+    };
     const run = {
       tasks: [
         {

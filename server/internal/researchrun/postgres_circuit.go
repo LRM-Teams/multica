@@ -31,7 +31,7 @@ func (s *PostgresStore) RecordCircuitFailure(ctx context.Context, in CircuitFail
 	if err != nil {
 		return ExecutionCircuit{}, nil, err
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpCircuitFailure, pgx.TxOptions{})
 	if err != nil {
 		return ExecutionCircuit{}, nil, err
 	}
@@ -57,7 +57,7 @@ func (s *PostgresStore) RecordCircuitFailure(ctx context.Context, in CircuitFail
 	if existing, found, findErr := findAttemptCircuitTransition(ctx, tx, circuit.ID, in.AttemptID, "failure_observed"); findErr != nil {
 		return ExecutionCircuit{}, nil, findErr
 	} else if found {
-		return circuit, []CircuitTransition{existing}, tx.Commit(ctx)
+		return circuit, []CircuitTransition{existing}, s.commitResearchTx(ctx, txOpCircuitFailure, tx)
 	}
 	transitions := []CircuitTransition{}
 	if target.ConfigFingerprint != "" && circuit.Target.ConfigFingerprint != target.ConfigFingerprint {
@@ -130,7 +130,7 @@ func (s *PostgresStore) RecordCircuitFailure(ctx context.Context, in CircuitFail
 		return ExecutionCircuit{}, nil, err
 	}
 	transitions = append(transitions, transition)
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpCircuitFailure, tx); err != nil {
 		return ExecutionCircuit{}, nil, err
 	}
 	return circuit, transitions, nil
@@ -147,7 +147,7 @@ func (s *PostgresStore) RecordCircuitSuccess(ctx context.Context, in CircuitSucc
 	if err != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, false, err
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpCircuitSuccess, pgx.TxOptions{})
 	if err != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, false, err
 	}
@@ -160,7 +160,7 @@ func (s *PostgresStore) RecordCircuitSuccess(ctx context.Context, in CircuitSucc
 	}
 	circuit, err := loadCircuitForUpdate(ctx, tx, in.WorkspaceID, target)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ExecutionCircuit{}, CircuitTransition{}, false, tx.Commit(ctx)
+		return ExecutionCircuit{}, CircuitTransition{}, false, s.commitResearchTx(ctx, txOpCircuitSuccess, tx)
 	}
 	if err != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, false, err
@@ -168,20 +168,20 @@ func (s *PostgresStore) RecordCircuitSuccess(ctx context.Context, in CircuitSucc
 	if existing, found, findErr := findAttemptCircuitTransition(ctx, tx, circuit.ID, in.AttemptID, "success_observed"); findErr != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, false, findErr
 	} else if found {
-		return circuit, existing, false, tx.Commit(ctx)
+		return circuit, existing, false, s.commitResearchTx(ctx, txOpCircuitSuccess, tx)
 	}
 	if target.ConfigFingerprint != "" && circuit.Target.ConfigFingerprint != target.ConfigFingerprint {
 		transition, reset, resetErr := resetCircuitForConfiguration(ctx, tx, circuit, in.SessionID, in.AttemptID, target.ConfigFingerprint)
 		if resetErr != nil {
 			return ExecutionCircuit{}, CircuitTransition{}, false, resetErr
 		}
-		if err = tx.Commit(ctx); err != nil {
+		if err = s.commitResearchTx(ctx, txOpCircuitSuccess, tx); err != nil {
 			return ExecutionCircuit{}, CircuitTransition{}, false, err
 		}
 		return reset, transition, true, nil
 	}
 	if circuit.State != CircuitClosed || (circuit.ConsecutiveFailures == 0 && circuit.WindowStartedAt == nil) {
-		return circuit, CircuitTransition{}, false, tx.Commit(ctx)
+		return circuit, CircuitTransition{}, false, s.commitResearchTx(ctx, txOpCircuitSuccess, tx)
 	}
 	var databaseNow time.Time
 	if err = tx.QueryRow(ctx, `SELECT now()`).Scan(&databaseNow); err != nil {
@@ -206,7 +206,7 @@ func (s *PostgresStore) RecordCircuitSuccess(ctx context.Context, in CircuitSucc
 	if err != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, false, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpCircuitSuccess, tx); err != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, false, err
 	}
 	return circuit, transition, true, nil
@@ -216,7 +216,7 @@ func (s *PostgresStore) ClaimCircuitProbe(ctx context.Context, workspaceID, sess
 	if strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(token) == "" || leaseDuration <= 0 {
 		return CircuitProbeLease{}, false, fmt.Errorf("%w: invalid circuit probe claim", ErrInvalidTransition)
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpCircuitProbeClaim, pgx.TxOptions{})
 	if err != nil {
 		return CircuitProbeLease{}, false, err
 	}
@@ -226,7 +226,7 @@ func (s *PostgresStore) ClaimCircuitProbe(ctx context.Context, workspaceID, sess
 	}
 	circuit, err := loadCircuitForUpdate(ctx, tx, workspaceID, target)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return CircuitProbeLease{}, false, tx.Commit(ctx)
+		return CircuitProbeLease{}, false, s.commitResearchTx(ctx, txOpCircuitProbeClaim, tx)
 	}
 	if err != nil {
 		return CircuitProbeLease{}, false, err
@@ -235,7 +235,7 @@ func (s *PostgresStore) ClaimCircuitProbe(ctx context.Context, workspaceID, sess
 		// A probe claim is not proof that the caller's target snapshot is the
 		// current configuration. Attempt-bound success/failure observations
 		// perform the audited reset after matching the immutable target.
-		return CircuitProbeLease{}, false, tx.Commit(ctx)
+		return CircuitProbeLease{}, false, s.commitResearchTx(ctx, txOpCircuitProbeClaim, tx)
 	}
 	var databaseNow time.Time
 	if err = tx.QueryRow(ctx, `SELECT now()`).Scan(&databaseNow); err != nil {
@@ -246,7 +246,7 @@ func (s *PostgresStore) ClaimCircuitProbe(ctx context.Context, workspaceID, sess
 		claimable = true
 	}
 	if !claimable {
-		return CircuitProbeLease{}, false, tx.Commit(ctx)
+		return CircuitProbeLease{}, false, s.commitResearchTx(ctx, txOpCircuitProbeClaim, tx)
 	}
 	from := circuit.State
 	generation := circuit.Generation + 1
@@ -264,7 +264,7 @@ func (s *PostgresStore) ClaimCircuitProbe(ctx context.Context, workspaceID, sess
 		"probe_claimed", "", "", ""); err != nil {
 		return CircuitProbeLease{}, false, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpCircuitProbeClaim, tx); err != nil {
 		return CircuitProbeLease{}, false, err
 	}
 	return CircuitProbeLease{CircuitID: circuit.ID, WorkspaceID: workspaceID, SessionID: sessionID,
@@ -279,7 +279,7 @@ func (s *PostgresStore) ResolveCircuitProbe(ctx context.Context, lease CircuitPr
 	if !success && (!policyOK || disposition.CircuitScope != lease.Target.Scope) {
 		return ExecutionCircuit{}, CircuitTransition{}, fmt.Errorf("%w: invalid failed probe policy", ErrInvalidTransition)
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpCircuitProbeResolve, pgx.TxOptions{})
 	if err != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, err
 	}
@@ -352,7 +352,7 @@ func (s *PostgresStore) ResolveCircuitProbe(ctx context.Context, lease CircuitPr
 	if err != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpCircuitProbeResolve, tx); err != nil {
 		return ExecutionCircuit{}, CircuitTransition{}, err
 	}
 	return circuit, transition, nil

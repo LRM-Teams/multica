@@ -691,7 +691,7 @@ func sortedFindingCodes(findings []GateFinding) []string {
 }
 
 func (s *PostgresStore) SetAwaitingConfirmation(ctx context.Context, sessionID string, gate GateResult) (Run, RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpRunAwaitConfirmation, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
@@ -706,7 +706,7 @@ func (s *PostgresStore) SetAwaitingConfirmation(ctx context.Context, sessionID s
 		return Run{}, RunEvent{}, err
 	}
 	if status == string(RunStatusAwaitingUserConfirm) {
-		if err = tx.Commit(ctx); err != nil {
+		if err = s.commitResearchTx(ctx, txOpRunAwaitConfirmation, tx); err != nil {
 			return Run{}, RunEvent{}, err
 		}
 		run, err := s.GetRun(ctx, sessionID, workspaceID)
@@ -722,7 +722,7 @@ func (s *PostgresStore) SetAwaitingConfirmation(ctx context.Context, sessionID s
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpRunAwaitConfirmation, tx); err != nil {
 		return Run{}, RunEvent{}, err
 	}
 	run, err := s.GetRun(ctx, sessionID, workspaceID)
@@ -730,7 +730,7 @@ func (s *PostgresStore) SetAwaitingConfirmation(ctx context.Context, sessionID s
 }
 
 func (s *PostgresStore) Complete(ctx context.Context, sessionID, workspaceID, userID string) (Run, RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpRunComplete, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
@@ -740,7 +740,7 @@ func (s *PostgresStore) Complete(ctx context.Context, sessionID, workspaceID, us
 		return Run{}, RunEvent{}, err
 	}
 	if run.Status == RunStatusCompleted {
-		return run, RunEvent{}, tx.Commit(ctx)
+		return run, RunEvent{}, s.commitResearchTx(ctx, txOpRunComplete, tx)
 	}
 	if run.Status != RunStatusAwaitingUserConfirm {
 		return Run{}, RunEvent{}, fmt.Errorf("%w: only a delivery-ready run can be completed", ErrInvalidTransition)
@@ -752,7 +752,7 @@ func (s *PostgresStore) Complete(ctx context.Context, sessionID, workspaceID, us
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpRunComplete, tx); err != nil {
 		return Run{}, RunEvent{}, err
 	}
 	run, err = s.GetRun(ctx, sessionID, workspaceID)
@@ -764,7 +764,7 @@ func (s *PostgresStore) Pause(ctx context.Context, sessionID, workspaceID, userI
 }
 
 func (s *PostgresStore) Resume(ctx context.Context, sessionID, workspaceID, userID string) (Run, RunEvent, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpRunResume, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
@@ -774,7 +774,7 @@ func (s *PostgresStore) Resume(ctx context.Context, sessionID, workspaceID, user
 		return Run{}, RunEvent{}, err
 	}
 	if run.Status == RunStatusRunning {
-		return run, RunEvent{}, tx.Commit(ctx)
+		return run, RunEvent{}, s.commitResearchTx(ctx, txOpRunResume, tx)
 	}
 	if run.Status != RunStatusPaused {
 		return Run{}, RunEvent{}, fmt.Errorf("%w: only paused runs can resume", ErrInvalidTransition)
@@ -786,7 +786,7 @@ func (s *PostgresStore) Resume(ctx context.Context, sessionID, workspaceID, user
 	if err != nil {
 		return Run{}, RunEvent{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpRunResume, tx); err != nil {
 		return Run{}, RunEvent{}, err
 	}
 	run, err = s.GetRun(ctx, sessionID, workspaceID)
@@ -813,7 +813,7 @@ func (s *PostgresStore) MarkFailed(ctx context.Context, sessionID, reason string
 }
 
 func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceID, userID string, target RunStatus, reason string, retryTasks bool) (Run, RunEvent, []string, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpRunTransition, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
@@ -823,7 +823,7 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 		return Run{}, RunEvent{}, nil, err
 	}
 	if run.Status == target {
-		return run, RunEvent{}, nil, tx.Commit(ctx)
+		return run, RunEvent{}, nil, s.commitResearchTx(ctx, txOpRunTransition, tx)
 	}
 	if run.Status == RunStatusCompleted || run.Status == RunStatusArchived || run.Status == RunStatusCancelled {
 		return Run{}, RunEvent{}, nil, fmt.Errorf("%w: run is terminal", ErrInvalidTransition)
@@ -898,7 +898,7 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpRunTransition, tx); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	run, err = s.GetRun(ctx, sessionID, workspaceID)
@@ -918,7 +918,7 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	if in.Language != nil && len(strings.TrimSpace(*in.Language)) > 64 {
 		return Run{}, RunEvent{}, nil, fmt.Errorf("%w: language exceeds 64 bytes", ErrInvalidContract)
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.beginResearchTx(ctx, txOpRunSteer, pgx.TxOptions{})
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
@@ -1052,7 +1052,7 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	if err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = s.commitResearchTx(ctx, txOpRunSteer, tx); err != nil {
 		return Run{}, RunEvent{}, nil, err
 	}
 	run, err = s.GetRun(ctx, in.SessionID, in.WorkspaceID)

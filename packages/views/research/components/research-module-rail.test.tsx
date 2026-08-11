@@ -3,7 +3,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ResearchModuleRail } from "./research-module-rail";
-import { ResearchCanvasDock } from "./research-canvas-dock";
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
@@ -62,56 +61,5 @@ describe("ResearchModuleRail (LRM-1151 Dock)", () => {
     const barBtn = screen.getByTestId("research-module-sources");
     expect(barBtn.getAttribute("aria-label")).toBe("Source strategy");
     expect(barBtn.textContent).toMatch(/Src/);
-  });
-});
-
-describe("ResearchCanvasDock (LRM-1151)", () => {
-  it("hosts module group + zoom + detail with mutual aria-pressed", () => {
-    const onSelectModule = vi.fn();
-    render(
-      <ResearchCanvasDock
-        zoomPct={100}
-        onZoomIn={vi.fn()}
-        onZoomOut={vi.fn()}
-        onFit={vi.fn()}
-        detailOpen={false}
-        onToggleDetail={vi.fn()}
-        activeModule="sources"
-        onSelectModule={onSelectModule}
-      />,
-    );
-    expect(screen.getByTestId("research-canvas-dock").getAttribute("data-layout")).toBe(
-      "desktop",
-    );
-    expect(
-      screen.getByTestId("research-module-sources").getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("research-module-trajectory").getAttribute("aria-pressed"),
-    ).toBe("false");
-    fireEvent.click(screen.getByTestId("research-module-detail"));
-    expect(onSelectModule).toHaveBeenCalledWith("detail");
-  });
-
-  it("hides zoom on mobile layout", () => {
-    render(
-      <ResearchCanvasDock
-        layout="mobile"
-        zoomPct={100}
-        onZoomIn={vi.fn()}
-        onZoomOut={vi.fn()}
-        onFit={vi.fn()}
-        showZoom={false}
-        showDetailToggle={false}
-        detailOpen={false}
-        onToggleDetail={vi.fn()}
-        activeModule={null}
-        onSelectModule={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId("research-canvas-dock").getAttribute("data-layout")).toBe(
-      "mobile",
-    );
-    expect(screen.queryByLabelText("Zoom in")).toBeNull();
   });
 });

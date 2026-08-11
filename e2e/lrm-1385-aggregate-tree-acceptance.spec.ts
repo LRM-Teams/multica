@@ -135,7 +135,7 @@ test.describe("LRM-1385 typed 96-node fixture", () => {
   });
 });
 
-test.describe.serial("LRM-1385 aggregate tree integration gate", () => {
+test.describe.skip("LRM-1385 aggregate tree integration gate — superseded by D5 star-graph session canvas", () => {
   test.skip(!runIntegration, "Set LRM_1385_INTEGRATION=1 with the worktree stack running");
   test.setTimeout(120_000);
   let seeded: SeededFixture;

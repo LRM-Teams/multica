@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { emptyCanvasFilter, type ResearchCanvasFilter } from "@multica/core/research";
+import type { ResearchCanvasFilter } from "@multica/core/research";
 import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
-const { storeState, setFilter, clearFilter } = vi.hoisted(() => {
+const { storeState, setFilter, clearFilter, emptyCanvasFilter } = vi.hoisted(() => {
+  const emptyCanvasFilter = (): ResearchCanvasFilter => ({
+    status: null,
+    tier: null,
+    round: null,
+    cluster: null,
+    query: "",
+  });
   const storeState: { filter: ResearchCanvasFilter } = {
     filter: emptyCanvasFilter(),
   };
@@ -13,7 +20,7 @@ const { storeState, setFilter, clearFilter } = vi.hoisted(() => {
   const clearFilter = vi.fn(() => {
     storeState.filter = emptyCanvasFilter();
   });
-  return { storeState, setFilter, clearFilter };
+  return { storeState, setFilter, clearFilter, emptyCanvasFilter };
 });
 
 vi.mock("@multica/core/research", async (importOriginal) => {

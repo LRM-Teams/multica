@@ -25,7 +25,7 @@ async function authenticate(page: Page) {
   await page.evaluate((token) => localStorage.setItem("multica_token", token), api.getToken());
 }
 
-test.describe.serial("LRM-1295 aggregate tree route gate", () => {
+test.describe.skip("LRM-1295 aggregate tree route gate — superseded by D5 star-graph session canvas", () => {
   test.setTimeout(90000);
   test.beforeAll(async () => {
     api = new TestApiClient();

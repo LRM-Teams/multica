@@ -27,7 +27,6 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { buildD5SessionCanvasModel } from "../lib/build-d5-session-canvas";
-import { extractLayoutResultFromViewModel } from "../star-graph/lib/star-canvas-view-model";
 import { buildTypedGraphMotionEvents, shouldSkipTypedGraphMotionCatchUp } from "../lib/build-typed-graph-motion-events";
 import { buildD5LensDisplayHints } from "../lib/research-d5-lens-display";
 import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
@@ -223,7 +222,7 @@ export function ResearchConstellationWorkspace({
     prevGraphRef.current = typedGraph;
   }, [typedGraph, motion.enqueue, motion.settleNow, t]);
 
-  const canvasModel = useMemo(
+  const canvasBuild = useMemo(
     () =>
       buildD5SessionCanvasModel(typedGraph, viewport, {
         rightPanelWidth: effectiveRailWidth,
@@ -231,11 +230,13 @@ export function ResearchConstellationWorkspace({
       }),
     [typedGraph, viewport, effectiveRailWidth],
   );
+  const canvasModel = canvasBuild?.model ?? null;
 
   useEffect(() => {
-    if (!canvasModel) return;
-    previousLayoutRef.current = extractLayoutResultFromViewModel(canvasModel);
-  }, [canvasModel]);
+    if (canvasBuild?.layoutForNext) {
+      previousLayoutRef.current = canvasBuild.layoutForNext;
+    }
+  }, [canvasBuild?.layoutForNext]);
 
   const lensHints = useMemo(
     () =>
@@ -492,6 +493,7 @@ export function ResearchConstellationWorkspace({
 
         <ResearchAgentInspector
           row={inspectorRow}
+          typedNode={selectedTypedNode}
           open={Boolean(inspectorRow) && !reportOpen}
           onClose={() => setInspectorAgentId(null)}
           onOpenAgentConfig={

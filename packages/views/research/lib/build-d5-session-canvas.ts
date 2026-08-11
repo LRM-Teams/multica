@@ -2,9 +2,16 @@ import type { TypedGraphResponse } from "@multica/core/research";
 import type { StarGraphLayoutResult } from "@multica/core/research";
 import {
   buildStarCanvasViewModel,
+  extractLayoutResultFromViewModel,
   rebaseStarCanvasIntoViewModel,
   type StarCanvasViewModel,
 } from "../star-graph";
+
+export interface D5SessionCanvasBuild {
+  model: StarCanvasViewModel;
+  /** Pre-viewport-rebase layout — must feed the next incremental layout pass. */
+  layoutForNext: StarGraphLayoutResult;
+}
 
 export function buildD5SessionCanvasModel(
   typed: TypedGraphResponse | undefined,
@@ -13,7 +20,7 @@ export function buildD5SessionCanvasModel(
     rightPanelWidth: number;
     previousLayout?: StarGraphLayoutResult;
   },
-): StarCanvasViewModel | null {
+): D5SessionCanvasBuild | null {
   if (!typed || typed.nodes.length === 0) return null;
 
   const base = buildStarCanvasViewModel({
@@ -25,10 +32,17 @@ export function buildD5SessionCanvasModel(
     previous: options.previousLayout,
   });
 
-  if (viewport.width <= 0 || viewport.height <= 0) return base;
+  const layoutForNext = extractLayoutResultFromViewModel(base);
 
-  return rebaseStarCanvasIntoViewModel(base, viewport, {
-    rightPanelWidth: options.rightPanelWidth,
-    padding: 32,
-  });
+  if (viewport.width <= 0 || viewport.height <= 0) {
+    return { model: base, layoutForNext };
+  }
+
+  return {
+    model: rebaseStarCanvasIntoViewModel(base, viewport, {
+      rightPanelWidth: options.rightPanelWidth,
+      padding: 32,
+    }),
+    layoutForNext,
+  };
 }

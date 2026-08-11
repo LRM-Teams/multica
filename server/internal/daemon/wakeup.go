@@ -680,7 +680,7 @@ func (d *Daemon) handleDaemonAgentStop(payload protocol.DaemonAgentStopPayload) 
 	if d == nil || strings.TrimSpace(payload.AgentID) == "" || strings.TrimSpace(payload.RuntimeID) == "" || payload.PlacementGeneration < 1 {
 		return nil
 	}
-	return d.removeReminderAgent(payload.AgentID, payload.RuntimeID, payload.PlacementGeneration)
+	return d.removeReminderAgent(payload)
 }
 
 func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload) error {
@@ -717,10 +717,12 @@ func (d *Daemon) applyDaemonAgentStart(payload protocol.DaemonAgentStartPayload)
 		d.logger.Warn("daemon agent start rejected outside local runtime", "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID, "workspace_id", payload.WorkspaceID)
 		return false, nil
 	}
-	changed, accepted, err := d.reminderAgents.applyStart(payload.AgentID, payload.RuntimeID, payload.WorkspaceID, payload.PlacementGeneration)
+	result, err := d.legacyAgentAttachmentAdapter().ApplyStart(payload)
 	if err != nil {
 		return false, err
 	}
+	changed := result.change.Kind == AgentAttachmentAttached || result.change.Kind == AgentAttachmentMoved
+	accepted := result.accepted
 	coordinatorCreated := false
 	if accepted {
 		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, payload.WorkspaceID, payload.AgentID)
@@ -779,7 +781,7 @@ func (d *Daemon) handleDaemonAgentLifecycleReplayEnd(payload protocol.DaemonAgen
 		}
 	}
 	d.mu.Unlock()
-	if err := d.reminderAgents.advanceLifecycleCursors(payload.RuntimeCursors); err != nil {
+	if err := d.legacyAgentAttachmentAdapter().AdvanceRecovery(payload.RuntimeCursors); err != nil {
 		return err
 	}
 	if !d.queueReminderFrame(protocol.EventDaemonAgentLifecycleAck, protocol.DaemonAgentLifecycleAckPayload{RuntimeCursors: payload.RuntimeCursors}) {
@@ -1078,7 +1080,9 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 			if !owner.Terminal {
 				continue
 			}
-			if _, _, err := d.reminderAgents.applyStop(owner.AgentID, runtimeID, owner.PlacementGeneration); err != nil {
+			if _, err := d.legacyAgentAttachmentAdapter().ApplyStop(protocol.DaemonAgentStopPayload{
+				AgentID: owner.AgentID, RuntimeID: runtimeID, PlacementGeneration: owner.PlacementGeneration,
+			}); err != nil {
 				return err
 			}
 		}

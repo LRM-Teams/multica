@@ -107,20 +107,26 @@ func (r *localAgentAttachmentRegistry) applyEvent(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	previousCursor := r.runtimeLifecycleCursors[event.RuntimeID]
-	if trackLifecycle && int64(event.LifecycleSeq) <= previousCursor {
-		result.accepted = true
-		result.reason = "duplicate_lifecycle_sequence"
-		r.logApplyLocked(workspaceID, event, result, nil)
-		return result, nil
-	}
-
 	entry, existed := r.agents[event.AgentID]
 	if strictWorkspace && existed && entry.WorkspaceID != workspaceID {
 		err := fmt.Errorf("Agent Attachment %s belongs to Workspace %s, not %s", event.AgentID, entry.WorkspaceID, workspaceID)
 		result.reason = "workspace_conflict"
 		r.logApplyLocked(workspaceID, event, result, err)
 		return result, err
+	}
+	if !strictWorkspace && workspaceID == "" && existed {
+		workspaceID = entry.WorkspaceID
+	}
+
+	previousCursor := r.runtimeLifecycleCursors[event.RuntimeID]
+	if trackLifecycle && int64(event.LifecycleSeq) <= previousCursor {
+		result.reason = "duplicate_lifecycle_sequence"
+		if event.Kind == AgentAttachmentEventAttach && existed && entry.WorkspaceID == workspaceID && entry.RuntimeID == event.RuntimeID && entry.PlacementGeneration == int64(event.AttachmentGeneration) {
+			result.accepted = true
+			result.change.Current = residencyAttachment(entry)
+		}
+		r.logApplyLocked(workspaceID, event, result, nil)
+		return result, nil
 	}
 
 	previousEntry := entry

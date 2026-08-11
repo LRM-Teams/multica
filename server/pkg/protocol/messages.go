@@ -576,9 +576,10 @@ type ReminderFireResultPayload struct {
 	Projection ReminderProjectionEvent `json:"projection"`
 }
 
-// DaemonAgentStopPayload removes an Agent from the daemon-local lifecycle
-// registry. It mirrors Raft's explicit agent:stop lifecycle boundary; the
-// daemon also clears every cached Reminder owned by the Agent.
+// DaemonAgentStopPayload is the legacy wake-socket detach shape. The daemon
+// maps placement_generation to AttachmentGeneration before applying it to the
+// AgentAttachmentRegistry, then clears cached Reminder projection state when
+// the semantic result is detached.
 type DaemonAgentStopPayload struct {
 	AgentID             string `json:"agent_id"`
 	RuntimeID           string `json:"runtime_id"`
@@ -587,10 +588,10 @@ type DaemonAgentStopPayload struct {
 	Replay              bool   `json:"replay,omitempty"`
 }
 
-// DaemonAgentStartPayload adds or moves an Agent in the daemon-local
-// running/idle lifecycle registry. Runtime placement mutations are replayed
-// through a durable lifecycle outbox, so an offline target daemon converges
-// before requesting the Agent's Reminder snapshot.
+// DaemonAgentStartPayload is the legacy wake-socket attach/move shape. The
+// daemon maps placement_generation to AttachmentGeneration and routes live and
+// replay frames through the AgentAttachmentRegistry before requesting the
+// Agent's Reminder snapshot.
 type DaemonAgentStartPayload struct {
 	AgentID             string `json:"agent_id"`
 	RuntimeID           string `json:"runtime_id"`

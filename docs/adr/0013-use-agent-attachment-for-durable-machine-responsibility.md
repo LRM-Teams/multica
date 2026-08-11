@@ -56,6 +56,14 @@ legacy `daemon:agent_start`, `daemon:agent_stop`, and replay-end frames are
 routed to the registry. Those adapters retain their current acceptance results
 and cursor behavior but do not maintain parallel generation or tombstone maps.
 
+A legacy live frame may omit `lifecycle_seq`; sequence zero is accepted only by
+the legacy translation adapter and applies no invented cursor. A legacy replay
+frame with a positive sequence uses the registry Apply core and commits that
+Runtime cursor atomically with its Attachment result. The existing replay-end
+ACK remains on the wire and monotonically advances any cursor not already
+committed, preserving mixed-version Server behavior while making a partially
+applied replay resumable from its durable prefix.
+
 Local credential bootstrap remains available for an upgraded daemon. A
 bootstrapped generation-zero legacy record is provisional and stays on the
 legacy facade until a generation-bearing lifecycle event establishes the

@@ -499,24 +499,21 @@ func (d *Daemon) notifyRuntimeSetChanged() {
 	d.runtimeSet.notify()
 }
 
-func (d *Daemon) removeReminderAgent(agentID, runtimeID string, generation int64) error {
-	removed := false
-	if d.reminderAgents != nil {
-		var err error
-		removed, _, err = d.reminderAgents.applyStop(agentID, runtimeID, generation)
-		if err != nil {
-			return err
-		}
+func (d *Daemon) removeReminderAgent(payload protocol.DaemonAgentStopPayload) error {
+	result, err := d.legacyAgentAttachmentAdapter().ApplyStop(payload)
+	if err != nil {
+		return err
 	}
+	removed := result.change.Kind == AgentAttachmentDetached
 	if removed && d.reminderCache != nil {
-		if err := d.reminderCache.removeOwner(agentID); err != nil {
+		if err := d.reminderCache.removeOwner(payload.AgentID); err != nil {
 			return err
 		}
 	}
 	if removed {
-		d.removeIdleMessageCoordinator(agentID, runtimeID)
+		d.removeIdleMessageCoordinator(payload.AgentID, payload.RuntimeID)
 		d.reminderGateMu.Lock()
-		delete(d.reminderPendingSnapshots, agentID)
+		delete(d.reminderPendingSnapshots, payload.AgentID)
 		d.reminderGateMu.Unlock()
 	}
 	return nil

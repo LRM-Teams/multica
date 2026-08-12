@@ -1,9 +1,7 @@
 package agent
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // ErrPiRPCTurnBusy means a caller tried to overlap two turns on one native Pi

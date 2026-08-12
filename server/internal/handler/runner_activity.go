@@ -70,10 +70,13 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
-		if err := h.redeliverUnacknowledgedComputerAgentMessages(ctx, identity); err != nil {
+		// Raft establishes APM ownership before it offers durable deliveries.
+		// The Computer can then accept messages into the Agent's starting Inbox
+		// and ACK them without requiring the Provider to be ready yet.
+		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
 			return err
 		}
-		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
+		if err := h.redeliverUnacknowledgedComputerAgentMessages(ctx, identity); err != nil {
 			return err
 		}
 		return h.dispatchPendingRunnerStops(ctx, identity)

@@ -116,7 +116,7 @@ type Daemon struct {
 	mixedRunActivityReporter func(protocol.MixedRunActivityTransitionPayload) bool
 	lifecycleDiagnostics     *lifecycleDiagnosticWriter
 	machineUpgradeLog        *machineUpgradeEventLog
-	machineUpgradeTakeoverMu sync.Mutex
+	machineUpgradeTakeover   *machineUpgradeTakeover
 	runnerInstanceID         string
 	runnerDiagnostics        *runnerDiagnosticRegistry
 
@@ -301,6 +301,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		mixedRunActivityOutbox:    newMixedRunActivityOutbox(cfg.WorkspacesRoot),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		runnerInstanceID:          uuid.NewString(),
+		machineUpgradeTakeover:    newMachineUpgradeTakeover(),
 	}
 	// A standalone replacement may bind the exclusive control port and finish
 	// registration so the incumbent can inspect it, but it must not claim work
@@ -826,6 +827,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// preflight is never misreported as a started daemon. resolveAuth has
 	// already run, so a missing token still fails fast before we begin serving.
 	go d.serveHealth(ctx, healthLn, time.Now())
+	if d.cfg.DetachedMachineUpgradeCandidate {
+		if err := d.machineUpgradeTakeover.prepare(d); err != nil {
+			return fmt.Errorf("prepare detached Machine Upgrade takeover: %w", err)
+		}
+		if err := d.machineUpgradeTakeover.waitForCommit(ctx); err != nil {
+			return fmt.Errorf("wait for detached Machine Upgrade takeover: %w", err)
+		}
+	}
 
 	// Renew the PAT before the first API call, then do the initial
 	// workspace sync. Both steps live in preflightAuth so the ordering
@@ -856,6 +865,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if err := d.markMachineUpgradeCandidateReady(); err != nil {
 			d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)
 		}
+	}
+	if d.cfg.DetachedMachineUpgradeCandidate {
+		d.releaseClaimBarrier()
 	}
 	if err := d.reconcileMachineUpgradeTerminalJournal(ctx); err != nil {
 		d.logger.Debug("machine upgrade terminal marker not yet clearable", "error", err)
@@ -915,23 +927,6 @@ func (d *Daemon) ReportMachineUpgradeTakeoverFailure(cause error) {
 		return
 	}
 	d.failMachineUpgrade(context.Background(), runtimeID, upgradeID, "candidate_takeover_failed", cause)
-}
-
-func (d *Daemon) BeginMachineUpgradeRollback(cause error) error {
-	if cause == nil || d.client == nil {
-		return nil
-	}
-	if err := d.MarkMachineUpgradeRollbackPending(); err != nil {
-		return err
-	}
-	d.mu.Lock()
-	upgradeID, runtimeID := d.machineUpgradeID, d.machineUpgradeRuntimeID
-	d.mu.Unlock()
-	generation := d.machineUpgradeRollbackGenerationID()
-	if upgradeID == "" || runtimeID == "" || generation == "" {
-		return fmt.Errorf("machine upgrade rollback identity is incomplete")
-	}
-	return d.client.ReportMachineUpgradeRollback(context.Background(), runtimeID, upgradeID, generation, "candidate_takeover_failed", cause.Error())
 }
 
 // ReportMachineUpgradeRollbackFailure leaves the rollback marker intact while

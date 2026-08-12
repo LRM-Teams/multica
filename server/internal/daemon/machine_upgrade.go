@@ -51,7 +51,7 @@ func (d *Daemon) machineUpgradeGenerationID() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if strings.TrimSpace(d.machineUpgradeGeneration) == "" {
-		if journal, err := d.currentMachineUpgradeJournal(); err == nil && journal != nil && daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion) && (journal.Phase == "handoff" || journal.Phase == "candidate_ready") {
+		if journal, err := d.currentMachineUpgradeJournal(); err == nil && journal != nil && daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion) && (journal.Phase == "handoff" || journal.Phase == "takeover_committed" || journal.Phase == "candidate_ready") {
 			d.machineUpgradeGeneration = journal.Generation
 		}
 	}
@@ -72,7 +72,7 @@ func (d *Daemon) markMachineUpgradeCandidateReady() error {
 	if journal.Phase == "candidate_ready" {
 		return nil
 	}
-	if journal.Phase != "handoff" {
+	if journal.Phase != "handoff" && journal.Phase != "takeover_committed" {
 		return fmt.Errorf("machine upgrade journal phase %q cannot become candidate_ready", journal.Phase)
 	}
 	journal.Phase = "candidate_ready"
@@ -444,7 +444,7 @@ func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs 
 	if journal.Phase == "candidate_ready" {
 		return nil
 	}
-	if journal.Phase != "handoff" {
+	if journal.Phase != "handoff" && journal.Phase != "takeover_committed" {
 		return nil
 	}
 	if !daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion) || journal.Generation != d.machineUpgradeGenerationID() {
@@ -458,12 +458,10 @@ func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs 
 	if !sameStringSet(journal.RuntimeIDs, runtimeIDs) {
 		return fmt.Errorf("successor Runtime set does not match accepted complete set")
 	}
-	// A detached candidate must first let the incumbent validate its exact
-	// local process proof. The authenticated takeover commit endpoint performs
-	// the remote attestation only after that local proof is accepted. A
-	// supervisor already owns the process handoff and keeps the existing direct
-	// attestation behavior.
-	if d.cfg.DetachedMachineUpgradeCandidate {
+	// A detached candidate may register only after the predecessor-to-candidate
+	// Computer generation CAS is durably committed. Before that point Run is
+	// blocked in the takeover module and cannot reach this function.
+	if d.cfg.DetachedMachineUpgradeCandidate && journal.Phase != "takeover_committed" {
 		return nil
 	}
 	if err := d.client.AttestComputerUpgrade(ctx, d.cfg.DaemonID, journal.ID, journal.Generation, d.cfg.CLIVersion, runtimeIDs, workspaceIDs); err != nil {
@@ -625,7 +623,7 @@ func (d *Daemon) currentMachineUpgradeJournal() (*machineUpgradeJournal, error) 
 			continue
 		}
 		var candidate machineUpgradeJournal
-		if json.Unmarshal(data, &candidate) != nil || (candidate.Phase != "accepted" && candidate.Phase != "staged" && candidate.Phase != "handoff" && candidate.Phase != "candidate_ready" && candidate.Phase != "rollback_pending") {
+		if json.Unmarshal(data, &candidate) != nil || (candidate.Phase != "accepted" && candidate.Phase != "staged" && candidate.Phase != "handoff" && candidate.Phase != "takeover_committed" && candidate.Phase != "candidate_ready" && candidate.Phase != "rollback_pending") {
 			continue
 		}
 		if newest == nil || candidate.UpdatedAt > newest.UpdatedAt {

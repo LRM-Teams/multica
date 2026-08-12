@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -126,11 +128,27 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	previousRoot := versionStoreRootFn
 	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+	store, err := cli.NewVersionStore(filepath.Join(root, "store"), "linux", func(context.Context, string, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"v9.9.9", "v10.0.0"} {
+		data := []byte("binary-" + version)
+		if _, err := store.StageBinary(context.Background(), version, data, fmt.Sprintf("%x", sha256.Sum256(data)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 1, "v10.0.0"); err != nil {
+		t.Fatal(err)
+	}
 
 	attestations := 0
 	var upstreamProof map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-1/attest" {
+		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-1/takeover" {
 			t.Fatalf("upstream path = %s", r.URL.Path)
 		}
 		attestations++
@@ -145,6 +163,8 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	d := New(Config{
 		CLIVersion:                      "v10.0.0",
 		DaemonID:                        "daemon-1",
+		WorkspaceID:                     "11111111-1111-1111-1111-111111111111",
+		Agents:                          map[string]AgentEntry{"codex": {}, "cursor": {}},
 		ComputerGeneration:              12,
 		LocalControlToken:               "profile-secret",
 		DetachedMachineUpgradeCandidate: true,
@@ -159,23 +179,25 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	if !d.pauseClaims {
 		t.Fatal("detached candidate did not start behind claim barrier")
 	}
-	d.ready.Store(true)
 	journal := &machineUpgradeJournal{
 		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
-		IncumbentGeneration: 7, PredecessorComputerGeneration: 11,
+		IncumbentGeneration: 1, IncumbentGenerationKnown: true, PredecessorComputerGeneration: 11,
 		RuntimeIDs:   []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
 		WorkspaceIDs: []string{"11111111-1111-1111-1111-111111111111"}, Phase: "handoff",
 	}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		t.Fatal(err)
 	}
+	if err := d.machineUpgradeTakeover.prepare(d); err != nil {
+		t.Fatal(err)
+	}
 
 	expected := MachineUpgradeTakeoverProof{
 		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
-		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 7,
+		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 1,
 		CandidateComputerGeneration: 12, CandidatePID: os.Getpid(), TargetVersion: "v10.0.0",
 		RuntimeIDs:   []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
-		WorkspaceIDs: []string{"11111111-1111-1111-1111-111111111111"}, Phase: "handoff",
+		WorkspaceIDs: []string{"11111111-1111-1111-1111-111111111111"}, Phase: "takeover_ready",
 	}
 	handler := d.localMachineUpgradeTakeoverHandler()
 	readHealthProof := func() MachineUpgradeTakeoverProof {
@@ -187,7 +209,7 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 		}
 		return *health.MachineUpgradeTakeover
 	}
-	if proof := readHealthProof(); proof.Phase != "handoff" || proof.CandidatePID != os.Getpid() {
+	if proof := readHealthProof(); proof.Phase != "takeover_ready" || proof.CandidatePID != os.Getpid() {
 		t.Fatalf("candidate proposal health proof = %+v", proof)
 	}
 	request := func(proof MachineUpgradeTakeoverProof, token string) *httptest.ResponseRecorder {
@@ -213,7 +235,7 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 		t.Fatalf("wrong-daemon takeover status = %d body=%s, want 409", rec.Code, rec.Body.String())
 	}
 	if attestations != 0 {
-		t.Fatalf("mismatched local proof reached server %d times", attestations)
+		t.Fatalf("candidate contacted server before exact local proof: %d requests", attestations)
 	}
 	if !d.pauseClaims {
 		t.Fatal("mismatched local proof released candidate claim barrier")
@@ -226,8 +248,8 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	if attestations != 1 {
 		t.Fatalf("server attestations = %d, want 1", attestations)
 	}
-	if d.pauseClaims {
-		t.Fatal("committed takeover did not release candidate claim barrier")
+	if !d.pauseClaims {
+		t.Fatal("takeover CAS released claims before normal candidate startup")
 	}
 	if got := stringSetFromAny(upstreamProof["runtime_ids"]); !sameStringSet(got, expected.RuntimeIDs) {
 		t.Fatalf("upstream runtime proof = %#v, want %#v", got, expected.RuntimeIDs)
@@ -236,13 +258,13 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 		t.Fatalf("upstream Workspace proof = %#v, want %#v", got, expected.WorkspaceIDs)
 	}
 	stored, err := d.currentMachineUpgradeJournal()
-	if err != nil || stored == nil || stored.Phase != "candidate_ready" {
+	if err != nil || stored == nil || stored.Phase != "takeover_committed" {
 		t.Fatalf("durable takeover journal = %+v err=%v", stored, err)
 	}
 	if replay := request(expected, "profile-secret"); replay.Code != http.StatusOK || attestations != 1 {
 		t.Fatalf("takeover replay status=%d attestations=%d body=%s", replay.Code, attestations, replay.Body.String())
 	}
-	if proof := readHealthProof(); proof.Phase != "candidate_ready" {
+	if proof := readHealthProof(); proof.Phase != "takeover_committed" {
 		t.Fatalf("committed health proof = %+v", proof)
 	}
 }

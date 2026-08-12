@@ -84,9 +84,9 @@ type Config struct {
 	WorkspaceID        string // the one workspace this daemon registers for
 	BindingsRoot       string // machine-wide Computer Binding store; empty keeps legacy single-workspace test/config behavior
 	ComputerGeneration int64  // monotonic machine-wide resident generation; server fences older generations
-	// DetachedMachineUpgradeCandidate gates the two-phase standalone takeover:
-	// the candidate registers locally, then waits for the incumbent's
-	// authenticated proof commit before it can attest completion remotely.
+	// DetachedMachineUpgradeCandidate gates the standalone takeover: the
+	// candidate proves local identity first, waits for the incumbent-authorized
+	// generation CAS, and only then starts server preflight and registration.
 	DetachedMachineUpgradeCandidate bool
 	Agents                          map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok
 	WorkspacesRoot                  string                // base path containing workspace directories (default: ~/.multica/workspaces)

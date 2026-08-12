@@ -315,17 +315,7 @@ jobs:
         # temporary workspace while its fixture is still being assembled.
         run: cd server && go test -p 1 ./...
 
-      # LRM-1076 AC1/AC5: re-run the silent-window integration test with -v so
-      # unattended_auto_steps / probe / scheduler-event counts appear in the log
-      # (plain `go test` without -v swallows test stdout even on PASS).
-      - name: LRM-1076 silent-window evidence
-        env:
-          LRM_1076_EVIDENCE_PATH: ${{ runner.temp }}/lrm-1076-evidence.txt
-        run: |
-          cd server && go test -p 1 -count=1 -v \
-            -run TestProcessResearchNextSteps_SilentWindowAutoStepsGe3 \
-            ./internal/handler/
-          test -s "$LRM_1076_EVIDENCE_PATH"
-          echo "::group::LRM-1076 silent-window evidence"
-          cat "$LRM_1076_EVIDENCE_PATH"
-          echo "::endgroup::"
+      # LRM-1076 AC1/AC5 lives in the main `go test ./...` suite above
+      # (TestProcessResearchNextSteps_SilentWindowAutoStepsGe3). The old
+      # dedicated evidence step required LRM_1076_EVIDENCE_PATH, which #2885
+      # stopped writing — keep assertions there, not a brittle file check here.

@@ -99,6 +99,21 @@ if ! grep -Fq -- 'compose pull backend' <<<"$deploy_test_workflow"; then
   exit 1
 fi
 
+if ! perl -0ne 'exit(!/compose pull backend\s+# Migration 339.*?compose stop backend\s+compose run --rm --no-deps --entrypoint \.\/migrate backend up/s)' <<<"$deploy_test_workflow"; then
+  echo "Test deployment must stop the old backend before the schema cutover"
+  exit 1
+fi
+
+production_migration_step="$(awk '
+  /- name: Run database migration/ { capture = 1 }
+  /- name: Pull & restart backend/ { capture = 0 }
+  capture
+' .github/workflows/deploy.yml)"
+if ! grep -Fq -- 'stop backend' <<<"$production_migration_step"; then
+  echo "Production deployment must stop the old backend before the schema cutover"
+  exit 1
+fi
+
 if grep -Fq -- 'branches: [dev]' <<<"$deploy_workflow"; then
   echo "Production deployment must not consume dev pushes"
   exit 1

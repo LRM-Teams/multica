@@ -6,12 +6,65 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+// TestSendChannelMessageConcurrentDuplicate_SingleConnPoolDoesNotDeadlock
+// pins the canonical-send transaction boundary. Duplicate inserts may wait on
+// the winning transaction's client_message_id unique key; recipient planning
+// must therefore reuse that transaction's connection instead of acquiring a
+// second pool connection before the winner can commit.
+func TestSendChannelMessageConcurrentDuplicate_SingleConnPoolDoesNotDeadlock(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	channelID := seedChannelForTest(t, "client-id-single-conn-"+randomID(), testUserID)
+	h := singleConnHandler(t, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const attempts = 2
+	statuses := make(chan int, attempts)
+	var wg sync.WaitGroup
+	for range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+				"content":           "single-connection concurrent retry",
+				"client_message_id": "client-" + channelID,
+			})
+			req = req.WithContext(ctx)
+			req = withChannelTestWorkspaceCtx(t, req, testUserID)
+			req = withURLParam(req, "channelId", channelID)
+			rec := httptest.NewRecorder()
+			h.SendChannelMessage(rec, req)
+			statuses <- rec.Code
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+
+	created, replayed := 0, 0
+	for status := range statuses {
+		switch status {
+		case http.StatusCreated:
+			created++
+		case http.StatusOK:
+			replayed++
+		default:
+			t.Fatalf("concurrent duplicate status = %d, want 201 or 200", status)
+		}
+	}
+	if created != 1 || replayed != 1 {
+		t.Fatalf("statuses created=%d replayed=%d, want 1/1", created, replayed)
+	}
+}
 
 // singleConnHandler returns a *Handler wired to a dedicated pgxpool.Pool
 // capped at maxConns, otherwise identical to testHandler. This is how the

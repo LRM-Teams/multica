@@ -99,7 +99,12 @@ func TestMixedRLFreezeService_TimeoutSettlesActiveTurnsAsCaptureGaps(t *testing.
 func TestMixedRLFreezeService_ReapQuiescenceFreezesQuietRun(t *testing.T) {
 	h := newMixedRLRepositoryHarness(t)
 	run := createMixedRLRun(t, h)
-	advanceMixedRLRunToQuietCandidate(t, h, run.RunID)
+	_, err := h.runs.TransitionStatus(h.ctx, run.RunID, "provisioning", "preflight")
+	require.NoError(t, err)
+	_, err = h.runs.StartTimeout(h.ctx, run.RunID, time.Now().UTC())
+	require.NoError(t, err)
+	_, err = h.runs.TransitionStatus(h.ctx, run.RunID, "running", "quiet_candidate")
+	require.NoError(t, err)
 	require.NoError(t, h.tx.QueryRow(h.ctx, `
 		UPDATE env_dispatch_run
 		SET quiet_candidate_since = now() - make_interval(secs => quiet_window_ms / 1000 + 1),

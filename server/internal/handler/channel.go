@@ -3740,23 +3740,23 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		ReplyToMessageID: replyToMessageID, QuoteMessageID: quoteMessageID,
 		QuoteSnapshot: quoteSnapshot, ThreadRootMessageID: rootID,
 		ThreadID: threadID, ClientMessageID: clientMessageID,
-		BeforeRecipientPlanning: func(ctx context.Context, msg ChannelMessageResponse, created bool) error {
+		BeforeRecipientPlanning: func(txHandler *Handler, ctx context.Context, msg ChannelMessageResponse, created bool) error {
 			if !created {
 				return nil
 			}
-			h.followChannelThreadUser(ctx, channelID, rootID, parseUUID(userID), true)
+			txHandler.followChannelThreadUser(ctx, channelID, rootID, parseUUID(userID), true)
 			if root.Type == "user" && root.AuthorID != nil {
-				h.followChannelThreadUserUnlessExplicitlyUnfollowed(ctx, channelID, rootID, parseUUID(*root.AuthorID), false)
+				txHandler.followChannelThreadUserUnlessExplicitlyUnfollowed(ctx, channelID, rootID, parseUUID(*root.AuthorID), false)
 			}
 			if root.Type == "agent" && root.AuthorID != nil {
-				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, channelID, rootID, parseUUID(*root.AuthorID))
+				txHandler.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, channelID, rootID, parseUUID(*root.AuthorID))
 			}
 			if ch.Kind == "dm" && root.Type == "user" {
-				for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
-					h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, channelID, rootID, agent.ID)
+				for _, agent := range txHandler.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+					txHandler.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, channelID, rootID, agent.ID)
 				}
 			}
-			h.followChannelThreadMentionedUsers(ctx, ch, msg)
+			txHandler.followChannelThreadMentionedUsers(ctx, ch, msg)
 			return nil
 		},
 	})
@@ -4390,7 +4390,7 @@ type canonicalChannelMessageInput struct {
 	ThreadRootMessageID     pgtype.UUID
 	ThreadID                *string
 	ClientMessageID         *string
-	BeforeRecipientPlanning func(context.Context, ChannelMessageResponse, bool) error
+	BeforeRecipientPlanning func(*Handler, context.Context, ChannelMessageResponse, bool) error
 }
 
 func (h *Handler) sendPreparedCanonicalChannelMessage(ctx context.Context, input canonicalChannelMessageInput) (service.CanonicalChannelMessageResult[channelMessageCreateResult, *canonicalMessageDeliveryPlan], error) {
@@ -4486,13 +4486,18 @@ func (h *Handler) persistPreparedCanonicalChannelMessage(ctx context.Context, in
 		}
 	}
 	defer tx.Rollback(ctx)
+	txHandler := *h
+	txHandler.DB = tx
+	if h.Queries != nil {
+		txHandler.Queries = h.Queries.WithTx(tx)
+	}
 
 	if input.BeforeRecipientPlanning != nil {
-		if err := input.BeforeRecipientPlanning(ctx, result.Message, result.Created); err != nil {
+		if err := input.BeforeRecipientPlanning(&txHandler, ctx, result.Message, result.Created); err != nil {
 			return zero, err
 		}
 	}
-	plans, err := h.planCanonicalMessageDeliveryRecipients(ctx, input.Channel, result.Message)
+	plans, err := txHandler.planCanonicalMessageDeliveryRecipients(ctx, input.Channel, result.Message)
 	if err != nil {
 		return zero, err
 	}

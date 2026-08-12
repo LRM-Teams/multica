@@ -210,6 +210,9 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		data := observation.Data.(AgentErrorObservationData)
 		projection.activityKind, projection.detailKind, projection.processInstanceID = protocol.ActivityKindError, "runtime_error", data.ProcessInstanceID
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Agent execution failed")
+	case AgentObservationOffline:
+		projection.activityKind = protocol.ActivityKindOffline
+		entry, err = activityNarrativeEntry(projection.activityKind, "", "Offline")
 	default:
 		return agentActivityProjection{}, fmt.Errorf("unknown Agent Observation kind %q", observation.Kind)
 	}

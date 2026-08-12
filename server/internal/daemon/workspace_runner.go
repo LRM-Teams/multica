@@ -225,7 +225,8 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 					if runner.logger != nil {
 						runner.logger.Warn("Workspace Runner provider start failed", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "start_dispatch_id", start.StartDispatchID, "reason", "provider_start_failed", "error", err)
 					}
-					_ = writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: start.AgentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusInactive})
+					// The lifecycle module publishes the exact Raft failure projection
+					// (spawn => Offline, runtime => Error) together with inactive.
 					return
 				}
 				if err := writeFrame(protocol.EventAgentStatus, status); err != nil {

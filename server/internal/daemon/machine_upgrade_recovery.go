@@ -20,6 +20,23 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 
 	runningSource := daemonVersionsMatch(d.cfg.CLIVersion, journal.SourceVersion)
 	runningTarget := daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion)
+	if !runningSource && !runningTarget {
+		superseded, err := d.machineUpgradeJournalSupersededByActive(journal)
+		if err != nil {
+			return false, fmt.Errorf("inspect superseding Active generation: %w", err)
+		}
+		if superseded {
+			if d.logger != nil {
+				d.logger.Warn("retaining Machine Upgrade journal superseded by explicit activation",
+					"journal_phase", journal.Phase,
+					"source_version", journal.SourceVersion,
+					"target_version", journal.TargetVersion,
+					"running_version", d.cfg.CLIVersion,
+				)
+			}
+			return false, nil
+		}
+	}
 	switch journal.Phase {
 	case "candidate_ready":
 		if !runningTarget {
@@ -131,6 +148,32 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 	d.mu.Unlock()
 	d.triggerRestart()
 	return true, nil
+}
+
+// machineUpgradeJournalSupersededByActive distinguishes an explicit
+// VersionStore activation from an arbitrary executable replacement. A later
+// Active generation matching this process proves another serialized installer
+// mutation superseded the retained operation. The old journal remains intact
+// for diagnosis and terminal-receipt reconciliation; recovery only stops
+// replaying its obsolete side effects.
+func (d *Daemon) machineUpgradeJournalSupersededByActive(journal *machineUpgradeJournal) (bool, error) {
+	if journal == nil {
+		return false, nil
+	}
+	root, err := versionStoreRootFn()
+	if err != nil {
+		return false, err
+	}
+	store, err := openVersionStoreFn(root)
+	if err != nil {
+		return false, err
+	}
+	state, err := store.ReadActivationState()
+	if err != nil {
+		return false, err
+	}
+	return state.Generation > journal.IncumbentGeneration &&
+		daemonVersionsMatch(state.ActiveVersion, d.cfg.CLIVersion), nil
 }
 
 func (d *Daemon) captureCommittedMachineUpgradeGeneration(journal *machineUpgradeJournal) error {

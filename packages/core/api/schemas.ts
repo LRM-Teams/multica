@@ -58,6 +58,8 @@ import type {
   NotePage,
   NotePageListResponse,
   NoteAIJob,
+  NotePageIssueRef,
+  NotePageIssueRefListResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
@@ -97,6 +99,34 @@ export const EMPTY_NOTE_PAGE: NotePage = {
 };
 
 export const EMPTY_NOTE_PAGE_LIST: NotePageListResponse = { pages: [] };
+
+export const NotePageIssueRefSchema: z.ZodType<NotePageIssueRef> = z.object({
+  type: z.literal("issue").default("issue"),
+  page_id: z.string().default(""),
+  issue_id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  identifier: z.string().default(""),
+  title: z.string().default(""),
+  number: z.number().default(0),
+  created_at: z.string().default(""),
+}).loose();
+
+export const NotePageIssueRefListResponseSchema: z.ZodType<NotePageIssueRefListResponse> = z.object({
+  refs: z.array(NotePageIssueRefSchema).default([]),
+}).loose();
+
+export const EMPTY_NOTE_PAGE_ISSUE_REF: NotePageIssueRef = {
+  type: "issue",
+  page_id: "",
+  issue_id: "",
+  workspace_id: "",
+  identifier: "",
+  title: "",
+  number: 0,
+  created_at: "",
+};
+
+export const EMPTY_NOTE_PAGE_ISSUE_REF_LIST: NotePageIssueRefListResponse = { refs: [] };
 
 export const NoteAIEditResultSchema = z.object({
   action: z.enum(["insert", "replace_selection", "replace_page", "patch"]),

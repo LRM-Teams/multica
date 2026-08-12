@@ -232,6 +232,9 @@ import type {
   UpdateNotePageSharesRequest,
   CreateNoteAIJobRequest,
   NoteAIJob,
+  NotePageIssueRef,
+  NotePageIssueRefListResponse,
+  CreateNotePageIssueRefRequest,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -430,6 +433,10 @@ import {
   EMPTY_NOTE_PAGE_LIST,
   NoteAIJobSchema,
   EMPTY_NOTE_AI_JOB,
+  NotePageIssueRefSchema,
+  NotePageIssueRefListResponseSchema,
+  EMPTY_NOTE_PAGE_ISSUE_REF,
+  EMPTY_NOTE_PAGE_ISSUE_REF_LIST,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1069,6 +1076,29 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/notes/ai-jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
     return parseWithFallback(raw, NoteAIJobSchema, EMPTY_NOTE_AI_JOB, {
       endpoint: "POST /api/notes/ai-jobs/{id}/cancel",
+    });
+  }
+
+  async listNotePageIssueRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs`);
+    return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/issue-refs",
+    });
+  }
+
+  async createNotePageIssueRef(pageId: string, data: CreateNotePageIssueRefRequest): Promise<NotePageIssueRef> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageIssueRefSchema, EMPTY_NOTE_PAGE_ISSUE_REF, {
+      endpoint: "POST /api/notes/pages/{id}/issue-refs",
+    });
+  }
+
+  async deleteNotePageIssueRef(pageId: string, issueId: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs/${encodeURIComponent(issueId)}`, {
+      method: "DELETE",
     });
   }
 

@@ -101,6 +101,7 @@
     "share_save_failed": "Could not save share settings",
     "note_saved": "Note saved",
     "note_save_failed": "Could not save note",
+    "issue_refs_sync_failed": "Note saved, but linking issues failed",
     "autosave_saved": "Saved",
     "autosave_pending": "Saving soon...",
     "autosave_saving": "Saving...",

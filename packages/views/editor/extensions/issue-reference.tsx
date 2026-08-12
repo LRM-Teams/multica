@@ -6,6 +6,7 @@ import { PluginKey } from "@tiptap/pm/state";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
 import { IssueChip } from "../../issues/components/issue-chip";
+import { useT } from "../../i18n/use-t";
 import type { MentionItem } from "./mention-suggestion";
 
 export const IssueReferenceExtension = Node.create({
@@ -20,10 +21,8 @@ export const IssueReferenceExtension = Node.create({
       // Explicit pluginKey: @tiptap/suggestion's Suggestion() falls back to a
       // MODULE-LEVEL SHARED PluginKey("suggestion") when none is given, so
       // any two Suggestion-backed nodes both left at their bare/disabled
-      // default (as this one always is post-2026-07-31 — see
-      // channel-reference.tsx) collide with "Adding different instances of a
-      // keyed plugin" the moment both are registered in the same editor,
-      // even though neither is actually active.
+      // default collide with "Adding different instances of a keyed plugin"
+      // the moment both are registered in the same editor.
       suggestion: {
         char: "#",
         allow: () => false,
@@ -45,6 +44,7 @@ export const IssueReferenceExtension = Node.create({
     return {
       id: { default: null },
       label: { default: null },
+      // Kept for round-trip of older docs; never used for inaccessible display.
       title: { default: null },
     };
   },
@@ -112,6 +112,7 @@ export const IssueReferenceExtension = Node.create({
 
 function IssueReferenceView({ node }: NodeViewProps) {
   const { id, label } = node.attrs;
+  const { t } = useT("editor");
   const p = useWorkspacePaths();
   const { push, openInNewTab } = useNavigation();
   const issuePath = p.issueDetail(id);
@@ -131,7 +132,9 @@ function IssueReferenceView({ node }: NodeViewProps) {
       <a href={issuePath} onClick={handleClick} className="issue-mention inline-flex">
         <IssueChip
           issueId={id}
-          fallbackLabel={label}
+          // Identifier-only while loading; never pass title attrs here.
+          fallbackLabel={typeof label === "string" && label.trim() ? label : undefined}
+          unresolvedLabel={t(($) => $.issue_reference.unavailable)}
           className="cursor-pointer hover:bg-accent transition-colors"
         />
       </a>

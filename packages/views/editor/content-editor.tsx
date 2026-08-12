@@ -128,8 +128,10 @@ interface ContentEditorProps {
    * the pill in issue/comment/description editors.
    */
   mentionVariant?: import("../common/mention-token").MentionTokenVariant;
-  /** Enable a channel reference `#` inline picker. */
+  /** Enable a channel reference `#` inline picker. Ignored when issue `#` is on. */
   enableChannelReferences?: boolean;
+  /** Enable an issue reference `#` inline picker (Notes). Mutually exclusive with channel `#`. */
+  enableIssueReferences?: boolean;
   /** Restrict the @ picker's member/agent candidates to these actor ids
    *  (e.g. a channel's members). Omit for the full workspace. */
   mentionAllowedActorIds?: ReadonlySet<string> | null;
@@ -236,6 +238,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       mentionContextItems,
       mentionVariant = "soft-bg",
       enableChannelReferences = false,
+      enableIssueReferences = false,
       mentionAllowedActorIds,
       scopedMentionAgents,
       mentionChannelMemberIds,
@@ -402,6 +405,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           getMentionScopedAgents: () => scopedMentionAgentsRef.current,
           getMentionChannelMemberIds: () => mentionChannelMemberIdsRef.current,
           enableChannelReferences,
+          enableIssueReferences,
           enableSlashCommands,
         slashCommandMode,
       }),

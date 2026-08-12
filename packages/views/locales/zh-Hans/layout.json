@@ -101,6 +101,7 @@
     "share_save_failed": "无法保存分享设置",
     "note_saved": "笔记已保存",
     "note_save_failed": "无法保存笔记",
+    "issue_refs_sync_failed": "笔记已保存，但关联 Issue 失败",
     "autosave_saved": "已保存",
     "autosave_pending": "即将保存...",
     "autosave_saving": "正在保存...",

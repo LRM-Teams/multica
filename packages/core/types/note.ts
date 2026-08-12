@@ -75,3 +75,23 @@ export interface NoteAIJob {
   created_at: string;
   updated_at?: string;
 }
+
+/** Stable note → issue link (S1-R1). Slice 1 is issue-only. */
+export interface NotePageIssueRef {
+  type: "issue";
+  page_id: string;
+  issue_id: string;
+  workspace_id: string;
+  identifier: string;
+  title: string;
+  number: number;
+  created_at: string;
+}
+
+export interface NotePageIssueRefListResponse {
+  refs: NotePageIssueRef[];
+}
+
+export interface CreateNotePageIssueRefRequest {
+  issue_id: string;
+}

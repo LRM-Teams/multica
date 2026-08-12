@@ -186,7 +186,7 @@ func (h *Handler) AcceptMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 		h.writeMachineUpgradeDaemonError(w, err)
 		return
 	}
-	h.publishMachineUpgradeProjection(r, rt)
+	h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	writeJSON(w, http.StatusOK, op)
 }
 
@@ -248,7 +248,7 @@ func (h *Handler) ReportMachineUpgradeProgress(w http.ResponseWriter, r *http.Re
 		writeCodedError(w, http.StatusConflict, "machine_upgrade_phase_conflict", "machine upgrade phase cannot advance from its current state")
 		return
 	}
-	h.publishMachineUpgradeProjection(r, rt)
+	h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	writeJSON(w, http.StatusOK, op)
 }
 
@@ -315,7 +315,7 @@ func (h *Handler) CancelMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	h.publishMachineUpgradeProjection(r, rt)
+	h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	writeJSON(w, http.StatusOK, op)
 }
 
@@ -368,7 +368,7 @@ func (h *Handler) createMachineUpgrade(
 		return nil, false, err
 	}
 	if created {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 	return op, created, nil
 }
@@ -459,7 +459,7 @@ func (h *Handler) attestMachineUpgradeRegistration(r *http.Request, rt db.AgentR
 		return
 	}
 	if updated != nil {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 }
 
@@ -494,7 +494,7 @@ func (h *Handler) attestLegacyMachineUpgradeRegistration(r *http.Request, rt db.
 		slog.Warn("legacy machine upgrade registration attestation failed", "error", err, "runtime_id", uuidToString(rt.ID), "upgrade_id", op.ID)
 	}
 	if updated != nil {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 }
 
@@ -515,7 +515,7 @@ func (h *Handler) attestMachineUpgradeRollbackRegistration(r *http.Request, rt d
 		slog.Warn("machine upgrade rollback registration attestation failed", "error", err, "runtime_id", uuidToString(rt.ID), "upgrade_id", op.ID)
 	}
 	if updated != nil {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 }
 
@@ -572,32 +572,32 @@ func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Re
 	return rt, member, true
 }
 
-// publishMachineUpgradeProjection broadcasts the Computer-scoped operation to
-// every Runtime projection behind an active Workspace connection. The
-// Workspace that happened to initiate the mutation has no special lifecycle.
-func (h *Handler) publishMachineUpgradeProjection(r *http.Request, rt db.AgentRuntime) {
-	computerID := runtimeDaemonKey(rt)
+// publishComputerUpgradeProjection invalidates the Computer projection in
+// every active Workspace binding. Upgrade lifecycle does not belong to a
+// Runtime, and the Workspace that initiated the mutation has no special role.
+func (h *Handler) publishComputerUpgradeProjection(r *http.Request, computerID string) {
+	computerID = strings.TrimSpace(computerID)
 	if computerID == "" {
 		return
 	}
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT DISTINCT ON (runtime.workspace_id) runtime.id
-		FROM agent_runtime AS runtime
-		WHERE `+machineUpgradeComputerRuntimeScope+`
-		ORDER BY runtime.workspace_id, runtime.created_at, runtime.id`, computerID)
+		SELECT workspace_id
+		FROM computer_workspace_bindings
+		WHERE daemon_id = $1 AND active = TRUE AND revoked_at IS NULL
+		ORDER BY workspace_id`, computerID)
 	if err != nil {
 		slog.Warn("machine upgrade projection scope failed", "error", err, "computer_id", computerID)
 		return
 	}
-	runtimeIDs := make([]pgtype.UUID, 0)
+	workspaceIDs := make([]pgtype.UUID, 0)
 	for rows.Next() {
-		var runtimeID pgtype.UUID
-		if err := rows.Scan(&runtimeID); err != nil {
+		var workspaceID pgtype.UUID
+		if err := rows.Scan(&workspaceID); err != nil {
 			rows.Close()
 			slog.Warn("machine upgrade projection scan failed", "error", err, "computer_id", computerID)
 			return
 		}
-		runtimeIDs = append(runtimeIDs, runtimeID)
+		workspaceIDs = append(workspaceIDs, workspaceID)
 	}
 	rowsErr := rows.Err()
 	rows.Close()
@@ -605,15 +605,9 @@ func (h *Handler) publishMachineUpgradeProjection(r *http.Request, rt db.AgentRu
 		slog.Warn("machine upgrade projection scope failed", "error", rowsErr, "computer_id", computerID)
 		return
 	}
-	for _, runtimeID := range runtimeIDs {
-		scopedRuntime, err := h.Queries.GetAgentRuntime(r.Context(), runtimeID)
-		if err != nil {
-			slog.Warn("machine upgrade projection runtime disappeared", "error", err, "computer_id", computerID, "runtime_id", uuidToString(runtimeID))
-			continue
-		}
-		workspaceID := uuidToString(scopedRuntime.WorkspaceID)
-		h.publish(protocol.EventDaemonRuntimeUpdated, workspaceID, "system", "", map[string]any{
-			"runtime": h.runtimeToResponse(r.Context(), scopedRuntime),
+	for _, workspaceID := range workspaceIDs {
+		h.publish(protocol.EventComputerUpdated, uuidToString(workspaceID), "system", "", map[string]any{
+			"computer_id": computerID,
 		})
 	}
 }

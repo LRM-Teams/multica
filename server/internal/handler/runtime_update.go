@@ -477,7 +477,7 @@ func (h *Handler) CancelUpdateIntent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to cancel machine upgrade: "+err.Error())
 		return
 	}
-	h.publishMachineUpgradeProjection(r, rt)
+	h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -730,7 +730,7 @@ func (h *Handler) projectLegacyMachineUpgradeResult(r *http.Request, rt db.Agent
 		updated, _ = h.MachineUpgradeStore.Progress(r.Context(), op.DaemonID, op.ID, MachineUpgradeFailed, "legacy_update_failed", carrier.Error)
 	}
 	if updated != nil {
-		h.publishMachineUpgradeProjection(r, rt)
+		h.publishComputerUpgradeProjection(r, runtimeDaemonKey(rt))
 	}
 }
 

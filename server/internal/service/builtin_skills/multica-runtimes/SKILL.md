@@ -63,6 +63,9 @@ the package selected by the active production or test environment. Computer owne
 can perform this action. A Workspace owner/admin does not gain lifecycle control
 over another person's Computer; the initiating Workspace is only an entry point,
 and every active Workspace connection observes the same Computer upgrade.
+Upgrade changes are projected to those Workspaces as `computer:updated`; the
+event carries only `computer_id`, and clients refetch their Workspace-scoped
+Computer projection. It is not a Runtime update event.
 
 The resident Computer is machine-wide: it runs as one detached process and is
 controlled by the Computer lifecycle, not an OS supervisor:

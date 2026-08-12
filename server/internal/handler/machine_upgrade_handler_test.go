@@ -301,8 +301,12 @@ func TestMachineUpgrade_AcceptSnapshotsEveryConnectedWorkspaceRuntime(t *testing
 	localHandler := *testHandler
 	localHandler.Bus = events.New()
 	publishedWorkspaces := make([]string, 0)
-	localHandler.Bus.Subscribe(protocol.EventDaemonRuntimeUpdated, func(event events.Event) {
+	localHandler.Bus.Subscribe(protocol.EventComputerUpdated, func(event events.Event) {
 		publishedWorkspaces = append(publishedWorkspaces, event.WorkspaceID)
+		payload, ok := event.Payload.(map[string]any)
+		if !ok || payload["computer_id"] != daemonID {
+			t.Fatalf("computer projection payload = %#v", event.Payload)
+		}
 	})
 
 	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")

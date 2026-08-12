@@ -7,6 +7,9 @@ set captured across every active Workspace Execution Binding at acceptance.
 Only the Computer owner may initiate or cancel this machine-wide mutation. A
 Workspace supplies visibility and an entry point, not an independent upgrade
 scope; every active Workspace connection projects the same operation and result.
+The server announces projection changes with `computer:updated` carrying only
+the stable `computer_id`; each Workspace client refetches its own projection.
+This is the sole realtime event for Machine Upgrade state changes.
 
 For a standalone resident, candidate verification is local-first. The target
 binds the exclusive control port and proves its exact PID, binary version,

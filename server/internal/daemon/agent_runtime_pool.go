@@ -1075,10 +1075,16 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 
 func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error, activityDone <-chan struct{}, captureDone <-chan *agent.ResidentTurnCapture, generation uint64, onComplete func(error, uint64, *agent.ResidentTurnCapture)) {
 	turnErr := <-done
-	<-activityDone
 	var capture *agent.ResidentTurnCapture
-	if captureDone != nil {
-		capture = <-captureDone
+	// A failed provider may exit without closing its auxiliary Activity/Capture
+	// streams. The provider completion receipt is authoritative for admission:
+	// release the slot immediately on failure so Pending Messages can be retried.
+	// Successful turns still drain both streams before settlement and completion.
+	if turnErr == nil {
+		<-activityDone
+		if captureDone != nil {
+			capture = <-captureDone
+		}
 	}
 	completed := false
 	freed := false

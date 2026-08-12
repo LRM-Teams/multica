@@ -1623,6 +1623,39 @@ func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) 
 	}
 }
 
+func TestFinishResidentMessageInputDoesNotStayBusyWhenActivityStreamOutlivesFailedTurn(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	done := make(chan error, 1)
+	activity := make(chan struct{})
+	slot := &canonicalAgentRuntimeSlot{
+		running:                true,
+		messageInputDone:       done,
+		messageInputGeneration: 1,
+	}
+	completed := make(chan error, 1)
+
+	go pool.finishResidentMessageInput(slot, done, activity, nil, 1, func(err error, _ uint64, _ *agent.ResidentTurnCapture) {
+		completed <- err
+	})
+	done <- errors.New("provider exited")
+
+	select {
+	case err := <-completed:
+		if err == nil || err.Error() != "provider exited" {
+			t.Fatalf("completion error = %v, want provider exited", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("failed provider turn remained busy while its activity stream stayed open")
+	}
+
+	slot.mu.Lock()
+	running, inputDone := slot.running, slot.messageInputDone
+	slot.mu.Unlock()
+	if running || inputDone != nil {
+		t.Fatalf("slot after failed turn = running %v, done %v; want released", running, inputDone != nil)
+	}
+}
+
 func TestIsResidentAcceptBusyErr(t *testing.T) {
 	cases := []struct {
 		name string

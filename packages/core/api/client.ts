@@ -232,6 +232,8 @@ import type {
   UpdateNotePageSharesRequest,
   CreateNoteAIJobRequest,
   NoteAIJob,
+  CreateNoteWorkerJobRequest,
+  NoteWorkerJob,
   NotePageIssueRef,
   NotePageIssueRefListResponse,
   CreateNotePageIssueRefRequest,
@@ -438,6 +440,8 @@ import {
   EMPTY_NOTE_PAGE_LIST,
   NoteAIJobSchema,
   EMPTY_NOTE_AI_JOB,
+  NoteWorkerJobSchema,
+  EMPTY_NOTE_WORKER_JOB,
   NotePageIssueRefSchema,
   NotePageIssueRefListResponseSchema,
   EMPTY_NOTE_PAGE_ISSUE_REF,
@@ -1086,6 +1090,31 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/notes/ai-jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
     return parseWithFallback(raw, NoteAIJobSchema, EMPTY_NOTE_AI_JOB, {
       endpoint: "POST /api/notes/ai-jobs/{id}/cancel",
+    });
+  }
+
+  async createNoteWorkerJob(
+    pageId: string,
+    data: CreateNoteWorkerJobRequest,
+    init?: { signal?: AbortSignal },
+  ): Promise<NoteWorkerJob> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/worker-jobs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      signal: init?.signal,
+    });
+    return parseWithFallback(raw, NoteWorkerJobSchema, EMPTY_NOTE_WORKER_JOB, {
+      endpoint: "POST /api/notes/pages/{id}/worker-jobs",
+    });
+  }
+
+  async getNoteWorkerJob(jobId: string, init?: { signal?: AbortSignal }): Promise<NoteWorkerJob> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/worker-jobs/${encodeURIComponent(jobId)}`,
+      init?.signal ? { signal: init.signal } : undefined,
+    );
+    return parseWithFallback(raw, NoteWorkerJobSchema, EMPTY_NOTE_WORKER_JOB, {
+      endpoint: "GET /api/notes/worker-jobs/{id}",
     });
   }
 

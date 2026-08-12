@@ -70,10 +70,16 @@ type noteDuplicateRequest struct {
 	Title *string `json:"title"`
 }
 
+// noteAIJobCreateRequest is the Editor contract create body (S2-C3).
+// Worker intent / Worker-only fields must be rejected — see note_intent.go.
 type noteAIJobCreateRequest struct {
 	AgentID string `json:"agent_id"`
 	Prompt  string `json:"prompt"`
 	Title   string `json:"title"`
+	Intent  string `json:"intent"`
+	// Worker-only fields — presence is misuse and must 400.
+	Instruction string `json:"instruction"`
+	Action      string `json:"action"`
 }
 
 type NoteAIEditResult struct {
@@ -1259,6 +1265,10 @@ func (h *Handler) CreateNoteAIJob(w http.ResponseWriter, r *http.Request) {
 	var req noteAIJobCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if reason := editorCreateMisuseReason(strings.TrimSpace(req.Intent), strings.TrimSpace(req.Instruction), strings.TrimSpace(req.Action)); reason != "" {
+		writeError(w, http.StatusBadRequest, reason)
 		return
 	}
 	prompt := strings.TrimSpace(req.Prompt)

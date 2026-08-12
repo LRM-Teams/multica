@@ -58,6 +58,7 @@ import type {
   NotePage,
   NotePageListResponse,
   NoteAIJob,
+  NoteWorkerJob,
   NotePageIssueRef,
   NotePageIssueRefListResponse,
   NoteWriteback,
@@ -209,6 +210,34 @@ export const EMPTY_NOTE_AI_JOB: NoteAIJob = {
   failure_reason: null,
   failure_code: null,
   repair_code: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const NoteWorkerJobSchema: z.ZodType<NoteWorkerJob> = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  page_id: z.string().default(""),
+  agent_id: z.string().default(""),
+  instruction: z.string().default(""),
+  status: z.enum(["pending", "dispatched", "running", "completed", "failed", "cancelled"]).catch("pending"),
+  intent: z.string().default("worker"),
+  task_id: z.string().nullable().optional(),
+  failure_reason: z.string().nullable().optional(),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_NOTE_WORKER_JOB: NoteWorkerJob = {
+  id: "",
+  workspace_id: "",
+  page_id: "",
+  agent_id: "",
+  instruction: "",
+  status: "pending",
+  intent: "worker",
+  task_id: null,
+  failure_reason: null,
   created_at: "",
   updated_at: "",
 };

@@ -181,12 +181,18 @@
 
 ### 2.1 Editor vs Worker 分家
 
-- [ ] **S2-C3 合同分离：Editor 与 Worker**
+- [x] **S2-C3 合同分离：Editor 与 Worker**
   - **目标**：两种意图两套合同，禁止混用。
   - **要做**：文档化 + 代码分型（例如不同 job/task reason 或 endpoint）。Editor = 现有 `note_ai_job`（改页）。Worker = 新路径（读笔记 → 平台执行）。
   - **不要做**：给 `note_ai_job` 加「顺便去建 issue/跑 agent」的副作用。
   - **依赖**：Slice 1 完成
   - **完成标准**：代码与注释/skill（若有）能一眼区分；误用返回明确错误。
+  - **已落地（2026-08-12）**：
+    - 合同文档：`docs/notes-editor-worker-contract.md`；索引：`docs/engineering-principles.md` §4.22
+    - 表 `note_worker_job`（migration `338_note_worker_job`）；API：`POST .../worker-jobs`、`GET .../worker-jobs/{id}`
+    - Editor/Worker 双向误用 400；Worker 创建不写 `note_ai_job`、不派发 task（派发留给 S2-C1）
+    - 核心类型/客户端：`NoteIntent` / `NoteWorkerJob*` in `@multica/core`
+    - 测试：`TestEditorCreateMisuseReason`、`TestWorkerCreateMisuseReason`、`TestCreateNoteAIJobRejectsWorkerFields`、`TestCreateNoteWorkerJobRejectsEditorFields`、`TestCreateNoteWorkerJobDoesNotCreateNoteAIJob`
 
 ### 2.2 上下文挂载
 

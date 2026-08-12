@@ -62,6 +62,8 @@ export interface CreateNoteAIJobRequest {
   agent_id: string;
   prompt: string;
   title?: string;
+  /** Must be omitted or "editor". "worker" is rejected (S2-C3). */
+  intent?: NoteIntent;
 }
 
 export interface NoteAIJob {
@@ -78,6 +80,38 @@ export interface NoteAIJob {
   repair_code?: NoteAIJobRepairCode | null;
   created_at: string;
   updated_at?: string;
+}
+
+/** Editor = rewrite page; Worker = platform work briefed by the note (S2-C3). */
+export type NoteIntent = "editor" | "worker";
+
+export type NoteWorkerJobStatus =
+  | "pending"
+  | "dispatched"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface CreateNoteWorkerJobRequest {
+  agent_id: string;
+  /** Trusted user directive. Note body is loaded under ACL at dispatch (S2-C1). */
+  instruction: string;
+  intent?: NoteIntent;
+}
+
+export interface NoteWorkerJob {
+  id: string;
+  workspace_id: string;
+  page_id: string;
+  agent_id: string;
+  instruction: string;
+  status: NoteWorkerJobStatus | string;
+  intent: NoteIntent | string;
+  task_id?: string | null;
+  failure_reason?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /** Stable note → issue link (S1-R1 / S1-R3). */

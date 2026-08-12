@@ -166,7 +166,7 @@ func TestWorkspaceRunnerAgentAttachAndStartPayloadsRejectCrossDecode(t *testing.
 		t.Fatalf("start payload accepted attach JSON: %s", attachRaw)
 	}
 
-	startRaw, err := json.Marshal(WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1"})
+	startRaw, err := json.Marshal(WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

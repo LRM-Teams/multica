@@ -79,7 +79,13 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := json.Unmarshal(raw, &status); err != nil {
 			return fmt.Errorf("decode Runner status: %w", err)
 		}
-		return h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status)
+		if err := h.recordRunnerLaunch(ctx, identity, daemonInstanceID, status); err != nil {
+			return err
+		}
+		if status.Status == protocol.AgentStatusInactive && h.DaemonHub != nil {
+			return h.reconcileWorkspaceRunnerLaunches(ctx, identity)
+		}
+		return nil
 	case protocol.EventAgentStartAck:
 		var acknowledgement protocol.AgentStartAckPayload
 		if err := json.Unmarshal(raw, &acknowledgement); err != nil {
@@ -429,23 +435,24 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 		if err != nil {
 			return err
 		}
-		var desiredLaunchID string
+		var desiredLaunchID, desiredStartDispatchID string
 		if err := h.DB.QueryRow(ctx, `
-			SELECT launch_id::text FROM agent_runner_launch_projection
-			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3`, workspaceID, agentID, runtimeID).Scan(&desiredLaunchID); err != nil {
+			SELECT launch_id::text, start_dispatch_id::text FROM agent_runner_launch_projection
+			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3`, workspaceID, agentID, runtimeID).Scan(&desiredLaunchID, &desiredStartDispatchID); err != nil {
 			return fmt.Errorf("load desired Runner launch: %w", err)
 		}
-		if desiredLaunchID != acknowledgement.LaunchID {
+		if desiredLaunchID != acknowledgement.LaunchID || desiredStartDispatchID != acknowledgement.StartDispatchID {
 			return errors.New("stale Workspace Runner start acknowledgement")
 		}
 		command, err := h.DB.Exec(ctx, `
 			INSERT INTO agent_activity_launch (
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
-				status, queue_state, queue_depth, queue_age_ms, accepted_at
-			) VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8, $9, now())
+				start_dispatch_id, status, queue_state, queue_depth, queue_age_ms, accepted_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, 'accepted', $8, $9, $10, now())
 			ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
 				runtime_id = EXCLUDED.runtime_id, daemon_id = EXCLUDED.daemon_id,
 				daemon_instance_id = EXCLUDED.daemon_instance_id, launch_id = EXCLUDED.launch_id,
+				start_dispatch_id = EXCLUDED.start_dispatch_id,
 				status = 'accepted',
 				queue_state = EXCLUDED.queue_state, queue_depth = EXCLUDED.queue_depth,
 				queue_age_ms = EXCLUDED.queue_age_ms, accepted_at = COALESCE(agent_activity_launch.accepted_at, now()),
@@ -454,7 +461,7 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
 			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
 			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id)`,
-			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, acknowledgement.LaunchID,
+			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, acknowledgement.LaunchID, acknowledgement.StartDispatchID,
 			acknowledgement.QueueState, acknowledgement.QueueDepth, acknowledgement.QueueAgeMS)
 		if err != nil {
 			return fmt.Errorf("persist Runner start acknowledgement: %w", err)

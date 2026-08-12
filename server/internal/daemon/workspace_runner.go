@@ -216,18 +216,17 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				failConnection(err)
 				continue
 			}
+			if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {
+				return err
+			}
+			connection.deliveries.Resume(start.AgentID, start.LaunchID)
 			go func() {
 				status, session, err := runner.completeManagedAgentStart(connection.ctx, start, ack)
 				if err != nil {
-					connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 					if runner.logger != nil {
-						runner.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "reason", "start_rejected", "error", err)
+						runner.logger.Warn("Workspace Runner provider start failed", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "start_dispatch_id", start.StartDispatchID, "reason", "provider_start_failed", "error", err)
 					}
-					failConnection(err)
-					return
-				}
-				if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {
-					failConnection(err)
+					_ = writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: start.AgentID, LaunchID: start.LaunchID, Status: protocol.AgentStatusInactive})
 					return
 				}
 				if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
@@ -238,7 +237,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 					failConnection(err)
 					return
 				}
-				connection.deliveries.Resume(start.AgentID, start.LaunchID)
 			}()
 		case protocol.EventDaemonAgentStop:
 			var stop protocol.WorkspaceRunnerAgentStopPayload

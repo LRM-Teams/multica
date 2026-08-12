@@ -111,7 +111,7 @@ func registerTestRunnerInbox(t *testing.T, runner *WorkspaceRunner, key InboxKey
 	runner.inboxes.inboxes[key.AgentID] = inboxRegistryEntry{runtimeID: runtimeID, coordinator: coordinator}
 	runner.inboxes.mu.Unlock()
 	if runner.processes != nil {
-		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: key.AgentID, RuntimeID: runtimeID, LaunchID: "test-launch-" + key.AgentID}); err != nil {
+		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: key.AgentID, RuntimeID: runtimeID, LaunchID: "test-launch-" + key.AgentID, StartDispatchID: "test-launch-" + key.AgentID + "-dispatch"}); err != nil {
 			t.Fatalf("register test APM launch: %v", err)
 		}
 	}

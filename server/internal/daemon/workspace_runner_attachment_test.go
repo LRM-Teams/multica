@@ -159,7 +159,7 @@ func TestWorkspaceRunnerManagedStartCreatesInboxWithoutAttachment(t *testing.T) 
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1"}
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1", StartDispatchID: "start-1" + "-dispatch"}
 	ack, status, session, err := runner.startManagedAgent(context.Background(), start)
 	if err != nil {
 		t.Fatalf("server-authorized Agent start: %v", err)
@@ -183,7 +183,7 @@ func TestWorkspaceRunnerManagedStartWaitsForCapacityBeforeProvider(t *testing.T)
 		providerStarted <- agentID
 		return nil
 	}
-	first := protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1"}
+	first := protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "launch-1" + "-dispatch"}
 	if _, _, _, err := runner.startManagedAgent(context.Background(), first); err != nil {
 		t.Fatalf("start first Agent: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestWorkspaceRunnerManagedStartWaitsForCapacityBeforeProvider(t *testing.T)
 		t.Fatalf("first provider Agent = %q", got)
 	}
 
-	second := protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-2", RuntimeID: "runtime-2", LaunchID: "launch-2"}
+	second := protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-2", RuntimeID: "runtime-2", LaunchID: "launch-2", StartDispatchID: "launch-2" + "-dispatch"}
 	done := make(chan error, 1)
 	go func() {
 		_, _, _, err := runner.startManagedAgent(context.Background(), second)
@@ -231,14 +231,14 @@ func TestWorkspaceRunnerManagedStopRejectsStaleLaunchID(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("attach Agent before start: %v", err)
 	}
-	first, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1"})
+	first, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1", StartDispatchID: "start-1" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("start initial managed Agent: %v", err)
 	}
 	if err := runner.processes.Stop(agentProcessCallback{AgentID: agentID, LaunchID: first.LaunchID}); err != nil {
 		t.Fatalf("stop initial managed launch: %v", err)
 	}
-	replacement, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-2"})
+	replacement, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-2", StartDispatchID: "start-2" + "-dispatch"})
 	if err != nil {
 		t.Fatalf("start replacement managed Agent: %v", err)
 	}
@@ -261,11 +261,11 @@ func TestWorkspaceRunnerManagedStartRejectsRuntimeMoveWithoutStopAndKeepsInbox(t
 	}
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
-	old := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: "runtime-old", LaunchID: "launch-old"}
+	old := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: "runtime-old", LaunchID: "launch-old", StartDispatchID: "launch-old" + "-dispatch"}
 	if _, _, _, err := runner.startManagedAgent(context.Background(), old); err != nil {
 		t.Fatalf("start old Runtime: %v", err)
 	}
-	if _, err := runner.registerManagedAgentStart(protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: "runtime-new", LaunchID: "launch-new"}); err == nil {
+	if _, err := runner.registerManagedAgentStart(protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: "runtime-new", LaunchID: "launch-new", StartDispatchID: "launch-new" + "-dispatch"}); err == nil {
 		t.Fatal("runtime move without stop was accepted")
 	}
 	_, runtimeID, ok := runner.inboxes.Resolve(agentID)
@@ -286,7 +286,7 @@ func TestWorkspaceRunnerManagedStopClosesProviderAndInbox(t *testing.T) {
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1"}
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "launch-1" + "-dispatch"}
 	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
 		t.Fatalf("start managed Agent: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *te
 	if _, err := runner.applyAttachmentAttach(attach); err != nil {
 		t.Fatalf("apply Attachment attach: %v", err)
 	}
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1", ReadinessPolicy: agentRuntimeReadinessFirstEvent}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1", StartDispatchID: "start-1" + "-dispatch", ReadinessPolicy: agentRuntimeReadinessFirstEvent}); err != nil {
 		t.Fatalf("start managed Agent for detach: %v", err)
 	}
 	detach := protocol.WorkspaceRunnerAgentDetachPayload{

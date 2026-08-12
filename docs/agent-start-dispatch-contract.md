@@ -20,6 +20,12 @@ same lifecycle module rather than implement their own start behavior.
 - **APM** is the Computer-local Agent Process Manager. It owns acceptance,
   queuing, process admission, and managed residency.
 
+The protocol requires that an APM-queued start is accepted and acknowledged.
+The scheduling policy behind that queue is Computer-local. Raft Computer
+1.0.15 directly demonstrates concurrent-start scheduling; Multica additionally
+has a `MaxAgentProcesses` resident-process policy. That Multica resource policy
+is not part of the wire contract and is not claimed to be a Raft equivalent.
+
 New protocol, domain, log, and schema names must use `computer_id`. Existing
 storage named `daemon_id` is a legacy adapter detail and must not be exposed as
 the lifecycle module's terminology or copied into new schema.
@@ -166,7 +172,8 @@ Messages received before APM acceptance remain buffered for that Agent and are
 not acknowledged as accepted by the Agent.
 
 After APM acceptance, the corresponding Agent queue may accept Messages even
-while process admission or provider startup is pending. A Message delivery ACK
+while local start scheduling, process admission, or provider startup is pending.
+A Message delivery ACK
 means the Agent's APM-owned buffer accepted it, not that the provider consumed
 it. Provider-visible consumption remains a separate cursor/freshness fact.
 

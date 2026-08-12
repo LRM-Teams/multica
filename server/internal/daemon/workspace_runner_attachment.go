@@ -81,7 +81,7 @@ func (runner *WorkspaceRunner) registerManagedAgentStart(payload protocol.Worksp
 	if !runner.hasRuntime(payload.RuntimeID) {
 		return protocol.AgentStartAckPayload{}, errors.New("managed start Runtime is outside Workspace Runner scope")
 	}
-	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, LaunchID: payload.LaunchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, LaunchID: payload.LaunchID, StartDispatchID: payload.StartDispatchID, ReadinessPolicy: agentRuntimeReadinessFirstEvent})
 	if err != nil {
 		return protocol.AgentStartAckPayload{}, fmt.Errorf("start managed Agent: %w", err)
 	}
@@ -119,6 +119,13 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	session := protocol.AgentSessionPayload{AgentID: ack.AgentID, LaunchID: ack.LaunchID}
 	if err := runner.activity.SetManaged(status, session); err != nil {
 		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("record managed start: %w", err)
+	}
+	if coordinator, runtimeID, ok := runner.messageCoordinator(payload.AgentID); ok && runtimeID == payload.RuntimeID {
+		if _, err := coordinator.flushWithResult(ctx, true); err != nil {
+			if runner.logger != nil {
+				runner.logger.Warn("Workspace Runner buffered Message flush deferred", "workspace_id", runner.config.WorkspaceID, "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID, "launch_id", payload.LaunchID, "start_dispatch_id", payload.StartDispatchID, "error", err)
+			}
+		}
 	}
 	return status, session, nil
 }

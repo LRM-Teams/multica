@@ -80,7 +80,10 @@ CREATE TABLE channel (id uuid PRIMARY KEY);
 CREATE TABLE agent (id uuid PRIMARY KEY);
 CREATE TABLE agent_runtime (id uuid PRIMARY KEY);
 CREATE TABLE channel_message (id uuid PRIMARY KEY);
-CREATE TABLE channel_message_reaction (id uuid PRIMARY KEY);
+CREATE TABLE channel_message_reaction (
+  id uuid PRIMARY KEY,
+  channel_message_id uuid REFERENCES channel_message(id)
+);
 CREATE TABLE env_dispatch_run (
   project_id uuid PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
   workspace_id uuid NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,

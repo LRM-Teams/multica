@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -10,13 +11,45 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon"
 )
 
+func TestDetachedTakeoverLostResponseUsesExactDurableCandidateProof(t *testing.T) {
+	expected := daemon.MachineUpgradeTakeoverProof{
+		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
+		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 7,
+		CandidateComputerGeneration: 12, CandidatePID: 1234, TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-1"}, WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
+	}
+	committed := expected
+	committed.Phase = "takeover_committed"
+
+	originalRequest := requestDetachedSuccessorTakeover
+	originalProbe := probeDetachedSuccessorHealth
+	t.Cleanup(func() {
+		requestDetachedSuccessorTakeover = originalRequest
+		probeDetachedSuccessorHealth = originalProbe
+	})
+	requestDetachedSuccessorTakeover = func(string, daemon.MachineUpgradeTakeoverProof) (daemon.MachineUpgradeTakeoverProof, error) {
+		return daemon.MachineUpgradeTakeoverProof{}, errors.New("lost loopback response")
+	}
+	probeDetachedSuccessorHealth = func(string) map[string]any {
+		return map[string]any{"machine_upgrade_takeover": committed}
+	}
+
+	got, err := commitDetachedSuccessorTakeoverVerified("test", expected)
+	if err != nil {
+		t.Fatalf("durably committed candidate was rejected after response loss: %v", err)
+	}
+	if got.Phase != "takeover_committed" || got.CandidatePID != expected.CandidatePID {
+		t.Fatalf("committed proof = %+v", got)
+	}
+}
+
 func TestDetachedSuccessorProofRejectsEveryTakeoverIdentityMismatch(t *testing.T) {
 	expected := daemon.MachineUpgradeTakeoverProof{
 		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
 		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 7,
 		CandidateComputerGeneration: 12, CandidatePID: 1234, TargetVersion: "v10.0.0",
 		RuntimeIDs: []string{"runtime-1", "runtime-2"}, WorkspaceIDs: []string{"workspace-1"},
-		Phase: "candidate_ready",
+		Phase: "takeover_committed",
 	}
 	if err := validateDetachedSuccessorProof(expected, expected); err != nil {
 		t.Fatalf("exact proof rejected: %v", err)
@@ -33,7 +66,7 @@ func TestDetachedSuccessorProofRejectsEveryTakeoverIdentityMismatch(t *testing.T
 		"target version":                func(p *daemon.MachineUpgradeTakeoverProof) { p.TargetVersion = "v10.0.1" },
 		"incomplete runtime set":        func(p *daemon.MachineUpgradeTakeoverProof) { p.RuntimeIDs = []string{"runtime-1"} },
 		"changed Workspace set":         func(p *daemon.MachineUpgradeTakeoverProof) { p.WorkspaceIDs = []string{"workspace-2"} },
-		"not durably committed":         func(p *daemon.MachineUpgradeTakeoverProof) { p.Phase = "handoff" },
+		"not durably committed":         func(p *daemon.MachineUpgradeTakeoverProof) { p.Phase = "takeover_ready" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -62,7 +95,7 @@ func TestReadyDetachedSuccessorMismatchTerminatesOnlySpawnedCandidate(t *testing
 		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
 		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 7,
 		CandidateComputerGeneration: 12, CandidatePID: child.Process.Pid, TargetVersion: "v10.0.0",
-		RuntimeIDs: []string{"runtime-1"}, WorkspaceIDs: []string{"workspace-1"}, Phase: "handoff",
+		RuntimeIDs: []string{"runtime-1"}, WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
 	}
 	observed := expected
 	observed.DaemonID = "daemon-stale"

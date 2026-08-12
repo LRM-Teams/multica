@@ -17,8 +17,15 @@ import (
 
 const detachedSuccessorPortReleaseTimeout = 5 * time.Second
 const detachedSuccessorReadyTimeout = 45 * time.Second
+const detachedSuccessorCommitRetryTimeout = 15 * time.Second
 
 var spawnDetachedDaemonBinary = startDetachedDaemonBinary
+var requestDetachedSuccessorTakeover = commitDetachedSuccessorTakeover
+var probeDetachedSuccessorHealth = func(profile string) map[string]any {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	return computer.ProbeHealth(ctx, computer.HealthPort(profile))
+}
 
 // startDetachedDaemonBinary launches the committed target as the next Computer
 // generation only after the machine-wide loopback control port is no longer
@@ -80,7 +87,7 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string, take
 		expectedTakeover.WorkspaceIDs = append([]string(nil), takeoverExpectation.WorkspaceIDs...)
 		expectedTakeover.CandidateComputerGeneration = generation
 		expectedTakeover.CandidatePID = child.Process.Pid
-		expectedTakeover.Phase = "handoff"
+		expectedTakeover.Phase = "takeover_ready"
 	}
 	// Keep the handle until the candidate itself binds the control port and
 	// reaches normal daemon readiness on the exact target. A child that merely
@@ -91,7 +98,11 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string, take
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		health := computer.ProbeHealth(ctx, computer.HealthPort(profile))
 		cancel()
-		if health["status"] == "running" {
+		wantStatus := "running"
+		if takeoverExpectation != nil {
+			wantStatus = "takeover_ready"
+		}
+		if health["status"] == wantStatus {
 			return acceptReadyDetachedCandidate(child, profile, expectedVersion, takeoverExpectation, expectedTakeover, health)
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -124,17 +135,48 @@ func acceptReadyDetachedCandidate(
 		terminateDetachedCandidate(child)
 		return err
 	}
-	committed, err := commitDetachedSuccessorTakeover(profile, expectedTakeover)
+	committed, err := commitDetachedSuccessorTakeoverVerified(profile, expectedTakeover)
 	if err != nil {
 		terminateDetachedCandidate(child)
 		return err
 	}
-	expectedTakeover.Phase = "candidate_ready"
+	expectedTakeover.Phase = committed.Phase
 	if err := validateDetachedSuccessorProof(expectedTakeover, committed); err != nil {
 		terminateDetachedCandidate(child)
 		return err
 	}
 	return child.Process.Release()
+}
+
+// commitDetachedSuccessorTakeoverVerified closes the ambiguous-response
+// window around the server generation CAS. A timeout does not prove that the
+// commit failed: the candidate may already have durably recorded the result
+// while the loopback response was lost. Retry the idempotent command and
+// accept only an exact committed proof published by that same child.
+func commitDetachedSuccessorTakeoverVerified(profile string, expected daemon.MachineUpgradeTakeoverProof) (daemon.MachineUpgradeTakeoverProof, error) {
+	deadline := time.Now().Add(detachedSuccessorCommitRetryTimeout)
+	var lastErr error
+	for {
+		committed, err := requestDetachedSuccessorTakeover(profile, expected)
+		if err == nil {
+			return committed, nil
+		}
+		lastErr = err
+
+		health := probeDetachedSuccessorHealth(profile)
+		if proof, ok := detachedTakeoverProofFromHealth(health); ok &&
+			(proof.Phase == "takeover_committed" || proof.Phase == "candidate_ready") {
+			want := expected
+			want.Phase = proof.Phase
+			if validateDetachedSuccessorProof(want, proof) == nil {
+				return proof, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return daemon.MachineUpgradeTakeoverProof{}, fmt.Errorf("detached successor takeover remained unconfirmed after %s: %w", detachedSuccessorCommitRetryTimeout, lastErr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func terminateDetachedCandidate(child *exec.Cmd) {

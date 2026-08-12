@@ -410,9 +410,14 @@ func runDaemonForeground(cmd *cobra.Command) error {
 			takeoverErr = spawnDetachedDaemonBinary(restartBin, profile, d.MachineUpgradeTarget(), &takeoverExpectation)
 		}
 		if takeoverErr != nil {
-			if rollbackStateErr := d.BeginMachineUpgradeRollback(takeoverErr); rollbackStateErr != nil {
-				return fmt.Errorf("record detached takeover rollback: %w", rollbackStateErr)
+			// The candidate has not returned a successful takeover CAS, so the
+			// incumbent still owns the server generation. Restore the retained
+			// source locally and terminally fail the operation; remote rollback is
+			// reserved for failures after ownership actually changed.
+			if rollbackStateErr := d.MarkMachineUpgradeRollbackPending(); rollbackStateErr != nil {
+				return fmt.Errorf("record detached takeover restore: %w", rollbackStateErr)
 			}
+			d.ReportMachineUpgradeTakeoverFailure(takeoverErr)
 			if recoveryErr := rollbackDetachedMachineUpgrade(profile, d); recoveryErr != nil {
 				d.ReportMachineUpgradeRollbackFailure(recoveryErr)
 				return fmt.Errorf("start detached machine-upgrade successor: %w; rollback recovery: %v", takeoverErr, recoveryErr)

@@ -21,6 +21,13 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 	runningSource := daemonVersionsMatch(d.cfg.CLIVersion, journal.SourceVersion)
 	runningTarget := daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion)
 	switch journal.Phase {
+	case "takeover_committed":
+		if !runningTarget {
+			return false, fmt.Errorf("takeover_committed journal requires target %s, running %s", journal.TargetVersion, d.cfg.CLIVersion)
+		}
+		// The detached coordinator resumes normal startup from this durable
+		// marker. Recovery must not schedule a second activation or restart.
+		return false, nil
 	case "candidate_ready":
 		if !runningTarget {
 			if !runningSource {
@@ -60,9 +67,7 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 			return false, fmt.Errorf("rollback_pending journal has no rollback generation")
 		}
 		if runningSource {
-			// The restored source now proceeds through normal authenticated runtime
-			// registration, which owns server-side rolled_back attestation.
-			return false, nil
+			return false, d.resumeMachineUpgradeRollback(ctx, journal)
 		}
 		if !runningTarget {
 			return false, fmt.Errorf("rollback_pending journal requires source %s or target %s, running %s", journal.SourceVersion, journal.TargetVersion, d.cfg.CLIVersion)
@@ -149,6 +154,38 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 	d.mu.Unlock()
 	d.triggerRestart()
 	return true, nil
+}
+
+// resumeMachineUpgradeRollback repairs the crash window where the local source
+// was restored before the server entered rollback_pending. The restored owner
+// first publishes the rollback generation, then repeats the accepted Workspace
+// registrations so the server can collect its normal per-Runtime proof.
+func (d *Daemon) resumeMachineUpgradeRollback(ctx context.Context, journal *machineUpgradeJournal) error {
+	if journal == nil || journal.Phase != "rollback_pending" || len(journal.RuntimeIDs) == 0 || strings.TrimSpace(journal.RollbackGeneration) == "" {
+		return fmt.Errorf("rollback recovery identity is incomplete")
+	}
+	if d.client == nil {
+		return fmt.Errorf("rollback recovery client is unavailable")
+	}
+	runtimeID := strings.TrimSpace(journal.RuntimeIDs[0])
+	receipt, err := d.client.GetMachineUpgradeReceipt(ctx, runtimeID, journal.ID)
+	if err != nil {
+		return fmt.Errorf("read rollback recovery receipt: %w", err)
+	}
+	if receipt != nil && receipt.Phase == "failed" {
+		// A pre-CAS candidate rejection is already terminal. Local source restore
+		// is sufficient; do not manufacture a remote rollback transition.
+		return nil
+	}
+	if err := d.client.ReportMachineUpgradeRollback(ctx, runtimeID, journal.ID, journal.RollbackGeneration, "candidate_takeover_failed", "restored source resumed rollback"); err != nil {
+		return fmt.Errorf("publish restored rollback generation: %w", err)
+	}
+	for _, workspaceID := range journal.WorkspaceIDs {
+		if _, err := d.registerRuntimesForWorkspace(ctx, workspaceID); err != nil {
+			return fmt.Errorf("re-register restored Workspace %s: %w", workspaceID, err)
+		}
+	}
+	return nil
 }
 
 // machineUpgradeJournalSupersededByActive distinguishes an explicit
@@ -296,6 +333,10 @@ func (d *Daemon) reconcileMachineUpgradeTerminalJournal(ctx context.Context) err
 			receipt.SourceVersion == nil || !daemonVersionsMatch(*receipt.SourceVersion, journal.SourceVersion) ||
 			!daemonVersionsMatch(d.cfg.CLIVersion, journal.SourceVersion) || !sameStringSet(receipt.RollbackRuntimeIDs, journal.RuntimeIDs) {
 			return fmt.Errorf("rolled_back terminal receipt does not match live restored proof")
+		}
+	case "failed":
+		if journal.Phase != "rollback_pending" || !daemonVersionsMatch(d.cfg.CLIVersion, journal.SourceVersion) {
+			return fmt.Errorf("failed terminal receipt does not match locally restored source")
 		}
 	default:
 		return nil

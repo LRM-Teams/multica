@@ -416,7 +416,7 @@ func TestRollbackPendingRecoveryRestoresOnceAndBoundsRestarts(t *testing.T) {
 		detached        bool
 	}{
 		{name: "detached target restores exact source and restarts", runningVersion: "v10.0.0", wantRestore: 1, wantRestart: true, detached: true},
-		{name: "restored source continues to registration proof", runningVersion: "v9.9.9", restartAttempts: 1},
+		{name: "restored source without server client fails closed", runningVersion: "v9.9.9", restartAttempts: 1, wantError: true},
 		{name: "exhausted rollback remains retained for operator recovery", runningVersion: "v10.0.0", restartAttempts: machineUpgradeMaxRestartAttempts, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -459,6 +459,72 @@ func TestRollbackPendingRecoveryRestoresOnceAndBoundsRestarts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRestoredSourceRecoveryPublishesRollbackBeforeRegistration(t *testing.T) {
+	root := t.TempDir()
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+	previousDetect := detectAgentVersion
+	detectAgentVersion = func(context.Context, string) (string, error) { return "codex 1.0.0", nil }
+	t.Cleanup(func() { detectAgentVersion = previousDetect })
+
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/machine-upgrades/upgrade-1"):
+			_ = json.NewEncoder(w).Encode(MachineUpgradeReceipt{ID: "upgrade-1", Phase: "converging"})
+		case strings.HasSuffix(r.URL.Path, "/progress"):
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/daemon/starting":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/daemon/register":
+			_ = json.NewEncoder(w).Encode(RegisterResponse{Runtimes: []Runtime{{ID: "runtime-1", WorkspaceID: "workspace-1", Provider: "codex"}}})
+		default:
+			t.Fatalf("unexpected rollback recovery request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v9.9.9", DaemonID: "computer-1", ComputerGeneration: 68, Agents: map[string]AgentEntry{"codex": {Path: "codex"}}},
+		client: NewClient(server.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentVersions: make(map[string]string), workspaces: make(map[string]*workspaceState), runtimeIndex: make(map[string]Runtime),
+	}
+	d.client.SetToken("test-token")
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", RollbackGeneration: "rollback-a",
+		SourceVersion: "v9.9.9", TargetVersion: "v10.0.0", RuntimeIDs: []string{"runtime-1"}, WorkspaceIDs: []string{"workspace-1"}, Phase: "rollback_pending",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err != nil || restarted {
+		t.Fatalf("rollback recovery restarted=%v err=%v", restarted, err)
+	}
+	want := []string{
+		"GET /api/daemon/runtimes/runtime-1/machine-upgrades/upgrade-1",
+		"POST /api/daemon/runtimes/runtime-1/machine-upgrades/upgrade-1/progress",
+		"POST /api/daemon/starting",
+		"POST /api/daemon/register",
+	}
+	if !sameStringSlice(paths, want) {
+		t.Fatalf("rollback recovery request order=%v, want %v", paths, want)
+	}
+}
+
+func sameStringSlice(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestMachineUpgradeJournalClearsOnlyForMatchingTerminalReceiptAndLiveSet(t *testing.T) {

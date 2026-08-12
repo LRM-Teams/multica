@@ -39,6 +39,12 @@ paths. Those are compatibility adapters over the same Computer operation and do
 not create runtime-owned update state. Startup keeps incomplete local upgrade
 journals fail-closed; only a proven later Active generation may supersede a
 retained `candidate_ready` marker, and the marker remains available for diagnosis.
+For standalone upgrades, the target first proves its exact local binary,
+VersionStore lineage, PID, and configured Runtime/Workspace shape. The server
+then atomically changes the Computer generation from predecessor to candidate;
+only after that CAS may the target heartbeat, register runtimes, connect its
+WebSocket, or claim work. A candidate rejected before the CAS cannot fence the
+incumbent and requires no remote rollback.
 
 ## CLI
 

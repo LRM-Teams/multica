@@ -83,6 +83,7 @@ type MachineUpgradeStore interface {
 	AttestLegacy(ctx context.Context, daemonID, id, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string, runtimeIDs []string) (*MachineUpgrade, error)
 	Attest(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
+	CommitTakeover(ctx context.Context, daemonID, id, generation, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error)
 	AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error)
 	BeginRollback(ctx context.Context, daemonID, id, generation, errorCode, errorMessage string) (*MachineUpgrade, error)
 	AttestRollback(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
@@ -540,6 +541,73 @@ func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemon
 		  AND accepted_generation=$5
 		RETURNING `+machineUpgradeColumns,
 		strings.TrimSpace(daemonID), strings.TrimSpace(id), runtimeIDs, workspaceIDs, strings.TrimSpace(generation)))
+}
+
+// CommitTakeover is the single ownership mutation in a detached upgrade. It
+// checks the immutable acceptance snapshot and changes Computer generation in
+// the same transaction. Until this succeeds the candidate cannot heartbeat or
+// register, so a rejected candidate never fences the incumbent.
+func (s *PostgresMachineUpgradeStore) CommitTakeover(ctx context.Context, daemonID, id, generation, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("machine upgrade store is not configured")
+	}
+	daemonID = strings.TrimSpace(daemonID)
+	id = strings.TrimSpace(id)
+	generation = strings.TrimSpace(generation)
+	cliVersion = strings.TrimSpace(cliVersion)
+	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
+	workspaceIDs = normalizedMachineRuntimeIDs(workspaceIDs)
+	if daemonID == "" || id == "" || generation == "" || cliVersion == "" ||
+		predecessorComputerGeneration < 1 || candidateComputerGeneration != predecessorComputerGeneration+1 {
+		return nil, errMachineUpgradeAttestationRejected
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin machine upgrade takeover: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	op, err := scanMachineUpgrade(tx.QueryRow(ctx, machineUpgradeSelect+`
+		WHERE daemon_id=$1 AND id=$2 FOR UPDATE`, daemonID, id))
+	if err != nil {
+		return nil, err
+	}
+	if op == nil || (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) ||
+		op.AcceptedGeneration == nil || *op.AcceptedGeneration != generation ||
+		op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(cliVersion)) ||
+		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) ||
+		!sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) {
+		return nil, errMachineUpgradeAttestationRejected
+	}
+	var current int64
+	if err := tx.QueryRow(ctx, `SELECT generation FROM computer_generation WHERE daemon_id=$1 FOR UPDATE`, daemonID).Scan(&current); err != nil {
+		return nil, fmt.Errorf("load predecessor Computer generation: %w", err)
+	}
+	if current == candidateComputerGeneration {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit replayed machine upgrade takeover: %w", err)
+		}
+		return op, nil
+	}
+	if current != predecessorComputerGeneration {
+		return nil, errStaleComputerGeneration
+	}
+	var committed int64
+	if err := tx.QueryRow(ctx, `
+		UPDATE computer_generation SET generation=$3, updated_at=now()
+		WHERE daemon_id=$1 AND generation=$2
+		RETURNING generation`, daemonID, predecessorComputerGeneration, candidateComputerGeneration).Scan(&committed); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errStaleComputerGeneration
+		}
+		return nil, fmt.Errorf("commit candidate Computer generation: %w", err)
+	}
+	if committed != candidateComputerGeneration {
+		return nil, errStaleComputerGeneration
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit machine upgrade takeover: %w", err)
+	}
+	return op, nil
 }
 
 // BeginRollback is monotonic: only an operation that reached handoff may move

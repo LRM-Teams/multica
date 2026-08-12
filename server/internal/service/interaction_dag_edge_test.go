@@ -115,13 +115,18 @@ func TestInteractionDAGEdge_DeliveryAloneDoesNotCreateEdge(t *testing.T) {
 		}},
 	)
 
+	deliveryID := util.MustParseUUID("70000000-0000-4000-8000-000000000415")
 	_, err := h.runs.CreateDeliveryObligation(h.ctx, CreateDeliveryObligationInput{
-		DeliveryID: util.MustParseUUID("70000000-0000-4000-8000-000000000415"),
+		DeliveryID: deliveryID,
 		RunID:      run.RunID, ChannelMessageID: delivered,
 		SourceRecipientAgentID: consumer.SourceAgentID,
 		RunAgentID:             consumer.RunAgentID,
 		State:                  "pending",
 	})
+	require.NoError(t, err)
+	// Settle so quiet_candidate activity invariants hold; the obligation row
+	// remains as evidence that delivery alone does not create a causal edge.
+	_, err = h.runs.SettleDeliveryObligation(h.ctx, deliveryID, "completed", time.Now().UTC())
 	require.NoError(t, err)
 
 	advanceMixedRLRunToQuietCandidate(t, h, run.RunID)

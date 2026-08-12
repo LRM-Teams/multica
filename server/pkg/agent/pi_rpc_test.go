@@ -142,24 +142,15 @@ func TestBuildResidentTurnCaptureNormalizesContentArrayIntoTypedBlocks(t *testin
 	}
 }
 
-func TestBuildResidentTurnCaptureCollapsesHiddenProviderRetries(t *testing.T) {
+func TestBuildResidentTurnCaptureRejectsAmbiguousRequests(t *testing.T) {
 	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
-	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+	_, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
 		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","attempt":1}`)},
 		{Kind: "provider_request", At: "2026-08-12T00:00:00.500Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","attempt":2}`)},
 		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}],"stopReason":"stop"}`)},
 	})
-	if err != nil {
-		t.Fatalf("buildResidentTurnCapture: %v", err)
-	}
-	if len(capture.ProviderCalls) != 1 {
-		t.Fatalf("hidden retries must collapse to one logical call, got %d", len(capture.ProviderCalls))
-	}
-	if !strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), `"attempt":2`) {
-		t.Fatalf("collapsed call must keep the final provider request, got %s", capture.ProviderCalls[0].RawProviderRequest)
-	}
-	if strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), `"attempt":1`) {
-		t.Fatalf("collapsed call must not retain superseded retry payloads: %s", capture.ProviderCalls[0].RawProviderRequest)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous Pi capture") {
+		t.Fatalf("buildResidentTurnCapture error = %v, want ambiguous Pi capture", err)
 	}
 }
 
@@ -185,28 +176,57 @@ func TestBuildResidentTurnCaptureIgnoresSSEChunkRecords(t *testing.T) {
 	}
 }
 
-func TestBuildResidentTurnCaptureDropsPreBoundaryHistoricalCalls(t *testing.T) {
+func TestReadPiCaptureRecordsStartsAtTrustedTurnOffset(t *testing.T) {
 	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-2"}
-	capture, err := buildResidentTurnCapture(binding, 2, 1, []piCaptureRecord{
-		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","capture_boundary":"boundary-1","call":"historical"}`)},
-		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"old"}],"stopReason":"stop","capture_boundary":"boundary-1"}`)},
-		{Kind: "provider_request", At: "2026-08-12T00:01:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","capture_boundary":"boundary-2","call":"current"}`)},
-		{Kind: "turn_end", At: "2026-08-12T00:01:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"new"}],"stopReason":"stop","capture_boundary":"boundary-2"}`)},
-	})
+	path := filepath.Join(t.TempDir(), "capture.jsonl")
+	historicalRequest := piCaptureRecord{Kind: PiCaptureEventProviderRequest, At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","call":"historical"}`)}
+	historicalFinal := piCaptureRecord{Kind: PiCaptureEventTurnEnd, At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"old"}],"stopReason":"stop"}`)}
+	writePiCaptureLines(t, path, false, historicalRequest, historicalFinal)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat capture log: %v", err)
+	}
+	currentRequest := piCaptureRecord{Kind: PiCaptureEventProviderRequest, At: "2026-08-12T00:01:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","call":"current"}`)}
+	currentFinal := piCaptureRecord{Kind: PiCaptureEventTurnEnd, At: "2026-08-12T00:01:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"new"}],"stopReason":"stop"}`)}
+	writePiCaptureLines(t, path, true, currentRequest, currentFinal)
+
+	records, err := readPiCaptureRecords(path, info.Size())
+	if err != nil {
+		t.Fatalf("readPiCaptureRecords: %v", err)
+	}
+	capture, err := buildResidentTurnCapture(binding, 2, 2, records)
 	if err != nil {
 		t.Fatalf("buildResidentTurnCapture: %v", err)
 	}
-	if capture.CaptureBoundary != "boundary-2" {
-		t.Fatalf("capture boundary = %q, want boundary-2", capture.CaptureBoundary)
-	}
 	if len(capture.ProviderCalls) != 1 {
-		t.Fatalf("post-boundary calls = %d, want 1 current call", len(capture.ProviderCalls))
+		t.Fatalf("provider calls = %d, want 1 current call", len(capture.ProviderCalls))
 	}
 	if !strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), `"call":"current"`) {
-		t.Fatalf("expected current-boundary request, got %s", capture.ProviderCalls[0].RawProviderRequest)
+		t.Fatalf("expected current request, got %s", capture.ProviderCalls[0].RawProviderRequest)
 	}
 	if strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), "historical") {
-		t.Fatalf("historical pre-boundary call leaked into capture: %s", capture.ProviderCalls[0].RawProviderRequest)
+		t.Fatalf("historical call leaked into capture: %s", capture.ProviderCalls[0].RawProviderRequest)
+	}
+}
+
+func writePiCaptureLines(t *testing.T, path string, appendLines bool, records ...piCaptureRecord) {
+	t.Helper()
+	flags := os.O_CREATE | os.O_WRONLY
+	if appendLines {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		t.Fatalf("open capture log: %v", err)
+	}
+	defer file.Close()
+	encoder := json.NewEncoder(file)
+	for _, record := range records {
+		if err := encoder.Encode(record); err != nil {
+			t.Fatalf("encode capture record: %v", err)
+		}
 	}
 }
 

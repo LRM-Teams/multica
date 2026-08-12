@@ -148,6 +148,9 @@ func trustedTurnCaptureScopeMatches(source agentTransportSource, run db.EnvDispa
 // input. It never trusts agent-declared ownership or provenance beyond the
 // authenticated credential scope already validated by the handler.
 func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUpload) (service.TrustedTurnCapture, error) {
+	if upload.Turn.TurnOrdinal <= 0 {
+		return service.TrustedTurnCapture{}, fmt.Errorf("positive turn_ordinal is required")
+	}
 	if strings.TrimSpace(upload.PayloadHash) == "" {
 		return service.TrustedTurnCapture{}, fmt.Errorf("payload_hash is required")
 	}
@@ -169,9 +172,6 @@ func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUploa
 		if err != nil {
 			return service.TrustedTurnCapture{}, fmt.Errorf("invalid completed_at")
 		}
-	}
-	if upload.Turn.TurnOrdinal <= 0 {
-		return service.TrustedTurnCapture{}, fmt.Errorf("positive turn_ordinal is required")
 	}
 
 	calls := make([]service.ProviderCallInput, 0, len(upload.ProviderCalls))

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
 )
 
@@ -88,14 +89,38 @@ func (d *Daemon) ObservedCanonicalActionAssociations(agentID string) []Canonical
 
 // observeCanonicalActionOutcome associates a canonical send/reaction ID with
 // the active provider/tool context only when the upstream canonical operation
-// succeeded. The current stub is intentionally inert so T031 fails until T037
-// implements trusted observation.
+// succeeded. Agent-declared provenance is never consulted.
 func (d *Daemon) observeCanonicalActionOutcome(agentID, kind, canonicalID string, succeeded bool) {
-	_ = d
-	_ = agentID
-	_ = kind
-	_ = canonicalID
-	_ = succeeded
+	if !succeeded {
+		return
+	}
+	agentID = strings.TrimSpace(agentID)
+	kind = strings.TrimSpace(kind)
+	canonicalID = strings.TrimSpace(canonicalID)
+	if agentID == "" || (kind != "message" && kind != "reaction") {
+		return
+	}
+	if _, err := uuid.Parse(canonicalID); err != nil {
+		return
+	}
+	state := provenanceStateFor(d)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	active, ok := state.active[agentID]
+	if !ok || strings.TrimSpace(active.CallID) == "" || strings.TrimSpace(active.ToolCallID) == "" {
+		return
+	}
+	for _, existing := range state.associations[agentID] {
+		if existing.Kind == kind && existing.CanonicalID == canonicalID {
+			return
+		}
+	}
+	state.associations[agentID] = append(state.associations[agentID], CanonicalActionAssociation{
+		Kind:           kind,
+		CanonicalID:    canonicalID,
+		ProducerCallID: active.CallID,
+		ToolCallID:     active.ToolCallID,
+	})
 }
 
 // credentialProxyAgentAPIHandler is the machine-local credential boundary for

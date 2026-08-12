@@ -663,23 +663,53 @@ func mixedRLProviderCallInput(runID pgtype.UUID, agent EnvDispatchRunAgentRecord
 
 func advanceMixedRLRunToRunning(t *testing.T, h mixedRLRepositoryHarness, runID pgtype.UUID) {
 	t.Helper()
-	_, err := h.runs.TransitionStatus(h.ctx, runID, "provisioning", "preflight")
+	run, err := h.runs.GetRun(h.ctx, runID)
 	require.NoError(t, err)
+	switch run.Status {
+	case "running":
+		return
+	case "provisioning":
+		_, err = h.runs.TransitionStatus(h.ctx, runID, "provisioning", "preflight")
+		require.NoError(t, err)
+	case "preflight":
+		// ready for StartTimeout
+	default:
+		require.Failf(t, "unexpected mixed-RL run status", "cannot advance status %q to running", run.Status)
+	}
 	_, err = h.runs.StartTimeout(h.ctx, runID, time.Date(2026, time.August, 10, 3, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 }
 
 func advanceMixedRLRunToQuietCandidate(t *testing.T, h mixedRLRepositoryHarness, runID pgtype.UUID) {
 	t.Helper()
-	advanceMixedRLRunToRunning(t, h, runID)
-	_, err := h.runs.TransitionStatus(h.ctx, runID, "running", "quiet_candidate")
+	run, err := h.runs.GetRun(h.ctx, runID)
+	require.NoError(t, err)
+	if run.Status == "quiet_candidate" {
+		return
+	}
+	if run.Status != "running" {
+		advanceMixedRLRunToRunning(t, h, runID)
+	}
+	_, err = h.runs.TransitionStatus(h.ctx, runID, "running", "quiet_candidate")
 	require.NoError(t, err)
 }
 
 func advanceMixedRLRunToFreezing(t *testing.T, h mixedRLRepositoryHarness, runID pgtype.UUID) {
 	t.Helper()
-	advanceMixedRLRunToRunning(t, h, runID)
-	_, err := h.runs.TransitionStatus(h.ctx, runID, "running", "freezing")
+	run, err := h.runs.GetRun(h.ctx, runID)
+	require.NoError(t, err)
+	if run.Status == "freezing" {
+		return
+	}
+	if run.Status == "quiet_candidate" {
+		_, err = h.runs.TransitionStatus(h.ctx, runID, "quiet_candidate", "freezing")
+		require.NoError(t, err)
+		return
+	}
+	if run.Status != "running" {
+		advanceMixedRLRunToRunning(t, h, runID)
+	}
+	_, err = h.runs.TransitionStatus(h.ctx, runID, "running", "freezing")
 	require.NoError(t, err)
 }
 

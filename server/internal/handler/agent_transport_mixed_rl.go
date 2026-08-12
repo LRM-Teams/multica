@@ -326,8 +326,11 @@ func captureJSONForbiddenField(raw json.RawMessage) (string, bool, error) {
 	collect(payload)
 	for _, normalized := range []string{
 		"authorization", "proxyauthorization", "xapikey", "apikey",
-		"accesstoken", "authtoken", "bearertoken", "clientsecret",
-		"secretkey", "credential", "credentials", "password",
+		"accesstoken", "refreshtoken", "sessiontoken", "awssessiontoken",
+		"securitytoken", "idtoken", "authtoken", "bearertoken",
+		"clientsecret", "privatekey", "clientprivatekey", "sshprivatekey",
+		"serviceaccountprivatekey", "secretaccesskey", "awssecretaccesskey",
+		"accesskeysecret", "secretkey", "credential", "credentials", "password",
 		"setcookie", "cookies", "cookie", "secret",
 	} {
 		if key, ok := found[normalized]; ok {

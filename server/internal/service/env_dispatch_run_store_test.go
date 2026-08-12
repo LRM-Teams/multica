@@ -419,7 +419,13 @@ func createFrozenCaptureGapTestFixture(
 	require.NoError(t, err)
 	before, err := h.ledger.GetFrozenDAG(h.ctx, run.RunID, snapshot.SnapshotID)
 	require.NoError(t, err)
-	require.Len(t, before.CaptureGaps, 1)
+	expectedGaps := 1
+	if terminalStatus == "failed_timeout" {
+		// Timeout freeze settles every still-active turn with its own durable
+		// run_timeout gap in addition to any gap recorded before freezing.
+		expectedGaps++
+	}
+	require.Len(t, before.CaptureGaps, expectedGaps)
 
 	return frozenCaptureGapTestFixture{
 		run: terminal, agent: agent, turn: turn, eventID: eventID,
@@ -1495,7 +1501,7 @@ func TestProviderCallLedger_GetFrozenDAGIsOwnedCanonicalSanitizedAndStable(t *te
 	require.Error(t, err)
 }
 
-func TestProviderCallLedger_FailedTimeoutRejectsOutstandingCaptureActivity(t *testing.T) {
+func TestProviderCallLedger_FailedTimeoutSettlesOutstandingCaptureActivity(t *testing.T) {
 	h := newMixedRLRepositoryHarness(t)
 	run := createMixedRLRun(t, h)
 	advanceMixedRLRunToRunning(t, h, run.RunID)
@@ -1504,13 +1510,17 @@ func TestProviderCallLedger_FailedTimeoutRejectsOutstandingCaptureActivity(t *te
 	})
 	require.NoError(t, err)
 
-	_, _, err = h.ledger.FreezeAndComplete(h.ctx, FrozenSnapshotInput{
+	_, terminal, err := h.ledger.FreezeAndComplete(h.ctx, FrozenSnapshotInput{
 		SnapshotID: "sha256:unsafe-timeout", RunID: run.RunID, RunStatus: "failed_timeout",
 		SchemaVersion: "1", NormalizationVersion: "1",
 		CanonicalManifest: []byte(`{"calls":[],"segments":[],"edges":[]}`),
 		SnapshotHash:      "sha256:unsafe-timeout",
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
+	assert.Equal(t, "failed_timeout", terminal.Status)
+	assert.Zero(t, terminal.ActiveTurnCount)
+	assert.Zero(t, terminal.InflightToolCount)
+	assert.Zero(t, terminal.UnfinishedCaptureBatchCount)
 }
 
 func TestProviderCallLedger_FailedTimeoutFrozenDAGIsReadable(t *testing.T) {

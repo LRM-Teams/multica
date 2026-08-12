@@ -36,7 +36,9 @@ The chain is:
 Machine Upgrade is Computer-scoped. Internally it uses the canonical daemon
 upgrade API; installed clients may still call legacy runtime-scoped HTTP update
 paths. Those are compatibility adapters over the same Computer operation and do
-not create runtime-owned update state.
+not create runtime-owned update state. Startup keeps incomplete local upgrade
+journals fail-closed; only a proven later Active generation may supersede a
+retained `candidate_ready` marker, and the marker remains available for diagnosis.
 
 ## CLI
 

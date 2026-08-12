@@ -10,5 +10,6 @@
 - `server/cmd/server/router.go` registers daemon task claim, runtime APIs, canonical daemon upgrade APIs, and the temporary runtime update compatibility adapters.
 - `server/internal/handler/runtime_update.go` resolves legacy runtime-scoped update requests to the runtime's daemon without recreating retired runtime update state.
 - `server/internal/handler/machine_upgrade_handler.go` owns the canonical daemon Machine Upgrade lifecycle and its legacy runtime response projection.
+- `server/internal/daemon/machine_upgrade.go` and `machine_upgrade_recovery.go` own the durable local Machine Upgrade journal, exact rollback, and fail-closed startup recovery. Only a proven later Active generation may supersede a retained `candidate_ready` marker.
 - `server/internal/daemon/daemon.go` claims tasks, enters the durable Agent workspace, launches provider CLIs, and reports completion.
 - `server/internal/daemon/execenv/agent_workspace.go` defines the canonical Agent workspace layout.

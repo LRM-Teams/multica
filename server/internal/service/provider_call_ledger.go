@@ -558,6 +558,19 @@ func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input Frozen
 				return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, settleErr
 			}
 		}
+		// Abort observable unfinished provider calls so timeout snapshots keep
+		// partial eligible data without leaving open in-flight call rows.
+		if _, abortErr := tx.Exec(ctx, `
+			UPDATE pi_provider_call
+			SET status = 'aborted',
+			    training_eligible = false,
+			    response_complete = false,
+			    completed_at = COALESCE(completed_at, now())
+			WHERE run_id = $1
+			  AND status NOT IN ('completed', 'failed', 'aborted', 'cancelled', 'error')
+		`, input.RunID); abortErr != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, abortErr
+		}
 		settled, settleErr := qtx.AdjustMixedRLRunActivity(ctx, db.AdjustMixedRLRunActivityParams{
 			RunID: input.RunID, ActiveTurnDelta: -locked.ActiveTurnCount,
 			InflightToolDelta: -locked.InflightToolCount, UnfinishedCaptureDelta: -locked.UnfinishedCaptureBatchCount,

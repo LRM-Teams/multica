@@ -119,6 +119,7 @@ func (h *Handler) persistCanonicalMessageDeliveryPlans(ctx context.Context, ch C
 }
 
 func persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, message ChannelMessageResponse, plans []*canonicalMessageDeliveryPlan) error {
+	activity := service.NewEnvDispatchActivityFromQueries(db.New(tx))
 	for _, plan := range plans {
 		delivery, deliveryCreated, err := persistCanonicalMessageDelivery(ctx, tx, ch, message, plan.Recipient)
 		if err != nil {
@@ -126,7 +127,7 @@ func persistCanonicalMessageDeliveryPlansTx(ctx context.Context, tx pgx.Tx, ch C
 		}
 		obligationCreated := false
 		if plan.Mixed {
-			obligationCreated, err = persistMixedRunDeliveryObligation(ctx, tx, plan.RunID, plan.RunAgentID, message.ID, uuidToString(plan.SourceRecipient.ID))
+			obligationCreated, err = createMixedRunDeliveryObligationWithActivity(ctx, activity, plan.RunID, plan.RunAgentID, message.ID, plan.SourceRecipient.ID)
 			if err != nil {
 				return fmt.Errorf("persist canonical mixed run delivery obligation: %w", err)
 			}
@@ -337,31 +338,24 @@ func (h *Handler) resolveCanonicalRunRecipient(ctx context.Context, ch ChannelRe
 	return uuidToString(runID), uuidToString(runAgentID), execution, true, nil
 }
 
-func persistMixedRunDeliveryObligation(ctx context.Context, exec dbExecutor, runID, runAgentID, messageID, sourceAgentID string) (bool, error) {
-	var deliveryID pgtype.UUID
-	err := exec.QueryRow(ctx, `
-		INSERT INTO env_dispatch_delivery_obligation (
-		  run_id, channel_message_id, source_recipient_agent_id, run_agent_id, state, queued_at
-		) VALUES ($1, $2, $3, $4, 'queued', now())
-		ON CONFLICT (channel_message_id, run_agent_id) DO NOTHING
-		RETURNING delivery_id`, parseUUID(runID), parseUUID(messageID), parseUUID(sourceAgentID), parseUUID(runAgentID)).Scan(&deliveryID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+func createMixedRunDeliveryObligationWithActivity(ctx context.Context, activity *service.EnvDispatchActivity, runID, runAgentID, messageID string, sourceAgentID pgtype.UUID) (bool, error) {
+	if activity == nil {
+		return false, errors.New("mixed-run activity service unavailable")
 	}
-	if err != nil {
-		return false, err
-	}
-	_, err = exec.Exec(ctx, `
-		UPDATE env_dispatch_run
-		SET pending_delivery_count = pending_delivery_count + 1,
-		    quiet_candidate_since = NULL,
-		    status = CASE WHEN status = 'quiet_candidate' THEN 'running' ELSE status END,
-		    updated_at = now()
-		WHERE run_id = $1`, parseUUID(runID))
-	return err == nil, err
+	_, created, err := activity.CreateDeliveryObligation(ctx, service.CreateDeliveryObligationInput{
+		RunID:                  parseUUID(runID),
+		ChannelMessageID:       parseUUID(messageID),
+		SourceRecipientAgentID: sourceAgentID,
+		RunAgentID:             parseUUID(runAgentID),
+		State:                  "queued",
+	})
+	return created, err
 }
 
 func (h *Handler) createMixedRunDeliveryObligation(ctx context.Context, runID, runAgentID, messageID, sourceAgentID string) error {
+	if h == nil || h.Queries == nil {
+		return errors.New("mixed run delivery queries unavailable")
+	}
 	if h.TxStarter == nil {
 		return errors.New("mixed run delivery transaction unavailable")
 	}
@@ -370,10 +364,22 @@ func (h *Handler) createMixedRunDeliveryObligation(ctx context.Context, runID, r
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := persistMixedRunDeliveryObligation(ctx, tx, runID, runAgentID, messageID, sourceAgentID); err != nil {
+	activity := service.NewEnvDispatchActivityFromQueries(h.Queries.WithTx(tx))
+	if _, err := createMixedRunDeliveryObligationWithActivity(ctx, activity, runID, runAgentID, messageID, parseUUID(sourceAgentID)); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// settleMixedRunDeliveryObligation settles a run-scoped delivery obligation
+// when the daemon acknowledges canonical delivery. Pending delivery counters
+// decrement through the shared activity path.
+func (h *Handler) settleMixedRunDeliveryObligation(ctx context.Context, channelMessageID, executionAgentID pgtype.UUID) error {
+	if h == nil || h.DB == nil {
+		return errors.New("mixed run delivery executor unavailable")
+	}
+	_, err := service.SettleDeliveryObligationForExecutionAgent(ctx, h.DB, channelMessageID, executionAgentID)
+	return err
 }
 
 func (h *Handler) notifyCanonicalMessageDelivery(ctx context.Context, ch ChannelResponse, recipient db.Agent, delivery protocol.AgentDeliverPayload) {

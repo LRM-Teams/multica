@@ -453,6 +453,19 @@ SELECT count(*) FROM interaction_dag_causal_edge
 WHERE run_id = sqlc.arg(run_id);
 
 
+-- name: AbortMixedRLUnfinishedProviderCalls :execrows
+-- Timeout freeze marks every still-observable unfinished call aborted and
+-- training-ineligible. Capture gaps cover turns whose batch never arrived.
+UPDATE pi_provider_call
+SET status = 'aborted',
+    response_complete = false,
+    training_eligible = false,
+    stop_reason = NULL,
+    completed_at = COALESCE(completed_at, sqlc.arg(completed_at))
+WHERE run_id = sqlc.arg(run_id)
+  AND frozen_at IS NULL
+  AND status = 'in_progress';
+
 -- name: FreezeMixedRLProviderCalls :execrows
 UPDATE pi_provider_call
 SET frozen_at = sqlc.arg(frozen_at)

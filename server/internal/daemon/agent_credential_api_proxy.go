@@ -4,10 +4,99 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 )
+
+// ActiveProviderToolContext is the daemon-observed provider/tool context used
+// to associate trusted visible actions. It is never accepted from agent text.
+type ActiveProviderToolContext struct {
+	AgentID    string
+	CallID     string
+	ToolCallID string
+}
+
+// CanonicalActionAssociation records a successful canonical message or
+// reaction observed by the credential proxy while a provider/tool context was
+// active for the same agent.
+type CanonicalActionAssociation struct {
+	Kind           string // "message" or "reaction"
+	CanonicalID    string
+	ProducerCallID string
+	ToolCallID     string
+}
+
+type credentialProxyProvenanceState struct {
+	mu           sync.Mutex
+	active       map[string]ActiveProviderToolContext
+	associations map[string][]CanonicalActionAssociation
+}
+
+var credentialProxyProvenanceByDaemon sync.Map // *Daemon -> *credentialProxyProvenanceState
+
+func provenanceStateFor(d *Daemon) *credentialProxyProvenanceState {
+	if d == nil {
+		return &credentialProxyProvenanceState{
+			active:       make(map[string]ActiveProviderToolContext),
+			associations: make(map[string][]CanonicalActionAssociation),
+		}
+	}
+	if existing, ok := credentialProxyProvenanceByDaemon.Load(d); ok {
+		return existing.(*credentialProxyProvenanceState)
+	}
+	created := &credentialProxyProvenanceState{
+		active:       make(map[string]ActiveProviderToolContext),
+		associations: make(map[string][]CanonicalActionAssociation),
+	}
+	actual, _ := credentialProxyProvenanceByDaemon.LoadOrStore(d, created)
+	return actual.(*credentialProxyProvenanceState)
+}
+
+// SetActiveProviderToolContext records the currently observed provider/tool
+// context for an agent. Empty CallID clears any prior context.
+func (d *Daemon) SetActiveProviderToolContext(ctx ActiveProviderToolContext) {
+	state := provenanceStateFor(d)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	agentID := strings.TrimSpace(ctx.AgentID)
+	if agentID == "" {
+		return
+	}
+	if strings.TrimSpace(ctx.CallID) == "" {
+		delete(state.active, agentID)
+		return
+	}
+	ctx.AgentID = agentID
+	ctx.CallID = strings.TrimSpace(ctx.CallID)
+	ctx.ToolCallID = strings.TrimSpace(ctx.ToolCallID)
+	state.active[agentID] = ctx
+}
+
+// ObservedCanonicalActionAssociations returns trusted associations recorded for
+// the agent. The slice is a copy and may be empty.
+func (d *Daemon) ObservedCanonicalActionAssociations(agentID string) []CanonicalActionAssociation {
+	state := provenanceStateFor(d)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	src := state.associations[strings.TrimSpace(agentID)]
+	out := make([]CanonicalActionAssociation, len(src))
+	copy(out, src)
+	return out
+}
+
+// observeCanonicalActionOutcome associates a canonical send/reaction ID with
+// the active provider/tool context only when the upstream canonical operation
+// succeeded. The current stub is intentionally inert so T031 fails until T037
+// implements trusted observation.
+func (d *Daemon) observeCanonicalActionOutcome(agentID, kind, canonicalID string, succeeded bool) {
+	_ = d
+	_ = agentID
+	_ = kind
+	_ = canonicalID
+	_ = succeeded
+}
 
 // credentialProxyAgentAPIHandler is the machine-local credential boundary for
 // every agent CLI API request. It forwards the exact API method, path, query,

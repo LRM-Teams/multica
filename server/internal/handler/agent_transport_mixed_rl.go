@@ -195,3 +195,14 @@ func captureCallTimes(started, completed string) (time.Time, time.Time, error) {
 	}
 	return startedAt, completedAt, nil
 }
+
+// turnCaptureResponseFromResult maps an accepted (or late) capture onto the
+// wire acknowledgement contract. The current stub only echoes acceptance; T039
+// must populate batch counts, run status, and post-freeze late routing.
+func turnCaptureResponseFromResult(result service.TrustedTurnCaptureResult, capture service.TrustedTurnCapture) protocol.TurnCaptureUploadResponse {
+	_ = capture
+	return protocol.TurnCaptureUploadResponse{
+		Accepted: true,
+		TurnID:   result.Turn.TurnID.String(),
+	}
+}

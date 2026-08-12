@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -109,5 +110,119 @@ func TestCredentialProxyAgentAPIRejectsRetiredExecutionHeaders(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("upstream calls = %d, want 0", calls)
+	}
+}
+
+func TestCredentialProxyAssociatesOnlySuccessfulCanonicalSendWithActiveProviderContext(t *testing.T) {
+	d := &Daemon{}
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{
+		AgentID: "agent-1", CallID: "C17", ToolCallID: "tool-1",
+	})
+
+	d.observeCanonicalActionOutcome("agent-1", "message", "70000000-0000-4000-8000-000000000301", false)
+	if got := d.ObservedCanonicalActionAssociations("agent-1"); len(got) != 0 {
+		t.Fatalf("failed send must not associate: %+v", got)
+	}
+
+	d.observeCanonicalActionOutcome("agent-1", "message", "70000000-0000-4000-8000-000000000302", true)
+	got := d.ObservedCanonicalActionAssociations("agent-1")
+	if len(got) != 1 {
+		t.Fatalf("successful send associations = %+v, want one trusted message association", got)
+	}
+	if got[0].Kind != "message" || got[0].CanonicalID != "70000000-0000-4000-8000-000000000302" {
+		t.Fatalf("association = %+v, want successful message canonical id", got[0])
+	}
+	if got[0].ProducerCallID != "C17" || got[0].ToolCallID != "tool-1" {
+		t.Fatalf("association must bind active provider/tool context, got %+v", got[0])
+	}
+}
+
+func TestCredentialProxyAssociatesOnlySuccessfulCanonicalReactionWithActiveProviderContext(t *testing.T) {
+	d := &Daemon{}
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{
+		AgentID: "agent-1", CallID: "C18", ToolCallID: "tool-react",
+	})
+
+	d.observeCanonicalActionOutcome("agent-1", "reaction", "70000000-0000-4000-8000-000000000311", false)
+	if got := d.ObservedCanonicalActionAssociations("agent-1"); len(got) != 0 {
+		t.Fatalf("failed reaction must not associate: %+v", got)
+	}
+
+	d.observeCanonicalActionOutcome("agent-1", "reaction", "70000000-0000-4000-8000-000000000312", true)
+	got := d.ObservedCanonicalActionAssociations("agent-1")
+	if len(got) != 1 || got[0].Kind != "reaction" || got[0].CanonicalID != "70000000-0000-4000-8000-000000000312" {
+		t.Fatalf("successful reaction associations = %+v", got)
+	}
+	if got[0].ProducerCallID != "C18" || got[0].ToolCallID != "tool-react" {
+		t.Fatalf("reaction association missing active context: %+v", got[0])
+	}
+}
+
+func TestCredentialProxyDoesNotAssociateCanonicalActionWithoutActiveProviderContext(t *testing.T) {
+	d := &Daemon{}
+	d.observeCanonicalActionOutcome("agent-1", "message", "70000000-0000-4000-8000-000000000321", true)
+	if got := d.ObservedCanonicalActionAssociations("agent-1"); len(got) != 0 {
+		t.Fatalf("success without active provider/tool context must not associate: %+v", got)
+	}
+}
+
+func TestCredentialProxyIgnoresAgentDeclaredProvenanceInRequestBody(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "forged-C99") {
+			// Generic API proxy may forward unknown fields; trusted provenance
+			// must still come only from daemon-observed success + active context.
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"70000000-0000-4000-8000-000000000331"}`))
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
+		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("write cached credential: %v", err)
+	}
+	d := &Daemon{cfg: cfg}
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "C19", ToolCallID: "tool-1"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/messages/send", bytes.NewBufferString(`{
+		"target":"channel:one",
+		"content":"hello",
+		"producer_call_id":"forged-C99",
+		"canonical_id":"forged-canonical",
+		"tool_call_id":"forged-tool"
+	}`))
+	req.Header.Set("X-Agent-ID", "agent-1")
+	req.Header.Set("X-Workspace-ID", "workspace-1")
+	rec := httptest.NewRecorder()
+	d.credentialProxyAgentAPIHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("proxy status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	// Forwarding agent-declared provenance fields must not create associations
+	// by itself; only a successful observed canonical id may bind.
+	if got := d.ObservedCanonicalActionAssociations("agent-1"); len(got) != 0 {
+		t.Fatalf("request-body provenance must not create associations: %+v", got)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode proxy response: %v", err)
+	}
+	canonicalID, _ := response["id"].(string)
+	if canonicalID == "" {
+		t.Fatal("successful send response must expose a canonical id")
+	}
+	d.observeCanonicalActionOutcome("agent-1", "message", canonicalID, true)
+	got := d.ObservedCanonicalActionAssociations("agent-1")
+	if len(got) != 1 || got[0].CanonicalID != canonicalID || got[0].ProducerCallID != "C19" || got[0].ToolCallID != "tool-1" {
+		t.Fatalf("trusted association = %+v, want response id bound to active context C19/tool-1", got)
+	}
+	for _, association := range got {
+		if association.ProducerCallID == "forged-C99" || association.CanonicalID == "forged-canonical" {
+			t.Fatalf("forged request provenance leaked into trusted association: %+v", got)
+		}
 	}
 }

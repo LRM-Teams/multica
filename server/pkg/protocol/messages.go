@@ -1240,12 +1240,33 @@ type AgentMemoryHydrateEntry struct {
 // record of one settled resident Pi turn. The daemon, rather than the
 // workspace runner, is the trust boundary which creates this payload.
 type TurnCaptureUpload struct {
-	AgentID        string                    `json:"agent_id"`
-	RuntimeID      string                    `json:"runtime_id"`
-	CaptureBatchID string                    `json:"capture_batch_id"`
-	Turn           TurnCaptureTurn           `json:"turn"`
-	ProviderCalls  []TurnCaptureProviderCall `json:"provider_calls"`
-	PayloadHash    string                    `json:"payload_hash"`
+	AgentID         string                      `json:"agent_id"`
+	RuntimeID       string                      `json:"runtime_id"`
+	CaptureBatchID  string                      `json:"capture_batch_id"`
+	Turn            TurnCaptureTurn             `json:"turn"`
+	ProviderCalls   []TurnCaptureProviderCall   `json:"provider_calls"`
+	VisibleActions  []TurnCaptureVisibleAction  `json:"visible_actions,omitempty"`
+	Consumptions    []TurnCaptureConsumption    `json:"consumptions,omitempty"`
+	PayloadHash     string                      `json:"payload_hash"`
+}
+
+// TurnCaptureVisibleAction is a trusted, daemon-observed successful channel
+// message or reaction associated with a provider call in the same batch.
+type TurnCaptureVisibleAction struct {
+	Kind           string `json:"kind"`
+	CanonicalID    string `json:"canonical_id"`
+	ProducerCallID string `json:"producer_call_id"`
+	ActionOrdinal  int64  `json:"action_ordinal"`
+	SucceededAt    string `json:"succeeded_at,omitempty"`
+}
+
+// TurnCaptureConsumption is concrete message acceptance/check evidence for a
+// provider call in the same trusted batch.
+type TurnCaptureConsumption struct {
+	ChannelMessageID    string `json:"channel_message_id"`
+	Source              string `json:"source"`
+	EffectiveFromCallID string `json:"effective_from_call_id"`
+	ConsumedAt          string `json:"consumed_at,omitempty"`
 }
 
 // TurnCaptureTurn identifies the logical resident turn that produced a
@@ -1285,10 +1306,19 @@ type TurnCaptureProviderCall struct {
 }
 
 // TurnCaptureUploadResponse is returned when the server atomically accepted
-// (or idempotently recognized) a capture batch.
+// (or idempotently recognized) a capture batch. After freeze, Late and
+// SnapshotID identify the immutable late-audit routing without claiming a
+// snapshot mutation.
 type TurnCaptureUploadResponse struct {
-	Accepted bool   `json:"accepted"`
-	TurnID   string `json:"turn_id,omitempty"`
+	Accepted           bool   `json:"accepted"`
+	CaptureBatchID     string `json:"capture_batch_id,omitempty"`
+	TurnID             string `json:"turn_id,omitempty"`
+	ProviderCallCount  int    `json:"provider_call_count,omitempty"`
+	VisibleActionCount int    `json:"visible_action_count,omitempty"`
+	ConsumptionCount   int    `json:"consumption_count,omitempty"`
+	RunStatus          string `json:"run_status,omitempty"`
+	Late               bool   `json:"late,omitempty"`
+	SnapshotID         string `json:"snapshot_id,omitempty"`
 }
 
 // TurnCaptureGapReport records why a finished daemon turn cannot supply a

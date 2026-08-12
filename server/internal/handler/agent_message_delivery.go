@@ -44,24 +44,7 @@ func (h *Handler) HandleAgentDeliveryAck(ctx context.Context, identity daemonws.
 	if !ok {
 		return errors.New("invalid canonical delivery acknowledgement")
 	}
-	_, err := h.DB.Exec(ctx, `
-		WITH settled AS (
-		  UPDATE env_dispatch_delivery_obligation AS obligation
-		  SET state = 'completed', settled_at = now()
-		  FROM env_dispatch_run_agent AS run_agent
-		  WHERE obligation.run_id = run_agent.run_id
-		    AND obligation.run_agent_id = run_agent.run_agent_id
-		    AND obligation.channel_message_id = $1
-		    AND run_agent.execution_agent_id = $2
-		    AND obligation.state IN ('pending', 'queued', 'accepted')
-		  RETURNING obligation.run_id
-		)
-		UPDATE env_dispatch_run AS run
-		SET pending_delivery_count = GREATEST(run.pending_delivery_count - 1, 0),
-		    updated_at = now()
-		FROM settled
-		WHERE run.run_id = settled.run_id`, parseUUID(messageID), parseUUID(ack.AgentID))
-	return err
+	return h.settleMixedRunDeliveryObligation(ctx, parseUUID(messageID), parseUUID(ack.AgentID))
 }
 
 func canonicalDeliveryMessageID(deliveryID, agentID string) (string, bool) {

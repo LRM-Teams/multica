@@ -218,6 +218,21 @@ type ResidentPendingNoticeInput interface {
 	AcceptPendingNotice(context.Context, ResidentPendingNotice) error
 }
 
+// PiRunIdentity is the durable mixed-run binding shared by one-shot and
+// resident Pi surfaces. Only PiRPCBackend may adopt it into a live session.
+type PiRunIdentity struct {
+	RunID      string
+	RunAgentID string
+}
+
+// PiRunBinding is a run-scoped native Pi session plus the current capture
+// boundary. Settlement advances CaptureBoundary without terminating the session.
+type PiRunBinding struct {
+	PiRunIdentity
+	SessionID       string
+	CaptureBoundary string
+}
+
 // ExecOptions configures a single execution.
 type ExecOptions struct {
 	Cwd   string

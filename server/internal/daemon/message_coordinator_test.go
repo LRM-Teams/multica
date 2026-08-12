@@ -128,6 +128,65 @@ func (r *activityResidentMessageRuntime) AcceptMessageBatch(context.Context, []a
 
 func (r *activityResidentMessageRuntime) RuntimeAlive() (bool, bool) { return false, false }
 
+type livenessTransitionResidentMessageRuntime struct {
+	mu          sync.Mutex
+	alive       bool
+	known       bool
+	acceptError error
+}
+
+func (r *livenessTransitionResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *livenessTransitionResidentMessageRuntime) RuntimeAlive() (bool, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.alive, r.known
+}
+
+func (r *livenessTransitionResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.acceptError != nil {
+		return agent.ResidentMessageAcceptance{}, r.acceptError
+	}
+	r.alive, r.known = true, true
+	done := make(chan error)
+	close(done)
+	return agent.ResidentMessageAcceptance{Done: done}, nil
+}
+
+func TestRuntimePoolReportsStartingOnlyAfterAcceptedInputStartsConfirmedRuntime(t *testing.T) {
+	tests := []struct {
+		name         string
+		backend      *livenessTransitionResidentMessageRuntime
+		wantStarting int
+		wantError    bool
+	}{
+		{name: "unknown liveness stays fail open", backend: &livenessTransitionResidentMessageRuntime{}, wantStarting: 0},
+		{name: "failed acceptance is not a start", backend: &livenessTransitionResidentMessageRuntime{known: true, acceptError: errors.New("provider busy")}, wantStarting: 0, wantError: true},
+		{name: "confirmed dead becomes alive", backend: &livenessTransitionResidentMessageRuntime{known: true}, wantStarting: 1},
+		{name: "already alive remains the same process", backend: &livenessTransitionResidentMessageRuntime{known: true, alive: true}, wantStarting: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pool := newCanonicalAgentRuntimePool()
+			pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: test.backend}
+			starting := 0
+			err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", []protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}}, func() {
+				starting++
+			}, nil, nil, nil)
+			if (err != nil) != test.wantError {
+				t.Fatalf("handoff error = %v, wantError %v", err, test.wantError)
+			}
+			if starting != test.wantStarting {
+				t.Fatalf("Starting observations = %d, want %d", starting, test.wantStarting)
+			}
+		})
+	}
+}
+
 type preparingResidentMessageRuntime struct {
 	mu       sync.Mutex
 	prepared bool
@@ -539,8 +598,8 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !reflect.DeepEqual(observed, []string{"starting", "accepted", "activity", "complete"}) {
-		t.Fatalf("callback order = %v, want starting, acceptance, runtime Activity, then completion", observed)
+	if !reflect.DeepEqual(observed, []string{"accepted", "activity", "complete"}) {
+		t.Fatalf("callback order = %v, want acceptance, runtime Activity, then completion without synthetic Starting", observed)
 	}
 }
 

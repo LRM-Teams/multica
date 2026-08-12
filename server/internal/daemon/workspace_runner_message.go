@@ -160,7 +160,10 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		if runner.logger != nil {
 			runner.logger.Warn("Workspace Runner Agent Message handoff incomplete before delivery acknowledgement", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", delivery.AgentID, "runtime_id", runtimeID, "delivery_id", delivery.DeliveryID, "acceptance", result.outcome)
 		}
-		return result, nil
+		if deferred {
+			return result, nil
+		}
+		return messageDeliveryAcceptance{}, err
 	}
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",

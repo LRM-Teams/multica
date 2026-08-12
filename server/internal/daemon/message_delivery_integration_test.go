@@ -479,9 +479,8 @@ func (r *recordingResidentMessage) snapshot() [][]agent.ResidentMessage {
 	return append([][]agent.ResidentMessage(nil), r.batches...)
 }
 
-// failingResidentMessageRuntime simulates a coordinator killed inside the
-// pre-handoff window: the Server-side delivery was acknowledged but the
-// concrete body handoff fails and the Context Boundary never advances.
+// failingResidentMessageRuntime simulates a provider rejecting input before
+// APM acceptance. Raft leaves the delivery unacknowledged in this phase.
 type failingResidentMessageRuntime struct{}
 
 func (failingResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
@@ -642,33 +641,32 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		}
 	}
 
-	// Phase A — crashed coordinator. Recovery completes, a canonical Message is
-	// server-acked, then the runtime handoff fails inside the pre-persist
-	// window: the durable boundary never advances and the runtime never holds
-	// a completed handoff.
+	// Phase A — provider rejection. The body remains Pending, the delivery is
+	// not acknowledged, and the durable boundary does not advance.
 	dA, acksA, batchesA, observedA, teardownA := connect(failingResidentMessageRuntime{})
 	idA, seqA := postMessage()
-	waitAck(acksA, seqA)
-	// The Message was server-acked but never durably consumed: the runtime
-	// handoff failed inside the pre-persist window, so the boundary for this
-	// target must still be below the Message's own sequence even though the
-	// runtime saw a handoff attempt for it.
+	select {
+	case ack := <-acksA:
+		t.Fatalf("provider rejection was acknowledged: %+v", ack)
+	case <-time.After(200 * time.Millisecond):
+	}
 	if got := waitBatch(observedA, batchesA, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
-		t.Fatalf("pre-crash runtime handoff attempt = %+v, want %s", got, idA)
+		t.Fatalf("rejected runtime handoff attempt = %+v, want %s", got, idA)
 	}
 	if got := readBoundary(); got[target] >= seqA {
 		t.Fatalf("boundary advanced to %d before handoff (seq=%d): %v", got[target], seqA, got)
 	}
-	// Crash: abandon the daemon without completing the flush.
+	// Disconnect: the Server still owns the unacknowledged delivery.
 	teardownA()
 	_ = dA
 
-	// Phase B — fresh daemon, same Agent root. Recovery must re-read the acked
-	// Message (the boundary never advanced) and hand it over: nothing lost.
-	_, _, batchesB, observedB, teardownB := connect(&idleMessageFakeRuntime{})
+	// Phase B — fresh daemon, same Agent root. Server redelivery and local
+	// Pending dedup converge on one provider handoff: nothing is lost or doubled.
+	_, acksB, batchesB, observedB, teardownB := connect(&idleMessageFakeRuntime{})
 	if got := waitBatch(observedB, batchesB, idA); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
 		t.Fatalf("restarted runtime batches = %+v, want canonical Message %s handed off", got, idA)
 	}
+	waitAck(acksB, seqA)
 	// Runtime observation proves only that native handoff started. Boundary
 	// persistence is a separate commit stage and may finish just afterward.
 	if got := waitBoundary(target, seqA); got[target] != seqA {

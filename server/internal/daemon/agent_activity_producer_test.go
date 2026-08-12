@@ -431,6 +431,15 @@ func TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity(t *testing.T)
 	if body.Text != "Agent execution failed" {
 		t.Fatalf("failure narrative = %q", body.Text)
 	}
+	if _, found := runner.processes.Snapshot("agent-a"); found {
+		t.Fatal("provider startup-request failure retained APM launch")
+	}
+	producer.mu.Lock()
+	state := producer.states[agentActivityProducerKey{agentID: "agent-a", launchID: "launch-a"}]
+	producer.mu.Unlock()
+	if state == nil || state.status.Status != protocol.AgentStatusInactive {
+		t.Fatalf("provider startup-request failure status = %+v, want inactive", state)
+	}
 }
 
 func installActivityProducerAgent(t *testing.T, producer *agentActivityProducer) {

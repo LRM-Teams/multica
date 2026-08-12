@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
@@ -166,6 +167,31 @@ func TestWorkspaceRunnerManagedStartCreatesInboxWithoutAttachment(t *testing.T) 
 	}
 	if ack.AgentID != agentID || ack.LaunchID == "" || status.LaunchID != ack.LaunchID || session.LaunchID != ack.LaunchID {
 		t.Fatalf("managed start result ack=%+v status=%+v session=%+v", ack, status, session)
+	}
+}
+
+func TestWorkspaceRunnerProviderSpawnFailureReportsInactiveAndOffline(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-cursor", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		return fmt.Errorf("spawn cursor: executable unavailable")
+	}
+	var activities []protocol.AgentActivityPayload
+	runner.activity.AttachTransport(func(payload protocol.AgentActivityPayload) { activities = append(activities, payload) })
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "dispatch-1"}
+	_, status, _, err := runner.startManagedAgent(context.Background(), start)
+	if err == nil {
+		t.Fatal("provider spawn failure was accepted")
+	}
+	if status.Status != protocol.AgentStatusInactive {
+		t.Fatalf("spawn failure status = %+v, want inactive", status)
+	}
+	if len(activities) != 1 || activities[0].Snapshot.ActivityKind != protocol.ActivityKindOffline {
+		t.Fatalf("spawn failure Activity = %+v, want Offline", activities)
 	}
 }
 

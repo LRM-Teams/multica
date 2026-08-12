@@ -279,6 +279,63 @@ func TestWorkspaceRunnerDeliveryAcknowledgesBusyRuntime(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerDeliveryDoesNotAcknowledgeProviderRejection(t *testing.T) {
+	d := New(Config{}, nil)
+	attempts := 0
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("cursor authenticate: TLS connection failed")
+		}
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", coordinator)
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: &idleMessageFakeRuntime{}}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "dm:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "dm:one", Seq: 1, Content: "hi"},
+	}
+	acknowledgements := 0
+	err = runner.handleMessageDelivery(context.Background(), delivery, func(eventType string, _ any) error {
+		if eventType == protocol.EventAgentDeliverAck {
+			acknowledgements++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("wire handler must keep the Runner connection alive after provider rejection: %v", err)
+	}
+	if acknowledgements != 0 {
+		t.Fatalf("acknowledgements = %d, want none before APM accepts provider input", acknowledgements)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 1 || pending[0].ID != delivery.Message.ID {
+		t.Fatalf("Pending after provider rejection = %+v, want message retained for redelivery", pending)
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("retry pending delivery after replacement start: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("provider attempts = %d, want one failed start and one successful retry", attempts)
+	}
+	coordinator.mu.Lock()
+	pending = coordinator.pendingBatchLocked()
+	boundary := coordinator.boundaries[delivery.Target]
+	coordinator.mu.Unlock()
+	if len(pending) != 0 || boundary != delivery.Seq {
+		t.Fatalf("successful retry pending=%+v boundary=%d, want consumed exactly once through seq %d", pending, boundary, delivery.Seq)
+	}
+}
+
 func TestWorkspaceRunnerDeliveryDispatcherDoesNotBlockAnotherAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

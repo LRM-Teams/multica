@@ -709,11 +709,10 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 		slot.mu.Unlock()
 		return errors.New("canonical resident runtime does not support idle Message input")
 	}
+	var runtimeWasConfirmedDead bool
 	if liveness, ok := slot.backend.(agent.ResidentRuntimeLivenessChecker); ok {
 		alive, known := liveness.RuntimeAlive()
-		if (!known || !alive) && onStarting != nil {
-			onStarting()
-		}
+		runtimeWasConfirmedDead = known && !alive
 	}
 	batch := make([]agent.ResidentMessage, 0, len(messages))
 	for _, message := range messages {
@@ -818,6 +817,14 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 		})
 		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
 		return errors.New("canonical resident runtime was invalidated during Message input acceptance")
+	}
+	if runtimeWasConfirmedDead && onStarting != nil {
+		if liveness, ok := slot.backend.(agent.ResidentRuntimeLivenessChecker); ok {
+			alive, known := liveness.RuntimeAlive()
+			if known && alive {
+				onStarting()
+			}
+		}
 	}
 	if onAccepted != nil {
 		onAccepted()

@@ -25,6 +25,7 @@ const (
 	AgentObservationMessageBodyAccepted    AgentObservationKind = "message_body_accepted"
 	AgentObservationFreshnessHeld          AgentObservationKind = "freshness_held"
 	AgentObservationError                  AgentObservationKind = "error"
+	AgentObservationOffline                AgentObservationKind = "offline"
 )
 
 // AgentObservationData seals the observation taxonomy to the execution facts
@@ -161,7 +162,7 @@ func (observation AgentObservation) Validate() error {
 		}
 		return nil
 
-	case AgentObservationError:
+	case AgentObservationError, AgentObservationOffline:
 		if err := observation.validateLaunchID(); err != nil {
 			return err
 		}

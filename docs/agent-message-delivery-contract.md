@@ -19,6 +19,8 @@ Verified Raft Computer behavior:
   deliveries re-enter the ordinary delivery path;
 - the Computer acknowledges only when `AgentProcessManager.deliverMessage`
   resolves `accepted=true`;
+- a rejected or failed provider input is not acknowledged; the server retains
+  delivery responsibility and may retry the same `deliveryId` and sequence;
 - APM acceptance includes durable local responsibility such as a starting,
   idle, busy, or already-consumed inbox state. It is not provider-turn
   completion, a read receipt, or Context Boundary advancement;
@@ -57,6 +59,17 @@ the local target sequence boundary prevents an accepted retry from entering the
 Provider twice and records actual context coverage. ACK never advances that
 boundary.
 
+Provider failure and lifecycle presentation follow the verified Raft phases:
+
+- failure of the outer `agent:start` path publishes `agent:status=inactive`
+  and `agent:activity=offline` with a safe detail;
+- failure after a provider process exists (including its startup request or
+  first-input authentication) publishes `agent:activity=error` with
+  `detailKind=runtime_error`, terminates the unusable process, and publishes
+  `agent:status=inactive`;
+- neither failure consumes Pending Message bodies. A later successful start can
+  accept the original delivery exactly once.
+
 Ordinary Message recovery has no snapshot side channel. The retired
 `agent:recovery:request` and `agent:recovery:page` events must not be reintroduced.
 Reminder snapshots remain an independent persistent wakeup protocol.
@@ -75,3 +88,9 @@ module interfaces, or logs.
   proves reconnect redelivery preserves sequence;
 - `TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery`
   proves wrong-sequence rejection, durable ACK, and the no-redelivery control.
+- `TestWorkspaceRunnerDeliveryDoesNotAcknowledgeProviderRejection` proves a
+  provider rejection is retained without ACK and succeeds exactly once after a
+  later retry;
+- `TestWorkspaceRunnerProviderSpawnFailureReportsInactiveAndOffline` and
+  `TestIdleMessageAcceptanceFailurePublishesVisibleErrorActivity` enforce the
+  two Raft failure phases.

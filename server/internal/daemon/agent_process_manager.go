@@ -25,14 +25,24 @@ type agentProcessManager struct {
 	newID        func() string
 	onTransition func(agentLifecycleTransition)
 
-	agents map[string]*managedAgentProcess
-	queued []string
+	agents        map[string]*managedAgentProcess
+	queued        []string
+	dispatches    map[string]agentStartDispatchReceipt
+	dispatchOrder []string
+}
+
+const agentStartDispatchReceiptCacheSize = 1024
+
+type agentStartDispatchReceipt struct {
+	runtimeID       string
+	acknowledgement protocol.AgentStartAckPayload
 }
 
 type agentProcessStartRequest struct {
 	AgentID         string
 	RuntimeID       string
 	LaunchID        string
+	StartDispatchID string
 	ReadinessPolicy string
 	DeliveryMode    string
 }
@@ -107,6 +117,7 @@ func newAgentProcessManager(workspaceID string, admission agentProcessAdmission,
 		newID:        func() string { return uuid.NewString() },
 		onTransition: onTransition,
 		agents:       make(map[string]*managedAgentProcess),
+		dispatches:   make(map[string]agentStartDispatchReceipt),
 	}
 }
 
@@ -124,6 +135,8 @@ func (m *agentProcessManager) Close() {
 	}
 	m.agents = nil
 	m.queued = nil
+	m.dispatches = nil
+	m.dispatchOrder = nil
 	m.mu.Unlock()
 }
 
@@ -137,16 +150,22 @@ func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if receipt, replayed := m.dispatches[request.StartDispatchID]; replayed {
+		if receipt.acknowledgement.AgentID != request.AgentID || receipt.acknowledgement.LaunchID != request.LaunchID || receipt.runtimeID != request.RuntimeID {
+			return protocol.AgentStartAckPayload{}, errors.New("start dispatch identity conflicts with its accepted receipt")
+		}
+		return receipt.acknowledgement, nil
+	}
 
 	if existing := m.agents[request.AgentID]; existing != nil && existing.managed {
 		if existing.runtimeID != request.RuntimeID {
 			return protocol.AgentStartAckPayload{}, errors.New("managed Agent must stop its current Runtime before starting another")
 		} else {
 			if existing.launchID == request.LaunchID {
-				return m.acceptanceLocked(existing, existing.queueState), nil
+				return m.rememberAcceptanceLocked(request, m.acceptanceLocked(existing, existing.queueState)), nil
 			}
 			m.rebindLaunchLocked(existing, request.LaunchID)
-			return m.acceptanceLocked(existing, protocol.AgentStartQueueRebound), nil
+			return m.rememberAcceptanceLocked(request, m.acceptanceLocked(existing, protocol.AgentStartQueueRebound)), nil
 		}
 	}
 
@@ -163,12 +182,13 @@ func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.
 	} else {
 		m.beginProcessLocked(managed)
 	}
-	return m.acceptanceLocked(managed, managed.queueState), nil
+	return m.rememberAcceptanceLocked(request, m.acceptanceLocked(managed, managed.queueState)), nil
 }
 
-// WaitForAdmission blocks until the exact managed launch owns a machine-wide
-// process slot. A queued start is locally durable in APM, but it must not
-// start a provider or report active before this fence opens.
+// WaitForAdmission blocks until the exact managed launch is selected by the
+// Computer-local process policy. A queued start is already accepted by APM and
+// may buffer Messages, but provider startup and active status wait for this
+// local scheduling fence. The policy is not part of the wire ACK contract.
 func (m *agentProcessManager) WaitForAdmission(ctx context.Context, callback agentProcessCallback) error {
 	if m == nil {
 		return errors.New("agent process manager is not configured")
@@ -399,7 +419,21 @@ func (m *agentProcessManager) startLocked(request agentProcessStartRequest) (pro
 	} else {
 		m.beginProcessLocked(managed)
 	}
-	return m.acceptanceLocked(managed, managed.queueState), nil
+	return m.rememberAcceptanceLocked(request, m.acceptanceLocked(managed, managed.queueState)), nil
+}
+
+func (m *agentProcessManager) rememberAcceptanceLocked(request agentProcessStartRequest, acknowledgement protocol.AgentStartAckPayload) protocol.AgentStartAckPayload {
+	acknowledgement.StartDispatchID = request.StartDispatchID
+	if _, exists := m.dispatches[request.StartDispatchID]; !exists {
+		m.dispatchOrder = append(m.dispatchOrder, request.StartDispatchID)
+	}
+	m.dispatches[request.StartDispatchID] = agentStartDispatchReceipt{runtimeID: request.RuntimeID, acknowledgement: acknowledgement}
+	for len(m.dispatchOrder) > agentStartDispatchReceiptCacheSize {
+		oldest := m.dispatchOrder[0]
+		m.dispatchOrder = m.dispatchOrder[1:]
+		delete(m.dispatches, oldest)
+	}
+	return acknowledgement
 }
 
 func (m *agentProcessManager) acceptanceLocked(managed *managedAgentProcess, queueState string) protocol.AgentStartAckPayload {
@@ -584,7 +618,7 @@ func (m *agentProcessManager) emitLocked(transition agentLifecycleTransition) {
 }
 
 func validateAgentProcessStartRequest(request agentProcessStartRequest) error {
-	for name, value := range map[string]string{"agent_id": request.AgentID, "runtime_id": request.RuntimeID, "launch_id": request.LaunchID} {
+	for name, value := range map[string]string{"agent_id": request.AgentID, "runtime_id": request.RuntimeID, "launch_id": request.LaunchID, "start_dispatch_id": request.StartDispatchID} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", name)
 		}

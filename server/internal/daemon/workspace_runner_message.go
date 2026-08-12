@@ -103,7 +103,7 @@ type messageDeliveryAcceptance struct {
 // startup may still be deferred, while an unknown/stale launch is not ACKed.
 func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
 	launch, managed := runner.processes.Snapshot(delivery.AgentID)
-	if !managed || launch.QueueState == protocol.AgentStartQueueQueued {
+	if !managed {
 		return messageDeliveryAcceptance{}, fmt.Errorf("Agent %q has not been accepted by APM", delivery.AgentID)
 	}
 	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
@@ -127,6 +127,9 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
 	))
+	if launch.QueueState == protocol.AgentStartQueueQueued {
+		return result, nil
+	}
 	runIdentity, identityErr := residentPiRunIdentity(delivery.RunID, delivery.RunAgentID)
 	if identityErr != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(

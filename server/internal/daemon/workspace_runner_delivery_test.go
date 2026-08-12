@@ -181,7 +181,7 @@ func TestWorkspaceRunnerUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.
 	if acknowledgements != 0 || handoffs != 0 {
 		t.Fatalf("unaccepted delivery acknowledgements=%d handoffs=%d, want 0/0", acknowledgements, handoffs)
 	}
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1"}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1", StartDispatchID: "launch-1" + "-dispatch"}); err != nil {
 		t.Fatalf("accept managed start: %v", err)
 	}
 	if err := runner.handleMessageDelivery(context.Background(), delivery, write); err != nil {
@@ -189,6 +189,50 @@ func TestWorkspaceRunnerUnacceptedDeliveryIsRetriedAfterManagedStart(t *testing.
 	}
 	if acknowledgements != 1 || handoffs != 1 {
 		t.Fatalf("retry acknowledgements=%d handoffs=%d, want 1/1", acknowledgements, handoffs)
+	}
+}
+
+func TestWorkspaceRunnerQueuedAPMAcceptsDeliveryWithoutStartingProvider(t *testing.T) {
+	var handoffs int
+	d := New(Config{MaxAgentProcesses: 1}, nil)
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "workspace-1"}
+	d.runtimeIndex["runtime-2"] = Runtime{ID: "runtime-2", WorkspaceID: "workspace-1"}
+	d.mu.Unlock()
+	firstCoordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, firstCoordinator)
+	first := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-1"}, "runtime-1", firstCoordinator)
+	coordinator, err := newTestMessageCoordinator(t, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	runner := registerTestInbox(t, d, InboxKey{WorkspaceID: "workspace-1", AgentID: "agent-2"}, "runtime-2", coordinator)
+	if first != runner {
+		t.Fatal("test Agents did not share the Workspace Runner")
+	}
+	queued, ok := runner.processes.Snapshot("agent-2")
+	if !ok || queued.QueueState != protocol.AgentStartQueueQueued {
+		t.Fatalf("queued launch = %+v, exists=%v", queued, ok)
+	}
+	providerStarts := 0
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error {
+		providerStarts++
+		return nil
+	}
+	delivery := protocol.AgentDeliverPayload{AgentID: "agent-2", Target: "channel:one", Seq: 1, DeliveryID: "delivery-queued", Message: protocol.AgentMessageProjection{ID: "message-queued", Target: "channel:one", Seq: 1}}
+	acceptance, err := runner.acceptMessageDelivery(context.Background(), delivery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acceptance.outcome != messageDeliveryPendingBuffered || providerStarts != 0 || handoffs != 0 {
+		t.Fatalf("queued acceptance=%+v provider_starts=%d handoffs=%d", acceptance, providerStarts, handoffs)
 	}
 }
 

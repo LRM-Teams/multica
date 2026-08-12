@@ -111,8 +111,9 @@ type Config struct {
 	MemoryCurationL3ReviewTimeout time.Duration // per-agent L3 reviewer timeout
 	MemoryCurationRunTimeout      time.Duration // wall-clock timeout for one daemon-claimed curation run
 	// MaxAgentProcesses bounds distinct agents with a live resident provider
-	// process on this daemon (#35). 0 = unlimited. Default = f(NumCPU) clamped
-	// FLOOR/CEIL; override with MULTICA_MAX_AGENT_PROCESSES.
+	// process on this Computer (#35). 0 = unlimited and is the production
+	// default. MULTICA_MAX_AGENT_PROCESSES enables an explicit operator safety
+	// valve; it is separate from the Raft-aligned start scheduling contract.
 	MaxAgentProcesses int
 	PollInterval      time.Duration
 	HeartbeatInterval time.Duration

@@ -13,9 +13,10 @@ import (
 )
 
 type runnerDesiredLaunch struct {
-	agentID   string
-	runtimeID string
-	launchID  string
+	agentID         string
+	runtimeID       string
+	launchID        string
+	startDispatchID string
 }
 
 type runnerObservedLaunch struct {
@@ -58,11 +59,15 @@ func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObserv
 	for _, agentID := range ordered {
 		want, wanted := desiredByAgent[agentID]
 		have, running := observedByAgent[agentID]
-		if running && (!wanted || have.runtimeID != want.runtimeID || have.launchID != want.launchID) {
+		mismatched := running && (!wanted || have.runtimeID != want.runtimeID || have.launchID != want.launchID)
+		if mismatched {
 			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: have.agentID, LaunchID: have.launchID}})
 		}
-		if wanted && (!running || have.runtimeID != want.runtimeID || have.launchID != want.launchID || have.status == protocol.AgentStatusInactive) {
-			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: want.agentID, RuntimeID: want.runtimeID, LaunchID: want.launchID}})
+		// Runtime replacement is two phase: stop the observed launch first and
+		// dispatch the desired start only after an inactive report removes it
+		// from the observed set on the next reconcile.
+		if wanted && !running {
+			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStart, payload: protocol.WorkspaceRunnerAgentStartPayload{AgentID: want.agentID, RuntimeID: want.runtimeID, LaunchID: want.launchID, StartDispatchID: want.startDispatchID}})
 		}
 	}
 	if len(actions) == 0 {
@@ -81,10 +86,9 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	if !h.DaemonHub.WorkspaceRunnerSupportsCapability(identity.DaemonID, identity.WorkspaceID, protocol.DaemonCapabilityWorkspaceRunnerAttachment) {
 		return nil
 	}
-	allowed := runnerAttachmentRuntimeScope(identity)
 	rows, err := h.DB.Query(ctx, `
 		SELECT desired.agent_id::text, desired.runtime_id::text,
-		       desired.launch_id::text
+		       desired.launch_id::text, desired.start_dispatch_id::text
 		FROM agent_runner_launch_projection desired
 		JOIN agent_runtime runtime ON runtime.id = desired.runtime_id
 		WHERE desired.workspace_id::text = $1 AND runtime.daemon_id = $2
@@ -95,13 +99,11 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 	desired := make([]runnerDesiredLaunch, 0)
 	for rows.Next() {
 		var launch runnerDesiredLaunch
-		if err := rows.Scan(&launch.agentID, &launch.runtimeID, &launch.launchID); err != nil {
+		if err := rows.Scan(&launch.agentID, &launch.runtimeID, &launch.launchID, &launch.startDispatchID); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan desired Runner launch: %w", err)
 		}
-		if _, ok := allowed[launch.runtimeID]; ok {
-			desired = append(desired, launch)
-		}
+		desired = append(desired, launch)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

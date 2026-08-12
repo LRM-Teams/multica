@@ -93,7 +93,7 @@ func TestManagedCapacityQueuedDetachAndCrashReplacementFence(t *testing.T) {
 
 func startManagedForCapacityTest(t *testing.T, runner *WorkspaceRunner, agentID, runtimeID, dispatchID string) protocol.AgentStartAckPayload {
 	t.Helper()
-	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: dispatchID})
+	ack, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: dispatchID, StartDispatchID: dispatchID + "-dispatch"})
 	if err != nil {
 		t.Fatalf("Start(%s): %v", agentID, err)
 	}

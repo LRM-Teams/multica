@@ -53,6 +53,15 @@
 - **指针**：决策表 `docs/members-directory-decisions.md`；ADR `docs/adr/0013-members-directory-replaces-agents-page.md`；术语 `CONTEXT.md` → Members Directory。
 - **欠债**：实现落地后把 product docs（`members-roles` 等）与 path helpers 改到与上表一致；旧 `/api/agents` 别名退场条件另立。
 
+### 0.2 Agent start dispatch 双身份协议 — `仅文档`（待可执行化）
+
+- **口径（2026-08-12）**：`launchId` 是 Agent 运行生命周期身份，`startDispatchId` 是一次 `agent:start` 命令的幂等身份；两者由服务端独立生成并持久化，协议与 APM 接口均必填，禁止互相 fallback。
+- **ACK 语义**：`agent:start:ack` 只证明 Computer 的 APM 已接受或排队，不证明进程、Provider、session 或消息消费；重连重投必须复用原 dispatch，重复 dispatch 只复用原 ACK。
+- **切换顺序**：Runtime replacement 必须 `stop old → matching inactive → start new`，不得同批 stop/start；setup、reconnect、Computer restart、Agent restart 与 Runtime update 统一经过一个 desired-state reconciliation module。
+- **命名**：领域统一 `computer_id`；既有 `daemon_id` 仅可作为旧存储 adapter 细节，不得进入新增协议、schema、日志或生命周期 module interface。
+- **指针**：完整协议、禁止项、Raft 1.0.15 已验证范围与升级为 `可执行` 所需回归见 `docs/agent-start-dispatch-contract.md`。
+- **当前状态**：实现与迁移尚未完成，不能标 `可执行`；完成后以协议类型、数据库约束、APM/reconcile tests 和日志断言升级本条。
+
 ## 1. 消息写入管道（BE）
 
 ### 1.1 destination-first 统一 finalizer — `可执行`（已落地）

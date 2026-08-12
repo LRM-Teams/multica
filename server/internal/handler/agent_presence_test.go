@@ -203,12 +203,12 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
-	var launchID string
-	if err := testPool.QueryRow(ctx, `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, parseUUID(agentID)).Scan(&launchID); err != nil {
+	var launchID, startDispatchID string
+	if err := testPool.QueryRow(ctx, `SELECT launch_id::text, start_dispatch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, parseUUID(agentID)).Scan(&launchID, &startDispatchID); err != nil {
 		t.Fatalf("load desired launch: %v", err)
 	}
 	start := protocol.AgentStartAckPayload{
-		AgentID: agentID, LaunchID: launchID, QueueState: protocol.AgentStartQueueQueued, QueueDepth: 2, QueueAgeMS: 15,
+		AgentID: agentID, LaunchID: launchID, StartDispatchID: startDispatchID, QueueState: protocol.AgentStartQueueQueued, QueueDepth: 2, QueueAgeMS: 15,
 	}
 	raw, err := json.Marshal(start)
 	if err != nil {

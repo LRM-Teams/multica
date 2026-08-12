@@ -78,6 +78,14 @@ func TestLoadAgentProcessCapInputsEnvOverride(t *testing.T) {
 	}
 }
 
+func TestResolveMaxAgentProcessesFromEnvDefaultsToUnlimited(t *testing.T) {
+	t.Parallel()
+	got, err := resolveMaxAgentProcessesFromEnv(func(string) string { return "" })
+	if err != nil || got != 0 {
+		t.Fatalf("default max Agent processes = %d, %v; want unlimited", got, err)
+	}
+}
+
 func TestLoadAgentProcessCapInputsPerCPU(t *testing.T) {
 	t.Parallel()
 	env := map[string]string{

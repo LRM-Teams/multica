@@ -230,6 +230,10 @@ jobs:
           # no `--pull` flag. Pull explicitly so migrations still execute from
           # the exact immutable image selected by IMAGE_TAG.
           compose pull backend
+          # Migration 339 removes the retired agent_start_intent table. Stop
+          # the old backend before applying migrations so it can never run
+          # against the new schema during the coordinated protocol cutover.
+          compose stop backend
           compose run --rm --no-deps --entrypoint ./migrate backend up
           # These variables expand inside the PostgreSQL container.
           # shellcheck disable=SC2016

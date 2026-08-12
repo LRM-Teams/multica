@@ -27,6 +27,7 @@ import { useNavigation } from "../navigation";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 import { NoteShareSummary } from "./note-share-summary";
+import { NoteWritebackReview } from "./note-writeback-review";
 import { waitForNoteAIJobResult } from "./note-ai-job-wait";
 import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
 
@@ -1011,6 +1012,17 @@ function NoteEditor({
           {t(($) => $.notes_page.create_issue_action)}
         </Button>
       </div>
+      <NoteWritebackReview
+        page={selected}
+        currentContent={draft.content}
+        onAppliedContent={(content) => {
+          setDraft((current) => ({
+            ...current,
+            content,
+            serverContent: content,
+          }));
+        }}
+      />
       <textarea
         ref={titleTextareaRef}
         rows={1}

@@ -133,12 +133,16 @@
     - accept 才改 `note_page.content` + `updated_by`；创建时 evidence 必填
     - 测试：`TestCreateNotePageWritebackRequiresEvidence`、`TestAccept*`、`TestReject*`
 
-- [ ] **S1-W2 写回必须带 evidence + FE 确认 UI**
+- [x] **S1-W2 写回必须带 evidence + FE 确认 UI**
   - **目标**：用户能看懂「这段话从哪来的」，确认或拒绝。
   - **要做**：复用或对齐现有 note AI diff 交互（见代码锚点）；每条提案至少含一个可打开的 issue 或 run 链接。
   - **不要做**：无 evidence 的提案允许 accept。
   - **依赖**：S1-W1
   - **完成标准**：UI 可确认/拒绝；无 evidence 的提案 API 返回 400。
+  - **已落地（2026-08-12）**：
+    - Notes 页在有 pending 写回时展示确认卡片（diff / append 预览 + evidence 链接）
+    - Accept / Reject 调 S1-W1 API；accept 后本地更新笔记正文
+    - 测试：`note-writeback-review.test.tsx`、`writeback-preview.test.ts`
 
 - [ ] **S1-W3 Issue/Run 完成时生成写回提案**
   - **目标**：工作结束 → 自动（或一键）生成针对关联笔记的待审写回。

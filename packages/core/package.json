@@ -47,6 +47,7 @@
     "./notes/queries": "./notes/queries.ts",
     "./notes/mutations": "./notes/mutations.ts",
     "./notes/issue-refs": "./notes/issue-refs.ts",
+    "./notes/writeback-preview": "./notes/writeback-preview.ts",
     "./user-activity": "./user-activity/index.ts",
     "./user-activity/queries": "./user-activity/queries.ts",
     "./user-activity/mutations": "./user-activity/mutations.ts",

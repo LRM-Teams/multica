@@ -23,6 +23,22 @@ vi.mock("@multica/core/identity", () => ({
   resolveActorDisplayName: (actor: { name?: string }, fallback: string) => actor.name || fallback,
 }));
 
+vi.mock("@multica/core/paths", () => ({
+  appendQueryParams: (href: string, params: Record<string, string>) => {
+    const qs = Object.entries(params)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join("&");
+    return href.includes("?") ? `${href}&${qs}` : `${href}?${qs}`;
+  },
+  useWorkspacePaths: () => ({
+    agentDetail: (id: string) => `/acme/members?member=agent%3A${id}`,
+  }),
+}));
+
+vi.mock("../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn() }),
+}));
+
 const agents: Agent[] = [
   {
     id: "agent-1",

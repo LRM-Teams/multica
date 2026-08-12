@@ -29,6 +29,8 @@ type noteWorkerJobCreateRequest struct {
 
 // NoteWorkerJobResponse is the durable Worker job record. After S2-C1 dispatch,
 // status is dispatched (or later running/completed) and task_id is set.
+// Status is projected from the linked agent_inbox_event when present so the
+// notes UI can show progress without a separate lifecycle writer.
 type NoteWorkerJobResponse struct {
 	ID            string  `json:"id"`
 	WorkspaceID   string  `json:"workspace_id"`
@@ -43,6 +45,41 @@ type NoteWorkerJobResponse struct {
 	UpdatedAt     string  `json:"updated_at"`
 }
 
+// noteWorkerStatusFromTask maps agent_inbox_event lifecycle onto Worker job
+// statuses (pending/dispatched/running/completed/failed/cancelled).
+func noteWorkerStatusFromTask(taskStatus string, terminalOutcome pgtype.Text, startedAt pgtype.Timestamptz, failureReason *string) string {
+	switch taskStatus {
+	case "pending", "failed":
+		// Inbox "pending" means the Worker task is already enqueued — surface
+		// as dispatched so the notes UI does not look stuck before drain.
+		return "dispatched"
+	case "draining":
+		if startedAt.Valid {
+			return "running"
+		}
+		return "dispatched"
+	case "suppressed":
+		return "cancelled"
+	case "acked":
+		if terminalOutcome.Valid {
+			switch terminalOutcome.String {
+			case "failed":
+				return "failed"
+			case "cancelled":
+				return "cancelled"
+			case "completed":
+				return "completed"
+			}
+		}
+		if failureReason != nil && strings.TrimSpace(*failureReason) != "" {
+			return "failed"
+		}
+		return "completed"
+	default:
+		return "dispatched"
+	}
+}
+
 func (h *Handler) noteWorkerJobResponse(ctx context.Context, workspaceID, userID, jobID pgtype.UUID) (NoteWorkerJobResponse, error) {
 	var (
 		resp                NoteWorkerJobResponse
@@ -52,16 +89,41 @@ func (h *Handler) noteWorkerJobResponse(ctx context.Context, workspaceID, userID
 		failure             *string
 		createdAt           pgtype.Timestamptz
 		updatedAt           pgtype.Timestamptz
+		taskStatus          pgtype.Text
+		terminalOutcome     pgtype.Text
+		startedAt           pgtype.Timestamptz
+		taskFailure         *string
 	)
 	err := h.DB.QueryRow(ctx, `
-SELECT j.id, j.workspace_id, j.page_id, j.agent_id, j.instruction, j.status, j.task_id, j.failure_reason, j.created_at, j.updated_at
+SELECT
+  j.id, j.workspace_id, j.page_id, j.agent_id, j.instruction, j.status, j.task_id, j.failure_reason, j.created_at, j.updated_at,
+  e.status, e.terminal_outcome, e.started_at, e.failure_reason
 FROM note_worker_job j
+LEFT JOIN agent_inbox_event e ON e.id = j.task_id
 WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspaceID, userID).Scan(
 		&id, &wsID, &pageID, &agentID, &instruction, &status, &taskID, &failure, &createdAt, &updatedAt,
+		&taskStatus, &terminalOutcome, &startedAt, &taskFailure,
 	)
 	if err != nil {
 		return resp, err
 	}
+
+	projected := status
+	if taskID.Valid && taskStatus.Valid {
+		projected = noteWorkerStatusFromTask(taskStatus.String, terminalOutcome, startedAt, taskFailure)
+		// Best-effort persist so list/debug and later polls stay coherent.
+		if projected != status {
+			_, _ = h.DB.Exec(ctx, `
+UPDATE note_worker_job
+SET status = $1, failure_reason = COALESCE($2, failure_reason), updated_at = now()
+WHERE id = $3`, projected, taskFailure, id)
+			status = projected
+			if taskFailure != nil && strings.TrimSpace(*taskFailure) != "" {
+				failure = taskFailure
+			}
+		}
+	}
+
 	resp = NoteWorkerJobResponse{
 		ID:          uuidToString(id),
 		WorkspaceID: uuidToString(wsID),

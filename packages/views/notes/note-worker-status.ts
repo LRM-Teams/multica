@@ -24,3 +24,16 @@ export function noteWorkerStatusMessageKey(
       return "unknown";
   }
 }
+
+/** Deep-link to the agent panel, optionally focused on the Worker task/run. */
+export function noteWorkerRunHref(
+  agentId: string,
+  taskId: string | null | undefined,
+  paths: { agentDetail: (id: string) => string },
+  appendQuery: (href: string, params: Record<string, string>) => string,
+): string {
+  const base = paths.agentDetail(agentId);
+  const runId = taskId?.trim();
+  if (!runId) return base;
+  return appendQuery(base, { run: runId });
+}

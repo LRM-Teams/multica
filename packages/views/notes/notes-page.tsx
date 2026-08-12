@@ -1025,7 +1025,7 @@ function NoteEditor({
           {t(($) => $.notes_page.worker_action)}
         </Button>
       </div>
-      {workerJobId ? <NoteWorkerStatusBanner jobId={workerJobId} /> : null}
+      {workerJobId ? <NoteWorkerStatusBanner jobId={workerJobId} onDismiss={() => setWorkerJobId(null)} /> : null}
       <NoteWritebackReview
         page={selected}
         currentContent={draft.content}

@@ -131,6 +131,61 @@ WHERE e.id = $1`, *resp.TaskID).Scan(&contextRaw, &chatContent); err != nil {
 	}
 }
 
+func TestGetNoteWorkerJobProjectsCompletedFromTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note Worker Project "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "Worker project note "+uuid.NewString())
+
+	createRec := httptest.NewRecorder()
+	testHandler.CreateNoteWorkerJob(createRec, withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/worker-jobs", map[string]any{
+		"agent_id":    agentID,
+		"instruction": "finish something",
+		"intent":      NoteIntentWorker,
+	}), "id", noteID))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var created NoteWorkerJobResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.TaskID == nil {
+		t.Fatal("expected task_id")
+	}
+
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE agent_inbox_event
+SET status = 'acked', terminal_outcome = 'completed', started_at = now(), completed_at = now(), acked_at = now()
+WHERE id = $1`, *created.TaskID); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+
+	getRec := httptest.NewRecorder()
+	testHandler.GetNoteWorkerJob(getRec, withURLParam(newRequest(http.MethodGet, "/api/notes/worker-jobs/"+created.ID, nil), "jobId", created.ID))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get: %d %s", getRec.Code, getRec.Body.String())
+	}
+	var got NoteWorkerJobResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if got.Status != "completed" {
+		t.Fatalf("projected status = %q, want completed", got.Status)
+	}
+
+	var stored string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT status FROM note_worker_job WHERE id = $1`, created.ID).Scan(&stored); err != nil {
+		t.Fatalf("load stored status: %v", err)
+	}
+	if stored != "completed" {
+		t.Fatalf("persisted status = %q, want completed", stored)
+	}
+}
+
 func TestCreateNoteWorkerJobRejectsOutsiderWithoutNoteAccess(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -6,6 +6,7 @@ import { Bot, Check, Loader2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import { noteWorkerJobOptions } from "@multica/core/notes/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
+import { appendQueryParams, useWorkspacePaths } from "@multica/core/paths";
 import type { Agent, NoteWorkerJob } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -13,7 +14,9 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { toast } from "sonner";
+import { useNavigation } from "../navigation";
 import { useT } from "../i18n/use-t";
+import { noteWorkerRunHref } from "./note-worker-status";
 
 export function NoteWorkerRunDialog({
   pageId,
@@ -32,6 +35,8 @@ export function NoteWorkerRunDialog({
 }) {
   const { t } = useT("layout");
   const queryClient = useQueryClient();
+  const paths = useWorkspacePaths();
+  const navigation = useNavigation();
   const [agentId, setAgentId] = useState<string | null>(defaultAgentId);
   const [instruction, setInstruction] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -63,7 +68,15 @@ export function NoteWorkerRunDialog({
       queryClient.setQueryData(noteWorkerJobOptions(job.id).queryKey, job);
       onDispatched(job);
       onOpenChange(false);
-      toast.success(t(($) => $.notes_page.worker_dispatched));
+      const href = noteWorkerRunHref(job.agent_id, job.task_id, paths, appendQueryParams);
+      toast.success(t(($) => $.notes_page.worker_dispatched), {
+        description: t(($) => $.notes_page.worker_dispatched_hint),
+        action: {
+          label: t(($) => $.notes_page.worker_open_run),
+          onClick: () => navigation.push(href),
+        },
+        duration: 10_000,
+      });
     } catch (error: unknown) {
       showErrorToast(error instanceof Error ? error.message : t(($) => $.notes_page.worker_dispatch_failed));
     } finally {

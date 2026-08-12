@@ -4,11 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
-
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var errInboxRegistryClosed = errors.New("Inbox registry is closed")
@@ -180,34 +177,6 @@ func (registry *InboxRegistry) Remove(agentID, runtimeID string) {
 	if ok && entry.coordinator != nil {
 		entry.coordinator.Close()
 		registry.log("workspace Runner Inbox closed", agentID, entry.runtimeID, "removed")
-	}
-}
-
-// BeginRecovery snapshots only this Workspace Runner's Inboxes. A reconnect
-// therefore cannot fan recovery out to another Workspace.
-func (registry *InboxRegistry) BeginRecovery(send func(protocol.AgentRecoveryRequest) error) {
-	if registry == nil || send == nil {
-		return
-	}
-	registry.mu.RLock()
-	agentIDs := make([]string, 0, len(registry.inboxes))
-	coordinators := make(map[string]*MessageCoordinator, len(registry.inboxes))
-	for agentID, entry := range registry.inboxes {
-		if entry.coordinator != nil {
-			agentIDs = append(agentIDs, agentID)
-			coordinators[agentID] = entry.coordinator
-		}
-	}
-	registry.mu.RUnlock()
-	sort.Strings(agentIDs)
-	for _, agentID := range agentIDs {
-		request := coordinators[agentID].BeginRecovery(agentID, 100)
-		if registry.logger != nil {
-			registry.logger.Info("Agent Message recovery started", "workspace_id", registry.workspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_reconnect")
-		}
-		if err := send(request); err != nil && registry.logger != nil {
-			registry.logger.Warn("workspace Runner Inbox recovery request failed", "error", err, "workspace_id", registry.workspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_connection_write_failed")
-		}
 	}
 }
 

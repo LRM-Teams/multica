@@ -183,7 +183,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 	if err := writeFrame(protocol.EventAgentAttachmentReplayReq, attachmentReplay); err != nil {
 		return err
 	}
-	attachmentReplayComplete := false
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -220,14 +219,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				return err
 			}
 			connection.deliveries.Resume(start.AgentID, start.LaunchID)
-			// APM acceptance owns this Agent's only Message coordinator. Once
-			// Attachment replay has fixed Workspace ownership, recover that
-			// coordinator before buffered Messages cross the Provider boundary.
-			if attachmentReplayComplete {
-				runner.beginMessageRecoveryForAgent(start.AgentID, func(request protocol.AgentRecoveryRequest) error {
-					return writeFrame(protocol.EventAgentRecoveryRequest, request)
-				})
-			}
 			go func() {
 				status, session, err := runner.completeManagedAgentStart(connection.ctx, start, ack)
 				if err != nil {
@@ -280,11 +271,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if runner.requestReminderSnapshot != nil {
 				runner.requestReminderSnapshot(attach.AgentID)
 			}
-			if attachmentReplayComplete {
-				runner.beginMessageRecoveryForAgent(attach.AgentID, func(request protocol.AgentRecoveryRequest) error {
-					return writeFrame(protocol.EventAgentRecoveryRequest, request)
-				})
-			}
 		case protocol.EventAgentDetach:
 			var detach protocol.WorkspaceRunnerAgentDetachPayload
 			if json.Unmarshal(message.Payload, &detach) != nil {
@@ -320,12 +306,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentAttachmentReplayAck, ack); err != nil {
 				return err
 			}
-			// Message recovery owns per-Agent snapshot/cursors, but starts only
-			// after the connection's Attachment handshake has a stable scope.
-			attachmentReplayComplete = true
-			runner.beginMessageRecoveryForAll(func(request protocol.AgentRecoveryRequest) error {
-				return writeFrame(protocol.EventAgentRecoveryRequest, request)
-			})
 		case protocol.EventMixedRunActivityAck:
 			var activityAck protocol.MixedRunActivityTransitionAckPayload
 			if json.Unmarshal(message.Payload, &activityAck) != nil || activityAck.Validate() != nil {
@@ -356,16 +336,6 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			if !connection.deliveries.Enqueue(delivery) && runner.logger != nil {
 				runner.logger.Warn("Workspace Runner Agent delivery was not queued", "workspace_id", workspaceID, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID, "seq", delivery.Seq, "reason", "connection_delivery_dispatcher_unavailable")
-			}
-		case protocol.EventAgentRecoveryPage:
-			var page protocol.AgentRecoveryPage
-			if json.Unmarshal(message.Payload, &page) != nil {
-				continue
-			}
-			if err := runner.mergeMessageRecoveryPage(page, func(request protocol.AgentRecoveryRequest) error {
-				return writeFrame(protocol.EventAgentRecoveryRequest, request)
-			}); err != nil && runner.logger != nil {
-				runner.logger.Warn("workspace Runner Agent Message recovery failed", "error", err, "workspace_id", workspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
 			}
 		case protocol.EventAgentActivityProbe:
 			var probe protocol.AgentActivityProbePayload

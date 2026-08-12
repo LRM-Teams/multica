@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"path/filepath"
-	"reflect"
 	"sync"
 	"testing"
 
@@ -86,31 +85,6 @@ func TestInboxRegistryRejectsCreationWithoutScopedAttachmentOrRuntime(t *testing
 	}
 	if _, _, ok := registry.Resolve("agent-1"); ok {
 		t.Fatal("cross-Workspace Inbox became resolvable")
-	}
-}
-
-func TestInboxRegistryReconnectRecoveryIsWorkspaceScoped(t *testing.T) {
-	resolver := &testInboxAttachmentResolver{attachments: map[InboxKey]AgentAttachment{}}
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1})
-	resolver.set(AgentAttachment{WorkspaceID: "workspace-2", AgentID: "agent-2", RuntimeID: "runtime-2", AttachmentGeneration: 1})
-	first := newTestInboxRegistry(t, "workspace-1", resolver)
-	second := newTestInboxRegistry(t, "workspace-2", resolver)
-	t.Cleanup(first.Close)
-	t.Cleanup(second.Close)
-	if _, err := first.Ensure("agent-1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := second.Ensure("agent-2"); err != nil {
-		t.Fatal(err)
-	}
-
-	var recovered []string
-	first.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
-		recovered = append(recovered, request.AgentID)
-		return nil
-	})
-	if want := []string{"agent-1"}; !reflect.DeepEqual(recovered, want) {
-		t.Fatalf("Workspace reconnect recovered Agents %v, want %v", recovered, want)
 	}
 }
 

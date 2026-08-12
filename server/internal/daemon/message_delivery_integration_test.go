@@ -135,14 +135,9 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	serverHandler.AgentDeliveryNotifier = hub
 	acks := make(chan protocol.AgentDeliverAckPayload, 2)
 	handoffs := make(chan protocol.AgentMessageHandoffPayload, 2)
-	recoveryRequests := make(chan protocol.AgentRecoveryRequest, 2)
 	hub.SetAgentDeliveryAckHandler(func(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 		acks <- ack
 		return serverHandler.HandleAgentDeliveryAck(ctx, identity, ack)
-	})
-	hub.SetAgentRecoveryHandler(func(ctx context.Context, identity daemonws.ClientIdentity, request protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error) {
-		recoveryRequests <- request
-		return serverHandler.HandleAgentMessageRecovery(ctx, identity, request)
 	})
 	hub.SetAgentMessageHandoffHandler(func(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.AgentMessageHandoffPayload) error {
 		handoffs <- payload
@@ -181,22 +176,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	}, 20*time.Millisecond, 30*time.Millisecond)
 	teardownRunner := startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
 	defer teardownRunner()
-
-	select {
-	case request := <-recoveryRequests:
-		if request.AgentID != agentID || request.RecoveryID == "" {
-			t.Fatalf("startup recovery request = %+v", request)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("startup recovery request was not observed")
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for !coordinator.FreshnessKnown() && time.Now().Before(deadline) {
-		runtime.Gosched()
-	}
-	if !coordinator.FreshnessKnown() {
-		t.Fatal("startup recovery did not complete")
-	}
 
 	body, _ := json.Marshal(map[string]any{"content": "hello", "client_message_id": uuid.NewString()})
 	req := httptest.NewRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", bytes.NewReader(body))
@@ -297,7 +276,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("busy canonical delivery was not acknowledged")
 	}
-	deadline = time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for len(fakeRuntime.noticeSnapshot()) == 0 && time.Now().Before(deadline) {
 		runtime.Gosched()
 	}
@@ -346,15 +325,6 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	}
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
 		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
-	}
-	runner.beginMessageRecovery(agentID)
-	select {
-	case request := <-recoveryRequests:
-		if request.AgentID != agentID || request.RecoveryID == "" || request.Boundaries[target] != busyCreated.Seq {
-			t.Fatalf("reconnect recovery request = %+v", request)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("reconnect recovery request was not observed")
 	}
 }
 
@@ -606,29 +576,11 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			t.Fatalf("accept test APM launch: %v", err)
 		}
 		acks = make(chan protocol.AgentDeliverAckPayload, 2)
-		recoveryReqs := make(chan protocol.AgentRecoveryRequest, 2)
 		hub.SetAgentDeliveryAckHandler(func(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
 			acks <- ack
 			return serverHandler.HandleAgentDeliveryAck(ctx, identity, ack)
 		})
-		hub.SetAgentRecoveryHandler(func(ctx context.Context, identity daemonws.ClientIdentity, request protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error) {
-			recoveryReqs <- request
-			return serverHandler.HandleAgentMessageRecovery(ctx, identity, request)
-		})
 		teardown = startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
-		select {
-		case request := <-recoveryReqs:
-			if request.AgentID != agentID || request.RecoveryID == "" {
-				t.Fatalf("recovery request = %+v", request)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("startup recovery request was not observed")
-		}
-		deadline := time.Now().Add(2 * time.Second)
-		coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
-		for !coordinator.FreshnessKnown() && time.Now().Before(deadline) {
-			runtime.Gosched()
-		}
 		return d, acks, normal.snapshot, normal.observed, teardown
 	}
 

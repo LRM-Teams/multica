@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,182 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
-
-func TestAgentMessageRecoveryPagesStableSequenceFenceAcrossTargets(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	daemonID := "message-recovery-runner-" + uuid.NewString()[:8]
-	runtimeID := seedMachineLockedRuntime(t, daemonID, "message recovery")
-	agentID := createHandlerTestAgentOnRuntime(t, "message-recovery-"+uuid.NewString()[:8], runtimeID)
-	channelOne := seedChannelForTest(t, "message-recovery-one-"+uuid.NewString(), testUserID)
-	channelTwo := seedChannelForTest(t, "message-recovery-two-"+uuid.NewString(), testUserID)
-	for _, channelID := range []string{channelOne, channelTwo} {
-		if _, err := testPool.Exec(ctx, `
-			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'agent', $3)
-			ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
-			t.Fatalf("add Agent member: %v", err)
-		}
-	}
-	boundaries := make(map[string]int64)
-	rows, err := testPool.Query(ctx, `
-		SELECT target, COALESCE(max(seq), 0)
-		FROM agent_message_delivery
-		WHERE workspace_id = $1 AND agent_id = $2
-		GROUP BY target`, testWorkspaceID, agentID)
-	if err != nil {
-		t.Fatalf("load initial Agent boundaries: %v", err)
-	}
-	for rows.Next() {
-		var target string
-		var sequence int64
-		if err := rows.Scan(&target, &sequence); err != nil {
-			rows.Close()
-			t.Fatalf("scan initial Agent boundary: %v", err)
-		}
-		boundaries[target] = sequence
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		t.Fatalf("iterate initial Agent boundaries: %v", err)
-	}
-	rows.Close()
-	insert := func(channelID, content string) ChannelMessageResponse {
-		message, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr(uuid.NewString()), 0)
-		if err != nil {
-			t.Fatalf("insert canonical Message: %v", err)
-		}
-		channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
-		if !found {
-			t.Fatalf("load channel %s", channelID)
-		}
-		testHandler.deliverCanonicalMessageToChannelAgents(ctx, channel, message)
-		return message
-	}
-	before := []ChannelMessageResponse{
-		insert(channelOne, "one"),
-		insert(channelOne, "two"),
-		insert(channelTwo, "three"),
-	}
-	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
-	request := protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: boundaries, Limit: 2}
-	page, err := testHandler.HandleAgentMessageRecovery(ctx, identity, request)
-	if err != nil {
-		t.Fatalf("first recovery page: %v", err)
-	}
-	if !page.HasMore || page.NextCursor == "" || len(page.Messages) != 2 || page.SnapshotID == "" || page.HighWatermark != page.SnapshotID {
-		t.Fatalf("first page = %+v", page)
-	}
-	notifier := &capturedAgentDeliveryNotifier{}
-	previousNotifier := testHandler.AgentDeliveryNotifier
-	testHandler.AgentDeliveryNotifier = notifier
-	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previousNotifier })
-	liveRecorder := sendChannelMessageForTest(t, channelOne, testUserID, map[string]any{
-		"content":           "created after recovery fence",
-		"client_message_id": uuid.NewString(),
-	})
-	if liveRecorder.Code != http.StatusCreated {
-		t.Fatalf("create live Message during recovery: status=%d body=%s", liveRecorder.Code, liveRecorder.Body.String())
-	}
-	var live ChannelMessageResponse
-	if err := json.Unmarshal(liveRecorder.Body.Bytes(), &live); err != nil {
-		t.Fatalf("decode live Message: %v", err)
-	}
-	if notifier.payload.Message.ID != live.ID || notifier.payload.AgentID != agentID {
-		t.Fatalf("post-fence Message was not covered by live delivery: %+v", notifier.payload)
-	}
-	all := append([]protocol.AgentMessageProjection(nil), page.Messages...)
-	for page.HasMore {
-		request.SnapshotID = page.SnapshotID
-		request.Cursor = page.NextCursor
-		page, err = testHandler.HandleAgentMessageRecovery(ctx, identity, request)
-		if err != nil {
-			t.Fatalf("next recovery page: %v", err)
-		}
-		all = append(all, page.Messages...)
-	}
-	if len(all) != len(before) {
-		t.Fatalf("snapshot returned %d Messages, want %d: %+v", len(all), len(before), all)
-	}
-	gotIDs := make(map[string]bool, len(all))
-	for _, message := range all {
-		if !strings.HasPrefix(message.ReplyTarget, "#message-recovery-") {
-			t.Fatalf("recovery Message reply target = %q, want reusable channel target", message.ReplyTarget)
-		}
-		if message.ChannelID == "" || message.ChannelKind != "group" || message.InitiatorType != "member" || message.InitiatorID != testUserID || message.InitiatorName != "Handler Test User" {
-			t.Fatalf("recovery Message lost attested scope/initiator: %+v", message)
-		}
-		gotIDs[message.ID] = true
-	}
-	for _, message := range before {
-		if !gotIDs[message.ID] {
-			t.Fatalf("snapshot omitted Message %s", message.ID)
-		}
-	}
-	if gotIDs[live.ID] {
-		t.Fatalf("post-fence live Message %s leaked into recovery snapshot", live.ID)
-	}
-
-	boundary := map[string]int64{"channel:" + channelOne: before[1].Seq}
-	page, err = testHandler.HandleAgentMessageRecovery(ctx, identity, protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: boundary, Limit: agentMessageRecoveryMaxPage + 50})
-	if err != nil {
-		t.Fatalf("boundary recovery: %v", err)
-	}
-	for _, message := range page.Messages {
-		if message.Target == "channel:"+channelOne && message.Seq <= before[1].Seq {
-			t.Fatalf("replayed covered Message: %+v", message)
-		}
-	}
-	foundAbsentTarget := false
-	for _, message := range page.Messages {
-		if message.Target == "channel:"+channelTwo {
-			foundAbsentTarget = true
-		}
-	}
-	if !foundAbsentTarget {
-		t.Fatal("target absent from boundary map was omitted")
-	}
-}
-
-func TestAgentMessageRecoveryRejectsCorruptStateAndWrongRuntime(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	daemonID := "message-recovery-invalid-" + uuid.NewString()[:8]
-	runtimeID := seedMachineLockedRuntime(t, daemonID, "message recovery invalid")
-	agentID := createHandlerTestAgentOnRuntime(t, "message-recovery-invalid-"+uuid.NewString()[:8], runtimeID)
-	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
-	forgedCursorRaw, err := json.Marshal(agentMessageRecoveryCursor{
-		Target: "channel:one", Seq: 1, ID: uuid.NewString(), SnapshotHash: "forged", Checksum: "forged",
-	})
-	if err != nil {
-		t.Fatalf("marshal forged cursor: %v", err)
-	}
-	for name, request := range map[string]protocol.AgentRecoveryRequest{
-		"missing recovery id":       {AgentID: agentID, Boundaries: map[string]int64{}},
-		"regressed boundary":        {AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: map[string]int64{"channel:one": -1}},
-		"damaged snapshot":          {AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: map[string]int64{}, SnapshotID: "not-base64"},
-		"damaged cursor":            {AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: map[string]int64{}, Cursor: "not-base64"},
-		"well formed forged cursor": {AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: map[string]int64{}, Cursor: base64.RawURLEncoding.EncodeToString(forgedCursorRaw)},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := testHandler.HandleAgentMessageRecovery(context.Background(), identity, request); err == nil {
-				t.Fatal("invalid recovery state was accepted")
-			}
-		})
-	}
-	wrong := daemonws.ClientIdentity{DaemonID: "wrong-" + daemonID, WorkspaceID: testWorkspaceID}
-	if _, err := testHandler.HandleAgentMessageRecovery(context.Background(), wrong, protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: map[string]int64{}}); err == nil {
-		t.Fatal("wrong runtime recovered Agent Messages")
-	}
-	if _, err := testHandler.HandleAgentMessageRecovery(context.Background(), identity, protocol.AgentRecoveryRequest{AgentID: "not-a-uuid", RecoveryID: uuid.NewString(), Boundaries: map[string]int64{}}); err == nil {
-		t.Fatal("invalid Agent UUID reached the trusted UUID parser")
-	}
-}
 
 func TestAgentMessageHandoffReceiptIsIdempotent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
@@ -238,6 +64,122 @@ func (n *capturedAgentDeliveryNotifier) NotifyWorkspaceAgentDelivery(workspaceID
 	n.payload = payload
 	n.deliveries = append(n.deliveries, capturedAgentDelivery{workspaceID: workspaceID, daemonID: daemonID, payload: payload})
 	return true
+}
+
+func TestWorkspaceRunnerReadyRedeliversUnacknowledgedMessagesInSequenceOrder(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "message-redelivery-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "message redelivery")
+	agentID := createHandlerTestAgentOnRuntime(t, "message-redelivery-"+uuid.NewString()[:8], runtimeID)
+	channelName := "message-redelivery-" + uuid.NewString()
+	channelID := seedChannelForTest(t, channelName, testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3) ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("add Agent member: %v", err)
+	}
+
+	previousNotifier := testHandler.AgentDeliveryNotifier
+	testHandler.AgentDeliveryNotifier = nil
+	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previousNotifier })
+	var sent []ChannelMessageResponse
+	for _, content := range []string{"first unacknowledged", "second unacknowledged"} {
+		recorder := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+			"content": content, "client_message_id": uuid.NewString(),
+		})
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("create canonical Message: status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var message ChannelMessageResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &message); err != nil {
+			t.Fatalf("decode canonical Message: %v", err)
+		}
+		sent = append(sent, message)
+	}
+
+	notifier := &capturedAgentDeliveryNotifier{}
+	testHandler.AgentDeliveryNotifier = notifier
+	h := *testHandler
+	h.AgentDeliveryNotifier = notifier
+	h.DaemonHub = daemonws.NewHub()
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		daemonID + "/" + testWorkspaceID + "/instance-1": true,
+	}}
+	ready := protocol.WorkspaceRunnerReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"}
+	raw, err := json.Marshal(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventWorkspaceRunnerReady, raw); err != nil {
+		t.Fatalf("accept Workspace Runner ready: %v", err)
+	}
+	if len(notifier.deliveries) != 2 {
+		t.Fatalf("redelivered %d Messages, want 2", len(notifier.deliveries))
+	}
+	for index, delivery := range notifier.deliveries {
+		if delivery.payload.AgentID != agentID || delivery.payload.Message.ID != sent[index].ID || delivery.payload.Seq != sent[index].Seq {
+			t.Fatalf("redelivery[%d] = %+v, want message=%s seq=%d", index, delivery.payload, sent[index].ID, sent[index].Seq)
+		}
+	}
+}
+
+func TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	daemonID := "message-ack-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "message acknowledgement")
+	agentID := createHandlerTestAgentOnRuntime(t, "message-ack-"+uuid.NewString()[:8], runtimeID)
+	channelID := seedChannelForTest(t, "message-ack-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3) ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatal(err)
+	}
+	previousNotifier := testHandler.AgentDeliveryNotifier
+	testHandler.AgentDeliveryNotifier = nil
+	t.Cleanup(func() { testHandler.AgentDeliveryNotifier = previousNotifier })
+	recorder := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{"content": "ack me", "client_message_id": uuid.NewString()})
+	var message ChannelMessageResponse
+	if recorder.Code != http.StatusCreated || json.Unmarshal(recorder.Body.Bytes(), &message) != nil {
+		t.Fatalf("create canonical Message: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
+	deliveryID := "message:" + message.ID + ":agent:" + agentID
+	if err := testHandler.HandleAgentDeliveryAck(ctx, identity, protocol.AgentDeliverAckPayload{AgentID: agentID, Seq: message.Seq + 1, DeliveryID: deliveryID}); err == nil {
+		t.Fatal("acknowledgement with the wrong sequence was accepted")
+	}
+	if err := testHandler.HandleAgentDeliveryAck(ctx, identity, protocol.AgentDeliverAckPayload{AgentID: agentID, Seq: message.Seq, DeliveryID: deliveryID}); err != nil {
+		t.Fatalf("acknowledge exact delivery: %v", err)
+	}
+	var acked bool
+	if err := testPool.QueryRow(ctx, `SELECT acked_at IS NOT NULL FROM agent_message_delivery WHERE agent_id = $1 AND message_id = $2`, agentID, message.ID).Scan(&acked); err != nil {
+		t.Fatalf("load durable acknowledgement: %v", err)
+	}
+	if !acked {
+		t.Fatal("exact acknowledgement was not durable")
+	}
+	notifier := &capturedAgentDeliveryNotifier{}
+	h := *testHandler
+	h.AgentDeliveryNotifier = notifier
+	h.DaemonHub = daemonws.NewHub()
+	h.RunnerPresenceSource = fakeRunnerPresenceSource{current: map[string]bool{
+		daemonID + "/" + testWorkspaceID + "/instance-1": true,
+	}}
+	ready, err := json.Marshal(protocol.WorkspaceRunnerReadyPayload{WorkspaceID: testWorkspaceID, DaemonInstanceID: "instance-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventWorkspaceRunnerReady, ready); err != nil {
+		t.Fatalf("accept Workspace Runner ready after acknowledgement: %v", err)
+	}
+	if len(notifier.deliveries) != 0 {
+		t.Fatalf("redelivered %d acknowledged Messages, want 0", len(notifier.deliveries))
+	}
 }
 
 func TestCanonicalMessageProjectsAgentDeliveryEnvelope(t *testing.T) {
@@ -783,6 +725,9 @@ func TestMixedRunLifecycleTransitionReportsPersistCountersIdempotently(t *testin
 
 func TestConcurrentPostAckAndNewObligationCannotLeaveRunFalselyQuiescent(t *testing.T) {
 	fixture := seedMixedRunDeliveryFixture(t)
+	if _, _, err := persistCanonicalMessageDelivery(fixture.ctx, testHandler.DB, ChannelResponse{ID: fixture.channelID, WorkspaceID: testWorkspaceID, Kind: "group", Name: "mixed-delivery"}, fixture.message, db.Agent{ID: parseUUID(fixture.agentID), RuntimeID: parseUUID(fixture.runtimeID)}); err != nil {
+		t.Fatalf("persist initial Agent delivery: %v", err)
+	}
 	if err := testHandler.createMixedRunDeliveryObligation(fixture.ctx, uuidToString(fixture.runID), uuidToString(fixture.runAgentID), fixture.message.ID, fixture.agentID); err != nil {
 		t.Fatalf("create initial delivery obligation: %v", err)
 	}

@@ -105,7 +105,6 @@ type MessageCoordinator struct {
 	handoff             RuntimeMessageHandoff
 	activity            MessageReceivedActivity
 	queueActivity       MessageQueueActivity
-	recovery            messageRecoveryState
 	handoffGeneration   uint64
 	activeHandoff       *runtimeMessageHandoffToken
 	boundaryHealthy     bool
@@ -161,24 +160,6 @@ const (
 	pendingNoticeCommitApplied
 )
 
-type messageRecoveryStatus string
-
-type messageRecoveryState struct {
-	status        messageRecoveryStatus
-	agentID       string
-	recoveryID    string
-	snapshotID    string
-	highWatermark string
-	nextCursor    string
-}
-
-const (
-	messageRecoveryUnknown    messageRecoveryStatus = "unknown"
-	messageRecoveryRecovering messageRecoveryStatus = "recovering"
-	messageRecoveryReady      messageRecoveryStatus = "ready"
-	messageRecoveryFailed     messageRecoveryStatus = "failed"
-)
-
 var (
 	errRuntimeMessageHandoffInProgress  = errors.New("runtime Message handoff is already in progress")
 	errRuntimeMessageHandoffInvalidated = errors.New("runtime Message handoff token was invalidated")
@@ -204,7 +185,6 @@ func NewMessageCoordinator(key InboxKey, agentRoot string, handoff RuntimeMessag
 		key: key, root: agentRoot, boundaries: boundaries,
 		pending:  make(map[string]map[int64]protocol.AgentMessageProjection),
 		accepted: make(map[string]struct{}), handoff: handoff, activity: activity,
-		recovery:            messageRecoveryState{status: messageRecoveryUnknown},
 		boundaryHealthy:     healthy,
 		writeBoundaries:     writeConsumedSeqs,
 		noticeCoordinatorID: uuid.NewString(),
@@ -255,111 +235,11 @@ func (c *MessageCoordinator) Close() {
 	}
 }
 
-// BeginRecovery resets freshness on startup and every websocket reconnect.
-func (c *MessageCoordinator) BeginRecovery(agentID string, limit int) protocol.AgentRecoveryRequest {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if limit <= 0 {
-		limit = 100
-	}
-	recoveryID := uuid.NewString()
-	c.recovery = messageRecoveryState{status: messageRecoveryRecovering, agentID: agentID, recoveryID: recoveryID}
-	return protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: recoveryID, Boundaries: cloneBoundaries(c.boundaries), Limit: limit}
-}
-
-// RecoveryRequest returns the next stateless page request.
-func (c *MessageCoordinator) RecoveryRequest(agentID string, limit int) protocol.AgentRecoveryRequest {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if limit <= 0 {
-		limit = 100
-	}
-	return protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: c.recovery.recoveryID, Boundaries: cloneBoundaries(c.boundaries), SnapshotID: c.recovery.snapshotID, Cursor: c.recovery.nextCursor, Limit: limit}
-}
-
-// MergeRecoveryPage validates the snapshot fence and merges recovered Messages
-// with concurrent live Deliveries by canonical identity and target sequence.
-func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	fail := func(err error) error {
-		c.recovery.status = messageRecoveryFailed
-		return err
-	}
-	if page.AgentID == "" || page.AgentID != c.recovery.agentID {
-		return fail(errors.New("recovery page agent does not match request"))
-	}
-	if page.RecoveryID == "" || page.RecoveryID != c.recovery.recoveryID {
-		// A page from the previous websocket generation may arrive after a
-		// reconnect. Ignore it without poisoning the active recovery attempt.
-		return errors.New("recovery page id does not match active recovery")
-	}
-	if c.recovery.status == messageRecoveryFailed {
-		return errors.New("recovery attempt has failed; start a new recovery")
-	}
-	if page.SnapshotID == "" || page.HighWatermark == "" {
-		return fail(errors.New("recovery page missing snapshot fence"))
-	}
-	if c.recovery.snapshotID != "" && (page.SnapshotID != c.recovery.snapshotID || page.HighWatermark != c.recovery.highWatermark) {
-		return fail(errors.New("recovery snapshot fence changed between pages"))
-	}
-	if page.HasMore && page.NextCursor == "" {
-		return fail(errors.New("recovery page has_more without next cursor"))
-	}
-	if page.HasMore && page.NextCursor == c.recovery.nextCursor {
-		return fail(errors.New("recovery cursor did not advance"))
-	}
-	if !page.HasMore && page.NextCursor != "" {
-		return fail(errors.New("terminal recovery page has next cursor"))
-	}
-	c.recovery.snapshotID = page.SnapshotID
-	c.recovery.highWatermark = page.HighWatermark
-	for _, message := range page.Messages {
-		message.RunID = page.RunID
-		message.RunAgentID = page.RunAgentID
-		message.DeliveryID = "recovery:" + page.SnapshotID + ":" + message.ID
-		delivery := protocol.AgentDeliverPayload{AgentID: page.AgentID, Target: message.Target, Seq: message.Seq, DeliveryID: message.DeliveryID, Message: message, RunID: page.RunID, RunAgentID: page.RunAgentID}
-		created, err := c.acceptLocked(delivery)
-		if err != nil {
-			return fail(err)
-		}
-		if created {
-			c.emitQueueActivityLocked([]protocol.AgentMessageProjection{message}, 1)
-		}
-	}
-	c.recovery.nextCursor = page.NextCursor
-	if page.HasMore {
-		c.recovery.status = messageRecoveryRecovering
-	} else {
-		// The terminal snapshot fence establishes canonical freshness. Recovered
-		// bodies remain Pending until a separate runtime handoff, message check,
-		// or send freshness hold advances their Context Boundaries.
-		c.recovery.status = messageRecoveryReady
-		// A complete snapshot rebuilds conservative coverage even when the file
-		// was previously missing or malformed.
-		c.boundaryHealthy = true
-	}
-	return nil
-}
-
-func (c *MessageCoordinator) FailRecovery() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.recovery.status = messageRecoveryFailed
-}
-
-func (c *MessageCoordinator) FreshnessKnown() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.recovery.status == messageRecoveryReady
-}
-
-// ContextBoundary is the minimum Credential Proxy integration. Freshness-
-// sensitive sends fail closed until the recovery fence completes.
+// ContextBoundary is the minimum Credential Proxy integration.
 func (c *MessageCoordinator) ContextBoundary(target string) (int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.recovery.status != messageRecoveryReady || !c.boundaryHealthy || len(c.pending[target]) > 0 {
+	if !c.boundaryHealthy || len(c.pending[target]) > 0 {
 		return 0, false
 	}
 	return c.boundaries[target], true
@@ -390,7 +270,7 @@ func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFre
 		return MessageSendFreshness{}, errors.New("Message coordinator is closed")
 	}
 	result := MessageSendFreshness{SeenUpToSeq: c.boundaries[target]}
-	if c.recovery.status != messageRecoveryReady || !c.boundaryHealthy {
+	if !c.boundaryHealthy {
 		c.mu.Unlock()
 		return result, errors.New("Message freshness is unknown")
 	}
@@ -583,9 +463,6 @@ func (c *MessageCoordinator) reserveRuntimeMessageHandoff() (*runtimeMessageHand
 	defer c.mu.Unlock()
 	if c.closed {
 		return nil, false, errors.New("Message coordinator is closed")
-	}
-	if c.recovery.status != messageRecoveryReady {
-		return nil, false, errors.New("Message freshness is unknown until recovery completes")
 	}
 	if c.activeHandoff != nil {
 		if c.activeHandoff.phase == runtimeMessageHandoffAccepted {
@@ -880,7 +757,9 @@ func validateAgentDelivery(delivery protocol.AgentDeliverPayload) error {
 func loadConsumedSeqs(path string) (map[string]int64, bool, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return map[string]int64{}, false, nil
+		// A new Agent has no prior coverage. The Server's durable unacknowledged
+		// deliveries rebuild Pending; an empty local boundary is therefore valid.
+		return map[string]int64{}, true, nil
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("read consumed sequences: %w", err)

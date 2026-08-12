@@ -214,6 +214,15 @@ An at-least-once transfer attempt of one Message to the Computer
 currently responsible for an Agent. Replaying the same `delivery_id` is the
 same Delivery; acceptance means the local coordinator accepted it, not that a
 runtime saw it or that a second canonical Message copy was persisted locally.
+
+### Delivery Acknowledgement
+
+The Computer's receipt that its Agent Process Manager accepted responsibility
+for one exact Delivery. It correlates the Agent, Delivery identity, and target
+sequence. It ends Server redelivery responsibility but does not mean the Agent
+read the Message, the Provider completed a turn, or the Context Boundary
+advanced.
+_Avoid_: Read receipt, Message completion, Context Boundary, recovery cursor
 _Avoid_: Inbox lease, task claim, execution
 
 ### Pending Message

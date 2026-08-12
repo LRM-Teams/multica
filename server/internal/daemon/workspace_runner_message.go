@@ -152,7 +152,7 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		result.outcome = messageDeliveryProviderAccepted
 	}
 	if err != nil {
-		deferred := errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown")
+		deferred := errors.Is(err, ErrCanonicalAgentRuntimeBusy)
 		outcome := map[bool]string{true: "deferred", false: "failed"}[deferred]
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
@@ -166,79 +166,6 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", "accepted", "",
 	))
 	return result, nil
-}
-
-func (runner *WorkspaceRunner) beginMessageRecovery(agentID string) {
-	runner.beginMessageRecoveryForAgent(agentID, func(request protocol.AgentRecoveryRequest) error {
-		return runner.sendOnCurrentConnection(protocol.EventAgentRecoveryRequest, request)
-	})
-}
-
-func (runner *WorkspaceRunner) beginMessageRecoveryForAgent(agentID string, send func(protocol.AgentRecoveryRequest) error) {
-	if send == nil {
-		return
-	}
-	coordinator, _, ok := runner.messageCoordinator(agentID)
-	if !ok {
-		return
-	}
-	request := coordinator.BeginRecovery(agentID, 100)
-	if runner.logger != nil {
-		runner.logger.Info("Agent Message recovery started", "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "agent_scoped_recovery")
-	}
-	if err := send(request); err != nil && runner.logger != nil {
-		runner.logger.Warn("Agent Message recovery request failed", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", agentID, "recovery_id", request.RecoveryID, "reason", "runner_connection_write_failed")
-	}
-}
-
-func (runner *WorkspaceRunner) beginMessageRecoveryForAll(send func(protocol.AgentRecoveryRequest) error) {
-	if runner == nil || runner.inboxes == nil {
-		return
-	}
-	runner.inboxes.BeginRecovery(send)
-}
-
-func (runner *WorkspaceRunner) mergeMessageRecoveryPage(page protocol.AgentRecoveryPage, send func(protocol.AgentRecoveryRequest) error) error {
-	if send == nil {
-		return errors.New("Message recovery sender is unavailable")
-	}
-	coordinator, runtimeID, ok := runner.messageCoordinator(page.AgentID)
-	if !ok {
-		return fmt.Errorf("no Message coordinator for recovery Agent %q", page.AgentID)
-	}
-	if err := coordinator.MergeRecoveryPage(page); err != nil {
-		return err
-	}
-	if runner.logger != nil {
-		runner.logger.Debug("Agent Message recovery page merged", "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "runtime_id", runtimeID, "recovery_id", page.RecoveryID, "snapshot_id", page.SnapshotID, "message_count", len(page.Messages), "has_more", page.HasMore)
-	}
-	if page.HasMore {
-		return send(coordinator.RecoveryRequest(page.AgentID, 100))
-	}
-	if runner.logger != nil {
-		runner.logger.Info("Agent Message recovery completed", "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "runtime_id", runtimeID, "recovery_id", page.RecoveryID, "snapshot_id", page.SnapshotID, "high_watermark", page.HighWatermark)
-	}
-
-	// Freshness is durable after MergeRecoveryPage. Runtime availability is a
-	// separate best-effort concern and must never block the Runner read loop.
-	runIdentity, identityErr := residentPiRunIdentity(page.RunID, page.RunAgentID)
-	if identityErr != nil {
-		return identityErr
-	}
-	flushCtx, cancel := context.WithTimeout(context.Background(), recoveryFlushTimeout)
-	go func() {
-		defer cancel()
-		if err := runner.ensureResidentRuntime(flushCtx, page.AgentID, runtimeID, runIdentity); err != nil {
-			if runner.logger != nil {
-				runner.logger.Warn("Workspace Runner Message recovery Runtime unavailable", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
-			}
-			return
-		}
-		if err := coordinator.Flush(flushCtx); err != nil && runner.logger != nil {
-			runner.logger.Warn("Workspace Runner Message recovery flush deferred", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
-		}
-	}()
-	return nil
 }
 
 func (runner *WorkspaceRunner) notifyPendingMessagesAfterTurn(agentID string) {

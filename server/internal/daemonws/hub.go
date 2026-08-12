@@ -95,7 +95,6 @@ type ReminderFireAttemptHandler func(ctx context.Context, identity ClientIdentit
 type ReminderProjectionHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error)
 type ReminderProjectionAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionAckPayload) error
 type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentDeliverAckPayload) error
-type AgentRecoveryHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error)
 type AgentMessageHandoffHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentMessageHandoffPayload) error
 
 // WorkspaceRunnerHandler receives only frames from the current ready
@@ -139,7 +138,6 @@ type Hub struct {
 	onReminderProjectionAck     ReminderProjectionAckHandler
 	deliveryMu                  sync.RWMutex
 	onAgentDeliveryAck          AgentDeliveryAckHandler
-	onAgentRecovery             AgentRecoveryHandler
 	onAgentMessageHandoff       AgentMessageHandoffHandler
 	runnerMu                    sync.RWMutex
 	onWorkspaceRunner           WorkspaceRunnerHandler
@@ -182,15 +180,6 @@ func (h *Hub) SetAgentDeliveryAckHandler(fn AgentDeliveryAckHandler) {
 	}
 	h.deliveryMu.Lock()
 	h.onAgentDeliveryAck = fn
-	h.deliveryMu.Unlock()
-}
-
-func (h *Hub) SetAgentRecoveryHandler(fn AgentRecoveryHandler) {
-	if h == nil {
-		return
-	}
-	h.deliveryMu.Lock()
-	h.onAgentRecovery = fn
 	h.deliveryMu.Unlock()
 }
 
@@ -249,12 +238,6 @@ func (h *Hub) agentDeliveryAckHandler() AgentDeliveryAckHandler {
 	h.deliveryMu.RLock()
 	defer h.deliveryMu.RUnlock()
 	return h.onAgentDeliveryAck
-}
-
-func (h *Hub) agentRecoveryHandler() AgentRecoveryHandler {
-	h.deliveryMu.RLock()
-	defer h.deliveryMu.RUnlock()
-	return h.onAgentRecovery
 }
 
 func (h *Hub) agentMessageHandoffHandler() AgentMessageHandoffHandler {
@@ -1427,30 +1410,6 @@ func (c *client) handleFrame(raw []byte) {
 			return
 		}
 		c.hub.acknowledgeAgentDelivery(c, payload)
-	case protocol.EventAgentRecoveryRequest:
-		recoveryHandler := c.hub.agentRecoveryHandler()
-		if recoveryHandler == nil {
-			return
-		}
-		var request protocol.AgentRecoveryRequest
-		if err := json.Unmarshal(msg.Payload, &request); err != nil {
-			return
-		}
-		page, err := recoveryHandler(context.Background(), c.identity, request)
-		if err != nil {
-			slog.Warn("agent recovery request failed", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", request.AgentID)
-			return
-		}
-		frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentRecoveryPage, Payload: mustMarshalRaw(page)})
-		if err != nil {
-			return
-		}
-		select {
-		case c.send <- frame:
-		default:
-			c.hub.unregister(c)
-			_ = c.conn.Close()
-		}
 	case protocol.EventAgentMessageHandoff:
 		handler := c.hub.agentMessageHandoffHandler()
 		if handler == nil {

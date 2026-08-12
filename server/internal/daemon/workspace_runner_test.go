@@ -188,9 +188,6 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 					return
 				}
 			}
-			if msg.Type == protocol.EventAgentRecoveryRequest {
-				continue
-			}
 			frames <- msg
 			responses++
 		}
@@ -294,9 +291,9 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	<-errCh
 }
 
-func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesAndRecoversCoordinator(t *testing.T) {
+func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesCoordinator(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	recovery := make(chan protocol.AgentRecoveryRequest, 1)
+	started := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -319,22 +316,17 @@ func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesAndRecoversCoordinator(
 			t.Error(err)
 			return
 		}
-		for {
+		for responses := 0; responses < 3; responses++ {
 			_, raw, err := conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
 				return
 			}
 			var frame protocol.Message
-			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventAgentRecoveryRequest {
+			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventAgentStartAck {
 				continue
 			}
-			var request protocol.AgentRecoveryRequest
-			if json.Unmarshal(frame.Payload, &request) != nil {
-				t.Errorf("invalid recovery request: %s", frame.Payload)
-				return
-			}
-			recovery <- request
+			started <- struct{}{}
 			return
 		}
 	}))
@@ -359,16 +351,13 @@ func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesAndRecoversCoordinator(
 	defer cancel()
 	go runner.runConnection(ctx)
 	select {
-	case request := <-recovery:
-		if request.AgentID != "agent-1" || request.RecoveryID == "" {
-			t.Fatalf("recovery request=%+v", request)
-		}
+	case <-started:
 		_, runtimeID, ok := runner.messageCoordinator("agent-1")
 		if !ok || runtimeID != "runtime-new" {
-			t.Fatalf("recovery coordinator runtime=%q ok=%v, want runtime-new", runtimeID, ok)
+			t.Fatalf("coordinator runtime=%q ok=%v, want runtime-new", runtimeID, ok)
 		}
 	case <-ctx.Done():
-		t.Fatal("timed out waiting for start-owned coordinator recovery")
+		t.Fatal("timed out waiting for start-owned coordinator")
 	}
 }
 

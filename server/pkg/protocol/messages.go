@@ -296,30 +296,6 @@ type AgentDeliverAckPayload struct {
 	Traceparent string `json:"traceparent,omitempty"`
 }
 
-// AgentRecoveryRequest asks the Server for a stateless snapshot page after
-// local target Context Boundaries. Cursor is empty for the first page.
-type AgentRecoveryRequest struct {
-	AgentID    string           `json:"agent_id"`
-	RecoveryID string           `json:"recovery_id"`
-	Boundaries map[string]int64 `json:"boundaries"`
-	SnapshotID string           `json:"snapshot_id,omitempty"`
-	Cursor     string           `json:"cursor,omitempty"`
-	Limit      int              `json:"limit"`
-}
-
-// AgentRecoveryPage is one bounded page under a stable Server fence.
-type AgentRecoveryPage struct {
-	AgentID       string                   `json:"agent_id"`
-	RecoveryID    string                   `json:"recovery_id"`
-	SnapshotID    string                   `json:"snapshot_id"`
-	HighWatermark string                   `json:"high_watermark"`
-	RunID         string                   `json:"run_id,omitempty"`
-	RunAgentID    string                   `json:"run_agent_id,omitempty"`
-	Messages      []AgentMessageProjection `json:"messages"`
-	NextCursor    string                   `json:"next_cursor,omitempty"`
-	HasMore       bool                     `json:"has_more"`
-}
-
 // AgentMessageHandoffPayload is the content-free observation emitted after a
 // concrete batch crosses the runtime input boundary. Message bodies never
 // travel back to the Server through this Activity seam.

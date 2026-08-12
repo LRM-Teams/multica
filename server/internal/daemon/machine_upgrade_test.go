@@ -244,33 +244,7 @@ func TestInterruptedMachineUpgradeRecoveryResumesOnlyIncompletePhases(t *testing
 }
 
 func TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplicitActivation(t *testing.T) {
-	root := t.TempDir()
-	storeRoot := filepath.Join(root, "store")
-	previousRoot := versionStoreRootFn
-	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
-	t.Cleanup(func() { versionStoreRootFn = previousRoot })
-
-	previousOpen := openVersionStoreFn
-	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
-		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
-	}
-	t.Cleanup(func() { openVersionStoreFn = previousOpen })
-
-	store, err := openVersionStoreFn(storeRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, version := range []string{"v10.0.0", "v11.0.0"} {
-		if _, err := cli.StageReleaseBytes(context.Background(), store, version, []byte("candidate"), "asset.tar.gz"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v10.0.0"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CompareAndSwapActivation(context.Background(), 1, "v11.0.0"); err != nil {
-		t.Fatal(err)
-	}
+	configureMachineUpgradeRecoveryVersionStore(t, "v9.9.9", "v10.0.0", "v11.0.0")
 
 	restartCalls := 0
 	d := &Daemon{
@@ -280,7 +254,7 @@ func TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplic
 	}
 	journal := &machineUpgradeJournal{
 		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
-		RuntimeIDs: []string{"runtime-1"}, Phase: "candidate_ready",
+		IncumbentGeneration: 1, RuntimeIDs: []string{"runtime-1"}, Phase: "candidate_ready",
 	}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
 		t.Fatal(err)
@@ -300,28 +274,7 @@ func TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplic
 }
 
 func TestInterruptedMachineUpgradeRecoveryRejectsUntrackedExecutableReplacement(t *testing.T) {
-	root := t.TempDir()
-	storeRoot := filepath.Join(root, "store")
-	previousRoot := versionStoreRootFn
-	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
-	t.Cleanup(func() { versionStoreRootFn = previousRoot })
-
-	previousOpen := openVersionStoreFn
-	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
-		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
-	}
-	t.Cleanup(func() { openVersionStoreFn = previousOpen })
-
-	store, err := openVersionStoreFn(storeRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cli.StageReleaseBytes(context.Background(), store, "v10.0.0", []byte("candidate"), "asset.tar.gz"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v10.0.0"); err != nil {
-		t.Fatal(err)
-	}
+	configureMachineUpgradeRecoveryVersionStore(t, "v10.0.0")
 
 	d := &Daemon{
 		cfg:    Config{CLIVersion: "v11.0.0"},
@@ -337,6 +290,84 @@ func TestInterruptedMachineUpgradeRecoveryRejectsUntrackedExecutableReplacement(
 
 	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
 		t.Fatalf("untracked replacement restarted=%v err=%v", restarted, err)
+	}
+}
+
+func TestInterruptedMachineUpgradeRecoveryRejectsUnknownIncumbentGeneration(t *testing.T) {
+	configureMachineUpgradeRecoveryVersionStore(t, "v10.0.0", "v11.0.0")
+	d := &Daemon{cfg: Config{CLIVersion: "v11.0.0"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-1"}, Phase: "candidate_ready",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
+		t.Fatalf("unknown incumbent recovery restarted=%v err=%v", restarted, err)
+	}
+}
+
+func TestInterruptedMachineUpgradeRecoveryRequiresGenerationAfterTargetActivation(t *testing.T) {
+	configureMachineUpgradeRecoveryVersionStore(t, "v11.0.0")
+	d := &Daemon{cfg: Config{CLIVersion: "v11.0.0"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		IncumbentGenerationKnown: true, RuntimeIDs: []string{"runtime-1"}, Phase: "candidate_ready",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
+		t.Fatalf("single-generation recovery restarted=%v err=%v", restarted, err)
+	}
+}
+
+func TestInterruptedMachineUpgradeRecoveryDoesNotSupersedeRollbackPending(t *testing.T) {
+	configureMachineUpgradeRecoveryVersionStore(t, "v10.0.0", "v11.0.0")
+	d := &Daemon{cfg: Config{CLIVersion: "v11.0.0"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		IncumbentGenerationKnown: true, RollbackGeneration: "rollback-a", RuntimeIDs: []string{"runtime-1"}, Phase: "rollback_pending",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
+		t.Fatalf("rollback_pending recovery restarted=%v err=%v", restarted, err)
+	}
+}
+
+func TestCreateMachineUpgradeJournalRequiresIncumbentGenerationEvidence(t *testing.T) {
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return "", fmt.Errorf("VersionStore unavailable") }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	d := &Daemon{}
+	acceptedGeneration := "generation-a"
+	journal, err := d.createMachineUpgradeJournal(&MachineUpgradeReceipt{
+		ID: "upgrade-1", AcceptedGeneration: &acceptedGeneration,
+	}, "v9.9.9", "v10.0.0")
+	if err == nil || journal != nil {
+		t.Fatalf("journal=%+v err=%v, want fail-closed evidence error", journal, err)
+	}
+}
+
+func TestCreateMachineUpgradeJournalRecordsKnownFirstGeneration(t *testing.T) {
+	configureMachineUpgradeRecoveryVersionStore(t)
+	d := &Daemon{}
+	acceptedGeneration := "generation-a"
+	journal, err := d.createMachineUpgradeJournal(&MachineUpgradeReceipt{
+		ID: "upgrade-1", AcceptedGeneration: &acceptedGeneration,
+	}, "v9.9.9", "v10.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.IncumbentGeneration != 0 || !journal.IncumbentGenerationKnown {
+		t.Fatalf("incumbent evidence = generation:%d known:%v", journal.IncumbentGeneration, journal.IncumbentGenerationKnown)
 	}
 }
 
@@ -745,6 +776,34 @@ func TestMachineUpgradeHandoffFailsClosedWhenClaimIsStillInFlightAtDeadline(t *t
 	}
 
 	d.exitClaim()
+}
+
+func configureMachineUpgradeRecoveryVersionStore(t *testing.T, versions ...string) *cli.VersionStore {
+	t.Helper()
+	storeRoot := filepath.Join(t.TempDir(), "store")
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	previousOpen := openVersionStoreFn
+	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
+		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
+	}
+	t.Cleanup(func() { openVersionStoreFn = previousOpen })
+
+	store, err := openVersionStoreFn(storeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for generation, version := range versions {
+		if _, err := cli.StageReleaseBytes(context.Background(), store, version, []byte("candidate"), "asset.tar.gz"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.CompareAndSwapActivation(context.Background(), uint64(generation), version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store
 }
 
 func stringPtr(value string) *string { return &value }

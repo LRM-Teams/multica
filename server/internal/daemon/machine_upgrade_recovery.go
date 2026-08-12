@@ -20,26 +20,27 @@ func (d *Daemon) recoverInterruptedMachineUpgrade(ctx context.Context) (bool, er
 
 	runningSource := daemonVersionsMatch(d.cfg.CLIVersion, journal.SourceVersion)
 	runningTarget := daemonVersionsMatch(d.cfg.CLIVersion, journal.TargetVersion)
-	if !runningSource && !runningTarget {
-		superseded, err := d.machineUpgradeJournalSupersededByActive(journal)
-		if err != nil {
-			return false, fmt.Errorf("inspect superseding Active generation: %w", err)
-		}
-		if superseded {
-			if d.logger != nil {
-				d.logger.Warn("retaining Machine Upgrade journal superseded by explicit activation",
-					"journal_phase", journal.Phase,
-					"source_version", journal.SourceVersion,
-					"target_version", journal.TargetVersion,
-					"running_version", d.cfg.CLIVersion,
-				)
-			}
-			return false, nil
-		}
-	}
 	switch journal.Phase {
 	case "candidate_ready":
 		if !runningTarget {
+			if !runningSource {
+				superseded, err := d.machineUpgradeJournalSupersededByActive(journal)
+				if err != nil {
+					return false, fmt.Errorf("inspect superseding Active generation: %w", err)
+				}
+				if superseded {
+					if d.logger != nil {
+						d.logger.Warn("retaining Machine Upgrade journal superseded by explicit activation",
+							"journal_phase", journal.Phase,
+							"source_version", journal.SourceVersion,
+							"target_version", journal.TargetVersion,
+							"incumbent_generation", journal.IncumbentGeneration,
+							"running_version", d.cfg.CLIVersion,
+						)
+					}
+					return false, nil
+				}
+			}
 			return false, fmt.Errorf("candidate_ready journal requires target %s, running %s", journal.TargetVersion, d.cfg.CLIVersion)
 		}
 		return false, nil
@@ -160,19 +161,22 @@ func (d *Daemon) machineUpgradeJournalSupersededByActive(journal *machineUpgrade
 	if journal == nil {
 		return false, nil
 	}
-	root, err := versionStoreRootFn()
+	// Positive legacy generations were only persisted after a successful
+	// VersionStore read. Legacy zero is ambiguous, so it must fail closed.
+	if !journal.IncumbentGenerationKnown && journal.IncumbentGeneration == 0 {
+		return false, nil
+	}
+	state, err := readMachineUpgradeActivationState()
 	if err != nil {
 		return false, err
 	}
-	store, err := openVersionStoreFn(root)
-	if err != nil {
-		return false, err
+	// candidate_ready already consumed incumbent+1 for the journal target. A
+	// distinct later activation therefore needs at least one further generation.
+	if state.Generation <= journal.IncumbentGeneration {
+		return false, nil
 	}
-	state, err := store.ReadActivationState()
-	if err != nil {
-		return false, err
-	}
-	return state.Generation > journal.IncumbentGeneration &&
+	generationDelta := state.Generation - journal.IncumbentGeneration
+	return generationDelta > 1 &&
 		daemonVersionsMatch(state.ActiveVersion, d.cfg.CLIVersion), nil
 }
 
@@ -180,15 +184,7 @@ func (d *Daemon) captureCommittedMachineUpgradeGeneration(journal *machineUpgrad
 	if journal == nil {
 		return fmt.Errorf("Machine Upgrade journal is required")
 	}
-	root, err := versionStoreRootFn()
-	if err != nil {
-		return err
-	}
-	store, err := openVersionStoreFn(root)
-	if err != nil {
-		return err
-	}
-	state, err := store.ReadActivationState()
+	state, err := readMachineUpgradeActivationState()
 	if err != nil {
 		return err
 	}
@@ -196,6 +192,7 @@ func (d *Daemon) captureCommittedMachineUpgradeGeneration(journal *machineUpgrad
 		return fmt.Errorf("committed Active does not match Machine Upgrade target")
 	}
 	journal.IncumbentGeneration = state.Generation - 1
+	journal.IncumbentGenerationKnown = true
 	return d.writeMachineUpgradeJournal(journal)
 }
 

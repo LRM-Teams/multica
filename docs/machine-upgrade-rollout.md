@@ -52,3 +52,13 @@ failed takeover was rolled back; a rollback result requires the previous
 generation, a distinct restored daemon generation, and the accepted runtime
 set to prove live registration. Until then the operation stays
 `rollback_pending`, rather than becoming terminal.
+
+## Superseded recovery markers
+
+A retained `candidate_ready` journal may outlive its completed server operation
+when a later explicit installer activates another release. Startup may stop
+replaying only that phase when the journal has durable incumbent-generation
+evidence, the VersionStore Active generation is at least two generations after
+that incumbent (the journal target consumed the first), and Active matches the
+running binary. Keep the old journal for diagnosis and terminal reconciliation.
+All earlier phases and `rollback_pending` continue to recover fail-closed.

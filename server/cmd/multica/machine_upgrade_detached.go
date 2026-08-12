@@ -218,7 +218,7 @@ func detachedTakeoverProofFromHealth(health map[string]any) (daemon.MachineUpgra
 }
 
 func commitDetachedSuccessorTakeover(profile string, expected daemon.MachineUpgradeTakeoverProof) (daemon.MachineUpgradeTakeoverProof, error) {
-	token, err := readMachineUpgradeControlToken(profile)
+	token, err := computer.ReadControlToken(profile)
 	if err != nil {
 		return daemon.MachineUpgradeTakeoverProof{}, fmt.Errorf("read detached takeover control token: %w", err)
 	}

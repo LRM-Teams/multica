@@ -472,6 +472,9 @@ func TestRuntimesSkillCoversClaimChain(t *testing.T) {
 		"agent_inbox_event",
 		"Computer resident drains and leases the canonical inbox event",
 		"multica runtime list --output json",
+		"multica computer upgrade --target-version <version>",
+		"upgrade_service_unreachable",
+		"There is no top-level",
 		"Agent's durable workspace",
 		"references/runtimes-source-map.md",
 	}
@@ -482,6 +485,9 @@ func TestRuntimesSkillCoversClaimChain(t *testing.T) {
 	}
 	if !skillHasFile(skill, "references/runtimes-source-map.md") {
 		t.Errorf("runtimes skill missing supporting source map")
+	}
+	if strings.Contains(body, "multica computer upgrade --target-version <version> --output json") {
+		t.Errorf("runtimes skill still documents the retired Computer upgrade output flag")
 	}
 }
 

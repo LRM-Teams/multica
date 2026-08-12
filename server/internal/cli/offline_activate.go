@@ -20,8 +20,8 @@ const ActivationAttemptEnv = "MULTICA_ACTIVATION_ATTEMPT_ID"
 var probeStagedCandidate = probeCandidateVersion
 
 // OfflineActivateStaged CAS-commits a staged release tag as Active after a real
-// candidate --version probe (not a fake healthy). Used by offline CLI update
-// and by daemon thin activate (no full register yet).
+// candidate --version probe (not a fake healthy). Used by offline Computer
+// upgrade and by daemon thin activate (no full register yet).
 //
 // Order: prepare → candidate_running → probe --version → candidate_healthy → CAS → committed.
 func (s *VersionStore) OfflineActivateStaged(

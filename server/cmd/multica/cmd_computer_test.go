@@ -19,6 +19,17 @@ func TestComputerUpgradeCommandUsesBoundComputer(t *testing.T) {
 	if flag := computerUpgradeCmd.Flags().Lookup("target-version"); flag == nil {
 		t.Fatal("computer upgrade is missing --target-version")
 	}
+	for _, retired := range []string{"wait", "output", "request-id", "download-timeout"} {
+		if flag := computerUpgradeCmd.Flags().Lookup(retired); flag != nil {
+			t.Fatalf("computer upgrade still exposes split/legacy flag --%s", retired)
+		}
+	}
+}
+
+func TestLegacyTopLevelUpdateCommandIsRemoved(t *testing.T) {
+	if hasSubcommand(rootCmd, "update") {
+		t.Fatal("top-level multica update must not remain alongside computer upgrade")
+	}
 }
 
 // #2487/#2490: selectors scope readiness or log/doctor evidence only. Stop and

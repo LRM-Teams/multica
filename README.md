@@ -138,11 +138,11 @@ Workspace connections, and runs the resident.
 | `multica computer start` | Start the one machine-wide resident |
 | `multica computer status` | Show identity, environment, fixed package source, resident, and Workspace connections |
 | `multica computer doctor` | Diagnose Computer state without creating or removing connections |
+| `multica computer upgrade [--target-version <version>]` | Upgrade through the live Computer owner, or install for the next start when stopped |
 | `multica workspace list` | List your workspaces (current is marked with `*`) |
 | `multica workspace switch <id\|slug>` | Switch the default Workspace for management commands |
 | `multica issue list` | List issues in your workspace |
 | `multica issue create` | Create a new issue |
-| `multica update` | Update to the latest version |
 
 See the [CLI and Computer Guide](CLI_AND_DAEMON.md) for the full command reference.
 

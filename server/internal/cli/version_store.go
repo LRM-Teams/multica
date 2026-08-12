@@ -167,7 +167,7 @@ func (s *VersionStore) ResolveStagedVersion(version string) (StagedVersion, erro
 // version recorded in activation.json, verifying the file actually exists on
 // disk. ok is false (with a nil error) when no version has ever been
 // activated on this machine — the normal state for an install that has never
-// run `multica update`. Callers should fall back to their own default binary
+// activate a release through `multica computer upgrade`. Callers should fall back to their own default binary
 // resolution in that case.
 func (s *VersionStore) ActiveBinaryPath() (path string, ok bool, err error) {
 	state, err := s.ReadActivationState()

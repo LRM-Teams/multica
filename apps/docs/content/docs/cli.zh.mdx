@@ -104,7 +104,7 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica computer status` | 查看脱敏后的身份、环境、固定包源和工作区连接 |
 | `multica computer logs [/<workspace>]` | 查看 resident 日志，可按工作区过滤 |
 | `multica computer doctor [/<workspace>]` | 只读诊断本机 Computer 状态 |
-| `multica computer upgrade [--target-version <version>]` | 按当前环境的固定包源升级，或安装排障用精确版本 |
+| `multica computer upgrade [--target-version <version>]` | 交给 live Computer owner 升级；resident 停止时为下次启动离线安装 |
 | `multica runtime list` | 列出当前工作区的 runtime |
 | `multica runtime usage` | 查看资源使用情况 |
 | `multica runtime activity` | 近期活动记录 |
@@ -116,7 +116,6 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica config show` | 查看当前环境和脱敏后的各环境登录状态 |
 | `multica config use <production\|test>` | 安全切换环境及其匹配的 stable/preview 包 |
 | `multica version` | 显示 CLI 版本 |
-| `multica update` | 按当前环境的固定包源升级 CLI |
 | `multica attachment view --id <id> --output <path>` | 将附件下载到本地文件路径 |
 | `multica attachment upload --path <file> [--target '#channel']` | 上传文件；返回的 id 用于 `--attachment-id` |
 

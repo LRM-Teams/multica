@@ -11,6 +11,15 @@ The server announces projection changes with `computer:updated` carrying only
 the stable `computer_id`; each Workspace client refetches its own projection.
 This is the sole realtime event for Machine Upgrade state changes.
 
+The only local CLI entry point is `multica computer upgrade`. It follows the
+Raft service-first rule: a live resident receives the request over its
+owner-authenticated loopback control surface; a proven absent resident permits
+a locked offline install for the next start; and held resident ownership with
+unreachable control fails as `upgrade_service_unreachable` without changing
+Active. Offline installation is not successor or convergence proof. Production
+and Test continue to select stable/preview packages respectively; only
+`--target-version` overrides that environment-owned source.
+
 For a standalone resident, candidate verification is local-first. The target
 binds the exclusive control port and proves its exact PID, binary version,
 VersionStore generation, Computer generation, and accepted Workspace binding

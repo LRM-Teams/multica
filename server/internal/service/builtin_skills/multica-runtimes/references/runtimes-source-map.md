@@ -1,7 +1,7 @@
 # Runtimes source map
 
 - `server/cmd/multica/cmd_runtime.go` registers runtime list, usage, and activity.
-- `server/cmd/multica/cmd_computer.go` registers the machine-wide Computer lifecycle (`start`/`stop`/`restart`/`status`/`logs`), release-channel selection, `doctor` diagnostics, and upgrades. Its retired-flag guard applies to lifecycle commands; setup reuses only the retired `--profile` check.
+- `server/cmd/multica/cmd_computer.go` registers the machine-wide Computer lifecycle (`start`/`stop`/`restart`/`status`/`logs`), `doctor` diagnostics, and the only local upgrade entry point. `server/internal/computer/lifecycle_upgrade.go` owns service-first live routing, absent-resident offline installation, and live-unreachable fail-closed behavior. Its retired-flag guard applies to lifecycle commands; setup reuses only the retired `--profile` check.
 - `server/cmd/multica/cmd_setup.go` owns and accepts `--environment test --server-url <api-origin> --app-url <app-origin>`, reuses saved Test origins for repair setup, asks before switching an already-active environment, validates the target before side effects, establishes one Workspace connection with Workspace-scoped authorization, and starts the resident.
 - `server/cmd/multica/cmd_config_use.go` switches an already-configured production/test environment together with its matching package, requires confirmation before interrupting a running resident, and supports explicit `--yes` automation.
 - `server/internal/cli/service_environment.go` owns the production/test service-target contract; `release_channel.go` and `update.go` derive the matching stable/preview entry from the canonical `metainfo.json`.

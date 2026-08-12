@@ -63,15 +63,24 @@ remain blocked until the CAS commits.
 multica runtime list --output json
 multica runtime usage <runtime-id> --output json
 multica runtime activity <runtime-id> --output json
-multica computer upgrade --target-version <version> --output json
+multica computer upgrade --target-version <version>
 ```
 
-`computer upgrade` uses the one machine-wide Computer identity and creates or
-polls the canonical machine-upgrade operation. Omit `--target-version` to use
-the package selected by the active production or test environment. Computer owners
-can perform this action. A Workspace owner/admin does not gain lifecycle control
-over another person's Computer; the initiating Workspace is only an entry point,
-and every active Workspace connection observes the same Computer upgrade.
+`computer upgrade` is the only local upgrade command. It first checks the
+machine-wide resident. A live resident receives the request through its
+owner-authenticated loopback control surface and owns download, verification,
+handoff, rollback, and convergence. If no resident owns the machine, the command
+may install a verified Active release for the next start under the machine lock;
+that offline result is not proof of a running successor. Held resident ownership
+with unavailable control returns `upgrade_service_unreachable` and never falls
+back to offline activation. Omit `--target-version` to use the package selected
+by the active production or test environment. There is no top-level
+`multica update` command.
+
+Computer owners can perform this action. A Workspace owner/admin does not gain
+lifecycle control over another person's Computer; the initiating Workspace is
+only an entry point, and every active Workspace connection observes the same
+Computer upgrade.
 Upgrade changes are projected to those Workspaces as `computer:updated`; the
 event carries only `computer_id`, and clients refetch their Workspace-scoped
 Computer projection. It is not a Runtime update event.

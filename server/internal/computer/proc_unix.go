@@ -3,6 +3,7 @@
 package computer
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"strconv"
@@ -22,6 +23,20 @@ func SysProcAttr(_ bool) *syscall.SysProcAttr {
 // for ERROR_ACCESS_DENIED to detect "parent Job Object disallowed breakaway"
 // and trigger the breakaway-disabled retry; that retry is a no-op on Unix.
 func IsAccessDeniedSpawnErr(_ error) bool { return false }
+
+func processAlive(pid int) (bool, bool) {
+	if pid <= 0 {
+		return false, false
+	}
+	err := syscall.Kill(pid, 0)
+	if err == nil || errors.Is(err, syscall.EPERM) {
+		return true, true
+	}
+	if errors.Is(err, syscall.ESRCH) {
+		return false, true
+	}
+	return false, false
+}
 
 // TailLog tails the resident process log file, showing the last lines and
 // optionally following new output, by delegating to the OS tail binary.

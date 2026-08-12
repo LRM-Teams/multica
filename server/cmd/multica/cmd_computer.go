@@ -90,10 +90,21 @@ var computerDoctorCmd = &cobra.Command{
 var computerUpgradeCmd = &cobra.Command{
 	Use:   "upgrade",
 	Short: "Upgrade this computer",
-	Long:  "Upgrade the resident Computer. Production uses stable packages and test uses preview packages; pass --target-version only to install a specific immutable recovery version.",
-	Args:  cobra.NoArgs,
-	RunE:  runComputerUpgrade,
+	Long: `Upgrade the resident Computer through its single machine owner.
+
+When the Computer is running, the command asks that live owner to download,
+verify, activate, hand off, and converge the upgrade. When no resident exists,
+it installs the verified release for the next Computer start under the same
+machine lock. A live but unreachable resident fails closed without changing
+the Active release.
+
+Production uses stable packages and test uses preview packages. Pass
+--target-version only to install a specific immutable recovery version.`,
+	Args: cobra.NoArgs,
+	RunE: runComputerUpgrade,
 }
+
+var computerUpgradeControlPort = computer.HealthPort
 
 var computerIdentityCmd = &cobra.Command{
 	Use:   "identity",
@@ -140,8 +151,6 @@ var computerIdentityFreshCmd = &cobra.Command{
 
 func init() {
 	computerUpgradeCmd.Flags().String("target-version", "", "Target version to install (default: latest)")
-	computerUpgradeCmd.Flags().String("output", "json", "Output format: table or json")
-	computerUpgradeCmd.Flags().Bool("wait", false, "Wait for the computer upgrade to complete")
 
 	// Machine-wide flags used by the lifecycle commands. These live on the
 	// parent so both start and restart see them; resolveProfile is forced to
@@ -280,37 +289,38 @@ func orDash(s string) string {
 }
 
 func runComputerUpgrade(cmd *cobra.Command, _ []string) error {
-	client, err := newAPIClient(cmd)
-	if err != nil {
-		return err
-	}
-
 	targetVersion, _ := cmd.Flags().GetString("target-version")
-	wait, _ := cmd.Flags().GetBool("wait")
-	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(150*time.Second))
+	ctx, cancel := context.WithTimeout(cmd.Context(), cli.DefaultUpdateDownloadTimeout+30*time.Second)
 	defer cancel()
-	upgrade, err := (&computer.Lifecycle{}).Upgrade(ctx, client, computer.UpgradeOptions{
+	upgrade, err := (&computer.Lifecycle{ControlPort: computerUpgradeControlPort("")}).Upgrade(ctx, computer.UpgradeOptions{
 		TargetVersion: targetVersion,
-		Wait:          wait,
 	})
 	if err != nil {
 		return err
 	}
-	return printComputerUpgrade(cmd, upgrade)
-}
-
-func printComputerUpgrade(cmd *cobra.Command, upgrade map[string]any) error {
-	output, _ := cmd.Flags().GetString("output")
-	if output == "json" {
-		return cli.PrintJSON(os.Stdout, upgrade)
+	if upgrade.Route == computer.UpgradeRouteLive {
+		fmt.Fprintf(os.Stdout,
+			"Computer upgrade accepted: %s (target %s, phase %s). The live Computer owns download, verification, handoff, and convergence.\n",
+			strVal(upgrade.Operation, "id"),
+			upgrade.ResolvedTarget,
+			strVal(upgrade.Operation, "phase"),
+		)
+		return nil
 	}
-	phase := strVal(upgrade, "phase")
-	if phase == "completed" {
-		fmt.Printf("Computer upgrade completed: %s\n", strVal(upgrade, "resolved_target"))
-	} else if phase == "failed" || phase == "rolled_back" || phase == "timeout" || phase == "cancelled" {
-		fmt.Printf("Computer upgrade %s: %s\n", phase, strVal(upgrade, "error_message"))
-	} else {
-		fmt.Printf("Computer upgrade initiated: %s (phase: %s)\n", strVal(upgrade, "id"), phase)
+	if upgrade.AlreadyCurrent {
+		fmt.Fprintf(os.Stdout,
+			"%s is already Active for the next Computer start (generation %d). Binary: %s\nNo running successor was proven.\n",
+			upgrade.ActiveVersion,
+			upgrade.Generation,
+			upgrade.BinaryPath,
+		)
+		return nil
 	}
+	fmt.Fprintf(os.Stdout,
+		"Installed %s for the next Computer start (generation %d). Binary: %s\nNo running successor was proven; run `multica computer start` to use this Active release.\n",
+		upgrade.ActiveVersion,
+		upgrade.Generation,
+		upgrade.BinaryPath,
+	)
 	return nil
 }

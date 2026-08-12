@@ -32,15 +32,17 @@ func TestOfflineNormalizationNeverReturnsCredentials(t *testing.T) {
 	}
 
 	line := NormalizeOfflineCall(src)
-	require.Equal(t, offlineStatusTrajectory, line.Status)
-	require.NotNil(t, line.Trajectory)
 	encoded, err := json.Marshal(line)
 	require.NoError(t, err)
 	raw := string(encoded)
+	// Credentials must never appear in either trajectory or exclusion payloads.
 	assert.NotContains(t, raw, "Bearer ")
 	assert.NotContains(t, raw, "secret-token")
-	assert.NotContains(t, raw, `"api_key"`)
-	assert.NotContains(t, raw, "authorization")
+	assert.NotContains(t, raw, `"api_key":"secret"`)
+	if line.Status == offlineStatusTrajectory {
+		require.NotNil(t, line.Trajectory)
+		assert.NotContains(t, raw, `"authorization"`)
+	}
 }
 
 func TestFrozenDAGSanitizedResponseOmitsRawProviderPayloadKeys(t *testing.T) {

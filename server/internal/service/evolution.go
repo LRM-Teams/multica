@@ -1616,13 +1616,6 @@ func initialEvolutionScore(submission db.EvolutionUnitSubmission) float64 {
 	return score
 }
 
-func uuidString(id pgtype.UUID) string {
-	if !id.Valid {
-		return ""
-	}
-	return id.String()
-}
-
 func sourceAgentIDFromUnitMetadata(unit db.SharedEvolutionUnit) pgtype.UUID {
 	if len(unit.Metadata) == 0 {
 		return pgtype.UUID{}

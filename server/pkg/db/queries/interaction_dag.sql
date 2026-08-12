@@ -265,6 +265,10 @@ WHERE run_id = $1 AND segment_id = $2
   AND reward_count >= expected_reward_count;
 
 
+-- Mixed-RL frozen DAG queries below are run-scoped. They must never join
+-- root_task_id or require dense-per-session segment coverage; those assumptions
+-- remain only on the legacy AssembleAssembledDag path above.
+
 -- name: InsertMixedRLProviderCall :one
 WITH allocated AS (
   UPDATE env_dispatch_run_agent
@@ -451,6 +455,11 @@ WHERE run_id = sqlc.arg(run_id);
 -- name: CountMixedRLEdges :one
 SELECT count(*) FROM interaction_dag_causal_edge
 WHERE run_id = sqlc.arg(run_id);
+
+-- name: GetChannelMessageReactionMessageID :one
+-- Resolves the reacted-to channel message for a successful reaction action.
+SELECT channel_message_id FROM channel_message_reaction
+WHERE id = sqlc.arg(reaction_id);
 
 
 -- name: AbortMixedRLUnfinishedProviderCalls :execrows

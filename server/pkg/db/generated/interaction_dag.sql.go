@@ -308,6 +308,46 @@ func (q *Queries) FreezeMixedRLEdges(ctx context.Context, arg FreezeMixedRLEdges
 	return result.RowsAffected(), nil
 }
 
+const getChannelMessageReactionMessageID = `-- name: GetChannelMessageReactionMessageID :one
+-- Resolves the reacted-to channel message for a successful reaction action.
+SELECT channel_message_id FROM channel_message_reaction
+WHERE id = $1
+`
+
+func (q *Queries) GetChannelMessageReactionMessageID(ctx context.Context, reactionID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getChannelMessageReactionMessageID, reactionID)
+	var channelMessageID pgtype.UUID
+	err := row.Scan(&channelMessageID)
+	return channelMessageID, err
+}
+
+const abortMixedRLUnfinishedProviderCalls = `-- name: AbortMixedRLUnfinishedProviderCalls :execrows
+-- Timeout freeze marks every still-observable unfinished call aborted and
+-- training-ineligible. Capture gaps cover turns whose batch never arrived.
+UPDATE pi_provider_call
+SET status = 'aborted',
+    response_complete = false,
+    training_eligible = false,
+    stop_reason = NULL,
+    completed_at = COALESCE(completed_at, $1)
+WHERE run_id = $2
+  AND frozen_at IS NULL
+  AND status = 'in_progress'
+`
+
+type AbortMixedRLUnfinishedProviderCallsParams struct {
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	RunID       pgtype.UUID        `json:"run_id"`
+}
+
+func (q *Queries) AbortMixedRLUnfinishedProviderCalls(ctx context.Context, arg AbortMixedRLUnfinishedProviderCallsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, abortMixedRLUnfinishedProviderCalls, arg.CompletedAt, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const freezeMixedRLProviderCalls = `-- name: FreezeMixedRLProviderCalls :execrows
 UPDATE pi_provider_call
 SET frozen_at = $1

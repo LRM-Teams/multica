@@ -58,24 +58,24 @@ type OfflineResolveRequest struct {
 
 // OfflineResolveLine is one NDJSON result line.
 type OfflineResolveLine struct {
-	CallID     string                        `json:"call_id"`
-	Status     string                        `json:"status"`
-	Reason     string                        `json:"reason,omitempty"`
-	Details    map[string]any                `json:"details,omitempty"`
-	Trajectory *NormalizedOfflineTrajectory  `json:"trajectory,omitempty"`
+	CallID     string                       `json:"call_id"`
+	Status     string                       `json:"status"`
+	Reason     string                       `json:"reason,omitempty"`
+	Details    map[string]any               `json:"details,omitempty"`
+	Trajectory *NormalizedOfflineTrajectory `json:"trajectory,omitempty"`
 }
 
 // NormalizedOfflineTrajectory is the provider-neutral typed export shape.
 type NormalizedOfflineTrajectory struct {
-	NormalizationVersion string               `json:"normalization_version"`
-	System               *NormalizedContent   `json:"system,omitempty"`
-	Messages             []NormalizedMessage  `json:"messages"`
-	Tools                []NormalizedTool     `json:"tools"`
-	GenerationConfig     map[string]any       `json:"generation_config,omitempty"`
-	Output               NormalizedMessage    `json:"output"`
-	Provider             NormalizedProvider   `json:"provider"`
-	RequestHash          string               `json:"request_hash"`
-	ResponseHash         string               `json:"response_hash"`
+	NormalizationVersion string              `json:"normalization_version"`
+	System               *NormalizedContent  `json:"system,omitempty"`
+	Messages             []NormalizedMessage `json:"messages"`
+	Tools                []NormalizedTool    `json:"tools"`
+	GenerationConfig     map[string]any      `json:"generation_config,omitempty"`
+	Output               NormalizedMessage   `json:"output"`
+	Provider             NormalizedProvider  `json:"provider"`
+	RequestHash          string              `json:"request_hash"`
+	ResponseHash         string              `json:"response_hash"`
 }
 
 type NormalizedContent struct {
@@ -88,13 +88,13 @@ type NormalizedMessage struct {
 }
 
 type NormalizedBlock struct {
-	Type       string          `json:"type"`
-	Text       string          `json:"text,omitempty"`
-	Thinking   string          `json:"thinking,omitempty"`
-	ID         string          `json:"id,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Arguments  json.RawMessage `json:"arguments,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Type       string            `json:"type"`
+	Text       string            `json:"text,omitempty"`
+	Thinking   string            `json:"thinking,omitempty"`
+	ID         string            `json:"id,omitempty"`
+	Name       string            `json:"name,omitempty"`
+	Arguments  json.RawMessage   `json:"arguments,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"`
 	Content    []NormalizedBlock `json:"content,omitempty"`
 }
 
@@ -283,7 +283,7 @@ func NormalizeOfflineCall(src OfflineCallSource) OfflineResolveLine {
 	switch src.TrainingMode {
 	case "online_rl":
 		return excludedOfflineLine(src.CallID, OfflineReasonWrongModeOnlineRL, map[string]any{
-			"training_mode":          src.TrainingMode,
+			"training_mode":         src.TrainingMode,
 			"normalization_version": OfflineNormalizationVersion,
 		})
 	case "none", "":
@@ -292,14 +292,14 @@ func NormalizeOfflineCall(src OfflineCallSource) OfflineResolveLine {
 			mode = "none"
 		}
 		return excludedOfflineLine(src.CallID, OfflineReasonWrongModeNone, map[string]any{
-			"training_mode":          mode,
+			"training_mode":         mode,
 			"normalization_version": OfflineNormalizationVersion,
 		})
 	case "offline_rl":
 		// continue
 	default:
 		return excludedOfflineLine(src.CallID, OfflineReasonWrongModeNone, map[string]any{
-			"training_mode":          src.TrainingMode,
+			"training_mode":         src.TrainingMode,
 			"normalization_version": OfflineNormalizationVersion,
 		})
 	}
@@ -316,10 +316,10 @@ func NormalizeOfflineCall(src OfflineCallSource) OfflineResolveLine {
 	}
 	if !src.TrainingEligible {
 		return excludedOfflineLine(src.CallID, OfflineReasonTrainingIneligible, map[string]any{
-			"status":             src.Status,
-			"stop_reason":        src.StopReason,
-			"response_complete":  src.ResponseComplete,
-			"training_eligible":  false,
+			"status":            src.Status,
+			"stop_reason":       src.StopReason,
+			"response_complete": src.ResponseComplete,
+			"training_eligible": false,
 		})
 	}
 	if len(src.RawProviderRequest) == 0 || len(src.FinalAssistantMessage) == 0 {
@@ -336,13 +336,13 @@ func NormalizeOfflineCall(src OfflineCallSource) OfflineResolveLine {
 	trajectory, unsupported, err := normalizeOfflineTrajectoryV1(src)
 	if err != nil {
 		return excludedOfflineLine(src.CallID, OfflineReasonNormalizationUnsupported, map[string]any{
-			"error":                  err.Error(),
+			"error":                 err.Error(),
 			"normalization_version": OfflineNormalizationVersion,
 		})
 	}
 	if unsupported != "" {
 		return excludedOfflineLine(src.CallID, OfflineReasonNormalizationUnsupported, map[string]any{
-			"semantic_type":          unsupported,
+			"semantic_type":         unsupported,
 			"normalization_version": OfflineNormalizationVersion,
 		})
 	}

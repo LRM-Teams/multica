@@ -164,8 +164,8 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	}, func() {
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:start", protocol.MixedRunActivityActiveTurn, 1)
-			// US1 capture accounting tracks the accepted resident-turn batch. The
-			// provider upload/capture payload remains deferred to T049.
+			// Capture-batch accounting opens with the resident turn and closes
+			// only after the trusted upload (or capture-gap) is acknowledged.
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:start", protocol.MixedRunActivityUnfinishedCaptureBatch, 1)
 		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")

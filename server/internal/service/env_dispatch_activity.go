@@ -222,5 +222,5 @@ func uuidString(id pgtype.UUID) string {
 	if !id.Valid {
 		return ""
 	}
-	return uuid.UUID(id.Bytes).String()
+	return id.String()
 }

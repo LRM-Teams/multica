@@ -1707,6 +1707,11 @@ export const IssueSchema = z.object({
   updated_at: z.string(),
 }).loose();
 
+export const CreateNotePageIssueResponseSchema = z.object({
+  issue: IssueSchema,
+  ref: NotePageIssueRefSchema,
+}).loose();
+
 export const ListIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
   total: z.number().default(0),

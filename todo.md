@@ -108,12 +108,16 @@
 
 ### 1.2 动作：笔记 → 创建 Issue
 
-- [ ] **S1-A1 从笔记创建 Issue**
+- [x] **S1-A1 从笔记创建 Issue**
   - **目标**：整页或选区一键/一命令变成 Issue，并自动建立笔记→Issue 引用。
   - **要做**：API + UI（选区优先，无选区用标题+摘要）；创建成功后写 S1-R1 关联；可选把 issue 引用插回笔记（待审或直接插——若改正文，私有页可直接插引用标记，但若重写大段内容仍建议待审；**最小要求是关联表一定有记录**）。
   - **不要做**：自动指派 Agent 执行（Slice 2 的 Worker）。
   - **依赖**：S1-R1、S1-R2
   - **完成标准**：创建后 Issue 存在；关联可查；无 workspace 成员不能对他人私有笔记操作。
+  - **已落地（2026-08-12）**：
+    - `POST /api/notes/pages/{id}/issues`：建 Issue + 写 `note_page_issue_ref`（不指派 agent）
+    - Notes 顶栏「创建 Issue」：有选区用选区，否则用标题+正文摘要；成功后插入 issue chip
+    - 测试：`TestCreateNotePageIssue*`
 
 ### 1.3 动作：工作 → 待审写回笔记
 

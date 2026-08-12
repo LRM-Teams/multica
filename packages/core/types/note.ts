@@ -1,3 +1,5 @@
+import type { Issue } from "./issue";
+
 export interface NotePage {
   id: string;
   workspace_id: string;
@@ -102,4 +104,14 @@ export interface NotePageIssueRefListResponse {
 
 export interface CreateNotePageIssueRefRequest {
   issue_id: string;
+}
+
+export interface CreateNotePageIssueRequest {
+  title?: string;
+  description?: string;
+}
+
+export interface CreateNotePageIssueResponse {
+  issue: Issue;
+  ref: NotePageIssueRef;
 }

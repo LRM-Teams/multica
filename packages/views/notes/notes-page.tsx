@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Check, ChevronDown, ChevronRight, Copy, Download, FileText, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Copy, Download, FilePlus, FileText, Loader2, Lock, MoreHorizontal, Plus, Share2, Sparkles, Trash2, Undo2, Users } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -826,6 +826,7 @@ function NoteEditor({
   const { uploadWithToast, uploading } = useFileUpload(api, (error) => {
     showErrorToast(error.message || t(($) => $.notes_page.image_paste_failed));
   });
+  const [creatingIssue, setCreatingIssue] = useState(false);
   const [draft, setDraft] = useState(() => ({
     title: selected.title,
     content: selected.content,
@@ -970,6 +971,45 @@ function NoteEditor({
             {t(($) => $.notes_page.share_action)}
           </Button>
         )}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={creatingIssue}
+          onClick={() => {
+            void (async () => {
+              if (creatingIssue) return;
+              setCreatingIssue(true);
+              try {
+                const selection = editorRef.current?.getSelectedText()?.trim() ?? "";
+                const titleFromSelection = selection.replace(/\s+/g, " ").slice(0, 200);
+                const title = titleFromSelection || draft.title.trim() || "Untitled";
+                const description = selection
+                  || (draft.content.trim() ? draft.content.trim().slice(0, 4000) : undefined);
+                const result = await api.createNotePageIssue(selected.id, {
+                  title,
+                  description,
+                });
+                const label = result.issue.identifier || result.ref.label || result.issue.title;
+                editorRef.current?.insertIssueReference({
+                  id: result.issue.id,
+                  label,
+                });
+                toast.success(t(($) => $.notes_page.create_issue_success, { identifier: label }));
+              } catch (error: unknown) {
+                showErrorToast(
+                  error instanceof Error && error.message
+                    ? error.message
+                    : t(($) => $.notes_page.create_issue_failed),
+                );
+              } finally {
+                setCreatingIssue(false);
+              }
+            })();
+          }}
+        >
+          {creatingIssue ? <Loader2 className="size-4 animate-spin" /> : <FilePlus className="size-4" />}
+          {t(($) => $.notes_page.create_issue_action)}
+        </Button>
       </div>
       <textarea
         ref={titleTextareaRef}

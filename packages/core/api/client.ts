@@ -235,6 +235,8 @@ import type {
   NotePageIssueRef,
   NotePageIssueRefListResponse,
   CreateNotePageIssueRefRequest,
+  CreateNotePageIssueRequest,
+  CreateNotePageIssueResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -437,6 +439,7 @@ import {
   NotePageIssueRefListResponseSchema,
   EMPTY_NOTE_PAGE_ISSUE_REF,
   EMPTY_NOTE_PAGE_ISSUE_REF_LIST,
+  CreateNotePageIssueResponseSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1100,6 +1103,43 @@ export class ApiClient {
     await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs/${encodeURIComponent(issueId)}`, {
       method: "DELETE",
     });
+  }
+
+  async createNotePageIssue(pageId: string, data: CreateNotePageIssueRequest = {}): Promise<CreateNotePageIssueResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/issues`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      CreateNotePageIssueResponseSchema,
+      {
+        issue: {
+          id: "",
+          workspace_id: "",
+          number: 0,
+          identifier: "",
+          title: "",
+          description: null,
+          status: "todo",
+          priority: "none",
+          assignee_type: null,
+          assignee_id: null,
+          creator_type: "member",
+          creator_id: "",
+          parent_issue_id: null,
+          project_id: null,
+          position: 0,
+          start_date: null,
+          due_date: null,
+          metadata: {},
+          created_at: "",
+          updated_at: "",
+        },
+        ref: EMPTY_NOTE_PAGE_ISSUE_REF,
+      },
+      { endpoint: "POST /api/notes/pages/{id}/issues" },
+    );
   }
 
   async getIssue(id: string): Promise<Issue> {

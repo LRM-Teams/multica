@@ -200,6 +200,10 @@ interface ContentEditorRef {
   insertBlankLineAtStart: () => void;
   /** Focus the editor and open the issue reference `#` picker. */
   openIssueReferences: () => void;
+  /** Selected plain text, or empty string when the selection is empty. */
+  getSelectedText: () => string;
+  /** Insert or replace the selection with an issueReference chip. */
+  insertIssueReference: (attrs: { id: string; label: string }) => void;
   /**
    * LRM-695 — append Markdown at the end of the document, parsing it through
    * the same `@tiptap/markdown` pipeline as paste so block syntax (e.g. a `>`
@@ -612,6 +616,28 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       openIssueReferences: () => {
         if (!editor) return;
         editor.chain().focus().insertContent("#").run();
+      },
+      getSelectedText: () => {
+        if (!editor) return "";
+        const { from, to } = editor.state.selection;
+        if (from === to) return "";
+        return editor.state.doc.textBetween(from, to, "\n", "\n").trim();
+      },
+      insertIssueReference: (attrs) => {
+        if (!editor) return;
+        const { from, to } = editor.state.selection;
+        const content = [
+          {
+            type: "issueReference",
+            attrs: { id: attrs.id, label: attrs.label, title: null },
+          },
+          { type: "text", text: " " },
+        ];
+        if (from === to) {
+          editor.chain().focus().insertContent(content).run();
+          return;
+        }
+        editor.chain().focus().insertContentAt({ from, to }, content).run();
       },
       insertMarkdown: (md: string) => {
         if (!editor) return;

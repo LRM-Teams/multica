@@ -2,7 +2,7 @@
 
 This runbook deploys LRM-2343's Message-backed `agent:create` Proposal flow.
 It replaces the live action-card state machine with a canonical channel Message
-and a durable first-start intent. The migration archives old rows; it never
+and a durable desired Runner launch. The migration archives old rows; it never
 deletes them during rollout.
 
 ## Before applying migrations
@@ -32,9 +32,12 @@ deployment. If both exist, stop: that is not an expected migration state.
 
 1. Apply database migrations through `291_archive_agent_action_card` before
    serving a binary that has removed the old action-card endpoints.
-2. Deploy server and daemon together. The daemon must understand heartbeat
-   `pending_agent_start_intents` and report `accepted`, then separately report
-   `ready` or `failed` with monotonically increasing `lifecycle_seq`.
+2. Deploy server and daemon together. The Workspace Runner reports its current
+   `runningAgents`; the server reconciles `agent_runner_launch_projection`
+   through stable `launchId`-fenced `agent:start`/`agent:stop` commands.
+   Migration 336 intentionally leaves the old start-intent and correlation
+   columns as write-only rolling-deploy shadows; new code does not consume
+   them. Remove that storage only after the old binary version floor is gone.
 3. Deploy the web client. It renders the `agent:create` reference from the
    channel Message directly and submits its `message_id` as `action_message_id`
    when an owner or admin confirms the final configuration.
@@ -48,11 +51,13 @@ verify the durable facts rather than only the HTTP response:
 SELECT aa.status,
        aa.channel_message_id,
        aa.result_agent_id,
-       asi.status AS start_intent_status,
-       asi.lifecycle_seq,
-       asi.failure_code
+       launch.runtime_id,
+       launch.launch_id,
+       observed.status AS observed_status,
+       observed.queue_state
 FROM agent_action aa
-LEFT JOIN agent_start_intent asi ON asi.agent_id = aa.result_agent_id
+LEFT JOIN agent_runner_launch_projection launch ON launch.agent_id = aa.result_agent_id
+LEFT JOIN agent_activity_launch observed ON observed.agent_id = aa.result_agent_id
 WHERE aa.action_type = 'agent:create'
 ORDER BY aa.prepared_at DESC
 LIMIT 1;
@@ -60,10 +65,10 @@ LIMIT 1;
 
 Expected sequence: the Message part starts `prepared`; exactly one successful
 commit changes it to `executed`, creates the Agent and `#general` membership,
-and yields one intent. A Computer heartbeat accepts that same dispatch ID; a
-separate local observation reports `ready`. A terminal `failed` row is retained
-for a human to correct through normal Agent configuration/lifecycle controls;
-the server must not keep redispatching it.
+and yields one desired launch. A connected Workspace Runner accepts that same
+`launch_id` and separately reports active residency. Reconnect retries the
+same launch; a Runtime move first stops the observed old launch and then starts
+the new desired placement.
 
 Finally, repeat the first preflight query. `agent_action_card` should be absent
 and `agent_action_card_archive` present. Compare the archived-row count with

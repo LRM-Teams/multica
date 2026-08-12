@@ -280,6 +280,7 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	defer runner.releaseConnection(connection)
 	if err := connection.Write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
 		WorkspaceID: workspaceID, DaemonInstanceID: runner.config.DaemonInstanceID,
+		RunningAgents: runner.processes.RunningAgentIDs(),
 		ActiveCapabilities: []string{
 			protocol.DaemonCapabilityWorkspaceRunnerAttachment,
 			protocol.DaemonCapabilityReminderTransientInput,

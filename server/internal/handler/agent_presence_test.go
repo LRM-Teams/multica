@@ -203,8 +203,12 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 		"daemon-1/" + testWorkspaceID + "/instance-1": true,
 	}}
 	identity := daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}
+	var launchID string
+	if err := testPool.QueryRow(ctx, `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, parseUUID(agentID)).Scan(&launchID); err != nil {
+		t.Fatalf("load desired launch: %v", err)
+	}
 	start := protocol.AgentStartAckPayload{
-		AgentID: agentID, LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: protocol.AgentStartQueueQueued, QueueDepth: 2, QueueAgeMS: 15,
+		AgentID: agentID, LaunchID: launchID, QueueState: protocol.AgentStartQueueQueued, QueueDepth: 2, QueueAgeMS: 15,
 	}
 	raw, err := json.Marshal(start)
 	if err != nil {
@@ -213,7 +217,7 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentStartAck, raw); err != nil {
 		t.Fatalf("persist Runner start acknowledgement: %v", err)
 	}
-	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: "launch-1", ProviderSessionID: "provider-session-1", TurnID: "turn-1", RuntimeGeneration: 3}
+	session := protocol.AgentSessionPayload{AgentID: agentID, LaunchID: launchID, ProviderSessionID: "provider-session-1", TurnID: "turn-1", RuntimeGeneration: 3}
 	raw, err = json.Marshal(session)
 	if err != nil {
 		t.Fatal(err)
@@ -221,19 +225,19 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	if err := h.HandleWorkspaceRunnerFrame(ctx, identity, "instance-1", protocol.EventAgentSession, raw); err != nil {
 		t.Fatalf("persist Runner session: %v", err)
 	}
-	var status, dispatchID, queueState, providerSession, providerTurn string
+	var status, queueState, providerSession, providerTurn string
 	var queueDepth int
 	var queueAge, generation int64
 	if err := testPool.QueryRow(ctx, `
-		SELECT status, start_dispatch_id, queue_state, queue_depth, queue_age_ms,
+		SELECT status, queue_state, queue_depth, queue_age_ms,
 		       provider_session_id, provider_turn_id, runtime_generation
 		FROM agent_activity_launch WHERE workspace_id = $1 AND agent_id = $2`, testWorkspaceID, agentID).Scan(
-		&status, &dispatchID, &queueState, &queueDepth, &queueAge, &providerSession, &providerTurn, &generation,
+		&status, &queueState, &queueDepth, &queueAge, &providerSession, &providerTurn, &generation,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if status != "accepted" || dispatchID != "dispatch-1" || queueState != protocol.AgentStartQueueQueued || queueDepth != 2 || queueAge != 15 || providerSession != "provider-session-1" || providerTurn != "turn-1" || generation != 3 {
-		t.Fatalf("persisted Runner launch=%q/%q/%q/%d/%d/%q/%q/%d", status, dispatchID, queueState, queueDepth, queueAge, providerSession, providerTurn, generation)
+	if status != "accepted" || queueState != protocol.AgentStartQueueQueued || queueDepth != 2 || queueAge != 15 || providerSession != "provider-session-1" || providerTurn != "turn-1" || generation != 3 {
+		t.Fatalf("persisted Runner launch=%q/%q/%d/%d/%q/%q/%d", status, queueState, queueDepth, queueAge, providerSession, providerTurn, generation)
 	}
 	stale := session
 	stale.LaunchID, stale.ProviderSessionID = "launch-stale", "provider-session-stale"
@@ -248,16 +252,20 @@ func TestRunnerStartAcknowledgementAndSessionPersistOneFencedLaunch(t *testing.T
 	}
 }
 
-func TestPendingRunnerLaunchDispatchUsesCurrentAttachmentAndStableIntentID(t *testing.T) {
+func TestPendingRunnerLaunchDispatchUsesDesiredLaunchID(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 	agentID, runtimeID := createHandlerTestAgent(t, "runner-dispatch-"+uuid.NewString()[:8], nil), handlerTestRuntimeID(t)
-	dispatchID := uuid.NewString()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_start_intent (start_dispatch_id, agent_id, workspace_id, runtime_id)
-		VALUES ($1, $2, $3, $4)`, dispatchID, agentID, testWorkspaceID, runtimeID); err != nil {
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET daemon_id = 'daemon-1' WHERE id = $1`, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = NULL WHERE id = $1`, runtimeID)
+	})
+	var launchID string
+	if err := testPool.QueryRow(ctx, `SELECT launch_id::text FROM agent_runner_launch_projection WHERE agent_id = $1`, agentID).Scan(&launchID); err != nil {
 		t.Fatal(err)
 	}
 	hub := daemonws.NewHub()
@@ -291,17 +299,26 @@ func TestPendingRunnerLaunchDispatchUsesCurrentAttachmentAndStableIntentID(t *te
 		t.Fatalf("dispatch pending Runner launch: %v", err)
 	}
 	conn.SetReadDeadline(time.Now().Add(time.Second))
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var frame protocol.Message
-	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStart {
-		t.Fatalf("Runner launch frame=%+v err=%v", frame, err)
-	}
-	var start protocol.WorkspaceRunnerAgentStartPayload
-	if err := json.Unmarshal(frame.Payload, &start); err != nil || start.AgentID != agentID || start.RuntimeID != runtimeID || start.StartDispatchID != dispatchID {
-		t.Fatalf("Runner launch payload=%+v err=%v", start, err)
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var frame protocol.Message
+		if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentStart {
+			t.Fatalf("Runner launch frame=%+v err=%v", frame, err)
+		}
+		var start protocol.WorkspaceRunnerAgentStartPayload
+		if err := json.Unmarshal(frame.Payload, &start); err != nil {
+			t.Fatal(err)
+		}
+		if start.AgentID != agentID {
+			continue
+		}
+		if start.RuntimeID != runtimeID || start.LaunchID != launchID {
+			t.Fatalf("Runner launch payload=%+v", start)
+		}
+		break
 	}
 }
 

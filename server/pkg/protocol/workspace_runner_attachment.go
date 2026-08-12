@@ -9,15 +9,13 @@ type agentAttachmentPayload struct {
 	RuntimeID            string `json:"runtimeId"`
 	AttachmentGeneration int64  `json:"attachmentGeneration"`
 	LifecycleSeq         int64  `json:"lifecycleSeq"`
-	CorrelationID        string `json:"correlationId"`
 }
 
 // WorkspaceRunnerAgentAttachPayload assigns or moves durable local
 // responsibility for an Agent. It does not request a managed launch.
 type WorkspaceRunnerAgentAttachPayload agentAttachmentPayload
 
-// WorkspaceRunnerAgentAttachedPayload is the durable acceptance receipt for
-// the correlated attach command.
+// WorkspaceRunnerAgentAttachedPayload is the durable acceptance receipt.
 type WorkspaceRunnerAgentAttachedPayload agentAttachmentPayload
 
 // WorkspaceRunnerAgentDetachPayload relinquishes durable local responsibility
@@ -80,7 +78,7 @@ func validateAttachmentReplayCursors(cursors map[string]int64) error {
 }
 
 func validateAgentAttachmentPayload(payload agentAttachmentPayload) error {
-	if err := validateRequiredIDs(payload.AgentID, payload.RuntimeID, payload.CorrelationID); err != nil {
+	if err := validateRequiredIDs(payload.AgentID, payload.RuntimeID); err != nil {
 		return err
 	}
 	if payload.AttachmentGeneration <= 0 {

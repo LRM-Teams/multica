@@ -114,6 +114,43 @@ func (registry *InboxRegistry) Ensure(agentID string) (bool, error) {
 	return true, nil
 }
 
+// EnsureForRuntime is the AgentProcessManager start seam. The server-owned
+// start command is current placement authority; replacing a stale local Inbox
+// here keeps setup, reconnect, and runtime move in lifecycle rather than in
+// Message delivery.
+func (registry *InboxRegistry) EnsureForRuntime(agentID, runtimeID string) (bool, error) {
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	if registry == nil || agentID == "" || runtimeID == "" {
+		return false, errors.New("Inbox registry, Agent identity, and Runtime identity are required")
+	}
+	if !registry.ownsRuntime(runtimeID) {
+		return false, fmt.Errorf("Runtime %q is not owned by Workspace %q", runtimeID, registry.workspaceID)
+	}
+	registry.mu.Lock()
+	if registry.closed {
+		registry.mu.Unlock()
+		return false, errInboxRegistryClosed
+	}
+	previous, exists := registry.inboxes[agentID]
+	if exists && previous.runtimeID == runtimeID && previous.coordinator != nil {
+		registry.mu.Unlock()
+		return false, nil
+	}
+	coordinator, err := registry.open(InboxKey{WorkspaceID: registry.workspaceID, AgentID: agentID}, runtimeID)
+	if err != nil {
+		registry.mu.Unlock()
+		return false, err
+	}
+	registry.inboxes[agentID] = inboxRegistryEntry{runtimeID: runtimeID, coordinator: coordinator}
+	registry.mu.Unlock()
+	if exists && previous.coordinator != nil {
+		previous.coordinator.Close()
+	}
+	registry.log("workspace Runner Inbox opened", agentID, runtimeID, map[bool]string{true: "lifecycle_replaced", false: "lifecycle_started"}[exists])
+	return true, nil
+}
+
 func (registry *InboxRegistry) Resolve(agentID string) (*MessageCoordinator, string, bool) {
 	if registry == nil {
 		return nil, "", false

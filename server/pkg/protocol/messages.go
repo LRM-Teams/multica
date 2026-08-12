@@ -1017,10 +1017,6 @@ type DaemonHeartbeatAckPayload struct {
 	// The daemon executes each via agentLifecycleExecutor and reports the
 	// result back via ReportAgentLifecycleOperationResult.
 	PendingAgentLifecycleOperations []DaemonHeartbeatPendingAgentLifecycleOperation `json:"pending_agent_lifecycle_operations,omitempty"`
-	// PendingAgentStartIntents are durable first-start deliveries. The server
-	// retains a pending intent until the Computer acknowledges it, so a missed
-	// heartbeat response is safely replayed with the same dispatch identity.
-	PendingAgentStartIntents []DaemonHeartbeatPendingAgentStartIntent `json:"pending_agent_start_intents,omitempty"`
 	// ReleaseManifestBaseURL, when non-empty, is the server's current opinion
 	// of where the daemon should download CLI update artifacts from. It takes
 	// precedence over the daemon's own MULTICA_RELEASE_MANIFEST_BASE_URL env
@@ -1067,17 +1063,6 @@ type DaemonHeartbeatPendingAgentLifecycleOperation struct {
 	RuntimeID   string `json:"runtime_id"`
 	WorkspaceID string `json:"workspace_id"`
 	ActionKind  string `json:"action_kind"`
-}
-
-// DaemonHeartbeatPendingAgentStartIntent is the non-secret delivery envelope
-// for an Agent's first start. Runtime configuration remains server-owned on the
-// Agent row; the Computer receives only stable identities and reports the
-// outcome against StartDispatchID.
-type DaemonHeartbeatPendingAgentStartIntent struct {
-	StartDispatchID string `json:"start_dispatch_id"`
-	AgentID         string `json:"agent_id"`
-	RuntimeID       string `json:"runtime_id"`
-	WorkspaceID     string `json:"workspace_id"`
 }
 
 // DaemonHeartbeatPendingModelList describes a request for the daemon to

@@ -47,9 +47,9 @@ Create / update / archive / skills / env management: **Web UI + HTTP** only.
 | Canonical Proposal | `handler/agent_action.go`, `channel_message.parts`, `agent_action` | `agent:create` is one visible Message plus an atomically seeded commit record; no action-card row or dismiss state |
 | Onboarding prepare command | `cmd/multica/cmd_action.go`, `handler/agent_action.go`, `workspace.onboarding_agent_id` | `multica action prepare` calls `/api/agent/actions/prepare`; only the active bound Onboarding Agent is authorized |
 | Commit idempotency | `handler/agent_action_commit.go` | action Message ID + non-secret final-payload hash returns the same Agent on a safe replay and rejects divergent payloads |
-| Atomic provisioning | `createAgentManagedTx`, `createAgentManagedCommit`, `provisionOnboardingAgent` | Human, Proposal, and Onboarding creation share one transaction-scoped primitive for Agent identity, system `#general` membership, and one `agent_start_intent`; onboarding only adds `workspace.onboarding_agent_id` and welcome messages |
-| Durable first start | migrations 288–289, `handler/agent_start_intent.go`, `daemon/agent_start_intent.go` | stable dispatch ID retries until Computer acceptance; `ready`/`failed` are later sequence-guarded observations, and failed work is not auto-restarted |
-| Human read model | `AgentResponse.StartIntentStatus`, `EventAgentStatus` | agent list/detail and realtime invalidation expose `pending|accepted|queued|ready|failed` plus a sanitized failure code |
+| Atomic provisioning | `createAgentManagedTx`, `createAgentManagedCommit`, `provisionOnboardingAgent`, migration 336 | Human, Proposal, and Onboarding creation share one transaction-scoped primitive for Agent identity, system `#general` membership, and a desired `agent_runner_launch_projection`; onboarding only adds `workspace.onboarding_agent_id` and welcome messages |
+| Durable first start | `handler/runner_reconcile.go`, `daemon/agent_process_manager.go` | the server-owned `launch_id` is retried through `agent:start` until the current Workspace Runner accepts it; setup, reconnect, daemon restart, and Runtime moves use the same desired-vs-observed reconcile |
+| Human read model | `agent_activity_launch`, Agent presence and Activity APIs | accepted/active/inactive residency is reported independently from user-visible Message Activity; queue state is diagnostic lifecycle evidence, not an Agent creation status field |
 
 See `docs/agent-creation-proposal-cutover.md` for the production migration
 preflight and post-deploy verification commands.

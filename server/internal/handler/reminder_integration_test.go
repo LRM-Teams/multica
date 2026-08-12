@@ -499,18 +499,18 @@ func TestAgentAttachmentReplayReceiptsFenceStaleGenerationAndSurviveServerRestar
 	})
 
 	type attachmentEvent struct {
-		runtimeID, kind, correlationID string
-		generation, seq                int64
+		runtimeID, kind string
+		generation, seq int64
 	}
 	load := func(runtimeID, kind string) attachmentEvent {
 		t.Helper()
 		var event attachmentEvent
 		if err := testPool.QueryRow(ctx, `
-			SELECT runtime_id::text, event_type, correlation_id::text, attachment_generation, lifecycle_seq
+			SELECT runtime_id::text, event_type, attachment_generation, lifecycle_seq
 			FROM agent_attachment_projection_event
 			WHERE agent_id = $1 AND runtime_id = $2 AND event_type = $3
 			ORDER BY lifecycle_seq DESC LIMIT 1`, agentID, runtimeID, kind).Scan(
-			&event.runtimeID, &event.kind, &event.correlationID, &event.generation, &event.seq,
+			&event.runtimeID, &event.kind, &event.generation, &event.seq,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -519,7 +519,7 @@ func TestAgentAttachmentReplayReceiptsFenceStaleGenerationAndSurviveServerRestar
 	receipt := func(event attachmentEvent) protocol.WorkspaceRunnerAgentAttachedPayload {
 		return protocol.WorkspaceRunnerAgentAttachedPayload{
 			AgentID: agentID, RuntimeID: event.runtimeID, AttachmentGeneration: event.generation,
-			LifecycleSeq: event.seq, CorrelationID: event.correlationID,
+			LifecycleSeq: event.seq,
 		}
 	}
 
@@ -2284,7 +2284,7 @@ func TestAgentReminderUpsertPublishesAuthoritativeOwnerBeforeProjection(t *testi
 	start := notifier.starts[0]
 	projection := notifier.projections[0]
 	if start.AgentID != fixture.agentID || start.RuntimeID != projection.RuntimeID ||
-		start.AttachmentGeneration < 1 || start.AttachmentGeneration != projection.PlacementGeneration || start.CorrelationID == "" ||
+		start.AttachmentGeneration < 1 || start.AttachmentGeneration != projection.PlacementGeneration ||
 		projection.AgentID != fixture.agentID || projection.ReminderID != scheduled.ID || projection.Terminal {
 		t.Fatalf("owner/projection mismatch start=%+v projection=%+v", start, projection)
 	}

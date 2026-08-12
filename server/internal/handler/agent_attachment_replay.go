@@ -36,7 +36,7 @@ func (h *Handler) replayAgentAttachmentCommands(ctx context.Context, identity da
 			return fmt.Errorf("Attachment replay Runtime outside Runner scope")
 		}
 		rows, err := h.DB.Query(ctx, `
-			SELECT lifecycle_seq, agent_id::text, runtime_id::text, attachment_generation, event_type, correlation_id::text
+			SELECT lifecycle_seq, agent_id::text, runtime_id::text, attachment_generation, event_type
 			FROM agent_attachment_projection_event
 			WHERE workspace_id::text = $1 AND runtime_id::text = $2 AND lifecycle_seq > $3
 			ORDER BY lifecycle_seq ASC`, identity.WorkspaceID, runtimeID, cursor)
@@ -46,7 +46,7 @@ func (h *Handler) replayAgentAttachmentCommands(ctx context.Context, identity da
 		end[runtimeID] = cursor
 		for rows.Next() {
 			var event agentAttachmentReplayEvent
-			if err := rows.Scan(&event.lifecycleSeq, &event.agentID, &event.runtimeID, &event.generation, &event.eventType, &event.correlationID); err != nil {
+			if err := rows.Scan(&event.lifecycleSeq, &event.agentID, &event.runtimeID, &event.generation, &event.eventType); err != nil {
 				rows.Close()
 				return fmt.Errorf("scan Attachment replay: %w", err)
 			}
@@ -65,7 +65,7 @@ func (h *Handler) replayAgentAttachmentCommands(ctx context.Context, identity da
 	for _, event := range events {
 		base := protocol.WorkspaceRunnerAgentAttachPayload{
 			AgentID: event.agentID, RuntimeID: event.runtimeID, AttachmentGeneration: event.generation,
-			LifecycleSeq: event.lifecycleSeq, CorrelationID: event.correlationID,
+			LifecycleSeq: event.lifecycleSeq,
 		}
 		var sent bool
 		switch event.eventType {
@@ -88,12 +88,11 @@ func (h *Handler) replayAgentAttachmentCommands(ctx context.Context, identity da
 }
 
 type agentAttachmentReplayEvent struct {
-	lifecycleSeq  int64
-	agentID       string
-	runtimeID     string
-	generation    int64
-	eventType     string
-	correlationID string
+	lifecycleSeq int64
+	agentID      string
+	runtimeID    string
+	generation   int64
+	eventType    string
 }
 
 func (h *Handler) acknowledgeAgentAttachmentCommand(ctx context.Context, identity daemonws.ClientIdentity, eventType string, payload protocol.WorkspaceRunnerAgentAttachedPayload) error {
@@ -110,29 +109,33 @@ func (h *Handler) acknowledgeAgentAttachmentCommand(ctx context.Context, identit
 	if eventType == protocol.EventAgentDetached {
 		wantEvent, wantReceipt = "detach", "detached"
 	}
-	var matched bool
+	var shadowCorrelationID string
 	err := h.DB.QueryRow(ctx, `
-		SELECT true
+		SELECT correlation_id::text
 		FROM agent_attachment_projection_event
-		WHERE lifecycle_seq = $1 AND correlation_id::text = $2
-		  AND agent_id::text = $3 AND runtime_id::text = $4 AND workspace_id::text = $5
-		  AND attachment_generation = $6 AND event_type = $7`,
-		payload.LifecycleSeq, payload.CorrelationID, payload.AgentID, payload.RuntimeID,
-		identity.WorkspaceID, payload.AttachmentGeneration, wantEvent).Scan(&matched)
+		WHERE lifecycle_seq = $1
+		  AND agent_id::text = $2 AND runtime_id::text = $3 AND workspace_id::text = $4
+		  AND attachment_generation = $5 AND event_type = $6`,
+		payload.LifecycleSeq, payload.AgentID, payload.RuntimeID,
+		identity.WorkspaceID, payload.AttachmentGeneration, wantEvent).Scan(&shadowCorrelationID)
 	if err != nil {
 		return errors.New("Attachment receipt does not match a pending command")
 	}
+	// correlation_id remains a rolling-deploy storage shadow only. New Runner
+	// protocol messages are fenced by the exact lifecycle event above and do
+	// not carry or interpret this legacy identity.
 	_, err = h.DB.Exec(ctx, `
 		INSERT INTO agent_attachment_projection_receipt (lifecycle_seq, correlation_id, receipt_type)
 		VALUES ($1, $2::uuid, $3)
-		ON CONFLICT (lifecycle_seq) DO NOTHING`, payload.LifecycleSeq, payload.CorrelationID, wantReceipt)
+		ON CONFLICT (lifecycle_seq) DO NOTHING`, payload.LifecycleSeq, shadowCorrelationID, wantReceipt)
 	if err != nil {
 		return fmt.Errorf("persist Attachment receipt: %w", err)
 	}
+	// The receipt is the durable admission boundary. Lifecycle convergence is
+	// independently retryable from ready, reconnect, and heartbeat, so a Hub
+	// race after this commit must not retroactively reject an accepted command.
 	if eventType == protocol.EventAgentAttached {
-		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
-			return err
-		}
+		h.reconcileConnectedRuntime(ctx, identity.WorkspaceID, parseUUID(payload.RuntimeID))
 	}
 	slog.Debug("Workspace Runner Attachment command acknowledged", "workspace_id", identity.WorkspaceID, "runtime_id", payload.RuntimeID, "agent_id", payload.AgentID, "lifecycle_seq", payload.LifecycleSeq, "outcome", "accepted", "reason", "command_receipt")
 	return nil

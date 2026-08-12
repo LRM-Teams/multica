@@ -58,15 +58,15 @@ func TestEnsureWindy_RequiresOwnerExplicitRuntimeAndModelThenSeedsGeneral(t *tes
 	}
 	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID) })
 
-	var startIntentStatus, startIntentRuntimeID string
+	var launchID, launchRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		SELECT status, runtime_id::text
-		FROM agent_start_intent
-		WHERE agent_id = $1`, agentID).Scan(&startIntentStatus, &startIntentRuntimeID); err != nil {
-		t.Fatalf("load Wendy first-start intent: %v", err)
+		SELECT launch_id::text, runtime_id::text
+		FROM agent_runner_launch_projection
+		WHERE agent_id = $1`, agentID).Scan(&launchID, &launchRuntimeID); err != nil {
+		t.Fatalf("load Wendy desired launch: %v", err)
 	}
-	if startIntentStatus != "pending" || startIntentRuntimeID != testRuntimeID {
-		t.Fatalf("Wendy first-start intent = status=%q runtime=%q", startIntentStatus, startIntentRuntimeID)
+	if launchID == "" || launchRuntimeID != testRuntimeID {
+		t.Fatalf("Wendy desired launch = id=%q runtime=%q", launchID, launchRuntimeID)
 	}
 
 	var membershipCount, welcomeCount int
@@ -102,7 +102,7 @@ func TestEnsureWindy_RequiresOwnerExplicitRuntimeAndModelThenSeedsGeneral(t *tes
 	}
 }
 
-func TestEnsureWindy_IdempotentRetryRepairsMissingStartIntent(t *testing.T) {
+func TestEnsureWindy_IdempotentRetryPreservesDesiredLaunch(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -139,15 +139,15 @@ func TestEnsureWindy_IdempotentRetryRepairsMissingStartIntent(t *testing.T) {
 		t.Fatalf("bound onboarding Agent was renamed from Alice to %q", response.Agent.DisplayName)
 	}
 
-	var status, gotRuntimeID string
+	var launchID, gotRuntimeID string
 	if err := testPool.QueryRow(ctx, `
-		SELECT status, runtime_id::text
-		FROM agent_start_intent
-		WHERE agent_id = $1`, agentID).Scan(&status, &gotRuntimeID); err != nil {
-		t.Fatalf("load repaired Wendy first-start intent: %v", err)
+		SELECT launch_id::text, runtime_id::text
+		FROM agent_runner_launch_projection
+		WHERE agent_id = $1`, agentID).Scan(&launchID, &gotRuntimeID); err != nil {
+		t.Fatalf("load Wendy desired launch: %v", err)
 	}
-	if status != "pending" || gotRuntimeID != runtimeID {
-		t.Fatalf("repaired Wendy first-start intent = status=%q runtime=%q", status, gotRuntimeID)
+	if launchID == "" || gotRuntimeID != runtimeID {
+		t.Fatalf("Wendy desired launch = id=%q runtime=%q", launchID, gotRuntimeID)
 	}
 }
 

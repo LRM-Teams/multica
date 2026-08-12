@@ -982,6 +982,25 @@ func (h *Hub) WorkspaceRunnerSupportsCapability(daemonID, workspaceID, capabilit
 	return supported
 }
 
+// WorkspaceRunnerIdentity returns a copy of the current ready connection's
+// authenticated scope. Mutation handlers use it to run the same reconcile as
+// ready/reconnect immediately after an Agent placement changes.
+func (h *Hub) WorkspaceRunnerIdentity(daemonID, workspaceID string) (ClientIdentity, bool) {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" {
+		return ClientIdentity{}, false
+	}
+	h.mu.RLock()
+	c := h.byRunner[workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}]
+	if c == nil || c.runnerDaemonInstanceID == "" {
+		h.mu.RUnlock()
+		return ClientIdentity{}, false
+	}
+	identity := c.identity
+	identity.RuntimeIDs = append([]string(nil), c.identity.RuntimeIDs...)
+	h.mu.RUnlock()
+	return identity, true
+}
+
 // NotifyWorkspaceRunner routes a command only to the current ready connection
 // for the exact daemon and Workspace. It is deliberately separate from the
 // removed legacy runtime fan-out route.

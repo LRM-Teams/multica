@@ -49,6 +49,7 @@ type WorkspaceRunnerReadyPayload struct {
 	WorkspaceID        string   `json:"workspaceId"`
 	DaemonInstanceID   string   `json:"daemonInstanceId"`
 	ActiveCapabilities []string `json:"activeCapabilities,omitempty"`
+	RunningAgents      []string `json:"runningAgents,omitempty"`
 }
 
 // WorkspaceRunnerPingPayload and WorkspaceRunnerPongPayload are connection
@@ -63,23 +64,22 @@ type WorkspaceRunnerPongPayload struct {
 }
 
 // WorkspaceRunnerAgentStartPayload is the server command accepted by a local
-// Agent Process Manager. StartDispatchID is stable across retries; LaunchID is
-// assigned by the Manager and returned in AgentStartAckPayload.
+// Agent Process Manager. LaunchID is the server-owned launch epoch and remains
+// stable when the same desired launch is retried after reconnect.
 type WorkspaceRunnerAgentStartPayload struct {
-	AgentID         string `json:"agentId"`
-	RuntimeID       string `json:"runtimeId"`
-	StartDispatchID string `json:"startDispatchId"`
+	AgentID   string `json:"agentId"`
+	RuntimeID string `json:"runtimeId"`
+	LaunchID  string `json:"launchId"`
 }
 
 // AgentStartAckPayload is an idempotent acceptance receipt. QueueState never
 // claims spawn, runtime readiness, or initial activation delivery.
 type AgentStartAckPayload struct {
-	AgentID         string `json:"agentId"`
-	LaunchID        string `json:"launchId"`
-	StartDispatchID string `json:"startDispatchId"`
-	QueueState      string `json:"queueState"`
-	QueueDepth      int    `json:"queueDepth"`
-	QueueAgeMS      int64  `json:"queueAgeMs"`
+	AgentID    string `json:"agentId"`
+	LaunchID   string `json:"launchId"`
+	QueueState string `json:"queueState"`
+	QueueDepth int    `json:"queueDepth"`
+	QueueAgeMS int64  `json:"queueAgeMs"`
 }
 
 type WorkspaceRunnerAgentStopPayload struct {
@@ -176,6 +176,16 @@ func (p WorkspaceRunnerReadyPayload) Validate() error {
 	if _, supported := seen[DaemonCapabilityWorkspaceRunnerAttachment]; !supported {
 		return fmt.Errorf("Workspace Runner Attachment capability is required")
 	}
+	running := make(map[string]struct{}, len(p.RunningAgents))
+	for _, agentID := range p.RunningAgents {
+		if err := validateRequiredIDs(agentID); err != nil {
+			return fmt.Errorf("invalid running Agent identity")
+		}
+		if _, duplicate := running[agentID]; duplicate {
+			return fmt.Errorf("duplicate running Agent %q", agentID)
+		}
+		running[agentID] = struct{}{}
+	}
 	return nil
 }
 
@@ -183,11 +193,11 @@ func (p WorkspaceRunnerPingPayload) Validate() error { return validateRequiredID
 func (p WorkspaceRunnerPongPayload) Validate() error { return validateRequiredIDs(p.PingID) }
 
 func (p WorkspaceRunnerAgentStartPayload) Validate() error {
-	return validateRequiredIDs(p.AgentID, p.RuntimeID, p.StartDispatchID)
+	return validateRequiredIDs(p.AgentID, p.RuntimeID, p.LaunchID)
 }
 
 func (p AgentStartAckPayload) Validate() error {
-	if err := validateRequiredIDs(p.AgentID, p.LaunchID, p.StartDispatchID); err != nil {
+	if err := validateRequiredIDs(p.AgentID, p.LaunchID); err != nil {
 		return err
 	}
 	if !isOneOf(p.QueueState, AgentStartQueueQueued, AgentStartQueueStarting, AgentStartQueueRunning, AgentStartQueueRebound) {

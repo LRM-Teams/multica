@@ -1258,7 +1258,7 @@ func TestWorkspaceRunnerAttachmentRegistersCoordinatorAtAgentRoot(t *testing.T) 
 	runner, _ := attachTestWorkspaceRunner(t, daemon, workspaceID, nil)
 
 	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
 	}); err != nil {
 		t.Fatalf("applyAttachmentAttach: %v", err)
 	}
@@ -1275,7 +1275,7 @@ func TestWorkspaceRunnerAttachmentRegistersCoordinatorAtAgentRoot(t *testing.T) 
 	}
 
 	if _, err := runner.applyAttachmentDetach(protocol.WorkspaceRunnerAgentDetachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2, CorrelationID: "detach-1",
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2,
 	}); err != nil {
 		t.Fatalf("applyAttachmentDetach: %v", err)
 	}

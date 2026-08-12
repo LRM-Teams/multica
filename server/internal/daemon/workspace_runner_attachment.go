@@ -105,7 +105,7 @@ func (runner *WorkspaceRunner) completeManagedAgentStart(ctx context.Context, pa
 	} else {
 		ack.QueueState = current.QueueState
 	}
-	if err := runner.ensureResidentRuntime(ctx, payload.AgentID, payload.RuntimeID); err != nil {
+	if err := runner.ensureResidentRuntime(ctx, payload.AgentID, payload.RuntimeID, nil); err != nil {
 		_ = runner.processes.Stop(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
 		return protocol.AgentStatusPayload{}, protocol.AgentSessionPayload{}, fmt.Errorf("start managed Agent provider: %w", err)
 	}

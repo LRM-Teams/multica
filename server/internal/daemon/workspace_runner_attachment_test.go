@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -106,7 +107,7 @@ func TestWorkspaceRunnerAttachmentAttachPersistsInboxWithoutLaunchingProcess(t *
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
-	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	payload := protocol.WorkspaceRunnerAgentAttachPayload{
 		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
 	}
@@ -157,7 +158,7 @@ func TestWorkspaceRunnerManagedStartCreatesInboxWithoutAttachment(t *testing.T) 
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
-	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1"}
 	ack, status, session, err := runner.startManagedAgent(context.Background(), start)
 	if err != nil {
@@ -178,7 +179,7 @@ func TestWorkspaceRunnerManagedStartWaitsForCapacityBeforeProvider(t *testing.T)
 	}
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
 	providerStarted := make(chan string, 2)
-	runner.ensureResidentRuntime = func(_ context.Context, agentID, _ string) error {
+	runner.ensureResidentRuntime = func(_ context.Context, agentID, _ string, _ *agent.PiRunIdentity) error {
 		providerStarted <- agentID
 		return nil
 	}
@@ -224,7 +225,7 @@ func TestWorkspaceRunnerManagedStopRejectsStaleLaunchID(t *testing.T) {
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
-	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
 		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
 	}); err != nil {
@@ -259,7 +260,7 @@ func TestWorkspaceRunnerManagedStartRejectsRuntimeMoveWithoutStopAndKeepsInbox(t
 		d.mu.Unlock()
 	}
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
-	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	old := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: "runtime-old", LaunchID: "launch-old"}
 	if _, _, _, err := runner.startManagedAgent(context.Background(), old); err != nil {
 		t.Fatalf("start old Runtime: %v", err)
@@ -280,7 +281,7 @@ func TestWorkspaceRunnerManagedStopClosesProviderAndInbox(t *testing.T) {
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
-	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
+	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	backend := &canonicalRuntimeTestBackend{}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,

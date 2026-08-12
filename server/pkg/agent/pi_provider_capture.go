@@ -333,7 +333,7 @@ const record = (kind, fields) => {
 };
 export default function (pi) {
   // Read-only final-boundary capture. Do not register tools, mutate events,
-  // or subscribe to streaming/SSE deltas.
+  // or subscribe to streaming/token deltas.
   pi.on("before_provider_request", (event) => { record("provider_request", { payload: event.payload }); });
   pi.on("turn_end", (event) => { record("turn_end", { message: event.message }); });
 }

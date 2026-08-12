@@ -186,7 +186,7 @@ func TestInteractionDAGSegment_ReactionCreatesNoDeliveryAndNoWake(t *testing.T) 
 	reactedMessage := util.MustParseUUID("70000000-0000-4000-8000-00000000030e")
 	reactionID := util.MustParseUUID("70000000-0000-4000-8000-00000000030f")
 	seedMixedRLChannelMessage(t, h, reactedMessage)
-	_, err := h.tx.Exec(h.ctx, "INSERT INTO channel_message_reaction (id) VALUES ($1)", reactionID)
+	_, err := h.tx.Exec(h.ctx, "INSERT INTO channel_message_reaction (id, channel_message_id) VALUES ($1, $2)", reactionID, reactedMessage)
 	require.NoError(t, err)
 
 	before, err := h.runs.GetRun(h.ctx, run.RunID)

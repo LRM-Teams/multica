@@ -143,6 +143,13 @@ func finalizeMixedRLCausalEdges(ctx context.Context, qtx *db.Queries, ledger *Pr
 		if prev.Ordinal+1 != cur.Ordinal {
 			continue
 		}
+		prevSeg, okPrev := segmentByID[prev.SegmentID]
+		curSeg, okCur := segmentByID[cur.SegmentID]
+		// Terminal ownership is a freeze-time persistence artifact, not a
+		// session-continuation cause. Only message segments participate.
+		if !okPrev || !okCur || prevSeg.Kind != "message" || curSeg.Kind != "message" {
+			continue
+		}
 		key := prev.SegmentID + "->" + cur.SegmentID
 		if _, seen := seenContinuation[key]; seen {
 			continue

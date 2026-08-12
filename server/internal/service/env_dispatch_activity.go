@@ -113,7 +113,7 @@ func NewEnvDispatchActivityFromQueries(queries *db.Queries) *EnvDispatchActivity
 
 // CreateDeliveryObligation persists a queued obligation and increments
 // pending_delivery_count exactly once per (message, run-agent). created is
-// true only when the durable counter advanced.
+// true only when the durable delivery row was inserted.
 func (a *EnvDispatchActivity) CreateDeliveryObligation(ctx context.Context, input CreateDeliveryObligationInput) (DeliveryObligationRecord, bool, error) {
 	if a == nil || a.store == nil {
 		return DeliveryObligationRecord{}, false, errors.New("mixed-run activity store unavailable")
@@ -128,19 +128,10 @@ func (a *EnvDispatchActivity) CreateDeliveryObligation(ctx context.Context, inpu
 		generated := uuid.New()
 		input.DeliveryID = pgtype.UUID{Bytes: generated, Valid: true}
 	}
-	before, err := a.store.GetRun(ctx, input.RunID)
+	record, created, err := a.store.createDeliveryObligationWithStatus(ctx, input)
 	if err != nil {
 		return DeliveryObligationRecord{}, false, err
 	}
-	record, err := a.store.CreateDeliveryObligation(ctx, input)
-	if err != nil {
-		return DeliveryObligationRecord{}, false, err
-	}
-	after, err := a.store.GetRun(ctx, input.RunID)
-	if err != nil {
-		return DeliveryObligationRecord{}, false, err
-	}
-	created := after.PendingDeliveryCount > before.PendingDeliveryCount
 	if created {
 		a.tracker.CreateDeliveryObligation(uuidString(record.DeliveryID))
 	}

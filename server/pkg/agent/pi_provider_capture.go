@@ -19,14 +19,14 @@ import (
 // not agent-declared provenance; they are read-only observations of Pi's
 // final provider boundary.
 const (
-	PiCaptureEventProviderRequest   = "provider_request"
-	PiCaptureEventFinalAssistant    = "final_assistant"
-	PiCaptureEventTurnEnd           = "turn_end"
-	PiCaptureEventVisibleAction     = "visible_action"
-	PiCaptureEventConsumption       = "consumption"
-	PiCaptureEventTurnStatus        = "turn_status"
-	PiCaptureEventCaptureBatch      = "capture_batch"
-	PiCaptureEventProviderCall      = "provider_call"
+	PiCaptureEventProviderRequest = "provider_request"
+	PiCaptureEventFinalAssistant  = "final_assistant"
+	PiCaptureEventTurnEnd         = "turn_end"
+	PiCaptureEventVisibleAction   = "visible_action"
+	PiCaptureEventConsumption     = "consumption"
+	PiCaptureEventTurnStatus      = "turn_status"
+	PiCaptureEventCaptureBatch    = "capture_batch"
+	PiCaptureEventProviderCall    = "provider_call"
 )
 
 // piCaptureRecord is emitted by the daemon-created Pi extension. Its payload
@@ -42,19 +42,21 @@ type piCaptureRecord struct {
 // JSONL record. Callers may marshal these for diagnostics; trusted upload uses
 // ResidentTurnCapture instead.
 type PiCaptureTypedEvent struct {
-	Kind      string          `json:"kind"`
-	At        time.Time       `json:"at"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-	Message   json.RawMessage `json:"message,omitempty"`
-	CallID    string          `json:"call_id,omitempty"`
-	TurnID    string          `json:"turn_id,omitempty"`
-	BatchID   string          `json:"capture_batch_id,omitempty"`
-	Status    string          `json:"status,omitempty"`
+	Kind    string          `json:"kind"`
+	At      time.Time       `json:"at"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	Message json.RawMessage `json:"message,omitempty"`
+	CallID  string          `json:"call_id,omitempty"`
+	TurnID  string          `json:"turn_id,omitempty"`
+	BatchID string          `json:"capture_batch_id,omitempty"`
+	Status  string          `json:"status,omitempty"`
 }
 
 func buildResidentTurnCapture(binding PiRunBinding, turnOrdinal, firstCallOrdinal int64, records []piCaptureRecord) (ResidentTurnCapture, error) {
-	records = filterPiCaptureRecordsForBoundary(binding.CaptureBoundary, records)
-	requests, finalMessages := pairPiCaptureProviderCalls(records)
+	requests, finalMessages, err := pairPiCaptureProviderCalls(records)
+	if err != nil {
+		return ResidentTurnCapture{}, err
+	}
 	if len(requests) == 0 || len(requests) != len(finalMessages) {
 		return ResidentTurnCapture{}, fmt.Errorf("incomplete Pi capture: provider_requests=%d final_messages=%d", len(requests), len(finalMessages))
 	}
@@ -215,59 +217,33 @@ func normalizePiFinalAssistantMessage(raw json.RawMessage) (json.RawMessage, err
 	return json.Marshal(message)
 }
 
-// pairPiCaptureProviderCalls collapses hidden lower-level retries: multiple
-// provider_request records before one final assistant message become one
-// logical call that keeps the last request payload.
-func pairPiCaptureProviderCalls(records []piCaptureRecord) (requests []piCaptureRecord, finals []piCaptureRecord) {
-	var pending []piCaptureRecord
+// pairPiCaptureProviderCalls requires one unambiguous provider request for
+// each final assistant message. Pi does not provide stable retry identifiers,
+// so multiple requests before one final cannot be safely paired.
+func pairPiCaptureProviderCalls(records []piCaptureRecord) ([]piCaptureRecord, []piCaptureRecord, error) {
+	var requests, finals []piCaptureRecord
+	var pending *piCaptureRecord
 	for _, record := range records {
 		switch record.Kind {
 		case PiCaptureEventProviderRequest, PiCaptureEventProviderCall:
-			pending = append(pending, record)
+			if pending != nil {
+				return nil, nil, errors.New("ambiguous Pi capture: multiple provider requests before a final assistant message")
+			}
+			copy := record
+			pending = &copy
 		case PiCaptureEventTurnEnd, PiCaptureEventFinalAssistant:
-			if len(pending) == 0 {
+			if pending == nil {
 				continue
 			}
-			requests = append(requests, pending[len(pending)-1])
+			requests = append(requests, *pending)
 			finals = append(finals, record)
 			pending = nil
 		}
 	}
-	return requests, finals
-}
-
-func filterPiCaptureRecordsForBoundary(boundary string, records []piCaptureRecord) []piCaptureRecord {
-	if strings.TrimSpace(boundary) == "" {
-		return records
+	if pending != nil {
+		return nil, nil, errors.New("incomplete Pi capture: provider request has no final assistant message")
 	}
-	filtered := make([]piCaptureRecord, 0, len(records))
-	for _, record := range records {
-		if piCaptureRecordBoundary(record) != "" && piCaptureRecordBoundary(record) != boundary {
-			continue
-		}
-		filtered = append(filtered, record)
-	}
-	// When records omit capture_boundary (legacy extension shape), retain all
-	// post-offset rows; the caller already sliced by capture log offset.
-	if len(filtered) == 0 {
-		return records
-	}
-	return filtered
-}
-
-func piCaptureRecordBoundary(record piCaptureRecord) string {
-	for _, raw := range []json.RawMessage{record.Payload, record.Message} {
-		if len(raw) == 0 {
-			continue
-		}
-		var fields struct {
-			CaptureBoundary string `json:"capture_boundary"`
-		}
-		if err := json.Unmarshal(raw, &fields); err == nil && fields.CaptureBoundary != "" {
-			return fields.CaptureBoundary
-		}
-	}
-	return ""
+	return requests, finals, nil
 }
 
 // typedPiCaptureEvents projects raw JSONL records into the resident RPC typed

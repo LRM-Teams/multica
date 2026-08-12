@@ -26,6 +26,125 @@ type captureResidentMessageRuntime struct {
 	completeOnce sync.Once
 }
 
+type captureBoundaryTurn struct {
+	capture  agent.ResidentTurnCapture
+	done     chan error
+	captures chan agent.ResidentTurnCapture
+}
+
+type captureBoundaryPiRuntime struct {
+	mu             sync.Mutex
+	binding        agent.PiRunBinding
+	boundarySerial int
+	active         bool
+	accepted       [][]agent.ResidentMessage
+	turns          []*captureBoundaryTurn
+	started        chan *captureBoundaryTurn
+}
+
+func newCaptureBoundaryPiRuntime(captures ...agent.ResidentTurnCapture) *captureBoundaryPiRuntime {
+	turns := make([]*captureBoundaryTurn, 0, len(captures))
+	for _, capture := range captures {
+		turns = append(turns, &captureBoundaryTurn{
+			capture: capture, done: make(chan error, 1), captures: make(chan agent.ResidentTurnCapture, 1),
+		})
+	}
+	return &captureBoundaryPiRuntime{turns: turns, started: make(chan *captureBoundaryTurn, len(turns))}
+}
+
+func (r *captureBoundaryPiRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *captureBoundaryPiRuntime) AcceptMessageBatch(_ context.Context, messages []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active {
+		return agent.ResidentMessageAcceptance{}, agent.ErrPiRPCTurnBusy
+	}
+	if len(r.turns) == 0 {
+		return agent.ResidentMessageAcceptance{}, fmt.Errorf("unexpected capture turn")
+	}
+	turn := r.turns[0]
+	r.turns = r.turns[1:]
+	r.accepted = append(r.accepted, append([]agent.ResidentMessage(nil), messages...))
+	r.active = true
+	r.started <- turn
+	return agent.ResidentMessageAcceptance{Done: turn.done, Capture: turn.captures}, nil
+}
+
+func (r *captureBoundaryPiRuntime) PrepareMessageInput(context.Context, func(agent.Message)) error {
+	return nil
+}
+
+func (r *captureBoundaryPiRuntime) AcceptReminderInput(context.Context, agent.ResidentReminderInput) (agent.ResidentMessageAcceptance, error) {
+	return agent.ResidentMessageAcceptance{}, nil
+}
+
+func (r *captureBoundaryPiRuntime) AcceptPendingNotice(context.Context, agent.ResidentPendingNotice) error {
+	return nil
+}
+
+func (r *captureBoundaryPiRuntime) BindRunIdentity(identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.binding.SessionID == "" {
+		r.boundarySerial = 1
+		r.binding = agent.PiRunBinding{PiRunIdentity: identity, SessionID: "pi-session", CaptureBoundary: "capture-1"}
+	} else if r.binding.PiRunIdentity != identity {
+		return agent.PiRunBinding{}, agent.ErrPiRPCRunIdentityRequiresFreshSession
+	}
+	return r.binding, nil
+}
+
+func (r *captureBoundaryPiRuntime) PrepareRun(_ context.Context, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	return r.BindRunIdentity(identity)
+}
+
+func (r *captureBoundaryPiRuntime) SettleRunTurn(identity agent.PiRunIdentity) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.binding.PiRunIdentity != identity {
+		return fmt.Errorf("Pi turn settlement identity mismatch")
+	}
+	if r.active {
+		return agent.ErrPiRPCTurnBusy
+	}
+	r.boundarySerial++
+	r.binding.CaptureBoundary = fmt.Sprintf("capture-%d", r.boundarySerial)
+	return nil
+}
+
+func (r *captureBoundaryPiRuntime) finish(turn *captureBoundaryTurn, err error) {
+	r.mu.Lock()
+	r.active = false
+	r.mu.Unlock()
+	turn.captures <- turn.capture
+	close(turn.captures)
+	turn.done <- err
+	close(turn.done)
+}
+
+func (r *captureBoundaryPiRuntime) batches() [][]agent.ResidentMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	batches := make([][]agent.ResidentMessage, len(r.accepted))
+	copy(batches, r.accepted)
+	return batches
+}
+
+func (r *captureBoundaryPiRuntime) Close() {}
+
+func (r *captureBoundaryPiRuntime) Compact(context.Context, string) (agent.PiCompactionResult, error) {
+	return agent.PiCompactionResult{}, nil
+}
+
+func (r *captureBoundaryPiRuntime) SetAutoCompaction(context.Context, bool) error { return nil }
+
+func (r *captureBoundaryPiRuntime) RuntimeStats(context.Context) (*agent.RuntimeTokenStats, error) {
+	return nil, nil
+}
+
 func (r *captureResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
 	return nil, nil
 }
@@ -100,8 +219,9 @@ func TestResidentMessageRuntimeCapture_UploadsTrustedBatchAtTurnEnd(t *testing.T
 	defer upstream.Close()
 
 	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
-		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token",
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
@@ -110,14 +230,14 @@ func TestResidentMessageRuntimeCapture_UploadsTrustedBatchAtTurnEnd(t *testing.T
 		RunID: runID, RunAgentID: runAgentID, PiSessionID: "pi-session-1",
 		CaptureBoundary: "boundary-1", TurnID: "turn-1", CaptureBatchID: "batch-1",
 		TurnOrdinal: 1, Complete: true,
-		StartedAt: time.Date(2026, time.August, 12, 15, 0, 0, 0, time.UTC),
+		StartedAt:   time.Date(2026, time.August, 12, 15, 0, 0, 0, time.UTC),
 		CompletedAt: time.Date(2026, time.August, 12, 15, 0, 8, 0, time.UTC),
 		ProviderCalls: []agent.ResidentProviderCallCapture{{
 			CallID: "C1", CallOrdinal: 1, Provider: "pi", Model: "test", APIKind: "messages",
 			RawProviderRequest: json.RawMessage(`{"messages":[]}`), FinalAssistantMessage: json.RawMessage(`{"role":"assistant"}`),
 			Status: "completed", StopReason: "stop", ResponseComplete: true,
 			RequestHash: "sha256:req", ResponseHash: "sha256:resp",
-			StartedAt: time.Date(2026, time.August, 12, 15, 0, 1, 0, time.UTC),
+			StartedAt:   time.Date(2026, time.August, 12, 15, 0, 1, 0, time.UTC),
 			CompletedAt: time.Date(2026, time.August, 12, 15, 0, 4, 0, time.UTC),
 		}},
 		PayloadHash: "sha256:batch-1",
@@ -204,7 +324,9 @@ func TestResidentMessageRuntimeCapture_ToolLifecycleDuringIdleInput(t *testing.T
 
 	deadline := time.After(2 * time.Second)
 	counts := map[string]int{}
-	for counts[protocol.MixedRunActivityInflightTool+"1"] < 2 || counts[protocol.MixedRunActivityInflightTool+"-1"] < 2 {
+	for counts[protocol.MixedRunActivityInflightTool+"1"] < 2 ||
+		counts[protocol.MixedRunActivityInflightTool+"-1"] < 2 ||
+		counts[protocol.MixedRunActivityActiveTurn+"-1"] < 1 {
 		select {
 		case report := <-reports:
 			counts[report.Dimension+fmt.Sprint(report.Delta)]++
@@ -253,8 +375,9 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 	defer upstream.Close()
 
 	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
 	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
-		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token",
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
 	}, time.Now()); err != nil {
 		t.Fatalf("writeCachedAgentCredential: %v", err)
 	}
@@ -311,82 +434,138 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 }
 
 func TestResidentMessageRuntimeCapture_NoHistoryReplayAfterNewBoundary(t *testing.T) {
-	const agentID, runtimeID = "agent-1", "runtime-1"
-	backend := newSettlementBlockingPiRuntime()
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+		runID       = "run-1"
+		runAgentID  = "run-agent-1"
+	)
+	var (
+		mu      sync.Mutex
+		uploads []protocol.TurnCaptureUpload
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/env-dispatch/runs/" + runID + "/turn-captures":
+			var payload protocol.TurnCaptureUpload
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode upload: %v", err)
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			uploads = append(uploads, payload)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureUploadResponse{Accepted: true, TurnID: payload.Turn.TurnID})
+		case "POST /api/v1/env-dispatch/runs/" + runID + "/turn-capture-gaps":
+			t.Fatal("complete captures must upload rather than report gaps")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("writeCachedAgentCredential: %v", err)
+	}
+	firstCapture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "capture-1", "turn-1", "batch-1", "call-1", "first")
+	secondCapture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "capture-2", "turn-2", "batch-2", "call-2", "second")
+	backend := newCaptureBoundaryPiRuntime(firstCapture, secondCapture)
 	pool := newCanonicalAgentRuntimePool()
 	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: backend,
 	}
-	identity := agent.PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
-	if _, err := pool.bindResidentPiRunIdentity(context.Background(), agentID, runtimeID, identity); err != nil {
-		t.Fatalf("bind Pi run identity: %v", err)
+	d := &Daemon{
+		cfg: cfg, client: NewClient(upstream.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		canonicalRuntimes: pool,
+		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID}},
 	}
 
 	firstBatch := []protocol.AgentMessageProjection{{
 		ID: "message-1", Target: "channel:one", Seq: 1, Content: "first turn",
-		RunID: "run-1", RunAgentID: "run-agent-1",
+		RunID: runID, RunAgentID: runAgentID,
 	}}
-	firstComplete := make(chan error, 1)
-	if err := pool.handoffIdleMessages(
-		context.Background(), agentID, runtimeID, firstBatch,
-		nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) { firstComplete <- err },
-	); err != nil {
+	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, firstBatch); err != nil {
 		t.Fatalf("first handoff: %v", err)
 	}
-	firstTurn := <-backend.accepted
-	backend.complete(firstTurn, nil)
-	backend.releaseSettlement()
-	select {
-	case err := <-firstComplete:
-		if err != nil {
-			t.Fatalf("first completion: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("first turn did not settle")
-	}
-
-	recording := &captureResidentMessageRuntime{done: make(chan error, 1), messages: make(chan agent.Message)}
-	pool.slots[agentID+"\x00"+runtimeID].mu.Lock()
-	// After settlement the capture boundary advanced. Replace with a recorder that
-	// proves the next idle input receives only the new batch, never prior history.
-	priorBoundary := backend.binding.CaptureBoundary
-	pool.slots[agentID+"\x00"+runtimeID].backend = recording
-	pool.slots[agentID+"\x00"+runtimeID].mu.Unlock()
-	if priorBoundary == "capture-1" {
+	backend.finish(<-backend.started, nil)
+	waitForCaptureUploads(t, &mu, &uploads, 1)
+	backend.mu.Lock()
+	boundaryAfterFirstTurn := backend.binding.CaptureBoundary
+	backend.mu.Unlock()
+	if boundaryAfterFirstTurn == "capture-1" {
 		t.Fatal("settlement did not advance capture boundary before the next turn")
 	}
 
 	secondBatch := []protocol.AgentMessageProjection{{
 		ID: "message-2", Target: "channel:one", Seq: 2, Content: "second turn only",
-		RunID: "run-1", RunAgentID: "run-agent-1",
+		RunID: runID, RunAgentID: runAgentID,
 	}}
-	secondComplete := make(chan error, 1)
-	if err := pool.handoffIdleMessages(
-		context.Background(), agentID, runtimeID, secondBatch,
-		nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) { secondComplete <- err },
-	); err != nil {
+	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, secondBatch); err != nil {
 		t.Fatalf("second handoff: %v", err)
 	}
-	recording.finish(nil)
-	select {
-	case err := <-secondComplete:
-		if err != nil {
-			t.Fatalf("second completion: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("second turn did not complete")
-	}
+	backend.finish(<-backend.started, nil)
+	waitForCaptureUploads(t, &mu, &uploads, 2)
 
-	batches := recording.batches()
-	if len(batches) != 1 {
-		t.Fatalf("post-boundary AcceptMessageBatch calls = %d, want 1", len(batches))
+	batches := backend.batches()
+	if len(batches) != 2 {
+		t.Fatalf("AcceptMessageBatch calls = %d, want 2", len(batches))
 	}
-	if len(batches[0]) != 1 || batches[0][0].ID != "message-2" || batches[0][0].Content != "second turn only" {
-		t.Fatalf("new boundary replayed history: %+v", batches[0])
+	if len(batches[1]) != 1 || batches[1][0].ID != "message-2" || batches[1][0].Content != "second turn only" {
+		t.Fatalf("new boundary replayed history: %+v", batches[1])
 	}
-	for _, message := range batches[0] {
+	for _, message := range batches[1] {
 		if message.ID == "message-1" || message.Content == "first turn" {
 			t.Fatalf("history from before the new capture boundary was replayed: %+v", message)
 		}
 	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(uploads[1].ProviderCalls) != 1 || uploads[1].ProviderCalls[0].CallID != "call-2" {
+		t.Fatalf("second upload calls = %+v, want only call-2", uploads[1].ProviderCalls)
+	}
+	for _, call := range uploads[1].ProviderCalls {
+		if call.CallID == "call-1" || string(call.RawProviderRequest) == `{"call":"first"}` {
+			t.Fatalf("second upload replayed first-turn capture: %+v", uploads[1].ProviderCalls)
+		}
+	}
+}
+
+func residentTurnCaptureForBoundaryTest(runID, runAgentID, boundary, turnID, batchID, callID, call string) agent.ResidentTurnCapture {
+	startedAt := time.Date(2026, time.August, 12, 15, 0, 0, 0, time.UTC)
+	return agent.ResidentTurnCapture{
+		RunID: runID, RunAgentID: runAgentID, PiSessionID: "pi-session", CaptureBoundary: boundary,
+		TurnID: turnID, CaptureBatchID: batchID, TurnOrdinal: 1, Complete: true,
+		StartedAt: startedAt, CompletedAt: startedAt.Add(time.Second), PayloadHash: "sha256:" + batchID,
+		ProviderCalls: []agent.ResidentProviderCallCapture{{
+			CallID: callID, CallOrdinal: 1, Provider: "pi", Model: "test", APIKind: "messages",
+			RawProviderRequest: json.RawMessage(`{"call":"` + call + `"}`), FinalAssistantMessage: json.RawMessage(`{"role":"assistant"}`),
+			Status: "completed", StopReason: "stop", ResponseComplete: true,
+			RequestHash: "sha256:req-" + call, ResponseHash: "sha256:resp-" + call,
+			StartedAt: startedAt, CompletedAt: startedAt.Add(time.Second),
+		}},
+	}
+}
+
+func waitForCaptureUploads(t *testing.T, mu *sync.Mutex, uploads *[]protocol.TurnCaptureUpload, count int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		length := len(*uploads)
+		mu.Unlock()
+		if length >= count {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	t.Fatalf("uploads = %d, want at least %d", len(*uploads), count)
 }

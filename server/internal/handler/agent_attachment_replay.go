@@ -109,29 +109,33 @@ func (h *Handler) acknowledgeAgentAttachmentCommand(ctx context.Context, identit
 	if eventType == protocol.EventAgentDetached {
 		wantEvent, wantReceipt = "detach", "detached"
 	}
-	var matched bool
+	var shadowCorrelationID string
 	err := h.DB.QueryRow(ctx, `
-		SELECT true
+		SELECT correlation_id::text
 		FROM agent_attachment_projection_event
 		WHERE lifecycle_seq = $1
 		  AND agent_id::text = $2 AND runtime_id::text = $3 AND workspace_id::text = $4
 		  AND attachment_generation = $5 AND event_type = $6`,
 		payload.LifecycleSeq, payload.AgentID, payload.RuntimeID,
-		identity.WorkspaceID, payload.AttachmentGeneration, wantEvent).Scan(&matched)
+		identity.WorkspaceID, payload.AttachmentGeneration, wantEvent).Scan(&shadowCorrelationID)
 	if err != nil {
 		return errors.New("Attachment receipt does not match a pending command")
 	}
+	// correlation_id remains a rolling-deploy storage shadow only. New Runner
+	// protocol messages are fenced by the exact lifecycle event above and do
+	// not carry or interpret this legacy identity.
 	_, err = h.DB.Exec(ctx, `
-		INSERT INTO agent_attachment_projection_receipt (lifecycle_seq, receipt_type)
-		VALUES ($1, $2)
-		ON CONFLICT (lifecycle_seq) DO NOTHING`, payload.LifecycleSeq, wantReceipt)
+		INSERT INTO agent_attachment_projection_receipt (lifecycle_seq, correlation_id, receipt_type)
+		VALUES ($1, $2::uuid, $3)
+		ON CONFLICT (lifecycle_seq) DO NOTHING`, payload.LifecycleSeq, shadowCorrelationID, wantReceipt)
 	if err != nil {
 		return fmt.Errorf("persist Attachment receipt: %w", err)
 	}
+	// The receipt is the durable admission boundary. Lifecycle convergence is
+	// independently retryable from ready, reconnect, and heartbeat, so a Hub
+	// race after this commit must not retroactively reject an accepted command.
 	if eventType == protocol.EventAgentAttached {
-		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
-			return err
-		}
+		h.reconcileConnectedRuntime(ctx, identity.WorkspaceID, parseUUID(payload.RuntimeID))
 	}
 	slog.Debug("Workspace Runner Attachment command acknowledged", "workspace_id", identity.WorkspaceID, "runtime_id", payload.RuntimeID, "agent_id", payload.AgentID, "lifecycle_seq", payload.LifecycleSeq, "outcome", "accepted", "reason", "command_receipt")
 	return nil

@@ -678,15 +678,15 @@ func TestAttachmentReplayStartsMessageRecoveryOnlyAfterCompletion(t *testing.T) 
 	runner.inboxes.BeginRecovery(func(request protocol.AgentRecoveryRequest) error {
 		return runner.sendOnConnection(connection, protocol.EventAgentRecoveryRequest, request)
 	})
-	if requests != 1 {
-		t.Fatalf("Message recovery requests=%d, want one for the newly created coordinator", requests)
+	if requests != 0 {
+		t.Fatalf("Attachment replay started Message recovery without agent:start: %d", requests)
 	}
 	if statuses != 0 || sessions != 0 {
 		t.Fatalf("Attachment replay invented Workspace Runner launch frames: status=%d session=%d", statuses, sessions)
 	}
 }
 
-func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testing.T) {
+func TestRestoreResidentAgentsRebuildsRootWithoutMessageLifecycle(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-4111-8111-111111111111"
 		agentID     = "22222222-2222-4222-8222-222222222222"
@@ -710,9 +710,8 @@ func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testin
 	if runner == nil {
 		t.Fatal("restore did not create Workspace Runner")
 	}
-	coordinator, gotRuntimeID, _ := runner.inboxes.Resolve(agentID)
-	if coordinator == nil || gotRuntimeID != runtimeID {
-		t.Fatalf("restored coordinator=%v runtime_id=%q", coordinator, gotRuntimeID)
+	if _, _, ok := runner.inboxes.Resolve(agentID); ok {
+		t.Fatal("restore created a Message coordinator before agent:start")
 	}
 	producer := runner.activity
 	_, frames := producer.AttachTransport(func(protocol.AgentActivityPayload) {})
@@ -724,7 +723,7 @@ func TestRestoreResidentAgentsRebuildsRunnerPresenceAndMessageRecovery(t *testin
 		recovery = request
 		return nil
 	})
-	if recovery.AgentID != agentID || recovery.RecoveryID == "" {
-		t.Fatalf("restored Message recovery request = %+v", recovery)
+	if recovery.AgentID != "" {
+		t.Fatalf("restore emitted Message recovery before agent:start: %+v", recovery)
 	}
 }

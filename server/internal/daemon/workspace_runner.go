@@ -220,6 +220,14 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 				return err
 			}
 			connection.deliveries.Resume(start.AgentID, start.LaunchID)
+			// APM acceptance owns this Agent's only Message coordinator. Once
+			// Attachment replay has fixed Workspace ownership, recover that
+			// coordinator before buffered Messages cross the Provider boundary.
+			if attachmentReplayComplete {
+				runner.beginMessageRecoveryForAgent(start.AgentID, func(request protocol.AgentRecoveryRequest) error {
+					return writeFrame(protocol.EventAgentRecoveryRequest, request)
+				})
+			}
 			go func() {
 				status, session, err := runner.completeManagedAgentStart(connection.ctx, start, ack)
 				if err != nil {

@@ -102,8 +102,8 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	return nil
 }
 
-// restoreResidentAgents rebuilds Inbox ownership for durable Attachments after
-// a Computer process restart. Provider launches are never reconstructed here;
+// restoreResidentAgents rebuilds durable Agent roots after a Computer process
+// restart. Attachment ownership alone does not create a Message coordinator;
 // the Workspace Runner receives an explicit managed start when work exists.
 func (d *Daemon) restoreResidentAgents() error {
 	if d == nil {
@@ -122,9 +122,6 @@ func (d *Daemon) restoreResidentAgents() error {
 		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, attachment.WorkspaceID, attachment.AgentID)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 			return fmt.Errorf("restore Agent root %q: %w", attachment.AgentID, err)
-		}
-		if _, err := d.ensureIdleMessageCoordinator(attachment.WorkspaceID, attachment.AgentID, attachment.RuntimeID); err != nil {
-			return fmt.Errorf("restore Agent Message coordinator %q: %w", attachment.AgentID, err)
 		}
 		if _, err := d.ensureWorkspaceRunner(attachment.WorkspaceID); err != nil {
 			return fmt.Errorf("restore Agent Workspace Runner %q: %w", attachment.AgentID, err)

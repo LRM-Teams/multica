@@ -88,7 +88,7 @@ func (runner *WorkspaceRunner) registerManagedAgentStart(payload protocol.Worksp
 	// Raft lifecycle authority is the server-provided start command. Register
 	// it before changing the Inbox so a cross-Runtime start that omitted its
 	// required stop fails without corrupting the current launch's routing.
-	if _, err := runner.inboxes.EnsureForRuntime(payload.AgentID, payload.RuntimeID); err != nil {
+	if _, err := runner.inboxes.AcceptStart(payload.AgentID, payload.RuntimeID); err != nil {
 		_ = runner.processes.Stop(agentProcessCallback{AgentID: payload.AgentID, LaunchID: payload.LaunchID})
 		return protocol.AgentStartAckPayload{}, fmt.Errorf("prepare managed Agent Inbox: %w", err)
 	}
@@ -156,8 +156,8 @@ func (runner *WorkspaceRunner) stopManagedAgent(payload protocol.WorkspaceRunner
 
 // applyAttachmentAttach establishes a durable local responsibility before the
 // corresponding receipt leaves this Runner. Attachment is deliberately not a
-// provider launch: it only prepares the persistent AgentRoot and Inbox owned
-// by this Workspace Runner.
+// provider or Message lifecycle: it only prepares durable ownership and the
+// persistent AgentRoot. APM acceptance of agent:start owns Inbox creation.
 func (runner *WorkspaceRunner) applyAttachmentAttach(payload protocol.WorkspaceRunnerAgentAttachPayload) (protocol.WorkspaceRunnerAgentAttachedPayload, error) {
 	if runner == nil || runner.attachments == nil || runner.inboxes == nil {
 		return protocol.WorkspaceRunnerAgentAttachedPayload{}, errors.New("Workspace Runner Attachment dependencies are unavailable")
@@ -185,9 +185,6 @@ func (runner *WorkspaceRunner) applyAttachmentAttach(payload protocol.WorkspaceR
 	agentRoot := agentworkspace.Root(runner.workspacesRoot, workspaceID, payload.AgentID)
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		return protocol.WorkspaceRunnerAgentAttachedPayload{}, fmt.Errorf("create Attachment AgentRoot: %w", err)
-	}
-	if _, err := runner.inboxes.Ensure(payload.AgentID); err != nil {
-		return protocol.WorkspaceRunnerAgentAttachedPayload{}, fmt.Errorf("ensure Attachment Inbox: %w", err)
 	}
 	return protocol.WorkspaceRunnerAgentAttachedPayload(payload), nil
 }

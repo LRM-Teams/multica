@@ -32,8 +32,9 @@ type inboxRegistryDependencies struct {
 }
 
 // InboxRegistry owns every in-memory Message coordinator for one immutable
-// Workspace Runner scope. The Attachment registry remains the authority for
-// whether an Inbox may be opened and which Runtime it belongs to.
+// Workspace Runner scope. Production lifecycle creation is owned by an
+// APM-accepted server start; Attachment resolution remains available to
+// explicit legacy repair and test seams.
 type InboxRegistry struct {
 	workspaceID string
 	attachments inboxAttachmentResolver
@@ -78,7 +79,6 @@ func (registry *InboxRegistry) Ensure(agentID string) (bool, error) {
 	if !registry.ownsRuntime(attachment.RuntimeID) {
 		return false, fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, registry.workspaceID)
 	}
-
 	registry.mu.Lock()
 	if registry.closed {
 		registry.mu.Unlock()
@@ -89,10 +89,7 @@ func (registry *InboxRegistry) Ensure(agentID string) (bool, error) {
 		registry.mu.Unlock()
 		return false, nil
 	}
-	coordinator, err := registry.open(
-		InboxKey{WorkspaceID: registry.workspaceID, AgentID: agentID},
-		attachment.RuntimeID,
-	)
+	coordinator, err := registry.open(InboxKey{WorkspaceID: registry.workspaceID, AgentID: agentID}, attachment.RuntimeID)
 	if err != nil {
 		registry.mu.Unlock()
 		return false, err
@@ -114,11 +111,11 @@ func (registry *InboxRegistry) Ensure(agentID string) (bool, error) {
 	return true, nil
 }
 
-// EnsureForRuntime is the AgentProcessManager start seam. The server-owned
+// AcceptStart is the AgentProcessManager start seam. The server-owned
 // start command is current placement authority; replacing a stale local Inbox
 // here keeps setup, reconnect, and runtime move in lifecycle rather than in
 // Message delivery.
-func (registry *InboxRegistry) EnsureForRuntime(agentID, runtimeID string) (bool, error) {
+func (registry *InboxRegistry) AcceptStart(agentID, runtimeID string) (bool, error) {
 	agentID = strings.TrimSpace(agentID)
 	runtimeID = strings.TrimSpace(runtimeID)
 	if registry == nil || agentID == "" || runtimeID == "" {

@@ -421,13 +421,9 @@ func createFrozenCaptureGapTestFixture(
 	require.NoError(t, err)
 	before, err := h.ledger.GetFrozenDAG(h.ctx, run.RunID, snapshot.SnapshotID)
 	require.NoError(t, err)
-	expectedGaps := 1
-	if terminalStatus == "failed_timeout" {
-		// Timeout freeze settles every still-active turn with its own durable
-		// run_timeout gap in addition to any gap recorded before freezing.
-		expectedGaps++
-	}
-	require.Len(t, before.CaptureGaps, expectedGaps)
+	// The pre-freeze capture gap has already settled this resident turn, so a
+	// timeout freeze must not append a duplicate run_timeout gap for it.
+	require.Len(t, before.CaptureGaps, 1)
 
 	return frozenCaptureGapTestFixture{
 		run: terminal, agent: agent, turn: turn, eventID: eventID,

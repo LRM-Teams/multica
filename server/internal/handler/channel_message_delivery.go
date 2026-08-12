@@ -281,7 +281,7 @@ func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Conte
 			LIMIT 1
 		) peer ON c.kind = 'dm'
 		WHERE delivery.workspace_id = $1 AND runtime.daemon_id = $2
-		  AND delivery.acked_at IS NULL
+		  AND delivery.ack_required AND delivery.acked_at IS NULL
 		ORDER BY delivery.seq, delivery.message_id, delivery.agent_id`,
 		parseUUID(identity.WorkspaceID), identity.DaemonID)
 	if err != nil {

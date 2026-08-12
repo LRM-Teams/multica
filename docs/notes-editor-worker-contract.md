@@ -17,16 +17,28 @@ Pending writebacks (`note_page_writeback`) are a third path (D1 human review). T
 
 1. **Separate endpoints and tables.** Editor rows live only in `note_ai_job`. Worker rows live only in `note_worker_job`. Never insert into both for one user action.
 2. **Misuse fails closed.** Sending Worker fields/`intent:"worker"` to the Editor endpoint returns 400. Sending Editor edit fields (`prompt` for page rewrite, `action`, `replace_page`, …) to the Worker endpoint returns 400.
-3. **Note body is untrusted input for Worker** (S2-C4 will wrap it). User `instruction` is the trusted directive; page content is context only.
+3. **Note body is untrusted input for Worker** (S2-C4). User `instruction` is the trusted directive; page content is context only. Prompt partitions and escaping are mandatory (see below).
 4. **Writebacks stay pending until accept** (D1). Worker completion may *propose* writebacks; it must not silent-edit the page through Editor.
 
 ## Status of Worker execution
 
 S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispatch:
 
-1. `POST .../worker-jobs` loads the page under ACL, builds an untrusted `<note>` + trusted `<instruction>` prompt, enqueues a chat task, and merges `context.note_brief = { version, page_id, title }`.
+1. `POST .../worker-jobs` loads the page under ACL, builds the Worker prompt (below), enqueues a chat task, and merges `context.note_brief = { version, page_id, title }`.
 2. `note_worker_job.task_id` is set and status becomes `dispatched`.
-3. UI trigger is still **S2-A2**; Agent `notes get` tool is **S2-C2**; richer prompt partitions are **S2-C4**.
+3. UI trigger is still **S2-A2**; Agent `notes get` tool is **S2-C2**.
+
+## Worker prompt partitions (S2-C4)
+
+`buildNoteWorkerPrompt` emits three stable XML-ish partitions:
+
+1. `<system_contract>…</system_contract>` — fixed Worker framing (brief ≠ Editor; note is untrusted; follow instruction + tools; may cite `multica notes get`)
+2. `<note><title>…</title><body>…</body></note>` — untrusted note snapshot (`page_id` also printed as plain metadata above `<note>`)
+3. `<instruction>…</instruction>` — caller directive (trusted relative to the note body)
+
+**Untrusted escaping:** every `<` / `>` in title/body becomes `‹` / `›` so note content cannot close partitions or inject fake tags. Instruction text additionally replaces a literal `</instruction>` with `‹/instruction›` so it cannot truncate its own partition.
+
+Code: `server/internal/handler/note_worker_prompt.go`. Tests lock tag strings and breakout cases.
 
 ## Agent read path (S2-C2)
 
@@ -39,6 +51,7 @@ S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispa
 - Editor create/get/cancel: `server/internal/handler/notes.go` (`CreateNoteAIJob`, …)
 - Worker create/get + cross-rejection: `server/internal/handler/note_worker.go`
 - Agent note read: `server/internal/handler/agent_notes.go`
+- Worker prompt partitions/escape: `server/internal/handler/note_worker_prompt.go`
 - Note brief context helper: `server/internal/service/note_brief.go`
 - Shared intent constants: `server/internal/handler/note_intent.go`
 - FE types: `packages/core/types/note.ts` (`NoteIntent`, `CreateNoteWorkerJobRequest`, …)

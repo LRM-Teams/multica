@@ -516,9 +516,9 @@
 ### 4.22 Notes Editor 与 Worker 必须分合同 — `可执行`（②分表/分 endpoint + ⑤误用拒绝测；owner: 本 Slice）
 - 改页 = **Editor**（`note_ai_job` / `POST .../ai-jobs`）；以笔记为 brief 做平台工作 = **Worker**（`note_worker_job` / `POST .../worker-jobs`）。禁止给 Editor 加「顺便建 Issue / 跑 Agent」副作用，也禁止 Worker 走 `replace_page` 改正文。
 - 误用 fail closed：Worker 字段/`intent:"worker"` 打到 Editor → 400；Editor 的 `prompt`/`action` 打到 Worker → 400。
-- Worker 派发把 `note_brief={version,page_id,title}` 写入 `agent_inbox_event.context`，prompt 用 untrusted `<note>` + trusted `<instruction>`；无权笔记拒绝。
+- Worker 派发把 `note_brief={version,page_id,title}` 写入 `agent_inbox_event.context`；prompt 三分区 `<system_contract>` / untrusted `<note>` / `<instruction>`，title/body 转义 `<`/`>`，instruction 防 `</instruction>` 截断（S2-C4）。
 - 待审写回（`note_page_writeback`）是第三条管道（D1），不是第三种 job。
-- **物**：`docs/notes-editor-worker-contract.md`；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` + 误用与 dispatch/ACL 测。
+- **物**：`docs/notes-editor-worker-contract.md`；migration `338_note_worker_job`；`note_intent.go` / `note_brief.go` / `note_worker_prompt.go` + 误用、dispatch/ACL、prompt breakout 测。
 
 ### 4.23 Context compaction 是可见 Activity，不是 Message acceptance 或进程生命周期 — `可执行`（②统一 lifecycle event + ③单一 gate/投影 + ⑤状态机回归；owner: @Codex）
 - Provider 原生事件先归一成 `MessageCompactionStarted` / `MessageCompactionFinished`；resident runtime 的主动压缩必须在独立 `ResidentMessagePreparation` gate 完成，不能共享 20 秒 native Message acceptance timeout，也不能把压缩超时解释成进程重启。

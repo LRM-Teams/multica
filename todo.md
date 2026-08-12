@@ -222,11 +222,16 @@
     - 不做 list/search
 
 
-- [ ] **S2-C4 指令与正文分离**
+- [x] **S2-C4 指令与正文分离**
   - **目标**：用户指令 / 系统合同 vs 笔记正文分离，防 prompt 注入。
   - **要做**：Worker prompt 模板明确分区（instruction vs `<note>`）；沿用 notes AI 的 escape/合同风格。
   - **依赖**：S2-C1
   - **完成标准**：prompt 构造有单测或快照测，分区标签稳定。
+  - **已落地（2026-08-12）**：
+    - `buildNoteWorkerPrompt`：`<system_contract>` / `<note>` / `<instruction>` 三分区
+    - title/body：`<`/`>` → `‹`/`›`；instruction 内 `</instruction>` 同规则防截断
+    - 合同：`docs/notes-editor-worker-contract.md`（Worker prompt partitions）
+    - 测试：`TestBuildNoteWorkerPromptEscapes*`、`TestBuildNoteWorkerPromptSnapshotStablePartitions`、`TestBuildNoteWorkerPromptUntrustedBoundary`
 
 ### 2.3 从笔记触发 Worker
 

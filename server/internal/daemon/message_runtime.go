@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -159,10 +160,15 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	if err != nil {
 		return err
 	}
+	var canonicalActionTurn canonicalActionTurnToken
+	if mixed {
+		canonicalActionTurn = d.allocateCanonicalActionTurnToken()
+	}
 	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
 		runner.observeMessageLifecycle(agentID, runtimeID)
 	}, func() {
 		if mixed {
+			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:start", protocol.MixedRunActivityActiveTurn, 1)
 			// Capture-batch accounting opens with the resident turn and closes
 			// only after the trusted upload (or capture-gap) is acknowledged.
@@ -171,12 +177,12 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
 		runner.observeMessageAccepted(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
-		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, message)
+		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
 		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
-			if d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, turnID, turnErr, capture) {
+			if d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, turnErr, capture) {
 				d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:end", protocol.MixedRunActivityUnfinishedCaptureBatch, -1)
 			}
 		}
@@ -200,6 +206,9 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		})
 	})
 	if err != nil {
+		if mixed {
+			d.endCanonicalActionTurn(agentID, canonicalActionTurn)
+		}
 		outcome := "rejected"
 		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 			outcome = "deferred"
@@ -220,7 +229,8 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 // daemon releases the matching unfinished-capture counter. A failed upload is
 // deliberately left unfinished; a successful server gap report is the only
 // alternate terminal outcome.
-func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, activityTurnID string, turnErr error, capture *agent.ResidentTurnCapture) bool {
+func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, activityTurnID string, turnToken canonicalActionTurnToken, turnErr error, capture *agent.ResidentTurnCapture) bool {
+	drained := d.endCanonicalActionTurn(agentID, turnToken)
 	if d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
 		return false
 	}
@@ -237,7 +247,13 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	if turnErr != nil {
 		gapReason = "provider_turn_failed"
 	}
-	if turnErr == nil && capture != nil && capture.Complete {
+	if drained.Overflow {
+		gapReason = "canonical_action_overflow"
+	}
+	if drained.Ambiguous {
+		gapReason = "canonical_action_context_ambiguous"
+	}
+	if turnErr == nil && !drained.Overflow && !drained.Ambiguous && capture != nil && capture.Complete {
 		payload := protocol.TurnCaptureUpload{
 			AgentID: agentID, RuntimeID: runtimeID, CaptureBatchID: capture.CaptureBatchID,
 			Turn: protocol.TurnCaptureTurn{
@@ -256,6 +272,7 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 				StartedAt: call.StartedAt.UTC().Format(time.RFC3339Nano), CompletedAt: call.CompletedAt.UTC().Format(time.RFC3339Nano),
 			})
 		}
+		payload.VisibleActions = resolvedTurnCaptureVisibleActions(capture.ProviderCalls, drained.Associations)
 		response, err := d.client.UploadTurnCapture(reportCtx, runID, payload, credential.Token)
 		if err == nil && response.Accepted {
 			return true
@@ -279,6 +296,49 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	return false
 }
 
+// resolvedTurnCaptureVisibleActions binds daemon-observed tool outcomes only
+// when Pi's typed final assistant blocks identify exactly one provider call.
+// Unresolved and ambiguous tool IDs fail closed.
+func resolvedTurnCaptureVisibleActions(calls []agent.ResidentProviderCallCapture, associations []CanonicalActionAssociation) []protocol.TurnCaptureVisibleAction {
+	toolProviders := make(map[string][]string)
+	for _, call := range calls {
+		var message struct {
+			Role   string `json:"role"`
+			Blocks []struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			} `json:"blocks"`
+		}
+		if json.Unmarshal(call.FinalAssistantMessage, &message) != nil || message.Role != "assistant" {
+			continue
+		}
+		seen := make(map[string]struct{})
+		for _, block := range message.Blocks {
+			if block.Type != "toolCall" || strings.TrimSpace(block.ID) == "" {
+				continue
+			}
+			if _, duplicate := seen[block.ID]; duplicate {
+				continue
+			}
+			seen[block.ID] = struct{}{}
+			toolProviders[block.ID] = append(toolProviders[block.ID], call.CallID)
+		}
+	}
+	visible := make([]protocol.TurnCaptureVisibleAction, 0, len(associations))
+	for index, association := range associations {
+		providerIDs := toolProviders[association.ToolCallID]
+		if len(providerIDs) != 1 || association.SucceededAt.IsZero() {
+			continue
+		}
+		visible = append(visible, protocol.TurnCaptureVisibleAction{
+			Kind: association.Kind, CanonicalID: association.CanonicalID,
+			ProducerCallID: providerIDs[0], ActionOrdinal: int64(index + 1),
+			SucceededAt: association.SucceededAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	return visible
+}
+
 func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agent.ResidentTurnCapture) (string, int64, string) {
 	if capture != nil {
 		return capture.TurnID, capture.TurnOrdinal, capture.CaptureBoundary
@@ -289,15 +349,19 @@ func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agen
 // reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.
 // User-facing Activity emission stays with the Workspace Runner; this reports
 // only the durable mixed-run transition deltas.
-func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, message agent.Message) {
+func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, turnToken canonicalActionTurnToken, message agent.Message) {
 	if runID == "" || runAgentID == "" || turnID == "" || strings.TrimSpace(message.CallID) == "" {
 		return
 	}
 	switch message.Type {
 	case agent.MessageToolUse:
+		d.SetActiveProviderToolContext(ActiveProviderToolContext{
+			AgentID: agentID, CallID: message.CallID, ToolCallID: message.CallID, TurnToken: turnToken,
+		})
 		d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID,
 			"turn:"+turnID+":tool:"+message.CallID+":start", protocol.MixedRunActivityInflightTool, 1)
 	case agent.MessageToolResult:
+		d.clearActiveProviderToolContext(agentID, turnToken, message.CallID)
 		d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID,
 			"turn:"+turnID+":tool:"+message.CallID+":end", protocol.MixedRunActivityInflightTool, -1)
 	}

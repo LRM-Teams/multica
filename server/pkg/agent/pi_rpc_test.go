@@ -154,6 +154,16 @@ func TestBuildResidentTurnCaptureRejectsAmbiguousRequests(t *testing.T) {
 	}
 }
 
+func TestBuildResidentTurnCaptureRejectsProviderRequestWithoutFinalAssistantMessage(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	_, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: PiCaptureEventProviderRequest, At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m"}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider request has no final assistant message") {
+		t.Fatalf("buildResidentTurnCapture error = %v, want incomplete provider request error", err)
+	}
+}
+
 func TestBuildResidentTurnCaptureIgnoresSSEChunkRecords(t *testing.T) {
 	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
 	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{

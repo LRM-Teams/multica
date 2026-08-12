@@ -1313,9 +1313,9 @@ type TurnCaptureUploadResponse struct {
 	Accepted           bool   `json:"accepted"`
 	CaptureBatchID     string `json:"capture_batch_id,omitempty"`
 	TurnID             string `json:"turn_id,omitempty"`
-	ProviderCallCount  int    `json:"provider_call_count,omitempty"`
-	VisibleActionCount int    `json:"visible_action_count,omitempty"`
-	ConsumptionCount   int    `json:"consumption_count,omitempty"`
+	ProviderCallCount  int    `json:"provider_call_count"`
+	VisibleActionCount int    `json:"visible_action_count"`
+	ConsumptionCount   int    `json:"consumption_count"`
 	RunStatus          string `json:"run_status,omitempty"`
 	Late               bool   `json:"late,omitempty"`
 	SnapshotID         string `json:"snapshot_id,omitempty"`

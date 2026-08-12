@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -292,6 +293,116 @@ func TestResidentMessageRuntimeCapture_UploadsTrustedBatchAtTurnEnd(t *testing.T
 	}
 }
 
+func TestResidentMessageRuntimeCapture_BindsProxyActionToProviderCallAndDrainsTurn(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+		runID       = "run-1"
+		runAgentID  = "run-agent-1"
+		canonicalID = "70000000-0000-4000-8000-000000000371"
+	)
+	var (
+		mu      sync.Mutex
+		uploads []protocol.TurnCaptureUpload
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/messages/send":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"created":true,"message":{"id":"`+canonicalID+`"}}`)
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-captures":
+			var upload protocol.TurnCaptureUpload
+			if err := json.NewDecoder(r.Body).Decode(&upload); err != nil {
+				t.Fatalf("decode upload: %v", err)
+			}
+			mu.Lock()
+			uploads = append(uploads, upload)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureUploadResponse{Accepted: true, TurnID: upload.Turn.TurnID})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("write credential: %v", err)
+	}
+	capture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-1", "turn-1", "batch-1", "provider-call-1", "first")
+	capture.ProviderCalls[0].FinalAssistantMessage = json.RawMessage(`{"role":"assistant","blocks":[{"type":"toolCall","id":"tool-1","name":"multica"}]}`)
+	backend := &captureResidentMessageRuntime{
+		done: make(chan error, 1), messages: make(chan agent.Message, 2),
+		capture: make(chan agent.ResidentTurnCapture, 1), emitCapture: &capture,
+	}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
+	d := &Daemon{
+		cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		canonicalRuntimes: pool,
+		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID}},
+		mixedRunActivityReporter: func(protocol.MixedRunActivityTransitionPayload) bool {
+			return true
+		},
+	}
+	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
+		ID: "message-1", Target: "channel:one", Seq: 1, Content: "send a message",
+		RunID: runID, RunAgentID: runAgentID, DeliveryID: "delivery-1",
+	}}); err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	backend.messages <- agent.Message{Type: agent.MessageToolUse, Tool: "multica", CallID: "tool-1"}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		state := provenanceStateFor(d)
+		state.mu.Lock()
+		active := state.active[agentID].ToolCallID == "tool-1"
+		state.mu.Unlock()
+		if active {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/messages/send", strings.NewReader(`{}`))
+	req.Header.Set("X-Agent-ID", agentID)
+	req.Header.Set("X-Workspace-ID", workspaceID)
+	rec := httptest.NewRecorder()
+	d.credentialProxyAgentAPIHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("proxy status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	backend.messages <- agent.Message{Type: agent.MessageToolResult, Tool: "multica", CallID: "tool-1"}
+	backend.finish(nil)
+	waitForCaptureUploads(t, &mu, &uploads, 1)
+
+	second := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-2", "turn-2", "batch-2", "provider-call-2", "second")
+	second.ProviderCalls[0].FinalAssistantMessage = capture.ProviderCalls[0].FinalAssistantMessage
+	secondTurnToken := d.beginCanonicalActionTurn(agentID)
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-turn-2", secondTurnToken, nil, &second) {
+		t.Fatal("second capture was not accepted")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(uploads) != 2 {
+		t.Fatalf("uploads = %d, want 2", len(uploads))
+	}
+	if len(uploads[0].VisibleActions) != 1 {
+		t.Fatalf("first visible actions = %+v, want one", uploads[0].VisibleActions)
+	}
+	action := uploads[0].VisibleActions[0]
+	if action.CanonicalID != canonicalID || action.ProducerCallID != "provider-call-1" || action.ActionOrdinal != 1 || action.SucceededAt == "" {
+		t.Fatalf("first visible action = %+v", action)
+	}
+	if len(uploads[1].VisibleActions) != 0 {
+		t.Fatalf("second turn replayed visible actions: %+v", uploads[1].VisibleActions)
+	}
+}
+
 func TestResidentMessageRuntimeCapture_ToolLifecycleDuringIdleInput(t *testing.T) {
 	const agentID, runtimeID = "agent-1", "runtime-1"
 	backend := &captureResidentMessageRuntime{
@@ -425,11 +536,168 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 				if gaps[0].Reason == "" || gaps[0].RunAgentID != runAgentID {
 					t.Fatalf("unexpected gap report: %+v", gaps[0])
 				}
+				if associations := d.ObservedCanonicalActionAssociations(agentID); len(associations) != 0 {
+					t.Fatalf("capture gap retained turn associations: %+v", associations)
+				}
 				return
 			}
 		case <-deadline:
 			t.Fatal("missing-batch path did not report a capture gap and release unfinished capture")
 		}
+	}
+}
+
+func TestResidentMessageRuntimeCapture_ActionOverflowReportsGapWithoutUpload(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+		runID       = "run-overflow"
+		runAgentID  = "run-agent-overflow"
+	)
+	var (
+		mu      sync.Mutex
+		uploads int
+		gaps    []protocol.TurnCaptureGapReport
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-captures":
+			mu.Lock()
+			uploads++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureUploadResponse{Accepted: true})
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-capture-gaps":
+			var gap protocol.TurnCaptureGapReport
+			if err := json.NewDecoder(r.Body).Decode(&gap); err != nil {
+				t.Errorf("decode gap: %v", err)
+			}
+			mu.Lock()
+			gaps = append(gaps, gap)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureGapResponse{Accepted: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("write credential: %v", err)
+	}
+	d := &Daemon{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	turnToken := d.beginCanonicalActionTurn(agentID)
+	toolContext := ActiveProviderToolContext{AgentID: agentID, CallID: "tool-overflow", ToolCallID: "tool-overflow", TurnToken: turnToken}
+	d.SetActiveProviderToolContext(toolContext)
+	for index := 0; index <= canonicalActionAssociationLimitPerTurn; index++ {
+		canonicalID := fmt.Sprintf("70000000-0000-4000-8000-%012x", index+1)
+		d.observeCanonicalActionOutcome(toolContext, "message", canonicalID, true)
+	}
+	capture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-overflow", "turn-overflow", "batch-overflow", "provider-call", "overflow")
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-overflow", turnToken, nil, &capture) {
+		t.Fatal("overflow gap was not accepted")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if uploads != 0 {
+		t.Fatalf("overflow emitted %d complete uploads", uploads)
+	}
+	if len(gaps) != 1 || gaps[0].Reason != "canonical_action_overflow" {
+		t.Fatalf("overflow gaps = %+v", gaps)
+	}
+	if drained := d.endCanonicalActionTurn(agentID, turnToken); len(drained.Associations) != 0 || drained.Overflow {
+		t.Fatalf("overflow state survived terminal gap: %+v", drained)
+	}
+}
+
+func TestResidentMessageRuntimeCapture_AmbiguousContextReportsGapAndRecovers(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+		runID       = "run-ambiguous"
+		runAgentID  = "run-agent-ambiguous"
+	)
+	var (
+		mu      sync.Mutex
+		uploads []protocol.TurnCaptureUpload
+		gaps    []protocol.TurnCaptureGapReport
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-captures":
+			var upload protocol.TurnCaptureUpload
+			_ = json.NewDecoder(r.Body).Decode(&upload)
+			mu.Lock()
+			uploads = append(uploads, upload)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureUploadResponse{Accepted: true})
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-capture-gaps":
+			var gap protocol.TurnCaptureGapReport
+			_ = json.NewDecoder(r.Body).Decode(&gap)
+			mu.Lock()
+			gaps = append(gaps, gap)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureGapResponse{Accepted: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("write credential: %v", err)
+	}
+	d := &Daemon{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	turn1 := d.beginCanonicalActionTurn(agentID)
+	turn2 := d.beginCanonicalActionTurn(agentID)
+	for index, token := range []canonicalActionTurnToken{turn1, turn2} {
+		capture := residentTurnCaptureForBoundaryTest(runID, runAgentID, fmt.Sprintf("boundary-%d", index+1), fmt.Sprintf("turn-%d", index+1), fmt.Sprintf("batch-%d", index+1), fmt.Sprintf("provider-%d", index+1), "ambiguous")
+		if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, fmt.Sprintf("activity-%d", index+1), token, nil, &capture) {
+			t.Fatalf("ambiguous gap %d was not accepted", index+1)
+		}
+	}
+
+	turn3 := d.beginCanonicalActionTurn(agentID)
+	context3 := ActiveProviderToolContext{AgentID: agentID, CallID: "tool-3", ToolCallID: "tool-3", TurnToken: turn3}
+	d.SetActiveProviderToolContext(context3)
+	d.observeCanonicalActionOutcome(context3, "message", "70000000-0000-4000-8000-000000000379", true)
+	recovery := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-3", "turn-3", "batch-3", "provider-3", "recovery")
+	recovery.ProviderCalls[0].FinalAssistantMessage = json.RawMessage(`{"role":"assistant","blocks":[{"type":"toolCall","id":"tool-3"}]}`)
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-3", turn3, nil, &recovery) {
+		t.Fatal("recovery upload was not accepted")
+	}
+	parallelTurn := d.beginCanonicalActionTurn(agentID)
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: agentID, CallID: "parallel-1", ToolCallID: "parallel-1", TurnToken: parallelTurn})
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: agentID, CallID: "parallel-2", ToolCallID: "parallel-2", TurnToken: parallelTurn})
+	parallelCapture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-4", "turn-4", "batch-4", "provider-4", "parallel")
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-4", parallelTurn, nil, &parallelCapture) {
+		t.Fatal("parallel-tool ambiguity gap was not accepted")
+	}
+	postParallelTurn := d.beginCanonicalActionTurn(agentID)
+	postParallelContext := ActiveProviderToolContext{AgentID: agentID, CallID: "tool-5", ToolCallID: "tool-5", TurnToken: postParallelTurn}
+	d.SetActiveProviderToolContext(postParallelContext)
+	if active, ok := d.activeProviderToolContextSnapshot(agentID); !ok || active.TurnToken != postParallelTurn {
+		t.Fatalf("parallel-tool cleanup did not recover: %+v, ok=%v", active, ok)
+	}
+	d.endCanonicalActionTurn(agentID, postParallelTurn)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gaps) != 3 || gaps[0].Reason != "canonical_action_context_ambiguous" ||
+		gaps[1].Reason != "canonical_action_context_ambiguous" || gaps[2].Reason != "canonical_action_context_ambiguous" {
+		t.Fatalf("ambiguous gaps = %+v", gaps)
+	}
+	if len(uploads) != 1 || len(uploads[0].VisibleActions) != 1 || uploads[0].VisibleActions[0].ProducerCallID != "provider-3" {
+		t.Fatalf("recovery uploads = %+v", uploads)
 	}
 }
 

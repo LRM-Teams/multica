@@ -186,8 +186,7 @@ func TestInteractionDAGSegment_ReactionCreatesNoDeliveryAndNoWake(t *testing.T) 
 	reactedMessage := util.MustParseUUID("70000000-0000-4000-8000-00000000030e")
 	reactionID := util.MustParseUUID("70000000-0000-4000-8000-00000000030f")
 	seedMixedRLChannelMessage(t, h, reactedMessage)
-	_, err := h.tx.Exec(h.ctx, "INSERT INTO channel_message_reaction (id, channel_message_id) VALUES ($1, $2)", reactionID, reactedMessage)
-	require.NoError(t, err)
+	seedMixedRLChannelReaction(t, h, reactionID, reactedMessage)
 
 	before, err := h.runs.GetRun(h.ctx, run.RunID)
 	require.NoError(t, err)
@@ -265,6 +264,15 @@ func TestInteractionDAGSegment_TrainOnceOwnedAssociationInvariant(t *testing.T) 
 func seedMixedRLChannelMessage(t *testing.T, h mixedRLRepositoryHarness, messageID pgtype.UUID) {
 	t.Helper()
 	_, err := h.tx.Exec(h.ctx, "INSERT INTO channel_message (id) VALUES ($1) ON CONFLICT DO NOTHING", messageID)
+	require.NoError(t, err)
+}
+
+func seedMixedRLChannelReaction(t *testing.T, h mixedRLRepositoryHarness, reactionID, messageID pgtype.UUID) {
+	t.Helper()
+	_, err := h.tx.Exec(h.ctx,
+		"INSERT INTO channel_message_reaction (id, channel_message_id) VALUES ($1, $2)",
+		reactionID, messageID,
+	)
 	require.NoError(t, err)
 }
 

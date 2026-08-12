@@ -200,16 +200,19 @@ func TestInteractionDAGEdge_ReactionSourceIsReactedMessageProducer(t *testing.T)
 	reactorTurn := createMixedRLTurnWithID(t, h, run.RunID, reactor, "70000000-0000-4000-8000-000000000432")
 	advanceMixedRLRunToRunning(t, h, run.RunID)
 
-	messageID := util.MustParseUUID("70000000-0000-4000-8000-000000000433")
+	earlierMessageID := util.MustParseUUID("70000000-0000-4000-8000-000000000433")
+	laterMessageID := util.MustParseUUID("70000000-0000-4000-8000-000000000435")
 	reactionID := util.MustParseUUID("70000000-0000-4000-8000-000000000434")
-	seedMixedRLChannelMessage(t, h, messageID)
-	_, err := h.tx.Exec(h.ctx, "INSERT INTO channel_message_reaction (id, channel_message_id) VALUES ($1, $2)", reactionID, messageID)
-	require.NoError(t, err)
+	seedMixedRLChannelMessage(t, h, earlierMessageID)
+	seedMixedRLChannelMessage(t, h, laterMessageID)
+	seedMixedRLChannelReaction(t, h, reactionID, earlierMessageID)
 
 	acceptMixedRLTrustedCapture(t, h, run, producer, producerTurn, []ProviderCallInput{
-		mixedRLProviderCallInput(run.RunID, producer, producerTurn, "edge-reaction-src", 1),
+		mixedRLProviderCallInput(run.RunID, producer, producerTurn, "edge-reaction-earlier-src", 1),
+		mixedRLProviderCallInput(run.RunID, producer, producerTurn, "edge-reaction-later-src", 2),
 	}, []VisibleActionInput{
-		mixedRLSucceededMessageAction(run.RunID, producer, producerTurn, messageID, "edge-reaction-src", 1),
+		mixedRLSucceededMessageAction(run.RunID, producer, producerTurn, earlierMessageID, "edge-reaction-earlier-src", 1),
+		mixedRLSucceededMessageAction(run.RunID, producer, producerTurn, laterMessageID, "edge-reaction-later-src", 2),
 	}, nil)
 
 	actionUUID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("mixed-rl-reaction-action:"+reactionID.String()))
@@ -231,10 +234,12 @@ func TestInteractionDAGEdge_ReactionSourceIsReactedMessageProducer(t *testing.T)
 
 	reactionEdges := edgesByType(dag.Edges, "reaction")
 	require.Len(t, reactionEdges, 1)
-	assert.Equal(t, "message:"+messageID.String(), reactionEdges[0].SourceSegmentID,
-		"reaction edge source must be the reacted message's producer segment")
+	assert.Equal(t, "message:"+earlierMessageID.String(), reactionEdges[0].SourceSegmentID,
+		"reaction edge source must be the bound message, not the most recent produced message")
+	assert.NotEqual(t, "message:"+laterMessageID.String(), reactionEdges[0].SourceSegmentID,
+		"reaction edge source must not be inferred from the most recent produced message")
 	assert.Equal(t, "reaction:"+reactionID.String(), reactionEdges[0].DestinationSegmentID)
-	assert.Equal(t, messageID, reactionEdges[0].TriggerMessageID)
+	assert.Equal(t, earlierMessageID, reactionEdges[0].TriggerMessageID)
 	assert.Empty(t, edgesByType(dag.Edges, "channel_message"),
 		"reaction must not invent a delivery/channel_message edge")
 }

@@ -147,10 +147,16 @@ func TestTrustedTurnCaptureScopeMatchesRejectsPiSessionAndCaptureBoundaryMismatc
 	assert.False(t, trustedTurnCaptureScopeMatches(source, foreignWorkspace, runAgent, credentialAgentID, runtimeID, "pi-session", "boundary-active"), "workspace must match credential")
 }
 
-func TestTurnCaptureUploadResponseDoesNotExposeProviderPayload(t *testing.T) {
+func TestTurnCaptureUploadResponseSerializesZeroCountsWithoutProviderPayload(t *testing.T) {
 	body, err := json.Marshal(protocol.TurnCaptureUploadResponse{Accepted: true, TurnID: "turn-1"})
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"accepted":true,"turn_id":"turn-1"}`, string(body))
+	assert.JSONEq(t, `{
+		"accepted": true,
+		"turn_id": "turn-1",
+		"provider_call_count": 0,
+		"visible_action_count": 0,
+		"consumption_count": 0
+	}`, string(body))
 	assert.NotContains(t, string(body), "raw_provider_request")
 }
 
@@ -251,6 +257,27 @@ func TestTurnCaptureFromProtocol_RejectsInvalidTrustedBatchRecords(t *testing.T)
 			message: "canonical_id",
 		},
 		{
+			name: "noncanonical canonical id",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].CanonicalID = "700000000000400080000000000002d5"
+			},
+			message: "canonical_id",
+		},
+		{
+			name: "unsupported visible action kind",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].Kind = "arbitrary"
+			},
+			message: "visible action kind",
+		},
+		{
+			name: "unsupported consumption source",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.Consumptions[0].Source = "arbitrary"
+			},
+			message: "consumption source",
+		},
+		{
 			name: "missing request hash",
 			mutate: func(upload *protocol.TurnCaptureUpload) {
 				upload.ProviderCalls[0].RequestHash = " "
@@ -277,6 +304,13 @@ func TestTurnCaptureFromProtocol_RejectsInvalidTrustedBatchRecords(t *testing.T)
 				upload.ProviderCalls[0].RawProviderRequest = json.RawMessage(`{"messages":`)
 			},
 			message: "valid JSON",
+		},
+		{
+			name: "invalid consumption channel message id",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.Consumptions[0].ChannelMessageID = "not-a-uuid"
+			},
+			message: "channel_message_id",
 		},
 		{
 			name: "action references foreign call",
@@ -308,6 +342,34 @@ func TestTurnCaptureFromProtocol_RejectsInvalidTrustedBatchRecords(t *testing.T)
 			},
 			message: "before started_at",
 		},
+		{
+			name: "invalid turn started timestamp",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.Turn.StartedAt = "not-a-timestamp"
+			},
+			message: "turn started_at",
+		},
+		{
+			name: "invalid provider call completed timestamp",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.ProviderCalls[0].CompletedAt = "not-a-timestamp"
+			},
+			message: "provider call completed_at",
+		},
+		{
+			name: "invalid visible action timestamp",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].SucceededAt = "not-a-timestamp"
+			},
+			message: "visible action succeeded_at",
+		},
+		{
+			name: "invalid consumption timestamp",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.Consumptions[0].ConsumedAt = "not-a-timestamp"
+			},
+			message: "consumption consumed_at",
+		},
 	}
 
 	for _, tc := range tests {
@@ -320,6 +382,67 @@ func TestTurnCaptureFromProtocol_RejectsInvalidTrustedBatchRecords(t *testing.T)
 			assert.NotContains(t, err.Error(), "do-not-log")
 		})
 	}
+}
+
+func TestAgentTransportUploadTurnCapture_RejectsUnsupportedVocabularyWithBadRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*protocol.TurnCaptureUpload)
+	}{
+		{name: "visible action kind", mutate: func(upload *protocol.TurnCaptureUpload) { upload.VisibleActions[0].Kind = "arbitrary" }},
+		{name: "consumption source", mutate: func(upload *protocol.TurnCaptureUpload) { upload.Consumptions[0].Source = "arbitrary" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upload := validTurnCaptureUpload()
+			upload.AgentID = "70000000-0000-4000-8000-000000000291"
+			upload.RuntimeID = "70000000-0000-4000-8000-000000000292"
+			tc.mutate(&upload)
+			req := withChatTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/v1/env-dispatch/runs/run/turn-captures", upload))
+			req.Header.Set("X-Actor-Source", "agent_credential")
+			req.Header.Set("X-Agent-ID", upload.AgentID)
+			req = withURLParam(req, "runID", "70000000-0000-4000-8000-000000000293")
+			recorder := httptest.NewRecorder()
+			(&Handler{}).AgentTransportUploadTurnCapture(recorder, req)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+		})
+	}
+}
+
+func TestTurnCaptureFromProtocol_RejectsNestedCredentialKeysWithoutLeakingValues(t *testing.T) {
+	runID := util.MustParseUUID("70000000-0000-4000-8000-0000000002d1")
+	tests := []struct {
+		name  string
+		field string
+		raw   string
+	}{
+		{name: "refresh token", field: "refresh_token", raw: `{"request":{"auth":{"refresh_token":"sentinel-refresh-value"}}}`},
+		{name: "session token", field: "session-token", raw: `{"request":{"headers":[{"session-token":"sentinel-session-value"}]}}`},
+		{name: "identity token", field: "id_token", raw: `{"request":{"identity":{"id_token":"sentinel-id-value"}}}`},
+		{name: "private key", field: "private_key", raw: `{"request":{"signing":{"private_key":"sentinel-private-value"}}}`},
+		{name: "secret access key", field: "secret_access_key", raw: `{"request":{"aws":{"secret_access_key":"sentinel-access-value"}}}`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			upload := validTurnCaptureUpload()
+			upload.ProviderCalls[0].RawProviderRequest = json.RawMessage(tc.raw)
+			_, err := turnCaptureFromProtocol(runID, upload)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.field)
+			assert.NotContains(t, err.Error(), "sentinel-")
+		})
+	}
+}
+
+func TestCaptureJSONForbiddenField_AllowsBenignRelatedFieldNames(t *testing.T) {
+	field, forbidden, err := captureJSONForbiddenField(json.RawMessage(`{
+		"metrics":{"refresh_token_count":2},
+		"signing":{"private_key_id":"synthetic-key-id"},
+		"session":{"session_token_expires_at":"2026-08-12T12:00:00Z"}
+	}`))
+	require.NoError(t, err)
+	assert.False(t, forbidden)
+	assert.Empty(t, field)
 }
 
 func TestTurnCaptureFromProtocol_DerivesRecordIDsFromBatchKindAndOrdinal(t *testing.T) {

@@ -196,12 +196,18 @@
 
 ### 2.2 上下文挂载
 
-- [ ] **S2-C1 执行可挂笔记 brief**
+- [x] **S2-C1 执行可挂笔记 brief**
   - **目标**：Task/Wake/Issue 执行请求可带 `note_page_id`（或一组 note refs）。
   - **要做**：API/协议字段；服务端校验笔记 ACL 后注入执行上下文；字段进 prompt 时包在明确 untrusted 边界内（对齐现有 note AI「正文 untrusted」口径）。
   - **不要做**：挂载无权限笔记；把分享范围外的子页面整树塞进去（除非显式设计，默认只挂指定页）。
   - **依赖**：S2-C3
   - **完成标准**：带 note 的执行与不带 note 的执行都有测；无权 note_id → 拒绝。
+  - **已落地（2026-08-12）**：
+    - Task context key：`note_brief`（`service.WithNoteBrief` / `NoteBriefFromContext`）
+    - `CreateNoteWorkerJob`：ACL 后构建 untrusted `<note>` + `<instruction>` prompt，EnqueueChatTask，写回 `task_id`/`dispatched`
+    - 无权笔记 → 404；Editor `ai-jobs` 不挂 `note_brief`
+    - 测试：`TestWithNoteBrief*`、`TestBuildNoteWorkerPromptUntrustedBoundary`、`TestCreateNoteWorkerJobDispatchesWithNoteBrief`、`TestCreateNoteWorkerJobRejectsOutsiderWithoutNoteAccess`、`TestCreateNoteAIJobDoesNotAttachNoteBrief`
+    - Issue/Wake 通用可选挂载与 UI 触发留给后续（S2-A2 / 扩展 enqueue）；本项以 Worker 派发路径落实协议字段与 ACL
 
 - [ ] **S2-C2 Agent 读笔记工具（ACL 内）**
   - **目标**：Worker 运行中可按需读指定笔记页（可选：同树只读子页需另开任务，默认不做搜索全家桶）。

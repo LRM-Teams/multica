@@ -22,12 +22,17 @@ Pending writebacks (`note_page_writeback`) are a third path (D1 human review). T
 
 ## Status of Worker execution
 
-S2-C3 establishes the typed contract and misuse rejection. Attaching the note as execution brief and waking the Agent is **S2-C1 / S2-A2**. A successfully created Worker job may remain `pending` until those slices wire dispatch.
+S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispatch:
+
+1. `POST .../worker-jobs` loads the page under ACL, builds an untrusted `<note>` + trusted `<instruction>` prompt, enqueues a chat task, and merges `context.note_brief = { version, page_id, title }`.
+2. `note_worker_job.task_id` is set and status becomes `dispatched`.
+3. UI trigger is still **S2-A2**; Agent `notes get` tool is **S2-C2**; richer prompt partitions are **S2-C4**.
 
 ## Code pointers
 
 - Editor create/get/cancel: `server/internal/handler/notes.go` (`CreateNoteAIJob`, …)
 - Worker create/get + cross-rejection: `server/internal/handler/note_worker.go`
+- Note brief context helper: `server/internal/service/note_brief.go`
 - Shared intent constants: `server/internal/handler/note_intent.go`
 - FE types: `packages/core/types/note.ts` (`NoteIntent`, `CreateNoteWorkerJobRequest`, …)
 - Product todo: `todo.md` Slice 2

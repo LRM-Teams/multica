@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -26,8 +27,8 @@ type noteWorkerJobCreateRequest struct {
 	Action string `json:"action"`
 }
 
-// NoteWorkerJobResponse is the durable Worker job record. Dispatch into an
-// agent task is wired by S2-C1; until then status stays pending and task_id is null.
+// NoteWorkerJobResponse is the durable Worker job record. After S2-C1 dispatch,
+// status is dispatched (or later running/completed) and task_id is set.
 type NoteWorkerJobResponse struct {
 	ID            string  `json:"id"`
 	WorkspaceID   string  `json:"workspace_id"`
@@ -82,10 +83,11 @@ WHERE j.id = $1 AND j.workspace_id = $2 AND j.creator_id = $3`, jobID, workspace
 	return resp, nil
 }
 
-// CreateNoteWorkerJob records a Worker job for "do platform work from this note".
-// It must not create note_ai_job rows or apply Editor replace_page actions.
+// CreateNoteWorkerJob records a Worker job and dispatches a chat task with the
+// note mounted as an untrusted brief (S2-C1). It must not create note_ai_job
+// rows or apply Editor replace_page actions.
 func (h *Handler) CreateNoteWorkerJob(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	workspaceID, userID, userIDString, ok := h.notesWorkspaceAndUser(w, r)
 	if !ok {
 		return
 	}
@@ -116,6 +118,10 @@ func (h *Handler) CreateNoteWorkerJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
+	if h.TaskService == nil {
+		writeError(w, http.StatusInternalServerError, "task service unavailable")
+		return
+	}
 
 	jobID := uuid.New()
 	jobUUID := parseUUID(jobID.String())
@@ -127,12 +133,74 @@ VALUES ($1, $2, $3, $4, $5, $6, 'pending')`,
 		return
 	}
 
+	session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
+		WorkspaceID: page.WorkspaceID,
+		AgentID:     agentID,
+		CreatorID:   userID,
+		Title:       normalizeNoteWorkerJobTitle(page.Title),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create note Worker job")
+		return
+	}
+	prompt := buildNoteWorkerPrompt(instruction, uuidToString(page.ID), page.Title, page.Content)
+	msg, err := h.Queries.CreateChatMessage(r.Context(), db.CreateChatMessageParams{
+		ChatSessionID: session.ID,
+		Role:          "user",
+		Content:       prompt,
+		Parts:         []byte("[]"),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create note Worker job")
+		return
+	}
+	task, err := h.TaskService.EnqueueChatTask(r.Context(), session, parseUUID(userIDString))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to enqueue note Worker job: "+err.Error())
+		return
+	}
+	if err := h.Queries.LinkChatMessageToTask(r.Context(), db.LinkChatMessageToTaskParams{ID: msg.ID, TaskID: task.ID}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to link note Worker job")
+		return
+	}
+
+	mergedContext, err := service.WithNoteBrief(task.Context, service.NoteBrief{
+		Version: 1,
+		PageID:  uuidToString(page.ID),
+		Title:   page.Title,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to attach note brief")
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), `
+UPDATE agent_inbox_event SET context = $1::jsonb WHERE id = $2`, mergedContext, task.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist note brief")
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), `
+UPDATE note_worker_job
+SET task_id = $1, status = 'dispatched', updated_at = now()
+WHERE id = $2`, task.ID, jobUUID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to link note Worker task")
+		return
+	}
+	_, _ = h.Queries.UpdateChatSessionStatus(r.Context(), db.UpdateChatSessionStatusParams{ID: session.ID, Status: "archived"})
+
 	resp, err := h.noteWorkerJobResponse(r.Context(), page.WorkspaceID, userID, jobUUID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load note Worker job")
 		return
 	}
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+func normalizeNoteWorkerJobTitle(noteTitle string) string {
+	title := strings.TrimSpace(noteTitle)
+	if title == "" {
+		title = "Untitled"
+	}
+	return "Note Worker: " + title
 }
 
 // GetNoteWorkerJob returns a Worker job owned by the caller in this workspace.

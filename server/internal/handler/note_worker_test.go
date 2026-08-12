@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 func TestCreateNoteWorkerJobRejectsEditorFields(t *testing.T) {
@@ -36,38 +38,37 @@ func TestCreateNoteWorkerJobRejectsEditorFields(t *testing.T) {
 	}
 }
 
-func TestCreateNoteAIJobRejectsWorkerFields(t *testing.T) {
+func TestCreateNoteAIJobDoesNotAttachNoteBrief(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
-	agentID := createHandlerTestAgent(t, "Note Editor Reject Agent "+uuid.NewString()[:8], nil)
-	noteID := createNotePageForAITest(t, "Editor reject note "+uuid.NewString())
+	agentID := createHandlerTestAgent(t, "Note Editor No Brief "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "Editor no brief "+uuid.NewString())
+	job := createNoteAIJobForTest(t, noteID, agentID)
 
-	for _, body := range []map[string]any{
-		{"agent_id": agentID, "prompt": "rewrite", "intent": NoteIntentWorker},
-		{"agent_id": agentID, "prompt": "rewrite", "instruction": "do platform work"},
-		{"agent_id": agentID, "prompt": "rewrite", "action": "replace_page"},
-	} {
-		req := withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/ai-jobs", body), "id", noteID)
-		w := httptest.NewRecorder()
-		testHandler.CreateNoteAIJob(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("body=%v: expected 400, got %d: %s", body, w.Code, w.Body.String())
-		}
-		if !strings.Contains(w.Body.String(), errNoteEditorRejectsWorker) {
-			t.Fatalf("body=%v: expected worker-reject message, got %s", body, w.Body.String())
-		}
+	var contextRaw []byte
+	if err := testPool.QueryRow(context.Background(), `
+SELECT context FROM agent_inbox_event WHERE id = $1`, job.TaskID).Scan(&contextRaw); err != nil {
+		t.Fatalf("load editor task context: %v", err)
+	}
+	if _, ok, err := service.NoteBriefFromContext(contextRaw); err != nil || ok {
+		t.Fatalf("Editor task must not carry note_brief: ok=%v err=%v raw=%s", ok, err, contextRaw)
 	}
 }
 
-func TestCreateNoteWorkerJobDoesNotCreateNoteAIJob(t *testing.T) {
+
+func TestCreateNoteWorkerJobDispatchesWithNoteBrief(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	agentID := createHandlerTestAgent(t, "Note Worker Agent "+uuid.NewString()[:8], nil)
 	noteID := createNotePageForAITest(t, "Worker note "+uuid.NewString())
+	if _, err := testPool.Exec(context.Background(), `
+UPDATE note_page SET content = $1 WHERE id = $2`, "Brief body for worker", noteID); err != nil {
+		t.Fatalf("set note content: %v", err)
+	}
 
 	req := withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/worker-jobs", map[string]any{
 		"agent_id":    agentID,
@@ -83,11 +84,11 @@ func TestCreateNoteWorkerJobDoesNotCreateNoteAIJob(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode worker job: %v", err)
 	}
-	if resp.ID == "" || resp.PageID != noteID || resp.AgentID != agentID || resp.Status != "pending" || resp.Intent != NoteIntentWorker {
+	if resp.ID == "" || resp.PageID != noteID || resp.AgentID != agentID || resp.Status != "dispatched" || resp.Intent != NoteIntentWorker {
 		t.Fatalf("worker job response = %#v", resp)
 	}
-	if resp.TaskID != nil {
-		t.Fatalf("S2-C3 worker job must not dispatch a task yet, got task_id=%v", *resp.TaskID)
+	if resp.TaskID == nil || *resp.TaskID == "" {
+		t.Fatal("expected dispatched task_id")
 	}
 
 	var aiJobs int
@@ -99,10 +100,62 @@ SELECT count(*) FROM note_ai_job WHERE page_id = $1`, noteID).Scan(&aiJobs); err
 		t.Fatalf("worker create leaked %d note_ai_job rows", aiJobs)
 	}
 
+	var contextRaw []byte
+	var chatContent string
+	if err := testPool.QueryRow(context.Background(), `
+SELECT e.context, m.content
+FROM agent_inbox_event e
+JOIN chat_message m ON m.task_id = e.id AND m.role = 'user'
+WHERE e.id = $1`, *resp.TaskID).Scan(&contextRaw, &chatContent); err != nil {
+		t.Fatalf("load task context/message: %v", err)
+	}
+	brief, ok, err := service.NoteBriefFromContext(contextRaw)
+	if err != nil || !ok {
+		t.Fatalf("NoteBriefFromContext: ok=%v err=%v raw=%s", ok, err, contextRaw)
+	}
+	if brief.PageID != noteID {
+		t.Fatalf("brief.page_id = %q, want %s", brief.PageID, noteID)
+	}
+	if !strings.Contains(chatContent, "<note>") || !strings.Contains(chatContent, "untrusted") || !strings.Contains(chatContent, "Brief body for worker") {
+		t.Fatalf("chat prompt missing untrusted note wrap: %s", chatContent)
+	}
+	if !strings.Contains(chatContent, "<instruction>") || !strings.Contains(chatContent, "Turn this brief into an Issue") {
+		t.Fatalf("chat prompt missing instruction: %s", chatContent)
+	}
+
 	getReq := withURLParam(newRequest(http.MethodGet, "/api/notes/worker-jobs/"+resp.ID, nil), "jobId", resp.ID)
 	getRec := httptest.NewRecorder()
 	testHandler.GetNoteWorkerJob(getRec, getReq)
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("GetNoteWorkerJob: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+}
+
+func TestCreateNoteWorkerJobRejectsOutsiderWithoutNoteAccess(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Note Worker ACL Agent "+uuid.NewString()[:8], nil)
+	noteID := createNotePageForAITest(t, "Private worker note "+uuid.NewString())
+	outsiderID := createWorkspaceMemberForNoteACL(t, "note-worker-outsider")
+
+	req := withURLParam(newRequestAs(outsiderID, http.MethodPost, "/api/notes/pages/"+noteID+"/worker-jobs", map[string]any{
+		"agent_id":    agentID,
+		"instruction": "should not dispatch",
+	}), "id", noteID)
+	w := httptest.NewRecorder()
+	testHandler.CreateNoteWorkerJob(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("outsider worker create: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var jobs int
+	if err := testPool.QueryRow(context.Background(), `
+SELECT count(*) FROM note_worker_job WHERE page_id = $1`, noteID).Scan(&jobs); err != nil {
+		t.Fatalf("count worker jobs: %v", err)
+	}
+	if jobs != 0 {
+		t.Fatalf("outsider created %d worker jobs", jobs)
 	}
 }

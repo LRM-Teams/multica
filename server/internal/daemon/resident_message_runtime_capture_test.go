@@ -615,6 +615,92 @@ func TestResidentMessageRuntimeCapture_ActionOverflowReportsGapWithoutUpload(t *
 	}
 }
 
+func TestResidentMessageRuntimeCapture_AmbiguousContextReportsGapAndRecovers(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+		runID       = "run-ambiguous"
+		runAgentID  = "run-agent-ambiguous"
+	)
+	var (
+		mu      sync.Mutex
+		uploads []protocol.TurnCaptureUpload
+		gaps    []protocol.TurnCaptureGapReport
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-captures":
+			var upload protocol.TurnCaptureUpload
+			_ = json.NewDecoder(r.Body).Decode(&upload)
+			mu.Lock()
+			uploads = append(uploads, upload)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureUploadResponse{Accepted: true})
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-capture-gaps":
+			var gap protocol.TurnCaptureGapReport
+			_ = json.NewDecoder(r.Body).Decode(&gap)
+			mu.Lock()
+			gaps = append(gaps, gap)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureGapResponse{Accepted: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("write credential: %v", err)
+	}
+	d := &Daemon{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	turn1 := d.beginCanonicalActionTurn(agentID)
+	turn2 := d.beginCanonicalActionTurn(agentID)
+	for index, token := range []canonicalActionTurnToken{turn1, turn2} {
+		capture := residentTurnCaptureForBoundaryTest(runID, runAgentID, fmt.Sprintf("boundary-%d", index+1), fmt.Sprintf("turn-%d", index+1), fmt.Sprintf("batch-%d", index+1), fmt.Sprintf("provider-%d", index+1), "ambiguous")
+		if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, fmt.Sprintf("activity-%d", index+1), token, nil, &capture) {
+			t.Fatalf("ambiguous gap %d was not accepted", index+1)
+		}
+	}
+
+	turn3 := d.beginCanonicalActionTurn(agentID)
+	context3 := ActiveProviderToolContext{AgentID: agentID, CallID: "tool-3", ToolCallID: "tool-3", TurnToken: turn3}
+	d.SetActiveProviderToolContext(context3)
+	d.observeCanonicalActionOutcome(context3, "message", "70000000-0000-4000-8000-000000000379", true)
+	recovery := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-3", "turn-3", "batch-3", "provider-3", "recovery")
+	recovery.ProviderCalls[0].FinalAssistantMessage = json.RawMessage(`{"role":"assistant","blocks":[{"type":"toolCall","id":"tool-3"}]}`)
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-3", turn3, nil, &recovery) {
+		t.Fatal("recovery upload was not accepted")
+	}
+	parallelTurn := d.beginCanonicalActionTurn(agentID)
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: agentID, CallID: "parallel-1", ToolCallID: "parallel-1", TurnToken: parallelTurn})
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: agentID, CallID: "parallel-2", ToolCallID: "parallel-2", TurnToken: parallelTurn})
+	parallelCapture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-4", "turn-4", "batch-4", "provider-4", "parallel")
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-4", parallelTurn, nil, &parallelCapture) {
+		t.Fatal("parallel-tool ambiguity gap was not accepted")
+	}
+	postParallelTurn := d.beginCanonicalActionTurn(agentID)
+	postParallelContext := ActiveProviderToolContext{AgentID: agentID, CallID: "tool-5", ToolCallID: "tool-5", TurnToken: postParallelTurn}
+	d.SetActiveProviderToolContext(postParallelContext)
+	if active, ok := d.activeProviderToolContextSnapshot(agentID); !ok || active.TurnToken != postParallelTurn {
+		t.Fatalf("parallel-tool cleanup did not recover: %+v, ok=%v", active, ok)
+	}
+	d.endCanonicalActionTurn(agentID, postParallelTurn)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gaps) != 3 || gaps[0].Reason != "canonical_action_context_ambiguous" ||
+		gaps[1].Reason != "canonical_action_context_ambiguous" || gaps[2].Reason != "canonical_action_context_ambiguous" {
+		t.Fatalf("ambiguous gaps = %+v", gaps)
+	}
+	if len(uploads) != 1 || len(uploads[0].VisibleActions) != 1 || uploads[0].VisibleActions[0].ProducerCallID != "provider-3" {
+		t.Fatalf("recovery uploads = %+v", uploads)
+	}
+}
+
 func TestResidentMessageRuntimeCapture_NoHistoryReplayAfterNewBoundary(t *testing.T) {
 	const (
 		workspaceID = "11111111-1111-1111-1111-111111111111"

@@ -162,12 +162,13 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	}
 	var canonicalActionTurn canonicalActionTurnToken
 	if mixed {
-		canonicalActionTurn = d.beginCanonicalActionTurn(agentID)
+		canonicalActionTurn = d.allocateCanonicalActionTurnToken()
 	}
 	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
 		runner.observeMessageLifecycle(agentID, runtimeID)
 	}, func() {
 		if mixed {
+			d.activateCanonicalActionTurn(agentID, canonicalActionTurn)
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:start", protocol.MixedRunActivityActiveTurn, 1)
 			// Capture-batch accounting opens with the resident turn and closes
 			// only after the trusted upload (or capture-gap) is acknowledged.
@@ -249,7 +250,10 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	if drained.Overflow {
 		gapReason = "canonical_action_overflow"
 	}
-	if turnErr == nil && !drained.Overflow && capture != nil && capture.Complete {
+	if drained.Ambiguous {
+		gapReason = "canonical_action_context_ambiguous"
+	}
+	if turnErr == nil && !drained.Overflow && !drained.Ambiguous && capture != nil && capture.Complete {
 		payload := protocol.TurnCaptureUpload{
 			AgentID: agentID, RuntimeID: runtimeID, CaptureBatchID: capture.CaptureBatchID,
 			Turn: protocol.TurnCaptureTurn{

@@ -317,9 +317,8 @@ func TestCredentialProxyAssociatesResponseWithIngressContextSnapshot(t *testing.
 	}()
 	<-requestArrived
 	d.clearActiveProviderToolContext("agent-1", turn1, "tool-1")
-	turn2 := d.beginCanonicalActionTurn("agent-1")
 	d.SetActiveProviderToolContext(ActiveProviderToolContext{
-		AgentID: "agent-1", CallID: "tool-2", ToolCallID: "tool-2", TurnToken: turn2,
+		AgentID: "agent-1", CallID: "tool-2", ToolCallID: "tool-2", TurnToken: turn1,
 	})
 	close(releaseResponse)
 	if rec := <-recorder; rec.Code != http.StatusCreated {
@@ -330,13 +329,9 @@ func TestCredentialProxyAssociatesResponseWithIngressContextSnapshot(t *testing.
 	if len(drained1.Associations) != 1 || drained1.Associations[0].ToolCallID != "tool-1" || drained1.Associations[0].TurnToken != turn1 {
 		t.Fatalf("turn1 associations = %+v, want ingress tool-1 context", drained1.Associations)
 	}
-	drained2 := d.endCanonicalActionTurn("agent-1", turn2)
-	if len(drained2.Associations) != 0 {
-		t.Fatalf("response was rebound to replacement context: %+v", drained2.Associations)
-	}
 }
 
-func TestCanonicalActionTurnsDrainOnlyMatchingToken(t *testing.T) {
+func TestCanonicalActionTurnsMarkSameAgentOverlapAmbiguous(t *testing.T) {
 	d := &Daemon{}
 	turn1 := d.beginCanonicalActionTurn("agent-1")
 	context1 := ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn1}
@@ -349,22 +344,103 @@ func TestCanonicalActionTurnsDrainOnlyMatchingToken(t *testing.T) {
 	d.observeCanonicalActionOutcome(context2, "reaction", "70000000-0000-4000-8000-000000000375", true)
 
 	drained1 := d.endCanonicalActionTurn("agent-1", turn1)
-	if len(drained1.Associations) != 1 || drained1.Associations[0].TurnToken != turn1 {
-		t.Fatalf("turn1 drain = %+v", drained1.Associations)
+	if !drained1.Ambiguous {
+		t.Fatalf("turn1 drain = %+v, want ambiguous overlap", drained1)
 	}
-	active2, ok := d.activeProviderToolContextSnapshot("agent-1")
-	if !ok || active2.TurnToken != turn2 || active2.ToolCallID != "tool-2" {
-		t.Fatalf("turn1 drain cleared turn2 active context: %+v, ok=%v", active2, ok)
+	if active, ok := d.activeProviderToolContextSnapshot("agent-1"); ok {
+		t.Fatalf("ambiguous overlap remained selectable: %+v", active)
 	}
-	d.observeCanonicalActionOutcome(active2, "message", "70000000-0000-4000-8000-000000000376", true)
 	drained2 := d.endCanonicalActionTurn("agent-1", turn2)
-	if len(drained2.Associations) != 2 {
-		t.Fatalf("turn2 drain = %+v, want both turn2 records", drained2.Associations)
+	if !drained2.Ambiguous {
+		t.Fatalf("turn2 drain = %+v, want ambiguous overlap", drained2)
 	}
-	for _, association := range drained2.Associations {
-		if association.TurnToken != turn2 {
-			t.Fatalf("turn2 stole foreign association: %+v", drained2.Associations)
-		}
+	turn3 := d.beginCanonicalActionTurn("agent-1")
+	context3 := ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-3", ToolCallID: "tool-3", TurnToken: turn3}
+	d.SetActiveProviderToolContext(context3)
+	if active, ok := d.activeProviderToolContextSnapshot("agent-1"); !ok || active.TurnToken != turn3 {
+		t.Fatalf("non-overlapping turn did not recover: %+v, ok=%v", active, ok)
+	}
+}
+
+func TestCanonicalActionTurnMarksParallelToolsAmbiguous(t *testing.T) {
+	d := &Daemon{}
+	turn := d.beginCanonicalActionTurn("agent-1")
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn})
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-2", ToolCallID: "tool-2", TurnToken: turn})
+	if active, ok := d.activeProviderToolContextSnapshot("agent-1"); ok {
+		t.Fatalf("parallel tool context remained selectable: %+v", active)
+	}
+	if drained := d.endCanonicalActionTurn("agent-1", turn); !drained.Ambiguous {
+		t.Fatalf("parallel tool drain = %+v, want ambiguous", drained)
+	}
+}
+
+type completionDrainResponseWriter struct {
+	header       http.Header
+	status       int
+	body         bytes.Buffer
+	expectedBody int
+	onComplete   func()
+}
+
+func (w *completionDrainResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *completionDrainResponseWriter) WriteHeader(status int) { w.status = status }
+
+func (w *completionDrainResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.body.Write(p)
+	if w.body.Len() == w.expectedBody && w.onComplete != nil {
+		complete := w.onComplete
+		w.onComplete = nil
+		complete()
+	}
+	return n, err
+}
+
+func TestCredentialProxyAssociatesBeforeDownstreamBodyCompletion(t *testing.T) {
+	const responseBody = `{"created":true,"message":{"id":"70000000-0000-4000-8000-000000000377"}}`
+	d := newCredentialProxyTestDaemon(t, http.StatusCreated, responseBody)
+	turn := d.beginCanonicalActionTurn("agent-1")
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn})
+	var drained canonicalActionTurnDrain
+	w := &completionDrainResponseWriter{expectedBody: len(responseBody), onComplete: func() {
+		drained = d.endCanonicalActionTurn("agent-1", turn)
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/messages/send", strings.NewReader(`{}`))
+	req.Header.Set("X-Agent-ID", "agent-1")
+	req.Header.Set("X-Workspace-ID", "workspace-1")
+	d.credentialProxyAgentAPIHandler().ServeHTTP(w, req)
+	if w.status != http.StatusCreated || w.body.String() != responseBody {
+		t.Fatalf("forwarded response = %d %q", w.status, w.body.String())
+	}
+	if len(drained.Associations) != 1 || drained.Associations[0].ToolCallID != "tool-1" {
+		t.Fatalf("downstream completion drained before observation: %+v", drained)
+	}
+}
+
+func TestCredentialProxyOverflowCompletesWithoutAssociation(t *testing.T) {
+	responseBody := `{"created":true,"message":{"id":"70000000-0000-4000-8000-000000000378"}}` + strings.Repeat(" ", canonicalActionProxyResponseCaptureLimit)
+	d := newCredentialProxyTestDaemon(t, http.StatusCreated, responseBody)
+	turn := d.beginCanonicalActionTurn("agent-1")
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn})
+	var drained canonicalActionTurnDrain
+	w := &completionDrainResponseWriter{expectedBody: len(responseBody), onComplete: func() {
+		drained = d.endCanonicalActionTurn("agent-1", turn)
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/messages/send", strings.NewReader(`{}`))
+	req.Header.Set("X-Agent-ID", "agent-1")
+	req.Header.Set("X-Workspace-ID", "workspace-1")
+	d.credentialProxyAgentAPIHandler().ServeHTTP(w, req)
+	if w.status != http.StatusCreated || w.body.String() != responseBody {
+		t.Fatalf("overflow response changed: status=%d bytes=%d want=%d", w.status, w.body.Len(), len(responseBody))
+	}
+	if len(drained.Associations) != 0 {
+		t.Fatalf("overflow response associated provenance: %+v", drained.Associations)
 	}
 }
 

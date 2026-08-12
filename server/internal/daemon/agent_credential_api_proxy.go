@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -43,11 +42,13 @@ type canonicalActionTurnState struct {
 	agentID      string
 	associations []CanonicalActionAssociation
 	overflow     bool
+	ambiguous    bool
 }
 
 type canonicalActionTurnDrain struct {
 	Associations []CanonicalActionAssociation
 	Overflow     bool
+	Ambiguous    bool
 }
 
 type credentialProxyProvenanceState struct {
@@ -88,7 +89,7 @@ func (d *Daemon) SetActiveProviderToolContext(ctx ActiveProviderToolContext) {
 		return
 	}
 	turn, ok := state.turns[ctx.TurnToken]
-	if !ok || turn.agentID != agentID {
+	if !ok || turn.agentID != agentID || turn.ambiguous {
 		return
 	}
 	if strings.TrimSpace(ctx.CallID) == "" {
@@ -100,26 +101,56 @@ func (d *Daemon) SetActiveProviderToolContext(ctx ActiveProviderToolContext) {
 	ctx.AgentID = agentID
 	ctx.CallID = strings.TrimSpace(ctx.CallID)
 	ctx.ToolCallID = strings.TrimSpace(ctx.ToolCallID)
+	if active, exists := state.active[agentID]; exists &&
+		(active.TurnToken != ctx.TurnToken || active.ToolCallID != ctx.ToolCallID) {
+		turn.ambiguous = true
+		if activeTurn, found := state.turns[active.TurnToken]; found && activeTurn.agentID == agentID {
+			activeTurn.ambiguous = true
+		}
+		delete(state.active, agentID)
+		return
+	}
 	state.active[agentID] = ctx
 }
 
 // beginCanonicalActionTurn creates an isolated provenance boundary. Existing
 // turns for the same agent remain intact until their matching token drains.
 func (d *Daemon) beginCanonicalActionTurn(agentID string) canonicalActionTurnToken {
+	token := d.allocateCanonicalActionTurnToken()
+	d.activateCanonicalActionTurn(agentID, token)
+	return token
+}
+
+func (d *Daemon) allocateCanonicalActionTurnToken() canonicalActionTurnToken {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	agentID = strings.TrimSpace(agentID)
-	if agentID == "" {
-		return 0
-	}
 	state.nextToken++
 	if state.nextToken == 0 {
 		state.nextToken++
 	}
-	token := state.nextToken
-	state.turns[token] = &canonicalActionTurnState{agentID: agentID}
-	return token
+	return state.nextToken
+}
+
+func (d *Daemon) activateCanonicalActionTurn(agentID string, token canonicalActionTurnToken) {
+	state := provenanceStateFor(d)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" || token == 0 {
+		return
+	}
+	turn := &canonicalActionTurnState{agentID: agentID}
+	for _, live := range state.turns {
+		if live.agentID == agentID {
+			live.ambiguous = true
+			turn.ambiguous = true
+		}
+	}
+	state.turns[token] = turn
+	if turn.ambiguous {
+		delete(state.active, agentID)
+	}
 }
 
 // clearActiveProviderToolContext clears only the matching tool. A late result
@@ -152,7 +183,7 @@ func (d *Daemon) endCanonicalActionTurn(agentID string, turnToken canonicalActio
 	delete(state.turns, turnToken)
 	out := make([]CanonicalActionAssociation, len(turn.associations))
 	copy(out, turn.associations)
-	return canonicalActionTurnDrain{Associations: out, Overflow: turn.overflow}
+	return canonicalActionTurnDrain{Associations: out, Overflow: turn.overflow, Ambiguous: turn.ambiguous}
 }
 
 func (d *Daemon) activeProviderToolContextSnapshot(agentID string) (ActiveProviderToolContext, bool) {
@@ -165,7 +196,7 @@ func (d *Daemon) activeProviderToolContextSnapshot(agentID string) (ActiveProvid
 		return ActiveProviderToolContext{}, false
 	}
 	turn, exists := state.turns[active.TurnToken]
-	if !exists || turn.agentID != agentID {
+	if !exists || turn.agentID != agentID || turn.ambiguous {
 		return ActiveProviderToolContext{}, false
 	}
 	return active, true
@@ -208,7 +239,7 @@ func (d *Daemon) observeCanonicalActionOutcome(providerContext ActiveProviderToo
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	turn, ok := state.turns[providerContext.TurnToken]
-	if !ok || turn.agentID != agentID || strings.TrimSpace(providerContext.ToolCallID) == "" {
+	if !ok || turn.agentID != agentID || turn.ambiguous || strings.TrimSpace(providerContext.ToolCallID) == "" {
 		return
 	}
 	for _, existing := range turn.associations {
@@ -290,47 +321,45 @@ func (d *Daemon) credentialProxyAgentAPIHandler() http.HandlerFunc {
 		}
 		defer response.Body.Close()
 		copyCredentialProxyResponseHeaders(w.Header(), response.Header)
+		if isCanonicalActionProxyRequest(r.Method, r.URL.Path) {
+			prefix, readErr := io.ReadAll(io.LimitReader(response.Body, canonicalActionProxyResponseCaptureLimit+1))
+			overflow := len(prefix) > canonicalActionProxyResponseCaptureLimit
+			if readErr == nil && !overflow && hasProviderContext {
+				kind, canonicalID, canonical := canonicalActionFromProxyResponse(
+					r.Method, r.URL.Path, response.StatusCode, prefix,
+				)
+				if canonical {
+					d.observeCanonicalActionOutcome(providerContext, kind, canonicalID, true)
+				}
+			}
+			w.WriteHeader(response.StatusCode)
+			_, writeErr := w.Write(prefix)
+			if writeErr == nil && overflow {
+				_, writeErr = io.Copy(w, response.Body)
+			}
+			if err := firstProxyResponseError(readErr, writeErr); err != nil && d.logger != nil {
+				d.logger.Warn("write agent credential proxy response", "error", err, "path", r.URL.Path)
+			}
+			return
+		}
 		w.WriteHeader(response.StatusCode)
-		captured := &boundedResponseCapture{limit: canonicalActionProxyResponseCaptureLimit}
-		if _, err := io.Copy(io.MultiWriter(w, captured), response.Body); err != nil && d.logger != nil {
+		if _, err := io.Copy(w, response.Body); err != nil && d.logger != nil {
 			d.logger.Warn("write agent credential proxy response", "error", err, "path", r.URL.Path)
 		}
-		kind, canonicalID, ok := canonicalActionFromProxyResponse(
-			r.Method, r.URL.Path, response.StatusCode, captured.Bytes(),
-		)
-		if ok && !captured.Overflowed() && hasProviderContext {
-			d.observeCanonicalActionOutcome(providerContext, kind, canonicalID, true)
+	}
+}
+
+func isCanonicalActionProxyRequest(method, path string) bool {
+	return method == http.MethodPost && (path == "/api/agent/messages/send" || path == "/api/agent/messages/react")
+}
+
+func firstProxyResponseError(errors ...error) error {
+	for _, err := range errors {
+		if err != nil {
+			return err
 		}
 	}
-}
-
-type boundedResponseCapture struct {
-	buffer     bytes.Buffer
-	limit      int
-	overflowed bool
-}
-
-func (c *boundedResponseCapture) Write(p []byte) (int, error) {
-	written := len(p)
-	remaining := c.limit - c.buffer.Len()
-	if remaining <= 0 {
-		c.overflowed = c.overflowed || written > 0
-		return written, nil
-	}
-	if len(p) > remaining {
-		p = p[:remaining]
-		c.overflowed = true
-	}
-	_, _ = c.buffer.Write(p)
-	return written, nil
-}
-
-func (c *boundedResponseCapture) Bytes() []byte {
-	return c.buffer.Bytes()
-}
-
-func (c *boundedResponseCapture) Overflowed() bool {
-	return c.overflowed
+	return nil
 }
 
 func canonicalActionFromProxyResponse(method, path string, status int, body []byte) (kind, canonicalID string, ok bool) {

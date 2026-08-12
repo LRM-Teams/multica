@@ -153,6 +153,9 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 	}
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch"}); err != nil {
+		t.Fatalf("accept test APM launch: %v", err)
+	}
 	coordinator, _ := resolveTestInbox(t, d, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
 	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot, commitIfCurrent)
@@ -587,6 +590,9 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		}
 		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 			t.Fatalf("ensureIdleMessageCoordinator: %v", err)
+		}
+		if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "acceptance-launch"}); err != nil {
+			t.Fatalf("accept test APM launch: %v", err)
 		}
 		acks = make(chan protocol.AgentDeliverAckPayload, 2)
 		recoveryReqs := make(chan protocol.AgentRecoveryRequest, 2)

@@ -765,15 +765,8 @@ function MachineDetailView({
   const ownerMember = ownerId
     ? members.find((m) => m.user_id === ownerId) ?? null
     : null;
-  const currentMember = user
-    ? members.find((member) => member.user_id === user.id) ?? null
-    : null;
-  const isWorkspaceUpgradeAdmin =
-    currentMember?.role === "owner" || currentMember?.role === "admin";
   const canUpdate =
     !!user && !!daemonUpgradeRuntime && daemonUpgradeRuntime.owner_id === user.id;
-  const canUpgrade =
-    !!daemonUpgradeRuntime && (canUpdate || isWorkspaceUpgradeAdmin);
   const {
     data: workspacesData,
     isFetching: workspacesLoading,
@@ -1037,7 +1030,7 @@ function MachineDetailView({
                     daemonTargetVersion={machine.daemonTargetVersion}
                     updateError={machine.updateError}
                     isOnline={machine.health === "online"}
-                    canUpdate={canUpgrade}
+                    canUpdate={canUpdate}
                   />
                 </InfoRow>
               ) : null}

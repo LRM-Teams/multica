@@ -83,7 +83,6 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string, take
 	var expectedTakeover daemon.MachineUpgradeTakeoverProof
 	if takeoverExpectation != nil {
 		expectedTakeover = *takeoverExpectation
-		expectedTakeover.RuntimeIDs = append([]string(nil), takeoverExpectation.RuntimeIDs...)
 		expectedTakeover.WorkspaceIDs = append([]string(nil), takeoverExpectation.WorkspaceIDs...)
 		expectedTakeover.CandidateComputerGeneration = generation
 		expectedTakeover.CandidatePID = child.Process.Pid

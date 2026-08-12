@@ -1,17 +1,21 @@
 # Machine Upgrade rollout and rollback
 
-Machine Upgrade is an additive, daemon-scoped lifecycle. Artifact publication,
+Machine Upgrade is an additive, Computer-scoped lifecycle. Artifact publication,
 staging, and an Active VersionStore pointer are progress only; server
-completion requires a capable successor generation plus the complete runtime
-set captured at acceptance.
+completion requires a capable successor generation plus recovery of the Runtime
+set captured across every active Workspace Execution Binding at acceptance.
+Only the Computer owner may initiate or cancel this machine-wide mutation. A
+Workspace supplies visibility and an entry point, not an independent upgrade
+scope; every active Workspace connection projects the same operation and result.
 
 For a standalone resident, candidate verification is local-first. The target
 binds the exclusive control port and proves its exact PID, binary version,
-VersionStore generation, and configured Runtime/Workspace shape without
-calling heartbeat or registration. The server then performs one atomic
+VersionStore generation, Computer generation, and accepted Workspace binding
+set without calling heartbeat or registration. The server then performs one atomic
 predecessor-to-candidate Computer generation CAS. Only after that ownership
 change may the candidate run normal authenticated startup and complete the
-accepted Runtime/Workspace registration proof. Rejection before the CAS leaves
+accepted Runtime recovery proof. Runtime cardinality is not takeover identity.
+Rejection before the CAS leaves
 the incumbent generation valid and does not enter server rollback.
 
 ## Deployment order
@@ -35,7 +39,8 @@ the incumbent generation valid and does not enter server rollback.
    no-op, while the interval flag only adjusts detection cadence.
 4. Deploy the web/desktop UI. A runtime is a projection of its daemon's
    canonical operation; sibling status must agree.
-5. New callers must use the daemon-scoped machine-upgrade API. The three
+5. New callers must use the Computer-scoped machine-upgrade API. Historical
+   route and database fields still use `daemon` names. The three
    legacy runtime-scoped HTTP update routes remain temporary compatibility
    adapters: they resolve the runtime's daemon and project or cancel that
    daemon's canonical operation. They must never recreate runtime-owned update

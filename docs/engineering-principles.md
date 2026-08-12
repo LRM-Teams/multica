@@ -211,6 +211,7 @@
 ### 4.0 服务环境决定连接目标与 Computer 包源 — `可执行`（⑤，owner: @Barry）
 - **服务环境**：`production` 是 leagent.me 正式服务，browser/API 的 canonical origin 分别是 `https://www.leagent.me` 与 `https://api.leagent.me`；`test` 是腾讯云测试服务，首版以 `https://82.157.184.89` 同时承担 app/API，之后可只改部署配置切到 `https://test.leagent.me`。服务端用 `APP_ENV=production|test` 声明身份，并通过公共 `/api/config.environment` 明确告诉页面，禁止根据域名或 IP 猜环境。旧服务缺字段或字段非法时，前端保守降级为 production。
 - **Computer 本机模型**：同一 OS 用户只有一个 Computer root/identity/resident；每个环境分别保存登录和 Workspace connection，本地键为 `(environment, workspace_id)`。两边连接可以同时保留，但单个 resident generation 同一时刻只服务当前环境；切换必须 drain、重启、验收，不能并发连接 production/test。
+- **Computer 生命周期所有权**：升级、重启和其他整机 mutation 只由 Computer owner 发起；Workspace owner/admin 只管理自己的 Workspace，不因页面中可见一台 Computer 就取得别人电脑的控制权。Workspace 页面只是发起入口和状态投影；一次 Computer 升级对该环境下全部 active Workspace connections 生效，所有连接必须看到同一 operation、版本和结果，禁止按发起 Workspace 分叉升级 lineage。
 - **包源随环境固定**：production 只用 `metainfo.json.environments.production` 的稳定版本；test 只用 `metainfo.json.environments.test` 的预发布版本。没有独立 `release_channel` 让用户制造“test 连稳定包”或“production 连预发布包”的组合。带版本 archive/checksum/manifest 不可变；不发布根目录 channel JSON，也不做隐式 fallback。
 - **页面引导**：Computer 页面用 `/api/config.environment` 决定命令类型，用 `daemon_server_url` 和 `daemon_app_url` 分别填 test API/Web origin。production 显示 `multica setup /<workspace>`；test 显示 `multica setup --environment test --server-url <api-origin> --app-url <app-origin> /<workspace>`。两个值当前可以相同，但协议不强制同源。页面不能读取本机 `~/.multica`，所以首次连接必须把目标写进命令；完成后本机配置保存 active environment。连接卡只保留平台选择、安装命令、setup 命令和等待状态；一行说明 setup 会激活目标环境、连接 Workspace 并启动 Computer。若 setup 将切换已有 active environment，CLI 必须在任何写入或登录前询问，除非自动化显式传 `--yes`。
 - **部署拓扑**：workflow 结构固定为 `dev → GitHub Environment test → Tencent s89`、`main → legacy-named GitHub Environment aliyun-dev → Aliyun/leagent.me production`。`aliyun-dev` 只因现有 secrets 无法导出而保留旧名字，不代表 dev。部署验收仍必须分别证明 workflow、目标 runner、served origin、镜像 SHA 与数据库迁移；workflow 合并本身不等于已上线。
@@ -336,7 +337,7 @@
 
 ### 4.15 Agent 重启控制面直接替换为 Raft 风格组合 — `仅文档`（新协议尚未落地）
 - 舍弃现有 `agent_lifecycle_operation` 编排，不做适配、双写或兼容层。服务端按 Raft 的边界组合 stop / session reset / workspace reset / start，机器继续用 status / session / Activity 事件表达运行时事实，不另建 phase-event ledger。
-- 复用 Raft 架构不等于继承其丢失窗口：每条命令必须有稳定 ID，破坏性命令必须幂等，Machine Service 必须持久保留终态并重试到 server ACK；start ACK 只代表受理，ready 只能由后续 status/session 证明。Full Reset 必须先取得 runtime 已停止且 provider lease 已释放的可靠证据，之后才能删除并重建完整 Agent Workspace。
+- 复用 Raft 架构不等于继承其丢失窗口：每条命令必须有稳定 ID，破坏性命令必须幂等，Computer 必须持久保留终态并重试到 server ACK；start ACK 只代表受理，ready 只能由后续 status/session 证明。Full Reset 必须先取得 runtime 已停止且 provider lease 已释放的可靠证据，之后才能删除并重建完整 Agent Workspace。
 - Activity 沿用 Raft 的 `Stopped` / `Starting` / `Working` 叙事；stop 事件附带 restart mode 与是否强制中断 active turn，不再发明 request/phase/completion 三套 Activity。三种模式和完整理由见 `docs/adr/0009-three-agent-restart-modes.md`。
 
 ### 4.16 调研进度只认服务端账本，Agent prose 不得推进状态 — `可执行`（① canonical ledger + ② strict envelope + ③单一调度器 + ⑤迁移/幂等回归；owner: @Codex ✅ 已签）

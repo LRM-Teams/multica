@@ -181,6 +181,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 	d := &Daemon{
 		cfg: Config{
 			WorkspacesRoot: t.TempDir(),
+			HealthPort:     19514,
 			Agents:         map[string]AgentEntry{"pi": {Path: "/usr/bin/true"}},
 		},
 		client:            client,
@@ -359,6 +360,7 @@ func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *tes
 	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 8)
 	d := &Daemon{
+		cfg:               Config{WorkspacesRoot: t.TempDir()},
 		canonicalRuntimes: pool,
 		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: "workspace-1"}},
 		mixedRunActivityReporter: func(payload protocol.MixedRunActivityTransitionPayload) bool {

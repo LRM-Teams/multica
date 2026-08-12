@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS env_dispatch_delivery_obligation_source_recipient_agent_idx;

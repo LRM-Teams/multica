@@ -41,13 +41,14 @@ type preMigrationHook func(ctx context.Context, pool *pgxpool.Pool) error
 // monthly-slice backfill for the historical pre-103 schema. Current
 // `agent_usage` recovery backfills use cmd/backfill_agent_usage_hourly.
 var preMigrationHooks = map[string]preMigrationHook{
-	"103_drop_legacy_daily_rollups":       runHistoricalUsageHourlyHook,
-	"188_agent_ascii_handle_backfill":     runAgentASCIIHandleBackfillHook,
-	"190_agent_handle_truncation_repair":  runAgentASCIIHandleBackfillHook,
-	"191_agent_default_handle_repair":     runAgentDefaultHandleRepairHook,
-	"227_agent_delete_fk_indexes":         runAgentDeleteFKIndexesHook,
-	"229_agent_delete_cascade_fk_indexes": runAgentDeleteCascadeFKIndexesHook,
-	"245_research_fleet_agent_indexes":    runResearchFleetAgentIndexesHook,
+	"103_drop_legacy_daily_rollups":                    runHistoricalUsageHourlyHook,
+	"188_agent_ascii_handle_backfill":                  runAgentASCIIHandleBackfillHook,
+	"190_agent_handle_truncation_repair":               runAgentASCIIHandleBackfillHook,
+	"191_agent_default_handle_repair":                  runAgentDefaultHandleRepairHook,
+	"227_agent_delete_fk_indexes":                      runAgentDeleteFKIndexesHook,
+	"229_agent_delete_cascade_fk_indexes":              runAgentDeleteCascadeFKIndexesHook,
+	"245_research_fleet_agent_indexes":                 runResearchFleetAgentIndexesHook,
+	"337_env_dispatch_delivery_obligation_agent_index": runAgentDeleteFKIndexesHook,
 }
 
 type concurrentIndexSpec struct {
@@ -92,6 +93,7 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_squad_leader", `CREATE INDEX CONCURRENTLY idx_squad_leader ON squad (leader_id)`},
 		{"idx_agent_creation_draft_used_agent", `CREATE INDEX CONCURRENTLY idx_agent_creation_draft_used_agent ON agent_creation_draft (used_agent_id)`},
 		{"idx_agent_workspace_source_agent", `CREATE INDEX CONCURRENTLY idx_agent_workspace_source_agent ON agent (workspace_id, source_agent_id) WHERE source_agent_id IS NOT NULL`},
+		{"env_dispatch_delivery_obligation_source_recipient_agent_idx", `CREATE INDEX CONCURRENTLY env_dispatch_delivery_obligation_source_recipient_agent_idx ON env_dispatch_delivery_obligation (source_recipient_agent_id)`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

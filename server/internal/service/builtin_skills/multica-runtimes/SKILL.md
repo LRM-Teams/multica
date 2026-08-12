@@ -48,6 +48,15 @@ convergence evidence; Runtime cardinality is not Computer takeover identity. A
 candidate rejected before the CAS cannot fence the incumbent and requires no
 remote rollback.
 
+Standalone takeover also carries a candidate-generation-bound local protocol
+marker from launcher to candidate. A v2 launcher waits for the explicit
+`takeover_ready` state. When a
+new candidate is spawned by a pre-v2 launcher, it projects the historical
+`running`/`handoff` loopback shape from the durable receipt so that launcher can
+authorize the same generation CAS. This compatibility projection does not
+start preflight, register runtimes, connect WebSocket, or claim work; those
+remain blocked until the CAS commits.
+
 ## CLI
 
 ```bash

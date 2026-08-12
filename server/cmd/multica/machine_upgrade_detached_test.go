@@ -79,6 +79,19 @@ func TestDetachedSuccessorProofRejectsEveryTakeoverIdentityMismatch(t *testing.T
 	}
 }
 
+func TestMachineUpgradeTakeoverProtocolIsBoundToCandidateGeneration(t *testing.T) {
+	value := machineUpgradeTakeoverProtocolValue(12)
+	if got := machineUpgradeTakeoverProtocolForGeneration(value, 12); got != daemon.MachineUpgradeTakeoverProtocolV2 {
+		t.Fatalf("matching protocol = %q", got)
+	}
+	if got := machineUpgradeTakeoverProtocolForGeneration(value, 13); got != "" {
+		t.Fatalf("inherited stale protocol = %q, want legacy", got)
+	}
+	if got := machineUpgradeTakeoverProtocolForGeneration(string(daemon.MachineUpgradeTakeoverProtocolV2), 12); got != "" {
+		t.Fatalf("unbound protocol = %q, want legacy", got)
+	}
+}
+
 func TestReadyDetachedSuccessorMismatchTerminatesOnlySpawnedCandidate(t *testing.T) {
 	if os.Getenv("MULTICA_TEST_DETACHED_CANDIDATE_SLEEPER") == "1" {
 		time.Sleep(time.Minute)

@@ -281,6 +281,14 @@ func (r *settlementBlockingPiRuntime) AcceptMessageBatch(_ context.Context, _ []
 	return agent.ResidentMessageAcceptance{Done: turn.done}, nil
 }
 
+func (r *settlementBlockingPiRuntime) PrepareMessageInput(_ context.Context, _ func(agent.Message)) error {
+	return nil
+}
+
+func (r *settlementBlockingPiRuntime) AcceptReminderInput(_ context.Context, _ agent.ResidentReminderInput) (agent.ResidentMessageAcceptance, error) {
+	return agent.ResidentMessageAcceptance{}, nil
+}
+
 func (r *settlementBlockingPiRuntime) AcceptPendingNotice(context.Context, agent.ResidentPendingNotice) error {
 	return nil
 }
@@ -428,7 +436,7 @@ func TestRuntimePoolSettlesPiTurnBeforeReopeningMessageAdmission(t *testing.T) {
 	firstComplete := make(chan error, 1)
 	if err := pool.handoffIdleMessages(
 		context.Background(), "agent-1", "runtime-1", messages,
-		nil, nil, nil, func(err error, _ uint64) { firstComplete <- err },
+		nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) { firstComplete <- err },
 	); err != nil {
 		t.Fatalf("first handoff: %v", err)
 	}
@@ -465,7 +473,7 @@ func TestRuntimePoolSettlesPiTurnBeforeReopeningMessageAdmission(t *testing.T) {
 	secondComplete := make(chan error, 1)
 	if err := pool.handoffIdleMessages(
 		context.Background(), "agent-1", "runtime-1", messages,
-		nil, nil, nil, func(err error, _ uint64) { secondComplete <- err },
+		nil, nil, nil, func(err error, _ uint64, _ *agent.ResidentTurnCapture) { secondComplete <- err },
 	); err != nil {
 		t.Fatalf("second handoff after settlement: %v", err)
 	}
@@ -512,7 +520,7 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 			observed = append(observed, "activity")
 			mu.Unlock()
 		},
-		func(error, uint64) {
+		func(error, uint64, *agent.ResidentTurnCapture) {
 			mu.Lock()
 			observed = append(observed, "complete")
 			mu.Unlock()
@@ -545,7 +553,7 @@ func TestRuntimePoolDrainsResidentActivityWithoutObserver(t *testing.T) {
 	if err := pool.handoffIdleMessages(
 		context.Background(), "agent-1", "runtime-1",
 		[]protocol.AgentMessageProjection{{ID: "message-1", Target: "dm:one", Seq: 1}},
-		nil, nil, nil, func(error, uint64) { close(completed) },
+		nil, nil, nil, func(error, uint64, *agent.ResidentTurnCapture) { close(completed) },
 	); err != nil {
 		t.Fatalf("handoff: %v", err)
 	}
@@ -578,7 +586,7 @@ func TestRuntimePoolSuppressesStaleTerminalActivityAfterNextTurnStarts(t *testin
 	}
 	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1}}
 	result := make(chan bool, 1)
-	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, func(_ error, generation uint64) {
+	if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, func(_ error, generation uint64, _ *agent.ResidentTurnCapture) {
 		if err := pool.handoffIdleMessages(context.Background(), "agent-1", "runtime-1", messages, nil, nil, nil, nil); err != nil {
 			result <- true
 			return

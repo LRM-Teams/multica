@@ -1704,6 +1704,44 @@ func (q *Queries) ListMixedRLSnapshotSegmentsCanonical(ctx context.Context, snap
 	return items, nil
 }
 
+const listMixedRLRunSegmentsCanonical = `-- name: ListMixedRLRunSegmentsCanonical :many
+SELECT segment_id, snapshot_id, run_id, run_agent_id, kind, canonical_action_id, segment_ordinal, reward, reward_source, provisional_at, finalized_at FROM interaction_dag_run_segment
+WHERE run_id = $1
+ORDER BY segment_ordinal, segment_id
+`
+
+func (q *Queries) ListMixedRLRunSegmentsCanonical(ctx context.Context, runID pgtype.UUID) ([]InteractionDagRunSegment, error) {
+	rows, err := q.db.Query(ctx, listMixedRLRunSegmentsCanonical, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagRunSegment{}
+	for rows.Next() {
+		var i InteractionDagRunSegment
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.SnapshotID,
+			&i.RunID,
+			&i.RunAgentID,
+			&i.Kind,
+			&i.CanonicalActionID,
+			&i.SegmentOrdinal,
+			&i.Reward,
+			&i.RewardSource,
+			&i.ProvisionalAt,
+			&i.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMixedRLVisibleActionsCanonical = `-- name: ListMixedRLVisibleActionsCanonical :many
 SELECT action_id, run_id, run_agent_id, turn_id, kind, canonical_id, producer_call_id, action_ordinal, status, created_at FROM pi_visible_action
 WHERE run_id = $1

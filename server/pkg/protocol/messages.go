@@ -1250,3 +1250,78 @@ type AgentMemoryHydrateEntry struct {
 	ChangeSeq   int64  `json:"change_seq,omitempty"`
 	DeletedAt   string `json:"deleted_at,omitempty"`
 }
+
+// TurnCaptureUpload is the daemon-to-server, agent-credential-authenticated
+// record of one settled resident Pi turn. The daemon, rather than the
+// workspace runner, is the trust boundary which creates this payload.
+type TurnCaptureUpload struct {
+	AgentID        string                    `json:"agent_id"`
+	RuntimeID      string                    `json:"runtime_id"`
+	CaptureBatchID string                    `json:"capture_batch_id"`
+	Turn           TurnCaptureTurn           `json:"turn"`
+	ProviderCalls  []TurnCaptureProviderCall `json:"provider_calls"`
+	PayloadHash    string                    `json:"payload_hash"`
+}
+
+// TurnCaptureTurn identifies the logical resident turn that produced a
+// capture batch. CaptureBoundary is the server-issued binding boundary and is
+// used to reject a stale or cross-run upload.
+type TurnCaptureTurn struct {
+	TurnID          string `json:"turn_id"`
+	RunAgentID      string `json:"run_agent_id"`
+	PiSessionID     string `json:"pi_session_id"`
+	CaptureBoundary string `json:"capture_boundary"`
+	TurnOrdinal     int64  `json:"turn_ordinal"`
+	Status          string `json:"status"`
+	StartedAt       string `json:"started_at,omitempty"`
+	CompletedAt     string `json:"completed_at,omitempty"`
+}
+
+// TurnCaptureProviderCall preserves the final provider request and typed
+// final assistant message for one provider call. RawProviderRequest must have
+// been redacted by the daemon before it reaches this transport DTO.
+type TurnCaptureProviderCall struct {
+	CallID                string          `json:"call_id"`
+	CallOrdinal           int64           `json:"call_ordinal"`
+	Provider              string          `json:"provider"`
+	Model                 string          `json:"model"`
+	APIKind               string          `json:"api_kind"`
+	RawProviderRequest    json.RawMessage `json:"raw_provider_request"`
+	FinalAssistantMessage json.RawMessage `json:"final_assistant_message"`
+	Status                string          `json:"status"`
+	StopReason            string          `json:"stop_reason,omitempty"`
+	ResponseComplete      bool            `json:"response_complete"`
+	AReaLSessionID        string          `json:"areal_session_id,omitempty"`
+	AReaLCallID           string          `json:"areal_call_id,omitempty"`
+	RequestHash           string          `json:"request_hash"`
+	ResponseHash          string          `json:"response_hash"`
+	StartedAt             string          `json:"started_at,omitempty"`
+	CompletedAt           string          `json:"completed_at,omitempty"`
+}
+
+// TurnCaptureUploadResponse is returned when the server atomically accepted
+// (or idempotently recognized) a capture batch.
+type TurnCaptureUploadResponse struct {
+	Accepted bool   `json:"accepted"`
+	TurnID   string `json:"turn_id,omitempty"`
+}
+
+// TurnCaptureGapReport records why a finished daemon turn cannot supply a
+// trusted complete capture. The server may freeze or otherwise terminally
+// account for the gap; callers must not silently decrement unfinished capture
+// state before this report is acknowledged.
+type TurnCaptureGapReport struct {
+	AgentID         string `json:"agent_id"`
+	RuntimeID       string `json:"runtime_id"`
+	RunAgentID      string `json:"run_agent_id"`
+	TurnID          string `json:"turn_id"`
+	TurnOrdinal     int64  `json:"turn_ordinal"`
+	CaptureBoundary string `json:"capture_boundary"`
+	Reason          string `json:"reason"`
+	OccurredAt      string `json:"occurred_at"`
+}
+
+// TurnCaptureGapResponse acknowledges durable accounting for a capture gap.
+type TurnCaptureGapResponse struct {
+	Accepted bool `json:"accepted"`
+}

@@ -218,10 +218,29 @@ func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity
 	if !inserted {
 		return tx.Commit(ctx)
 	}
-	query := `UPDATE env_dispatch_run
+	query := `UPDATE env_dispatch_run AS run
 		SET ` + counterColumn + ` = ` + counterColumn + ` + $2,
-		    quiet_candidate_since = NULL,
-		    status = CASE WHEN status = 'quiet_candidate' THEN 'running' ELSE status END,
+		    quiet_candidate_since = CASE
+		      WHEN $2 > 0 THEN NULL
+		      WHEN run.active_turn_count + CASE WHEN '` + counterColumn + `' = 'active_turn_count' THEN $2 ELSE 0 END = 0
+		       AND run.pending_delivery_count = 0
+		       AND run.queued_message_count + CASE WHEN '` + counterColumn + `' = 'queued_message_count' THEN $2 ELSE 0 END = 0
+		       AND run.inflight_tool_count + CASE WHEN '` + counterColumn + `' = 'inflight_tool_count' THEN $2 ELSE 0 END = 0
+		       AND run.unfinished_capture_batch_count + CASE WHEN '` + counterColumn + `' = 'unfinished_capture_batch_count' THEN $2 ELSE 0 END = 0
+		      THEN now()
+		      ELSE NULL
+		    END,
+		    status = CASE
+		      WHEN $2 > 0 AND run.status = 'quiet_candidate' THEN 'running'
+		      WHEN $2 < 0
+		       AND run.active_turn_count + CASE WHEN '` + counterColumn + `' = 'active_turn_count' THEN $2 ELSE 0 END = 0
+		       AND run.pending_delivery_count = 0
+		       AND run.queued_message_count + CASE WHEN '` + counterColumn + `' = 'queued_message_count' THEN $2 ELSE 0 END = 0
+		       AND run.inflight_tool_count + CASE WHEN '` + counterColumn + `' = 'inflight_tool_count' THEN $2 ELSE 0 END = 0
+		       AND run.unfinished_capture_batch_count + CASE WHEN '` + counterColumn + `' = 'unfinished_capture_batch_count' THEN $2 ELSE 0 END = 0
+		      THEN 'quiet_candidate'
+		      ELSE run.status
+		    END,
 		    updated_at = now()
 		WHERE run_id = $1
 		  AND status IN ('preflight', 'running', 'quiet_candidate')

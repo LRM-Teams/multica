@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -172,10 +173,12 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	}, func(message agent.Message) {
 		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, message)
 		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
-	}, func(turnErr error, generation uint64) {
+	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
-			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:end", protocol.MixedRunActivityUnfinishedCaptureBatch, -1)
+			if d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, turnID, turnErr, capture) {
+				d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:end", protocol.MixedRunActivityUnfinishedCaptureBatch, -1)
+			}
 		}
 		outcome, reasonCode := "completed", ""
 		if turnErr != nil {
@@ -211,6 +214,76 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		runner.observeMessageTurnCompletion(agentID, runtimeID, err)
 	}
 	return err
+}
+
+// reportResidentTurnCapture performs durable server-side accounting before the
+// daemon releases the matching unfinished-capture counter. A failed upload is
+// deliberately left unfinished; a successful server gap report is the only
+// alternate terminal outcome.
+func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, activityTurnID string, turnErr error, capture *agent.ResidentTurnCapture) bool {
+	if d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
+		return false
+	}
+	credential, ok := readCachedAgentCredential(d.cfg, workspaceID, runtimeID, agentID, time.Now())
+	if !ok {
+		if d.logger != nil {
+			d.logger.Warn("mixed-run capture credential unavailable", "run_id", runID, "run_agent_id", runAgentID)
+		}
+		return false
+	}
+	reportCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	gapReason := "capture_unavailable"
+	if turnErr != nil {
+		gapReason = "provider_turn_failed"
+	}
+	if turnErr == nil && capture != nil && capture.Complete {
+		payload := protocol.TurnCaptureUpload{
+			AgentID: agentID, RuntimeID: runtimeID, CaptureBatchID: capture.CaptureBatchID,
+			Turn: protocol.TurnCaptureTurn{
+				TurnID: capture.TurnID, RunAgentID: capture.RunAgentID, PiSessionID: capture.PiSessionID,
+				CaptureBoundary: capture.CaptureBoundary, TurnOrdinal: capture.TurnOrdinal, Status: "settled",
+				StartedAt: capture.StartedAt.UTC().Format(time.RFC3339Nano), CompletedAt: capture.CompletedAt.UTC().Format(time.RFC3339Nano),
+			},
+			PayloadHash: capture.PayloadHash,
+		}
+		for _, call := range capture.ProviderCalls {
+			payload.ProviderCalls = append(payload.ProviderCalls, protocol.TurnCaptureProviderCall{
+				CallID: call.CallID, CallOrdinal: call.CallOrdinal, Provider: call.Provider, Model: call.Model, APIKind: call.APIKind,
+				RawProviderRequest: call.RawProviderRequest, FinalAssistantMessage: call.FinalAssistantMessage,
+				Status: call.Status, StopReason: call.StopReason, ResponseComplete: call.ResponseComplete,
+				RequestHash: call.RequestHash, ResponseHash: call.ResponseHash,
+				StartedAt: call.StartedAt.UTC().Format(time.RFC3339Nano), CompletedAt: call.CompletedAt.UTC().Format(time.RFC3339Nano),
+			})
+		}
+		response, err := d.client.UploadTurnCapture(reportCtx, runID, payload, credential.Token)
+		if err == nil && response.Accepted {
+			return true
+		}
+		if d.logger != nil {
+			d.logger.Warn("mixed-run capture upload failed", "run_id", runID, "run_agent_id", runAgentID, "error", err)
+		}
+		gapReason = "capture_upload_rejected"
+	}
+	gapTurnID, turnOrdinal, boundary := mixedRunCaptureGapIdentity(runAgentID, activityTurnID, capture)
+	response, err := d.client.ReportTurnCaptureGap(reportCtx, runID, protocol.TurnCaptureGapReport{
+		AgentID: agentID, RuntimeID: runtimeID, RunAgentID: runAgentID, TurnID: gapTurnID, TurnOrdinal: turnOrdinal,
+		CaptureBoundary: boundary, Reason: gapReason, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}, credential.Token)
+	if err == nil && response.Accepted {
+		return true
+	}
+	if d.logger != nil {
+		d.logger.Warn("mixed-run capture gap report failed", "run_id", runID, "run_agent_id", runAgentID, "error", err)
+	}
+	return false
+}
+
+func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agent.ResidentTurnCapture) (string, int64, string) {
+	if capture != nil {
+		return capture.TurnID, capture.TurnOrdinal, capture.CaptureBoundary
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(runAgentID+":capture-gap:"+activityTurnID)).String(), 0, ""
 }
 
 // reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.

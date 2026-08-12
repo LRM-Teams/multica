@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/util"
@@ -241,6 +242,10 @@ type FrozenSnapshotInput struct {
 	NormalizationVersion string
 	CanonicalManifest    []byte
 	SnapshotHash         string
+	// Build executes after the run row is locked and transitioned to freezing,
+	// but before validation/counting/snapshot publication. It is the only safe
+	// extension point for deterministic terminal closure.
+	Build func(context.Context, *db.Queries, FrozenSnapshotInput) (FrozenSnapshotInput, error)
 }
 
 type FrozenDAGRunRecord struct {
@@ -533,21 +538,52 @@ func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input Frozen
 	if input.RunStatus == "failed_timeout" && locked.Status != "running" && locked.Status != "quiet_candidate" {
 		return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, fmt.Errorf("timeout freeze requires running or quiet_candidate status, got %q", locked.Status)
 	}
-	if input.RunStatus == "failed_timeout" &&
-		(locked.ActiveTurnCount != 0 || locked.InflightToolCount != 0 || locked.UnfinishedCaptureBatchCount != 0) {
-		return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, fmt.Errorf(
-			"timeout freeze requires capture activity settlement: active_turns=%d inflight_tools=%d unfinished_captures=%d",
-			locked.ActiveTurnCount, locked.InflightToolCount, locked.UnfinishedCaptureBatchCount,
-		)
+	expectedStatus := locked.Status
+	if input.RunStatus == "failed_timeout" {
+		activeTurns, listErr := qtx.ListMixedRLActiveResidentTurns(ctx, input.RunID)
+		if listErr != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, listErr
+		}
+		for _, turn := range activeTurns {
+			if _, gapErr := qtx.RecordMixedRLCaptureGap(ctx, db.RecordMixedRLCaptureGapParams{
+				EventID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, RunID: input.RunID,
+				RunAgentID: turn.RunAgentID, TurnID: turn.TurnID,
+				Reason: "run_timeout", Summary: []byte(`{"source":"timeout_freeze"}`),
+			}); gapErr != nil {
+				return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, gapErr
+			}
+			if _, settleErr := qtx.CompleteMixedRLResidentTurn(ctx, db.CompleteMixedRLResidentTurnParams{
+				TurnID: turn.TurnID, Status: "capture_gap", CompletedAt: timestamptz(time.Now().UTC()),
+			}); settleErr != nil {
+				return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, settleErr
+			}
+		}
+		settled, settleErr := qtx.AdjustMixedRLRunActivity(ctx, db.AdjustMixedRLRunActivityParams{
+			RunID: input.RunID, ActiveTurnDelta: -locked.ActiveTurnCount,
+			InflightToolDelta: -locked.InflightToolCount, UnfinishedCaptureDelta: -locked.UnfinishedCaptureBatchCount,
+		})
+		if settleErr != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, settleErr
+		}
+		expectedStatus = settled.Status
 	}
 
 	if _, err = tx.Exec(ctx, "SELECT set_config('multica.mixed_rl_freeze_writer', 'on', true)"); err != nil {
 		return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
 	}
 	if _, err = qtx.TransitionMixedRLRunStatus(ctx, db.TransitionMixedRLRunStatusParams{
-		RunID: input.RunID, ExpectedStatus: locked.Status, NextStatus: "freezing",
+		RunID: input.RunID, ExpectedStatus: expectedStatus, NextStatus: "freezing",
 	}); err != nil {
 		return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
+	}
+	if input.Build != nil {
+		input, err = input.Build(ctx, qtx, input)
+		if err != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, err
+		}
+		if input.SnapshotID == "" || input.SnapshotHash == "" || input.SchemaVersion == "" || input.NormalizationVersion == "" || !json.Valid(input.CanonicalManifest) {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, errors.New("freeze builder returned an invalid snapshot input")
+		}
 	}
 
 	invariants, err := qtx.ValidateMixedRLRunForFreeze(ctx, input.RunID)

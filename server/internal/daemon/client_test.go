@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestClient_IdentityHeaders_PostJSON(t *testing.T) {
@@ -482,6 +484,51 @@ func TestDefaultTerminalRetrySchedule_MatchesAgreedPlan(t *testing.T) {
 		if defaultTerminalRetrySchedule[i] != d {
 			t.Errorf("schedule[%d]: got %s, want %s", i, defaultTerminalRetrySchedule[i], d)
 		}
+	}
+}
+
+func TestClient_UploadTurnCaptureUsesAgentCredentialAndRuntimeIdentity(t *testing.T) {
+	var received protocol.TurnCaptureUpload
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/api/v1/env-dispatch/runs/run-1/turn-captures"; got != want {
+			t.Errorf("path: got %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer cached-agent-credential"; got != want {
+			t.Errorf("authorization: got %q, want %q", got, want)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.TurnCaptureUploadResponse{Accepted: true})
+	}))
+	defer srv.Close()
+
+	payload := protocol.TurnCaptureUpload{
+		AgentID:        "agent-1",
+		RuntimeID:      "runtime-1",
+		CaptureBatchID: "batch-1",
+		Turn: protocol.TurnCaptureTurn{
+			TurnID:          "turn-1",
+			RunAgentID:      "run-agent-1",
+			PiSessionID:     "pi-session-1",
+			CaptureBoundary: "boundary-1",
+			TurnOrdinal:     1,
+			Status:          "settled",
+		},
+	}
+
+	response, err := NewClient(srv.URL).UploadTurnCapture(
+		context.Background(), "run-1", payload, "cached-agent-credential",
+	)
+	if err != nil {
+		t.Fatalf("UploadTurnCapture: %v", err)
+	}
+	if !response.Accepted {
+		t.Fatal("expected accepted response")
+	}
+	if received.AgentID != payload.AgentID || received.RuntimeID != payload.RuntimeID {
+		t.Fatalf("identity was not serialized: got agent=%q runtime=%q", received.AgentID, received.RuntimeID)
 	}
 }
 

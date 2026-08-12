@@ -433,6 +433,13 @@ SELECT * FROM interaction_dag_run_segment
 WHERE snapshot_id = sqlc.arg(snapshot_id)
 ORDER BY segment_ordinal, segment_id;
 
+-- name: ListMixedRLRunSegmentsCanonical :many
+-- Provisional plus terminal segments in the deterministic order used by the
+-- freeze manifest, before snapshot_id is assigned.
+SELECT * FROM interaction_dag_run_segment
+WHERE run_id = sqlc.arg(run_id)
+ORDER BY segment_ordinal, segment_id;
+
 -- name: CountMixedRLProviderCalls :one
 SELECT count(*) FROM pi_provider_call
 WHERE run_id = sqlc.arg(run_id);

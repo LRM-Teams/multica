@@ -966,6 +966,42 @@ func (c *Client) postJSONWithRetry(ctx context.Context, path string, reqBody any
 	return c.postJSONWithRetryToken(ctx, path, reqBody, respBody, schedule, c.tokenSnapshot())
 }
 
+// UploadTurnCapture posts one trusted, complete resident-Pi turn capture with
+// the cached durable agent credential. It intentionally does not use the
+// runner WebSocket: the daemon owns the Pi extension and redaction boundary.
+func (c *Client) UploadTurnCapture(ctx context.Context, runID string, capture protocol.TurnCaptureUpload, agentCredential string) (*protocol.TurnCaptureUploadResponse, error) {
+	var response protocol.TurnCaptureUploadResponse
+	if err := c.postJSONWithRetryToken(
+		ctx,
+		fmt.Sprintf("/api/v1/env-dispatch/runs/%s/turn-captures", runID),
+		capture,
+		&response,
+		defaultTerminalRetrySchedule,
+		agentCredential,
+	); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+// ReportTurnCaptureGap records a completed resident turn for which the daemon
+// could not produce a trusted complete capture. A caller may finish its local
+// unfinished-capture accounting only after this request is acknowledged.
+func (c *Client) ReportTurnCaptureGap(ctx context.Context, runID string, gap protocol.TurnCaptureGapReport, agentCredential string) (*protocol.TurnCaptureGapResponse, error) {
+	var response protocol.TurnCaptureGapResponse
+	if err := c.postJSONWithRetryToken(
+		ctx,
+		fmt.Sprintf("/api/v1/env-dispatch/runs/%s/turn-capture-gaps", runID),
+		gap,
+		&response,
+		defaultTerminalRetrySchedule,
+		agentCredential,
+	); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 func (c *Client) postJSONWithRetryToken(ctx context.Context, path string, reqBody any, respBody any, schedule []time.Duration, token string) error {
 	var lastErr error
 	for attempt := 0; ; attempt++ {

@@ -117,6 +117,27 @@ type EnvDispatchResponse struct {
 	Audit                     *EnvDispatchAuditResponse     `json:"audit,omitempty"`
 }
 
+// FrozenRunDAGResponse is the sanitized, immutable public view of a completed
+// mixed-RL run. It intentionally projects only the frozen DAG data; raw
+// provider payloads, credentials, SSE, and materialized tensors never cross
+// this boundary.
+type FrozenRunDAGResponse struct {
+	RunID         string                                `json:"run_id"`
+	ProjectID     string                                `json:"project_id"`
+	WorkspaceID   string                                `json:"workspace_id"`
+	Status        string                                `json:"status"`
+	SnapshotID    string                                `json:"snapshot_id"`
+	SnapshotHash  string                                `json:"snapshot_hash"`
+	SchemaVersion string                                `json:"schema_version"`
+	FrozenAt      time.Time                             `json:"frozen_at"`
+	CaptureGaps   []service.FrozenDAGCaptureGapRecord   `json:"capture_gaps"`
+	RunAgents     []service.FrozenDAGRunAgentRecord     `json:"run_agents"`
+	ProviderCalls []service.FrozenDAGProviderCallRecord `json:"provider_calls"`
+	Segments      []service.FrozenDAGSegmentRecord      `json:"segments"`
+	Associations  []service.FrozenDAGAssociationRecord  `json:"associations"`
+	Edges         []service.CausalEdgeRecord            `json:"edges"`
+}
+
 func (response EnvDispatchResponse) MarshalJSON() ([]byte, error) {
 	type responseAlias EnvDispatchResponse
 	if response.QuietWindowMS == 0 {
@@ -348,6 +369,80 @@ func (h *Handler) GetDag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.getEnvDispatchDagForProject(w, r, chi.URLParam(r, "projectID"))
+}
+
+// GetFrozenRunDAG serves the run-scoped mixed-RL frozen snapshot. Unlike the
+// legacy project DAG, readiness is derived solely from the mixed run lifecycle
+// and never from a root task or a dense session-cover assumption.
+func (h *Handler) GetFrozenRunDAG(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireUserID(w, r); !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace ID required")
+		return
+	}
+	runID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "runID"), "runID")
+	if !ok {
+		return
+	}
+	run, err := h.Queries.GetMixedRLRun(r.Context(), runID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "lookup mixed run: "+err.Error())
+		return
+	}
+	if run.WorkspaceID != parseUUID(workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+		return
+	}
+	if run.Status != "completed" && run.Status != "failed_timeout" {
+		w.Header().Set("Retry-After", "1")
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"run_id":                run.RunID.String(),
+			"status":                run.Status,
+			"quiet_candidate_since": timeValueForJSON(run.QuietCandidateSince),
+			"deadline_at":           timeValueForJSON(run.TimeoutDeadlineAt),
+		})
+		return
+	}
+	ledger := service.NewProviderCallLedger(h.Queries, h.TxStarter)
+	dag, err := ledger.GetFrozenDAG(r.Context(), runID, run.FrozenSnapshotID.String)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "read frozen mixed run DAG: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, frozenRunDAGResponse(dag))
+}
+
+func timeValueForJSON(value pgtype.Timestamptz) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Time
+}
+
+func frozenRunDAGResponse(dag service.FrozenDAGRecord) FrozenRunDAGResponse {
+	return FrozenRunDAGResponse{
+		RunID:         dag.Run.RunID.String(),
+		ProjectID:     dag.Run.ProjectID.String(),
+		WorkspaceID:   dag.Run.WorkspaceID.String(),
+		Status:        dag.Run.Status,
+		SnapshotID:    dag.Snapshot.SnapshotID,
+		SnapshotHash:  dag.Snapshot.SnapshotHash,
+		SchemaVersion: dag.Snapshot.SchemaVersion,
+		FrozenAt:      dag.Run.FrozenAt,
+		CaptureGaps:   dag.CaptureGaps,
+		RunAgents:     dag.RunAgents,
+		ProviderCalls: dag.ProviderCalls,
+		Segments:      dag.Segments,
+		Associations:  dag.Associations,
+		Edges:         dag.Edges,
+	}
 }
 
 // getEnvDispatchDagForProject serves the project-scoped assembled DAG for both

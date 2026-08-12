@@ -148,6 +148,15 @@ type ActivityCounterDelta struct {
 	UnfinishedCapture int64
 }
 
+// MixedRLQuiescenceResult contains the durable run state after one evaluation
+// and, when due, the terminal freeze kind a scheduler must execute.
+type MixedRLQuiescenceResult struct {
+	Run       EnvDispatchRunRecord
+	Decision  MixedRLQuiescenceDecision
+	FreezeDue bool
+	TimedOut  bool
+}
+
 type CaptureGapInput struct {
 	EventID    pgtype.UUID
 	RunID      pgtype.UUID
@@ -218,6 +227,44 @@ func (s *EnvDispatchRunStore) StartTimeout(ctx context.Context, runID pgtype.UUI
 		RunID: runID, SubmittedAt: timestamptz(submittedAt),
 	})
 	return mixedRLRunRecord(run), err
+}
+
+func (s *EnvDispatchRunStore) GetRun(ctx context.Context, runID pgtype.UUID) (EnvDispatchRunRecord, error) {
+	run, err := s.queries.GetMixedRLRun(ctx, runID)
+	return mixedRLRunRecord(run), err
+}
+
+// EvaluateQuiescence applies only the reversible lifecycle transitions. A
+// caller that receives FreezeDue must immediately invoke the atomic ledger
+// freeze; this split prevents a timer from publishing a partial snapshot while
+// activity transitions are still being persisted.
+func (s *EnvDispatchRunStore) EvaluateQuiescence(ctx context.Context, runID pgtype.UUID, now time.Time) (MixedRLQuiescenceResult, error) {
+	run, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return MixedRLQuiescenceResult{}, err
+	}
+	decision := EvaluateMixedRLQuiescence(run, now)
+	result := MixedRLQuiescenceResult{Run: run, Decision: decision}
+	switch decision {
+	case MixedRLQuiescenceStartCandidate:
+		updated, transitionErr := s.TransitionStatus(ctx, runID, "running", "quiet_candidate")
+		if transitionErr != nil {
+			return MixedRLQuiescenceResult{}, transitionErr
+		}
+		result.Run = updated
+	case MixedRLQuiescenceResumeRunning:
+		updated, transitionErr := s.TransitionStatus(ctx, runID, "quiet_candidate", "running")
+		if transitionErr != nil {
+			return MixedRLQuiescenceResult{}, transitionErr
+		}
+		result.Run = updated
+	case MixedRLQuiescenceFreezeCompleted:
+		result.FreezeDue = true
+	case MixedRLQuiescenceFreezeTimeout:
+		result.FreezeDue = true
+		result.TimedOut = true
+	}
+	return result, nil
 }
 
 func (s *EnvDispatchRunStore) BindRunAgent(ctx context.Context, input BindEnvDispatchRunAgentInput) (EnvDispatchRunAgentRecord, error) {

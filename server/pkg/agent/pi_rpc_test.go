@@ -20,6 +20,43 @@ func TestNewPiRPCBackendImplementsResidentMessagePreparation(t *testing.T) {
 	}
 }
 
+func TestBuildResidentTurnCaptureRedactsProviderCredentials(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	records := []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"model":"test","api_key":"secret","nested":{"authorization":"Bearer secret","ok":true}}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","api_key":"secret","content":[{"type":"text","text":"done"}],"stopReason":"stop"}`)},
+	}
+
+	capture, err := buildResidentTurnCapture(binding, 1, 1, records)
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("provider calls: got %d, want 1", len(capture.ProviderCalls))
+	}
+	request := string(capture.ProviderCalls[0].RawProviderRequest)
+	if strings.Contains(request, "secret") || strings.Contains(request, "api_key") || strings.Contains(request, "authorization") {
+		t.Fatalf("redacted request still contains credentials: %s", request)
+	}
+	if response := string(capture.ProviderCalls[0].FinalAssistantMessage); strings.Contains(response, "secret") || strings.Contains(response, "api_key") {
+		t.Fatalf("redacted response still contains credentials: %s", response)
+	}
+	if capture.PayloadHash == "" || capture.CaptureBatchID == "" || capture.TurnID == "" {
+		t.Fatalf("capture identity/integrity missing: %+v", capture)
+	}
+}
+
+func TestResidentTurnCaptureIdentityRetainsBoundaryForGapReporting(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	capture := residentTurnCaptureIdentity(binding, 2)
+	if capture.TurnID == "" || capture.CaptureBatchID == "" || capture.CaptureBoundary != binding.CaptureBoundary {
+		t.Fatalf("capture identity = %+v, want turn, batch, and current boundary", capture)
+	}
+	if capture.Complete {
+		t.Fatal("identity shell without provider records must not be complete")
+	}
+}
+
 func fakePiRPCProcessScript() string {
 	return `#!/bin/sh
 	printf x >> "$PI_RPC_TEST_STARTS"

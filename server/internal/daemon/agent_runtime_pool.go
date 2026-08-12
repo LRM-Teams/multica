@@ -682,7 +682,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 	onStarting func(),
 	onAccepted func(),
 	onMessage func(agent.Message),
-	onComplete func(error, uint64),
+	onComplete func(error, uint64, *agent.ResidentTurnCapture),
 ) error {
 	if p == nil {
 		return errors.New("canonical agent runtime pool is nil")
@@ -816,14 +816,14 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 		activityDone := drainResidentActivity(acceptance.Messages, func(message agent.Message) {
 			p.observeResidentRuntimeMessage(slot, message)
 		})
-		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, 0, nil)
+		go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
 		return errors.New("canonical resident runtime was invalidated during Message input acceptance")
 	}
 	if onAccepted != nil {
 		onAccepted()
 	}
 	activityDone := drainResidentActivity(acceptance.Messages, observeRuntimeMessage)
-	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, generation, onComplete)
+	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), generation, onComplete)
 	return nil
 }
 
@@ -940,7 +940,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 	slot.messageInputDone = acceptance.Done
 	slot.mu.Unlock()
 	activityDone := drainResidentActivity(acceptance.Messages, nil)
-	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, 0, nil)
+	go p.finishResidentMessageInput(slot, acceptance.Done, activityDone, drainResidentCapture(acceptance.Capture), 0, nil)
 	if invalidated {
 		return errors.New("canonical resident runtime was invalidated during Reminder input acceptance")
 	}
@@ -959,6 +959,22 @@ func drainResidentActivity(messages <-chan agent.Message, onMessage func(agent.M
 			if onMessage != nil {
 				onMessage(message)
 			}
+		}
+	}()
+	return done
+}
+
+func drainResidentCapture(captures <-chan agent.ResidentTurnCapture) <-chan *agent.ResidentTurnCapture {
+	done := make(chan *agent.ResidentTurnCapture, 1)
+	if captures == nil {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		for capture := range captures {
+			copy := capture
+			done <- &copy
 		}
 	}()
 	return done
@@ -1050,9 +1066,13 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	return nil
 }
 
-func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error, activityDone <-chan struct{}, generation uint64, onComplete func(error, uint64)) {
+func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error, activityDone <-chan struct{}, captureDone <-chan *agent.ResidentTurnCapture, generation uint64, onComplete func(error, uint64, *agent.ResidentTurnCapture)) {
 	turnErr := <-done
 	<-activityDone
+	var capture *agent.ResidentTurnCapture
+	if captureDone != nil {
+		capture = <-captureDone
+	}
 	completed := false
 	freed := false
 	var settleBackend agent.PiRPCBackend
@@ -1115,7 +1135,7 @@ func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAg
 		p.signalAgentProcessCapacityFreed()
 	}
 	if completed && onComplete != nil {
-		onComplete(turnErr, generation)
+		onComplete(turnErr, generation, capture)
 	}
 }
 

@@ -98,6 +98,22 @@ RETURNING *;
 SELECT * FROM env_dispatch_run
 WHERE run_id = sqlc.arg(run_id);
 
+-- name: ListMixedRLQuiescenceCandidates :many
+-- The evaluator makes the final transition decision after this bounded scan.
+SELECT * FROM env_dispatch_run
+WHERE status IN ('running', 'quiet_candidate')
+  AND (
+    timeout_deadline_at <= sqlc.arg(now_at)
+    OR (status = 'running'
+        AND active_turn_count = 0
+        AND pending_delivery_count = 0
+        AND queued_message_count = 0
+        AND inflight_tool_count = 0
+        AND unfinished_capture_batch_count = 0)
+    OR status = 'quiet_candidate'
+  )
+ORDER BY timeout_deadline_at NULLS LAST, run_id;
+
 -- name: LockMixedRLRun :one
 SELECT * FROM env_dispatch_run
 WHERE run_id = sqlc.arg(run_id)
@@ -226,6 +242,19 @@ SELECT sqlc.arg(turn_id), sqlc.arg(run_id), sqlc.arg(run_agent_id),
 FROM allocated
 RETURNING *;
 
+-- name: GetMixedRLResidentTurn :one
+SELECT turn_id, run_id, run_agent_id, turn_ordinal, status,
+       capture_started_at, capture_completed_at, accepted_message_ids,
+       started_at, completed_at
+FROM env_dispatch_resident_turn
+WHERE turn_id = sqlc.arg(turn_id);
+
+-- name: GetMixedRLTurnCaptureBatch :one
+SELECT capture_batch_id, turn_id, capture_boundary, call_count,
+       action_count, consumption_count, payload_hash, accepted_at
+FROM env_dispatch_turn_capture_batch
+WHERE turn_id = sqlc.arg(turn_id);
+
 -- name: InsertMixedRLTurnCaptureBatch :one
 WITH matched_turn AS MATERIALIZED (
   SELECT turn.turn_id
@@ -247,6 +276,17 @@ SELECT sqlc.arg(capture_batch_id), matched_turn.turn_id,
        sqlc.arg(payload_hash)
 FROM matched_turn
 RETURNING *;
+
+-- name: ListMixedRLActiveResidentTurns :many
+-- The timeout freezer uses this stable order to convert every in-flight
+-- resident turn into an explicit capture gap before publishing a partial DAG.
+SELECT turn_id, run_id, run_agent_id, turn_ordinal, status,
+       capture_started_at, capture_completed_at, accepted_message_ids,
+       started_at, completed_at
+FROM env_dispatch_resident_turn
+WHERE run_id = sqlc.arg(run_id)
+  AND status = 'active'
+ORDER BY run_agent_id, turn_ordinal, turn_id;
 
 -- name: CompleteMixedRLResidentTurn :one
 UPDATE env_dispatch_resident_turn

@@ -359,7 +359,8 @@ func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *tes
 	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
 	reports := make(chan protocol.MixedRunActivityTransitionPayload, 8)
 	d := &Daemon{
-		canonicalRuntimes: pool, runtimeIndex: map[string]Runtime{},
+		canonicalRuntimes: pool,
+		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: "workspace-1"}},
 		mixedRunActivityReporter: func(payload protocol.MixedRunActivityTransitionPayload) bool {
 			reports <- payload
 			return true
@@ -380,7 +381,10 @@ func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *tes
 
 	counts := map[string]int{}
 	deadline := time.After(2 * time.Second)
-	for len(counts) < 6 {
+	// Without a daemon client/credential, the capture cannot be acknowledged.
+	// The unfinished-capture counter must therefore remain open rather than
+	// being decremented merely because the local runtime finished.
+	for len(counts) < 5 {
 		select {
 		case report := <-reports:
 			counts[report.Dimension+fmt.Sprint(report.Delta)]++
@@ -390,7 +394,7 @@ func TestResidentMessageRuntimeReportsMixedRunTurnCaptureAndToolLifecycle(t *tes
 	}
 	for _, key := range []string{
 		protocol.MixedRunActivityActiveTurn + "1", protocol.MixedRunActivityActiveTurn + "-1",
-		protocol.MixedRunActivityUnfinishedCaptureBatch + "1", protocol.MixedRunActivityUnfinishedCaptureBatch + "-1",
+		protocol.MixedRunActivityUnfinishedCaptureBatch + "1",
 		protocol.MixedRunActivityInflightTool + "1", protocol.MixedRunActivityInflightTool + "-1",
 	} {
 		if counts[key] != 1 {

@@ -1399,6 +1399,14 @@ func (b *piRPCRaceBackend) AcceptMessageBatch(_ context.Context, messages []agen
 	return agent.ResidentMessageAcceptance{Done: turnDone, Messages: b.messages}, nil
 }
 
+func (b *piRPCRaceBackend) PrepareMessageInput(_ context.Context, _ func(agent.Message)) error {
+	return nil
+}
+
+func (b *piRPCRaceBackend) AcceptReminderInput(_ context.Context, _ agent.ResidentReminderInput) (agent.ResidentMessageAcceptance, error) {
+	return agent.ResidentMessageAcceptance{}, nil
+}
+
 func (b *piRPCRaceBackend) AcceptPendingNotice(_ context.Context, _ agent.ResidentPendingNotice) error {
 	return nil
 }
@@ -1504,7 +1512,7 @@ func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) 
 		nil, // onStarting
 		nil, // onAccepted
 		nil, // onMessage
-		func(err error, gen uint64) {
+		func(err error, gen uint64, _ *agent.ResidentTurnCapture) {
 			firstCompleteErr = err
 			close(firstComplete)
 		},
@@ -1589,7 +1597,7 @@ func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) 
 		context.Background(),
 		"agent-a", "runtime-a",
 		nil, nil, nil, nil,
-		func(err error, gen uint64) {
+		func(err error, gen uint64, _ *agent.ResidentTurnCapture) {
 			thirdCompleteErr = err
 			close(thirdComplete)
 		},

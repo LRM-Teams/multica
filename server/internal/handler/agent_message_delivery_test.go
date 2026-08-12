@@ -732,11 +732,12 @@ func TestMixedRunLifecycleTransitionReportsPersistCountersIdempotently(t *testin
 		report(dimension, 1, dimension+":start")
 	}
 	var active, queued, tools, captures int64
+	var runStatus string
 	load := func() {
 		t.Helper()
 		if err := testPool.QueryRow(fixture.ctx, `SELECT active_turn_count, queued_message_count,
-			inflight_tool_count, unfinished_capture_batch_count FROM env_dispatch_run WHERE run_id = $1`, fixture.runID).
-			Scan(&active, &queued, &tools, &captures); err != nil {
+			inflight_tool_count, unfinished_capture_batch_count, status FROM env_dispatch_run WHERE run_id = $1`, fixture.runID).
+			Scan(&active, &queued, &tools, &captures, &runStatus); err != nil {
 			t.Fatalf("load lifecycle counters: %v", err)
 		}
 	}
@@ -758,6 +759,9 @@ func TestMixedRunLifecycleTransitionReportsPersistCountersIdempotently(t *testin
 	load()
 	if active != 0 || queued != 0 || tools != 0 || captures != 0 {
 		t.Fatalf("settled lifecycle counters active=%d queued=%d tools=%d captures=%d, want all zero", active, queued, tools, captures)
+	}
+	if runStatus != "quiet_candidate" {
+		t.Fatalf("settled lifecycle status=%q, want quiet_candidate", runStatus)
 	}
 	const underflowTransitionID = "active_turn:underflow"
 	if err := reportErr(protocol.MixedRunActivityActiveTurn, -1, underflowTransitionID); err == nil || !strings.Contains(err.Error(), "would make counter negative") {

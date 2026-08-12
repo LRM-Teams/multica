@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ErrPiRPCTurnBusy means a caller tried to overlap two turns on one native Pi
@@ -194,6 +197,10 @@ type piRPCBackend struct {
 	process        *piRPCProcess
 	runBinding     *PiRunBinding
 	boundarySerial uint64
+	captureLogPath string
+	captureExtPath string
+	captureTurns   int64
+	captureCalls   int64
 	running        atomic.Bool
 	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
 	// field of the same name for the full explanation.
@@ -215,10 +222,245 @@ type piRPCProcess struct {
 }
 
 type piRPCIdleInput struct {
-	done     chan piRPCCompletion
-	turnDone chan error
-	messages chan Message
-	stream   *piRPCTurn
+	done             chan piRPCCompletion
+	turnDone         chan error
+	messages         chan Message
+	captures         chan ResidentTurnCapture
+	stream           *piRPCTurn
+	captureOffset    int64
+	captureBinding   PiRunBinding
+	captureTurn      int64
+	captureFirstCall int64
+}
+
+// piCaptureRecord is emitted by the daemon-created Pi extension. Its payload
+// is intentionally parsed and redacted by Go before it can leave the daemon.
+type piCaptureRecord struct {
+	Kind    string          `json:"kind"`
+	At      string          `json:"at"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	Message json.RawMessage `json:"message,omitempty"`
+}
+
+func buildResidentTurnCapture(binding PiRunBinding, turnOrdinal, firstCallOrdinal int64, records []piCaptureRecord) (ResidentTurnCapture, error) {
+	var requests []piCaptureRecord
+	var finalMessages []piCaptureRecord
+	for _, record := range records {
+		switch record.Kind {
+		case "provider_request":
+			requests = append(requests, record)
+		case "turn_end":
+			finalMessages = append(finalMessages, record)
+		}
+	}
+	if len(requests) == 0 || len(requests) != len(finalMessages) {
+		return ResidentTurnCapture{}, fmt.Errorf("incomplete Pi capture: provider_requests=%d final_messages=%d", len(requests), len(finalMessages))
+	}
+	if turnOrdinal <= 0 || firstCallOrdinal <= 0 {
+		return ResidentTurnCapture{}, errors.New("Pi capture requires positive turn and call ordinals")
+	}
+	capture := residentTurnCaptureIdentity(binding, turnOrdinal)
+	turnID := capture.TurnID
+	for index, requestRecord := range requests {
+		request, err := redactPiCaptureJSON(requestRecord.Payload)
+		if err != nil {
+			return ResidentTurnCapture{}, fmt.Errorf("redact provider request %d: %w", index, err)
+		}
+		finalMessage, err := redactPiCaptureJSON(finalMessages[index].Message)
+		if err != nil {
+			return ResidentTurnCapture{}, fmt.Errorf("redact final assistant message %d: %w", index, err)
+		}
+		var metadata struct {
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		}
+		_ = json.Unmarshal(request, &metadata)
+		var final struct {
+			StopReason string `json:"stopReason"`
+		}
+		_ = json.Unmarshal(finalMessage, &final)
+		startedAt, err := time.Parse(time.RFC3339Nano, requestRecord.At)
+		if err != nil {
+			return ResidentTurnCapture{}, fmt.Errorf("parse provider request timestamp %d: %w", index, err)
+		}
+		completedAt, err := time.Parse(time.RFC3339Nano, finalMessages[index].At)
+		if err != nil {
+			return ResidentTurnCapture{}, fmt.Errorf("parse final assistant timestamp %d: %w", index, err)
+		}
+		if capture.StartedAt.IsZero() || startedAt.Before(capture.StartedAt) {
+			capture.StartedAt = startedAt
+		}
+		if completedAt.After(capture.CompletedAt) {
+			capture.CompletedAt = completedAt
+		}
+		callOrdinal := firstCallOrdinal + int64(index)
+		callID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(turnID+":call:"+fmt.Sprint(callOrdinal))).String()
+		capture.ProviderCalls = append(capture.ProviderCalls, ResidentProviderCallCapture{
+			CallID:                callID,
+			CallOrdinal:           callOrdinal,
+			Provider:              metadata.Provider,
+			Model:                 metadata.Model,
+			APIKind:               "messages",
+			RawProviderRequest:    request,
+			FinalAssistantMessage: finalMessage,
+			Status:                "completed",
+			StopReason:            final.StopReason,
+			ResponseComplete:      true,
+			RequestHash:           sha256JSON(request),
+			ResponseHash:          sha256JSON(finalMessage),
+			StartedAt:             startedAt,
+			CompletedAt:           completedAt,
+		})
+	}
+	integrity, err := json.Marshal(struct {
+		RunID           string                        `json:"run_id"`
+		RunAgentID      string                        `json:"run_agent_id"`
+		SessionID       string                        `json:"pi_session_id"`
+		CaptureBoundary string                        `json:"capture_boundary"`
+		TurnID          string                        `json:"turn_id"`
+		TurnOrdinal     int64                         `json:"turn_ordinal"`
+		ProviderCalls   []ResidentProviderCallCapture `json:"provider_calls"`
+	}{capture.RunID, capture.RunAgentID, capture.PiSessionID, capture.CaptureBoundary, capture.TurnID, capture.TurnOrdinal, capture.ProviderCalls})
+	if err != nil {
+		return ResidentTurnCapture{}, fmt.Errorf("canonicalize Pi capture: %w", err)
+	}
+	capture.PayloadHash = sha256JSON(integrity)
+	capture.Complete = true
+	return capture, nil
+}
+
+func residentTurnCaptureIdentity(binding PiRunBinding, turnOrdinal int64) ResidentTurnCapture {
+	turnID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(binding.RunAgentID+":turn:"+fmt.Sprint(turnOrdinal))).String()
+	return ResidentTurnCapture{
+		RunID:           binding.RunID,
+		RunAgentID:      binding.RunAgentID,
+		PiSessionID:     binding.SessionID,
+		CaptureBoundary: binding.CaptureBoundary,
+		TurnID:          turnID,
+		CaptureBatchID:  uuid.NewSHA1(uuid.NameSpaceURL, []byte("capture:"+turnID)).String(),
+		TurnOrdinal:     turnOrdinal,
+	}
+}
+
+func sha256JSON(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+func redactPiCaptureJSON(raw json.RawMessage) (json.RawMessage, error) {
+	if !json.Valid(raw) {
+		return nil, errors.New("invalid JSON")
+	}
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	redactPiCaptureValue(payload)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+func redactPiCaptureValue(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+			switch normalized {
+			case "authorization", "api_key", "apikey", "access_token", "token", "password", "secret", "x_api_key":
+				delete(typed, key)
+			default:
+				redactPiCaptureValue(child)
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			redactPiCaptureValue(child)
+		}
+	}
+}
+
+func newPiCaptureExtension() (extensionPath string, captureLogPath string, err error) {
+	logFile, err := os.CreateTemp("", "multica-pi-capture-*.jsonl")
+	if err != nil {
+		return "", "", fmt.Errorf("create Pi capture log: %w", err)
+	}
+	captureLogPath = logFile.Name()
+	if err := logFile.Close(); err != nil {
+		_ = os.Remove(captureLogPath)
+		return "", "", fmt.Errorf("close Pi capture log: %w", err)
+	}
+	if err := os.Chmod(captureLogPath, 0o600); err != nil {
+		_ = os.Remove(captureLogPath)
+		return "", "", fmt.Errorf("secure Pi capture log: %w", err)
+	}
+	extension, err := os.CreateTemp("", "multica-pi-capture-extension-*.mjs")
+	if err != nil {
+		_ = os.Remove(captureLogPath)
+		return "", "", fmt.Errorf("create Pi capture extension: %w", err)
+	}
+	extensionPath = extension.Name()
+	encodedPath, err := json.Marshal(captureLogPath)
+	if err != nil {
+		_ = extension.Close()
+		_ = os.Remove(extensionPath)
+		_ = os.Remove(captureLogPath)
+		return "", "", err
+	}
+	source := fmt.Sprintf(`import { appendFileSync } from "node:fs";
+const capturePath = %s;
+const record = (kind, fields) => {
+  try { appendFileSync(capturePath, JSON.stringify({ kind, at: new Date().toISOString(), ...fields }) + "\\n", { encoding: "utf8", mode: 0o600 }); } catch (_) {}
+};
+export default function (pi) {
+  pi.on("before_provider_request", (event) => { record("provider_request", { payload: event.payload }); });
+  pi.on("turn_end", (event) => { record("turn_end", { message: event.message }); });
+}
+`, string(encodedPath))
+	if _, err := io.WriteString(extension, source); err != nil {
+		_ = extension.Close()
+		_ = os.Remove(extensionPath)
+		_ = os.Remove(captureLogPath)
+		return "", "", fmt.Errorf("write Pi capture extension: %w", err)
+	}
+	if err := extension.Close(); err != nil {
+		_ = os.Remove(extensionPath)
+		_ = os.Remove(captureLogPath)
+		return "", "", fmt.Errorf("close Pi capture extension: %w", err)
+	}
+	if err := os.Chmod(extensionPath, 0o600); err != nil {
+		_ = os.Remove(extensionPath)
+		_ = os.Remove(captureLogPath)
+		return "", "", fmt.Errorf("secure Pi capture extension: %w", err)
+	}
+	return extensionPath, captureLogPath, nil
+}
+
+func readPiCaptureRecords(path string, offset int64) ([]piCaptureRecord, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1024), 32*1024*1024)
+	var records []piCaptureRecord
+	for scanner.Scan() {
+		var record piCaptureRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			return nil, fmt.Errorf("decode Pi capture record: %w", err)
+		}
+		records = append(records, record)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
 }
 
 type piRPCTurn struct {
@@ -305,6 +547,10 @@ func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, er
 	if err != nil {
 		return PiRunBinding{}, fmt.Errorf("allocate Pi run session: %w", err)
 	}
+	captureExtPath, captureLogPath, err := newPiCaptureExtension()
+	if err != nil {
+		return PiRunBinding{}, err
+	}
 	b.boundarySerial++
 	binding := PiRunBinding{
 		PiRunIdentity:   identity,
@@ -313,6 +559,10 @@ func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, er
 	}
 	b.cfg.ResidentOptions.ResumeSessionID = sessionPath
 	b.runBinding = &binding
+	b.captureExtPath = captureExtPath
+	b.captureLogPath = captureLogPath
+	b.captureTurns = 0
+	b.captureCalls = 0
 	return binding, nil
 }
 
@@ -332,6 +582,7 @@ func (b *piRPCBackend) PrepareRun(ctx context.Context, identity PiRunIdentity) (
 		if b.process == nil && b.runBinding != nil && b.runBinding.PiRunIdentity == identity {
 			b.runBinding = nil
 			b.cfg.ResidentOptions.ResumeSessionID = ""
+			b.removeCaptureArtifactsLocked()
 		}
 		b.mu.Unlock()
 		_ = os.Remove(binding.SessionID)
@@ -451,10 +702,32 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 	if err != nil {
 		return ResidentMessageAcceptance{}, err
 	}
+	b.mu.Lock()
+	binding := PiRunBinding{}
+	if b.runBinding != nil {
+		binding = *b.runBinding
+	}
+	captureTurn := b.captureTurns + 1
+	captureFirstCall := b.captureCalls + 1
+	captureOffset := int64(0)
+	if b.captureLogPath != "" {
+		if info, statErr := os.Stat(b.captureLogPath); statErr != nil {
+			b.mu.Unlock()
+			return ResidentMessageAcceptance{}, fmt.Errorf("Pi capture log stat: %w", statErr)
+		} else {
+			captureOffset = info.Size()
+		}
+	}
+	b.mu.Unlock()
 	idleInput := &piRPCIdleInput{
-		done:     make(chan piRPCCompletion, 1),
-		turnDone: make(chan error, 1),
-		messages: make(chan Message, 256),
+		done:             make(chan piRPCCompletion, 1),
+		turnDone:         make(chan error, 1),
+		messages:         make(chan Message, 256),
+		captures:         make(chan ResidentTurnCapture, 1),
+		captureOffset:    captureOffset,
+		captureBinding:   binding,
+		captureTurn:      captureTurn,
+		captureFirstCall: captureFirstCall,
 	}
 	idleInput.stream = &piRPCTurn{
 		done: idleInput.done,
@@ -495,7 +768,7 @@ func (b *piRPCBackend) acceptIdleInputPrompt(ctx context.Context, prompt string)
 	// Context Boundary; a concurrent canonical turn must not overlap the Pi turn.
 	releaseAdmission = false
 	go b.finishIdleMessageInput(p, idleInput)
-	return ResidentMessageAcceptance{Done: idleInput.turnDone, Messages: idleInput.messages}, nil
+	return ResidentMessageAcceptance{Done: idleInput.turnDone, Messages: idleInput.messages, Capture: idleInput.captures}, nil
 }
 
 // AcceptPendingNotice queues a content-free steering input while Pi is busy.
@@ -560,6 +833,38 @@ func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCI
 	}
 	p.stateMu.Unlock()
 	turnErr := piRPCCompletionError(completion)
+	var capture *ResidentTurnCapture
+	if idleInput.captureBinding.RunID != "" {
+		identity := residentTurnCaptureIdentity(idleInput.captureBinding, idleInput.captureTurn)
+		capture = &identity
+	}
+	if turnErr == nil && idleInput.captureBinding.RunID != "" {
+		b.mu.Lock()
+		captureLogPath := b.captureLogPath
+		b.mu.Unlock()
+		if captureLogPath != "" {
+			records, captureErr := readPiCaptureRecords(captureLogPath, idleInput.captureOffset)
+			if captureErr == nil {
+				builtCapture, buildErr := buildResidentTurnCapture(idleInput.captureBinding, idleInput.captureTurn, idleInput.captureFirstCall, records)
+				if buildErr == nil {
+					b.mu.Lock()
+					b.captureTurns = idleInput.captureTurn
+					b.captureCalls += int64(len(builtCapture.ProviderCalls))
+					b.mu.Unlock()
+					captureCopy := builtCapture
+					capture = &captureCopy
+				} else {
+					b.cfg.Logger.Warn("Pi resident capture rejected", "error", buildErr)
+				}
+			} else {
+				b.cfg.Logger.Warn("Pi resident capture unavailable", "error", captureErr)
+			}
+		}
+	}
+	if capture != nil {
+		idleInput.captures <- *capture
+	}
+	close(idleInput.captures)
 	if turnErr != nil {
 		b.dispose(p)
 	}
@@ -719,6 +1024,7 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	if b.process != nil {
 		return b.process, nil
 	}
+	opts.piCaptureExtension = b.captureExtPath
 	execName := b.cfg.ExecutablePath
 	if execName == "" {
 		execName = "pi"
@@ -1095,6 +1401,18 @@ func (b *piRPCBackend) disposeLocked(p *piRPCProcess) {
 	if p.mcpConfigPath != "" {
 		_ = os.Remove(p.mcpConfigPath)
 	}
+	b.removeCaptureArtifactsLocked()
+}
+
+func (b *piRPCBackend) removeCaptureArtifactsLocked() {
+	if b.captureExtPath != "" {
+		_ = os.Remove(b.captureExtPath)
+		b.captureExtPath = ""
+	}
+	if b.captureLogPath != "" {
+		_ = os.Remove(b.captureLogPath)
+		b.captureLogPath = ""
+	}
 }
 
 func trySendPiRPCResponse(ch chan<- piRPCResponse, response piRPCResponse) {
@@ -1139,6 +1457,9 @@ func buildPiRPCArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) [
 				args = append(args, "--extension", p)
 			}
 		}
+	}
+	if opts.piCaptureExtension != "" {
+		args = append(args, "--extension", opts.piCaptureExtension)
 	}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)

@@ -154,15 +154,15 @@ func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUploa
 	if strings.TrimSpace(upload.PayloadHash) == "" {
 		return service.TrustedTurnCapture{}, fmt.Errorf("payload_hash is required")
 	}
-	runAgentID, err := util.ParseUUID(upload.Turn.RunAgentID)
+	runAgentID, err := parseCanonicalCaptureUUID(upload.Turn.RunAgentID)
 	if err != nil {
 		return service.TrustedTurnCapture{}, fmt.Errorf("invalid run_agent_id")
 	}
-	turnID, err := util.ParseUUID(upload.Turn.TurnID)
+	turnID, err := parseCanonicalCaptureUUID(upload.Turn.TurnID)
 	if err != nil {
 		return service.TrustedTurnCapture{}, fmt.Errorf("invalid turn_id")
 	}
-	batchID, err := util.ParseUUID(upload.CaptureBatchID)
+	batchID, err := parseCanonicalCaptureUUID(upload.CaptureBatchID)
 	if err != nil {
 		return service.TrustedTurnCapture{}, fmt.Errorf("invalid capture_batch_id")
 	}
@@ -236,7 +236,10 @@ func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUploa
 	}
 	actions := make([]service.VisibleActionInput, 0, len(upload.VisibleActions))
 	for _, action := range upload.VisibleActions {
-		canonicalID, err := util.ParseUUID(action.CanonicalID)
+		if action.Kind != "message" && action.Kind != "reaction" {
+			return service.TrustedTurnCapture{}, fmt.Errorf("unsupported visible action kind %q", action.Kind)
+		}
+		canonicalID, err := parseCanonicalCaptureUUID(action.CanonicalID)
 		if err != nil {
 			return service.TrustedTurnCapture{}, fmt.Errorf("invalid visible action canonical_id")
 		}
@@ -258,7 +261,10 @@ func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUploa
 
 	consumptions := make([]service.MessageConsumptionInput, 0, len(upload.Consumptions))
 	for i, consumption := range upload.Consumptions {
-		messageID, err := util.ParseUUID(consumption.ChannelMessageID)
+		if consumption.Source != "accept_message_batch" && consumption.Source != "message_check" {
+			return service.TrustedTurnCapture{}, fmt.Errorf("unsupported consumption source %q", consumption.Source)
+		}
+		messageID, err := parseCanonicalCaptureUUID(consumption.ChannelMessageID)
 		if err != nil {
 			return service.TrustedTurnCapture{}, fmt.Errorf("invalid consumption channel_message_id")
 		}
@@ -287,6 +293,17 @@ func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUploa
 		},
 		Calls: calls, Actions: actions, Consumptions: consumptions, CompletedAt: completedAt,
 	}, nil
+}
+
+func parseCanonicalCaptureUUID(raw string) (pgtype.UUID, error) {
+	parsed, err := uuid.Parse(raw)
+	if err != nil || raw != parsed.String() {
+		return pgtype.UUID{}, fmt.Errorf("UUID is not canonical")
+	}
+	var value pgtype.UUID
+	copy(value.Bytes[:], parsed[:])
+	value.Valid = true
+	return value, nil
 }
 
 func captureJSONForbiddenField(raw json.RawMessage) (string, bool, error) {

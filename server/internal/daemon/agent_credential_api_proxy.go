@@ -14,6 +14,7 @@ import (
 )
 
 const canonicalActionProxyResponseCaptureLimit = 64 * 1024
+const canonicalActionAssociationLimitPerTurn = 1024
 
 // ActiveProviderToolContext is the daemon-observed provider/tool context used
 // to associate trusted visible actions. It is never accepted from agent text.
@@ -31,6 +32,7 @@ type CanonicalActionAssociation struct {
 	CanonicalID    string
 	ProducerCallID string
 	ToolCallID     string
+	SucceededAt    time.Time
 }
 
 type credentialProxyProvenanceState struct {
@@ -79,6 +81,46 @@ func (d *Daemon) SetActiveProviderToolContext(ctx ActiveProviderToolContext) {
 	state.active[agentID] = ctx
 }
 
+// beginCanonicalActionTurn atomically advances the agent's turn-scoped
+// provenance boundary. Any records left by an interrupted prior turn are
+// discarded before the next provider input can run.
+func (d *Daemon) beginCanonicalActionTurn(agentID string) {
+	state := provenanceStateFor(d)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	agentID = strings.TrimSpace(agentID)
+	delete(state.active, agentID)
+	delete(state.associations, agentID)
+}
+
+// clearActiveProviderToolContext clears only the matching tool. A late result
+// for an older tool must not clear a newer active tool context.
+func (d *Daemon) clearActiveProviderToolContext(agentID, toolCallID string) {
+	state := provenanceStateFor(d)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	agentID = strings.TrimSpace(agentID)
+	toolCallID = strings.TrimSpace(toolCallID)
+	if active, ok := state.active[agentID]; ok && active.ToolCallID == toolCallID {
+		delete(state.active, agentID)
+	}
+}
+
+// endCanonicalActionTurn atomically clears active context and drains the
+// current turn's associations so they can be uploaded at most once.
+func (d *Daemon) endCanonicalActionTurn(agentID string) []CanonicalActionAssociation {
+	state := provenanceStateFor(d)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	agentID = strings.TrimSpace(agentID)
+	delete(state.active, agentID)
+	src := state.associations[agentID]
+	delete(state.associations, agentID)
+	out := make([]CanonicalActionAssociation, len(src))
+	copy(out, src)
+	return out
+}
+
 // ObservedCanonicalActionAssociations returns trusted associations recorded for
 // the agent. The slice is a copy and may be empty.
 func (d *Daemon) ObservedCanonicalActionAssociations(agentID string) []CanonicalActionAssociation {
@@ -104,14 +146,15 @@ func (d *Daemon) observeCanonicalActionOutcome(agentID, kind, canonicalID string
 	if agentID == "" || (kind != "message" && kind != "reaction") {
 		return
 	}
-	if _, err := uuid.Parse(canonicalID); err != nil {
+	parsed, err := uuid.Parse(canonicalID)
+	if err != nil || canonicalID != parsed.String() {
 		return
 	}
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	active, ok := state.active[agentID]
-	if !ok || strings.TrimSpace(active.CallID) == "" || strings.TrimSpace(active.ToolCallID) == "" {
+	if !ok || strings.TrimSpace(active.ToolCallID) == "" {
 		return
 	}
 	for _, existing := range state.associations[agentID] {
@@ -119,11 +162,15 @@ func (d *Daemon) observeCanonicalActionOutcome(agentID, kind, canonicalID string
 			return
 		}
 	}
+	if len(state.associations[agentID]) >= canonicalActionAssociationLimitPerTurn {
+		return
+	}
 	state.associations[agentID] = append(state.associations[agentID], CanonicalActionAssociation{
 		Kind:           kind,
 		CanonicalID:    canonicalID,
 		ProducerCallID: active.CallID,
 		ToolCallID:     active.ToolCallID,
+		SucceededAt:    time.Now().UTC(),
 	})
 }
 
@@ -262,7 +309,8 @@ func canonicalActionFromProxyResponse(method, path string, status int, body []by
 	}
 
 	canonicalID = strings.TrimSpace(canonicalID)
-	if _, err := uuid.Parse(canonicalID); err != nil {
+	parsed, err := uuid.Parse(canonicalID)
+	if err != nil || canonicalID != parsed.String() {
 		return "", "", false
 	}
 	return kind, canonicalID, true

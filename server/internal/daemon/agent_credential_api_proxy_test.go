@@ -164,11 +164,9 @@ func TestCredentialProxyAssociatesCanonicalResponsesWithActiveProviderContext(t 
 			if len(got) != 1 {
 				t.Fatalf("associations = %+v, want one deduplicated canonical association", got)
 			}
-			want := CanonicalActionAssociation{
-				Kind: tt.kind, CanonicalID: tt.canonicalID, ProducerCallID: tt.callID, ToolCallID: tt.toolCallID,
-			}
-			if got[0] != want {
-				t.Fatalf("association = %+v, want %+v", got[0], want)
+			if got[0].Kind != tt.kind || got[0].CanonicalID != tt.canonicalID ||
+				got[0].ProducerCallID != tt.callID || got[0].ToolCallID != tt.toolCallID || got[0].SucceededAt.IsZero() {
+				t.Fatalf("association = %+v, want trusted fields and a success timestamp", got[0])
 			}
 		})
 	}
@@ -193,6 +191,10 @@ func TestCredentialProxyRejectsNonCanonicalResponses(t *testing.T) {
 		{name: "malformed json", method: http.MethodPost, path: "/api/agent/messages/send", status: http.StatusOK, responseBody: `{"created":true`},
 		{name: "missing message id", method: http.MethodPost, path: "/api/agent/messages/send", status: http.StatusOK, responseBody: `{"created":true,"message":{}}`},
 		{name: "invalid message id", method: http.MethodPost, path: "/api/agent/messages/send", status: http.StatusOK, responseBody: `{"created":true,"message":{"id":"not-a-uuid"}}`},
+		{name: "raw hex message id", method: http.MethodPost, path: "/api/agent/messages/send", status: http.StatusOK, responseBody: `{"created":true,"message":{"id":"70000000000040008000000000000341"}}`},
+		{name: "urn message id", method: http.MethodPost, path: "/api/agent/messages/send", status: http.StatusOK, responseBody: `{"created":true,"message":{"id":"urn:uuid:` + validMessageID + `"}}`},
+		{name: "braced message id", method: http.MethodPost, path: "/api/agent/messages/send", status: http.StatusOK, responseBody: `{"created":true,"message":{"id":"{` + validMessageID + `}"}}`},
+		{name: "uppercase message id", method: http.MethodPost, path: "/api/agent/messages/send", status: http.StatusOK, responseBody: `{"created":true,"message":{"id":"70000000-0000-4000-8000-000000000ABC"}}`},
 		{name: "missing reaction id", method: http.MethodPost, path: "/api/agent/messages/react", status: http.StatusOK, responseBody: `{"added":true,"reaction":{}}`},
 		{name: "invalid reaction id", method: http.MethodPost, path: "/api/agent/messages/react", status: http.StatusOK, responseBody: `{"added":true,"reaction":{"id":"not-a-uuid"}}`},
 		{name: "unrelated path", method: http.MethodPost, path: "/api/agent/messages/read", status: http.StatusOK, responseBody: `{"created":true,"message":{"id":"` + validMessageID + `"}}`},

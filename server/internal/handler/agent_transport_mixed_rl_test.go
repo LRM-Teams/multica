@@ -257,6 +257,27 @@ func TestTurnCaptureFromProtocol_RejectsInvalidTrustedBatchRecords(t *testing.T)
 			message: "canonical_id",
 		},
 		{
+			name: "noncanonical canonical id",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].CanonicalID = "700000000000400080000000000002d5"
+			},
+			message: "canonical_id",
+		},
+		{
+			name: "unsupported visible action kind",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].Kind = "arbitrary"
+			},
+			message: "visible action kind",
+		},
+		{
+			name: "unsupported consumption source",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.Consumptions[0].Source = "arbitrary"
+			},
+			message: "consumption source",
+		},
+		{
 			name: "missing request hash",
 			mutate: func(upload *protocol.TurnCaptureUpload) {
 				upload.ProviderCalls[0].RequestHash = " "
@@ -359,6 +380,30 @@ func TestTurnCaptureFromProtocol_RejectsInvalidTrustedBatchRecords(t *testing.T)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.message)
 			assert.NotContains(t, err.Error(), "do-not-log")
+		})
+	}
+}
+
+func TestAgentTransportUploadTurnCapture_RejectsUnsupportedVocabularyWithBadRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*protocol.TurnCaptureUpload)
+	}{
+		{name: "visible action kind", mutate: func(upload *protocol.TurnCaptureUpload) { upload.VisibleActions[0].Kind = "arbitrary" }},
+		{name: "consumption source", mutate: func(upload *protocol.TurnCaptureUpload) { upload.Consumptions[0].Source = "arbitrary" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upload := validTurnCaptureUpload()
+			upload.AgentID = "70000000-0000-4000-8000-000000000291"
+			upload.RuntimeID = "70000000-0000-4000-8000-000000000292"
+			tc.mutate(&upload)
+			req := withChatTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/v1/env-dispatch/runs/run/turn-captures", upload))
+			req.Header.Set("X-Actor-Source", "agent_credential")
+			req.Header.Set("X-Agent-ID", upload.AgentID)
+			req = withURLParam(req, "runID", "70000000-0000-4000-8000-000000000293")
+			recorder := httptest.NewRecorder()
+			(&Handler{}).AgentTransportUploadTurnCapture(recorder, req)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 		})
 	}
 }

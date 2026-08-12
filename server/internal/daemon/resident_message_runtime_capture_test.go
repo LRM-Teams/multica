@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -292,6 +293,115 @@ func TestResidentMessageRuntimeCapture_UploadsTrustedBatchAtTurnEnd(t *testing.T
 	}
 }
 
+func TestResidentMessageRuntimeCapture_BindsProxyActionToProviderCallAndDrainsTurn(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+		runID       = "run-1"
+		runAgentID  = "run-agent-1"
+		canonicalID = "70000000-0000-4000-8000-000000000371"
+	)
+	var (
+		mu      sync.Mutex
+		uploads []protocol.TurnCaptureUpload
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/messages/send":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"created":true,"message":{"id":"`+canonicalID+`"}}`)
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-captures":
+			var upload protocol.TurnCaptureUpload
+			if err := json.NewDecoder(r.Body).Decode(&upload); err != nil {
+				t.Fatalf("decode upload: %v", err)
+			}
+			mu.Lock()
+			uploads = append(uploads, upload)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureUploadResponse{Accepted: true, TurnID: upload.Turn.TurnID})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("write credential: %v", err)
+	}
+	capture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-1", "turn-1", "batch-1", "provider-call-1", "first")
+	capture.ProviderCalls[0].FinalAssistantMessage = json.RawMessage(`{"role":"assistant","blocks":[{"type":"toolCall","id":"tool-1","name":"multica"}]}`)
+	backend := &captureResidentMessageRuntime{
+		done: make(chan error, 1), messages: make(chan agent.Message, 2),
+		capture: make(chan agent.ResidentTurnCapture, 1), emitCapture: &capture,
+	}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{mode: canonicalRuntimeResident, backend: backend}
+	d := &Daemon{
+		cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		canonicalRuntimes: pool,
+		runtimeIndex:      map[string]Runtime{runtimeID: {ID: runtimeID, WorkspaceID: workspaceID}},
+		mixedRunActivityReporter: func(protocol.MixedRunActivityTransitionPayload) bool {
+			return true
+		},
+	}
+	if err := d.handoffIdleMessageBatch(context.Background(), agentID, runtimeID, []protocol.AgentMessageProjection{{
+		ID: "message-1", Target: "channel:one", Seq: 1, Content: "send a message",
+		RunID: runID, RunAgentID: runAgentID, DeliveryID: "delivery-1",
+	}}); err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	backend.messages <- agent.Message{Type: agent.MessageToolUse, Tool: "multica", CallID: "tool-1"}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		state := provenanceStateFor(d)
+		state.mu.Lock()
+		active := state.active[agentID].ToolCallID == "tool-1"
+		state.mu.Unlock()
+		if active {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/messages/send", strings.NewReader(`{}`))
+	req.Header.Set("X-Agent-ID", agentID)
+	req.Header.Set("X-Workspace-ID", workspaceID)
+	rec := httptest.NewRecorder()
+	d.credentialProxyAgentAPIHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("proxy status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	backend.messages <- agent.Message{Type: agent.MessageToolResult, Tool: "multica", CallID: "tool-1"}
+	backend.finish(nil)
+	waitForCaptureUploads(t, &mu, &uploads, 1)
+
+	second := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-2", "turn-2", "batch-2", "provider-call-2", "second")
+	second.ProviderCalls[0].FinalAssistantMessage = capture.ProviderCalls[0].FinalAssistantMessage
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-turn-2", nil, &second) {
+		t.Fatal("second capture was not accepted")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(uploads) != 2 {
+		t.Fatalf("uploads = %d, want 2", len(uploads))
+	}
+	if len(uploads[0].VisibleActions) != 1 {
+		t.Fatalf("first visible actions = %+v, want one", uploads[0].VisibleActions)
+	}
+	action := uploads[0].VisibleActions[0]
+	if action.CanonicalID != canonicalID || action.ProducerCallID != "provider-call-1" || action.ActionOrdinal != 1 || action.SucceededAt == "" {
+		t.Fatalf("first visible action = %+v", action)
+	}
+	if len(uploads[1].VisibleActions) != 0 {
+		t.Fatalf("second turn replayed visible actions: %+v", uploads[1].VisibleActions)
+	}
+}
+
 func TestResidentMessageRuntimeCapture_ToolLifecycleDuringIdleInput(t *testing.T) {
 	const agentID, runtimeID = "agent-1", "runtime-1"
 	backend := &captureResidentMessageRuntime{
@@ -410,6 +520,8 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 	}}); err != nil {
 		t.Fatalf("handoff: %v", err)
 	}
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: agentID, CallID: "tool-gap", ToolCallID: "tool-gap"})
+	d.observeCanonicalActionOutcome(agentID, "message", "70000000-0000-4000-8000-000000000372", true)
 	backend.finish(nil)
 
 	deadline := time.After(2 * time.Second)
@@ -424,6 +536,9 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 				}
 				if gaps[0].Reason == "" || gaps[0].RunAgentID != runAgentID {
 					t.Fatalf("unexpected gap report: %+v", gaps[0])
+				}
+				if associations := d.ObservedCanonicalActionAssociations(agentID); len(associations) != 0 {
+					t.Fatalf("capture gap retained turn associations: %+v", associations)
 				}
 				return
 			}

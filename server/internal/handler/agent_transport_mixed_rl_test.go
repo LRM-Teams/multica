@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -43,6 +44,79 @@ func TestAgentTransportUploadTurnCapture_RejectsPayloadAgentDifferentFromCredent
 	recorder := httptest.NewRecorder()
 	(&Handler{}).AgentTransportUploadTurnCapture(recorder, req)
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestAgentTransportUploadTurnCapture_AcknowledgesLateCaptureFromProviderService(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	fixture := seedMixedRunDeliveryFixture(t)
+
+	var piSessionID, captureBoundary string
+	err := testPool.QueryRow(fixture.ctx, `
+		SELECT pi_session_id, capture_boundary
+		FROM env_dispatch_run_agent
+		WHERE run_id = $1 AND run_agent_id = $2
+	`, fixture.runID, fixture.runAgentID).Scan(&piSessionID, &captureBoundary)
+	require.NoError(t, err)
+
+	turnID := util.MustParseUUID("70000000-0000-4000-8000-0000000002a9")
+	_, err = testPool.Exec(fixture.ctx, `
+		INSERT INTO env_dispatch_resident_turn (
+			turn_id, run_id, run_agent_id, turn_ordinal, status
+		) VALUES ($1, $2, $3, 1, 'active')
+	`, turnID, fixture.runID, fixture.runAgentID)
+	require.NoError(t, err)
+
+	snapshotID := "sha256:handler-late-" + fixture.runID.String()
+	snapshotHash := snapshotID
+	_, err = testPool.Exec(fixture.ctx, `
+		UPDATE env_dispatch_run
+		SET status = 'freezing'
+		WHERE run_id = $1 AND status = 'running'
+	`, fixture.runID)
+	require.NoError(t, err)
+	_, err = testHandler.Queries.CreateMixedRLFrozenSnapshot(fixture.ctx, db.CreateMixedRLFrozenSnapshotParams{
+		SnapshotID: snapshotID, RunID: fixture.runID, RunStatus: "completed",
+		SchemaVersion: "1", NormalizationVersion: "1",
+		CanonicalManifest: []byte(`{"calls":[],"segments":[],"edges":[]}`), SnapshotHash: snapshotHash,
+	})
+	require.NoError(t, err)
+	_, err = testHandler.Queries.CompleteMixedRLRunWithSnapshot(fixture.ctx, db.CompleteMixedRLRunWithSnapshotParams{
+		TerminalStatus: "completed", RunID: fixture.runID, SnapshotID: snapshotID, SnapshotHash: snapshotHash,
+	})
+	require.NoError(t, err)
+
+	upload := validTurnCaptureUpload()
+	upload.AgentID = fixture.agentID
+	upload.RuntimeID = fixture.runtimeID
+	upload.Turn.RunAgentID = fixture.runAgentID.String()
+	upload.Turn.PiSessionID = piSessionID
+	upload.Turn.CaptureBoundary = captureBoundary
+	upload.Turn.TurnID = turnID.String()
+	upload.CaptureBatchID = "70000000-0000-4000-8000-0000000002aa"
+
+	req := withChatTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/v1/env-dispatch/runs/"+fixture.runID.String()+"/turn-captures", upload))
+	req.Header.Set("X-Actor-Source", "agent_credential")
+	req.Header.Set("X-Agent-ID", fixture.agentID)
+	req = withURLParam(req, "runID", fixture.runID.String())
+	recorder := httptest.NewRecorder()
+	testHandler.AgentTransportUploadTurnCapture(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	var response protocol.TurnCaptureUploadResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.True(t, response.Accepted)
+	assert.True(t, response.Late)
+	assert.Equal(t, snapshotID, response.SnapshotID)
+	assert.Equal(t, "completed", response.RunStatus)
+	assert.Equal(t, upload.CaptureBatchID, response.CaptureBatchID)
+	assert.Equal(t, upload.Turn.TurnID, response.TurnID)
+	assert.Equal(t, len(upload.ProviderCalls), response.ProviderCallCount)
+	assert.Equal(t, len(upload.VisibleActions), response.VisibleActionCount)
+	assert.Equal(t, len(upload.Consumptions), response.ConsumptionCount)
+	assert.NotContains(t, recorder.Body.String(), "raw_provider_request")
+	assert.NotContains(t, recorder.Body.String(), "final_assistant_message")
 }
 
 func TestTrustedTurnCaptureScopeMatchesRejectsCredentialRuntimeAndRunnerMismatches(t *testing.T) {
@@ -94,14 +168,14 @@ func TestTurnCaptureFromProtocol_MapsAtomicBatchActionsConsumptionsAndEligibilit
 			CallID: "C17", CallOrdinal: 17, Provider: "synthetic", Model: "synthetic-model", APIKind: "messages",
 			RawProviderRequest:    json.RawMessage(`{"model":"synthetic-model","messages":[]}`),
 			FinalAssistantMessage: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}]}`),
-			Status: "completed", StopReason: "toolUse", ResponseComplete: true,
+			Status:                "completed", StopReason: "toolUse", ResponseComplete: true,
 			RequestHash: "sha256:req", ResponseHash: "sha256:resp",
 			StartedAt: "2026-08-12T10:00:01Z", CompletedAt: "2026-08-12T10:00:04Z",
 		}, {
 			CallID: "C18", CallOrdinal: 18, Provider: "synthetic", Model: "synthetic-model", APIKind: "messages",
 			RawProviderRequest:    json.RawMessage(`{"model":"synthetic-model","messages":[]}`),
 			FinalAssistantMessage: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"cut"}]}`),
-			Status: "completed", StopReason: "length", ResponseComplete: true,
+			Status:                "completed", StopReason: "length", ResponseComplete: true,
 			RequestHash: "sha256:req2", ResponseHash: "sha256:resp2",
 			StartedAt: "2026-08-12T10:00:05Z", CompletedAt: "2026-08-12T10:00:06Z",
 		}},
@@ -127,9 +201,147 @@ func TestTurnCaptureFromProtocol_MapsAtomicBatchActionsConsumptionsAndEligibilit
 	require.Len(t, capture.Consumptions, 1)
 	assert.Equal(t, "message_check", capture.Consumptions[0].Source)
 	assert.Equal(t, "C17", capture.Consumptions[0].EffectiveFromCallID)
+	expectedActionID := util.MustParseUUID(uuid.NewSHA1(uuid.NameSpaceURL, []byte(upload.CaptureBatchID+":action:1")).String())
+	expectedConsumptionID := util.MustParseUUID(uuid.NewSHA1(uuid.NameSpaceURL, []byte(upload.CaptureBatchID+":consumption:1")).String())
+	assert.Equal(t, expectedActionID, capture.Actions[0].ActionID)
+	assert.Equal(t, expectedConsumptionID, capture.Consumptions[0].ConsumptionID)
 	require.Len(t, capture.Calls, 2)
 	assert.True(t, capture.Calls[0].TrainingEligible, "complete toolUse calls are training-eligible")
 	assert.False(t, capture.Calls[1].TrainingEligible, "length-stop calls remain audit-only")
+}
+
+func TestTurnCaptureFromProtocol_RejectsInvalidTrustedBatchRecords(t *testing.T) {
+	runID := util.MustParseUUID("70000000-0000-4000-8000-0000000002d1")
+	tests := []struct {
+		name    string
+		mutate  func(*protocol.TurnCaptureUpload)
+		message string
+	}{
+		{
+			name: "duplicate action ordinal",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions = append(upload.VisibleActions, upload.VisibleActions[0])
+				upload.VisibleActions[1].CanonicalID = "70000000-0000-4000-8000-0000000002da"
+			},
+			message: "visible action ordinal",
+		},
+		{
+			name: "regressing action ordinal",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].ActionOrdinal = 2
+				upload.VisibleActions = append(upload.VisibleActions, protocol.TurnCaptureVisibleAction{
+					Kind: "reaction", CanonicalID: "70000000-0000-4000-8000-0000000002db",
+					ProducerCallID: "C17", ActionOrdinal: 1,
+				})
+			},
+			message: "visible action ordinal",
+		},
+		{
+			name: "nonpositive action ordinal",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].ActionOrdinal = 0
+			},
+			message: "visible action ordinal",
+		},
+		{
+			name: "invalid canonical id",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].CanonicalID = "not-a-uuid"
+			},
+			message: "canonical_id",
+		},
+		{
+			name: "missing request hash",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.ProviderCalls[0].RequestHash = " "
+			},
+			message: "request_hash",
+		},
+		{
+			name: "missing response hash",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.ProviderCalls[0].ResponseHash = ""
+			},
+			message: "response_hash",
+		},
+		{
+			name: "nested secret field",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.ProviderCalls[0].RawProviderRequest = json.RawMessage(`{"messages":[],"transport":{"auth":{"client-secret":"do-not-log"}}}`)
+			},
+			message: "client-secret",
+		},
+		{
+			name: "malformed provider request json",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.ProviderCalls[0].RawProviderRequest = json.RawMessage(`{"messages":`)
+			},
+			message: "valid JSON",
+		},
+		{
+			name: "action references foreign call",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.VisibleActions[0].ProducerCallID = "foreign-call"
+			},
+			message: "producer_call_id",
+		},
+		{
+			name: "consumption references foreign call",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.Consumptions[0].EffectiveFromCallID = "foreign-call"
+			},
+			message: "effective_from_call_id",
+		},
+		{
+			name: "provider call completion before start",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.ProviderCalls[0].StartedAt = "2026-08-12T10:00:04Z"
+				upload.ProviderCalls[0].CompletedAt = "2026-08-12T10:00:03Z"
+			},
+			message: "before started_at",
+		},
+		{
+			name: "turn completion before start",
+			mutate: func(upload *protocol.TurnCaptureUpload) {
+				upload.Turn.StartedAt = "2026-08-12T10:00:09Z"
+				upload.Turn.CompletedAt = "2026-08-12T10:00:08Z"
+			},
+			message: "before started_at",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			upload := validTurnCaptureUpload()
+			tc.mutate(&upload)
+			_, err := turnCaptureFromProtocol(runID, upload)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.message)
+			assert.NotContains(t, err.Error(), "do-not-log")
+		})
+	}
+}
+
+func TestTurnCaptureFromProtocol_DerivesRecordIDsFromBatchKindAndOrdinal(t *testing.T) {
+	runID := util.MustParseUUID("70000000-0000-4000-8000-0000000002e1")
+	upload := validTurnCaptureUpload()
+	first, err := turnCaptureFromProtocol(runID, upload)
+	require.NoError(t, err)
+
+	upload.Turn.TurnID = "70000000-0000-4000-8000-0000000002ea"
+	upload.VisibleActions[0].CanonicalID = "70000000-0000-4000-8000-0000000002eb"
+	upload.Consumptions[0].ChannelMessageID = "70000000-0000-4000-8000-0000000002ec"
+	second, err := turnCaptureFromProtocol(runID, upload)
+	require.NoError(t, err)
+	assert.Equal(t, first.Actions[0].ActionID, second.Actions[0].ActionID)
+	assert.Equal(t, first.Consumptions[0].ConsumptionID, second.Consumptions[0].ConsumptionID)
+	assert.NotEqual(t, first.Actions[0].ActionID, first.Consumptions[0].ConsumptionID)
+
+	upload.CaptureBatchID = "70000000-0000-4000-8000-0000000002ed"
+	third, err := turnCaptureFromProtocol(runID, upload)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Actions[0].ActionID, third.Actions[0].ActionID)
+	assert.NotEqual(t, first.Consumptions[0].ConsumptionID, third.Consumptions[0].ConsumptionID)
 }
 
 func TestTurnCaptureFromProtocol_RejectsMissingPayloadHashAndAuthMaterial(t *testing.T) {
@@ -144,7 +356,7 @@ func TestTurnCaptureFromProtocol_RejectsMissingPayloadHashAndAuthMaterial(t *tes
 			CallID: "C1", CallOrdinal: 1, Provider: "synthetic", Model: "m", APIKind: "messages",
 			RawProviderRequest:    json.RawMessage(`{"model":"m"}`),
 			FinalAssistantMessage: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}]}`),
-			Status: "completed", StopReason: "stop", ResponseComplete: true,
+			Status:                "completed", StopReason: "stop", ResponseComplete: true,
 			RequestHash: "sha256:req", ResponseHash: "sha256:resp",
 		}},
 	}
@@ -159,7 +371,7 @@ func TestTurnCaptureFromProtocol_RejectsMissingPayloadHashAndAuthMaterial(t *tes
 		CallID: "C1", CallOrdinal: 1, Provider: "synthetic", Model: "m", APIKind: "messages",
 		RawProviderRequest:    json.RawMessage(`{"model":"m","authorization":"Bearer secret","api_key":"secret"}`),
 		FinalAssistantMessage: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}]}`),
-		Status: "completed", StopReason: "stop", ResponseComplete: true,
+		Status:                "completed", StopReason: "stop", ResponseComplete: true,
 		RequestHash: "sha256:req", ResponseHash: "sha256:resp",
 	}}
 	_, err = turnCaptureFromProtocol(runID, withAuth)
@@ -199,18 +411,41 @@ func TestTurnCaptureResponseFromResult_RoutesPostFreezeLateAudit(t *testing.T) {
 		Run:        service.EnvDispatchRunRecord{Status: "completed"},
 	}
 	capture := service.TrustedTurnCapture{
-		Batch: service.TurnCaptureBatchInput{CaptureBatchID: util.MustParseUUID("70000000-0000-4000-8000-0000000002f1")},
-		Calls: []service.ProviderCallInput{{CallID: "C1"}},
+		TurnID: util.MustParseUUID("70000000-0000-4000-8000-0000000002f2"),
+		Batch:  service.TurnCaptureBatchInput{CaptureBatchID: util.MustParseUUID("70000000-0000-4000-8000-0000000002f1")},
+		Calls:  []service.ProviderCallInput{{CallID: "C1"}},
 	}
 	resp := turnCaptureResponseFromResult(result, capture)
 	assert.True(t, resp.Accepted)
 	assert.True(t, resp.Late, "post-freeze uploads must be acknowledged as late audit events")
 	assert.Equal(t, "sha256:frozen-snapshot", resp.SnapshotID)
 	assert.Equal(t, "completed", resp.RunStatus)
+	assert.Equal(t, "70000000-0000-4000-8000-0000000002f2", resp.TurnID)
 	assert.Equal(t, "70000000-0000-4000-8000-0000000002f1", resp.CaptureBatchID)
 	assert.Equal(t, 1, resp.ProviderCallCount)
 	assert.Zero(t, resp.VisibleActionCount)
 	assert.NotContains(t, mustJSON(t, resp), "raw_provider_request")
+}
+
+func validTurnCaptureUpload() protocol.TurnCaptureUpload {
+	return protocol.TurnCaptureUpload{
+		CaptureBatchID: "70000000-0000-4000-8000-0000000002d2",
+		PayloadHash:    "sha256:batch",
+		Turn: protocol.TurnCaptureTurn{
+			TurnID: "70000000-0000-4000-8000-0000000002d3", RunAgentID: "70000000-0000-4000-8000-0000000002d4",
+			PiSessionID: "pi-session", CaptureBoundary: "boundary-1", TurnOrdinal: 1,
+			StartedAt: "2026-08-12T10:00:00Z", CompletedAt: "2026-08-12T10:00:08Z",
+		},
+		ProviderCalls: []protocol.TurnCaptureProviderCall{syntheticTurnCaptureCall("C17", 17)},
+		VisibleActions: []protocol.TurnCaptureVisibleAction{{
+			Kind: "message", CanonicalID: "70000000-0000-4000-8000-0000000002d5",
+			ProducerCallID: "C17", ActionOrdinal: 1, SucceededAt: "2026-08-12T10:00:05Z",
+		}},
+		Consumptions: []protocol.TurnCaptureConsumption{{
+			ChannelMessageID: "70000000-0000-4000-8000-0000000002d6", Source: "message_check",
+			EffectiveFromCallID: "C17", ConsumedAt: "2026-08-12T10:00:06Z",
+		}},
+	}
 }
 
 func syntheticTurnCaptureCall(callID string, ordinal int64) protocol.TurnCaptureProviderCall {
@@ -218,7 +453,7 @@ func syntheticTurnCaptureCall(callID string, ordinal int64) protocol.TurnCapture
 		CallID: callID, CallOrdinal: ordinal, Provider: "synthetic", Model: "m", APIKind: "messages",
 		RawProviderRequest:    json.RawMessage(`{"model":"m"}`),
 		FinalAssistantMessage: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}]}`),
-		Status: "completed", StopReason: "stop", ResponseComplete: true,
+		Status:                "completed", StopReason: "stop", ResponseComplete: true,
 		RequestHash: "sha256:req-" + callID, ResponseHash: "sha256:resp-" + callID,
 	}
 }

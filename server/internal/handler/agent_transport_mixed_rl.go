@@ -166,39 +166,57 @@ func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUploa
 	if err != nil {
 		return service.TrustedTurnCapture{}, fmt.Errorf("invalid capture_batch_id")
 	}
-	completedAt := time.Time{}
-	if upload.Turn.CompletedAt != "" {
-		completedAt, err = time.Parse(time.RFC3339Nano, upload.Turn.CompletedAt)
-		if err != nil {
-			return service.TrustedTurnCapture{}, fmt.Errorf("invalid completed_at")
-		}
+	turnStartedAt, err := parseCaptureTimestamp(upload.Turn.StartedAt, "turn started_at")
+	if err != nil {
+		return service.TrustedTurnCapture{}, err
+	}
+	completedAt, err := parseCaptureTimestamp(upload.Turn.CompletedAt, "turn completed_at")
+	if err != nil {
+		return service.TrustedTurnCapture{}, err
+	}
+	if !turnStartedAt.IsZero() && !completedAt.IsZero() && completedAt.Before(turnStartedAt) {
+		return service.TrustedTurnCapture{}, fmt.Errorf("turn completed_at is before started_at")
 	}
 
+	callOrdinals := make([]int64, len(upload.ProviderCalls))
+	for i := range upload.ProviderCalls {
+		callOrdinals[i] = upload.ProviderCalls[i].CallOrdinal
+	}
+	if err := validateStrictPositiveOrdinals(callOrdinals, "provider call ordinal"); err != nil {
+		return service.TrustedTurnCapture{}, err
+	}
 	calls := make([]service.ProviderCallInput, 0, len(upload.ProviderCalls))
-	var previousOrdinal int64
-	seenOrdinal := map[int64]struct{}{}
+	callIDs := make(map[string]struct{}, len(upload.ProviderCalls))
 	for _, call := range upload.ProviderCalls {
-		if call.CallOrdinal <= 0 {
-			return service.TrustedTurnCapture{}, fmt.Errorf("provider call ordinal must be positive")
+		callID := strings.TrimSpace(call.CallID)
+		if callID == "" {
+			return service.TrustedTurnCapture{}, fmt.Errorf("provider call call_id is required")
 		}
-		if _, dup := seenOrdinal[call.CallOrdinal]; dup {
-			return service.TrustedTurnCapture{}, fmt.Errorf("overlapping provider call ordinal %d", call.CallOrdinal)
+		if _, duplicate := callIDs[callID]; duplicate {
+			return service.TrustedTurnCapture{}, fmt.Errorf("duplicate provider call call_id")
 		}
-		if previousOrdinal > 0 && call.CallOrdinal < previousOrdinal {
-			return service.TrustedTurnCapture{}, fmt.Errorf("regressing provider call ordinals")
+		callIDs[callID] = struct{}{}
+		if strings.TrimSpace(call.RequestHash) == "" {
+			return service.TrustedTurnCapture{}, fmt.Errorf("provider call request_hash is required")
 		}
-		seenOrdinal[call.CallOrdinal] = struct{}{}
-		previousOrdinal = call.CallOrdinal
-		if err := rejectTurnCaptureAuthMaterial(call.RawProviderRequest); err != nil {
+		if strings.TrimSpace(call.ResponseHash) == "" {
+			return service.TrustedTurnCapture{}, fmt.Errorf("provider call response_hash is required")
+		}
+		if field, forbidden, err := captureJSONForbiddenField(call.RawProviderRequest); err != nil {
 			return service.TrustedTurnCapture{}, err
+		} else if forbidden {
+			return service.TrustedTurnCapture{}, fmt.Errorf("provider request contains forbidden transport authentication field %q", field)
 		}
 		startedAt, completedCallAt, err := captureCallTimes(call.StartedAt, call.CompletedAt)
 		if err != nil {
 			return service.TrustedTurnCapture{}, err
 		}
+		if !startedAt.IsZero() && !completedCallAt.IsZero() && completedCallAt.Before(startedAt) {
+			return service.TrustedTurnCapture{}, fmt.Errorf("provider call completed_at is before started_at")
+		}
 		eligible := call.Status == "completed" && call.ResponseComplete && (call.StopReason == "stop" || call.StopReason == "toolUse")
 		calls = append(calls, service.ProviderCallInput{
-			CallID: call.CallID, RunID: runID, RunAgentID: runAgentID, TurnID: turnID,
+			CallID: callID, RunID: runID, RunAgentID: runAgentID, TurnID: turnID,
 			PiSessionID: upload.Turn.PiSessionID, CallOrdinal: call.CallOrdinal,
 			Provider: call.Provider, Model: call.Model, APIKind: call.APIKind,
 			RawProviderRequest: call.RawProviderRequest, FinalAssistantMessage: call.FinalAssistantMessage,
@@ -209,49 +227,54 @@ func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUploa
 		})
 	}
 
+	actionOrdinals := make([]int64, len(upload.VisibleActions))
+	for i := range upload.VisibleActions {
+		actionOrdinals[i] = upload.VisibleActions[i].ActionOrdinal
+	}
+	if err := validateStrictPositiveOrdinals(actionOrdinals, "visible action ordinal"); err != nil {
+		return service.TrustedTurnCapture{}, err
+	}
 	actions := make([]service.VisibleActionInput, 0, len(upload.VisibleActions))
 	for _, action := range upload.VisibleActions {
 		canonicalID, err := util.ParseUUID(action.CanonicalID)
 		if err != nil {
 			return service.TrustedTurnCapture{}, fmt.Errorf("invalid visible action canonical_id")
 		}
-		succeededAt := time.Time{}
-		if action.SucceededAt != "" {
-			succeededAt, err = time.Parse(time.RFC3339Nano, action.SucceededAt)
-			if err != nil {
-				return service.TrustedTurnCapture{}, fmt.Errorf("invalid visible action succeeded_at")
-			}
+		producerCallID := strings.TrimSpace(action.ProducerCallID)
+		if _, found := callIDs[producerCallID]; !found {
+			return service.TrustedTurnCapture{}, fmt.Errorf("visible action producer_call_id must reference a provider call in the same batch")
 		}
-		actionID := pgtype.UUID{Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte(
-			turnID.String()+":action:"+action.Kind+":"+canonicalID.String()+":"+fmt.Sprint(action.ActionOrdinal),
-		)), Valid: true}
+		succeededAt, err := parseCaptureTimestamp(action.SucceededAt, "visible action succeeded_at")
+		if err != nil {
+			return service.TrustedTurnCapture{}, err
+		}
 		actions = append(actions, service.VisibleActionInput{
-			ActionID: actionID, RunID: runID, RunAgentID: runAgentID, TurnID: turnID,
-			Kind: action.Kind, CanonicalID: canonicalID, ProducerCallID: action.ProducerCallID,
+			ActionID: deterministicCaptureRecordID(batchID, "action", action.ActionOrdinal),
+			RunID:    runID, RunAgentID: runAgentID, TurnID: turnID,
+			Kind: action.Kind, CanonicalID: canonicalID, ProducerCallID: producerCallID,
 			ActionOrdinal: action.ActionOrdinal, Status: "succeeded", CreatedAt: succeededAt,
 		})
 	}
 
 	consumptions := make([]service.MessageConsumptionInput, 0, len(upload.Consumptions))
-	for _, consumption := range upload.Consumptions {
+	for i, consumption := range upload.Consumptions {
 		messageID, err := util.ParseUUID(consumption.ChannelMessageID)
 		if err != nil {
 			return service.TrustedTurnCapture{}, fmt.Errorf("invalid consumption channel_message_id")
 		}
-		consumedAt := time.Time{}
-		if consumption.ConsumedAt != "" {
-			consumedAt, err = time.Parse(time.RFC3339Nano, consumption.ConsumedAt)
-			if err != nil {
-				return service.TrustedTurnCapture{}, fmt.Errorf("invalid consumption consumed_at")
-			}
+		effectiveFromCallID := strings.TrimSpace(consumption.EffectiveFromCallID)
+		if _, found := callIDs[effectiveFromCallID]; !found {
+			return service.TrustedTurnCapture{}, fmt.Errorf("consumption effective_from_call_id must reference a provider call in the same batch")
 		}
-		consumptionID := pgtype.UUID{Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte(
-			turnID.String()+":consumption:"+messageID.String()+":"+consumption.EffectiveFromCallID,
-		)), Valid: true}
+		consumedAt, err := parseCaptureTimestamp(consumption.ConsumedAt, "consumption consumed_at")
+		if err != nil {
+			return service.TrustedTurnCapture{}, err
+		}
 		consumptions = append(consumptions, service.MessageConsumptionInput{
-			ConsumptionID: consumptionID, RunID: runID, RunAgentID: runAgentID, TurnID: turnID,
+			ConsumptionID: deterministicCaptureRecordID(batchID, "consumption", int64(i+1)),
+			RunID:         runID, RunAgentID: runAgentID, TurnID: turnID,
 			ChannelMessageID: messageID, Source: consumption.Source,
-			EffectiveFromCallID: consumption.EffectiveFromCallID, ConsumedAt: consumedAt,
+			EffectiveFromCallID: effectiveFromCallID, ConsumedAt: consumedAt,
 		})
 	}
 
@@ -266,36 +289,97 @@ func turnCaptureFromProtocol(runID pgtype.UUID, upload protocol.TurnCaptureUploa
 	}, nil
 }
 
-func rejectTurnCaptureAuthMaterial(raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return nil
+func captureJSONForbiddenField(raw json.RawMessage) (string, bool, error) {
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", false, fmt.Errorf("provider request must be valid JSON")
 	}
-	encoded := strings.ToLower(string(raw))
-	for _, forbidden := range []string{`"authorization"`, `"api_key"`, `"apikey"`, `"access_token"`, `"x-api-key"`} {
-		if strings.Contains(encoded, forbidden) {
-			name := strings.Trim(forbidden, `"`)
-			return fmt.Errorf("provider request contains forbidden transport authentication field %q", name)
+	if _, ok := payload.(map[string]any); !ok {
+		return "", false, fmt.Errorf("provider request must be a JSON object")
+	}
+	found := make(map[string]string)
+	var collect func(any)
+	collect = func(value any) {
+		switch typed := value.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				normalized := strings.Map(func(r rune) rune {
+					if r >= 'A' && r <= 'Z' {
+						return r + ('a' - 'A')
+					}
+					if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+						return r
+					}
+					return -1
+				}, key)
+				if _, exists := found[normalized]; !exists {
+					found[normalized] = key
+				}
+				collect(child)
+			}
+		case []any:
+			for _, child := range typed {
+				collect(child)
+			}
 		}
+	}
+	collect(payload)
+	for _, normalized := range []string{
+		"authorization", "proxyauthorization", "xapikey", "apikey",
+		"accesstoken", "authtoken", "bearertoken", "clientsecret",
+		"secretkey", "credential", "credentials", "password",
+		"setcookie", "cookies", "cookie", "secret",
+	} {
+		if key, ok := found[normalized]; ok {
+			return key, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func validateStrictPositiveOrdinals(values []int64, label string) error {
+	seen := make(map[int64]struct{}, len(values))
+	var previous int64
+	for _, value := range values {
+		if value <= 0 {
+			return fmt.Errorf("%s must be positive", label)
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return fmt.Errorf("duplicate %s %d", label, value)
+		}
+		if previous > 0 && value < previous {
+			return fmt.Errorf("regressing %ss", label)
+		}
+		seen[value] = struct{}{}
+		previous = value
 	}
 	return nil
 }
 
+func parseCaptureTimestamp(raw, field string) (time.Time, error) {
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid %s", field)
+	}
+	return parsed, nil
+}
+
+func deterministicCaptureRecordID(batchID pgtype.UUID, kind string, ordinal int64) pgtype.UUID {
+	return pgtype.UUID{Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte(
+		batchID.String()+":"+kind+":"+fmt.Sprint(ordinal),
+	)), Valid: true}
+}
+
 func captureCallTimes(started, completed string) (time.Time, time.Time, error) {
-	var err error
-	var startedAt, completedAt time.Time
-	if started != "" {
-		startedAt, err = time.Parse(time.RFC3339Nano, started)
-		if err != nil {
-			return time.Time{}, time.Time{}, fmt.Errorf("invalid provider call started_at")
-		}
+	startedAt, err := parseCaptureTimestamp(started, "provider call started_at")
+	if err != nil {
+		return time.Time{}, time.Time{}, err
 	}
-	if completed != "" {
-		completedAt, err = time.Parse(time.RFC3339Nano, completed)
-		if err != nil {
-			return time.Time{}, time.Time{}, fmt.Errorf("invalid provider call completed_at")
-		}
-	}
-	return startedAt, completedAt, nil
+	completedAt, err := parseCaptureTimestamp(completed, "provider call completed_at")
+	return startedAt, completedAt, err
 }
 
 // turnCaptureResponseFromResult maps an accepted (or late) capture onto the
@@ -304,6 +388,7 @@ func turnCaptureResponseFromResult(result service.TrustedTurnCaptureResult, capt
 	resp := protocol.TurnCaptureUploadResponse{
 		Accepted:           true,
 		CaptureBatchID:     capture.Batch.CaptureBatchID.String(),
+		TurnID:             capture.TurnID.String(),
 		ProviderCallCount:  len(capture.Calls),
 		VisibleActionCount: len(capture.Actions),
 		ConsumptionCount:   len(capture.Consumptions),

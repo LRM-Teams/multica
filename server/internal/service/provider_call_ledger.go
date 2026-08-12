@@ -544,6 +544,12 @@ func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input Frozen
 		if listErr != nil {
 			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, listErr
 		}
+		if int64(len(activeTurns)) != locked.ActiveTurnCount {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, fmt.Errorf(
+				"timeout freeze activity mismatch: active_turn_count=%d active_resident_turns=%d",
+				locked.ActiveTurnCount, len(activeTurns),
+			)
+		}
 		for _, turn := range activeTurns {
 			if _, gapErr := qtx.RecordMixedRLCaptureGap(ctx, db.RecordMixedRLCaptureGapParams{
 				EventID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, RunID: input.RunID,

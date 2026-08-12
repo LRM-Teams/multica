@@ -181,6 +181,7 @@ func TestEnsureResidentMessageRuntimeRotatesPiSessionBetweenRuns(t *testing.T) {
 	d := &Daemon{
 		cfg: Config{
 			WorkspacesRoot: t.TempDir(),
+			HealthPort:     19514,
 			Agents:         map[string]AgentEntry{"pi": {Path: "/usr/bin/true"}},
 		},
 		client:            client,

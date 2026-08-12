@@ -1,0 +1,2 @@
+CREATE INDEX env_dispatch_delivery_obligation_source_recipient_agent_id_idx
+  ON env_dispatch_delivery_obligation (source_recipient_agent_id);

@@ -402,6 +402,8 @@ func createFrozenCaptureGapTestFixture(
 		TurnID: turn.TurnID, Reason: "turn_batch_missing",
 		Summary: []byte(`{"call_count":0}`),
 	}))
+	_, err := h.runs.CompleteResidentTurn(h.ctx, turn.TurnID, "capture_gap", time.Now().UTC())
+	require.NoError(t, err)
 
 	if terminalStatus == "completed" {
 		advanceMixedRLRunToQuietCandidate(t, h, run.RunID)

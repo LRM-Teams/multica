@@ -102,7 +102,8 @@ func TestMixedRLFreezeService_ReapQuiescenceFreezesQuietRun(t *testing.T) {
 	advanceMixedRLRunToQuietCandidate(t, h, run.RunID)
 	require.NoError(t, h.tx.QueryRow(h.ctx, `
 		UPDATE env_dispatch_run
-		SET quiet_candidate_since = now() - make_interval(secs => quiet_window_ms / 1000 + 1)
+		SET quiet_candidate_since = now() - make_interval(secs => quiet_window_ms / 1000 + 1),
+		    timeout_deadline_at = now() + interval '1 hour'
 		WHERE run_id = $1
 		RETURNING run_id`, run.RunID).Scan(&run.RunID))
 

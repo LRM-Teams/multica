@@ -316,6 +316,11 @@ func (s *EnvDispatchRunStore) CompleteResidentTurn(ctx context.Context, turnID p
 }
 
 func (s *EnvDispatchRunStore) CreateDeliveryObligation(ctx context.Context, input CreateDeliveryObligationInput) (DeliveryObligationRecord, error) {
+	record, _, err := s.createDeliveryObligationWithStatus(ctx, input)
+	return record, err
+}
+
+func (s *EnvDispatchRunStore) createDeliveryObligationWithStatus(ctx context.Context, input CreateDeliveryObligationInput) (DeliveryObligationRecord, bool, error) {
 	queuedAt := input.QueuedAt
 	if queuedAt.IsZero() {
 		queuedAt = time.Now().UTC()
@@ -326,7 +331,10 @@ func (s *EnvDispatchRunStore) CreateDeliveryObligation(ctx context.Context, inpu
 		SourceRecipientAgentID: input.SourceRecipientAgentID,
 		RunAgentID:             input.RunAgentID, State: input.State, QueuedAt: timestamptz(queuedAt),
 	})
-	return deliveryObligationRecord(row), err
+	if err != nil {
+		return DeliveryObligationRecord{}, false, err
+	}
+	return deliveryObligationRecordFromCreateRow(row), row.Inserted, nil
 }
 
 func (s *EnvDispatchRunStore) SettleDeliveryObligation(ctx context.Context, deliveryID pgtype.UUID, state string, settledAt time.Time) (DeliveryObligationRecord, error) {
@@ -441,6 +449,15 @@ func residentTurnRecord(row db.EnvDispatchResidentTurn) ResidentTurnRecord {
 }
 
 func deliveryObligationRecord(row db.EnvDispatchDeliveryObligation) DeliveryObligationRecord {
+	return DeliveryObligationRecord{
+		DeliveryID: row.DeliveryID, RunID: row.RunID, ChannelMessageID: row.ChannelMessageID,
+		SourceRecipientAgentID: row.SourceRecipientAgentID, RunAgentID: row.RunAgentID,
+		State: row.State, QueuedAt: timeValue(row.QueuedAt), SettledAt: timeValue(row.SettledAt),
+		CreatedAt: timeValue(row.CreatedAt),
+	}
+}
+
+func deliveryObligationRecordFromCreateRow(row db.CreateMixedRLDeliveryObligationRow) DeliveryObligationRecord {
 	return DeliveryObligationRecord{
 		DeliveryID: row.DeliveryID, RunID: row.RunID, ChannelMessageID: row.ChannelMessageID,
 		SourceRecipientAgentID: row.SourceRecipientAgentID, RunAgentID: row.RunAgentID,

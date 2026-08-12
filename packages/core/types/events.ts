@@ -55,6 +55,7 @@ export type WSEventType =
   | "daemon:heartbeat"
   | "daemon:register"
   | "daemon:runtime_updated"
+  | "computer:updated"
   | "skill:created"
   | "skill:updated"
   | "skill:deleted"
@@ -164,6 +165,10 @@ export interface AgentMemoryUpdatedPayload {
 
 export interface DaemonRuntimeUpdatedPayload {
   runtime: AgentRuntime;
+}
+
+export interface ComputerUpdatedPayload {
+  computer_id: string;
 }
 
 export interface VoiceCallUpdatedPayload {
@@ -591,6 +596,7 @@ export interface WSEventPayloadMap {
   "daemon:heartbeat": unknown;
   "daemon:register": unknown;
   "daemon:runtime_updated": DaemonRuntimeUpdatedPayload;
+  "computer:updated": ComputerUpdatedPayload;
   "skill:created": unknown;
   "skill:updated": unknown;
   "skill:deleted": unknown;

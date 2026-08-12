@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -172,23 +171,5 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 	}
 	if eventCount < 3 {
 		t.Fatalf("expected ≥3 scheduler events documenting silent steps, got %d", eventCount)
-	}
-
-	line := fmt.Sprintf(
-		"LRM-1076 silent-window evidence: emitted=%d unattended_auto_steps=%d unattended_probes=%d scheduler_events=%d (user quiet since %s, no chat)",
-		emitted, got.UnattendedAutoSteps, probeCount, eventCount, quietAt.Format(time.RFC3339),
-	)
-	t.Log(line)
-	// go test without -v swallows stdout; GitHub Actions surfaces step summary.
-	if summary := os.Getenv("GITHUB_STEP_SUMMARY"); summary != "" {
-		f, err := os.OpenFile(summary, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err == nil {
-			_, _ = fmt.Fprintf(f, "### LRM-1076 silent-window evidence\n\n```\n%s\n```\n", line)
-			_ = f.Close()
-		}
-	}
-	// Also dump to a workspace-relative file when present (local/CI artifact path).
-	if out := os.Getenv("LRM_1076_EVIDENCE_PATH"); out != "" {
-		_ = os.WriteFile(out, []byte(line+"\n"), 0o644)
 	}
 }

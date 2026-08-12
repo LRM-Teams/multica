@@ -1,18 +1,34 @@
 # Machine Upgrade rollout and rollback
 
-Machine Upgrade is an additive, daemon-scoped lifecycle. Artifact publication,
+Machine Upgrade is an additive, Computer-scoped lifecycle. Artifact publication,
 staging, and an Active VersionStore pointer are progress only; server
-completion requires a capable successor generation plus the complete runtime
-set captured at acceptance.
+completion requires a capable successor generation plus recovery of the Runtime
+set captured across every active Workspace Execution Binding at acceptance.
+Only the Computer owner may initiate or cancel this machine-wide mutation. A
+Workspace supplies visibility and an entry point, not an independent upgrade
+scope; every active Workspace connection projects the same operation and result.
+The server announces projection changes with `computer:updated` carrying only
+the stable `computer_id`; each Workspace client refetches its own projection.
+This is the sole realtime event for Machine Upgrade state changes.
 
 For a standalone resident, candidate verification is local-first. The target
 binds the exclusive control port and proves its exact PID, binary version,
-VersionStore generation, and configured Runtime/Workspace shape without
-calling heartbeat or registration. The server then performs one atomic
+VersionStore generation, Computer generation, and accepted Workspace binding
+set without calling heartbeat or registration. The server then performs one atomic
 predecessor-to-candidate Computer generation CAS. Only after that ownership
 change may the candidate run normal authenticated startup and complete the
-accepted Runtime/Workspace registration proof. Rejection before the CAS leaves
+accepted Runtime recovery proof. Runtime cardinality is not takeover identity.
+Rejection before the CAS leaves
 the incumbent generation valid and does not enter server rollback.
+
+The launcher marks the v2 loopback takeover protocol with the candidate's exact
+Computer generation when spawning it, so an inherited environment value cannot
+change a later candidate's protocol.
+If that marker is absent, the candidate was spawned by a pre-v2 launcher and
+projects the legacy `running`/`handoff` health shape from its durable receipt so
+the launcher can authorize the same CAS. This is only a local compatibility
+view: preflight, Runtime registration, WebSocket connection, and task claims
+remain blocked until the CAS commits.
 
 ## Deployment order
 
@@ -35,7 +51,8 @@ the incumbent generation valid and does not enter server rollback.
    no-op, while the interval flag only adjusts detection cadence.
 4. Deploy the web/desktop UI. A runtime is a projection of its daemon's
    canonical operation; sibling status must agree.
-5. New callers must use the daemon-scoped machine-upgrade API. The three
+5. New callers must use the Computer-scoped machine-upgrade API. Historical
+   route and database fields still use `daemon` names. The three
    legacy runtime-scoped HTTP update routes remain temporary compatibility
    adapters: they resolve the runtime's daemon and project or cancel that
    daemon's canonical operation. They must never recreate runtime-owned update

@@ -212,10 +212,12 @@ BEGIN
   PERFORM pg_advisory_unlock(%[2]d);
   RETURN NEW;
 END;
-$$;
+$$`, schema, deliveryObligationReplayAdvisoryKey))
+	require.NoError(t, err)
+	_, err = pool.Exec(context.Background(), fmt.Sprintf(`
 CREATE TRIGGER wait_for_delivery_obligation_insert
 BEFORE INSERT ON %[1]s.env_dispatch_delivery_obligation
-FOR EACH ROW EXECUTE FUNCTION %[1]s.wait_for_delivery_obligation_insert();`, schema, deliveryObligationReplayAdvisoryKey))
+FOR EACH ROW EXECUTE FUNCTION %[1]s.wait_for_delivery_obligation_insert()`, schema))
 	require.NoError(t, err)
 }
 

@@ -678,12 +678,13 @@ func (c *Client) AttestComputerUpgrade(ctx context.Context, daemonID, upgradeID,
 	}, nil)
 }
 
-func (c *Client) CommitComputerUpgradeTakeover(ctx context.Context, daemonID, upgradeID, generationID, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, runtimeIDs, workspaceIDs []string) error {
+func (c *Client) CommitComputerUpgradeTakeover(ctx context.Context, computerID, upgradeID, generationID, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, workspaceIDs []string) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/computer/machine-upgrades/%s/takeover", upgradeID), map[string]any{
-		"daemon_id": daemonID, "generation_id": generationID, "cli_version": cliVersion,
+		// daemon_id is the installed-client compatibility spelling of Computer ID.
+		"daemon_id": computerID, "generation_id": generationID, "cli_version": cliVersion,
 		"predecessor_computer_generation": predecessorComputerGeneration,
 		"candidate_computer_generation":   candidateComputerGeneration,
-		"runtime_ids":                     runtimeIDs, "workspace_ids": workspaceIDs,
+		"workspace_ids":                   workspaceIDs,
 	}, nil)
 }
 

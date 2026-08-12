@@ -33,18 +33,29 @@ The chain is:
 5. the resident starts the provider CLI in the Agent's durable workspace;
 6. the resident reports completion.
 
-Machine Upgrade is Computer-scoped. Internally it uses the canonical daemon
-upgrade API; installed clients may still call legacy runtime-scoped HTTP update
+Machine Upgrade is Computer-scoped. Internally, historical route and database
+fields still use `daemon` names; installed clients may also call legacy runtime-scoped HTTP update
 paths. Those are compatibility adapters over the same Computer operation and do
 not create runtime-owned update state. Startup keeps incomplete local upgrade
 journals fail-closed; only a proven later Active generation may supersede a
 retained `candidate_ready` marker, and the marker remains available for diagnosis.
 For standalone upgrades, the target first proves its exact local binary,
-VersionStore lineage, PID, and configured Runtime/Workspace shape. The server
+VersionStore lineage, PID, Computer generation, and accepted Workspace binding set. The server
 then atomically changes the Computer generation from predecessor to candidate;
 only after that CAS may the target heartbeat, register runtimes, connect its
-WebSocket, or claim work. A candidate rejected before the CAS cannot fence the
-incumbent and requires no remote rollback.
+WebSocket, or claim work. Runtime registration is post-takeover recovery and
+convergence evidence; Runtime cardinality is not Computer takeover identity. A
+candidate rejected before the CAS cannot fence the incumbent and requires no
+remote rollback.
+
+Standalone takeover also carries a candidate-generation-bound local protocol
+marker from launcher to candidate. A v2 launcher waits for the explicit
+`takeover_ready` state. When a
+new candidate is spawned by a pre-v2 launcher, it projects the historical
+`running`/`handoff` loopback shape from the durable receipt so that launcher can
+authorize the same generation CAS. This compatibility projection does not
+start preflight, register runtimes, connect WebSocket, or claim work; those
+remain blocked until the CAS commits.
 
 ## CLI
 
@@ -58,7 +69,12 @@ multica computer upgrade --target-version <version> --output json
 `computer upgrade` uses the one machine-wide Computer identity and creates or
 polls the canonical machine-upgrade operation. Omit `--target-version` to use
 the package selected by the active production or test environment. Computer owners
-and workspace owners/admins can perform this action.
+can perform this action. A Workspace owner/admin does not gain lifecycle control
+over another person's Computer; the initiating Workspace is only an entry point,
+and every active Workspace connection observes the same Computer upgrade.
+Upgrade changes are projected to those Workspaces as `computer:updated`; the
+event carries only `computer_id`, and clients refetch their Workspace-scoped
+Computer projection. It is not a Runtime update event.
 
 The resident Computer is machine-wide: it runs as one detached process and is
 controlled by the Computer lifecycle, not an OS supervisor:

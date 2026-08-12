@@ -11,6 +11,7 @@ import { channelGoalKeys } from "../channels/goal";
 import { runnerActivityKeys, runnerActivitySummaryKeys } from "../agents/queries";
 import { agentPresenceKeys } from "../agents/agent-presence";
 import { researchKeys } from "../research/queries";
+import { runtimeKeys } from "../runtimes/queries";
 import { voiceCallKeys } from "../voice-calls/queries";
 import type {
   ChannelMessage,
@@ -263,6 +264,35 @@ describe("useRealtimeSync — ws instance change", () => {
       expect(qc.getQueryData(key)).toEqual(new Map([["agent-1", "online"]]));
       expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
       expect(invalidateSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates the Workspace Computer projection on computer:updated", () => {
+    vi.useFakeTimers();
+    try {
+      const ws = createMockWs();
+      renderHook(() => useRealtimeSync(ws, stores), {
+        wrapper: createWrapper(qc),
+      });
+      const anyHandler = (ws.onAny as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        | ((message: { type: string; payload: unknown }) => void)
+        | undefined;
+
+      invalidateSpy.mockClear();
+      act(() => {
+        anyHandler?.({
+          type: "computer:updated",
+          payload: { computer_id: "computer-1" },
+        });
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(invalidateSpy).toHaveBeenCalledTimes(1);
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: runtimeKeys.all("ws-1"),
+      });
     } finally {
       vi.useRealTimers();
     }

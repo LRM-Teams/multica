@@ -424,7 +424,7 @@ WITH upserted AS (
   )
   ON CONFLICT (channel_message_id, run_agent_id) DO UPDATE
   SET source_recipient_agent_id = obligation.source_recipient_agent_id
-  RETURNING obligation.*, (xmax = 0) AS inserted
+  RETURNING obligation.delivery_id, obligation.run_id, obligation.channel_message_id, obligation.source_recipient_agent_id, obligation.run_agent_id, obligation.state, obligation.queued_at, obligation.settled_at, obligation.created_at, (xmax = 0) AS inserted
 ), counted AS (
   UPDATE env_dispatch_run AS run
   SET pending_delivery_count = run.pending_delivery_count + 1,
@@ -438,7 +438,7 @@ WITH upserted AS (
   RETURNING run.run_id
 )
 SELECT delivery_id, run_id, channel_message_id, source_recipient_agent_id,
-       run_agent_id, state, queued_at, settled_at, created_at
+       run_agent_id, state, queued_at, settled_at, created_at, inserted
 FROM upserted
 WHERE NOT inserted
    OR state NOT IN ('pending', 'queued', 'accepted')
@@ -455,7 +455,20 @@ type CreateMixedRLDeliveryObligationParams struct {
 	QueuedAt               pgtype.Timestamptz `json:"queued_at"`
 }
 
-func (q *Queries) CreateMixedRLDeliveryObligation(ctx context.Context, arg CreateMixedRLDeliveryObligationParams) (EnvDispatchDeliveryObligation, error) {
+type CreateMixedRLDeliveryObligationRow struct {
+	DeliveryID             pgtype.UUID        `json:"delivery_id"`
+	RunID                  pgtype.UUID        `json:"run_id"`
+	ChannelMessageID       pgtype.UUID        `json:"channel_message_id"`
+	SourceRecipientAgentID pgtype.UUID        `json:"source_recipient_agent_id"`
+	RunAgentID             pgtype.UUID        `json:"run_agent_id"`
+	State                  string             `json:"state"`
+	QueuedAt               pgtype.Timestamptz `json:"queued_at"`
+	SettledAt              pgtype.Timestamptz `json:"settled_at"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	Inserted               bool               `json:"inserted"`
+}
+
+func (q *Queries) CreateMixedRLDeliveryObligation(ctx context.Context, arg CreateMixedRLDeliveryObligationParams) (CreateMixedRLDeliveryObligationRow, error) {
 	row := q.db.QueryRow(ctx, createMixedRLDeliveryObligation,
 		arg.DeliveryID,
 		arg.RunID,
@@ -465,7 +478,7 @@ func (q *Queries) CreateMixedRLDeliveryObligation(ctx context.Context, arg Creat
 		arg.State,
 		arg.QueuedAt,
 	)
-	var i EnvDispatchDeliveryObligation
+	var i CreateMixedRLDeliveryObligationRow
 	err := row.Scan(
 		&i.DeliveryID,
 		&i.RunID,
@@ -476,6 +489,7 @@ func (q *Queries) CreateMixedRLDeliveryObligation(ctx context.Context, arg Creat
 		&i.QueuedAt,
 		&i.SettledAt,
 		&i.CreatedAt,
+		&i.Inserted,
 	)
 	return i, err
 }

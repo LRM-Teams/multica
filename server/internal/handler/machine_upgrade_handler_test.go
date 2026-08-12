@@ -12,7 +12,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func createMachineUpgradeSiblingRuntimes(t *testing.T, ownerID string) (string, string, string) {
@@ -43,6 +45,19 @@ func createMachineUpgradeSiblingRuntimes(t *testing.T, ownerID string) (string, 
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID)
 	})
 	return first, second, daemonID
+}
+
+func bindMachineUpgradeWorkspace(t *testing.T, daemonID, workspaceID, ownerID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_workspace_bindings (
+			daemon_id, workspace_id, user_id, execution_token_hash, active
+		) VALUES ($1, $2, $3, $4, TRUE)`, daemonID, workspaceID, ownerID, "machine-upgrade-test"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_workspace_bindings WHERE daemon_id = $1 AND workspace_id = $2`, daemonID, workspaceID)
+	})
 }
 
 func createLegacyMachineUpgradeSiblingRuntimes(t *testing.T, ownerID string) (string, string, string) {
@@ -259,11 +274,77 @@ func TestMachineUpgrade_CapableHeartbeatAcceptsAndRequiresEverySiblingAttestatio
 	}
 }
 
+func TestMachineUpgrade_AcceptSnapshotsEveryConnectedWorkspaceRuntime(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	siblingWorkspaceID := createBindingTestWorkspace(t, testUserID, "owner")
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
+	bindMachineUpgradeWorkspace(t, daemonID, siblingWorkspaceID, testUserID)
+	createSibling := func(provider string) string {
+		var id string
+		if err := testPool.QueryRow(context.Background(), `
+			INSERT INTO agent_runtime (
+				workspace_id, daemon_id, name, runtime_mode, provider, status,
+				device_info, metadata, owner_id, last_seen_at
+			) VALUES ($1, $2, $3, 'local', $4, 'online', 'test machine',
+				'{"capabilities":["machine_upgrade_v1"]}'::jsonb, $5, now())
+			RETURNING id`, siblingWorkspaceID, daemonID, provider+"-"+uuid.NewString(), provider, testUserID).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, id) })
+		return id
+	}
+	thirdRuntimeID := createSibling("claude")
+	fourthRuntimeID := createSibling("codex")
+	localHandler := *testHandler
+	localHandler.Bus = events.New()
+	publishedWorkspaces := make([]string, 0)
+	localHandler.Bus.Subscribe(protocol.EventComputerUpdated, func(event events.Event) {
+		publishedWorkspaces = append(publishedWorkspaces, event.WorkspaceID)
+		payload, ok := event.Payload.(map[string]any)
+		if !ok || payload["computer_id"] != daemonID {
+			t.Fatalf("computer projection payload = %#v", event.Payload)
+		}
+	})
+
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
+	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	acceptReq := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+firstRuntimeID+"/machine-upgrades/"+created.ID+"/accept", map[string]string{
+		"generation_id": "generation-a",
+		"cli_version":   "v9.9.9",
+	})
+	acceptReq = withRouteParams(acceptReq, "runtimeId", firstRuntimeID, "upgradeId", created.ID)
+	acceptW := httptest.NewRecorder()
+	localHandler.AcceptMachineUpgrade(acceptW, acceptReq)
+	if acceptW.Code != http.StatusOK {
+		t.Fatalf("accept = %d: %s", acceptW.Code, acceptW.Body.String())
+	}
+	op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || op == nil {
+		t.Fatalf("accepted operation = %+v err=%v", op, err)
+	}
+	if !sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, []string{testWorkspaceID, siblingWorkspaceID}) {
+		t.Fatalf("accepted Workspaces = %v", op.AcceptedWorkspaceIDs)
+	}
+	if !sameMachineRuntimeSet(op.AcceptedRuntimeIDs, []string{firstRuntimeID, secondRuntimeID, thirdRuntimeID, fourthRuntimeID}) {
+		t.Fatalf("accepted Runtimes = %v", op.AcceptedRuntimeIDs)
+	}
+	if !sameMachineRuntimeSet(publishedWorkspaces, []string{testWorkspaceID, siblingWorkspaceID}) || len(publishedWorkspaces) != 2 {
+		t.Fatalf("upgrade projections = %v, want one per active Workspace connection", publishedWorkspaces)
+	}
+}
+
 func TestMachineUpgrade_ComputerAttestationRequiresExactAcceptedRuntimeSet(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
 	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
@@ -271,7 +352,6 @@ func TestMachineUpgrade_ComputerAttestationRequiresExactAcceptedRuntimeSet(t *te
 	}
 	accepted, err := testHandler.MachineUpgradeStore.Accept(
 		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9", "v9.9.9",
-		[]string{firstRuntimeID, secondRuntimeID},
 	)
 	if err != nil {
 		t.Fatalf("accept machine upgrade: %v", err)
@@ -309,7 +389,8 @@ func TestMachineUpgrade_TakeoverCommitsComputerGenerationOnlyAfterExactProof(t *
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
 	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +404,6 @@ func TestMachineUpgrade_TakeoverCommitsComputerGenerationOnlyAfterExactProof(t *
 	}
 	accepted, err := testHandler.MachineUpgradeStore.Accept(
 		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9", "v9.9.10",
-		[]string{firstRuntimeID, secondRuntimeID},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -345,11 +425,11 @@ func TestMachineUpgrade_TakeoverCommitsComputerGenerationOnlyAfterExactProof(t *
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_generation WHERE daemon_id=$1`, daemonID)
 	})
 
-	request := func(predecessor, candidate int64, runtimeIDs []string) *httptest.ResponseRecorder {
+	request := func(predecessor, candidate int64, workspaceIDs []string) *httptest.ResponseRecorder {
 		req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/computer/machine-upgrades/"+created.ID+"/takeover", map[string]any{
 			"daemon_id": daemonID, "generation_id": "generation-a", "cli_version": "v9.9.10",
 			"predecessor_computer_generation": predecessor, "candidate_computer_generation": candidate,
-			"runtime_ids": runtimeIDs, "workspace_ids": accepted.AcceptedWorkspaceIDs,
+			"workspace_ids": workspaceIDs,
 		})
 		req.Header.Set("X-Computer-Generation", strconv.FormatInt(candidate, 10))
 		req = withURLParam(req, "upgradeId", created.ID)
@@ -358,24 +438,24 @@ func TestMachineUpgrade_TakeoverCommitsComputerGenerationOnlyAfterExactProof(t *
 		return w
 	}
 
-	if w := request(64, 65, []string{firstRuntimeID, secondRuntimeID}); w.Code != http.StatusConflict {
+	if w := request(64, 65, accepted.AcceptedWorkspaceIDs); w.Code != http.StatusConflict {
 		t.Fatalf("stale predecessor status=%d body=%s", w.Code, w.Body.String())
 	}
-	if w := request(66, 67, []string{firstRuntimeID}); w.Code != http.StatusConflict {
-		t.Fatalf("incomplete candidate set status=%d body=%s", w.Code, w.Body.String())
+	if w := request(66, 67, nil); w.Code != http.StatusConflict {
+		t.Fatalf("incomplete Workspace set status=%d body=%s", w.Code, w.Body.String())
 	}
 	var generation int64
 	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 66 {
 		t.Fatalf("rejected proof changed generation=%d err=%v", generation, err)
 	}
 
-	if w := request(66, 67, []string{secondRuntimeID, firstRuntimeID}); w.Code != http.StatusOK {
+	if w := request(66, 67, accepted.AcceptedWorkspaceIDs); w.Code != http.StatusOK {
 		t.Fatalf("exact takeover status=%d body=%s accepted=%+v", w.Code, w.Body.String(), accepted)
 	}
 	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 67 {
 		t.Fatalf("takeover generation=%d err=%v", generation, err)
 	}
-	if w := request(66, 67, []string{firstRuntimeID, secondRuntimeID}); w.Code != http.StatusOK {
+	if w := request(66, 67, accepted.AcceptedWorkspaceIDs); w.Code != http.StatusOK {
 		t.Fatalf("takeover replay status=%d body=%s", w.Code, w.Body.String())
 	}
 }
@@ -847,8 +927,12 @@ func TestMachineUpgrade_CanonicalAuthorizationAndCancellationBoundary(t *testing
 		} else {
 			testHandler.CancelMachineUpgrade(w, req)
 		}
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("%s by non-owner = %d: %s", method, w.Code, w.Body.String())
+		want := http.StatusOK
+		if method == http.MethodDelete {
+			want = http.StatusForbidden
+		}
+		if w.Code != want {
+			t.Fatalf("%s by non-owner = %d: %s, want %d", method, w.Code, w.Body.String(), want)
 		}
 	}
 
@@ -865,14 +949,13 @@ func TestMachineUpgrade_CanonicalAuthorizationAndCancellationBoundary(t *testing
 	cancelReq = withURLParams(cancelReq, "daemonId", daemonID, "upgradeId", created.ID)
 	cancelW := httptest.NewRecorder()
 	testHandler.CancelMachineUpgrade(cancelW, cancelReq)
-	if cancelW.Code != http.StatusOK {
+	if cancelW.Code != http.StatusForbidden {
 		t.Fatalf("cancel queued operation by workspace admin = %d: %s", cancelW.Code, cancelW.Body.String())
 	}
-	var cancelled MachineUpgrade
-	if err := json.Unmarshal(cancelW.Body.Bytes(), &cancelled); err != nil || cancelled.Phase != MachineUpgradeCancelled || cancelled.Result == nil || *cancelled.Result != "cancelled" {
-		t.Fatalf("cancel response = %+v err=%v", cancelled, err)
-	}
 
+	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
+		t.Fatal(err)
+	}
 	_, accepted := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
 	if _, err := testPool.Exec(context.Background(), `UPDATE machine_upgrade SET phase = 'starting', result = NULL WHERE id = $1`, accepted.ID); err != nil {
 		t.Fatal(err)
@@ -886,38 +969,37 @@ func TestMachineUpgrade_CanonicalAuthorizationAndCancellationBoundary(t *testing
 	}
 }
 
-func TestMachineUpgrade_AllowsComputerOwnerOrWorkspaceOwnerAdmin(t *testing.T) {
+func TestMachineUpgrade_AllowsOnlyComputerOwner(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	runtimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")
-
-	nonOwnerReq := newRequestAsUser(plainMemberID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{"target_version": "v9.9.9", "request_id": uuid.NewString()})
-	nonOwnerReq = withURLParam(nonOwnerReq, "daemonId", daemonID)
-	nonOwnerW := httptest.NewRecorder()
-	testHandler.CreateMachineUpgrade(nonOwnerW, nonOwnerReq)
-	if nonOwnerW.Code != http.StatusForbidden {
-		t.Fatalf("canonical create by non-owner = %d: %s", nonOwnerW.Code, nonOwnerW.Body.String())
-	}
-	workspaceOwnerW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
-	if workspaceOwnerW.Code != http.StatusOK {
-		t.Fatalf("canonical create by workspace owner = %d: %s", workspaceOwnerW.Code, workspaceOwnerW.Body.String())
-	}
-	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
+	computerOwnerID := createRuntimeLocalSkillTestMember(t, "member")
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET owner_id = $1 WHERE daemon_id = $2`, computerOwnerID, daemonID); err != nil {
 		t.Fatal(err)
 	}
-	adminMemberID := createRuntimeLocalSkillTestMember(t, "admin")
-	adminW, _ := initiateMachineUpgrade(t, adminMemberID, daemonID, "v9.9.9")
-	if adminW.Code != http.StatusOK {
-		t.Fatalf("canonical create by workspace admin = %d: %s", adminW.Code, adminW.Body.String())
+	workspaceAdminID := createRuntimeLocalSkillTestMember(t, "admin")
+	for label, workspaceManagerID := range map[string]string{
+		"Workspace owner": testUserID,
+		"Workspace admin": workspaceAdminID,
+	} {
+		nonOwnerReq := newRequestAsUser(workspaceManagerID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{"target_version": "v9.9.9", "request_id": uuid.NewString()})
+		nonOwnerReq = withURLParam(nonOwnerReq, "daemonId", daemonID)
+		nonOwnerW := httptest.NewRecorder()
+		testHandler.CreateMachineUpgrade(nonOwnerW, nonOwnerReq)
+		if nonOwnerW.Code != http.StatusForbidden {
+			t.Fatalf("canonical create by non-owner %s = %d: %s", label, nonOwnerW.Code, nonOwnerW.Body.String())
+		}
 	}
-
+	computerOwnerW, _ := initiateMachineUpgrade(t, computerOwnerID, daemonID, "v9.9.9")
+	if computerOwnerW.Code != http.StatusOK {
+		t.Fatalf("canonical create by Computer owner = %d: %s", computerOwnerW.Code, computerOwnerW.Body.String())
+	}
 	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
 		t.Fatal(err)
 	}
 	pinTestRuntime(t, runtimeID, "0.3.85")
-	pinnedW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	pinnedW, _ := initiateMachineUpgrade(t, computerOwnerID, daemonID, "v9.9.9")
 	if pinnedW.Code != http.StatusConflict {
 		t.Fatalf("canonical create on pinned runtime = %d: %s", pinnedW.Code, pinnedW.Body.String())
 	}
@@ -929,7 +1011,7 @@ func TestMachineUpgrade_AllowsComputerOwnerOrWorkspaceOwnerAdmin(t *testing.T) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET pinned_version = NULL, metadata = '{"launched_by":"desktop","capabilities":["machine_upgrade_v1"]}'::jsonb WHERE id = $1`, runtimeID); err != nil {
 		t.Fatal(err)
 	}
-	desktopW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	desktopW, _ := initiateMachineUpgrade(t, computerOwnerID, daemonID, "v9.9.9")
 	if desktopW.Code != http.StatusConflict {
 		t.Fatalf("canonical create on desktop-managed runtime = %d: %s", desktopW.Code, desktopW.Body.String())
 	}

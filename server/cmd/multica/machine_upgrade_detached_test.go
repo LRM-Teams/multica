@@ -13,10 +13,10 @@ import (
 
 func TestDetachedTakeoverLostResponseUsesExactDurableCandidateProof(t *testing.T) {
 	expected := daemon.MachineUpgradeTakeoverProof{
-		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
+		UpgradeID: "upgrade-1", Generation: "generation-a", ComputerID: "daemon-1",
 		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 7,
 		CandidateComputerGeneration: 12, CandidatePID: 1234, TargetVersion: "v10.0.0",
-		RuntimeIDs: []string{"runtime-1"}, WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
+		WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
 	}
 	committed := expected
 	committed.Phase = "takeover_committed"
@@ -45,11 +45,11 @@ func TestDetachedTakeoverLostResponseUsesExactDurableCandidateProof(t *testing.T
 
 func TestDetachedSuccessorProofRejectsEveryTakeoverIdentityMismatch(t *testing.T) {
 	expected := daemon.MachineUpgradeTakeoverProof{
-		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
+		UpgradeID: "upgrade-1", Generation: "generation-a", ComputerID: "daemon-1",
 		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 7,
 		CandidateComputerGeneration: 12, CandidatePID: 1234, TargetVersion: "v10.0.0",
-		RuntimeIDs: []string{"runtime-1", "runtime-2"}, WorkspaceIDs: []string{"workspace-1"},
-		Phase: "takeover_committed",
+		WorkspaceIDs: []string{"workspace-1"},
+		Phase:        "takeover_committed",
 	}
 	if err := validateDetachedSuccessorProof(expected, expected); err != nil {
 		t.Fatalf("exact proof rejected: %v", err)
@@ -58,26 +58,37 @@ func TestDetachedSuccessorProofRejectsEveryTakeoverIdentityMismatch(t *testing.T
 	tests := map[string]func(*daemon.MachineUpgradeTakeoverProof){
 		"operation":                     func(p *daemon.MachineUpgradeTakeoverProof) { p.UpgradeID = "upgrade-stale" },
 		"handoff generation":            func(p *daemon.MachineUpgradeTakeoverProof) { p.Generation = "generation-stale" },
-		"daemon":                        func(p *daemon.MachineUpgradeTakeoverProof) { p.DaemonID = "daemon-stale" },
+		"Computer":                      func(p *daemon.MachineUpgradeTakeoverProof) { p.ComputerID = "computer-stale" },
 		"predecessor Computer":          func(p *daemon.MachineUpgradeTakeoverProof) { p.PredecessorComputerGeneration = 10 },
 		"predecessor VersionStore":      func(p *daemon.MachineUpgradeTakeoverProof) { p.PredecessorVersionStoreGeneration = 6 },
 		"candidate Computer generation": func(p *daemon.MachineUpgradeTakeoverProof) { p.CandidateComputerGeneration = 13 },
 		"candidate pid":                 func(p *daemon.MachineUpgradeTakeoverProof) { p.CandidatePID = 9999 },
 		"target version":                func(p *daemon.MachineUpgradeTakeoverProof) { p.TargetVersion = "v10.0.1" },
-		"incomplete runtime set":        func(p *daemon.MachineUpgradeTakeoverProof) { p.RuntimeIDs = []string{"runtime-1"} },
 		"changed Workspace set":         func(p *daemon.MachineUpgradeTakeoverProof) { p.WorkspaceIDs = []string{"workspace-2"} },
 		"not durably committed":         func(p *daemon.MachineUpgradeTakeoverProof) { p.Phase = "takeover_ready" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			observed := expected
-			observed.RuntimeIDs = append([]string(nil), expected.RuntimeIDs...)
 			observed.WorkspaceIDs = append([]string(nil), expected.WorkspaceIDs...)
 			mutate(&observed)
 			if err := validateDetachedSuccessorProof(expected, observed); err == nil || !strings.Contains(err.Error(), "detached successor") {
 				t.Fatalf("mismatched proof error = %v", err)
 			}
 		})
+	}
+}
+
+func TestMachineUpgradeTakeoverProtocolIsBoundToCandidateGeneration(t *testing.T) {
+	value := machineUpgradeTakeoverProtocolValue(12)
+	if got := machineUpgradeTakeoverProtocolForGeneration(value, 12); got != daemon.MachineUpgradeTakeoverProtocolV2 {
+		t.Fatalf("matching protocol = %q", got)
+	}
+	if got := machineUpgradeTakeoverProtocolForGeneration(value, 13); got != "" {
+		t.Fatalf("inherited stale protocol = %q, want legacy", got)
+	}
+	if got := machineUpgradeTakeoverProtocolForGeneration(string(daemon.MachineUpgradeTakeoverProtocolV2), 12); got != "" {
+		t.Fatalf("unbound protocol = %q, want legacy", got)
 	}
 }
 
@@ -92,13 +103,13 @@ func TestReadyDetachedSuccessorMismatchTerminatesOnlySpawnedCandidate(t *testing
 		t.Fatal(err)
 	}
 	expected := daemon.MachineUpgradeTakeoverProof{
-		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
+		UpgradeID: "upgrade-1", Generation: "generation-a", ComputerID: "daemon-1",
 		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 7,
 		CandidateComputerGeneration: 12, CandidatePID: child.Process.Pid, TargetVersion: "v10.0.0",
-		RuntimeIDs: []string{"runtime-1"}, WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
+		WorkspaceIDs: []string{"workspace-1"}, Phase: "takeover_ready",
 	}
 	observed := expected
-	observed.DaemonID = "daemon-stale"
+	observed.ComputerID = "computer-stale"
 	health := map[string]any{
 		"status":                   "running",
 		"cli_version":              "v10.0.0",

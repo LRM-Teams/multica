@@ -79,6 +79,8 @@ func init() {
 	_ = f.MarkHidden("computer-generation")
 	f.Bool("machine-upgrade-detached-candidate", false, "Internal detached Machine Upgrade candidate marker")
 	_ = f.MarkHidden("machine-upgrade-detached-candidate")
+	f.String("machine-upgrade-takeover-protocol", "", "Internal generation-bound Machine Upgrade takeover protocol")
+	_ = f.MarkHidden("machine-upgrade-takeover-protocol")
 
 	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
 	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
@@ -349,6 +351,10 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		}
 	}
 	cfg.DetachedMachineUpgradeCandidate, _ = cmd.Flags().GetBool("machine-upgrade-detached-candidate")
+	takeoverProtocol, _ := cmd.Flags().GetString("machine-upgrade-takeover-protocol")
+	cfg.MachineUpgradeTakeoverProtocol = machineUpgradeTakeoverProtocolForGeneration(
+		takeoverProtocol, cfg.ComputerGeneration,
+	)
 	controlToken, err := ensureMachineUpgradeControlToken(profile)
 	if err != nil {
 		return err

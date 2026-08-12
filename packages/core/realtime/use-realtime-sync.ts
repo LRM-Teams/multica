@@ -599,6 +599,12 @@ export function useRealtimeSync(
           qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
         }
       },
+      computer: () => {
+        const wsId = getCurrentWsId();
+        if (wsId) {
+          qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+        }
+      },
       sandbox: () => {
         const wsId = getCurrentWsId();
         if (wsId) qc.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });

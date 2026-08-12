@@ -322,6 +322,12 @@ func teardownArchivedAgentDependents(ctx context.Context, qtx *db.Queries, agent
 	}); err != nil {
 		return err
 	}
+	if err := qtx.DeleteMixedRLRunsByAgentIDs(ctx, agentIDs); err != nil {
+		return err
+	}
+	if err := qtx.DeleteMixedRLDeliveryObligationsBySourceAgentIDs(ctx, agentIDs); err != nil {
+		return err
+	}
 	if err := qtx.DetachDerivedAgentsFromSources(ctx, agentIDs); err != nil {
 		return err
 	}

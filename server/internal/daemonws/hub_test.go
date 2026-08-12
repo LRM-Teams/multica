@@ -1389,3 +1389,77 @@ func (p *localFirstDaemonRelayPublisher) PublishWithID(scopeType, scopeID, exclu
 	}
 	return nil
 }
+
+func TestWorkspaceRunnerMixedRunActivityAcknowledgesOnlyCommittedTransition(t *testing.T) {
+	hub := NewHub()
+	handled := make(chan string, 2)
+	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, raw json.RawMessage) error {
+		if eventType != protocol.EventMixedRunActivityTransition {
+			return nil
+		}
+		var payload protocol.MixedRunActivityTransitionPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return err
+		}
+		handled <- payload.TransitionID
+		if payload.TransitionID == "failed-transition" {
+			return errors.New("injected transaction failure")
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	write := func(eventType string, payload any) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1", ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment}})
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	transition := protocol.MixedRunActivityTransitionPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-1", RunID: "run-1", RunAgentID: "run-agent-1",
+		TransitionID: "failed-transition", Dimension: protocol.MixedRunActivityActiveTurn, Delta: 1,
+	}
+	write(protocol.EventMixedRunActivityTransition, transition)
+	if got := <-handled; got != transition.TransitionID {
+		t.Fatalf("failed transition handled as %q", got)
+	}
+	transition.TransitionID = "committed-transition"
+	write(protocol.EventMixedRunActivityTransition, transition)
+	if got := <-handled; got != transition.TransitionID {
+		t.Fatalf("committed transition handled as %q", got)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message protocol.Message
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Type != protocol.EventMixedRunActivityAck {
+		t.Fatalf("ack frame type = %q", message.Type)
+	}
+	var ack protocol.MixedRunActivityTransitionAckPayload
+	if err := json.Unmarshal(message.Payload, &ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.RunID != transition.RunID || ack.TransitionID != transition.TransitionID {
+		t.Fatalf("ack = %+v, want committed transition only", ack)
+	}
+}

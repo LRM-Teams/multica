@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -44,7 +45,9 @@ type workspaceRunnerDependencies struct {
 	diagnostics                 *runnerDiagnosticRegistry
 	openInbox                   inboxCoordinatorFactory
 	runtimeSet                  func() AgentAttachmentRuntimeSet
-	ensureResidentRuntime       func(context.Context, string, string) error
+	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
+	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
+	mixedRunActivityReplay      func(send func(string, any) error)
 	requestReminderSnapshot     func(string)
 	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
 	removeDetachedReminderAgent func(string) error
@@ -73,7 +76,9 @@ type WorkspaceRunner struct {
 	diagnostics *runnerDiagnosticRegistry
 
 	runtimeSet                  func() AgentAttachmentRuntimeSet
-	ensureResidentRuntime       func(context.Context, string, string) error
+	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
+	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
+	mixedRunActivityReplay      func(send func(string, any) error)
 	requestReminderSnapshot     func(string)
 	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
 	removeDetachedReminderAgent func(string) error
@@ -136,6 +141,8 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		diagnostics:                 dependencies.diagnostics,
 		runtimeSet:                  dependencies.runtimeSet,
 		ensureResidentRuntime:       dependencies.ensureResidentRuntime,
+		mixedRunActivityAck:         dependencies.mixedRunActivityAck,
+		mixedRunActivityReplay:      dependencies.mixedRunActivityReplay,
 		requestReminderSnapshot:     dependencies.requestReminderSnapshot,
 		handleReminderInput:         dependencies.handleReminderInput,
 		removeDetachedReminderAgent: dependencies.removeDetachedReminderAgent,
@@ -313,6 +320,10 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 			return d.attachmentRuntimeSet(workspaceID)
 		},
 		ensureResidentRuntime: d.ensureResidentMessageRuntime,
+		mixedRunActivityAck:   d.ackMixedRunActivity,
+		mixedRunActivityReplay: func(send func(string, any) error) {
+			d.replayMixedRunActivity(workspaceID, send)
+		},
 		requestReminderSnapshot: func(agentID string) {
 			d.requestReminderSnapshot(workspaceID, agentID)
 		},

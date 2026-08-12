@@ -129,3 +129,87 @@ func CloneEnvDispatchAgent(ctx context.Context, q CloneDeps, in CloneEnvDispatch
 func envDispatchDerivedAgentName(bindingID string) string {
 	return "env-" + bindingID
 }
+
+// ValidateMixedDispatchProvisionedBindings verifies every side-effecting
+// source/derived/runtime/provider binding before native Pi preparation. Native
+// Pi session identity and capture boundary are deliberately allocated by
+// PrepareMixedDispatchRunAgent after this validation succeeds.
+func ValidateMixedDispatchProvisionedBindings(plan MixedDispatchPlan, agents []MixedDispatchRunAgent) error {
+	return validateMixedDispatchProvisionedAgents(plan, agents, false)
+}
+
+// ValidateMixedDispatchProvisionedAgents verifies the complete side-effecting
+// mixed preflight set after native Pi preparation, including one fresh Pi
+// session per run agent.
+func ValidateMixedDispatchProvisionedAgents(plan MixedDispatchPlan, agents []MixedDispatchRunAgent) error {
+	return validateMixedDispatchProvisionedAgents(plan, agents, true)
+}
+
+func validateMixedDispatchProvisionedAgents(plan MixedDispatchPlan, agents []MixedDispatchRunAgent, requirePiSession bool) error {
+	if len(agents) != len(plan.RunAgents) {
+		return fmt.Errorf("failed_preflight: provisioned run-agent count does not match roster")
+	}
+	expected := make(map[string]string, len(plan.RunAgents))
+	trainable := false
+	for _, agent := range plan.RunAgents {
+		if agent.SourceAgentID == "" {
+			return fmt.Errorf("failed_preflight: planned source agent identity is required")
+		}
+		switch agent.TrainingMode {
+		case "online_rl", "offline_rl", "none":
+		default:
+			return fmt.Errorf("failed_preflight: unsupported training mode %q for agent %s", agent.TrainingMode, agent.SourceAgentID)
+		}
+		if _, duplicate := expected[agent.SourceAgentID]; duplicate {
+			return fmt.Errorf("failed_preflight: duplicate planned source agent %s", agent.SourceAgentID)
+		}
+		expected[agent.SourceAgentID] = agent.TrainingMode
+		trainable = trainable || agent.TrainingMode != "none"
+	}
+	if trainable && (strings.TrimSpace(plan.TargetPolicy) == "" || strings.TrimSpace(plan.Tokenizer) == "") {
+		return fmt.Errorf("failed_preflight: common target policy and tokenizer are required")
+	}
+
+	seenSources := make(map[string]struct{}, len(agents))
+	seenExecutions := make(map[string]struct{}, len(agents))
+	seenSessions := make(map[string]struct{}, len(agents))
+	for _, agent := range agents {
+		mode, ok := expected[agent.SourceAgentID]
+		if !ok {
+			return fmt.Errorf("failed_preflight: provisioned source agent %s is not in roster", agent.SourceAgentID)
+		}
+		if _, duplicate := seenSources[agent.SourceAgentID]; duplicate {
+			return fmt.Errorf("failed_preflight: duplicate provisioned source agent %s", agent.SourceAgentID)
+		}
+		seenSources[agent.SourceAgentID] = struct{}{}
+		if agent.TrainingMode != mode {
+			return fmt.Errorf("failed_preflight: training classification changed for agent %s", agent.SourceAgentID)
+		}
+		if agent.ExecutionAgentID == "" || agent.ExecutionAgentID == agent.SourceAgentID {
+			return fmt.Errorf("failed_preflight: source agent %s has no derived execution binding", agent.SourceAgentID)
+		}
+		if _, duplicate := seenExecutions[agent.ExecutionAgentID]; duplicate {
+			return fmt.Errorf("failed_preflight: derived execution agent %s is reused", agent.ExecutionAgentID)
+		}
+		seenExecutions[agent.ExecutionAgentID] = struct{}{}
+		if agent.RuntimeID == "" {
+			return fmt.Errorf("failed_preflight: runtime is not ready for agent %s", agent.SourceAgentID)
+		}
+		if requirePiSession {
+			if agent.PiSessionID == "" {
+				return fmt.Errorf("failed_preflight: Pi session is required for agent %s", agent.SourceAgentID)
+			}
+			if _, duplicate := seenSessions[agent.PiSessionID]; duplicate {
+				return fmt.Errorf("failed_preflight: Pi session is reused for agent %s", agent.SourceAgentID)
+			}
+			seenSessions[agent.PiSessionID] = struct{}{}
+		}
+		if mode == "online_rl" && agent.AReALSessionID == "" {
+			return fmt.Errorf("failed_preflight: online provider session is required for agent %s", agent.SourceAgentID)
+		}
+		if mode != "online_rl" && agent.AReALSessionID != "" {
+			return fmt.Errorf("failed_preflight: non-online agent %s has an online provider session", agent.SourceAgentID)
+		}
+	}
+	return nil
+}

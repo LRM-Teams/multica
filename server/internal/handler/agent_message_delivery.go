@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -36,7 +37,44 @@ func (h *Handler) HandleAgentDeliveryAck(ctx context.Context, identity daemonws.
 	if strings.TrimSpace(ack.AgentID) == "" || strings.TrimSpace(ack.DeliveryID) == "" || ack.Seq <= 0 {
 		return errors.New("invalid agent delivery acknowledgement")
 	}
-	return h.requireAgentMessageDaemonScope(ctx, identity, ack.AgentID)
+	if err := h.requireAgentMessageDaemonScope(ctx, identity, ack.AgentID); err != nil {
+		return err
+	}
+	messageID, ok := canonicalDeliveryMessageID(ack.DeliveryID, ack.AgentID)
+	if !ok {
+		return errors.New("invalid canonical delivery acknowledgement")
+	}
+	_, err := h.DB.Exec(ctx, `
+		WITH settled AS (
+		  UPDATE env_dispatch_delivery_obligation AS obligation
+		  SET state = 'completed', settled_at = now()
+		  FROM env_dispatch_run_agent AS run_agent
+		  WHERE obligation.run_id = run_agent.run_id
+		    AND obligation.run_agent_id = run_agent.run_agent_id
+		    AND obligation.channel_message_id = $1
+		    AND run_agent.execution_agent_id = $2
+		    AND obligation.state IN ('pending', 'queued', 'accepted')
+		  RETURNING obligation.run_id
+		)
+		UPDATE env_dispatch_run AS run
+		SET pending_delivery_count = GREATEST(run.pending_delivery_count - 1, 0),
+		    updated_at = now()
+		FROM settled
+		WHERE run.run_id = settled.run_id`, parseUUID(messageID), parseUUID(ack.AgentID))
+	return err
+}
+
+func canonicalDeliveryMessageID(deliveryID, agentID string) (string, bool) {
+	const prefix = "message:"
+	suffix := ":agent:" + agentID
+	if !strings.HasPrefix(deliveryID, prefix) || !strings.HasSuffix(deliveryID, suffix) {
+		return "", false
+	}
+	messageID := strings.TrimSuffix(strings.TrimPrefix(deliveryID, prefix), suffix)
+	if _, err := util.ParseUUID(messageID); err != nil {
+		return "", false
+	}
+	return messageID, true
 }
 
 func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.AgentMessageHandoffPayload) error {
@@ -213,10 +251,34 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 			return protocol.AgentRecoveryPage{}, err
 		}
 	}
+	runID, runAgentID, err := h.resolveAgentMixedRunIdentity(ctx, identity.WorkspaceID, request.AgentID)
+	if err != nil {
+		return protocol.AgentRecoveryPage{}, err
+	}
 	return protocol.AgentRecoveryPage{
 		AgentID: request.AgentID, RecoveryID: request.RecoveryID, SnapshotID: snapshotID, HighWatermark: snapshotID,
-		Messages: items, NextCursor: nextCursor, HasMore: hasMore,
+		RunID: runID, RunAgentID: runAgentID, Messages: items, NextCursor: nextCursor, HasMore: hasMore,
 	}, nil
+}
+
+func (h *Handler) resolveAgentMixedRunIdentity(ctx context.Context, workspaceID, executionAgentID string) (string, string, error) {
+	var runID, runAgentID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		SELECT run.run_id, run_agent.run_agent_id
+		FROM env_dispatch_run AS run
+		JOIN env_dispatch_run_agent AS run_agent ON run_agent.run_id = run.run_id
+		WHERE run.workspace_id = $1
+		  AND run_agent.execution_agent_id = $2
+		  AND run.status IN ('preflight', 'running', 'quiet_candidate')
+		ORDER BY run.created_at DESC
+		LIMIT 1`, parseUUID(workspaceID), parseUUID(executionAgentID)).Scan(&runID, &runAgentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("resolve mixed run identity for Message recovery: %w", err)
+	}
+	return uuidToString(runID), uuidToString(runAgentID), nil
 }
 
 func (h *Handler) resolveAgentRecoverySnapshot(ctx context.Context, workspaceID, agentID, encoded string) (agentMessageRecoverySnapshot, string, error) {

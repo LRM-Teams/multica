@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -6139,4 +6141,112 @@ func withChannelTestWorkspaceCtx(t *testing.T, req *http.Request, userID string)
 		t.Fatalf("load test member row: %v", err)
 	}
 	return req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, memberRow))
+}
+
+func TestCanonicalRecipientMappingUsesSourceMembershipBeforeDerivedIdentity(t *testing.T) {
+	sourceA := db.Agent{ID: parseUUID("70000000-0000-4000-8000-000000000001")}
+	sourceB := db.Agent{ID: parseUUID("70000000-0000-4000-8000-000000000002")}
+	derivedA := db.Agent{ID: parseUUID("70000000-0000-4000-8000-000000000011")}
+	derivedB := db.Agent{ID: parseUUID("70000000-0000-4000-8000-000000000012")}
+
+	got := mapCanonicalRunRecipients(
+		[]db.Agent{sourceA},
+		map[string]db.Agent{
+			uuidToString(sourceA.ID): derivedA,
+			uuidToString(sourceB.ID): derivedB,
+		},
+	)
+	if len(got) != 1 || got[0].SourceAgentID != uuidToString(sourceA.ID) || uuidToString(got[0].ExecutionAgent.ID) != uuidToString(derivedA.ID) {
+		t.Fatalf("mapped recipients = %+v, want only source-member A mapped to derived A", got)
+	}
+}
+
+type canonicalChannelMessageSender interface {
+	sendCanonicalChannelMessage(context.Context, ChannelResponse, SendChannelMessageRequest, string) (ChannelMessageResponse, error)
+}
+
+var _ canonicalChannelMessageSender = (*Handler)(nil)
+
+type canonicalRecipientPolicyDB struct {
+	muted map[string]bool
+}
+
+func (db *canonicalRecipientPolicyDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+
+func (db *canonicalRecipientPolicyDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, nil
+}
+
+func (db *canonicalRecipientPolicyDB) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+	agentID, _ := args[2].(pgtype.UUID)
+	return canonicalRecipientMuteRow{muted: db.muted[uuidToString(agentID)]}
+}
+
+type canonicalRecipientMuteRow struct {
+	muted bool
+}
+
+func (row canonicalRecipientMuteRow) Scan(dest ...any) error {
+	if !row.muted {
+		return pgx.ErrNoRows
+	}
+	mutedAt, ok := dest[0].(*pgtype.Timestamptz)
+	if !ok {
+		return fmt.Errorf("unexpected mute scan destination %T", dest[0])
+	}
+	*mutedAt = pgtype.Timestamptz{Time: time.Unix(1, 0).UTC(), Valid: true}
+	return nil
+}
+
+func TestCanonicalRecipientCalculationPreservesSourcePolicyBeforeExecutionMapping(t *testing.T) {
+	sourceA := db.Agent{ID: parseUUID("71000000-0000-4000-8000-000000000001"), RuntimeID: parseUUID("71000000-0000-4000-8000-000000000101")}
+	sourceB := db.Agent{ID: parseUUID("71000000-0000-4000-8000-000000000002"), RuntimeID: parseUUID("71000000-0000-4000-8000-000000000102")}
+	sourceMuted := db.Agent{ID: parseUUID("71000000-0000-4000-8000-000000000003"), RuntimeID: parseUUID("71000000-0000-4000-8000-000000000103")}
+	sourceOutside := db.Agent{ID: parseUUID("71000000-0000-4000-8000-000000000004"), RuntimeID: parseUUID("71000000-0000-4000-8000-000000000104")}
+	executionA := db.Agent{ID: parseUUID("71000000-0000-4000-8000-000000000011"), RuntimeID: parseUUID("71000000-0000-4000-8000-000000000111")}
+	executionB := db.Agent{ID: parseUUID("71000000-0000-4000-8000-000000000012"), RuntimeID: parseUUID("71000000-0000-4000-8000-000000000112")}
+	executionMuted := db.Agent{ID: parseUUID("71000000-0000-4000-8000-000000000013"), RuntimeID: parseUUID("71000000-0000-4000-8000-000000000113")}
+	executionOutside := db.Agent{ID: parseUUID("71000000-0000-4000-8000-000000000014"), RuntimeID: parseUUID("71000000-0000-4000-8000-000000000114")}
+
+	h := &Handler{DB: &canonicalRecipientPolicyDB{muted: map[string]bool{uuidToString(sourceMuted.ID): true}}}
+	channel := ChannelResponse{ID: "71000000-0000-4000-8000-000000000201", WorkspaceID: "71000000-0000-4000-8000-000000000202"}
+	executionBySource := map[string]db.Agent{
+		uuidToString(sourceA.ID):       executionA,
+		uuidToString(sourceB.ID):       executionB,
+		uuidToString(sourceMuted.ID):   executionMuted,
+		uuidToString(sourceOutside.ID): executionOutside,
+	}
+	authorA := uuidToString(sourceA.ID)
+
+	tests := []struct {
+		name        string
+		candidates  []db.Agent
+		message     ChannelMessageResponse
+		respectMute bool
+		want        []canonicalRunRecipient
+	}{
+		{name: "broadcast", candidates: []db.Agent{sourceA, sourceB, sourceMuted}, message: ChannelMessageResponse{Type: "user"}, respectMute: true, want: []canonicalRunRecipient{{SourceAgentID: uuidToString(sourceA.ID), ExecutionAgent: executionA}, {SourceAgentID: uuidToString(sourceB.ID), ExecutionAgent: executionB}}},
+		{name: "explicit mention", candidates: []db.Agent{sourceB}, message: ChannelMessageResponse{Type: "user"}, want: []canonicalRunRecipient{{SourceAgentID: uuidToString(sourceB.ID), ExecutionAgent: executionB}}},
+		{name: "thread participant", candidates: []db.Agent{sourceA}, message: ChannelMessageResponse{Type: "user"}, respectMute: true, want: []canonicalRunRecipient{{SourceAgentID: uuidToString(sourceA.ID), ExecutionAgent: executionA}}},
+		{name: "muted agent omitted", candidates: []db.Agent{sourceA, sourceMuted}, message: ChannelMessageResponse{Type: "user"}, respectMute: true, want: []canonicalRunRecipient{{SourceAgentID: uuidToString(sourceA.ID), ExecutionAgent: executionA}}},
+		{name: "source membership before derived mapping", candidates: []db.Agent{sourceA}, message: ChannelMessageResponse{Type: "user"}, want: []canonicalRunRecipient{{SourceAgentID: uuidToString(sourceA.ID), ExecutionAgent: executionA}}},
+		{name: "agent sender has no self wakeup", candidates: []db.Agent{sourceA, sourceB}, message: ChannelMessageResponse{Type: "agent", AuthorID: &authorA}, respectMute: true, want: []canonicalRunRecipient{{SourceAgentID: uuidToString(sourceB.ID), ExecutionAgent: executionB}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sourceRecipients := h.filterCanonicalMessageDeliveryRecipients(context.Background(), channel, tc.message, tc.candidates, tc.respectMute)
+			got := mapCanonicalRunRecipients(sourceRecipients, executionBySource)
+			if len(got) != len(tc.want) {
+				t.Fatalf("mapped recipients = %+v, want %+v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i].SourceAgentID != tc.want[i].SourceAgentID || uuidToString(got[i].ExecutionAgent.ID) != uuidToString(tc.want[i].ExecutionAgent.ID) {
+					t.Fatalf("mapped recipient[%d] = source %q execution %q, want source %q execution %q", i, got[i].SourceAgentID, uuidToString(got[i].ExecutionAgent.ID), tc.want[i].SourceAgentID, uuidToString(tc.want[i].ExecutionAgent.ID))
+				}
+			}
+		})
+	}
 }

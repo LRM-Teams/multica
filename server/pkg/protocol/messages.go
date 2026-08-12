@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -201,6 +202,11 @@ type AgentMessageProjection struct {
 	// resident turn. It must never be persisted in coordinator state or sent
 	// by the Server because it may contain scoped memory.
 	RuntimeContext string `json:"-"`
+	// Daemon-local lifecycle metadata is copied from the authenticated delivery
+	// envelope and never serialized as part of canonical message content.
+	RunID      string `json:"-"`
+	RunAgentID string `json:"-"`
+	DeliveryID string `json:"-"`
 }
 
 // AgentMessageMemoryProjection is a server-filtered memory item applicable to
@@ -214,6 +220,58 @@ type AgentMessageMemoryProjection struct {
 	SubjectID   string `json:"subject_id,omitempty"`
 }
 
+const (
+	MixedRunActivityActiveTurn             = "active_turn"
+	MixedRunActivityQueuedMessage          = "queued_message"
+	MixedRunActivityInflightTool           = "inflight_tool"
+	MixedRunActivityUnfinishedCaptureBatch = "unfinished_capture_batch"
+)
+
+// MixedRunActivityTransitionPayload reports one durable lifecycle edge. The
+// server owns pending-delivery accounting from obligation rows; the daemon
+// reports the other four dimensions with stable transition IDs so reconnect or
+// retry cannot double-apply a counter delta.
+type MixedRunActivityTransitionPayload struct {
+	AgentID      string `json:"agent_id"`
+	RuntimeID    string `json:"runtime_id"`
+	RunID        string `json:"run_id"`
+	RunAgentID   string `json:"run_agent_id"`
+	TransitionID string `json:"transition_id"`
+	Dimension    string `json:"dimension"`
+	Delta        int    `json:"delta"`
+}
+
+func (p MixedRunActivityTransitionPayload) Validate() error {
+	if strings.TrimSpace(p.AgentID) == "" || strings.TrimSpace(p.RuntimeID) == "" ||
+		strings.TrimSpace(p.RunID) == "" || strings.TrimSpace(p.RunAgentID) == "" || strings.TrimSpace(p.TransitionID) == "" {
+		return errors.New("mixed-run activity transition identity is incomplete")
+	}
+	if p.Delta != -1 && p.Delta != 1 {
+		return errors.New("mixed-run activity transition delta must be -1 or 1")
+	}
+	switch p.Dimension {
+	case MixedRunActivityActiveTurn, MixedRunActivityQueuedMessage, MixedRunActivityInflightTool, MixedRunActivityUnfinishedCaptureBatch:
+		return nil
+	default:
+		return errors.New("invalid mixed-run activity transition dimension")
+	}
+}
+
+// MixedRunActivityTransitionAckPayload confirms the server committed a
+// transition (or recognized the same already-committed payload). The daemon
+// may remove its durable outbox entry only after receiving this frame.
+type MixedRunActivityTransitionAckPayload struct {
+	RunID        string `json:"run_id"`
+	TransitionID string `json:"transition_id"`
+}
+
+func (p MixedRunActivityTransitionAckPayload) Validate() error {
+	if strings.TrimSpace(p.RunID) == "" || strings.TrimSpace(p.TransitionID) == "" {
+		return errors.New("mixed-run activity transition acknowledgement identity is incomplete")
+	}
+	return nil
+}
+
 // AgentDeliverPayload is an at-least-once transfer attempt to a single local
 // Agent coordinator. DeliveryID identifies the attempt lineage; Message.ID
 // plus its target sequence identify the canonical Message being projected.
@@ -224,6 +282,8 @@ type AgentDeliverPayload struct {
 	DeliveryID  string                 `json:"deliveryId"`
 	Message     AgentMessageProjection `json:"message"`
 	Traceparent string                 `json:"traceparent,omitempty"`
+	RunID       string                 `json:"runId,omitempty"`
+	RunAgentID  string                 `json:"runAgentId,omitempty"`
 }
 
 // AgentDeliverAckPayload confirms only per-Agent provider acceptance, Pending
@@ -253,6 +313,8 @@ type AgentRecoveryPage struct {
 	RecoveryID    string                   `json:"recovery_id"`
 	SnapshotID    string                   `json:"snapshot_id"`
 	HighWatermark string                   `json:"high_watermark"`
+	RunID         string                   `json:"run_id,omitempty"`
+	RunAgentID    string                   `json:"run_agent_id,omitempty"`
 	Messages      []AgentMessageProjection `json:"messages"`
 	NextCursor    string                   `json:"next_cursor,omitempty"`
 	HasMore       bool                     `json:"has_more"`
@@ -398,6 +460,37 @@ type SeedAgentContextRequestPayload struct {
 	InitialNotes  map[string]string `json:"initial_notes,omitempty"`
 	InitialMemory map[string]string `json:"initial_memory,omitempty"`
 	MaxBytes      int               `json:"max_bytes,omitempty"`
+}
+
+// PreparePiRunRequestPayload asks the daemon owning RuntimeID to create the
+// resident Pi backend, bind the durable mixed-run identity, and start the
+// native process without accepting any conversation input.
+type PreparePiRunRequestPayload struct {
+	RequestID  string `json:"request_id"`
+	RuntimeID  string `json:"runtime_id"`
+	AgentID    string `json:"agent_id"`
+	RunID      string `json:"run_id"`
+	RunAgentID string `json:"run_agent_id"`
+}
+
+type PreparePiRunResponsePayload struct {
+	RequestID       string `json:"request_id"`
+	SessionID       string `json:"session_id,omitempty"`
+	CaptureBoundary string `json:"capture_boundary,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+type RevokePiRunRequestPayload struct {
+	RequestID  string `json:"request_id"`
+	RuntimeID  string `json:"runtime_id"`
+	AgentID    string `json:"agent_id"`
+	RunID      string `json:"run_id"`
+	RunAgentID string `json:"run_agent_id"`
+}
+
+type RevokePiRunResponsePayload struct {
+	RequestID string `json:"request_id"`
+	Error     string `json:"error,omitempty"`
 }
 
 // SeedAgentContextResponsePayload is the daemon reply for initial context seeding.

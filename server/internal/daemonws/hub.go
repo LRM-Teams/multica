@@ -602,6 +602,39 @@ func (h *Hub) reminderHandlers() (ReminderSnapshotHandler, ReminderFireAttemptHa
 	return h.onReminderSnapshot, h.onReminderFire
 }
 
+func (h *Hub) RequestPreparePiRun(ctx context.Context, req protocol.PreparePiRunRequestPayload) (*protocol.PreparePiRunResponsePayload, error) {
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonPreparePiRunRequest, req)
+	if err != nil {
+		return nil, err
+	}
+	var response protocol.PreparePiRunResponsePayload
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, err
+	}
+	if response.Error != "" {
+		return nil, errors.New(response.Error)
+	}
+	if strings.TrimSpace(response.SessionID) == "" || strings.TrimSpace(response.CaptureBoundary) == "" {
+		return nil, errors.New("daemon returned incomplete Pi run binding")
+	}
+	return &response, nil
+}
+
+func (h *Hub) RequestRevokePiRun(ctx context.Context, req protocol.RevokePiRunRequestPayload) error {
+	raw, err := h.requestDaemon(ctx, req.RuntimeID, req.RequestID, protocol.EventDaemonRevokePiRunRequest, req)
+	if err != nil {
+		return err
+	}
+	var response protocol.RevokePiRunResponsePayload
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return err
+	}
+	if response.Error != "" {
+		return errors.New(response.Error)
+	}
+	return nil
+}
+
 func (h *Hub) reminderProjectionHandlers() (ReminderProjectionHandler, ReminderProjectionAckHandler) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -1310,13 +1343,43 @@ func (c *client) handleFrame(raw []byte) {
 			return
 		}
 		c.hub.dispatchWorkspaceRunnerFrame(c, msg.Type, msg.Payload)
+	case protocol.EventMixedRunActivityTransition:
+		var payload protocol.MixedRunActivityTransitionPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.Validate() != nil {
+			return
+		}
+		if !c.hub.isCurrentWorkspaceRunner(c) {
+			return
+		}
+		c.runnerLastInbound.Store(time.Now().UnixNano())
+		handler := c.hub.workspaceRunnerHandler()
+		if handler == nil {
+			return
+		}
+		if err := handler(context.Background(), c.identity, c.runnerDaemonInstanceID, msg.Type, msg.Payload); err != nil {
+			slog.Warn("workspace runner frame rejected", "error", err, "daemon_id", c.identity.DaemonID, "workspace_id", c.identity.WorkspaceID, "event_type", msg.Type)
+			return
+		}
+		ack := protocol.MixedRunActivityTransitionAckPayload{RunID: payload.RunID, TransitionID: payload.TransitionID}
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventMixedRunActivityAck, Payload: mustMarshalRaw(ack)})
+		if err != nil {
+			return
+		}
+		select {
+		case c.send <- frame:
+		default:
+			c.hub.unregister(c)
+			_ = c.conn.Close()
+		}
 	case protocol.EventDaemonHeartbeat:
 		c.handleHeartbeatFrame(msg.Payload)
 	case protocol.EventAgentWorkspaceFileTree,
 		protocol.EventAgentWorkspaceFileContent,
 		protocol.EventDaemonWriteFileResponse,
 		protocol.EventDaemonDeleteDirResponse,
-		protocol.EventDaemonSeedAgentContextResponse:
+		protocol.EventDaemonSeedAgentContextResponse,
+		protocol.EventDaemonPreparePiRunResponse,
+		protocol.EventDaemonRevokePiRunResponse:
 		var idOnly struct {
 			RequestID string `json:"request_id"`
 		}

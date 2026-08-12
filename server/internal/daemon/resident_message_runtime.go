@@ -10,18 +10,47 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+// residentPiRunIdentity converts an optional run-scoped identity pair into the
+// Pi binding input. Both fields empty means a plain resident session; exactly
+// one set is a protocol violation.
+func residentPiRunIdentity(runID, runAgentID string) (*agent.PiRunIdentity, error) {
+	runID = strings.TrimSpace(runID)
+	runAgentID = strings.TrimSpace(runAgentID)
+	if runID == "" && runAgentID == "" {
+		return nil, nil
+	}
+	if runID == "" || runAgentID == "" {
+		return nil, errors.New("resident Pi run identity requires both run_id and run_agent_id")
+	}
+	return &agent.PiRunIdentity{RunID: runID, RunAgentID: runAgentID}, nil
+}
 
 // ensureResidentMessageRuntime creates the single Agent×runtime provider
 // process needed by the MessageCoordinator. Its input is deliberately only
 // stable Agent placement/configuration; Message delivery never constructs a
 // Task or a current-turn transport envelope.
-func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runtimeID string) error {
+func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runtimeID string, runIdentity *agent.PiRunIdentity) error {
 	if d == nil || d.canonicalRuntimes == nil {
 		return errors.New("resident Message runtime is not configured")
 	}
 	if d.canonicalRuntimes.hasResidentBackend(agentID, runtimeID) {
-		return nil
+		if runIdentity == nil {
+			return nil
+		}
+		if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err == nil {
+			return nil
+		} else if !errors.Is(err, agent.ErrPiRPCRunIdentityRequiresFreshSession) {
+			return fmt.Errorf("bind resident Pi run identity: %w", err)
+		}
+		// A run-scoped Pi session cannot inherit an unbound or differently
+		// bound resident. Replace it only through the pool's idle invalidation
+		// boundary; an active prior turn remains busy and is never torn down.
+		if err := d.canonicalRuntimes.invalidateSession(agentID, runtimeID); err != nil {
+			return fmt.Errorf("rotate resident Pi run identity: %w", err)
+		}
 	}
 	if d.client == nil {
 		return errors.New("resident Message runtime is not configured")
@@ -187,6 +216,11 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("acquire resident Message runtime: %w", err)
 	}
 	lease.release(true)
+	if runIdentity != nil {
+		if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err != nil {
+			return fmt.Errorf("bind resident Pi run identity: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -211,4 +245,38 @@ func newCanonicalGrokResidentBackend(cfg agent.Config) (agent.Backend, func(), e
 func newCanonicalPiResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {
 	backend := agent.NewPiRPCBackend(cfg)
 	return backend, backend.Close, nil
+}
+
+func (d *Daemon) prepareResidentPiRun(ctx context.Context, agentID, runtimeID string, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	if err := d.ensureResidentMessageRuntime(ctx, agentID, runtimeID, &identity); err != nil {
+		return agent.PiRunBinding{}, err
+	}
+	return d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, identity)
+}
+
+func (d *Daemon) revokeResidentPiRun(agentID, runtimeID string, identity agent.PiRunIdentity) error {
+	if d == nil || d.canonicalRuntimes == nil {
+		return nil
+	}
+	return d.canonicalRuntimes.revokeResidentPiRunIdentity(agentID, runtimeID, identity)
+}
+
+func (d *Daemon) handlePreparePiRunRequest(ctx context.Context, req protocol.PreparePiRunRequestPayload, writes chan<- []byte) {
+	response := protocol.PreparePiRunResponsePayload{RequestID: req.RequestID}
+	binding, err := d.prepareResidentPiRun(ctx, req.AgentID, req.RuntimeID, agent.PiRunIdentity{RunID: req.RunID, RunAgentID: req.RunAgentID})
+	if err != nil {
+		response.Error = err.Error()
+	} else {
+		response.SessionID = binding.SessionID
+		response.CaptureBoundary = binding.CaptureBoundary
+	}
+	d.sendDaemonFrame(protocol.EventDaemonPreparePiRunResponse, response, req.RequestID, writes)
+}
+
+func (d *Daemon) handleRevokePiRunRequest(req protocol.RevokePiRunRequestPayload, writes chan<- []byte) {
+	response := protocol.RevokePiRunResponsePayload{RequestID: req.RequestID}
+	if err := d.revokeResidentPiRun(req.AgentID, req.RuntimeID, agent.PiRunIdentity{RunID: req.RunID, RunAgentID: req.RunAgentID}); err != nil {
+		response.Error = err.Error()
+	}
+	d.sendDaemonFrame(protocol.EventDaemonRevokePiRunResponse, response, req.RequestID, writes)
 }

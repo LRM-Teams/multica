@@ -112,6 +112,9 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 			return messageDeliveryAcceptance{}, fmt.Errorf("no Message coordinator for Agent %q", delivery.AgentID)
 		}
 	}
+	delivery.Message.RunID = delivery.RunID
+	delivery.Message.RunAgentID = delivery.RunAgentID
+	delivery.Message.DeliveryID = delivery.DeliveryID
 	accepted, err := coordinator.Accept(ctx, delivery)
 	if err != nil {
 		return messageDeliveryAcceptance{}, err
@@ -130,7 +133,14 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		return result, nil
 	}
 
-	if err := runner.ensureResidentRuntime(ctx, delivery.AgentID, runtimeID); err != nil {
+	runIdentity, identityErr := residentPiRunIdentity(delivery.RunID, delivery.RunAgentID)
+	if identityErr != nil {
+		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
+			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "failed", canonicalMessageFailureReason(identityErr),
+		))
+		return messageDeliveryAcceptance{}, identityErr
+	}
+	if err := runner.ensureResidentRuntime(ctx, delivery.AgentID, runtimeID, runIdentity); err != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "runtime_handoff_attempted", "deferred", canonicalMessageFailureReason(err),
 		))
@@ -216,10 +226,14 @@ func (runner *WorkspaceRunner) mergeMessageRecoveryPage(page protocol.AgentRecov
 
 	// Freshness is durable after MergeRecoveryPage. Runtime availability is a
 	// separate best-effort concern and must never block the Runner read loop.
+	runIdentity, identityErr := residentPiRunIdentity(page.RunID, page.RunAgentID)
+	if identityErr != nil {
+		return identityErr
+	}
 	flushCtx, cancel := context.WithTimeout(context.Background(), recoveryFlushTimeout)
 	go func() {
 		defer cancel()
-		if err := runner.ensureResidentRuntime(flushCtx, page.AgentID, runtimeID); err != nil {
+		if err := runner.ensureResidentRuntime(flushCtx, page.AgentID, runtimeID, runIdentity); err != nil {
 			if runner.logger != nil {
 				runner.logger.Warn("Workspace Runner Message recovery Runtime unavailable", "error", err, "workspace_id", runner.config.WorkspaceID, "agent_id", page.AgentID, "recovery_id", page.RecoveryID)
 			}

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -115,7 +116,7 @@ func TestWriteEnvDispatchError_ValidationFailureNotLoggedAtError(t *testing.T) {
 func TestEnvDispatch_RejectsMissingMode(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"training_mode":false,"env_id":"` + validUUID + `","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","domain":"swe_lego","issue":{"title":"t"}}`
+	body := `{"env_id":"` + validUUID + `","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","domain":"swe_lego","issue":{"title":"t"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -128,7 +129,7 @@ func TestEnvDispatch_RejectsMissingMode(t *testing.T) {
 func TestEnvDispatch_RejectsMalformedEnvID(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"training_mode":false,"mode":"scratch","env_id":"not-a-uuid","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
+	body := `{"mode":"scratch","env_id":"not-a-uuid","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -141,7 +142,7 @@ func TestEnvDispatch_RejectsMalformedEnvID(t *testing.T) {
 func TestEnvDispatch_RejectsSweLegoMessage(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"q"}}`
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"q"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -154,7 +155,7 @@ func TestEnvDispatch_RejectsSweLegoMessage(t *testing.T) {
 func TestEnvDispatch_SelfPlayIssue_Returns501(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -180,40 +181,15 @@ func TestEnvDispatch_AcceptsEmptyEnvIDShape(t *testing.T) {
 	// empty env_id must not be rejected by the handler's UUID-shape gate
 	// (which would emit "invalid env_id"); the service decides whether an
 	// empty env_id is allowed (scratch self_play resolves a default).
-	body := `{"training_mode":false,"mode":"scratch","env_id":"","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+	body := `{"mode":"scratch","env_id":"","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
 	rr := doEnvDispatch(t, body)
 	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "invalid env_id") {
 		t.Fatalf("empty env_id must pass the handler UUID gate, got %d %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestEnvDispatch_RejectsMalformedTrainAgentID(t *testing.T) {
-	// A malformed train_agent_id must be rejected by the handler's UUID-shape
-	// gate with a 400 (mirroring the agent_id/squad_id shape checks) instead of
-	// panicking deeper in the adapter.
-	body := `{"training_mode":true,"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"not-a-uuid","issue":{"title":"t"}}`
-	rr := doEnvDispatch(t, body)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (malformed train_agent_id must not panic)", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), "invalid train_agent_id") {
-		t.Fatalf("body = %s, want it to mention invalid train_agent_id", rr.Body.String())
-	}
-}
-
-func TestEnvDispatch_AcceptsWellFormedTrainAgentID(t *testing.T) {
-	// A well-formed train_agent_id equal to agent_id (single-agent training)
-	// must pass the handler's UUID-shape gate. Using train_agent_id == agent_id
-	// also satisfies the service validate() rule so no 400 is emitted.
-	body := `{"training_mode":true,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"` + validUUID + `","message":{"content":"hi"}}`
-	rr := doEnvDispatch(t, body)
-	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "train_agent_id") {
-		t.Fatalf("well-formed train_agent_id must pass shape validation, got %d %s", rr.Code, rr.Body.String())
-	}
-}
-
 func TestEnvDispatch_AcceptsResumeMode(t *testing.T) {
-	body := `{"training_mode":false,"mode":"resume","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
+	body := `{"mode":"resume","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
 	rr := doEnvDispatch(t, body)
 	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "mode") {
 		t.Fatalf("resume must be accepted as a mode, got %d %s", rr.Code, rr.Body.String())
@@ -222,7 +198,7 @@ func TestEnvDispatch_AcceptsResumeMode(t *testing.T) {
 
 func TestEnvDispatchHandler_CriticAgentID_ShapeValidation(t *testing.T) {
 	// 400 on malformed UUID
-	body := `{"training_mode":true,"agent_id":"` + validUUID + `","mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"train_agent_id":"` + validUUID + `","critic_agent_id":"not-a-uuid","message":{"content":"hi"}}`
+	body := `{"agent_id":"` + validUUID + `","mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"critic_agent_id":"not-a-uuid","message":{"content":"hi"}}`
 	req := httptest.NewRequest("POST", "/api/v1/env-dispatch", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h := newTestHandler(Config{})
@@ -243,7 +219,7 @@ func TestEnvDispatchHandler_CriticAgentID_ShapeValidation(t *testing.T) {
 // A spec with neither template nor base_env_id triggers the service's shape
 // validation error, proving the field reached the service layer.
 func TestEnvDispatch_ParsesPerAgentEnv(t *testing.T) {
-	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{}}}`
+	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{}}}`
 	w := doEnvDispatch(t, body)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (shape validation); body=%s", w.Code, w.Body.String())
@@ -256,7 +232,7 @@ func TestEnvDispatch_ParsesPerAgentEnv(t *testing.T) {
 	// shape error: the runtime is a valid scratch policy, so synchronous shape
 	// validation passes and the dispatch proceeds. The synthetic API key must
 	// not surface in the response.
-	runtimeBody := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{"runtime":{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}}}}`
+	runtimeBody := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{"runtime":{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}}}}`
 	w2 := doEnvDispatch(t, runtimeBody)
 	if strings.Contains(w2.Body.String(), "needs a template") {
 		t.Fatalf("runtime-only spec must advance past the shape error; got %s", w2.Body.String())
@@ -655,71 +631,53 @@ func agentWorkspaceID(t *testing.T, agentID string) string {
 	return wsID
 }
 
-// TestEnvDispatch_TrainingMode exercises the required training_mode request
-// contract (Task 1): omitted training_mode returns HTTP 400 at the handler
-// boundary; training_mode=true without train_agent_id and training_mode=false
-// with a training ID are rejected by service validation (surfaced as 400 with
-// "training_mode"). The two valid forms (true + train_agent_id, false + no
-// training IDs) must reach the service with the exact boolean - verified by
-// the service validation behavior: a wrong boolean would trigger the
-// opposite training_mode 400.
-func TestEnvDispatch_TrainingMode(t *testing.T) {
-	t.Run("Omitted_Returns400", func(t *testing.T) {
-		body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
-		rr := doEnvDispatch(t, body)
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("omitted training_mode: want 400, got %d %s", rr.Code, rr.Body.String())
-		}
-		if !strings.Contains(rr.Body.String(), "training_mode") {
-			t.Fatalf("body should mention training_mode; got %s", rr.Body.String())
-		}
-	})
+// Legacy classification fields are rejected for every value and are never
+// translated into mixed classifications. Both malformed and well-formed
+// train_agent_id values must fail as removed fields before UUID translation.
+func TestEnvDispatch_LegacyTrainingFieldsAreRemoved(t *testing.T) {
+	base := `"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}`
+	cases := map[string]struct {
+		fieldName string
+		field     string
+	}{
+		"training_mode true":         {"training_mode", `"training_mode":true`},
+		"training_mode false":        {"training_mode", `"training_mode":false`},
+		"train_agent_id well-formed": {"train_agent_id", `"train_agent_id":"` + validUUID + `"`},
+		"train_agent_id malformed":   {"train_agent_id", `"train_agent_id":"not-a-uuid"`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rr := doEnvDispatch(t, `{`+base+`,`+tc.field+`}`)
+			if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), tc.fieldName) || !strings.Contains(rr.Body.String(), "removed") {
+				t.Fatalf("legacy %s response = %d %s, want field-specific removed-field 400", tc.fieldName, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
 
-	t.Run("TrueWithoutTrainAgentID_Returns400", func(t *testing.T) {
-		body := `{"training_mode":true,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
-		rr := doEnvDispatch(t, body)
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("true without train_agent_id: want 400, got %d %s", rr.Code, rr.Body.String())
-		}
-		if !strings.Contains(rr.Body.String(), "training_mode") {
-			t.Fatalf("body should mention training_mode; got %s", rr.Body.String())
-		}
+func TestEnvDispatchSuccessResponseIncludesRunIdentityAndStatus(t *testing.T) {
+	response := envDispatchSuccessResponse(service.EnvDispatchResult{
+		ProjectID:           "project-1",
+		QuietWindowMS:       2000,
+		TotalTimeoutSeconds: 3300,
+		Rollouts: []service.EnvRollout{
+			{RunID: "run-1", ProjectID: "project-1"},
+		},
 	})
-
-	t.Run("FalseWithTrainAgentID_Returns400", func(t *testing.T) {
-		body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"` + validUUID + `","message":{"content":"hi"}}`
-		rr := doEnvDispatch(t, body)
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("false with train_agent_id: want 400, got %d %s", rr.Code, rr.Body.String())
-		}
-		if !strings.Contains(rr.Body.String(), "training_mode") {
-			t.Fatalf("body should mention training_mode; got %s", rr.Body.String())
-		}
-	})
-
-	t.Run("TrueWithTrainAgentID_ReachesServiceWithExactBoolean", func(t *testing.T) {
-		// training_mode=true with train_agent_id == agent_id (single-agent
-		// training) must pass the training_mode validation rules. If the
-		// handler incorrectly passed false, the service would emit
-		// "training_mode false forbids train_agent_id" -> 400.
-		body := `{"training_mode":true,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"` + validUUID + `","message":{"content":"hi"}}`
-		rr := doEnvDispatch(t, body)
-		if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "training_mode") {
-			t.Fatalf("true with train_agent_id must pass training_mode validation, got %d %s", rr.Code, rr.Body.String())
-		}
-	})
-
-	t.Run("FalseWithoutTrainingIDs_ReachesServiceWithExactBoolean", func(t *testing.T) {
-		// training_mode=false with no train_agent_id/critic_agent_id must pass
-		// the training_mode validation rules. If the handler incorrectly
-		// passed true, the service would emit "training_mode true requires
-		// train_agent_id" -> 400.
-		body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
-		rr := doEnvDispatch(t, body)
-		if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "training_mode") {
-			t.Fatalf("false without training IDs must pass training_mode validation, got %d %s", rr.Code, rr.Body.String())
-		}
-	})
+	body, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := payload["run_id"]; got != "run-1" {
+		t.Fatalf("run_id = %v, want run-1", got)
+	}
+	if got := payload["status"]; got != "running" {
+		t.Fatalf("status = %v, want running", got)
+	}
 }
 
 // TestGetDag_NoEnvDispatchRun_Returns202 verifies the /dag endpoint returns
@@ -987,5 +945,256 @@ func TestMapRolloutsIncludesSourceAndRunIdentity(t *testing.T) {
 	}
 	if got[0].RunID != "run-1" || got[0].SourceTaskID != "source-1" {
 		t.Fatalf("mapped identity = %+v", got[0])
+	}
+}
+
+func TestEnvDispatchMixedRequestDTODoesNotExposeLegacyFields(t *testing.T) {
+	encoded, err := json.Marshal(EnvDispatchRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{`"training_mode"`, `"train_agent_id"`} {
+		if strings.Contains(string(encoded), removed) {
+			t.Fatalf("request DTO exposed removed field %s: %s", removed, encoded)
+		}
+	}
+}
+
+func TestEnvDispatchMixedContractTimingBoundsAreInclusive(t *testing.T) {
+	valid := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+	accepted := map[string]string{
+		"quiet lower bound":   `"quiet_window_ms":100,"total_timeout_seconds":30`,
+		"quiet upper bound":   `"quiet_window_ms":60000,"total_timeout_seconds":61`,
+		"timeout lower bound": `"quiet_window_ms":100,"total_timeout_seconds":30`,
+		"timeout upper bound": `"quiet_window_ms":60000,"total_timeout_seconds":86400`,
+	}
+	for name, fragment := range accepted {
+		t.Run(name, func(t *testing.T) {
+			body := strings.TrimSuffix(valid, "}") + `,` + fragment + `}`
+			var request EnvDispatchRequest
+			if err := json.Unmarshal([]byte(body), &request); err != nil {
+				t.Fatalf("decode request boundary: %v", err)
+			}
+			plan, err := service.PreflightMixedDispatch(service.MixedDispatchPreflightInput{
+				Roster:        []service.MixedDispatchRosterAgent{{SourceAgentID: validUUID, Provider: "pi"}},
+				QuietWindowMS: request.QuietWindowMS, TotalTimeoutSeconds: request.TotalTimeoutSeconds,
+			})
+			if err != nil || len(plan.RunAgents) != 1 || plan.RunAgents[0].TrainingMode != "none" {
+				t.Fatalf("inclusive boundary preflight plan=%+v err=%v, want accepted none classification", plan, err)
+			}
+		})
+	}
+
+	rejected := map[string]struct {
+		fragment string
+		field    string
+	}{
+		"quiet below lower bound":     {`"quiet_window_ms":99,"total_timeout_seconds":30`, "quiet_window_ms"},
+		"quiet above upper bound":     {`"quiet_window_ms":60001,"total_timeout_seconds":61`, "quiet_window_ms"},
+		"timeout below lower bound":   {`"quiet_window_ms":100,"total_timeout_seconds":29`, "total_timeout_seconds"},
+		"timeout above upper bound":   {`"quiet_window_ms":100,"total_timeout_seconds":86401`, "total_timeout_seconds"},
+		"total duration equals quiet": {`"quiet_window_ms":60000,"total_timeout_seconds":60`, "total_timeout_seconds"},
+	}
+	for name, fragment := range rejected {
+		t.Run(name, func(t *testing.T) {
+			body := strings.TrimSuffix(valid, "}") + `,` + fragment.fragment + `}`
+			rr := doEnvDispatch(t, body)
+			if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), fragment.field) {
+				t.Fatalf("invalid timing response = %d %s, want 400 naming %s", rr.Code, rr.Body.String(), fragment.field)
+			}
+		})
+	}
+}
+
+func TestEnvDispatchMixedContractSuccessResponseDefaultsAndClassification(t *testing.T) {
+	submittedAt := time.Date(2026, time.August, 10, 10, 0, 0, 0, time.UTC)
+	encoded, err := json.Marshal(EnvDispatchResponse{
+		ChannelID: "channel-1",
+		ProjectID: "project-1",
+		Rollouts: []EnvRolloutResponse{{
+			RunID: "run-1", EnvID: "env-1", ProjectID: "project-1",
+			ChatSessionID: "secret-chat-session",
+		}},
+		InitialMessageSubmittedAt: submittedAt,
+		RunAgents: mapMixedDispatchRunAgents([]service.MixedDispatchRunAgent{
+			{SourceAgentID: "source-online", ExecutionAgentID: "execution-online", RuntimeID: "runtime-online", PiSessionID: "secret-pi-online", AReALSessionID: "secret-areal-online", TrainingMode: "online_rl"},
+			{SourceAgentID: "source-offline", ExecutionAgentID: "execution-offline", TrainingMode: "offline_rl"},
+			{SourceAgentID: "source-none", ExecutionAgentID: "execution-none", TrainingMode: "none"},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		ChannelID                 string                          `json:"channel_id"`
+		ProjectID                 string                          `json:"project_id"`
+		Rollouts                  []EnvRolloutResponse            `json:"rollouts"`
+		QuietWindowMS             int                             `json:"quiet_window_ms"`
+		TotalTimeoutSeconds       int                             `json:"total_timeout_seconds"`
+		InitialMessageSubmittedAt time.Time                       `json:"initial_message_submitted_at"`
+		RunAgents                 []service.MixedDispatchRunAgent `json:"run_agents"`
+	}
+	if err := json.Unmarshal(encoded, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.ChannelID != "channel-1" || response.ProjectID != "project-1" || len(response.Rollouts) != 1 || response.Rollouts[0].RunID != "run-1" {
+		t.Fatalf("success identity fields = %+v, want channel/project/rollout identity", response)
+	}
+	if response.QuietWindowMS != 2000 || response.TotalTimeoutSeconds != 3300 || !response.InitialMessageSubmittedAt.Equal(submittedAt) {
+		t.Fatalf("success timing fields = %+v, want defaults 2000/3300 and submission time %s", response, submittedAt)
+	}
+	wantModes := map[string]string{"source-online": "online_rl", "source-offline": "offline_rl", "source-none": "none"}
+	if len(response.RunAgents) != len(wantModes) {
+		t.Fatalf("run_agents = %+v, want three classifications", response.RunAgents)
+	}
+	for _, agent := range response.RunAgents {
+		if wantModes[agent.SourceAgentID] != agent.TrainingMode || agent.ExecutionAgentID == "" {
+			t.Fatalf("run agent classification = %+v, want source/execution identity and %q", agent, wantModes[agent.SourceAgentID])
+		}
+	}
+	for _, forbidden := range []string{
+		`"training_mode":false`, "train_agent_id", `"runtime_id"`, `"daemon_id"`, `"chat_session_id"`,
+		`"agent_sandboxes"`, `"sandbox_refs"`, `"agent_sandbox_refs"`, `"leader_run_id"`, `"agent_run_id"`,
+		"secret-pi-online", "secret-areal-online", "secret-chat-session", "secret-runtime", "secret-daemon",
+		"secret-leader-run", "secret-agent-run", "secret-sandbox-runtime", "secret-sandbox-daemon",
+	} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("success response exposed forbidden legacy or session field %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+type canonicalSendFailureEnvDispatchDeps struct {
+	stubEnvDispatchDeps
+	envs             map[string]bool
+	projects         map[string]bool
+	channels         map[string]bool
+	runtimes         map[string]bool
+	sendAttempts     int
+	acceptedMessages int
+	startedRuns      int
+	enqueuedRuns     int
+}
+
+func newCanonicalSendFailureEnvDispatchDeps() *canonicalSendFailureEnvDispatchDeps {
+	return &canonicalSendFailureEnvDispatchDeps{
+		envs: map[string]bool{}, projects: map[string]bool{}, channels: map[string]bool{}, runtimes: map[string]bool{},
+	}
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) GetEnv(_ context.Context, envID, _ string) (service.Env, error) {
+	if envID == "base-env" {
+		return service.Env{ID: envID, Mode: service.EnvModeBase}, nil
+	}
+	return service.Env{ID: envID, Mode: service.EnvModeScratch}, nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) CreateEnv(context.Context, string, []string, string, service.EnvMode, service.EnvDomain) (string, error) {
+	f.envs["provisional-env"] = true
+	return "provisional-env", nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) DeleteEnv(_ context.Context, envID, _ string) error {
+	delete(f.envs, envID)
+	return nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) CreateProject(context.Context, string, string, string) (string, error) {
+	f.projects["provisional-project"] = true
+	return "provisional-project", nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) DeleteProject(_ context.Context, projectID, _ string) error {
+	delete(f.projects, projectID)
+	return nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) ResolveMessageRoster(context.Context, string, string, []service.PerAgentEnvSpec) (service.MessageRoster, error) {
+	return service.MessageRoster{LeaderID: "source-a", AgentIDs: []string{"source-a", "source-b"}}, nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) CreateEnvDispatchChannel(context.Context, string, string, string, string, service.MessageRoster, map[string]service.ResolvedPerAgentSandboxPolicy) (string, error) {
+	f.channels["provisional-channel"] = true
+	return "provisional-channel", nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) DeleteChannel(_ context.Context, _ string, channelID string) error {
+	delete(f.channels, channelID)
+	return nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) ProvisionEnvDispatchAgent(_ context.Context, in service.EnvDispatchAgentProvisionInput) (service.EnvDispatchAgentProvisionResult, error) {
+	runtimeID := "provisional-runtime-" + in.AgentID
+	f.runtimes[runtimeID] = true
+	arealSessionID := ""
+	if in.TrainingMode == "online_rl" {
+		arealSessionID = "areal-session-" + in.AgentID
+	}
+	return service.EnvDispatchAgentProvisionResult{
+		AgentID:           "execution-" + in.AgentID,
+		SandboxInstanceID: "sandbox-" + in.AgentID,
+		RuntimeID:         runtimeID,
+		DaemonID:          "daemon-" + in.AgentID,
+		ChatSessionID:     "pi-session-" + in.AgentID,
+		AReALSessionID:    arealSessionID,
+	}, nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) DeleteAgentRuntime(_ context.Context, _ string, runtimeID string) error {
+	delete(f.runtimes, runtimeID)
+	return nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) PrepareMixedDispatchRunAgent(_ context.Context, runID string, agent service.MixedDispatchRunAgent) (service.MixedDispatchRunAgent, error) {
+	agent.RunAgentID = "run-agent-" + agent.SourceAgentID
+	agent.PiSessionID = "native-pi-" + runID + "-" + agent.SourceAgentID
+	agent.CaptureBoundary = "boundary-" + agent.RunAgentID
+	return agent, nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) BindMixedDispatchRunAgent(context.Context, string, service.MixedDispatchRunAgent) error {
+	return nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) RevokeMixedDispatchRunAgent(context.Context, string, service.MixedDispatchRunAgent) error {
+	return nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) PersistMixedDispatchInitialMessage(context.Context, string, string, string, string) (service.PreparedMixedDispatchMessage, error) {
+	f.sendAttempts++
+	return service.PreparedMixedDispatchMessage{}, errors.New("synthetic canonical send failure")
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) CreateChannelMessage(context.Context, string, string, string, string) (string, error) {
+	f.sendAttempts++
+	return "", errors.New("synthetic canonical send failure")
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) StartMixedDispatchRun(context.Context, string, time.Time) error {
+	f.startedRuns++
+	return nil
+}
+
+func (f *canonicalSendFailureEnvDispatchDeps) EnqueueEnvDispatchChannelRun(context.Context, string, string, service.ChannelRunInput, int) (string, error) {
+	f.enqueuedRuns++
+	return "unexpected-run", nil
+}
+
+func TestEnvDispatchMixedCanonicalSendFailureRollsBackBeforeAcceptance(t *testing.T) {
+	deps := newCanonicalSendFailureEnvDispatchDeps()
+	_, err := service.NewEnvDispatchService(deps, 1).Dispatch(context.Background(), service.EnvDispatchInput{
+		WorkspaceID: "workspace-1", UserID: "user-1", Mode: service.EnvModeScratch, EnvID: "base-env",
+		Domain: service.EnvDomainSelfPlay, DispatchType: service.EnvDispatchMessage, GroupSize: 1, AgentID: "source-a",
+		OnlineTrainableAgents: []string{"source-a"}, OfflineTrainableAgents: []string{"source-b"},
+		QuietWindowMS: 2000, TotalTimeoutSeconds: 3300, Message: &service.MessageInput{Content: "must not be accepted"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "synthetic canonical send failure") {
+		t.Fatalf("dispatch error = %v, want canonical send failure", err)
+	}
+	if deps.sendAttempts != 1 || deps.acceptedMessages != 0 || deps.startedRuns != 0 || deps.enqueuedRuns != 0 {
+		t.Fatalf("post-failure activity attempts=%d accepted=%d starts=%d enqueues=%d, want one failed send and no accepted activity", deps.sendAttempts, deps.acceptedMessages, deps.startedRuns, deps.enqueuedRuns)
+	}
+	if len(deps.envs) != 0 || len(deps.projects) != 0 || len(deps.channels) != 0 || len(deps.runtimes) != 0 {
+		t.Fatalf("provisional resources survived rollback: envs=%v projects=%v channels=%v runtimes=%v", deps.envs, deps.projects, deps.channels, deps.runtimes)
 	}
 }

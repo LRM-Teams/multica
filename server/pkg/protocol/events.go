@@ -142,6 +142,8 @@ const (
 	EventAgentRecoveryRequest     = "agent:recovery:request"
 	EventAgentRecoveryPage        = "agent:recovery:page"
 	EventAgentMessageHandoff      = "agent:message_handoff"
+	EventMixedRunActivityTransition = "mixed_run:activity_transition"
+	EventMixedRunActivityAck        = "mixed_run:activity_transition:ack"
 	EventAgentAttach              = "agent:attach"
 	EventAgentAttached            = "agent:attached"
 	EventAgentDetach              = "agent:detach"
@@ -195,6 +197,10 @@ const (
 	// only whitelisted markdown files. Correlated by RequestID.
 	EventDaemonSeedAgentContextRequest  = "daemon:seed_agent_context_request"
 	EventDaemonSeedAgentContextResponse = "daemon:seed_agent_context_response"
+	EventDaemonPreparePiRunRequest      = "daemon:prepare_pi_run_request"
+	EventDaemonPreparePiRunResponse     = "daemon:prepare_pi_run_response"
+	EventDaemonRevokePiRunRequest       = "daemon:revoke_pi_run_request"
+	EventDaemonRevokePiRunResponse      = "daemon:revoke_pi_run_response"
 
 	// GitHub integration events
 	EventGitHubInstallationCreated = "github_installation:created"

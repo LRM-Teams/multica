@@ -52,7 +52,7 @@ func (d *Daemon) handleReminderOwnerInput(ctx context.Context, payload protocol.
 		return reminderOwnerInputRejected
 	}
 	if !d.canonicalRuntimes.hasResidentBackend(payload.AgentID, payload.RuntimeID) {
-		if err := d.ensureResidentMessageRuntime(ctx, payload.AgentID, payload.RuntimeID); err != nil {
+		if err := d.ensureResidentMessageRuntime(ctx, payload.AgentID, payload.RuntimeID, nil); err != nil {
 			d.recordReminderOwnerInputOutcome(payload, reminderOwnerInputInjectionFailed, "resident_runtime_unavailable")
 			return reminderOwnerInputInjectionFailed
 		}

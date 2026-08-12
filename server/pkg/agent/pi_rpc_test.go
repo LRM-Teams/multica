@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -567,5 +569,124 @@ func TestPiRPCBackendForceKillDuringInitialAckActuallyKillsNotHang(t *testing.T)
 	}
 	if !strings.Contains(execResult.Error, AgentForceKilledMarker) {
 		t.Fatalf("result error = %q, want it to contain %q", execResult.Error, AgentForceKilledMarker)
+	}
+}
+
+func TestPiRPCBackendFreshRunIdentityAndResidentTurnReuse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	starts := filepath.Join(dir, "starts")
+	backend := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": starts,
+	}})
+	t.Cleanup(backend.Close)
+
+	identity := PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	bound, err := backend.BindRunIdentity(identity)
+	if err != nil {
+		t.Fatalf("bind run identity: %v", err)
+	}
+	if bound.SessionID == "" || bound.CaptureBoundary == "" {
+		t.Fatalf("bound identity = %+v, want fresh session and capture boundary", bound)
+	}
+	previousBoundary := bound.CaptureBoundary
+	for turn := 1; turn <= 2; turn++ {
+		acceptance, err := backend.AcceptMessageBatch(context.Background(), []ResidentMessage{{
+			ID: fmt.Sprintf("message-%d", turn), Target: "channel:one", Seq: int64(turn), Content: "hello",
+		}})
+		if err != nil {
+			t.Fatalf("turn %d: %v", turn, err)
+		}
+		if err := <-acceptance.Done; err != nil {
+			t.Fatalf("turn %d completion: %v", turn, err)
+		}
+		if err := backend.SettleRunTurn(identity); err != nil {
+			t.Fatalf("turn %d settlement: %v", turn, err)
+		}
+		settled, err := backend.BindRunIdentity(identity)
+		if err != nil {
+			t.Fatalf("turn %d inspect settled binding: %v", turn, err)
+		}
+		if settled.SessionID != bound.SessionID {
+			t.Fatalf("turn %d settlement changed Pi session: first=%+v settled=%+v", turn, bound, settled)
+		}
+		if settled.CaptureBoundary == previousBoundary {
+			t.Fatalf("turn %d settlement did not advance capture boundary: %+v", turn, settled)
+		}
+		previousBoundary = settled.CaptureBoundary
+	}
+	rebound, err := backend.BindRunIdentity(identity)
+	if err != nil {
+		t.Fatalf("idempotent bind after resident process start: %v", err)
+	}
+	if rebound.SessionID != bound.SessionID {
+		t.Fatalf("idempotent bind changed Pi session: first=%+v rebound=%+v", bound, rebound)
+	}
+	if _, err := backend.BindRunIdentity(PiRunIdentity{RunID: "run-other", RunAgentID: identity.RunAgentID}); err == nil {
+		t.Fatal("resident backend accepted a different run identity")
+	} else if !errors.Is(err, ErrPiRPCRunIdentityRequiresFreshSession) {
+		t.Fatalf("different run identity error = %v, want fresh-session sentinel", err)
+	}
+	data, err := os.ReadFile(starts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "x"); got != 1 {
+		t.Fatalf("resident Pi children = %d, want one reused child", got)
+	}
+
+	other := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": starts,
+	}})
+	t.Cleanup(other.Close)
+	otherBound, err := other.BindRunIdentity(PiRunIdentity{RunID: "run-2", RunAgentID: "run-agent-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherBound.SessionID == bound.SessionID || otherBound.CaptureBoundary == bound.CaptureBoundary {
+		t.Fatalf("dispatches reused Pi identity: first=%+v second=%+v", bound, otherBound)
+	}
+}
+
+func TestPiRPCBackendPrepareRunStartsBoundProcessWithoutAgentTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	startsPath := filepath.Join(dir, "starts")
+	messageInputPath := filepath.Join(dir, "message-input.json")
+	b := newPiRPCBackend(Config{ExecutablePath: path, ResidentOptions: ExecOptions{Cwd: dir}, Env: map[string]string{
+		"PI_RPC_TEST_STARTS": startsPath, "PI_RPC_TEST_MESSAGE_INPUT": messageInputPath,
+	}})
+	t.Cleanup(b.Close)
+
+	identity := PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	binding, err := b.PrepareRun(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("PrepareRun: %v", err)
+	}
+	if binding.PiRunIdentity != identity || binding.SessionID == "" || binding.CaptureBoundary == "" {
+		t.Fatalf("binding = %+v, want complete native run identity", binding)
+	}
+	waitForPiRPCTestPath(t, startsPath)
+	if _, err := os.Stat(messageInputPath); !os.IsNotExist(err) {
+		t.Fatalf("preflight started an agent turn: message input stat err=%v", err)
+	}
+	alive, known := b.RuntimeAlive()
+	if !known || !alive {
+		t.Fatalf("prepared runtime alive=(%v,%v), want known and alive", alive, known)
+	}
+}
+
+func TestPiRPCBackendPrepareRunRejectsNativeStartFailureBeforeTurn(t *testing.T) {
+	b := newPiRPCBackend(Config{ExecutablePath: filepath.Join(t.TempDir(), "missing-pi")})
+	t.Cleanup(b.Close)
+
+	binding, err := b.PrepareRun(context.Background(), PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"})
+	if err == nil || !strings.Contains(err.Error(), "pi executable not found") {
+		t.Fatalf("PrepareRun binding=%+v err=%v, want deterministic native start failure", binding, err)
+	}
+	if b.running.Load() {
+		t.Fatal("failed preflight left an active agent turn")
 	}
 }

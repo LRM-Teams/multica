@@ -578,9 +578,12 @@ func TestPermanentAgentDeleteNonCascadingFKInventory(t *testing.T) {
 		t.Skip("database not available")
 	}
 	expected := map[string]bool{
-		"agent_source_workspace_fk":        true,
-		"squad_leader_id_fkey":             true,
-		"voice_call_session_agent_id_fkey": true,
+		"agent_source_workspace_fk":                                       true,
+		"env_dispatch_delivery_obligation_source_recipient_agent_id_fkey": true,
+		"env_dispatch_run_agent_execution_agent_id_fkey":                  true,
+		"env_dispatch_run_agent_source_agent_id_fkey":                     true,
+		"squad_leader_id_fkey":                                            true,
+		"voice_call_session_agent_id_fkey":                                true,
 	}
 	rows, err := testPool.Query(context.Background(), `
 		SELECT conname

@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 var _ interface{ Run(context.Context) } = (*WorkspaceRunner)(nil)
@@ -27,7 +29,7 @@ func TestWorkspaceRunnerConstructionRequiresFixedIdentity(t *testing.T) {
 		runtimeSet: func() AgentAttachmentRuntimeSet {
 			return AgentAttachmentRuntimeSet{WorkspaceID: "workspace-1"}
 		},
-		ensureResidentRuntime: func(context.Context, string, string) error { return nil },
+		ensureResidentRuntime: func(context.Context, string, string, *agent.PiRunIdentity) error { return nil },
 	}
 	for name, mutate := range map[string]func(*WorkspaceRunnerConfig){
 		"Daemon":          func(config *WorkspaceRunnerConfig) { config.DaemonID = "" },
@@ -209,7 +211,7 @@ func TestWorkspaceRunnerOwnsLocalStateAndSharesMachineDependencies(t *testing.T)
 		runtimeSet: func() AgentAttachmentRuntimeSet {
 			return AgentAttachmentRuntimeSet{WorkspaceID: "workspace-1"}
 		},
-		ensureResidentRuntime: func(context.Context, string, string) error { return nil },
+		ensureResidentRuntime: func(context.Context, string, string, *agent.PiRunIdentity) error { return nil },
 	}
 	first, err := newWorkspaceRunner(WorkspaceRunnerConfig{
 		DaemonID: "daemon-1", DaemonInstanceID: "instance-1", WorkspaceID: "workspace-1",

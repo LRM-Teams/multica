@@ -2,8 +2,12 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +39,9 @@ func (d *Daemon) openMessageCoordinator(key InboxKey, runtimeID string) (*Messag
 	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot, commitIfCurrent PendingNoticeCommitIfCurrent) error {
 		return d.canonicalRuntimes.handoffBusyNotice(ctx, key.AgentID, runtimeID, snapshot, commitIfCurrent)
 	}, 0, 0)
+	coordinator.ConfigureQueueActivity(func(messages []protocol.AgentMessageProjection, delta int) {
+		d.reportMixedRunMessageQueueActivity(key.AgentID, runtimeID, messages, delta)
+	})
 	return coordinator, nil
 }
 
@@ -124,7 +131,25 @@ func (d *Daemon) restoreResidentAgents() error {
 	return nil
 }
 
+func mixedRunMessageBatchIdentity(messages []protocol.AgentMessageProjection) (string, string, string, bool) {
+	if len(messages) == 0 || messages[0].RunID == "" || messages[0].RunAgentID == "" {
+		return "", "", "", false
+	}
+	runID, runAgentID := messages[0].RunID, messages[0].RunAgentID
+	identities := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.RunID != runID || message.RunAgentID != runAgentID {
+			return "", "", "", false
+		}
+		identities = append(identities, message.ID+"\x00"+message.Target+"\x00"+strconv.FormatInt(message.Seq, 10))
+	}
+	sort.Strings(identities)
+	sum := sha256.Sum256([]byte(runID + "\x00" + runAgentID + "\x01" + strings.Join(identities, "\x01")))
+	return runID, runAgentID, hex.EncodeToString(sum[:]), true
+}
+
 func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+	runID, runAgentID, turnID, mixed := mixedRunMessageBatchIdentity(messages)
 	d.mu.Lock()
 	workspaceID := d.runtimeIndex[runtimeID].WorkspaceID
 	d.mu.Unlock()
@@ -136,11 +161,22 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
 		runner.observeMessageLifecycle(agentID, runtimeID)
 	}, func() {
+		if mixed {
+			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:start", protocol.MixedRunActivityActiveTurn, 1)
+			// US1 capture accounting tracks the accepted resident-turn batch. The
+			// provider upload/capture payload remains deferred to T049.
+			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:start", protocol.MixedRunActivityUnfinishedCaptureBatch, 1)
+		}
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
 		runner.observeMessageAccepted(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
+		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, message)
 		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64) {
+		if mixed {
+			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
+			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:end", protocol.MixedRunActivityUnfinishedCaptureBatch, -1)
+		}
 		outcome, reasonCode := "completed", ""
 		if turnErr != nil {
 			outcome, reasonCode = "failed", "provider_turn_failed"
@@ -175,6 +211,23 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		runner.observeMessageTurnCompletion(agentID, runtimeID, err)
 	}
 	return err
+}
+
+// reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.
+// User-facing Activity emission stays with the Workspace Runner; this reports
+// only the durable mixed-run transition deltas.
+func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, message agent.Message) {
+	if runID == "" || runAgentID == "" || turnID == "" || strings.TrimSpace(message.CallID) == "" {
+		return
+	}
+	switch message.Type {
+	case agent.MessageToolUse:
+		d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID,
+			"turn:"+turnID+":tool:"+message.CallID+":start", protocol.MixedRunActivityInflightTool, 1)
+	case agent.MessageToolResult:
+		d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID,
+			"turn:"+turnID+":tool:"+message.CallID+":end", protocol.MixedRunActivityInflightTool, -1)
+	}
 }
 
 // prepareResidentMessageBatch hydrates the portable memory center once, then

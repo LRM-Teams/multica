@@ -122,9 +122,121 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 			return fmt.Errorf("decode Attachment replay acknowledgement: %w", err)
 		}
 		return h.acknowledgeAgentAttachmentReplay(ctx, identity, acknowledgement)
+	case protocol.EventMixedRunActivityTransition:
+		var transition protocol.MixedRunActivityTransitionPayload
+		if err := json.Unmarshal(raw, &transition); err != nil {
+			return fmt.Errorf("decode mixed-run activity transition: %w", err)
+		}
+		return h.recordMixedRunActivityTransition(ctx, identity, transition)
 	default:
 		return nil
 	}
+}
+
+func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity daemonws.ClientIdentity, transition protocol.MixedRunActivityTransitionPayload) error {
+	if err := transition.Validate(); err != nil {
+		return err
+	}
+	workspaceID, err := util.ParseUUID(identity.WorkspaceID)
+	if err != nil {
+		return errors.New("invalid Runner workspace identity")
+	}
+	runID, err := util.ParseUUID(transition.RunID)
+	if err != nil {
+		return errors.New("invalid mixed-run activity run_id")
+	}
+	runAgentID, err := util.ParseUUID(transition.RunAgentID)
+	if err != nil {
+		return errors.New("invalid mixed-run activity run_agent_id")
+	}
+	agentID, err := util.ParseUUID(transition.AgentID)
+	if err != nil {
+		return errors.New("invalid mixed-run activity agent_id")
+	}
+	runtimeID, err := util.ParseUUID(transition.RuntimeID)
+	if err != nil {
+		return errors.New("invalid mixed-run activity runtime_id")
+	}
+	var counterColumn string
+	switch transition.Dimension {
+	case protocol.MixedRunActivityActiveTurn:
+		counterColumn = "active_turn_count"
+	case protocol.MixedRunActivityQueuedMessage:
+		counterColumn = "queued_message_count"
+	case protocol.MixedRunActivityInflightTool:
+		counterColumn = "inflight_tool_count"
+	case protocol.MixedRunActivityUnfinishedCaptureBatch:
+		counterColumn = "unfinished_capture_batch_count"
+	default:
+		return errors.New("invalid mixed-run activity dimension")
+	}
+	if h.TxStarter == nil {
+		return errors.New("mixed-run activity transaction unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var authorized bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM env_dispatch_run_agent run_agent
+		  JOIN env_dispatch_run run ON run.run_id = run_agent.run_id
+		  JOIN agent_runtime runtime ON runtime.id = run_agent.runtime_id
+		  WHERE run.run_id = $1 AND run.workspace_id = $2
+		    AND run_agent.run_agent_id = $3
+		    AND run_agent.execution_agent_id = $4
+		    AND run_agent.runtime_id = $5
+		    AND runtime.daemon_id = $6
+		)`, runID, workspaceID, runAgentID, agentID, runtimeID, identity.DaemonID).Scan(&authorized); err != nil {
+		return fmt.Errorf("authorize mixed-run activity transition: %w", err)
+	}
+	if !authorized {
+		return errors.New("mixed-run activity transition scope mismatch")
+	}
+	var inserted bool
+	err = tx.QueryRow(ctx, `
+		INSERT INTO env_dispatch_activity_transition AS transition (
+		  run_id, transition_id, run_agent_id, agent_id, runtime_id, dimension, delta
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (run_id, transition_id) DO UPDATE
+		SET transition_id = EXCLUDED.transition_id
+		WHERE transition.run_agent_id = EXCLUDED.run_agent_id
+		  AND transition.agent_id = EXCLUDED.agent_id
+		  AND transition.runtime_id = EXCLUDED.runtime_id
+		  AND transition.dimension = EXCLUDED.dimension
+		  AND transition.delta = EXCLUDED.delta
+		RETURNING (xmax = 0)`, runID, transition.TransitionID, runAgentID, agentID, runtimeID, transition.Dimension, transition.Delta).Scan(&inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("mixed-run activity transition id conflicts with a different payload")
+	}
+	if err != nil {
+		return fmt.Errorf("persist mixed-run activity transition: %w", err)
+	}
+	if !inserted {
+		return tx.Commit(ctx)
+	}
+	query := `UPDATE env_dispatch_run
+		SET ` + counterColumn + ` = ` + counterColumn + ` + $2,
+		    quiet_candidate_since = NULL,
+		    status = CASE WHEN status = 'quiet_candidate' THEN 'running' ELSE status END,
+		    updated_at = now()
+		WHERE run_id = $1
+		  AND status IN ('preflight', 'running', 'quiet_candidate')
+		  AND ` + counterColumn + ` + $2 >= 0`
+	tag, err := tx.Exec(ctx, query, runID, transition.Delta)
+	if err != nil {
+		return fmt.Errorf("apply mixed-run activity transition: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("mixed-run activity transition would make counter negative or mutate an inactive run")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit mixed-run activity transition: %w", err)
+	}
+	return nil
 }
 
 // recordWorkspaceRunnerReady fences launches owned by an older daemon process.

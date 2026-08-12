@@ -51,6 +51,10 @@ type RuntimeMessageHandoff func(context.Context, []protocol.AgentMessageProjecti
 // It is deliberately best effort and never participates in delivery state.
 type MessageReceivedActivity func([]protocol.AgentMessageProjection)
 
+// MessageQueueActivity observes messages entering (+1) or leaving (-1) the
+// coordinator Pending set. Callers must use stable per-message transition IDs.
+type MessageQueueActivity func([]protocol.AgentMessageProjection, int)
+
 // PendingNoticeSnapshot is the content-free projection of current Pending.
 // The runtime seam owns same-session suppression because only it knows when a
 // provider session is replaced.
@@ -100,6 +104,7 @@ type MessageCoordinator struct {
 	accepted            map[string]struct{}
 	handoff             RuntimeMessageHandoff
 	activity            MessageReceivedActivity
+	queueActivity       MessageQueueActivity
 	recovery            messageRecoveryState
 	handoffGeneration   uint64
 	activeHandoff       *runtimeMessageHandoffToken
@@ -226,6 +231,13 @@ func (c *MessageCoordinator) ConfigurePendingNotices(handoff RuntimePendingNotic
 	}
 }
 
+// ConfigureQueueActivity installs the observer for Pending-set transitions.
+func (c *MessageCoordinator) ConfigureQueueActivity(activity MessageQueueActivity) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queueActivity = activity
+}
+
 // Close stops future Notice attempts. Pending remains rebuildable from the
 // canonical service and is intentionally not persisted during shutdown.
 func (c *MessageCoordinator) Close() {
@@ -303,9 +315,16 @@ func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) 
 	c.recovery.snapshotID = page.SnapshotID
 	c.recovery.highWatermark = page.HighWatermark
 	for _, message := range page.Messages {
-		delivery := protocol.AgentDeliverPayload{AgentID: page.AgentID, Target: message.Target, Seq: message.Seq, DeliveryID: "recovery:" + page.SnapshotID + ":" + message.ID, Message: message}
-		if _, err := c.acceptLocked(delivery); err != nil {
+		message.RunID = page.RunID
+		message.RunAgentID = page.RunAgentID
+		message.DeliveryID = "recovery:" + page.SnapshotID + ":" + message.ID
+		delivery := protocol.AgentDeliverPayload{AgentID: page.AgentID, Target: message.Target, Seq: message.Seq, DeliveryID: message.DeliveryID, Message: message, RunID: page.RunID, RunAgentID: page.RunAgentID}
+		created, err := c.acceptLocked(delivery)
+		if err != nil {
 			return fail(err)
+		}
+		if created {
+			c.emitQueueActivityLocked([]protocol.AgentMessageProjection{message}, 1)
 		}
 	}
 	c.recovery.nextCursor = page.NextCursor
@@ -408,8 +427,13 @@ func (c *MessageCoordinator) Accept(_ context.Context, delivery protocol.AgentDe
 		return false, err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.acceptLocked(delivery)
+	created, err := c.acceptLocked(delivery)
+	activity := c.queueActivity
+	c.mu.Unlock()
+	if err == nil && created && activity != nil {
+		activity([]protocol.AgentMessageProjection{delivery.Message}, 1)
+	}
+	return created, err
 }
 
 func (c *MessageCoordinator) acceptLocked(delivery protocol.AgentDeliverPayload) (bool, error) {
@@ -481,8 +505,10 @@ func (c *MessageCoordinator) MarkRead(target string, throughSeq int64) error {
 		c.boundaryHealthy = true
 	}
 	pendingChanged := false
+	var removed []protocol.AgentMessageProjection
 	for sequence, message := range c.pending[target] {
 		if sequence <= c.boundaries[target] {
+			removed = append(removed, message)
 			delete(c.pending[target], sequence)
 			delete(c.accepted, messageIdentityKey(message))
 			pendingChanged = true
@@ -494,6 +520,7 @@ func (c *MessageCoordinator) MarkRead(target string, throughSeq int64) error {
 	if pendingChanged {
 		c.pendingGeneration++
 	}
+	c.emitQueueActivityLocked(removed, -1)
 	return nil
 }
 
@@ -672,6 +699,7 @@ func (c *MessageCoordinator) commitRuntimeMessageHandoff(token *runtimeMessageHa
 			delete(c.pending, message.Target)
 		}
 	}
+	c.emitQueueActivityLocked(token.messages, -1)
 	c.pendingGeneration++
 	c.activeHandoff = nil
 	return nil
@@ -817,6 +845,12 @@ func (c *MessageCoordinator) pendingBatchLocked() []protocol.AgentMessageProject
 		}
 	}
 	return batch
+}
+
+func (c *MessageCoordinator) emitQueueActivityLocked(messages []protocol.AgentMessageProjection, delta int) {
+	if len(messages) > 0 && c.queueActivity != nil {
+		c.queueActivity(messages, delta)
+	}
 }
 
 func (c *MessageCoordinator) pendingCountLocked() int {

@@ -3734,21 +3734,32 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		fresh := uuid.NewString()
 		threadID = &fresh
 	}
-	authorName := h.channelAuthorName(r.Context(), userID)
-	result, err := h.createUserChannelMessageWithIdempotency(r.Context(), channelMessageInsertInput{
-		ChannelID:           channelID,
-		WorkspaceID:         parseUUID(workspaceID),
-		AuthorID:            parseUUID(userID),
-		AuthorName:          authorName,
-		Content:             content,
-		Parts:               parts,
-		ReplyToMessageID:    replyToMessageID,
-		QuoteMessageID:      quoteMessageID,
-		QuoteSnapshot:       quoteSnapshot,
-		ThreadRootMessageID: rootID,
-		ThreadID:            threadID,
-		ClientMessageID:     clientMessageID,
-	}, attachmentIDs)
+	result, err := h.sendPreparedCanonicalChannelMessage(r.Context(), canonicalChannelMessageInput{
+		Channel: ch, WorkspaceID: workspaceID, UserID: userID,
+		Content: content, Parts: parts, AttachmentIDs: attachmentIDs,
+		ReplyToMessageID: replyToMessageID, QuoteMessageID: quoteMessageID,
+		QuoteSnapshot: quoteSnapshot, ThreadRootMessageID: rootID,
+		ThreadID: threadID, ClientMessageID: clientMessageID,
+		BeforeRecipientPlanning: func(ctx context.Context, msg ChannelMessageResponse, created bool) error {
+			if !created {
+				return nil
+			}
+			h.followChannelThreadUser(ctx, channelID, rootID, parseUUID(userID), true)
+			if root.Type == "user" && root.AuthorID != nil {
+				h.followChannelThreadUserUnlessExplicitlyUnfollowed(ctx, channelID, rootID, parseUUID(*root.AuthorID), false)
+			}
+			if root.Type == "agent" && root.AuthorID != nil {
+				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, channelID, rootID, parseUUID(*root.AuthorID))
+			}
+			if ch.Kind == "dm" && root.Type == "user" {
+				for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+					h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, channelID, rootID, agent.ID)
+				}
+			}
+			h.followChannelThreadMentionedUsers(ctx, ch, msg)
+			return nil
+		},
+	})
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
@@ -3761,53 +3772,17 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to create channel thread message")
 		return
 	}
-	msg := result.Message
-	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
-	msg.UndeliveredMentions = h.undeliveredMentionsForMessage(r.Context(), ch, msg.Content, msg.Parts)
+	msg := result.Message.Message
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
-		if channelMessageNeedsVoiceTranscription(msg.Parts) {
-			h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-				if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
-					slog.Error("resume channel thread voice transcription failed", "message_id", msg.ID, "error", err)
-				}
-			})
-		}
+		result.Acknowledge(r.Context())
 		return
 	}
-	h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(userID), true)
-	if root.Type == "user" && root.AuthorID != nil {
-		h.followChannelThreadUserUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, parseUUID(*root.AuthorID), false)
-	}
-	if root.Type == "agent" && root.AuthorID != nil {
-		h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, parseUUID(*root.AuthorID))
-	}
-	if ch.Kind == "dm" && root.Type == "user" {
-		// A one-to-one agent DM remains addressed to its agent peer even when
-		// the human opens a thread on an earlier human-authored message. Keep an
-		// explicit agent unfollow sticky, matching mention/thread semantics.
-		for _, agent := range h.channelAgentMembers(r.Context(), ch.WorkspaceID, ch.ID) {
-			h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, agent.ID)
-		}
-	}
-	h.followChannelThreadMentionedUsers(r.Context(), ch, msg)
-	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
-	if ch.Kind == "dm" {
-		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
-	}
-	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
 	h.noteMemberActivity(workspaceID, userID, true)
-	// Ack first — see SendChannelMessage: wake/Feishu must not block send RTT.
+	// Ack first: delivery notification, agent wake, and Feishu work are all
+	// post-response behavior owned by the shared continuation.
 	writeJSON(w, http.StatusCreated, msg)
-	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-		if channelMessageNeedsVoiceTranscription(msg.Parts) {
-			if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
-				slog.Error("channel thread voice transcription failed", "message_id", msg.ID, "error", err)
-			}
-			return
-		}
-		h.dispatchHumanChannelMessageSideEffects(ctx, ch, msg, parseUUID(userID))
-	})
+	result.Acknowledge(r.Context())
 }
 
 func (h *Handler) MarkChannelThreadRead(w http.ResponseWriter, r *http.Request) {
@@ -4402,6 +4377,170 @@ func (h *Handler) SetChannelTyping(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+type canonicalChannelMessageInput struct {
+	Channel                 ChannelResponse
+	WorkspaceID             string
+	UserID                  string
+	Content                 string
+	Parts                   []protocol.MessagePart
+	AttachmentIDs           []pgtype.UUID
+	ReplyToMessageID        pgtype.UUID
+	QuoteMessageID          pgtype.UUID
+	QuoteSnapshot           []byte
+	ThreadRootMessageID     pgtype.UUID
+	ThreadID                *string
+	ClientMessageID         *string
+	BeforeRecipientPlanning func(context.Context, ChannelMessageResponse, bool) error
+}
+
+func (h *Handler) sendPreparedCanonicalChannelMessage(ctx context.Context, input canonicalChannelMessageInput) (service.CanonicalChannelMessageResult[channelMessageCreateResult, *canonicalMessageDeliveryPlan], error) {
+	threadID := uuid.NewString()
+	if input.ThreadID != nil && strings.TrimSpace(*input.ThreadID) != "" {
+		threadID = *input.ThreadID
+	}
+	return service.SendCanonicalChannelMessage(ctx, service.CanonicalChannelMessageOperation[channelMessageCreateResult, *canonicalMessageDeliveryPlan]{
+		Validate: func(context.Context) error {
+			if h == nil || h.DB == nil || strings.TrimSpace(input.Channel.ID) == "" || strings.TrimSpace(input.WorkspaceID) == "" || strings.TrimSpace(input.UserID) == "" {
+				return errors.New("canonical channel message context is incomplete")
+			}
+			if input.Content == "" && !channelPartsAllowEmptyContent(input.Parts) {
+				return errors.New("content is required")
+			}
+			if len([]rune(input.Content)) > channelMessageMaxLen {
+				return errors.New("content is too long")
+			}
+			return nil
+		},
+		PersistAtomically: func(ctx context.Context) (service.CanonicalChannelMessagePersistence[channelMessageCreateResult, *canonicalMessageDeliveryPlan], error) {
+			return h.persistPreparedCanonicalChannelMessage(ctx, input, threadID)
+		},
+		Publish: func(ctx context.Context, result channelMessageCreateResult) error {
+			msg := result.Message
+			_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(input.Channel.ID))
+			if input.Channel.Kind == "dm" {
+				h.clearDMHiddenForChannelMembers(ctx, input.WorkspaceID, parseUUID(input.Channel.ID))
+			}
+			// Do not call publishChannelToMembers here: its compatibility path
+			// schedules recipient selection again. This send already persisted the
+			// exact complete recipient set through the application service.
+			recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, input.WorkspaceID, input.Channel.ID))
+			h.publishToUsers(protocol.EventChannelMessage, input.WorkspaceID, "member", input.UserID, recipientIDs, msg)
+			h.observeChannelAgentTriggerDepth(protocol.EventChannelMessage, msg)
+			return nil
+		},
+		PostAck: func(ctx context.Context, result channelMessageCreateResult, created bool, plans []*canonicalMessageDeliveryPlan) {
+			msg := result.Message
+			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+				h.notifyCanonicalMessageDeliveryPlans(ctx, input.Channel, plans)
+				if channelMessageNeedsVoiceTranscription(msg.Parts) {
+					if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+						slog.Error("channel voice transcription failed", "message_id", msg.ID, "error", err)
+					}
+					return
+				}
+				if created {
+					h.dispatchHumanChannelMessageSideEffects(ctx, input.Channel, msg, parseUUID(input.UserID))
+				}
+			})
+		},
+	})
+}
+
+// sendCanonicalChannelMessage is the env-dispatch adapter for the same
+// application service used by the frontend send path. Env dispatch sends a
+
+// persistPreparedCanonicalChannelMessage owns the single durable boundary for
+// a canonical send. A unique-key replay rolls back PostgreSQL's aborted insert
+// transaction, validates the existing payload, then starts a fresh transaction
+// that idempotently repairs any missing delivery or mixed-run obligation rows.
+func (h *Handler) persistPreparedCanonicalChannelMessage(ctx context.Context, input canonicalChannelMessageInput, threadID string) (service.CanonicalChannelMessagePersistence[channelMessageCreateResult, *canonicalMessageDeliveryPlan], error) {
+	var zero service.CanonicalChannelMessagePersistence[channelMessageCreateResult, *canonicalMessageDeliveryPlan]
+	insertInput := channelMessageInsertInput{
+		ChannelID: parseUUID(input.Channel.ID), WorkspaceID: parseUUID(input.WorkspaceID),
+		AuthorID: parseUUID(input.UserID), AuthorName: h.channelAuthorName(ctx, input.UserID),
+		Content: input.Content, Parts: input.Parts,
+		ReplyToMessageID: input.ReplyToMessageID, QuoteMessageID: input.QuoteMessageID,
+		QuoteSnapshot: input.QuoteSnapshot, ThreadRootMessageID: input.ThreadRootMessageID,
+		ThreadID: &threadID, ClientMessageID: input.ClientMessageID,
+	}
+	if h.TxStarter == nil {
+		return zero, errors.New("canonical channel message transaction unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return zero, err
+	}
+	result, err := h.createUserChannelMessageTx(ctx, tx, insertInput, input.AttachmentIDs)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		if input.ClientMessageID == nil || !isUniqueViolation(err) {
+			return zero, err
+		}
+		result, err = h.resolveDuplicateUserChannelMessage(ctx, insertInput, input.AttachmentIDs)
+		if err != nil {
+			return zero, err
+		}
+		tx, err = h.TxStarter.Begin(ctx)
+		if err != nil {
+			return zero, fmt.Errorf("begin canonical replay repair transaction: %w", err)
+		}
+	}
+	defer tx.Rollback(ctx)
+
+	if input.BeforeRecipientPlanning != nil {
+		if err := input.BeforeRecipientPlanning(ctx, result.Message, result.Created); err != nil {
+			return zero, err
+		}
+	}
+	plans, err := h.planCanonicalMessageDeliveryRecipients(ctx, input.Channel, result.Message)
+	if err != nil {
+		return zero, err
+	}
+	if err := persistCanonicalMessageDeliveryPlansTx(ctx, tx, input.Channel, result.Message, plans); err != nil {
+		return zero, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return zero, fmt.Errorf("commit atomic canonical message: %w", err)
+	}
+	result.Message = h.attachSingleChannelMessageDetails(ctx, input.WorkspaceID, parseUUID(input.UserID), result.Message)
+	result.Message.UndeliveredMentions = h.undeliveredMentionsForMessage(ctx, input.Channel, result.Message.Content, result.Message.Parts)
+	return service.CanonicalChannelMessagePersistence[channelMessageCreateResult, *canonicalMessageDeliveryPlan]{
+		Message: result, Created: result.Created, Recipients: plans,
+	}, nil
+}
+
+// new top-level text message, so reply, quote, attachment, and idempotency
+// fields are intentionally empty here.
+func (h *Handler) prepareCanonicalChannelMessage(ctx context.Context, ch ChannelResponse, req SendChannelMessageRequest, userID string) (service.CanonicalChannelMessageResult[channelMessageCreateResult, *canonicalMessageDeliveryPlan], error) {
+	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
+	if err != nil {
+		return service.CanonicalChannelMessageResult[channelMessageCreateResult, *canonicalMessageDeliveryPlan]{}, err
+	}
+	if content == "" && !channelPartsAllowEmptyContent(parts) {
+		return service.CanonicalChannelMessageResult[channelMessageCreateResult, *canonicalMessageDeliveryPlan]{}, errors.New("content is required")
+	}
+	content, parts, err = h.enrichChannelMessageMentions(ctx, ch, content, parts)
+	if err != nil {
+		return service.CanonicalChannelMessageResult[channelMessageCreateResult, *canonicalMessageDeliveryPlan]{}, err
+	}
+	if err := h.validateDMMentionMembership(ctx, ch, content, parts); err != nil {
+		return service.CanonicalChannelMessageResult[channelMessageCreateResult, *canonicalMessageDeliveryPlan]{}, err
+	}
+	return h.sendPreparedCanonicalChannelMessage(ctx, canonicalChannelMessageInput{
+		Channel: ch, WorkspaceID: ch.WorkspaceID, UserID: userID,
+		Content: content, Parts: parts,
+	})
+}
+
+func (h *Handler) sendCanonicalChannelMessage(ctx context.Context, ch ChannelResponse, req SendChannelMessageRequest, userID string) (ChannelMessageResponse, error) {
+	result, err := h.prepareCanonicalChannelMessage(ctx, ch, req, userID)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	result.Acknowledge(ctx)
+	return result.Message.Message, nil
+}
+
 func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -4473,21 +4612,18 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	authorName := h.channelAuthorName(r.Context(), userID)
-	threadID := uuid.NewString()
-	result, err := h.createUserChannelMessageWithIdempotency(r.Context(), channelMessageInsertInput{
-		ChannelID:        channelID,
-		WorkspaceID:      parseUUID(workspaceID),
-		AuthorID:         parseUUID(userID),
-		AuthorName:       authorName,
+	result, err := h.sendPreparedCanonicalChannelMessage(r.Context(), canonicalChannelMessageInput{
+		Channel:          ch,
+		WorkspaceID:      workspaceID,
+		UserID:           userID,
 		Content:          content,
 		Parts:            parts,
+		AttachmentIDs:    attachmentIDs,
 		ReplyToMessageID: replyToMessageID,
 		QuoteMessageID:   quoteMessageID,
 		QuoteSnapshot:    quoteSnapshot,
-		ThreadID:         &threadID,
 		ClientMessageID:  clientMessageID,
-	}, attachmentIDs)
+	})
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
@@ -4500,25 +4636,12 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create channel message")
 		return
 	}
-	msg := result.Message
-	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
-	msg.UndeliveredMentions = h.undeliveredMentionsForMessage(r.Context(), ch, msg.Content, msg.Parts)
+	msg := result.Message.Message
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
-		if channelMessageNeedsVoiceTranscription(msg.Parts) {
-			h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-				if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
-					slog.Error("resume channel voice transcription failed", "message_id", msg.ID, "error", err)
-				}
-			})
-		}
+		result.Acknowledge(r.Context())
 		return
 	}
-	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
-	if ch.Kind == "dm" {
-		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
-	}
-	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
 	// LRM-717: message send is HTTP; WS presence alone can lag/expire. Force an
 	// online lease + member:presence so message-stream avatars heal Offline.
 	h.noteMemberActivity(workspaceID, userID, true)
@@ -4526,15 +4649,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	// must not inflate the client's send latency / Sending... state.
 	writeJSON(w, http.StatusCreated, msg)
 	h.awardHonorXP(r.Context(), parseUUID(userID), "channel.message", msg.ID)
-	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-		if channelMessageNeedsVoiceTranscription(msg.Parts) {
-			if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
-				slog.Error("channel voice transcription failed", "message_id", msg.ID, "error", err)
-			}
-			return
-		}
-		h.dispatchHumanChannelMessageSideEffects(ctx, ch, msg, parseUUID(userID))
-	})
+	result.Acknowledge(r.Context())
 }
 
 func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
@@ -6958,7 +7073,7 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 	if err != nil {
 		return channelMessageCreateResult{}, err
 	}
-	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth, in.KindHint)
+	result, err := h.createUserChannelMessageTx(ctx, tx, in, attachmentIDs)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if in.ClientMessageID != nil && isUniqueViolation(err) {
@@ -6966,11 +7081,24 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 		}
 		return channelMessageCreateResult{}, err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return channelMessageCreateResult{}, err
+	}
+	return result, nil
+}
+
+// createUserChannelMessageTx performs every canonical message write but does
+// not commit. Its caller owns rollback/commit and may append recipient delivery
+// rows and mixed-run obligations to the same transaction.
+func (h *Handler) createUserChannelMessageTx(ctx context.Context, tx pgx.Tx, in channelMessageInsertInput, attachmentIDs []pgtype.UUID) (channelMessageCreateResult, error) {
+	inserted, err := insertChannelMessageWithPartsExec(ctx, tx, in.ChannelID, in.WorkspaceID, "user", in.AuthorID, in.AuthorName, in.Content, in.Parts, "multica", nil, in.ClientMessageID, in.ReplyToMessageID, in.QuoteMessageID, in.QuoteSnapshot, in.ThreadRootMessageID, in.ThreadID, in.TriggerDepth, in.KindHint)
+	if err != nil {
+		return channelMessageCreateResult{}, err
+	}
 	msg := inserted.Message
 	if len(attachmentIDs) > 0 {
 		qtx := h.Queries.WithTx(tx)
 		if err := linkOwnedAttachmentsToChannelMessage(ctx, qtx, parseUUID(msg.ID), in.WorkspaceID, "member", in.AuthorID, attachmentIDs); err != nil {
-			_ = tx.Rollback(ctx)
 			return channelMessageCreateResult{}, err
 		}
 	}
@@ -6989,16 +7117,11 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 			  AND reference.channel_message_id = $1`,
 			parseUUID(msg.ID), in.WorkspaceID, in.ChannelID, parseUUID(voiceAttachmentID))
 		if err != nil {
-			_ = tx.Rollback(ctx)
 			return channelMessageCreateResult{}, fmt.Errorf("enqueue channel voice transcription: %w", err)
 		}
 		if tag.RowsAffected() != 1 {
-			_ = tx.Rollback(ctx)
 			return channelMessageCreateResult{}, errors.New("recorded voice attachment was not bound to the created message")
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return channelMessageCreateResult{}, err
 	}
 	return channelMessageCreateResult{Message: msg, Created: true}, nil
 }

@@ -112,6 +112,8 @@ type Daemon struct {
 	workspaceRunners         map[string]*WorkspaceRunner
 	workspaceRunnerCancels   map[string]context.CancelFunc
 	workspaceRunnerRun       func(*WorkspaceRunner, context.Context) // test seam; production calls Runner.Run
+	mixedRunActivityOutbox   *mixedRunActivityOutbox
+	mixedRunActivityReporter func(protocol.MixedRunActivityTransitionPayload) bool
 	lifecycleDiagnostics     *lifecycleDiagnosticWriter
 	machineUpgradeLog        *machineUpgradeEventLog
 	machineUpgradeTakeoverMu sync.Mutex
@@ -296,6 +298,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		messageDraftStore:         NewMessageDraftStore(cfg.WorkspacesRoot),
 		workspaceRunners:          make(map[string]*WorkspaceRunner),
 		workspaceRunnerCancels:    make(map[string]context.CancelFunc),
+		mixedRunActivityOutbox:    newMixedRunActivityOutbox(cfg.WorkspacesRoot),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 		runnerInstanceID:          uuid.NewString(),
 	}

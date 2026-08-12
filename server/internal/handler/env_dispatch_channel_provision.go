@@ -21,6 +21,7 @@ type ProvisionEnvDispatchAgentInput struct {
 	WorkspaceID, UserID, EnvID, ProjectID, ChannelID, AgentID string
 	SourceSandboxInstanceID                                   string
 	SandboxConfig                                             json.RawMessage
+	TrainingMode, TargetPolicy, Tokenizer                     string
 }
 
 func buildEnvDispatchCloneInput(in ProvisionEnvDispatchAgentInput, bindingID, runtimeID, executionModel string) service.CloneEnvDispatchAgentInput {
@@ -132,6 +133,24 @@ func envDispatchBindingExecutionAgentID(binding envAgentSandboxBinding) string {
 
 type ProvisionEnvDispatchAgentResult struct {
 	AgentID, SandboxInstanceID, RuntimeID, DaemonID, ChatSessionID string
+	AReALSessionID                                                 string
+}
+
+// reclaimMixedDispatchAReALSession removes a provisional online-RL session
+// from the external AReaL data proxy. AReaL v2 has no end-session route;
+// export_trajectories(remove_session=true) is its authoritative teardown.
+func reclaimMixedDispatchAReALSession(ctx context.Context, sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	cfg := service.LoadTrainingConfig()
+	if strings.TrimSpace(cfg.BridgeStubURL) == "" || strings.TrimSpace(cfg.AdminAPIKey) == "" {
+		return fmt.Errorf("reclaim mixed AReaL session: bridge is not configured")
+	}
+	if err := arealrl.New(cfg.BridgeStubURL, cfg.AdminAPIKey).RemoveSession(ctx, sessionID); err != nil {
+		return fmt.Errorf("reclaim mixed AReaL session: %w", err)
+	}
+	return nil
 }
 
 // provisionEnvDispatchAgent creates the isolated runtime/session pair that an
@@ -175,6 +194,17 @@ func envDispatchDerivedAgentEnabled() bool {
 // because CloneSandboxInstance requires a destination runtime_id; migrating it
 // to the pre-create-free discovery flow is a follow-up.
 func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnvDispatchAgentInput) (ProvisionEnvDispatchAgentResult, error) {
+	if in.TrainingMode != "" {
+		switch in.TrainingMode {
+		case "online_rl", "offline_rl":
+			if strings.TrimSpace(in.TargetPolicy) == "" || strings.TrimSpace(in.Tokenizer) == "" {
+				return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("mixed env-dispatch trainable agent requires target policy and tokenizer")
+			}
+		case "none":
+		default:
+			return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("invalid mixed env-dispatch training mode %q", in.TrainingMode)
+		}
+	}
 	if !envDispatchDerivedAgentEnabled() {
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("env-dispatch derived-agent provisioning is disabled")
 	}
@@ -186,10 +216,26 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	if !won {
 		if binding.Status == "ready" && binding.SandboxInstanceID != nil && binding.RuntimeID != nil && binding.DaemonID != nil {
 			executionAgentID := envDispatchBindingExecutionAgentID(binding)
+			if in.TrainingMode != "" {
+				if executionAgentID == "" || executionAgentID == in.AgentID {
+					return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("env-dispatch ready binding has no derived execution agent")
+				}
+				runtimeRef, readinessErr := service.WaitForOnlineSandboxRuntime(ctx, &envSandboxLifecycleDepsAdapter{h: h}, in.WorkspaceID, *binding.DaemonID, *binding.SandboxInstanceID, envDispatchRuntimeReadinessTimeout)
+				if readinessErr != nil || runtimeRef.ID != *binding.RuntimeID {
+					if readinessErr == nil {
+						readinessErr = fmt.Errorf("runtime identity mismatch")
+					}
+					return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("revalidate env-dispatch runtime: %w", readinessErr)
+				}
+			}
 			var sessionID string
 			err := h.DB.QueryRow(ctx, `SELECT chat_session_id::text FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, executionAgentID).Scan(&sessionID)
 			if err == nil {
-				return ProvisionEnvDispatchAgentResult{AgentID: executionAgentID, SandboxInstanceID: *binding.SandboxInstanceID, RuntimeID: *binding.RuntimeID, DaemonID: *binding.DaemonID, ChatSessionID: sessionID}, nil
+				arealSessionID := ""
+				if binding.TrainingSessionID != nil {
+					arealSessionID = *binding.TrainingSessionID
+				}
+				return ProvisionEnvDispatchAgentResult{AgentID: executionAgentID, SandboxInstanceID: *binding.SandboxInstanceID, RuntimeID: *binding.RuntimeID, DaemonID: *binding.DaemonID, ChatSessionID: sessionID, AReALSessionID: arealSessionID}, nil
 			}
 		}
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("env-dispatch binding is %s", binding.Status)
@@ -210,7 +256,7 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	// areal-default + bridge URL + session-key runtime. The real task is
 	// enqueued by the service layer after provisioning and linked to the
 	// session for DAG assembly.
-	if h.isEnvDispatchTrainingTarget(ctx, in.ProjectID, in.AgentID) {
+	if in.TrainingMode == "online_rl" || h.isEnvDispatchTrainingTarget(ctx, in.ProjectID, in.AgentID) {
 		return h.provisionEnvDispatchAgentTraining(ctx, in, store, binding)
 	}
 
@@ -287,7 +333,7 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 		sourceID = *binding.SourceSandboxInstanceID
 	}
 	if sourceID != "" {
-		return h.provisionEnvDispatchAgentBranch(ctx, in, store, config, lifecycle, sourceID)
+		return h.provisionEnvDispatchAgentBranch(ctx, in, store, binding, config, lifecycle, sourceID)
 	}
 
 	// Scratch first-address: create sandbox (service mints daemon nonce on
@@ -304,11 +350,20 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	}
 	derivedID := ""
 	cleanup := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
-		if cleanupErr := h.cleanupFailedEnvDispatchDerivedAgent(context.WithoutCancel(ctx), binding.ID, in.AgentID, derivedID); cleanupErr != nil {
-			cause = fmt.Errorf("%w (cleanup derived agent: %v)", cause, cleanupErr)
+		cleanupCtx := context.WithoutCancel(ctx)
+		var cleanupErrs []error
+		if err := h.cleanupFailedEnvDispatchDerivedAgent(cleanupCtx, binding.ID, in.AgentID, derivedID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup derived agent: %w", err))
 		}
-		_ = lifecycle.Delete(context.WithoutCancel(ctx), ref, in.UserID)
-		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "provisioning failed")
+		if err := lifecycle.Delete(cleanupCtx, ref, in.UserID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup sandbox: %w", err))
+		}
+		if err := store.markFailed(cleanupCtx, h.DB, in.EnvID, in.AgentID, "provisioning failed"); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("mark binding failed: %w", err))
+		}
+		if len(cleanupErrs) > 0 {
+			return ProvisionEnvDispatchAgentResult{}, errors.Join(cause, errors.Join(cleanupErrs...))
+		}
 		return ProvisionEnvDispatchAgentResult{}, cause
 	}
 	runtimeRef, err := service.WaitForOnlineSandboxRuntime(ctx, &envSandboxLifecycleDepsAdapter{h: h}, in.WorkspaceID, ref.DaemonID, ref.InstanceID, envDispatchRuntimeReadinessTimeout)
@@ -333,11 +388,13 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 		return cleanup(fmt.Errorf("ensure env-dispatch channel session: %w", err))
 	}
 	if err := store.markReady(ctx, h.DB, in.EnvID, in.AgentID, ref.InstanceID, runtimeRef.ID, ref.DaemonID); err != nil {
+		cause := fmt.Errorf("mark env-dispatch binding ready: %w", err)
 		if sessionCreated {
-			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
-			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+			if cleanupErr := h.cleanupFailedEnvDispatchSession(context.WithoutCancel(ctx), in.ChannelID, derivedID, sessionID); cleanupErr != nil {
+				cause = errors.Join(cause, cleanupErr)
+			}
 		}
-		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
+		return cleanup(cause)
 	}
 	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
 }
@@ -359,10 +416,17 @@ func (h *Handler) attachEnvDispatchAgentToSharedRuntime(ctx context.Context, in 
 	sandboxInstanceID, runtimeID, daemonID := *shared.SandboxInstanceID, *shared.RuntimeID, *shared.DaemonID
 	derivedID := ""
 	cleanup := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
-		if cleanupErr := h.cleanupFailedEnvDispatchDerivedAgent(context.WithoutCancel(ctx), binding.ID, in.AgentID, derivedID); cleanupErr != nil {
-			cause = fmt.Errorf("%w (cleanup derived agent: %v)", cause, cleanupErr)
+		cleanupCtx := context.WithoutCancel(ctx)
+		var cleanupErrs []error
+		if err := h.cleanupFailedEnvDispatchDerivedAgent(cleanupCtx, binding.ID, in.AgentID, derivedID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup derived agent: %w", err))
 		}
-		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "shared attach failed")
+		if err := store.markFailed(cleanupCtx, h.DB, in.EnvID, in.AgentID, "shared attach failed"); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("mark shared binding failed: %w", err))
+		}
+		if len(cleanupErrs) > 0 {
+			return ProvisionEnvDispatchAgentResult{}, errors.Join(cause, errors.Join(cleanupErrs...))
+		}
 		return ProvisionEnvDispatchAgentResult{}, cause
 	}
 	var err error
@@ -384,13 +448,26 @@ func (h *Handler) attachEnvDispatchAgentToSharedRuntime(ctx context.Context, in 
 		return cleanup(fmt.Errorf("ensure env-dispatch channel session: %w", err))
 	}
 	if err := store.markReady(ctx, h.DB, in.EnvID, in.AgentID, sandboxInstanceID, runtimeID, daemonID); err != nil {
+		cause := fmt.Errorf("mark env-dispatch binding ready: %w", err)
 		if sessionCreated {
-			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
-			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+			if cleanupErr := h.cleanupFailedEnvDispatchSession(context.WithoutCancel(ctx), in.ChannelID, derivedID, sessionID); cleanupErr != nil {
+				cause = errors.Join(cause, cleanupErr)
+			}
 		}
-		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
+		return cleanup(cause)
 	}
 	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: sandboxInstanceID, RuntimeID: runtimeID, DaemonID: daemonID, ChatSessionID: sessionID}, nil
+}
+
+func (h *Handler) cleanupFailedEnvDispatchSession(ctx context.Context, channelID, agentID, sessionID string) error {
+	var cleanupErrs []error
+	if _, err := h.DB.Exec(ctx, `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("delete channel agent session: %w", err))
+	}
+	if _, err := h.DB.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, sessionID); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("delete chat session: %w", err))
+	}
+	return errors.Join(cleanupErrs...)
 }
 
 // cleanupFailedEnvDispatchDerivedAgent removes the runtime-owning derived
@@ -420,15 +497,24 @@ WHERE id::text = $2
 // source sandbox filesystem). It retains the legacy pre-create-runtime flow
 // because CloneSandboxInstance requires a destination runtime_id; migrating it
 // to the pre-create-free discovery flow is a follow-up.
-func (h *Handler) provisionEnvDispatchAgentBranch(ctx context.Context, in ProvisionEnvDispatchAgentInput, store envDispatchChannelStore, config envDispatchSandboxConfig, lifecycle *service.EnvSandboxLifecycleService, sourceID string) (ProvisionEnvDispatchAgentResult, error) {
+func (h *Handler) provisionEnvDispatchAgentBranch(ctx context.Context, in ProvisionEnvDispatchAgentInput, store envDispatchChannelStore, binding envAgentSandboxBinding, config envDispatchSandboxConfig, lifecycle *service.EnvSandboxLifecycleService, sourceID string) (ProvisionEnvDispatchAgentResult, error) {
 	runtimeID, daemonID, err := (&envDispatchDepsAdapter{h: h}).PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, in.AgentID)
 	if err != nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "precreate runtime failed")
 		return ProvisionEnvDispatchAgentResult{}, err
 	}
 	cleanup := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
-		_ = (&envDispatchDepsAdapter{h: h}).DeleteAgentRuntime(context.WithoutCancel(ctx), in.WorkspaceID, runtimeID)
-		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "provisioning failed")
+		cleanupCtx := context.WithoutCancel(ctx)
+		var cleanupErrs []error
+		if err := (&envDispatchDepsAdapter{h: h}).DeleteAgentRuntime(cleanupCtx, in.WorkspaceID, runtimeID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup provisional runtime: %w", err))
+		}
+		if err := store.markFailed(cleanupCtx, h.DB, in.EnvID, in.AgentID, "provisioning failed"); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("mark branch binding failed: %w", err))
+		}
+		if len(cleanupErrs) > 0 {
+			return ProvisionEnvDispatchAgentResult{}, errors.Join(cause, errors.Join(cleanupErrs...))
+		}
 		return ProvisionEnvDispatchAgentResult{}, cause
 	}
 	createInput, err := config.createInput(in.WorkspaceID, daemonID)
@@ -451,6 +537,51 @@ func (h *Handler) provisionEnvDispatchAgentBranch(ctx context.Context, in Provis
 		}, in.UserID)
 	if err != nil {
 		return cleanup(err)
+	}
+	if in.TrainingMode != "" {
+		derivedID := ""
+		cleanupMixed := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
+			cleanupCtx := context.WithoutCancel(ctx)
+			var cleanupErrs []error
+			if err := h.cleanupFailedEnvDispatchDerivedAgent(cleanupCtx, binding.ID, in.AgentID, derivedID); err != nil {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup branch derived agent: %w", err))
+			}
+			if err := lifecycle.Delete(cleanupCtx, ref, in.UserID); err != nil {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup branch sandbox: %w", err))
+			}
+			if len(cleanupErrs) > 0 {
+				cause = errors.Join(cause, errors.Join(cleanupErrs...))
+			}
+			return cleanup(cause)
+		}
+		runtimeRef, readinessErr := service.WaitForOnlineSandboxRuntime(ctx, &envSandboxLifecycleDepsAdapter{h: h}, in.WorkspaceID, daemonID, ref.InstanceID, envDispatchRuntimeReadinessTimeout)
+		if readinessErr != nil {
+			return cleanupMixed(fmt.Errorf("wait for online branch runtime: %w", readinessErr))
+		}
+		if runtimeRef.ID != runtimeID {
+			return cleanupMixed(fmt.Errorf("branch runtime identity mismatch"))
+		}
+		derivedID, err = CloneEnvDispatchAgentTx(ctx, h, buildEnvDispatchCloneInput(in, binding.ID, runtimeRef.ID, config.ExecutionModel))
+		if err != nil {
+			return cleanupMixed(fmt.Errorf("clone branch derived agent: %w", err))
+		}
+		sessionID, sessionCreated, sessionErr := h.ensureEnvDispatchChannelSession(ctx, envDispatchChannelSessionInput{
+			WorkspaceID: in.WorkspaceID, ProjectID: in.ProjectID, ChannelID: in.ChannelID,
+			AgentID: derivedID, CreatorID: in.UserID, RuntimeID: runtimeRef.ID,
+		})
+		if sessionErr != nil {
+			return cleanupMixed(fmt.Errorf("ensure branch env-dispatch channel session: %w", sessionErr))
+		}
+		if err := store.markReady(ctx, h.DB, in.EnvID, in.AgentID, ref.InstanceID, runtimeRef.ID, daemonID); err != nil {
+			cause := fmt.Errorf("mark branch env-dispatch binding ready: %w", err)
+			if sessionCreated {
+				if cleanupErr := h.cleanupFailedEnvDispatchSession(context.WithoutCancel(ctx), in.ChannelID, derivedID, sessionID); cleanupErr != nil {
+					cause = errors.Join(cause, cleanupErr)
+				}
+			}
+			return cleanupMixed(cause)
+		}
+		return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: daemonID, ChatSessionID: sessionID}, nil
 	}
 	var sessionID string
 	if err := h.DB.QueryRow(ctx, `
@@ -517,35 +648,30 @@ func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in Prov
 		existingKey = *binding.TrainingSessionKey
 	}
 	res, err := service.ResolveEnvDispatchTrainingSession(ctx, client, service.EnvDispatchTrainingBinding{
-		BindingID:          binding.ID,
-		TrainingSessionID:  existingID,
-		TrainingSessionKey: existingKey,
+		BindingID: binding.ID, TrainingSessionID: existingID, TrainingSessionKey: existingKey,
 	}, in.EnvID)
 	if err != nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training session resolve failed")
 		return ProvisionEnvDispatchAgentResult{}, err
 	}
+	reclaimSession := func(cause error) error {
+		if cleanupErr := reclaimMixedDispatchAReALSession(context.WithoutCancel(ctx), res.SessionID); cleanupErr != nil {
+			return fmt.Errorf("%w (cleanup AReaL session: %v)", cause, cleanupErr)
+		}
+		return cause
+	}
 	if res.Opened {
 		if err := store.setTrainingSession(ctx, h.DB, in.EnvID, in.AgentID, res.SessionID, res.SessionRef, res.ProxyKey); err != nil {
 			_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "persist training session failed")
-			return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("persist training session: %w", err)
+			return ProvisionEnvDispatchAgentResult{}, reclaimSession(fmt.Errorf("persist training session: %w", err))
 		}
 	}
 
 	lifecycle := newEnvSandboxLifecycleService(h)
 	if lifecycle == nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "lifecycle unavailable")
-		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("sandbox lifecycle unavailable")
+		return ProvisionEnvDispatchAgentResult{}, reclaimSession(fmt.Errorf("sandbox lifecycle unavailable"))
 	}
-	// The sandbox pi routes its LLM calls to the address reachable *from inside
-	// the sandbox VM* (AREAL_PROXY_URL / cfg.ProxyURL). This is deliberately
-	// distinct from cfg.BridgeStubURL (AREAL_BRIDGE_STUB_URL), which is the
-	// backend->stub address used by the arealrl control-plane client above:
-	// BridgeStubURL may be a Docker-compose DNS name (e.g. db-bridge-stub-multica)
-	// that resolves on the backend's compose network but NOT inside the sandbox
-	// VM, so using it as the pi base_url makes every LLM call hang on DNS/connect
-	// and the training DAG times out. Fall back to BridgeStubURL only when
-	// ProxyURL is unset (single-host deploys where the two addresses coincide).
 	sandboxProxyURL := cfg.ProxyURL
 	if sandboxProxyURL == "" {
 		sandboxProxyURL = cfg.BridgeStubURL
@@ -553,55 +679,68 @@ func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in Prov
 	rtJSON, err := json.Marshal(service.EnvDispatchTrainingRuntimePolicy(sandboxProxyURL, res.ProxyKey))
 	if err != nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "encode training runtime failed")
-		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("encode training runtime: %w", err)
+		return ProvisionEnvDispatchAgentResult{}, reclaimSession(fmt.Errorf("encode training runtime: %w", err))
 	}
 	ref, err := lifecycle.Create(ctx, service.CreateSandboxInstanceInput{
-		WorkspaceID:   in.WorkspaceID,
-		Template:      "default",
-		DaemonEnabled: true,
-		Runtime:       rtJSON,
-		RuntimeEnv:    map[string]string{},
+		WorkspaceID: in.WorkspaceID, Template: "default", DaemonEnabled: true,
+		Runtime: rtJSON, RuntimeEnv: map[string]string{},
 	}, in.UserID)
 	if err != nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "sandbox create failed")
-		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("create training sandbox: %w", err)
+		return ProvisionEnvDispatchAgentResult{}, reclaimSession(fmt.Errorf("create training sandbox: %w", err))
 	}
 	derivedID := ""
 	cleanup := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
-		if cleanupErr := h.cleanupFailedEnvDispatchDerivedAgent(context.WithoutCancel(ctx), binding.ID, in.AgentID, derivedID); cleanupErr != nil {
-			cause = fmt.Errorf("%w (cleanup derived agent: %v)", cause, cleanupErr)
+		cleanupCtx := context.WithoutCancel(ctx)
+		var cleanupErrs []error
+		if err := h.cleanupFailedEnvDispatchDerivedAgent(cleanupCtx, binding.ID, in.AgentID, derivedID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup training derived agent: %w", err))
 		}
-		_ = lifecycle.Delete(context.WithoutCancel(ctx), ref, in.UserID)
-		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training provisioning failed")
-		return ProvisionEnvDispatchAgentResult{}, cause
+		if err := lifecycle.Delete(cleanupCtx, ref, in.UserID); err != nil {
+			// Delete is idempotent: the lifecycle adapter creates a delete job or
+			// reuses the active one. Retry once so a transient persistence/notify
+			// failure cannot strand ownership inside this provisioner. Preserve
+			// the first failure even when retry succeeds so rollback degradation
+			// remains visible to the caller.
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup training sandbox: %w", err))
+			if retryErr := lifecycle.Delete(cleanupCtx, ref, in.UserID); retryErr != nil {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("retry cleanup training sandbox: %w", retryErr))
+			}
+		}
+		if err := store.markFailed(cleanupCtx, h.DB, in.EnvID, in.AgentID, "training provisioning failed"); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("mark training binding failed: %w", err))
+		}
+		if err := reclaimMixedDispatchAReALSession(cleanupCtx, res.SessionID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("cleanup AReaL session: %w", err))
+		}
+		return ProvisionEnvDispatchAgentResult{}, errors.Join(cause, errors.Join(cleanupErrs...))
 	}
 	runtimeRef, err := service.WaitForOnlineSandboxRuntime(ctx, &envSandboxLifecycleDepsAdapter{h: h}, in.WorkspaceID, ref.DaemonID, ref.InstanceID, envDispatchRuntimeReadinessTimeout)
 	if err != nil {
 		return cleanup(fmt.Errorf("wait for online sandbox runtime: %w", err))
 	}
-	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, buildEnvDispatchCloneInput(
-		in, binding.ID, runtimeRef.ID, "",
-	))
+	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, buildEnvDispatchCloneInput(in, binding.ID, runtimeRef.ID, ""))
 	if err != nil {
 		return cleanup(fmt.Errorf("clone derived agent: %w", err))
 	}
 	sessionID, sessionCreated, err := h.ensureEnvDispatchChannelSession(ctx, envDispatchChannelSessionInput{
-		WorkspaceID: in.WorkspaceID,
-		ProjectID:   in.ProjectID,
-		ChannelID:   in.ChannelID,
-		AgentID:     derivedID,
-		CreatorID:   in.UserID,
-		RuntimeID:   runtimeRef.ID,
+		WorkspaceID: in.WorkspaceID, ProjectID: in.ProjectID, ChannelID: in.ChannelID,
+		AgentID: derivedID, CreatorID: in.UserID, RuntimeID: runtimeRef.ID,
 	})
 	if err != nil {
 		return cleanup(fmt.Errorf("ensure env-dispatch channel session: %w", err))
 	}
 	if err := store.markReady(ctx, h.DB, in.EnvID, in.AgentID, ref.InstanceID, runtimeRef.ID, ref.DaemonID); err != nil {
+		cause := fmt.Errorf("mark env-dispatch binding ready: %w", err)
 		if sessionCreated {
-			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
-			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+			if cleanupErr := h.cleanupFailedEnvDispatchSession(context.WithoutCancel(ctx), in.ChannelID, derivedID, sessionID); cleanupErr != nil {
+				cause = errors.Join(cause, cleanupErr)
+			}
 		}
-		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
+		return cleanup(cause)
 	}
-	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
+	return ProvisionEnvDispatchAgentResult{
+		AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID,
+		DaemonID: ref.DaemonID, ChatSessionID: sessionID, AReALSessionID: res.SessionID,
+	}, nil
 }

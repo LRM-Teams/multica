@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -1309,6 +1310,308 @@ func TestCanonicalAgentRuntimePoolIsActivatedByWorkspaceRunnerMessageDelivery(t 
 	}
 	if !strings.Contains(string(raw), "runner.ensureResidentRuntime(") {
 		t.Fatal("Workspace Runner Message delivery does not activate its resident Runtime")
+	}
+}
+
+// piRPCRaceBackend is a deterministic PiRPCBackend mock for the
+// settlement-vs-handoff race test. It lets the test block SettleRunTurn
+// mid-call so a concurrent handoff can be proven to wait (or fail busy)
+// while the capture boundary is still advancing.
+type piRPCRaceBackend struct {
+	mu          sync.Mutex
+	runBinding  *agent.PiRunBinding
+	boundarySeq uint64
+	settleBlock chan struct{} // non-nil → SettleRunTurn blocks on it
+	settleCalls int
+	settleErr   error
+	acceptCalls int
+
+	// turnDone lets the test signal the pool's finishResidentMessageInput.
+	turnDone chan error
+	// messages is closed immediately (no activity stream).
+	messages chan agent.Message
+}
+
+func newPiRPCRaceBackend() *piRPCRaceBackend {
+	msgs := make(chan agent.Message)
+	close(msgs)
+	return &piRPCRaceBackend{
+		turnDone: make(chan error, 1),
+		messages: msgs,
+	}
+}
+
+func (b *piRPCRaceBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	return nil, errors.New("not implemented for race test")
+}
+
+func (b *piRPCRaceBackend) BindRunIdentity(identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.runBinding != nil {
+		if b.runBinding.PiRunIdentity != identity {
+			return agent.PiRunBinding{}, agent.ErrPiRPCRunIdentityRequiresFreshSession
+		}
+		return *b.runBinding, nil
+	}
+	b.boundarySeq++
+	binding := agent.PiRunBinding{
+		PiRunIdentity:   identity,
+		SessionID:       "test-session-" + identity.RunID,
+		CaptureBoundary: fmt.Sprintf("test-session-%s:%d", identity.RunID, b.boundarySeq),
+	}
+	b.runBinding = &binding
+	return binding, nil
+}
+
+func (b *piRPCRaceBackend) PrepareRun(_ context.Context, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	return b.BindRunIdentity(identity)
+}
+
+func (b *piRPCRaceBackend) SettleRunTurn(identity agent.PiRunIdentity) error {
+	b.mu.Lock()
+	b.settleCalls++
+	block := b.settleBlock
+	b.mu.Unlock()
+
+	if block != nil {
+		<-block // Test controls when settlement completes.
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.settleErr != nil {
+		return b.settleErr
+	}
+	if b.runBinding == nil || b.runBinding.PiRunIdentity != identity {
+		return errors.New("settlement identity mismatch")
+	}
+	b.boundarySeq++
+	b.runBinding.CaptureBoundary = fmt.Sprintf("test-session-%s:%d", identity.RunID, b.boundarySeq)
+	return nil
+}
+
+func (b *piRPCRaceBackend) AcceptMessageBatch(_ context.Context, messages []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	b.mu.Lock()
+	b.acceptCalls++
+	turnDone := b.turnDone
+	b.mu.Unlock()
+	return agent.ResidentMessageAcceptance{Done: turnDone, Messages: b.messages}, nil
+}
+
+func (b *piRPCRaceBackend) AcceptPendingNotice(_ context.Context, _ agent.ResidentPendingNotice) error {
+	return nil
+}
+
+func (b *piRPCRaceBackend) Compact(_ context.Context, _ string) (agent.PiCompactionResult, error) {
+	return agent.PiCompactionResult{}, nil
+}
+
+func (b *piRPCRaceBackend) SetAutoCompaction(_ context.Context, _ bool) error {
+	return nil
+}
+
+func (b *piRPCRaceBackend) RuntimeStats(_ context.Context) (*agent.RuntimeTokenStats, error) {
+	return nil, nil
+}
+
+func (b *piRPCRaceBackend) Close() {}
+
+func (b *piRPCRaceBackend) currentBoundary() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.runBinding == nil {
+		return ""
+	}
+	return b.runBinding.CaptureBoundary
+}
+
+func (b *piRPCRaceBackend) getSettleCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.settleCalls
+}
+
+func (b *piRPCRaceBackend) getAcceptCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.acceptCalls
+}
+
+// TestFinishResidentMessageInputHoldsAdmissionDuringSettlement proves the
+// core race fix: while finishResidentMessageInput is calling SettleRunTurn
+// (capture boundary advancing), a concurrent handoff must see the slot as
+// busy (ErrCanonicalAgentRuntimeBusy). After settlement completes, the next
+// handoff succeeds against the fresh capture boundary.
+//
+// The race: if completion cleared messageInputDone/running before
+// SettleRunTurn, a concurrent AcceptMessageBatch would start a new turn under
+// the old capture boundary, and settlement would fail with ErrPiRPCTurnBusy.
+func TestFinishResidentMessageInputHoldsAdmissionDuringSettlement(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	backend := newPiRPCRaceBackend()
+	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-a",
+	})
+
+	factory := func(_ agent.Config) (agent.Backend, func(), error) {
+		return backend, func() {}, nil
+	}
+
+	// Acquire a resident lease to establish the slot.
+	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: identity,
+		Mode:     canonicalRuntimeResident,
+		Factory:  factory,
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	// Bind a Pi run identity on the slot so the settle path is exercised.
+	runIdentity := agent.PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	binding, err := pool.bindResidentPiRunIdentity(context.Background(), "agent-a", "runtime-a", runIdentity)
+	if err != nil {
+		t.Fatalf("bindResidentPiRunIdentity: %v", err)
+	}
+	initialBoundary := binding.CaptureBoundary
+	if initialBoundary == "" {
+		t.Fatal("initial capture boundary is empty")
+	}
+
+	// Release the lease so the slot becomes idle (running=false).
+	lease.release(true)
+
+	// Set up the first handoff with a controllable turnDone.
+	firstDone := make(chan error, 1)
+	firstMessages := make(chan agent.Message)
+	close(firstMessages) // No activity stream for this test.
+	backend.mu.Lock()
+	backend.turnDone = firstDone
+	backend.messages = firstMessages
+	backend.mu.Unlock()
+
+	firstComplete := make(chan struct{})
+	var firstCompleteErr error
+
+	err = pool.handoffIdleMessages(
+		context.Background(),
+		"agent-a", "runtime-a",
+		nil, // no messages needed — AcceptMessageBatch is mocked
+		nil, // onStarting
+		nil, // onAccepted
+		nil, // onMessage
+		func(err error, gen uint64) {
+			firstCompleteErr = err
+			close(firstComplete)
+		},
+	)
+	if err != nil {
+		t.Fatalf("first handoff: %v", err)
+	}
+
+	// Block SettleRunTurn so we can prove admission is held during settlement.
+	settleBlock := make(chan struct{})
+	backend.mu.Lock()
+	backend.settleBlock = settleBlock
+	backend.mu.Unlock()
+
+	// Signal turn completion — this triggers finishResidentMessageInput in a
+	// goroutine. The pool will capture settleBackend/settleIdentity and call
+	// SettleRunTurn (which blocks on settleBlock).
+	firstDone <- nil
+
+	// Wait for SettleRunTurn to be entered (settleCalls becomes 1).
+	deadline := time.Now().Add(2 * time.Second)
+	for backend.getSettleCalls() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("SettleRunTurn was never called")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// While SettleRunTurn is blocked, a concurrent handoff must see the slot
+	// as busy (admission is still held by the settling turn).
+	secondDone := make(chan error, 1)
+	secondMessages := make(chan agent.Message)
+	close(secondMessages)
+	backend.mu.Lock()
+	backend.turnDone = secondDone
+	backend.messages = secondMessages
+	backend.mu.Unlock()
+
+	err = pool.handoffIdleMessages(
+		context.Background(),
+		"agent-a", "runtime-a",
+		nil, nil, nil, nil, nil,
+	)
+	if !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("concurrent handoff during settlement error = %v, want ErrCanonicalAgentRuntimeBusy", err)
+	}
+
+	// AcceptMessageBatch must NOT have been called for the racing handoff —
+	// the pool rejected it before reaching the provider.
+	if got := backend.getAcceptCalls(); got != 1 {
+		t.Fatalf("AcceptMessageBatch calls = %d, want 1 (only the first handoff)", got)
+	}
+
+	// Now let settlement complete.
+	close(settleBlock)
+
+	// Wait for the first handoff's completion callback.
+	<-firstComplete
+	if firstCompleteErr != nil {
+		t.Fatalf("first handoff completion error = %v", firstCompleteErr)
+	}
+
+	// The capture boundary must have advanced.
+	newBoundary := backend.currentBoundary()
+	if newBoundary == initialBoundary {
+		t.Fatalf("capture boundary did not advance: still %q", newBoundary)
+	}
+
+	// After settlement, the next handoff succeeds.
+	thirdDone := make(chan error, 1)
+	thirdMessages := make(chan agent.Message)
+	close(thirdMessages)
+	backend.mu.Lock()
+	backend.turnDone = thirdDone
+	backend.messages = thirdMessages
+	backend.settleBlock = nil // Don't block subsequent settlements.
+	backend.mu.Unlock()
+
+	thirdComplete := make(chan struct{})
+	var thirdCompleteErr error
+	err = pool.handoffIdleMessages(
+		context.Background(),
+		"agent-a", "runtime-a",
+		nil, nil, nil, nil,
+		func(err error, gen uint64) {
+			thirdCompleteErr = err
+			close(thirdComplete)
+		},
+	)
+	if err != nil {
+		t.Fatalf("post-settlement handoff: %v", err)
+	}
+
+	// Complete the third handoff's turn.
+	thirdDone <- nil
+	<-thirdComplete
+	if thirdCompleteErr != nil {
+		t.Fatalf("third handoff completion error = %v", thirdCompleteErr)
+	}
+
+	// Boundary must have advanced again after the third turn's settlement.
+	finalBoundary := backend.currentBoundary()
+	if finalBoundary == newBoundary {
+		t.Fatalf("capture boundary did not advance after third turn: still %q", finalBoundary)
+	}
+	if got := backend.getSettleCalls(); got != 2 {
+		t.Fatalf("SettleRunTurn calls = %d, want 2", got)
 	}
 }
 

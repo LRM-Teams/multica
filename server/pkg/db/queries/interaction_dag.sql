@@ -263,3 +263,316 @@ WHERE run_id = $1 AND segment_id = $2
   AND status = 'in_progress'
   AND fetched_message_count >= expected_message_count
   AND reward_count >= expected_reward_count;
+
+
+-- name: InsertMixedRLProviderCall :one
+WITH allocated AS (
+  UPDATE env_dispatch_run_agent
+  SET next_call_ordinal = next_call_ordinal + 1
+  WHERE run_id = sqlc.arg(run_id)
+    AND run_agent_id = sqlc.arg(run_agent_id)
+    AND next_call_ordinal = sqlc.arg(call_ordinal)
+  RETURNING next_call_ordinal - 1 AS call_ordinal
+)
+INSERT INTO pi_provider_call (
+  call_id, run_id, run_agent_id, turn_id, pi_session_id, call_ordinal,
+  provider, model, api_kind, raw_provider_request, final_assistant_message,
+  normalized_trajectory, normalization_version, status, stop_reason,
+  response_complete, training_eligible, areal_session_id, areal_call_id,
+  request_hash, response_hash, started_at, completed_at
+)
+SELECT
+  sqlc.arg(call_id), sqlc.arg(run_id), sqlc.arg(run_agent_id), sqlc.arg(turn_id),
+  sqlc.arg(pi_session_id), allocated.call_ordinal, sqlc.arg(provider),
+  sqlc.arg(model), sqlc.arg(api_kind), sqlc.arg(raw_provider_request),
+  sqlc.arg(final_assistant_message), sqlc.narg(normalized_trajectory),
+  NULLIF(sqlc.arg(normalization_version), ''), sqlc.arg(status),
+  NULLIF(sqlc.arg(stop_reason), ''), sqlc.arg(response_complete),
+  (
+    sqlc.arg(status)::text = 'completed'
+    AND sqlc.arg(response_complete)::boolean
+    AND sqlc.arg(stop_reason)::text IN ('stop', 'toolUse')
+  ),
+  NULLIF(sqlc.arg(areal_session_id), ''), NULLIF(sqlc.arg(areal_call_id), ''),
+  sqlc.arg(request_hash), NULLIF(sqlc.arg(response_hash), ''),
+  sqlc.arg(started_at), sqlc.narg(completed_at)
+FROM allocated
+RETURNING pi_provider_call.*;
+
+-- name: GetMixedRLProviderCall :one
+SELECT * FROM pi_provider_call
+WHERE run_id = sqlc.arg(run_id) AND call_id = sqlc.arg(call_id);
+
+-- name: ListMixedRLProviderCallsCanonical :many
+SELECT call.*
+FROM pi_provider_call call
+JOIN env_dispatch_run_agent agent ON agent.run_agent_id = call.run_agent_id
+WHERE call.run_id = sqlc.arg(run_id)
+ORDER BY agent.source_agent_id, agent.run_agent_id, call.call_ordinal, call.call_id;
+
+-- name: InsertMixedRLVisibleAction :one
+INSERT INTO pi_visible_action (
+  action_id, run_id, run_agent_id, turn_id, kind, canonical_id,
+  producer_call_id, action_ordinal, status, created_at
+) VALUES (
+  sqlc.arg(action_id), sqlc.arg(run_id), sqlc.arg(run_agent_id),
+  sqlc.arg(turn_id), sqlc.arg(kind), sqlc.arg(canonical_id),
+  NULLIF(sqlc.arg(producer_call_id), ''), sqlc.arg(action_ordinal),
+  sqlc.arg(status), sqlc.arg(created_at)
+)
+RETURNING *;
+
+-- name: ListMixedRLVisibleActionsCanonical :many
+SELECT * FROM pi_visible_action
+WHERE run_id = sqlc.arg(run_id)
+ORDER BY created_at, canonical_id;
+
+-- name: InsertMixedRLMessageConsumption :one
+INSERT INTO pi_message_consumption (
+  consumption_id, run_id, run_agent_id, turn_id, channel_message_id,
+  source, effective_from_call_id, consumed_at
+)
+SELECT sqlc.arg(consumption_id), sqlc.arg(run_id), sqlc.arg(run_agent_id),
+       sqlc.arg(turn_id), sqlc.arg(channel_message_id), sqlc.arg(source),
+       call.call_id, sqlc.arg(consumed_at)
+FROM pi_provider_call call
+WHERE call.run_id = sqlc.arg(run_id)
+  AND call.run_agent_id = sqlc.arg(run_agent_id)
+  AND call.call_id = sqlc.arg(effective_from_call_id)
+  AND call.started_at > sqlc.arg(consumed_at)
+RETURNING pi_message_consumption.*;
+
+-- name: ListMixedRLMessageConsumptions :many
+SELECT * FROM pi_message_consumption
+WHERE run_id = sqlc.arg(run_id)
+ORDER BY consumed_at, consumption_id;
+
+-- name: InsertMixedRLRunSegment :one
+INSERT INTO interaction_dag_run_segment (
+  segment_id, snapshot_id, run_id, run_agent_id, kind,
+  canonical_action_id, segment_ordinal, reward, reward_source,
+  provisional_at, finalized_at
+) VALUES (
+  sqlc.arg(segment_id), NULLIF(sqlc.arg(snapshot_id), ''), sqlc.arg(run_id),
+  sqlc.arg(run_agent_id), sqlc.arg(kind), sqlc.narg(canonical_action_id),
+  sqlc.arg(segment_ordinal), sqlc.narg(reward),
+  NULLIF(sqlc.arg(reward_source), ''), sqlc.arg(provisional_at),
+  sqlc.narg(finalized_at)
+)
+RETURNING *;
+
+-- name: AssociateMixedRLProviderCall :execrows
+INSERT INTO interaction_dag_segment_provider_call (
+  segment_id, provider_call_id, run_id, run_agent_id,
+  call_ordinal, association_kind
+)
+SELECT sqlc.arg(segment_id), sqlc.arg(provider_call_id), segment.run_id,
+       segment.run_agent_id, call.call_ordinal, sqlc.arg(association_kind)
+FROM interaction_dag_run_segment segment
+JOIN pi_provider_call call
+  ON call.call_id = sqlc.arg(provider_call_id)
+ AND call.run_id = segment.run_id
+ AND call.run_agent_id = segment.run_agent_id
+ AND call.call_ordinal = sqlc.arg(call_ordinal)
+WHERE segment.segment_id = sqlc.arg(segment_id)
+  AND (
+    sqlc.arg(association_kind)::text <> 'shared_producer'
+    OR EXISTS (
+      SELECT 1
+      FROM interaction_dag_segment_provider_call owner
+      WHERE owner.provider_call_id = call.call_id
+        AND owner.run_id = segment.run_id
+        AND owner.association_kind = 'owned'
+    )
+  );
+
+-- name: ListMixedRLSegmentCallsCanonical :many
+SELECT association.*
+FROM interaction_dag_segment_provider_call association
+JOIN interaction_dag_run_segment segment
+  ON segment.segment_id = association.segment_id
+WHERE segment.run_id = sqlc.arg(run_id)
+ORDER BY segment.segment_ordinal, association.call_ordinal,
+         association.provider_call_id;
+
+-- name: InsertMixedRLCausalEdge :one
+INSERT INTO interaction_dag_causal_edge (
+  edge_id, snapshot_id, run_id, src_segment_id, dst_segment_id, type,
+  trigger_message_id, dst_call_id, edge_ordinal
+) VALUES (
+  sqlc.arg(edge_id), NULLIF(sqlc.arg(snapshot_id), ''), sqlc.arg(run_id),
+  sqlc.arg(src_segment_id), sqlc.arg(dst_segment_id), sqlc.arg(type),
+  sqlc.narg(trigger_message_id), NULLIF(sqlc.arg(dst_call_id), ''),
+  sqlc.arg(edge_ordinal)
+)
+RETURNING *;
+
+-- name: ListMixedRLCausalEdgesCanonical :many
+SELECT * FROM interaction_dag_causal_edge
+WHERE run_id = sqlc.arg(run_id)
+ORDER BY edge_ordinal, edge_id;
+
+-- name: CreateMixedRLFrozenSnapshot :one
+INSERT INTO interaction_dag_frozen_snapshot (
+  snapshot_id, run_id, run_status, schema_version, normalization_version,
+  segment_count, call_count, edge_count, canonical_manifest, snapshot_hash
+) VALUES (
+  sqlc.arg(snapshot_id), sqlc.arg(run_id), sqlc.arg(run_status),
+  sqlc.arg(schema_version), sqlc.arg(normalization_version),
+  sqlc.arg(segment_count), sqlc.arg(call_count), sqlc.arg(edge_count),
+  sqlc.arg(canonical_manifest), sqlc.arg(snapshot_hash)
+)
+RETURNING *;
+
+-- name: GetMixedRLFrozenSnapshot :one
+SELECT * FROM interaction_dag_frozen_snapshot
+WHERE run_id = sqlc.arg(run_id);
+
+-- name: ListMixedRLSnapshotSegmentsCanonical :many
+SELECT * FROM interaction_dag_run_segment
+WHERE snapshot_id = sqlc.arg(snapshot_id)
+ORDER BY segment_ordinal, segment_id;
+
+-- name: CountMixedRLProviderCalls :one
+SELECT count(*) FROM pi_provider_call
+WHERE run_id = sqlc.arg(run_id);
+
+-- name: CountMixedRLSegments :one
+SELECT count(*) FROM interaction_dag_run_segment
+WHERE run_id = sqlc.arg(run_id);
+
+-- name: CountMixedRLEdges :one
+SELECT count(*) FROM interaction_dag_causal_edge
+WHERE run_id = sqlc.arg(run_id);
+
+
+-- name: FreezeMixedRLProviderCalls :execrows
+UPDATE pi_provider_call
+SET frozen_at = sqlc.arg(frozen_at)
+WHERE run_id = sqlc.arg(run_id) AND frozen_at IS NULL;
+
+-- name: FreezeMixedRLSegments :execrows
+UPDATE interaction_dag_run_segment
+SET snapshot_id = sqlc.arg(snapshot_id),
+    finalized_at = COALESCE(finalized_at, sqlc.arg(frozen_at))
+WHERE run_id = sqlc.arg(run_id) AND snapshot_id IS NULL;
+
+-- name: FreezeMixedRLEdges :execrows
+UPDATE interaction_dag_causal_edge
+SET snapshot_id = sqlc.arg(snapshot_id)
+WHERE run_id = sqlc.arg(run_id) AND snapshot_id IS NULL;
+
+
+-- name: RecordMixedRLLateEvent :exec
+INSERT INTO env_dispatch_run_audit_event (
+  event_id, run_id, run_agent_id, turn_id, kind, reason, summary, snapshot_id
+) VALUES (
+  sqlc.arg(event_id), sqlc.arg(run_id), sqlc.narg(run_agent_id),
+  sqlc.narg(turn_id), 'late_event', sqlc.arg(reason), sqlc.arg(summary),
+  sqlc.arg(snapshot_id)
+);
+
+-- name: ValidateMixedRLRunForFreeze :one
+SELECT
+  (
+    SELECT count(*)
+    FROM env_dispatch_run_agent agent
+    WHERE agent.run_id = sqlc.arg(run_id)
+      AND agent.training_mode = 'online_rl'
+      AND agent.areal_session_id IS NULL
+  ) AS missing_online_session_count,
+  (
+    SELECT count(*)
+    FROM env_dispatch_run_agent agent
+    WHERE agent.run_id = sqlc.arg(run_id)
+      AND (
+        (agent.training_mode = 'online_rl' AND agent.areal_session_id IS NULL)
+        OR (agent.training_mode = 'none' AND agent.areal_session_id IS NOT NULL)
+      )
+  ) AS invalid_run_agent_identity_count,
+  (
+    SELECT count(*)
+    FROM pi_provider_call call
+    JOIN env_dispatch_run_agent agent
+      ON agent.run_id = call.run_id
+     AND agent.run_agent_id = call.run_agent_id
+    WHERE call.run_id = sqlc.arg(run_id)
+      AND (
+        call.pi_session_id IS DISTINCT FROM agent.pi_session_id
+        OR (
+          agent.training_mode = 'online_rl'
+          AND (
+            agent.areal_session_id IS NULL
+            OR call.areal_session_id IS DISTINCT FROM agent.areal_session_id
+            OR call.areal_call_id IS NULL
+          )
+        )
+        OR (
+          agent.training_mode <> 'online_rl'
+          AND (call.areal_session_id IS NOT NULL OR call.areal_call_id IS NOT NULL)
+        )
+      )
+  ) AS invalid_provider_call_identity_count,
+  (
+    SELECT count(*)
+    FROM env_dispatch_turn_capture_batch batch
+    JOIN env_dispatch_resident_turn turn ON turn.turn_id = batch.turn_id
+    JOIN env_dispatch_run_agent agent
+      ON agent.run_id = turn.run_id
+     AND agent.run_agent_id = turn.run_agent_id
+    WHERE turn.run_id = sqlc.arg(run_id)
+      AND batch.capture_boundary IS DISTINCT FROM agent.capture_boundary
+  ) AS capture_boundary_mismatch_count,
+  (
+    SELECT count(*)
+    FROM interaction_dag_segment_provider_call shared
+    WHERE shared.run_id = sqlc.arg(run_id)
+      AND shared.association_kind = 'shared_producer'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM interaction_dag_segment_provider_call owner
+        WHERE owner.run_id = shared.run_id
+          AND owner.provider_call_id = shared.provider_call_id
+          AND owner.association_kind = 'owned'
+      )
+  ) AS shared_without_owner_count,
+  (
+    SELECT count(*)
+    FROM pi_message_consumption consumption
+    LEFT JOIN pi_provider_call call
+      ON call.run_id = consumption.run_id
+     AND call.run_agent_id = consumption.run_agent_id
+     AND call.call_id = consumption.effective_from_call_id
+    WHERE consumption.run_id = sqlc.arg(run_id)
+      AND (call.call_id IS NULL OR call.started_at <= consumption.consumed_at)
+  ) AS invalid_consumption_count,
+  (
+    SELECT count(*)
+    FROM (
+      SELECT segment.run_agent_id
+      FROM interaction_dag_run_segment segment
+      WHERE segment.run_id = sqlc.arg(run_id)
+        AND segment.kind = 'terminal'
+      GROUP BY segment.run_agent_id
+      HAVING count(*) > 1
+    ) duplicate_terminal
+  ) AS duplicate_terminal_agent_count,
+  (
+    SELECT count(*)
+    FROM env_dispatch_resident_turn turn
+    WHERE turn.run_id = sqlc.arg(run_id)
+      AND turn.status = 'settled'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM env_dispatch_turn_capture_batch batch
+        WHERE batch.turn_id = turn.turn_id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM env_dispatch_run_audit_event gap
+        WHERE gap.run_id = turn.run_id
+          AND gap.run_agent_id = turn.run_agent_id
+          AND gap.turn_id = turn.turn_id
+          AND gap.kind = 'capture_gap'
+      )
+  ) AS uncovered_settled_turn_count;

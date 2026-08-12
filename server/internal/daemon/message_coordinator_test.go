@@ -239,6 +239,118 @@ func TestRuntimePoolCompactionPreparationFailureDoesNotRestartResidentProcess(t 
 	}
 }
 
+type settlementBlockingPiTurn struct {
+	boundary string
+	done     chan error
+}
+
+type settlementBlockingPiRuntime struct {
+	mu                sync.Mutex
+	binding           agent.PiRunBinding
+	boundarySerial    int
+	active            bool
+	accepted          chan settlementBlockingPiTurn
+	settlementStarted chan struct{}
+	settlementRelease chan struct{}
+	releaseOnce       sync.Once
+	settlementCalls   int
+}
+
+func newSettlementBlockingPiRuntime() *settlementBlockingPiRuntime {
+	return &settlementBlockingPiRuntime{
+		accepted:          make(chan settlementBlockingPiTurn, 2),
+		settlementStarted: make(chan struct{}),
+		settlementRelease: make(chan struct{}),
+	}
+}
+
+func (r *settlementBlockingPiRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *settlementBlockingPiRuntime) AcceptMessageBatch(_ context.Context, _ []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	if r.active {
+		r.mu.Unlock()
+		return agent.ResidentMessageAcceptance{}, agent.ErrPiRPCTurnBusy
+	}
+	r.active = true
+	turn := settlementBlockingPiTurn{boundary: r.binding.CaptureBoundary, done: make(chan error, 1)}
+	r.mu.Unlock()
+	r.accepted <- turn
+	return agent.ResidentMessageAcceptance{Done: turn.done}, nil
+}
+
+func (r *settlementBlockingPiRuntime) AcceptPendingNotice(context.Context, agent.ResidentPendingNotice) error {
+	return nil
+}
+
+func (r *settlementBlockingPiRuntime) BindRunIdentity(identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.binding.SessionID == "" {
+		r.boundarySerial = 1
+		r.binding = agent.PiRunBinding{
+			PiRunIdentity:   identity,
+			SessionID:       "pi-session",
+			CaptureBoundary: "capture-1",
+		}
+	} else if r.binding.PiRunIdentity != identity {
+		return agent.PiRunBinding{}, agent.ErrPiRPCRunIdentityRequiresFreshSession
+	}
+	return r.binding, nil
+}
+
+func (r *settlementBlockingPiRuntime) PrepareRun(_ context.Context, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
+	return r.BindRunIdentity(identity)
+}
+func (r *settlementBlockingPiRuntime) SettleRunTurn(identity agent.PiRunIdentity) error {
+	r.mu.Lock()
+	if r.binding.PiRunIdentity != identity {
+		r.mu.Unlock()
+		return errors.New("Pi turn settlement identity mismatch")
+	}
+	r.settlementCalls++
+	call := r.settlementCalls
+	r.mu.Unlock()
+	if call == 1 {
+		close(r.settlementStarted)
+		<-r.settlementRelease
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active {
+		return agent.ErrPiRPCTurnBusy
+	}
+	r.boundarySerial++
+	r.binding.CaptureBoundary = fmt.Sprintf("capture-%d", r.boundarySerial)
+	return nil
+}
+
+func (r *settlementBlockingPiRuntime) complete(turn settlementBlockingPiTurn, err error) {
+	r.mu.Lock()
+	r.active = false
+	r.mu.Unlock()
+	turn.done <- err
+	close(turn.done)
+}
+
+func (r *settlementBlockingPiRuntime) releaseSettlement() {
+	r.releaseOnce.Do(func() { close(r.settlementRelease) })
+}
+
+func (r *settlementBlockingPiRuntime) Close() {}
+
+func (r *settlementBlockingPiRuntime) Compact(context.Context, string) (agent.PiCompactionResult, error) {
+	return agent.PiCompactionResult{}, nil
+}
+
+func (r *settlementBlockingPiRuntime) SetAutoCompaction(context.Context, bool) error { return nil }
+
+func (r *settlementBlockingPiRuntime) RuntimeStats(context.Context) (*agent.RuntimeTokenStats, error) {
+	return nil, nil
+}
+
 type pendingNoticeRuntime struct {
 	mu      sync.Mutex
 	notices []agent.ResidentPendingNotice
@@ -298,6 +410,77 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 			t.Fatal("runtime pool did not release admission after native turn completion")
 		}
 		runtime.Gosched()
+	}
+}
+
+func TestRuntimePoolSettlesPiTurnBeforeReopeningMessageAdmission(t *testing.T) {
+	backend := newSettlementBlockingPiRuntime()
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	identity := agent.PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}
+	initialBinding, err := pool.bindResidentPiRunIdentity(context.Background(), "agent-1", "runtime-1", identity)
+	if err != nil {
+		t.Fatalf("bind Pi run identity: %v", err)
+	}
+	messages := []protocol.AgentMessageProjection{{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"}}
+	firstComplete := make(chan error, 1)
+	if err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1", messages,
+		nil, nil, nil, func(err error, _ uint64) { firstComplete <- err },
+	); err != nil {
+		t.Fatalf("first handoff: %v", err)
+	}
+	firstTurn := <-backend.accepted
+	if firstTurn.boundary != initialBinding.CaptureBoundary {
+		t.Fatalf("first turn boundary = %q, want %q", firstTurn.boundary, initialBinding.CaptureBoundary)
+	}
+	backend.complete(firstTurn, nil)
+	select {
+	case <-backend.settlementStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first turn settlement did not start")
+	}
+
+	// Settlement is blocked after native completion. A racing handoff must not
+	// cross Pi's input boundary until the pool has advanced the capture boundary.
+	racingErr := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1", messages,
+		nil, nil, nil, nil,
+	)
+	backend.releaseSettlement()
+	if !errors.Is(racingErr, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("handoff during settlement error = %v, want pool busy", racingErr)
+	}
+	select {
+	case err := <-firstComplete:
+		if err != nil {
+			t.Fatalf("first completion after settlement: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first completion did not reopen admission after settlement")
+	}
+
+	secondComplete := make(chan error, 1)
+	if err := pool.handoffIdleMessages(
+		context.Background(), "agent-1", "runtime-1", messages,
+		nil, nil, nil, func(err error, _ uint64) { secondComplete <- err },
+	); err != nil {
+		t.Fatalf("second handoff after settlement: %v", err)
+	}
+	secondTurn := <-backend.accepted
+	if secondTurn.boundary == firstTurn.boundary {
+		t.Fatalf("second turn reused stale capture boundary %q", secondTurn.boundary)
+	}
+	backend.complete(secondTurn, nil)
+	select {
+	case err := <-secondComplete:
+		if err != nil {
+			t.Fatalf("second completion: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second completion was not observed")
 	}
 }
 
@@ -741,10 +924,44 @@ func TestRuntimePoolDefersBusyNoticeAcrossCompactionBoundary(t *testing.T) {
 	}
 }
 
+func TestMessageCoordinatorReportsQueuedLifecycleOnAcceptAndFlush(t *testing.T) {
+	var transitions []int
+	coordinator, err := NewMessageCoordinator(InboxKey{WorkspaceID: "workspace-test", AgentID: "agent-test"}, t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error { return nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.ConfigureQueueActivity(func(messages []protocol.AgentMessageProjection, delta int) {
+		if len(messages) != 1 || messages[0].RunID != "run-1" || messages[0].RunAgentID != "run-agent-1" {
+			t.Fatalf("queue activity messages = %+v", messages)
+		}
+		transitions = append(transitions, delta)
+	})
+	request := coordinator.BeginRecovery("agent-1", 100)
+	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "snapshot-1", HighWatermark: "snapshot-1",
+	}); err != nil {
+		t.Fatalf("complete recovery fence: %v", err)
+	}
+	message := protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello", RunID: "run-1", RunAgentID: "run-agent-1", DeliveryID: "delivery-1"}
+	created, err := coordinator.Accept(context.Background(), protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: message.Target, Seq: message.Seq, DeliveryID: message.DeliveryID, Message: message,
+	})
+	if err != nil || !created {
+		t.Fatalf("accept mixed-run message created=%v err=%v", created, err)
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("flush mixed-run message: %v", err)
+	}
+	if !reflect.DeepEqual(transitions, []int{1, -1}) {
+		t.Fatalf("queue lifecycle transitions = %v, want [1 -1]", transitions)
+	}
+}
+
 func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *testing.T) {
 	root := t.TempDir()
 	var mu sync.Mutex
 	var notices []agent.ResidentPendingNotice
+
 	activityCount := 0
 	coordinator, err := newTestMessageCoordinator(t, root, func(context.Context, []protocol.AgentMessageProjection) error {
 		return ErrCanonicalAgentRuntimeBusy

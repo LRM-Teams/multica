@@ -21,6 +21,11 @@ import (
 // server work behind an active conversation.
 var ErrPiRPCTurnBusy = errors.New("pi RPC turn busy")
 
+// ErrPiRPCRunIdentityRequiresFreshSession means an existing resident cannot
+// adopt the requested run identity without violating the one-session-per-run
+// boundary. The daemon may replace the backend only while its pool slot is idle.
+var ErrPiRPCRunIdentityRequiresFreshSession = errors.New("pi RPC run identity requires a fresh session")
+
 // PiRPCBackend is the daemon-owned lifecycle surface for chat sessions. Close
 // is required after a failed turn, identity mismatch, idle eviction, or daemon
 // shutdown so no stale native context is retained.
@@ -30,6 +35,9 @@ type PiRPCBackend interface {
 	ResidentMessagePreparation
 	ResidentReminderInputReceiver
 	ResidentPendingNoticeInput
+	BindRunIdentity(PiRunIdentity) (PiRunBinding, error)
+	PrepareRun(context.Context, PiRunIdentity) (PiRunBinding, error)
+	SettleRunTurn(PiRunIdentity) error
 	Close()
 	// Compact explicitly compacts the Pi session context with custom instructions.
 	// Returns the compaction summary and before/after token counts.
@@ -168,12 +176,25 @@ func (b *piRPCBackend) sendControlCommand(ctx context.Context, p *piRPCProcess, 
 	}
 }
 
+type PiRunIdentity struct {
+	RunID      string
+	RunAgentID string
+}
+
+type PiRunBinding struct {
+	PiRunIdentity
+	SessionID       string
+	CaptureBoundary string
+}
+
 type piRPCBackend struct {
 	cfg Config
 
-	mu      sync.Mutex
-	process *piRPCProcess
-	running atomic.Bool
+	mu             sync.Mutex
+	process        *piRPCProcess
+	runBinding     *PiRunBinding
+	boundarySerial uint64
+	running        atomic.Bool
 	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
 	// field of the same name for the full explanation.
 	forceKilled               atomic.Bool
@@ -263,6 +284,81 @@ func (b *piRPCBackend) Close() {
 	if b.process != nil {
 		b.disposeLocked(b.process)
 	}
+}
+
+func (b *piRPCBackend) BindRunIdentity(identity PiRunIdentity) (PiRunBinding, error) {
+	if strings.TrimSpace(identity.RunID) == "" || strings.TrimSpace(identity.RunAgentID) == "" {
+		return PiRunBinding{}, errors.New("Pi run identity requires run_id and run_agent_id")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.runBinding != nil {
+		if b.runBinding.PiRunIdentity != identity {
+			return PiRunBinding{}, fmt.Errorf("%w: Pi backend is already bound to another run agent", ErrPiRPCRunIdentityRequiresFreshSession)
+		}
+		return *b.runBinding, nil
+	}
+	if b.process != nil {
+		return PiRunBinding{}, fmt.Errorf("%w: Pi run identity must be bound before the resident process starts", ErrPiRPCRunIdentityRequiresFreshSession)
+	}
+	sessionPath, err := newPiSessionPath()
+	if err != nil {
+		return PiRunBinding{}, fmt.Errorf("allocate Pi run session: %w", err)
+	}
+	b.boundarySerial++
+	binding := PiRunBinding{
+		PiRunIdentity:   identity,
+		SessionID:       sessionPath,
+		CaptureBoundary: fmt.Sprintf("%s:%d", sessionPath, b.boundarySerial),
+	}
+	b.cfg.ResidentOptions.ResumeSessionID = sessionPath
+	b.runBinding = &binding
+	return binding, nil
+}
+
+// SettleRunTurn closes only the current capture boundary. The resident Pi
+
+// PrepareRun binds a fresh run-specific native session and starts the Pi RPC
+// process without submitting a prompt. A successful return proves executable,
+// session-file, environment, and process startup readiness before any canonical
+// conversation input can be persisted or delivered.
+func (b *piRPCBackend) PrepareRun(ctx context.Context, identity PiRunIdentity) (PiRunBinding, error) {
+	binding, err := b.BindRunIdentity(identity)
+	if err != nil {
+		return PiRunBinding{}, err
+	}
+	if _, err := b.ensureProcess(b.cfg.ResidentOptions); err != nil {
+		b.mu.Lock()
+		if b.process == nil && b.runBinding != nil && b.runBinding.PiRunIdentity == identity {
+			b.runBinding = nil
+			b.cfg.ResidentOptions.ResumeSessionID = ""
+		}
+		b.mu.Unlock()
+		_ = os.Remove(binding.SessionID)
+		return PiRunBinding{}, fmt.Errorf("prepare Pi run process: %w", err)
+	}
+	alive, known := b.runtimeAlive()
+	if known && !alive {
+		b.Close()
+		_ = os.Remove(binding.SessionID)
+		return PiRunBinding{}, errors.New("prepare Pi run process: native process exited during startup")
+	}
+	return binding, nil
+}
+
+// process and native session stay alive for later message batches in this run.
+func (b *piRPCBackend) SettleRunTurn(identity PiRunIdentity) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.runBinding == nil || b.runBinding.PiRunIdentity != identity {
+		return errors.New("Pi turn settlement identity mismatch")
+	}
+	if b.running.Load() {
+		return ErrPiRPCTurnBusy
+	}
+	b.boundarySerial++
+	b.runBinding.CaptureBoundary = fmt.Sprintf("%s:%d", b.runBinding.SessionID, b.boundarySerial)
+	return nil
 }
 
 // ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Same

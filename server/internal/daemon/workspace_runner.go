@@ -147,6 +147,9 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 	if producer == nil || runner.processes == nil {
 		return errors.New("workspace Runner lifecycle owners are unavailable")
 	}
+	if runner.mixedRunActivityReplay != nil {
+		runner.mixedRunActivityReplay(writeFrame)
+	}
 	transportGeneration, reconnectFrames := producer.AttachTransport(func(activity protocol.AgentActivityPayload) {
 		if err := writeFrame(protocol.EventAgentActivity, activity); err != nil && runner.logger != nil {
 			runner.logger.Debug("workspace runner Activity publish failed", "workspace_id", workspaceID, "error", err)
@@ -298,6 +301,16 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			runner.beginMessageRecoveryForAll(func(request protocol.AgentRecoveryRequest) error {
 				return writeFrame(protocol.EventAgentRecoveryRequest, request)
 			})
+		case protocol.EventMixedRunActivityAck:
+			var activityAck protocol.MixedRunActivityTransitionAckPayload
+			if json.Unmarshal(message.Payload, &activityAck) != nil || activityAck.Validate() != nil {
+				continue
+			}
+			if runner.mixedRunActivityAck != nil {
+				if err := runner.mixedRunActivityAck(activityAck); err != nil && runner.logger != nil {
+					runner.logger.Warn("persist mixed-run activity acknowledgement failed", "error", err, "workspace_id", workspaceID, "run_id", activityAck.RunID, "transition_id", activityAck.TransitionID)
+				}
+			}
 		case protocol.EventAgentDeliver:
 			var transient protocol.AgentTransientDeliverPayload
 			if json.Unmarshal(message.Payload, &transient) == nil && transient.Kind != "" {

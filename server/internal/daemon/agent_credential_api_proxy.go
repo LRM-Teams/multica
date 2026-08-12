@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
 )
+
+const canonicalActionProxyResponseCaptureLimit = 64 * 1024
 
 // ActiveProviderToolContext is the daemon-observed provider/tool context used
 // to associate trusted visible actions. It is never accepted from agent text.
@@ -183,10 +187,85 @@ func (d *Daemon) credentialProxyAgentAPIHandler() http.HandlerFunc {
 		defer response.Body.Close()
 		copyCredentialProxyResponseHeaders(w.Header(), response.Header)
 		w.WriteHeader(response.StatusCode)
-		if _, err := io.Copy(w, response.Body); err != nil && d.logger != nil {
+		captured := &boundedResponseCapture{limit: canonicalActionProxyResponseCaptureLimit}
+		if _, err := io.Copy(io.MultiWriter(w, captured), response.Body); err != nil && d.logger != nil {
 			d.logger.Warn("write agent credential proxy response", "error", err, "path", r.URL.Path)
 		}
+		kind, canonicalID, ok := canonicalActionFromProxyResponse(
+			r.Method, r.URL.Path, response.StatusCode, captured.Bytes(),
+		)
+		if ok && !captured.Overflowed() {
+			d.observeCanonicalActionOutcome(agentID, kind, canonicalID, true)
+		}
 	}
+}
+
+type boundedResponseCapture struct {
+	buffer     bytes.Buffer
+	limit      int
+	overflowed bool
+}
+
+func (c *boundedResponseCapture) Write(p []byte) (int, error) {
+	written := len(p)
+	remaining := c.limit - c.buffer.Len()
+	if remaining <= 0 {
+		c.overflowed = c.overflowed || written > 0
+		return written, nil
+	}
+	if len(p) > remaining {
+		p = p[:remaining]
+		c.overflowed = true
+	}
+	_, _ = c.buffer.Write(p)
+	return written, nil
+}
+
+func (c *boundedResponseCapture) Bytes() []byte {
+	return c.buffer.Bytes()
+}
+
+func (c *boundedResponseCapture) Overflowed() bool {
+	return c.overflowed
+}
+
+func canonicalActionFromProxyResponse(method, path string, status int, body []byte) (kind, canonicalID string, ok bool) {
+	if method != http.MethodPost || status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return "", "", false
+	}
+
+	switch path {
+	case "/api/agent/messages/send":
+		var response struct {
+			Created bool `json:"created"`
+			Message struct {
+				ID string `json:"id"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil || !response.Created {
+			return "", "", false
+		}
+		kind, canonicalID = "message", response.Message.ID
+	case "/api/agent/messages/react":
+		var response struct {
+			Added    bool `json:"added"`
+			Reaction struct {
+				ID string `json:"id"`
+			} `json:"reaction"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil || !response.Added {
+			return "", "", false
+		}
+		kind, canonicalID = "reaction", response.Reaction.ID
+	default:
+		return "", "", false
+	}
+
+	canonicalID = strings.TrimSpace(canonicalID)
+	if _, err := uuid.Parse(canonicalID); err != nil {
+		return "", "", false
+	}
+	return kind, canonicalID, true
 }
 
 func copyCredentialProxyRequestHeaders(dst, src http.Header) {

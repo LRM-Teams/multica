@@ -235,12 +235,17 @@
 
 ### 2.3 从笔记触发 Worker
 
-- [ ] **S2-A2 笔记内触发 Agent（Worker）**
+- [x] **S2-A2 笔记内触发 Agent（Worker）**
   - **目标**：落实 D3 的主路径——在笔记里选 Agent + 指令，「按这篇做」。
   - **要做**：UI 入口（可先独立按钮，Slice 3 再收成统一意图路由）；创建 Worker 执行并挂当前 `note_page_id`；状态可感知（排队/跑完）。
   - **不要做**：走 Editor 的 `replace_page` / `note_ai_job` 完成「去干活」。
   - **依赖**：S2-C1、S2-C2、S2-C3、S2-C4
   - **完成标准**：E2E 或集成测：从笔记触发 → task 带 note → 不创建 note_ai_job 编辑合同。
+  - **已落地（2026-08-12）**：
+    - UI：「按这篇做」按钮 + 菜单项 → `NoteWorkerRunDialog` → `createNoteWorkerJob(..., intent: "worker")`
+    - 状态条：`NoteWorkerStatusBanner` 轮询 `noteWorkerJobOptions`；链接智能体详情
+    - 测试：`NoteWorkerRunDialog` 断言只打 Worker API、不打 `createNoteAIJob`；status helper 单测
+    - 后端派发/ACL 已由 S2-C1 覆盖；本项不新增 E2E（CI 无 Playwright）
 
 - [ ] **S2-R1 引用扩展到 Agent / Run**
   - **目标**：笔记可引用 Agent、Run（展示+关联），便于写回 evidence。

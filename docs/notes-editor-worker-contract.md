@@ -26,7 +26,7 @@ S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispa
 
 1. `POST .../worker-jobs` loads the page under ACL, builds the Worker prompt (below), enqueues a chat task, and merges `context.note_brief = { version, page_id, title }`.
 2. `note_worker_job.task_id` is set and status becomes `dispatched`.
-3. UI trigger is still **S2-A2**; Agent `notes get` tool is **S2-C2**.
+3. UI trigger is **S2-A2** (`NoteWorkerRunDialog` / 「按这篇做」); Agent `notes get` tool is **S2-C2**.
 
 ## Worker prompt partitions (S2-C4)
 
@@ -39,6 +39,16 @@ S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispa
 **Untrusted escaping:** every `<` / `>` in title/body becomes `‹` / `›` so note content cannot close partitions or inject fake tags. Instruction text additionally replaces a literal `</instruction>` with `‹/instruction›` so it cannot truncate its own partition.
 
 Code: `server/internal/handler/note_worker_prompt.go`. Tests lock tag strings and breakout cases.
+
+## UI trigger (S2-A2)
+
+Notes page exposes **Work from this note** / 「按这篇做」:
+
+1. User picks an agent + instruction → `POST .../worker-jobs` with `intent: "worker"` (never `note_ai_job` / Editor).
+2. UI stores the returned job id and polls `GET .../worker-jobs/{id}` while status is `pending` | `dispatched` | `running`.
+3. Status banner links to the agent detail page.
+
+FE: `packages/views/notes/note-worker-run-dialog.tsx`, `note-worker-status-banner.tsx`.
 
 ## Agent read path (S2-C2)
 

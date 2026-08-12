@@ -28,6 +28,8 @@ import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n/use-t";
 import { NoteShareSummary } from "./note-share-summary";
 import { NoteWritebackReview } from "./note-writeback-review";
+import { NoteWorkerRunDialog } from "./note-worker-run-dialog";
+import { NoteWorkerStatusBanner } from "./note-worker-status-banner";
 import { waitForNoteAIJobResult } from "./note-ai-job-wait";
 import { buildNoteShareNames, memberLabel, workspaceLabel } from "./share-labels";
 
@@ -44,6 +46,7 @@ type NotesPageUiState = {
   sharePage: NotePage | null;
   exportOpen: boolean;
   aiAgentOpen: boolean;
+  workerOpen: boolean;
   showTrash: boolean;
 };
 
@@ -805,8 +808,10 @@ function NoteEditor({
   currentUserId,
   ownerName,
   shareNames,
+  workerJobId,
   onOpenPage,
   onOpenShare,
+  onOpenWorker,
   onOptimizeSelection,
   onEditPageWithAI,
 }: {
@@ -815,8 +820,10 @@ function NoteEditor({
   currentUserId?: string;
   ownerName: string;
   shareNames: string[];
+  workerJobId: string | null;
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
+  onOpenWorker: () => void;
   onOptimizeSelection: (request: TextOptimizationRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
   onEditPageWithAI: (request: PageEditAIRequest, options?: { signal?: AbortSignal; onStatus?: (status: NoteAIJobStatus) => void }) => Promise<NoteAIEditResult>;
 }) {
@@ -1011,7 +1018,12 @@ function NoteEditor({
           {creatingIssue ? <Loader2 className="size-4 animate-spin" /> : <FilePlus className="size-4" />}
           {t(($) => $.notes_page.create_issue_action)}
         </Button>
+        <Button variant="outline" size="sm" onClick={onOpenWorker}>
+          <Bot className="size-4" />
+          {t(($) => $.notes_page.worker_action)}
+        </Button>
       </div>
+      {workerJobId ? <NoteWorkerStatusBanner jobId={workerJobId} /> : null}
       <NoteWritebackReview
         page={selected}
         currentContent={draft.content}
@@ -1097,7 +1109,11 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const selectedId = pageId ?? selectedFromList?.id;
   const { data: detailPage } = useQuery(noteDetailOptions(wsId, selectedId ?? ""));
   const selected = detailPage?.id ? detailPage : selectedFromList;
-  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, showTrash: false }));
+  const [uiState, setUiState] = useState<NotesPageUiState>(() => ({ sharePage: null, exportOpen: false, aiAgentOpen: false, workerOpen: false, showTrash: false }));
+  const [workerJobId, setWorkerJobId] = useState<string | null>(null);
+  useEffect(() => {
+    setWorkerJobId(null);
+  }, [selected?.id]);
   const [noteExpansionOverrides, setNoteExpansionOverrides] = useState<NoteExpansionOverrides>(() => ({ selectionId: null, expanded: readNoteExpandedIds(wsId), collapsed: new Set() }));
   const tree = useMemo(() => buildNoteTree(list.pages), [list.pages]);
   const ownTree = useMemo(() => tree.filter((node) => node.owner_user_id === currentUserId), [currentUserId, tree]);
@@ -1149,7 +1165,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
   const [dragState, setDragState] = useState<NoteDragState>({ draggingId: null, dropTarget: null });
   const [aiAgentConfig, setAiAgentConfig] = useState<NoteAiAgentConfig>(() => ({ workspaceId: null, agentId: null }));
   const configuredAiAgentId = aiAgentConfig.workspaceId === wsId ? aiAgentConfig.agentId : wsId ? readNoteAiAgent(wsId) : null;
-  const { sharePage, exportOpen, aiAgentOpen, showTrash } = uiState;
+  const { sharePage, exportOpen, aiAgentOpen, workerOpen, showTrash } = uiState;
   const { draggingId: draggingNoteId } = dragState;
 
   useEffect(() => {
@@ -1387,6 +1403,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
                 <Sparkles className="size-3.5" />
                 {t(($) => $.notes_page.ai_agent_action)}
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, workerOpen: true }))}>
+                <Bot className="size-3.5" />
+                {t(($) => $.notes_page.worker_action)}
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setUiState((current) => ({ ...current, exportOpen: true }))}>
                 <Download className="size-3.5" />
                 {t(($) => $.notes_page.export_action)}
@@ -1495,8 +1515,10 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               currentUserId={currentUserId}
               ownerName={selectedOwnerName}
               shareNames={selectedShareNames}
+              workerJobId={workerJobId}
               onOpenPage={openPage}
               onOpenShare={() => setUiState((current) => ({ ...current, sharePage: selected }))}
+              onOpenWorker={() => setUiState((current) => ({ ...current, workerOpen: true }))}
               onOptimizeSelection={optimizeSelectedNoteText}
               onEditPageWithAI={editNotePageWithAI}
             />
@@ -1507,6 +1529,16 @@ export function NotesPage({ pageId }: { pageId?: string }) {
         if (!open) setUiState((current) => ({ ...current, sharePage: null }));
       }} />
       <NoteAiAgentDialog agents={agents} selectedAgentId={configuredAiAgentId} open={aiAgentOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, aiAgentOpen: open }))} onSelect={saveConfiguredAiAgent} />
+      {selected ? (
+        <NoteWorkerRunDialog
+          pageId={selected.id}
+          agents={agents}
+          defaultAgentId={configuredAiAgentId}
+          open={workerOpen}
+          onOpenChange={(open) => setUiState((current) => ({ ...current, workerOpen: open }))}
+          onDispatched={(job) => setWorkerJobId(job.id)}
+        />
+      ) : null}
       <ExportDialog page={selected} open={exportOpen} onOpenChange={(open) => setUiState((current) => ({ ...current, exportOpen: open }))} />
     </div>
   );

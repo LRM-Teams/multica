@@ -35,7 +35,12 @@ func TestFrozenRunDAGResponse_IsSanitizedAndPreservesFrozenOrdering(t *testing.T
 
 	body, err := json.Marshal(frozenRunDAGResponse(dag))
 	assert.NoError(t, err)
-	assert.Contains(t, string(body), `"provider_calls":[{"call_id":"call-1"},{"call_id":"call-2"}]`)
+	var response FrozenRunDAGResponse
+	assert.NoError(t, json.Unmarshal(body, &response))
+	assert.Equal(t, []string{"call-1", "call-2"}, []string{
+		response.ProviderCalls[0].CallID,
+		response.ProviderCalls[1].CallID,
+	})
 	for _, forbidden := range []string{"raw_provider_request", "final_assistant_message", "normalized_trajectory", "authorization", "tensor"} {
 		assert.NotContains(t, string(body), forbidden)
 	}

@@ -61,8 +61,9 @@ type concurrentIndexSpec struct {
 // up-to-date schema to repair missing Agent FK indexes, so skip only the
 // historical pre-table phase and create the index whenever the table exists.
 var agentDeleteIndexOptionalRelations = map[string]string{
-	"idx_agent_attachment_upload_session_agent": "agent_attachment_upload_session",
-	"idx_note_ai_job_agent":                     "note_ai_job",
+	"idx_agent_attachment_upload_session_agent":                   "agent_attachment_upload_session",
+	"idx_note_ai_job_agent":                                       "note_ai_job",
+	"env_dispatch_delivery_obligation_source_recipient_agent_idx": "env_dispatch_delivery_obligation",
 }
 
 func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error {

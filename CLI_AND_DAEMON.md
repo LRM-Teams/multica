@@ -51,16 +51,21 @@ version:
 Adoption is complete when `daemon status` reports the same `Version` as the
 canonical `multica version`.
 
-### Update
+### Computer Upgrade
 
 ```bash
-multica update
+multica computer upgrade
+# Recovery only: install one exact immutable release
+multica computer upgrade --target-version v0.5.0-rc.2
 ```
 
-`multica update` updates the executable that invoked it. If Multica still
-resolves from an older system/Homebrew path, rerun the install script first to
-migrate to `$HOME/.local/bin/multica`; then use `multica update` on that
-canonical installation.
+The command routes through a running Computer's owner-only local control
+surface, so that resident owns download, verification, handoff, and convergence.
+If no resident owns the machine, it installs the verified release into
+VersionStore for the next Computer start. If resident ownership exists but the
+control surface is unreachable, it fails closed with
+`upgrade_service_unreachable` and leaves Active unchanged. There is no separate
+top-level `multica update` command.
 
 ## Quick Start
 
@@ -689,7 +694,7 @@ For recurring agent work, use **agent reminders** (`multica reminder schedule` /
 
 ```bash
 multica version              # Show CLI version and commit hash
-multica update               # Update to latest version
+multica computer upgrade     # Upgrade the machine-wide Computer
 multica workspace info --agents           # List agents in the current workspace
 ```
 

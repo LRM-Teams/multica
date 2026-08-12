@@ -110,7 +110,7 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica computer status` | Show redacted identity, environment, fixed package source, and Workspace connections |
 | `multica computer logs [/<workspace>]` | View resident logs, optionally scoped to one Workspace |
 | `multica computer doctor [/<workspace>]` | Diagnose local Computer state without changing it |
-| `multica computer upgrade [--target-version <version>]` | Upgrade from the current environment's package source, or to an exact recovery version |
+| `multica computer upgrade [--target-version <version>]` | Route through the live Computer owner, or install for the next start when stopped |
 | `multica runtime list` | List runtimes in the current workspace |
 | `multica runtime usage` | Show resource usage |
 | `multica runtime activity` | Recent activity log |
@@ -122,7 +122,6 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica config show` | Show the active environment and redacted saved environment sessions |
 | `multica config use <production\|test>` | Safely switch environment and its matching stable/preview package |
 | `multica version` | Print the CLI version |
-| `multica update` | Upgrade from the current environment's fixed package source |
 | `multica attachment view --id <id> --output <path>` | Download attachment bytes to a local file path |
 | `multica attachment upload --path <file> [--target '#channel']` | Upload a file; use returned id with `--attachment-id` |
 

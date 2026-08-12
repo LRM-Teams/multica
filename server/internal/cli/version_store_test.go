@@ -580,7 +580,7 @@ func TestVersionOutputMatchesRelease(t *testing.T) {
 }
 
 // Negative case: a fresh VersionStore that has never activated anything
-// (the normal state for an install that has never run `multica update`)
+// (the normal state for an install that has never run `multica computer upgrade`)
 // must report ok=false without error, so callers fall back to their own
 // default binary resolution.
 func TestVersionStoreActiveBinaryPathNoActivationYet(t *testing.T) {

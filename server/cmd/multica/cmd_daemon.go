@@ -355,7 +355,7 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	cfg.MachineUpgradeTakeoverProtocol = machineUpgradeTakeoverProtocolForGeneration(
 		takeoverProtocol, cfg.ComputerGeneration,
 	)
-	controlToken, err := ensureMachineUpgradeControlToken(profile)
+	controlToken, err := computer.EnsureControlToken(profile)
 	if err != nil {
 		return err
 	}

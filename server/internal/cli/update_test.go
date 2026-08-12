@@ -52,9 +52,6 @@ func TestReleaseManifestBaseURLEnvOverride(t *testing.T) {
 		t.Fatalf("with env set to whitespace only, releaseManifestBaseURL() = %q, want default %q (not blank)", got, DefaultReleaseManifestBaseURL)
 	}
 
-	if ReleaseWebURL() != releaseManifestBaseURL() {
-		t.Fatalf("ReleaseWebURL() = %q must track the same override as releaseManifestBaseURL() = %q", ReleaseWebURL(), releaseManifestBaseURL())
-	}
 }
 
 // TestReleaseManifestBaseURLWithOverridePrecedence proves the three-layer
@@ -87,9 +84,8 @@ func TestReleaseManifestBaseURLWithOverridePrecedence(t *testing.T) {
 		t.Fatalf("server value whitespace-only: got %q, want default (not blank)", got)
 	}
 
-	// The zero-arg form must still behave exactly as before (no server
-	// context available), so existing callers (ReleaseWebURL, the CLI's own
-	// `multica update`) are unaffected by this change.
+	// The zero-arg form is the offline Computer-upgrade source and must still
+	// honor the environment override when no server-dispatched URL exists.
 	t.Setenv(ReleaseManifestBaseURLEnv, "https://env-override.example.com/computer")
 	if got := releaseManifestBaseURL(); got != "https://env-override.example.com/computer" {
 		t.Fatalf("zero-arg releaseManifestBaseURL() regressed: got %q", got)
@@ -302,38 +298,6 @@ func TestStableAndPrereleaseVersionClassification(t *testing.T) {
 	}
 	if !IsPrereleaseVersion("v0.4.0-alpha.1") || IsPrereleaseVersion("v0.4.0") {
 		t.Fatal("prerelease classification is wrong")
-	}
-}
-
-func TestBrewUpdateConfiguredIgnoresLegacyUpstreamTap(t *testing.T) {
-	t.Setenv("MULTICA_BREW_PACKAGE", "")
-	if IsBrewUpdateConfigured() {
-		t.Fatal("empty MULTICA_BREW_PACKAGE should not configure brew updates")
-	}
-
-	t.Setenv("MULTICA_BREW_PACKAGE", "lrm-teams/tap/multica")
-	if !IsBrewUpdateConfigured() {
-		t.Fatal("LRM tap should configure brew updates")
-	}
-
-	t.Setenv("MULTICA_BREW_PACKAGE", "  "+LegacyBrewPackage+"  ")
-	if IsBrewUpdateConfigured() {
-		t.Fatal("legacy upstream tap must be ignored")
-	}
-}
-
-func TestUpdateViaBrewRejectsLegacyUpstreamTap(t *testing.T) {
-	t.Setenv("MULTICA_BREW_PACKAGE", LegacyBrewPackage)
-
-	out, err := UpdateViaBrew()
-	if err == nil {
-		t.Fatal("expected error for legacy upstream tap")
-	}
-	if out != "" {
-		t.Fatalf("output = %q, want empty", out)
-	}
-	if !strings.Contains(err.Error(), "legacy upstream tap") {
-		t.Fatalf("error = %v, want legacy upstream tap", err)
 	}
 }
 

@@ -25,7 +25,7 @@ type StageReleaseResult struct {
 // serverDispatched is the same three-layer-precedence override
 // FetchLatestReleaseWithOverride takes for the "check for a new version"
 // step — pass "" when the caller has no server-dispatched value (e.g. the
-// CLI's own `multica update`, which has no daemon connection). Callers that
+// offline `multica computer upgrade`, which has no daemon connection). Callers that
 // do have one (the daemon) must pass it here too, or a machine relying
 // purely on server-dispatch could see a new version at check time and then
 // silently fall back to the compiled default at download time.

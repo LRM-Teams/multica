@@ -16,25 +16,29 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 )
 
-const updateSubprocessModeEnv = "MULTICA_TEST_UPDATE_SUBPROCESS_MODE"
+const computerUpgradeSubprocessModeEnv = "MULTICA_TEST_COMPUTER_UPGRADE_SUBPROCESS_MODE"
+const testComputerControlTokenFile = "machine-upgrade-control.token"
+const testComputerUpgradeTargetEnv = "MULTICA_TEST_COMPUTER_UPGRADE_TARGET"
+const testComputerUpgradeControlPortEnv = "MULTICA_TEST_COMPUTER_UPGRADE_CONTROL_PORT"
 
-type updateSubprocessRequest struct {
+type computerUpgradeSubprocessRequest struct {
 	RequestID     string `json:"request_id"`
 	TargetVersion string `json:"target_version"`
 }
 
-func TestUpdateSubprocessLiveOwnerRoutesWithoutReadingReleaseFeed(t *testing.T) {
+func TestComputerUpgradeSubprocessLiveOwnerRoutesWithoutReadingReleaseFeed(t *testing.T) {
 	home := t.TempDir()
 	controlDir := filepath.Join(home, ".multica", "computer")
 	if err := os.MkdirAll(controlDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(controlDir, machineUpgradeControlTokenFile), []byte("owner-secret\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(controlDir, testComputerControlTokenFile), []byte("owner-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -45,7 +49,7 @@ func TestUpdateSubprocessLiveOwnerRoutesWithoutReadingReleaseFeed(t *testing.T) 
 	defer listener.Close()
 	controlPort := listener.Addr().(*net.TCPAddr).Port
 
-	requestSeen := make(chan updateSubprocessRequest, 2)
+	requestSeen := make(chan computerUpgradeSubprocessRequest, 2)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "running", "daemon_id": "daemon-1"})
@@ -55,7 +59,7 @@ func TestUpdateSubprocessLiveOwnerRoutesWithoutReadingReleaseFeed(t *testing.T) 
 			http.Error(w, "bad owner token", http.StatusUnauthorized)
 			return
 		}
-		var request updateSubprocessRequest
+		var request computerUpgradeSubprocessRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -67,45 +71,49 @@ func TestUpdateSubprocessLiveOwnerRoutesWithoutReadingReleaseFeed(t *testing.T) 
 	go func() { _ = server.Serve(listener) }()
 	defer server.Close()
 
-	for attempt := 0; attempt < 2; attempt++ {
-		output, err := runUpdateSubprocess(t, home, controlPort, "http://127.0.0.1:1/unreachable")
+	targets := []struct {
+		arg  string
+		want string
+	}{{want: "latest"}, {arg: "1.2.3", want: "v1.2.3"}}
+	for attempt, target := range targets {
+		output, err := runComputerUpgradeSubprocessWithTarget(t, home, controlPort, "http://127.0.0.1:1/unreachable", target.arg)
 		if err != nil {
-			t.Fatalf("multica update subprocess replay %d: %v\n%s", attempt+1, err, output)
+			t.Fatalf("multica computer upgrade subprocess %d: %v\n%s", attempt+1, err, output)
 		}
-		if !strings.Contains(string(output), "live daemon owns staging and handoff") {
+		if !strings.Contains(string(output), "live Computer owns download, verification, handoff, and convergence") {
 			t.Fatalf("subprocess output = %q, want live-owner confirmation", output)
 		}
 	}
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt, target := range targets {
 		request := <-requestSeen
-		if request.RequestID != "same-request" || request.TargetVersion != "latest" {
-			t.Fatalf("canonical request = %+v, want same-request/latest", request)
+		if strings.TrimSpace(request.RequestID) == "" || request.TargetVersion != target.want {
+			t.Fatalf("canonical request %d = %+v, want generated request ID and target %s", attempt+1, request, target.want)
 		}
 	}
 }
 
-func TestUpdateSubprocessAbsentDaemonInstallsForNextStart(t *testing.T) {
+func TestComputerUpgradeSubprocessAbsentResidentInstallsForNextStart(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the Windows adapter is cross-compiled separately; this subprocess fixture is a POSIX script")
 	}
 	home := t.TempDir()
-	feed := newUpdateSubprocessReleaseFeed(t, "v1.2.3")
+	feed := newComputerUpgradeSubprocessReleaseFeed(t, "v1.2.3")
 	defer feed.Close()
-	controlPort := unusedUpdateControlPort(t)
+	controlPort := unusedComputerUpgradeControlPort(t)
 
-	child := exec.Command(os.Args[0], "-test.run=^TestUpdateSubprocessHelper$")
+	child := exec.Command(os.Args[0], "-test.run=^TestComputerUpgradeSubprocessHelper$")
 	child.Env = append(os.Environ(),
 		"HOME="+home,
-		updateSubprocessModeEnv+"=offline",
-		"MULTICA_TEST_UPDATE_CONTROL_PORT="+strconv.Itoa(controlPort),
+		computerUpgradeSubprocessModeEnv+"=offline",
+		testComputerUpgradeControlPortEnv+"="+strconv.Itoa(controlPort),
 		"MULTICA_RELEASE_MANIFEST_BASE_URL="+feed.URL,
 	)
 	output, err := child.CombinedOutput()
 	if err != nil {
-		t.Fatalf("offline multica update subprocess: %v\n%s", err, output)
+		t.Fatalf("offline multica computer upgrade subprocess: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "Installed v1.2.3 for the next daemon start") ||
+	if !strings.Contains(string(output), "Installed v1.2.3 for the next Computer start") ||
 		!strings.Contains(string(output), "No running successor was proven") {
 		t.Fatalf("offline output = %q, want precise next-start/no-successor wording", output)
 	}
@@ -123,7 +131,7 @@ func TestUpdateSubprocessAbsentDaemonInstallsForNextStart(t *testing.T) {
 	}
 }
 
-func TestUpdateSubprocessLiveOwnerFailuresNeverMutateVersionStore(t *testing.T) {
+func TestComputerUpgradeSubprocessLiveOwnerFailuresNeverMutateVersionStore(t *testing.T) {
 	tests := []struct {
 		name       string
 		statusCode int
@@ -132,11 +140,12 @@ func TestUpdateSubprocessLiveOwnerFailuresNeverMutateVersionStore(t *testing.T) 
 	}{
 		{name: "authentication failure", statusCode: http.StatusUnauthorized, body: "local control authentication failed", want: "upgrade_service_unreachable"},
 		{name: "distinct mutation conflict", statusCode: http.StatusConflict, body: "upgrade_already_in_progress", want: "machine upgrade request rejected: upgrade_already_in_progress"},
+		{name: "malformed canonical response", statusCode: http.StatusOK, body: "{}", want: "response is missing operation id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
-			writeUpdateControlToken(t, home, "wrong-owner-secret")
+			writeComputerUpgradeControlToken(t, home, "wrong-owner-secret")
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/health":
@@ -150,49 +159,74 @@ func TestUpdateSubprocessLiveOwnerFailuresNeverMutateVersionStore(t *testing.T) 
 			defer server.Close()
 			controlPort := server.Listener.Addr().(*net.TCPAddr).Port
 
-			output, err := runUpdateSubprocess(t, home, controlPort, "http://127.0.0.1:1/unreachable")
+			output, err := runComputerUpgradeSubprocess(t, home, controlPort, "http://127.0.0.1:1/unreachable")
 			if err == nil || !strings.Contains(string(output), tt.want) {
 				t.Fatalf("subprocess error = %v output = %q, want %q", err, output, tt.want)
 			}
-			assertUpdateVersionStoreUnchanged(t, home)
+			assertComputerUpgradeVersionStoreUnchanged(t, home)
 		})
 	}
 }
 
-func TestUpdateSubprocessLivePIDWithUnavailableControlFailsClosed(t *testing.T) {
+func TestComputerUpgradeSubprocessLivePIDWithUnavailableControlFailsClosed(t *testing.T) {
 	home := t.TempDir()
 	pidDir := filepath.Join(home, ".multica", "computer")
 	if err := os.MkdirAll(pidDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pidDir, "daemon.pid"), []byte("4242\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(pidDir, "daemon.pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	output, err := runUpdateSubprocess(t, home, unusedUpdateControlPort(t), "http://127.0.0.1:1/unreachable")
+	output, err := runComputerUpgradeSubprocess(t, home, unusedComputerUpgradeControlPort(t), "http://127.0.0.1:1/unreachable")
 	if err == nil || !strings.Contains(string(output), "upgrade_service_unreachable") ||
 		!strings.Contains(string(output), "refusing offline activation") {
 		t.Fatalf("subprocess error = %v output = %q, want fail-closed unavailable owner", err, output)
 	}
-	assertUpdateVersionStoreUnchanged(t, home)
+	assertComputerUpgradeVersionStoreUnchanged(t, home)
 }
 
-func TestUpdateSubprocessDistinctConcurrentMutationGetsStableConflict(t *testing.T) {
+func TestComputerUpgradeSubprocessStaleDeadPIDAllowsOfflineFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the Windows adapter is cross-compiled separately; this subprocess fixture is a POSIX script")
+	}
 	home := t.TempDir()
-	writeUpdateControlToken(t, home, "owner-secret")
+	pidDir := filepath.Join(home, ".multica", "computer")
+	if err := os.MkdirAll(pidDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pidDir, "daemon.pid"), []byte("2147483647\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	feed := newComputerUpgradeSubprocessReleaseFeed(t, "v1.2.3")
+	defer feed.Close()
+
+	output, err := runComputerUpgradeSubprocess(t, home, unusedComputerUpgradeControlPort(t), feed.URL)
+	if err != nil {
+		t.Fatalf("offline fallback with stale PID: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Installed v1.2.3 for the next Computer start") {
+		t.Fatalf("stale-PID fallback output = %q", output)
+	}
+}
+
+func TestComputerUpgradeSubprocessDistinctConcurrentMutationGetsStableConflict(t *testing.T) {
+	home := t.TempDir()
+	writeComputerUpgradeControlToken(t, home, "owner-secret")
 	firstEntered := make(chan struct{})
 	secondRejected := make(chan struct{})
+	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "running", "daemon_id": "daemon-1"})
 		case "/machine-upgrades":
-			var request updateSubprocessRequest
+			var request computerUpgradeSubprocessRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			if request.RequestID == "request-a" {
+			if requestCount.Add(1) == 1 {
 				close(firstEntered)
 				<-secondRejected
 				_ = json.NewEncoder(w).Encode(map[string]any{"id": "upgrade-a", "phase": "queued"})
@@ -213,50 +247,58 @@ func TestUpdateSubprocessDistinctConcurrentMutationGetsStableConflict(t *testing
 	}
 	firstResult := make(chan result, 1)
 	go func() {
-		output, err := newUpdateSubprocessCommand(home, controlPort, "http://127.0.0.1:1/unreachable", "request-a").CombinedOutput()
+		output, err := newComputerUpgradeSubprocessCommand(home, controlPort, "http://127.0.0.1:1/unreachable").CombinedOutput()
 		firstResult <- result{output: output, err: err}
 	}()
 	<-firstEntered
-	secondOutput, secondErr := newUpdateSubprocessCommand(home, controlPort, "http://127.0.0.1:1/unreachable", "request-b").CombinedOutput()
+	secondOutput, secondErr := newComputerUpgradeSubprocessCommand(home, controlPort, "http://127.0.0.1:1/unreachable").CombinedOutput()
 	first := <-firstResult
-	if first.err != nil || !strings.Contains(string(first.output), "live daemon owns staging and handoff") {
+	if first.err != nil || !strings.Contains(string(first.output), "live Computer owns download, verification, handoff, and convergence") {
 		t.Fatalf("first mutation = %v output %q, want canonical success", first.err, first.output)
 	}
 	if secondErr == nil || !strings.Contains(string(secondOutput), "machine upgrade request rejected: upgrade_already_in_progress") {
 		t.Fatalf("second mutation = %v output %q, want stable conflict", secondErr, secondOutput)
 	}
-	assertUpdateVersionStoreUnchanged(t, home)
+	assertComputerUpgradeVersionStoreUnchanged(t, home)
 }
 
-func runUpdateSubprocess(t *testing.T, home string, controlPort int, releaseBaseURL string) ([]byte, error) {
+func runComputerUpgradeSubprocess(t *testing.T, home string, controlPort int, releaseBaseURL string) ([]byte, error) {
 	t.Helper()
-	return newUpdateSubprocessCommand(home, controlPort, releaseBaseURL, "same-request").CombinedOutput()
+	return runComputerUpgradeSubprocessWithTarget(t, home, controlPort, releaseBaseURL, "")
 }
 
-func newUpdateSubprocessCommand(home string, controlPort int, releaseBaseURL, requestID string) *exec.Cmd {
-	child := exec.Command(os.Args[0], "-test.run=^TestUpdateSubprocessHelper$")
+func runComputerUpgradeSubprocessWithTarget(t *testing.T, home string, controlPort int, releaseBaseURL, target string) ([]byte, error) {
+	t.Helper()
+	command := newComputerUpgradeSubprocessCommand(home, controlPort, releaseBaseURL)
+	if target != "" {
+		command.Env = append(command.Env, testComputerUpgradeTargetEnv+"="+target)
+	}
+	return command.CombinedOutput()
+}
+
+func newComputerUpgradeSubprocessCommand(home string, controlPort int, releaseBaseURL string) *exec.Cmd {
+	child := exec.Command(os.Args[0], "-test.run=^TestComputerUpgradeSubprocessHelper$")
 	child.Env = append(os.Environ(),
 		"HOME="+home,
-		updateSubprocessModeEnv+"=run",
-		"MULTICA_TEST_UPDATE_CONTROL_PORT="+strconv.Itoa(controlPort),
-		"MULTICA_TEST_UPDATE_REQUEST_ID="+requestID,
+		computerUpgradeSubprocessModeEnv+"=run",
+		testComputerUpgradeControlPortEnv+"="+strconv.Itoa(controlPort),
 		"MULTICA_RELEASE_MANIFEST_BASE_URL="+releaseBaseURL,
 	)
 	return child
 }
 
-func writeUpdateControlToken(t *testing.T, home, token string) {
+func writeComputerUpgradeControlToken(t *testing.T, home, token string) {
 	t.Helper()
 	controlDir := filepath.Join(home, ".multica", "computer")
 	if err := os.MkdirAll(controlDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(controlDir, machineUpgradeControlTokenFile), []byte(token+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(controlDir, testComputerControlTokenFile), []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func assertUpdateVersionStoreUnchanged(t *testing.T, home string) {
+func assertComputerUpgradeVersionStoreUnchanged(t *testing.T, home string) {
 	t.Helper()
 	root := filepath.Join(home, ".local", "share", "multica")
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
@@ -264,7 +306,7 @@ func assertUpdateVersionStoreUnchanged(t *testing.T, home string) {
 	}
 }
 
-func newUpdateSubprocessReleaseFeed(t *testing.T, tag string) *httptest.Server {
+func newComputerUpgradeSubprocessReleaseFeed(t *testing.T, tag string) *httptest.Server {
 	t.Helper()
 	script := []byte("#!/bin/sh\nprintf 'multica " + tag + "\\n'\n")
 	var archive bytes.Buffer
@@ -313,7 +355,7 @@ func newUpdateSubprocessReleaseFeed(t *testing.T, tag string) *httptest.Server {
 	return feed
 }
 
-func unusedUpdateControlPort(t *testing.T) int {
+func unusedComputerUpgradeControlPort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -326,20 +368,20 @@ func unusedUpdateControlPort(t *testing.T) int {
 	return port
 }
 
-func TestUpdateSubprocessHelper(t *testing.T) {
-	if os.Getenv(updateSubprocessModeEnv) == "" {
+func TestComputerUpgradeSubprocessHelper(t *testing.T) {
+	if os.Getenv(computerUpgradeSubprocessModeEnv) == "" {
 		return
 	}
-	controlPort, err := strconv.Atoi(os.Getenv("MULTICA_TEST_UPDATE_CONTROL_PORT"))
+	controlPort, err := strconv.Atoi(os.Getenv(testComputerUpgradeControlPortEnv))
 	if err != nil || controlPort <= 0 {
 		t.Fatalf("invalid subprocess control port: %v", err)
 	}
-	updateComputerHealthPort = func(string) int { return controlPort }
-	requestID := strings.TrimSpace(os.Getenv("MULTICA_TEST_UPDATE_REQUEST_ID"))
-	if requestID == "" {
-		requestID = "same-request"
+	computerUpgradeControlPort = func(string) int { return controlPort }
+	args := []string{"computer", "upgrade"}
+	if target := strings.TrimSpace(os.Getenv(testComputerUpgradeTargetEnv)); target != "" {
+		args = append(args, "--target-version", target)
 	}
-	rootCmd.SetArgs([]string{"update", "--request-id", requestID})
+	rootCmd.SetArgs(args)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)

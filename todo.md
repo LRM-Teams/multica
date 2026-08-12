@@ -121,12 +121,17 @@
 
 ### 1.3 动作：工作 → 待审写回笔记
 
-- [ ] **S1-W1 待审写回数据模型与 API**
+- [x] **S1-W1 待审写回数据模型与 API**
   - **目标**：落实 D1——写回先提案、人确认再落库。
   - **要做**：存储提案（目标 `page_id`、patch/append 内容、evidence 列表、status=pending/applied/rejected、actor）；list / accept / reject API；accept 时更新 `note_page` 并记录 `updated_by`。
   - **不要做**：自动静默改 `content`；与 `note_ai_job` 混成同一个 job 类型（可复用 diff UI 模式，但合同分开）。
   - **依赖**：无（可与 1.1 并行，但 1.4 依赖本项）
   - **完成标准**：Go 测：accept 后 content 变、reject 不变；evidence 字段必填校验。
+  - **已落地（2026-08-12）**：
+    - 表 `note_page_writeback`（migration `337_note_page_writeback`）
+    - `POST/GET .../pages/{id}/writebacks`；`POST .../writebacks/{id}/accept|reject`
+    - accept 才改 `note_page.content` + `updated_by`；创建时 evidence 必填
+    - 测试：`TestCreateNotePageWritebackRequiresEvidence`、`TestAccept*`、`TestReject*`
 
 - [ ] **S1-W2 写回必须带 evidence + FE 确认 UI**
   - **目标**：用户能看懂「这段话从哪来的」，确认或拒绝。

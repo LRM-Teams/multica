@@ -60,6 +60,8 @@ import type {
   NoteAIJob,
   NotePageIssueRef,
   NotePageIssueRefListResponse,
+  NoteWriteback,
+  NoteWritebackListResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
@@ -89,6 +91,49 @@ export const EMPTY_NOTE_PAGE_ISSUE_REF: NotePageIssueRef = {
 };
 
 export const EMPTY_NOTE_PAGE_ISSUE_REF_LIST: NotePageIssueRefListResponse = { refs: [] };
+
+export const NoteWritebackEvidenceSchema = z.object({
+  type: z.string().default(""),
+  id: z.string().default(""),
+  label: z.string().nullable().optional(),
+}).loose();
+
+export const NoteWritebackSchema: z.ZodType<NoteWriteback> = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  page_id: z.string().default(""),
+  action: z.string().default("append"),
+  content: z.string().default(""),
+  target: z.string().nullable().optional(),
+  evidence: z.array(NoteWritebackEvidenceSchema).default([]),
+  status: z.string().default("pending"),
+  created_by_type: z.string().default("member"),
+  created_by_id: z.string().default(""),
+  resolved_by: z.string().nullable().optional(),
+  resolved_at: z.string().nullable().optional(),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const NoteWritebackListResponseSchema: z.ZodType<NoteWritebackListResponse> = z.object({
+  writebacks: z.array(NoteWritebackSchema).default([]),
+}).loose();
+
+export const EMPTY_NOTE_WRITEBACK: NoteWriteback = {
+  id: "",
+  workspace_id: "",
+  page_id: "",
+  action: "append",
+  content: "",
+  evidence: [],
+  status: "pending",
+  created_by_type: "member",
+  created_by_id: "",
+  created_at: "",
+  updated_at: "",
+};
+
+export const EMPTY_NOTE_WRITEBACK_LIST: NoteWritebackListResponse = { writebacks: [] };
 
 export const NotePageSchema: z.ZodType<NotePage> = z.object({
   id: z.string().default(""),

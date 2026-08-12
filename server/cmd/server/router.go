@@ -900,10 +900,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/issue-refs", h.CreateNotePageIssueRef)
 						r.Delete("/issue-refs/{issueId}", h.DeleteNotePageIssueRef)
 						r.Post("/issues", h.CreateNotePageIssue)
+						r.Get("/writebacks", h.ListNotePageWritebacks)
+						r.Post("/writebacks", h.CreateNotePageWriteback)
 					})
 				})
 				r.Get("/ai-jobs/{jobId}", h.GetNoteAIJob)
 				r.Post("/ai-jobs/{jobId}/cancel", h.CancelNoteAIJob)
+				r.Post("/writebacks/{writebackId}/accept", h.AcceptNotePageWriteback)
+				r.Post("/writebacks/{writebackId}/reject", h.RejectNotePageWriteback)
 			})
 
 			// Issues

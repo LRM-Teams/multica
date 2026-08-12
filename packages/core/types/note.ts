@@ -115,3 +115,41 @@ export interface CreateNotePageIssueResponse {
   issue: Issue;
   ref: NotePageIssueRef;
 }
+
+/** Pending note writeback proposal (S1-W1 / D1). */
+export type NoteWritebackAction = "append" | "patch" | "replace_page";
+export type NoteWritebackStatus = "pending" | "applied" | "rejected";
+
+export interface NoteWritebackEvidence {
+  type: string;
+  id: string;
+  label?: string | null;
+}
+
+export interface NoteWriteback {
+  id: string;
+  workspace_id: string;
+  page_id: string;
+  action: NoteWritebackAction | string;
+  content: string;
+  target?: string | null;
+  evidence: NoteWritebackEvidence[];
+  status: NoteWritebackStatus | string;
+  created_by_type: string;
+  created_by_id: string;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NoteWritebackListResponse {
+  writebacks: NoteWriteback[];
+}
+
+export interface CreateNoteWritebackRequest {
+  action: NoteWritebackAction;
+  content: string;
+  target?: string;
+  evidence: NoteWritebackEvidence[];
+}

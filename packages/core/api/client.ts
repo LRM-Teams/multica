@@ -237,6 +237,9 @@ import type {
   CreateNotePageIssueRefRequest,
   CreateNotePageIssueRequest,
   CreateNotePageIssueResponse,
+  NoteWriteback,
+  NoteWritebackListResponse,
+  CreateNoteWritebackRequest,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -440,6 +443,10 @@ import {
   EMPTY_NOTE_PAGE_ISSUE_REF,
   EMPTY_NOTE_PAGE_ISSUE_REF_LIST,
   CreateNotePageIssueResponseSchema,
+  NoteWritebackSchema,
+  NoteWritebackListResponseSchema,
+  EMPTY_NOTE_WRITEBACK,
+  EMPTY_NOTE_WRITEBACK_LIST,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1140,6 +1147,46 @@ export class ApiClient {
       },
       { endpoint: "POST /api/notes/pages/{id}/issues" },
     );
+  }
+
+  async listNotePageWritebacks(pageId: string, status?: string): Promise<NoteWritebackListResponse> {
+    const query = status ? `?status=${encodeURIComponent(status)}` : "";
+    const raw = await this.fetch<unknown>(
+      `/api/notes/pages/${encodeURIComponent(pageId)}/writebacks${query}`,
+    );
+    return parseWithFallback(raw, NoteWritebackListResponseSchema, EMPTY_NOTE_WRITEBACK_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/writebacks",
+    });
+  }
+
+  async createNotePageWriteback(pageId: string, data: CreateNoteWritebackRequest): Promise<NoteWriteback> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/writebacks`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NoteWritebackSchema, EMPTY_NOTE_WRITEBACK, {
+      endpoint: "POST /api/notes/pages/{id}/writebacks",
+    });
+  }
+
+  async acceptNotePageWriteback(writebackId: string): Promise<NoteWriteback> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/writebacks/${encodeURIComponent(writebackId)}/accept`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, NoteWritebackSchema, EMPTY_NOTE_WRITEBACK, {
+      endpoint: "POST /api/notes/writebacks/{id}/accept",
+    });
+  }
+
+  async rejectNotePageWriteback(writebackId: string): Promise<NoteWriteback> {
+    const raw = await this.fetch<unknown>(
+      `/api/notes/writebacks/${encodeURIComponent(writebackId)}/reject`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, NoteWritebackSchema, EMPTY_NOTE_WRITEBACK, {
+      endpoint: "POST /api/notes/writebacks/{id}/reject",
+    });
   }
 
   async getIssue(id: string): Promise<Issue> {

@@ -294,6 +294,84 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	<-errCh
 }
 
+func TestWorkspaceRunnerStartAfterAttachmentReplayCreatesAndRecoversCoordinator(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	recovery := make(chan protocol.AgentRecoveryRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := completeTestWorkspaceRunnerAttachmentReplay(conn); err != nil {
+			t.Error(err)
+			return
+		}
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-new", LaunchID: "launch-1", StartDispatchID: "dispatch-1",
+		})})
+		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
+			t.Error(err)
+			return
+		}
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var frame protocol.Message
+			if json.Unmarshal(raw, &frame) != nil || frame.Type != protocol.EventAgentRecoveryRequest {
+				continue
+			}
+			var request protocol.AgentRecoveryRequest
+			if json.Unmarshal(frame.Payload, &request) != nil {
+				t.Errorf("invalid recovery request: %s", frame.Payload)
+				return
+			}
+			recovery <- request
+			return
+		}
+	}))
+	defer server.Close()
+
+	d := New(Config{ServerBaseURL: server.URL, DaemonID: "daemon-1", WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	d.runtimeIndex["runtime-old"] = Runtime{ID: "runtime-old", WorkspaceID: "ws-1"}
+	d.runtimeIndex["runtime-new"] = Runtime{ID: "runtime-new", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
+		AgentID: "agent-1", RuntimeID: "runtime-old", AttachmentGeneration: 1, LifecycleSeq: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go runner.runConnection(ctx)
+	select {
+	case request := <-recovery:
+		if request.AgentID != "agent-1" || request.RecoveryID == "" {
+			t.Fatalf("recovery request=%+v", request)
+		}
+		_, runtimeID, ok := runner.messageCoordinator("agent-1")
+		if !ok || runtimeID != "runtime-new" {
+			t.Fatalf("recovery coordinator runtime=%q ok=%v, want runtime-new", runtimeID, ok)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for start-owned coordinator recovery")
+	}
+}
+
 func TestWorkspaceRunnerAcknowledgesCanonicalMessageDeliveryWithoutRuntime(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	acknowledgements := make(chan protocol.AgentDeliverAckPayload, 2)

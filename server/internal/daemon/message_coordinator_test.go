@@ -1248,7 +1248,7 @@ func TestMessageCoordinatorCoverageCheckRetainsPendingWhenCommitWriteFails(t *te
 	}
 }
 
-func TestWorkspaceRunnerAttachmentRegistersCoordinatorAtAgentRoot(t *testing.T) {
+func TestWorkspaceRunnerAttachmentPreparesAgentRootWithoutCoordinator(t *testing.T) {
 	const workspaceID = "11111111-1111-4111-8111-111111111111"
 	const agentID = "22222222-2222-4222-8222-222222222222"
 	const runtimeID = "33333333-3333-4333-8333-333333333333"
@@ -1262,13 +1262,9 @@ func TestWorkspaceRunnerAttachmentRegistersCoordinatorAtAgentRoot(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("applyAttachmentAttach: %v", err)
 	}
-	coordinator, registeredRuntimeID := resolveTestInbox(t, daemon, InboxKey{WorkspaceID: workspaceID, AgentID: agentID})
-	if coordinator == nil || registeredRuntimeID != runtimeID {
-		t.Fatalf("coordinator=%v runtime_id=%q", coordinator, registeredRuntimeID)
-	}
 	wantRoot := agentworkspace.Root(daemon.cfg.WorkspacesRoot, workspaceID, agentID)
-	if coordinator.root != wantRoot {
-		t.Fatalf("coordinator root = %q, want Agent root %q", coordinator.root, wantRoot)
+	if _, _, ok := runner.messageCoordinator(agentID); ok {
+		t.Fatal("Attachment created a Message coordinator before agent:start")
 	}
 	if _, err := os.Stat(wantRoot); err != nil {
 		t.Fatalf("Agent root was not provisioned: %v", err)

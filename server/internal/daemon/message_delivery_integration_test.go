@@ -72,16 +72,35 @@ func (r *idleMessageFakeRuntime) noticeSnapshot() []agent.ResidentPendingNotice 
 	return append([]agent.ResidentPendingNotice(nil), r.notices...)
 }
 
-func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
-	dbURL := os.Getenv("DATABASE_URL")
+func openMessageDeliveryAcceptanceDatabase(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
+		t.Skip("DATABASE_URL is unset; run `make test` or load the checkout environment before DB-backed acceptance tests")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
-	if err != nil || pool.Ping(context.Background()) != nil {
-		t.Skip("acceptance database is unavailable")
+	if err != nil {
+		t.Fatalf("configure acceptance database: %v", err)
+	}
+	if err := pool.Ping(context.Background()); err != nil {
+		pool.Close()
+		t.Skipf("acceptance database is unavailable: %v", err)
+	}
+	var deliveryTablePresent bool
+	if err := pool.QueryRow(context.Background(), `SELECT to_regclass('public.agent_message_delivery') IS NOT NULL`).Scan(&deliveryTablePresent); err != nil {
+		pool.Close()
+		t.Fatalf("inspect acceptance database schema: %v", err)
+	}
+	if !deliveryTablePresent {
+		pool.Close()
+		t.Fatal("acceptance database is not migrated through agent_message_delivery; run `make migrate-up` with the same ENV_FILE")
 	}
 	t.Cleanup(pool.Close)
+	return pool
+}
+
+func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
+	pool := openMessageDeliveryAcceptanceDatabase(t)
 	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
 	workspacesRoot := t.TempDir()
@@ -509,15 +528,7 @@ func (failingResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent
 // a fresh coordinator on the same Agent root completes recovery and hands the
 // Message over instead of losing it.
 func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.T) {
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
-	if err != nil || pool.Ping(context.Background()) != nil {
-		t.Skip("acceptance database is unavailable")
-	}
-	defer pool.Close()
+	pool := openMessageDeliveryAcceptanceDatabase(t)
 	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
 	workspacesRoot := t.TempDir()

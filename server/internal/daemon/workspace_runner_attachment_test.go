@@ -99,7 +99,7 @@ func TestWorkspaceRunnerAttachmentReplaySupportsWorkspaceWithoutRuntimes(t *test
 	}
 }
 
-func TestWorkspaceRunnerAttachmentAttachPersistsInboxWithoutLaunchingProcess(t *testing.T) {
+func TestWorkspaceRunnerAttachmentAttachPersistsOwnershipWithoutLaunchingLifecycle(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, nil)
 	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
@@ -119,8 +119,8 @@ func TestWorkspaceRunnerAttachmentAttachPersistsInboxWithoutLaunchingProcess(t *
 	if !found || attachment.RuntimeID != runtimeID || attachment.AttachmentGeneration != 1 {
 		t.Fatalf("durable Attachment=%+v found=%v", attachment, found)
 	}
-	if _, inboxRuntime, found := runner.inboxes.Resolve(agentID); !found || inboxRuntime != runtimeID {
-		t.Fatalf("Attachment Inbox found=%v runtime=%q", found, inboxRuntime)
+	if _, _, found := runner.inboxes.Resolve(agentID); found {
+		t.Fatal("Attachment created an Inbox before agent:start")
 	}
 	if _, err := os.Stat(agentworkspace.Root(root, workspaceID, agentID)); err != nil {
 		t.Fatalf("Attachment AgentRoot was not created: %v", err)
@@ -358,7 +358,7 @@ func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *te
 	if !found || attachment.AttachmentGeneration != 2 || attachment.RuntimeID != runtimeID {
 		t.Fatalf("stale detach removed newer Attachment: %+v found=%v", attachment, found)
 	}
-	if _, inboxRuntime, found := runner.inboxes.Resolve(agentID); !found || inboxRuntime != runtimeID {
-		t.Fatalf("reattach did not recover Inbox: found=%v runtime=%q", found, inboxRuntime)
+	if _, _, found := runner.inboxes.Resolve(agentID); found {
+		t.Fatal("reattach created an Inbox before agent:start")
 	}
 }

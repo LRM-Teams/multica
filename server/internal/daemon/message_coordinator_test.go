@@ -598,8 +598,8 @@ func TestRuntimePoolPublishesAcceptanceBeforeResidentRuntimeActivity(t *testing.
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !reflect.DeepEqual(observed, []string{"starting", "accepted", "activity", "complete"}) {
-		t.Fatalf("callback order = %v, want starting, acceptance, runtime Activity, then completion", observed)
+	if !reflect.DeepEqual(observed, []string{"accepted", "activity", "complete"}) {
+		t.Fatalf("callback order = %v, want acceptance, runtime Activity, then completion without synthetic Starting", observed)
 	}
 }
 

@@ -13,11 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// NotePageIssueRefResponse is a structured note→issue link (S1-R1 / S1-R3).
+// NotePageIssueRefResponse is a structured note→target link (S1-R1 / S1-R3 / S2-R1).
 //
 // Contract for agents/clients:
 //   - Always: type, id, accessible
-//   - When accessible=true: label (+ detail fields)
+//   - type is "issue" | "agent" | "run"
+//   - When accessible=true: label (+ detail fields); run also includes agent_id
 //   - When accessible=false: no label/title/identifier — only type+id
 type NotePageIssueRefResponse struct {
 	Type        string  `json:"type"`
@@ -26,6 +27,7 @@ type NotePageIssueRefResponse struct {
 	Accessible  bool    `json:"accessible"`
 	PageID      string  `json:"page_id,omitempty"`
 	IssueID     string  `json:"issue_id,omitempty"`
+	AgentID     string  `json:"agent_id,omitempty"`
 	WorkspaceID string  `json:"workspace_id,omitempty"`
 	Identifier  string  `json:"identifier,omitempty"`
 	Title       string  `json:"title,omitempty"`
@@ -69,6 +71,28 @@ func inaccessibleIssueRef(issueID string) NotePageIssueRefResponse {
 		ID:         issueID,
 		Accessible: false,
 	}
+}
+
+// loadNotePageRefs returns issue + agent + run associations for a note page
+// (S1-R1 / S2-R1). Order: issues, then agents, then runs (each by created_at).
+func (h *Handler) loadNotePageRefs(ctx context.Context, pageID, pageWorkspaceID pgtype.UUID) ([]NotePageIssueRefResponse, error) {
+	issues, err := h.loadNotePageIssueRefs(ctx, pageID, pageWorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	agents, err := h.loadNotePageAgentRefs(ctx, pageID, pageWorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	runs, err := h.loadNotePageRunRefs(ctx, pageID, pageWorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]NotePageIssueRefResponse, 0, len(issues)+len(agents)+len(runs))
+	out = append(out, issues...)
+	out = append(out, agents...)
+	out = append(out, runs...)
+	return out, nil
 }
 
 // loadNotePageIssueRefs returns association rows for a note page.

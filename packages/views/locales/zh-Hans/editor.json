@@ -230,5 +230,9 @@
   },
   "issue_reference": {
     "unavailable": "不可见"
+  },
+  "run_reference": {
+    "open": "打开 Run",
+    "fallback_label": "run"
   }
 }

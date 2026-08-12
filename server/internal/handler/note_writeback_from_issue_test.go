@@ -23,7 +23,7 @@ func TestBuildIssueDoneWritebackContent(t *testing.T) {
 			Valid:  true,
 		},
 	}
-	got := buildIssueDoneWritebackContent(issue, "MUL-9")
+	got := buildIssueDoneWritebackContent(issue, "MUL-9", "", "")
 	if !strings.Contains(got, "[MUL-9](mention://issue/"+issueID.String()+")") {
 		t.Fatalf("missing mention: %q", got)
 	}
@@ -32,6 +32,14 @@ func TestBuildIssueDoneWritebackContent(t *testing.T) {
 	}
 	if !strings.Contains(got, "Context: Line one line two") {
 		t.Fatalf("expected collapsed context, got %q", got)
+	}
+
+	withRun := buildIssueDoneWritebackContent(issue, "MUL-9", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	if !strings.Contains(withRun, "mention://run/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") {
+		t.Fatalf("missing run mention: %q", withRun)
+	}
+	if !strings.Contains(withRun, "mention://agent/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb") {
+		t.Fatalf("missing agent mention: %q", withRun)
 	}
 }
 

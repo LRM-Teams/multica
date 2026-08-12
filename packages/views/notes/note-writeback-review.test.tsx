@@ -7,7 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NotePage, NoteWriteback } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
-import { NoteWritebackReview } from "./note-writeback-review";
+import { evidenceHref, NoteWritebackReview } from "./note-writeback-review";
 
 const listNotePageWritebacks = vi.fn();
 const acceptNotePageWriteback = vi.fn();
@@ -25,12 +25,17 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
-vi.mock("@multica/core/paths", () => ({
-  useWorkspacePaths: () => ({
-    issueDetail: (id: string) => `/acme/issues/${id}`,
-    issues: () => "/acme/issues",
-  }),
-}));
+vi.mock("@multica/core/paths", async () => {
+  const actual = await vi.importActual<typeof import("@multica/core/paths")>("@multica/core/paths");
+  return {
+    ...actual,
+    useWorkspacePaths: () => ({
+      issueDetail: (id: string) => `/acme/issues/${id}`,
+      issues: () => "/acme/issues",
+      agentDetail: (id: string) => `/acme/members?member=agent%3A${id}`,
+    }),
+  };
+});
 
 vi.mock("../navigation", () => ({
   AppLink: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => (
@@ -127,5 +132,27 @@ describe("NoteWritebackReview", () => {
     await user.click(screen.getByTestId("note-writeback-reject"));
     await waitFor(() => expect(rejectNotePageWriteback).toHaveBeenCalledWith("wb-1"));
     expect(onAppliedContent).not.toHaveBeenCalled();
+  });
+});
+
+describe("evidenceHref (S2-R1)", () => {
+  const paths = {
+    issueDetail: (id: string) => `/acme/issues/${id}`,
+    issues: () => "/acme/issues",
+    agentDetail: (id: string) => `/acme/members?member=agent%3A${id}`,
+  } as ReturnType<typeof import("@multica/core/paths").useWorkspacePaths>;
+
+  it("links run evidence to agentDetail?run= when agent evidence is present", () => {
+    const evidence = [
+      { type: "issue", id: "issue-1", label: "MUL-1" },
+      { type: "run", id: "run-1", label: "run" },
+      { type: "agent", id: "agent-1", label: "agent" },
+    ];
+    expect(evidenceHref(evidence[1]!, evidence, paths)).toBe(
+      "/acme/members?member=agent%3Aagent-1&run=run-1",
+    );
+    expect(evidenceHref(evidence[2]!, evidence, paths)).toBe(
+      "/acme/members?member=agent%3Aagent-1",
+    );
   });
 });

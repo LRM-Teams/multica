@@ -28,7 +28,7 @@ func (h *Handler) GetAgentNotePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	refs, err := h.loadNotePageIssueRefs(r.Context(), page.ID, page.WorkspaceID)
+	refs, err := h.loadNotePageRefs(r.Context(), page.ID, page.WorkspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load note page refs")
 		return

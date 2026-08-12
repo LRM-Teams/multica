@@ -237,6 +237,8 @@ import type {
   NotePageIssueRef,
   NotePageIssueRefListResponse,
   CreateNotePageIssueRefRequest,
+  CreateNotePageAgentRefRequest,
+  CreateNotePageRunRefRequest,
   CreateNotePageIssueRequest,
   CreateNotePageIssueResponse,
   NoteWriteback,
@@ -1137,6 +1139,52 @@ export class ApiClient {
 
   async deleteNotePageIssueRef(pageId: string, issueId: string): Promise<void> {
     await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/issue-refs/${encodeURIComponent(issueId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listNotePageAgentRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/agent-refs`);
+    return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/agent-refs",
+    });
+  }
+
+  async createNotePageAgentRef(pageId: string, data: CreateNotePageAgentRefRequest): Promise<NotePageIssueRef> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/agent-refs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageIssueRefSchema, EMPTY_NOTE_PAGE_ISSUE_REF, {
+      endpoint: "POST /api/notes/pages/{id}/agent-refs",
+    });
+  }
+
+  async deleteNotePageAgentRef(pageId: string, agentId: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/agent-refs/${encodeURIComponent(agentId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listNotePageRunRefs(pageId: string): Promise<NotePageIssueRefListResponse> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/run-refs`);
+    return parseWithFallback(raw, NotePageIssueRefListResponseSchema, EMPTY_NOTE_PAGE_ISSUE_REF_LIST, {
+      endpoint: "GET /api/notes/pages/{id}/run-refs",
+    });
+  }
+
+  async createNotePageRunRef(pageId: string, data: CreateNotePageRunRefRequest): Promise<NotePageIssueRef> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(pageId)}/run-refs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageIssueRefSchema, EMPTY_NOTE_PAGE_ISSUE_REF, {
+      endpoint: "POST /api/notes/pages/{id}/run-refs",
+    });
+  }
+
+  async deleteNotePageRunRef(pageId: string, runId: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(pageId)}/run-refs/${encodeURIComponent(runId)}`, {
       method: "DELETE",
     });
   }

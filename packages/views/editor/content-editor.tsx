@@ -204,6 +204,7 @@ interface ContentEditorRef {
   getSelectedText: () => string;
   /** Insert or replace the selection with an issueReference chip. */
   insertIssueReference: (attrs: { id: string; label: string }) => void;
+  insertRunReference: (attrs: { id: string; label: string; agentId?: string | null }) => void;
   /**
    * LRM-695 — append Markdown at the end of the document, parsing it through
    * the same `@tiptap/markdown` pipeline as paste so block syntax (e.g. a `>`
@@ -630,6 +631,26 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           {
             type: "issueReference",
             attrs: { id: attrs.id, label: attrs.label, title: null },
+          },
+          { type: "text", text: " " },
+        ];
+        if (from === to) {
+          editor.chain().focus().insertContent(content).run();
+          return;
+        }
+        editor.chain().focus().insertContentAt({ from, to }, content).run();
+      },
+      insertRunReference: (attrs) => {
+        if (!editor) return;
+        const { from, to } = editor.state.selection;
+        const content = [
+          {
+            type: "runReference",
+            attrs: {
+              id: attrs.id,
+              label: attrs.label,
+              agentId: attrs.agentId ?? null,
+            },
           },
           { type: "text", text: " " },
         ];

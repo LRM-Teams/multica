@@ -76,6 +76,7 @@ import { IssueReferenceExtension } from "./issue-reference";
 import { createIssueReferenceSuggestion } from "./issue-reference-suggestion";
 import { ChannelReferenceExtension } from "./channel-reference";
 import { createChannelReferenceSuggestion } from "./channel-reference-suggestion";
+import { RunReferenceExtension } from "./run-reference";
 import { SlashCommandExtension } from "./slash-command-extension";
 import { createSlashCommandSuggestion, createBuiltinCommandSuggestion, createBlockCommandSuggestion } from "./slash-command-suggestion";
 import { CodeBlockView } from "./code-block-view";
@@ -378,6 +379,7 @@ export function createEditorExtensions(
           ? createChannelReferenceSuggestion(options.queryClient)
           : { char: "#", allow: () => false },
     }),
+    RunReferenceExtension,
     SlashCommandExtension.configure({
       HTMLAttributes: { class: "slash-command" },
       suggestion: !options.enableSlashCommands

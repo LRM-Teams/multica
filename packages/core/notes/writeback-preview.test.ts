@@ -40,6 +40,7 @@ describe("writebackHasOpenableEvidence", () => {
     expect(writebackHasOpenableEvidence([])).toBe(false);
     expect(writebackHasOpenableEvidence([{ type: "issue", id: "i1" }])).toBe(true);
     expect(writebackHasOpenableEvidence([{ type: "run", id: "r1" }])).toBe(true);
+    expect(writebackHasOpenableEvidence([{ type: "agent", id: "a1" }])).toBe(true);
     expect(writebackHasOpenableEvidence([{ type: "note", id: "n1" }])).toBe(false);
   });
 });

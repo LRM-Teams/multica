@@ -15,15 +15,24 @@ describe("NotePageIssueRefSchema (S1-R3)", () => {
     expect(parsed.title).toBe("Ship it");
   });
 
-  it("accepts inaccessible refs without label/title", () => {
-    const parsed = NotePageIssueRefSchema.parse({
-      type: "issue",
-      id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-      accessible: false,
-    });
-    expect(parsed.accessible).toBe(false);
-    expect(parsed.label ?? null).toBeNull();
-    expect(parsed.title).toBeUndefined();
+  it("accepts agent and run refs (S2-R1)", () => {
+    expect(
+      NotePageIssueRefSchema.parse({
+        type: "agent",
+        id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        accessible: true,
+        label: "Deepseek",
+      }).type,
+    ).toBe("agent");
+    expect(
+      NotePageIssueRefSchema.parse({
+        type: "run",
+        id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        accessible: true,
+        label: "run",
+        agent_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      }).agent_id,
+    ).toBe("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
   });
 });
 

@@ -230,5 +230,9 @@
   },
   "issue_reference": {
     "unavailable": "Unavailable"
+  },
+  "run_reference": {
+    "open": "Open run",
+    "fallback_label": "run"
   }
 }

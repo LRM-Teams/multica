@@ -247,12 +247,18 @@
     - 测试：`NoteWorkerRunDialog` 断言只打 Worker API、不打 `createNoteAIJob`；status helper 单测
     - 后端派发/ACL 已由 S2-C1 覆盖；本项不新增 E2E（CI 无 Playwright）
 
-- [ ] **S2-R1 引用扩展到 Agent / Run**
+- [x] **S2-R1 引用扩展到 Agent / Run**
   - **目标**：笔记可引用 Agent、Run（展示+关联），便于写回 evidence。
   - **要做**：扩展 S1 引用模型 `type`；渲染与跳转；写回 evidence 可链 run。
   - **不要做**：Issue 页上的「关联笔记」列表（Slice 3）。
   - **依赖**：S1-R1
   - **完成标准**：可插入/渲染；ACL 降级行为与 Issue 引用一致。
+  - **已落地（2026-08-12）**：
+    - DB：`note_page_agent_ref` / `note_page_run_ref`（migration `339`）
+    - API：`.../agent-refs`、`.../run-refs`；`GetNotePage.refs` 异构 `issue|agent|run`
+    - 编辑器：笔记 `@` 仅智能体；`mention://run` TipTap 节点；autosave 同步三类关联
+    - 写回：evidence 可带 agent；`evidenceHref` → `agentDetail?run=`
+    - 测试：Go CRUD/ACL/GetNotePage；FE extract/schema/evidenceHref
 
 ---
 

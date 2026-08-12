@@ -200,7 +200,7 @@ function ReadonlyLink({
   }
 
   if (isMentionHref(href)) {
-    const match = href.match(/^mention:\/\/(member|agent|issue|project|all|squad)\/(.+)$/);
+    const match = href.match(/^mention:\/\/(member|agent|issue|project|run|all|squad)\/(.+)$/);
     if (match?.[1] === "issue" && match[2]) {
       const label =
         typeof children === "string"
@@ -209,6 +209,19 @@ function ReadonlyLink({
             ? children.join("")
             : undefined;
       return <IssueMentionLink issueId={match[2]} label={label} />;
+    }
+    if (match?.[1] === "run" && match[2]) {
+      const label =
+        typeof children === "string"
+          ? children
+          : Array.isArray(children)
+            ? children.join("")
+            : "run";
+      return (
+        <span className="mention" data-mention-type="run" data-run-id={match[2]}>
+          {label}
+        </span>
+      );
     }
     if (match?.[1] === "project" && match[2]) {
       const label =

@@ -114,10 +114,12 @@ export interface NoteWorkerJob {
   updated_at: string;
 }
 
-/** Stable note → issue link (S1-R1 / S1-R3). */
+/** Stable note → target link (S1-R1 / S1-R3 / S2-R1). */
+export type NotePageRefType = "issue" | "agent" | "run";
+
 export interface NotePageIssueRef {
-  type: "issue";
-  /** Issue UUID. Always present. */
+  type: NotePageRefType | string;
+  /** Target UUID. Always present. */
   id: string;
   /** Identifier label when accessible; omitted when inaccessible. */
   label?: string | null;
@@ -125,6 +127,8 @@ export interface NotePageIssueRef {
   page_id?: string;
   /** @deprecated Prefer `id`; kept for older clients during transition. */
   issue_id?: string;
+  /** Present on accessible run refs (S2-R1). */
+  agent_id?: string;
   workspace_id?: string;
   identifier?: string;
   title?: string;
@@ -138,6 +142,14 @@ export interface NotePageIssueRefListResponse {
 
 export interface CreateNotePageIssueRefRequest {
   issue_id: string;
+}
+
+export interface CreateNotePageAgentRefRequest {
+  agent_id: string;
+}
+
+export interface CreateNotePageRunRefRequest {
+  run_id: string;
 }
 
 export interface CreateNotePageIssueRequest {

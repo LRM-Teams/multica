@@ -68,12 +68,13 @@ import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 
 export const NotePageIssueRefSchema: z.ZodType<NotePageIssueRef> = z.object({
-  type: z.literal("issue").default("issue"),
+  type: z.enum(["issue", "agent", "run"]).catch("issue"),
   id: z.string().default(""),
   label: z.string().nullable().optional(),
   accessible: z.boolean().default(false),
   page_id: z.string().optional(),
   issue_id: z.string().optional(),
+  agent_id: z.string().optional(),
   workspace_id: z.string().optional(),
   identifier: z.string().optional(),
   title: z.string().optional(),

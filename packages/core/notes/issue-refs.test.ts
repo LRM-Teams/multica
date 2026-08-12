@@ -1,11 +1,22 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { extractIssueIdsFromNoteMarkdown, syncNotePageIssueRefsFromContent } from "./issue-refs";
+import {
+  extractAgentIdsFromNoteMarkdown,
+  extractIssueIdsFromNoteMarkdown,
+  extractRunIdsFromNoteMarkdown,
+  syncNotePageIssueRefsFromContent,
+} from "./issue-refs";
 
 vi.mock("../api", () => ({
   api: {
     listNotePageIssueRefs: vi.fn(),
     createNotePageIssueRef: vi.fn(),
     deleteNotePageIssueRef: vi.fn(),
+    listNotePageAgentRefs: vi.fn(),
+    createNotePageAgentRef: vi.fn(),
+    deleteNotePageAgentRef: vi.fn(),
+    listNotePageRunRefs: vi.fn(),
+    createNotePageRunRef: vi.fn(),
+    deleteNotePageRunRef: vi.fn(),
   },
 }));
 
@@ -25,6 +36,16 @@ describe("extractIssueIdsFromNoteMarkdown", () => {
         "[x](mention://member/u1) [#ch](mention://channel/c1) [bad](mention://issue/not-a-uuid)",
       ),
     ).toEqual([]);
+  });
+});
+
+describe("extractAgentIdsFromNoteMarkdown / extractRunIdsFromNoteMarkdown", () => {
+  it("extracts agent and run UUIDs (S2-R1)", () => {
+    const agent = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const run = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const md = `[@Deep](mention://agent/${agent}) did [run](mention://run/${run})`;
+    expect(extractAgentIdsFromNoteMarkdown(md)).toEqual([agent]);
+    expect(extractRunIdsFromNoteMarkdown(md)).toEqual([run]);
   });
 });
 

@@ -37,13 +37,26 @@ func (h *Handler) maybeProposeNoteWritebacksOnIssueDone(
 	}
 
 	identifier := fmt.Sprintf("%s-%d", prefix, issue.Number)
-	content := buildIssueDoneWritebackContent(issue, identifier)
 	evidence, err := h.buildIssueDoneWritebackEvidence(ctx, issue, identifier)
 	if err != nil {
 		slog.Warn("note writeback on done: build evidence failed",
 			"issue_id", uuidToString(issue.ID), "error", err)
 		return
 	}
+	var runID, agentID string
+	for _, item := range evidence {
+		switch item.Type {
+		case "run":
+			if runID == "" {
+				runID = item.ID
+			}
+		case "agent":
+			if agentID == "" {
+				agentID = item.ID
+			}
+		}
+	}
+	content := buildIssueDoneWritebackContent(issue, identifier, runID, agentID)
 	evidenceJSON, err := json.Marshal(evidence)
 	if err != nil {
 		slog.Warn("note writeback on done: encode evidence failed",
@@ -94,7 +107,7 @@ WHERE issue_id = $1`, issueID)
 	return out, rows.Err()
 }
 
-func buildIssueDoneWritebackContent(issue db.Issue, identifier string) string {
+func buildIssueDoneWritebackContent(issue db.Issue, identifier string, runID, agentID string) string {
 	title := strings.TrimSpace(issue.Title)
 	if title == "" {
 		title = "Untitled"
@@ -107,6 +120,16 @@ func buildIssueDoneWritebackContent(issue db.Issue, identifier string) string {
 	b.WriteString(title)
 	b.WriteString("\n\n")
 	b.WriteString("- Status moved to **done**.\n")
+	if runID != "" {
+		b.WriteString("- Run: ")
+		b.WriteString(fmt.Sprintf("[run](mention://run/%s)", runID))
+		b.WriteString("\n")
+	}
+	if agentID != "" {
+		b.WriteString("- Agent: ")
+		b.WriteString(fmt.Sprintf("[@agent](mention://agent/%s)", agentID))
+		b.WriteString("\n")
+	}
 	if issue.Description.Valid {
 		summary := strings.TrimSpace(issue.Description.String)
 		if summary != "" {
@@ -135,13 +158,13 @@ func (h *Handler) buildIssueDoneWritebackEvidence(ctx context.Context, issue db.
 		Label: &label,
 	}}
 
-	var taskID pgtype.UUID
+	var taskID, agentID pgtype.UUID
 	err := h.DB.QueryRow(ctx, `
-SELECT id
+SELECT id, agent_id
 FROM agent_inbox_event
 WHERE issue_id = $1 AND status = 'completed'
 ORDER BY completed_at DESC NULLS LAST, updated_at DESC
-LIMIT 1`, issue.ID).Scan(&taskID)
+LIMIT 1`, issue.ID).Scan(&taskID, &agentID)
 	if err == nil && taskID.Valid {
 		runLabel := "run"
 		evidence = append(evidence, noteWritebackEvidence{
@@ -149,6 +172,14 @@ LIMIT 1`, issue.ID).Scan(&taskID)
 			ID:    uuidToString(taskID),
 			Label: &runLabel,
 		})
+		if agentID.Valid {
+			agentLabel := "agent"
+			evidence = append(evidence, noteWritebackEvidence{
+				Type:  "agent",
+				ID:    uuidToString(agentID),
+				Label: &agentLabel,
+			})
+		}
 	} else if err != nil && err != pgx.ErrNoRows {
 		return nil, err
 	}

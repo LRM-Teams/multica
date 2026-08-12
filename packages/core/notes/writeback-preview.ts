@@ -46,6 +46,6 @@ export function writebackHasOpenableEvidence(
     const type = (item.type ?? "").trim().toLowerCase();
     const id = (item.id ?? "").trim();
     if (!id) return false;
-    return type === "issue" || type === "run" || type === "task" || type === "agent_task";
+    return type === "issue" || type === "agent" || type === "run" || type === "task" || type === "agent_task";
   });
 }

@@ -11,7 +11,7 @@ import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { noteAIJobOptions, noteDetailOptions, noteListOptions, noteTrashOptions } from "@multica/core/notes/queries";
 import { useCreateNotePage, useDeleteNotePage, useDuplicateNotePage, useMoveNotePage, usePermanentlyDeleteNotePage, useRestoreNotePage, useUpdateNotePage, useUpdateNotePageShares } from "@multica/core/notes/mutations";
-import { syncNotePageIssueRefsFromContent } from "@multica/core/notes/issue-refs";
+import { syncNotePageRefsFromContent } from "@multica/core/notes/issue-refs";
 import { agentListOptions, memberListOptions, workspaceListOptions } from "@multica/core/workspace/queries";
 import type { Agent, MemberWithUser, NoteAIEditResult, NoteAIJobStatus, NotePage } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -808,6 +808,7 @@ function NoteEditor({
   currentUserId,
   ownerName,
   shareNames,
+  agents,
   workerJobId,
   onOpenPage,
   onOpenShare,
@@ -820,6 +821,7 @@ function NoteEditor({
   currentUserId?: string;
   ownerName: string;
   shareNames: string[];
+  agents: Agent[];
   workerJobId: string | null;
   onOpenPage: (id: string) => void;
   onOpenShare: () => void;
@@ -915,7 +917,7 @@ function NoteEditor({
           // Best-effort: sync note→issue refs after content lands. Failures
           // must not roll back the note body save (S1-R2).
           try {
-            const sync = await syncNotePageIssueRefsFromContent(selected.id, page.content);
+            const sync = await syncNotePageRefsFromContent(selected.id, page.content);
             if (sync.errors.length > 0 && active) {
               showErrorToast(t(($) => $.notes_page.issue_refs_sync_failed));
             }
@@ -1079,7 +1081,9 @@ function NoteEditor({
         showEmptyLinePlaceholder
         className="mt-6 min-h-[55vh] px-0 pb-[45vh] pt-2"
         debounceMs={150}
-        disableMentions
+        disableMentions={false}
+        mentionAllowedActorIds={new Set(agents.map((agent) => agent.id))}
+        scopedMentionAgents={agents}
         enableIssueReferences
         enableSlashCommands
         slashCommandMode="block"
@@ -1515,6 +1519,7 @@ export function NotesPage({ pageId }: { pageId?: string }) {
               currentUserId={currentUserId}
               ownerName={selectedOwnerName}
               shareNames={selectedShareNames}
+              agents={agents}
               workerJobId={workerJobId}
               onOpenPage={openPage}
               onOpenShare={() => setUiState((current) => ({ ...current, sharePage: selected }))}

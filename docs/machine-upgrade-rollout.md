@@ -21,6 +21,15 @@ accepted Runtime recovery proof. Runtime cardinality is not takeover identity.
 Rejection before the CAS leaves
 the incumbent generation valid and does not enter server rollback.
 
+The launcher marks the v2 loopback takeover protocol with the candidate's exact
+Computer generation when spawning it, so an inherited environment value cannot
+change a later candidate's protocol.
+If that marker is absent, the candidate was spawned by a pre-v2 launcher and
+projects the legacy `running`/`handoff` health shape from its durable receipt so
+the launcher can authorize the same CAS. This is only a local compatibility
+view: preflight, Runtime registration, WebSocket connection, and task claims
+remain blocked until the CAS commits.
+
 ## Deployment order
 
 1. Apply migrations `288_machine_upgrade_contract`,

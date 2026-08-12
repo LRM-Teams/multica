@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/computer"
@@ -62,7 +63,10 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string, take
 	}
 	args := computer.ResidentArgs(computer.StartOptions{Generation: generation})
 	if takeoverExpectation != nil {
-		args = append(args, "--machine-upgrade-detached-candidate")
+		args = append(args,
+			"--machine-upgrade-detached-candidate",
+			"--machine-upgrade-takeover-protocol", machineUpgradeTakeoverProtocolValue(generation),
+		)
 	}
 	child := exec.Command(binaryPath, args...)
 	child.Stdout = logFile
@@ -108,6 +112,17 @@ func startDetachedDaemonBinary(binaryPath, profile, expectedVersion string, take
 	}
 	terminateDetachedCandidate(child)
 	return fmt.Errorf("detached successor did not become ready within %s", detachedSuccessorReadyTimeout)
+}
+
+func machineUpgradeTakeoverProtocolValue(generation int64) string {
+	return fmt.Sprintf("%s:%d", daemon.MachineUpgradeTakeoverProtocolV2, generation)
+}
+
+func machineUpgradeTakeoverProtocolForGeneration(value string, generation int64) daemon.MachineUpgradeTakeoverProtocol {
+	if generation > 0 && strings.TrimSpace(value) == machineUpgradeTakeoverProtocolValue(generation) {
+		return daemon.MachineUpgradeTakeoverProtocolV2
+	}
+	return ""
 }
 
 func acceptReadyDetachedCandidate(

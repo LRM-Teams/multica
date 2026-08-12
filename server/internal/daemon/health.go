@@ -86,7 +86,14 @@ func (d *Daemon) healthHandler(startedAt time.Time) http.HandlerFunc {
 		// "running" (older CLI/desktop) safely treat "starting" as not-ready.
 		status := "starting"
 		if d.machineUpgradeTakeover != nil && d.machineUpgradeTakeover.isReady() && !d.ready.Load() {
-			status = "takeover_ready"
+			if d.cfg.MachineUpgradeTakeoverProtocol == MachineUpgradeTakeoverProtocolV2 {
+				status = "takeover_ready"
+			} else {
+				// Compatibility projection for pre-v2 launchers. The candidate is
+				// still blocked before registration; only the loopback launcher sees
+				// the historical readiness spelling needed to authorize the CAS.
+				status = "running"
+			}
 		} else if d.ready.Load() {
 			status = "running"
 		}

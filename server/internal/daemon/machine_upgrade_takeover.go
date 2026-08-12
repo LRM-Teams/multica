@@ -110,16 +110,19 @@ func (t *machineUpgradeTakeover) prepare(d *Daemon) error {
 // accepted Workspace set comes from the durable operation receipt; the
 // candidate values come from the process that owns the local control port.
 type MachineUpgradeTakeoverProof struct {
-	UpgradeID                         string   `json:"upgrade_id"`
-	Generation                        string   `json:"generation"`
-	ComputerID                        string   `json:"daemon_id"` // Legacy wire spelling; domain identity is Computer.
-	PredecessorComputerGeneration     int64    `json:"predecessor_computer_generation"`
-	PredecessorVersionStoreGeneration uint64   `json:"predecessor_version_store_generation"`
-	CandidateComputerGeneration       int64    `json:"candidate_computer_generation"`
-	CandidatePID                      int      `json:"candidate_pid"`
-	TargetVersion                     string   `json:"target_version"`
-	WorkspaceIDs                      []string `json:"workspace_ids"`
-	Phase                             string   `json:"phase"`
+	UpgradeID                         string `json:"upgrade_id"`
+	Generation                        string `json:"generation"`
+	ComputerID                        string `json:"daemon_id"` // Legacy wire spelling; domain identity is Computer.
+	PredecessorComputerGeneration     int64  `json:"predecessor_computer_generation"`
+	PredecessorVersionStoreGeneration uint64 `json:"predecessor_version_store_generation"`
+	CandidateComputerGeneration       int64  `json:"candidate_computer_generation"`
+	CandidatePID                      int    `json:"candidate_pid"`
+	TargetVersion                     string `json:"target_version"`
+	// RuntimeIDs is retained only for the loopback handshake emitted to
+	// pre-v2 launchers. Server takeover identity is Computer + Workspace scoped.
+	RuntimeIDs   []string `json:"runtime_ids,omitempty"`
+	WorkspaceIDs []string `json:"workspace_ids"`
+	Phase        string   `json:"phase"`
 }
 
 // MachineUpgradeTakeoverExpectation returns the incumbent-owned half of a
@@ -172,8 +175,17 @@ func (d *Daemon) machineUpgradeTakeoverProof() (MachineUpgradeTakeoverProof, err
 	workspaceIDs := append([]string(nil), journal.WorkspaceIDs...)
 	sort.Strings(workspaceIDs)
 	phase := journal.Phase
-	if phase == "handoff" {
+	legacyLauncher := d.cfg.MachineUpgradeTakeoverProtocol != MachineUpgradeTakeoverProtocolV2
+	if phase == "handoff" && !legacyLauncher {
 		phase = "takeover_ready"
+	}
+	runtimeIDs := []string(nil)
+	if legacyLauncher {
+		runtimeIDs = append(runtimeIDs, journal.RuntimeIDs...)
+		sort.Strings(runtimeIDs)
+		if phase == "takeover_committed" {
+			phase = "candidate_ready"
+		}
 	}
 	return MachineUpgradeTakeoverProof{
 		UpgradeID:                         journal.ID,
@@ -184,6 +196,7 @@ func (d *Daemon) machineUpgradeTakeoverProof() (MachineUpgradeTakeoverProof, err
 		CandidateComputerGeneration:       d.cfg.ComputerGeneration,
 		CandidatePID:                      os.Getpid(),
 		TargetVersion:                     d.cfg.CLIVersion,
+		RuntimeIDs:                        runtimeIDs,
 		WorkspaceIDs:                      workspaceIDs,
 		Phase:                             phase,
 	}, nil
@@ -216,6 +229,9 @@ func ValidateMachineUpgradeTakeoverProof(expected, actual MachineUpgradeTakeover
 	}
 	if !daemonVersionsMatch(expected.TargetVersion, actual.TargetVersion) {
 		return fmt.Errorf("target version mismatch")
+	}
+	if !sameStringSet(expected.RuntimeIDs, actual.RuntimeIDs) {
+		return fmt.Errorf("accepted Runtime receipt mismatch")
 	}
 	if !sameStringSet(expected.WorkspaceIDs, actual.WorkspaceIDs) {
 		return fmt.Errorf("accepted Workspace set mismatch")
@@ -270,7 +286,9 @@ func (d *Daemon) localMachineUpgradeTakeoverHandler() http.HandlerFunc {
 			writeTakeoverJSON(w, actual)
 			return
 		}
-		if expected.Phase != "takeover_ready" || actual.Phase != "takeover_ready" {
+		legacyLauncher := d.cfg.MachineUpgradeTakeoverProtocol != MachineUpgradeTakeoverProtocolV2 &&
+			expected.Phase == "handoff" && actual.Phase == "handoff"
+		if !legacyLauncher && (expected.Phase != "takeover_ready" || actual.Phase != "takeover_ready") {
 			http.Error(w, "detached takeover is not awaiting incumbent commit", http.StatusConflict)
 			return
 		}
@@ -308,6 +326,12 @@ func (d *Daemon) localMachineUpgradeTakeoverHandler() http.HandlerFunc {
 			d.logger.Info("detached Machine Upgrade candidate released to authenticated startup", "upgrade_id", actual.UpgradeID)
 		}
 		actual.Phase = "takeover_committed"
+		if legacyLauncher {
+			// Pre-v2 launchers require candidate_ready in the loopback response.
+			// The durable journal remains takeover_committed; normal startup still
+			// owns Runtime registration and server completion after this response.
+			actual.Phase = "candidate_ready"
+		}
 		writeTakeoverJSON(w, actual)
 	}
 }

@@ -33,10 +33,9 @@ describe("ActivityTab", () => {
           {
             id: "row-1",
             occurred_at: "2026-08-06T12:00:00Z",
-            title: "Running command...",
-            subtext: "Safe detail",
-            tone: "active",
-            body_kind: "text",
+            title: "Running command",
+            tone: "warning",
+            body_kind: "command",
             body: "sanitized body",
           },
         ],
@@ -49,14 +48,66 @@ describe("ActivityTab", () => {
     expect(runnerActivity).toHaveBeenCalledWith("workspace-1", "agent-1");
     expect(screen.getByTestId("activity-timeline-spine")).toBeInTheDocument();
     expect(screen.getAllByTestId("runner-activity-row").map((row) => row.textContent)).toEqual([
-      expect.stringContaining("Running command..."),
+      expect.stringContaining("Running command"),
       expect.stringContaining("Idle"),
     ]);
-    expect(screen.getAllByText("Running command...")).toHaveLength(1);
+    expect(screen.getAllByText("Running command")).toHaveLength(1);
     // Default-full: body visible without expand (2026-08-11).
     expect(screen.getByText("sanitized body")).toBeInTheDocument();
     expect(screen.getByTestId("activity-command-block")).toBeInTheDocument();
     expect(screen.queryByTestId("activity-command-fold-toggle")).toBeNull();
+  });
+
+  it("renders a long Running command body fully (no line-clamp) with Copy", async () => {
+    vi.mocked(copyText).mockResolvedValue(true);
+    const command =
+      '/bin/bash -lc "pwd && rg --files -g \'!*.git\' -g \'!node_modules\' | head -80 && git status --short"';
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Running command...", tone: "warning", visibility: "visible" },
+        timeline: [{
+          id: "row-cmd",
+          occurred_at: "2026-08-06T12:00:00Z",
+          title: "Running command",
+          tone: "warning",
+          body_kind: "command",
+          body: command,
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    const code = screen.getByTestId("activity-command-block").querySelector("code");
+    expect(code?.textContent).toBe(command);
+    expect(code?.textContent).not.toContain("…");
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(command));
+  });
+
+  it("falls back to subtext for legacy Running command rows without body", () => {
+    const command = "go test ./internal/handler -count=1";
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Running command...", tone: "warning", visibility: "visible" },
+        timeline: [{
+          id: "row-legacy",
+          occurred_at: "2026-08-06T12:00:00Z",
+          title: "Running command",
+          subtext: command,
+          tone: "warning",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    expect(screen.getByTestId("activity-command-block").querySelector("code")?.textContent).toBe(
+      command,
+    );
   });
 
   it("renders a server-projected soft-hold row (warning tone) with its reason subtext", () => {

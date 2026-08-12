@@ -243,6 +243,103 @@ func TestInterruptedMachineUpgradeRecoveryResumesOnlyIncompletePhases(t *testing
 	}
 }
 
+func TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplicitActivation(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := filepath.Join(root, "store")
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	previousOpen := openVersionStoreFn
+	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
+		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
+	}
+	t.Cleanup(func() { openVersionStoreFn = previousOpen })
+
+	store, err := openVersionStoreFn(storeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"v10.0.0", "v11.0.0"} {
+		if _, err := cli.StageReleaseBytes(context.Background(), store, version, []byte("candidate"), "asset.tar.gz"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v10.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 1, "v11.0.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	restartCalls := 0
+	d := &Daemon{
+		cfg:        Config{CLIVersion: "v11.0.0"},
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cancelFunc: func() { restartCalls++ },
+	}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-1"}, Phase: "candidate_ready",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := d.recoverInterruptedMachineUpgrade(context.Background())
+	if err != nil || restarted {
+		t.Fatalf("superseded recovery restarted=%v err=%v", restarted, err)
+	}
+	if restartCalls != 0 {
+		t.Fatalf("superseded recovery restarted process %d times", restartCalls)
+	}
+	retained, err := d.currentMachineUpgradeJournal()
+	if err != nil || retained == nil || retained.ID != journal.ID || retained.Phase != journal.Phase {
+		t.Fatalf("superseded journal was mutated or removed: %+v err=%v", retained, err)
+	}
+}
+
+func TestInterruptedMachineUpgradeRecoveryRejectsUntrackedExecutableReplacement(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := filepath.Join(root, "store")
+	previousRoot := versionStoreRootFn
+	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
+	t.Cleanup(func() { versionStoreRootFn = previousRoot })
+
+	previousOpen := openVersionStoreFn
+	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
+		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
+	}
+	t.Cleanup(func() { openVersionStoreFn = previousOpen })
+
+	store, err := openVersionStoreFn(storeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.StageReleaseBytes(context.Background(), store, "v10.0.0", []byte("candidate"), "asset.tar.gz"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v10.0.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &Daemon{
+		cfg:    Config{CLIVersion: "v11.0.0"},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-1"}, Phase: "candidate_ready",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	if restarted, err := d.recoverInterruptedMachineUpgrade(context.Background()); err == nil || restarted {
+		t.Fatalf("untracked replacement restarted=%v err=%v", restarted, err)
+	}
+}
+
 func TestForwardRecoveryBoundsTargetRestarts(t *testing.T) {
 	root := t.TempDir()
 	previousRoot := versionStoreRootFn

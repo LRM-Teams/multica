@@ -25,6 +25,7 @@ func TestBuildNoteWorkerPromptUntrustedBoundary(t *testing.T) {
 		"untrusted",
 		"page_id: page-uuid",
 		"replace_page",
+		"multica notes get page-uuid",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)

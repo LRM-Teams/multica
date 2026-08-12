@@ -28,10 +28,17 @@ S2-C3 established the typed contract and misuse rejection. **S2-C1** wires dispa
 2. `note_worker_job.task_id` is set and status becomes `dispatched`.
 3. UI trigger is still **S2-A2**; Agent `notes get` tool is **S2-C2**; richer prompt partitions are **S2-C4**.
 
+## Agent read path (S2-C2)
+
+- CLI: `multica notes get <page-id> --output json` (agent task token only)
+- API: `GET /api/agent/notes/pages/{id}`
+- ACL: current task must authorize the page via `note_worker_job` (or matching `note_brief`) **and** the Worker `creator_id` must still pass `noteAccess`. Agent `OwnerUserID` is never the note viewer. No list/search.
+
 ## Code pointers
 
 - Editor create/get/cancel: `server/internal/handler/notes.go` (`CreateNoteAIJob`, …)
 - Worker create/get + cross-rejection: `server/internal/handler/note_worker.go`
+- Agent note read: `server/internal/handler/agent_notes.go`
 - Note brief context helper: `server/internal/service/note_brief.go`
 - Shared intent constants: `server/internal/handler/note_intent.go`
 - FE types: `packages/core/types/note.ts` (`NoteIntent`, `CreateNoteWorkerJobRequest`, …)

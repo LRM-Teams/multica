@@ -209,12 +209,18 @@
     - 测试：`TestWithNoteBrief*`、`TestBuildNoteWorkerPromptUntrustedBoundary`、`TestCreateNoteWorkerJobDispatchesWithNoteBrief`、`TestCreateNoteWorkerJobRejectsOutsiderWithoutNoteAccess`、`TestCreateNoteAIJobDoesNotAttachNoteBrief`
     - Issue/Wake 通用可选挂载与 UI 触发留给后续（S2-A2 / 扩展 enqueue）；本项以 Worker 派发路径落实协议字段与 ACL
 
-- [ ] **S2-C2 Agent 读笔记工具（ACL 内）**
+- [x] **S2-C2 Agent 读笔记工具（ACL 内）**
   - **目标**：Worker 运行中可按需读指定笔记页（可选：同树只读子页需另开任务，默认不做搜索全家桶）。
   - **要做**：CLI 或 runtime 工具：`notes get` 类；强制 workspace + ACL。
   - **不要做**：默认开放「搜索整个 workspace 所有笔记」。
   - **依赖**：S2-C1
   - **完成标准**：有权可读、无权不可读的测例。
+  - **已落地（2026-08-12）**：
+    - `GET /api/agent/notes/pages/{id}`：task 上 `note_worker_job`/`note_brief` 授权 + creator `noteAccess`
+    - CLI：`multica notes get <page-id>`（仅 agent token）；runtime_config Available Commands 已列
+    - 测试：`TestGetAgentNotePageAllowsWorkerBriefPage`、`TestGetAgentNotePageRejectsUnauthorizedPage`、`TestGetAgentNotePageRejectsWhenCreatorLosesAccess`
+    - 不做 list/search
+
 
 - [ ] **S2-C4 指令与正文分离**
   - **目标**：用户指令 / 系统合同 vs 笔记正文分离，防 prompt 注入。

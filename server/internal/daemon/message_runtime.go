@@ -92,12 +92,9 @@ func (d *Daemon) ensureIdleMessageCoordinatorForDelivery(workspaceID, agentID st
 	if !runtimeKnown || runtime.WorkspaceID != workspaceID {
 		return fmt.Errorf("durable Agent Attachment for %q is not owned by Workspace %q", agentID, workspaceID)
 	}
-	created, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID)
+	_, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, attachment.RuntimeID)
 	if err != nil {
 		return fmt.Errorf("repair Agent Message coordinator: %w", err)
-	}
-	if created {
-		runner.beginMessageRecovery(agentID)
 	}
 	return nil
 }

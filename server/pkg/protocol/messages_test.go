@@ -46,8 +46,6 @@ func TestAgentMessageWireFieldsFollowTheirBoundaryContracts(t *testing.T) {
 	}
 
 	projectValues := []any{
-		AgentRecoveryRequest{AgentID: "agent-1", RecoveryID: "recovery-1", Boundaries: map[string]int64{}, SnapshotID: "snapshot-1", Cursor: "cursor-1", Limit: 10},
-		AgentRecoveryPage{AgentID: "agent-1", RecoveryID: "recovery-1", SnapshotID: "snapshot-1", HighWatermark: "fence-1", RunID: "run-1", RunAgentID: "run-agent-1", NextCursor: "cursor-2", HasMore: true},
 		AgentMessageHandoffPayload{AgentID: "agent-1", RuntimeID: "runtime-1", HandoffID: "handoff-1", Count: 1},
 	}
 	var encoded strings.Builder
@@ -59,12 +57,12 @@ func TestAgentMessageWireFieldsFollowTheirBoundaryContracts(t *testing.T) {
 		encoded.Write(data)
 	}
 	wire := encoded.String()
-	for _, field := range []string{`"agent_id"`, `"recovery_id"`, `"snapshot_id"`, `"high_watermark"`, `"next_cursor"`, `"has_more"`, `"runtime_id"`, `"handoff_id"`, `"run_id"`, `"run_agent_id"`} {
+	for _, field := range []string{`"agent_id"`, `"runtime_id"`, `"handoff_id"`} {
 		if !strings.Contains(wire, field) {
 			t.Fatalf("encoded payloads %s do not contain %s", wire, field)
 		}
 	}
-	for _, field := range []string{`"recoveryId"`, `"snapshotId"`, `"highWatermark"`, `"nextCursor"`, `"hasMore"`, `"runtimeId"`, `"handoffId"`} {
+	for _, field := range []string{`"runtimeId"`, `"handoffId"`} {
 		if strings.Contains(wire, field) {
 			t.Fatalf("encoded payloads %s contain non-project field %s", wire, field)
 		}

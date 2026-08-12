@@ -55,12 +55,6 @@ const (
 	taskMessageFlushInterval            = 200 * time.Millisecond
 	taskMessageTrajectoryCoalesceWindow = 350 * time.Millisecond
 	taskMessageTrajectoryMaxChars       = 2000
-	// recoveryFlushTimeout bounds a background recovery Flush so a busy /
-	// idle-input-unsupported resident runtime can never stall the workspace
-	// runner read loop while waiting on the provider (see
-	// handleMessageRecoveryPageWithSend). The coordinator's pending-notice
-	// retry completes the batch if the runtime is transiently busy.
-	recoveryFlushTimeout = 30 * time.Second
 )
 
 // taskRunner executes a single agent task and returns the result.

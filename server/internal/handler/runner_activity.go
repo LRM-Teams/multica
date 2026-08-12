@@ -70,6 +70,9 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
+		if err := h.redeliverUnacknowledgedComputerAgentMessages(ctx, identity); err != nil {
+			return err
+		}
 		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
 			return err
 		}

@@ -62,6 +62,14 @@
 - **指针**：完整协议、禁止项、Raft 1.0.15 已验证范围与升级为 `可执行` 所需回归见 `docs/agent-start-dispatch-contract.md`。
 - **当前状态**：实现与迁移尚未完成，不能标 `可执行`；完成后以协议类型、数据库约束、APM/reconcile tests 和日志断言升级本条。
 
+### 0.3 Agent Message ACK 重投协议 — `可执行`（①②⑤，owner: @Codex）
+
+- **口径（2026-08-12）**：普通消息只走 `agent:deliver → APM accepted → agent:deliver:ack`。Server 持久化未 ACK responsibility，Workspace Runner ready 后按原始 `seq` 重投；启动期由 Computer/APM buffer。ACK 不是 read、Provider turn completion 或 Context Boundary advancement。
+- **双层安全**：Server `acked_at` 负责“不丢”；Computer 的 `target + seq` / `consumed-seqs.json` 负责 Provider 去重与真实 context coverage。`deliveryId` 与 `seq` 禁止合并或互相替代。
+- **不存在**：普通消息的 `agent:recovery:request/page` 协议、payload、handler 与 coordinator 状态机已删除；Reminder snapshot 不受影响。
+- **命名**：新增接口和日志使用 Computer；既有 `daemon_id` 只视为旧存储/auth adapter。
+- **物**：migration `340_agent_message_delivery_ack`；协议类型不存在性；`TestWorkspaceRunnerReadyRedeliversUnacknowledgedMessagesInSequenceOrder` 与 `TestAgentDeliveryAcknowledgementRequiresExactSequenceAndStopsRedelivery`（均先见红）。完整 Raft 1.0.15 证据边界与 Multica 映射见 `docs/agent-message-delivery-contract.md`。
+
 ## 1. 消息写入管道（BE）
 
 ### 1.1 destination-first 统一 finalizer — `可执行`（已落地）

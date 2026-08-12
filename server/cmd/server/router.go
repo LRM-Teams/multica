@@ -428,7 +428,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderProjectionAck,
 	)
 	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
-	daemonHub.SetAgentRecoveryHandler(h.HandleAgentMessageRecovery)
 	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
 	// The current fenced Workspace Runner owns Attachment, launch, Message, and
 	// typed Activity intake for one daemon/workspace pair.

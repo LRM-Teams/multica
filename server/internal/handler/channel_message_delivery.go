@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -239,6 +241,89 @@ func (h *Handler) attachCanonicalMessageMemories(ctx context.Context, workspaceI
 			SubjectType: memory.SubjectType, SubjectID: memory.SubjectID,
 		})
 	}
+}
+
+// redeliverUnacknowledgedComputerAgentMessages rebuilds the Computer's
+// at-least-once transport queue whenever its Workspace Runner becomes ready.
+// The persisted delivery sequence remains the canonical target sequence; this
+// path neither invents a recovery cursor nor changes local context coverage.
+func (h *Handler) redeliverUnacknowledgedComputerAgentMessages(ctx context.Context, identity daemonws.ClientIdentity) error {
+	if h == nil || h.DB == nil || h.AgentDeliveryNotifier == nil {
+		return nil
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT delivery.agent_id, m.id, m.channel_id, delivery.seq, m.content, m.parts,
+		       delivery.target, c.kind, c.project_id, m.author_type, m.author_id,
+		       COALESCE(NULLIF(author_user.name, ''), NULLIF(author_agent.name, ''), ''),
+		       CASE c.kind
+		         WHEN 'group' THEN '#' || c.name
+		         WHEN 'dm' THEN 'dm:@' || COALESCE(peer.handle, '')
+		         ELSE ''
+		       END || CASE
+		         WHEN m.thread_root_message_id IS NOT NULL THEN ':' || LEFT(m.thread_root_message_id::text, 8)
+		         ELSE ''
+		       END
+		FROM agent_message_delivery delivery
+		JOIN agent recipient ON recipient.id = delivery.agent_id AND recipient.archived_at IS NULL
+		JOIN agent_runtime runtime ON runtime.id = recipient.runtime_id
+		JOIN channel_message m ON m.id = delivery.message_id AND m.deleted_at IS NULL
+		JOIN channel c ON c.id = m.channel_id AND c.workspace_id = delivery.workspace_id
+		LEFT JOIN "user" author_user ON m.author_type = 'user' AND author_user.id = m.author_id
+		LEFT JOIN agent author_agent ON m.author_type = 'agent' AND author_agent.id = m.author_id
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(NULLIF(u.name, ''), NULLIF(a.name, ''), '') AS handle
+			FROM channel_member cm
+			LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
+			LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id AND a.archived_at IS NULL
+			WHERE cm.channel_id = c.id AND cm.workspace_id = delivery.workspace_id
+			  AND NOT (cm.member_type = 'agent' AND cm.member_id = delivery.agent_id)
+			ORDER BY cm.created_at ASC
+			LIMIT 1
+		) peer ON c.kind = 'dm'
+		WHERE delivery.workspace_id = $1 AND runtime.daemon_id = $2
+		  AND delivery.acked_at IS NULL
+		ORDER BY delivery.seq, delivery.message_id, delivery.agent_id`,
+		parseUUID(identity.WorkspaceID), identity.DaemonID)
+	if err != nil {
+		return fmt.Errorf("load unacknowledged Computer Agent Messages: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var agentID, messageID, channelID, projectID, authorID pgtype.UUID
+		var seq int64
+		var content, target, channelKind, authorType, authorName, replyTarget string
+		var rawParts []byte
+		if err := rows.Scan(&agentID, &messageID, &channelID, &seq, &content, &rawParts, &target, &channelKind, &projectID, &authorType, &authorID, &authorName, &replyTarget); err != nil {
+			return fmt.Errorf("scan unacknowledged Computer Agent Message: %w", err)
+		}
+		var parts []protocol.MessagePart
+		if len(rawParts) > 0 && string(rawParts) != "null" {
+			if err := json.Unmarshal(rawParts, &parts); err != nil {
+				return fmt.Errorf("decode unacknowledged Computer Agent Message parts: %w", err)
+			}
+		}
+		agentIDText := uuidToString(agentID)
+		message := protocol.AgentMessageProjection{
+			ID: uuidToString(messageID), ChannelID: uuidToString(channelID), Target: target,
+			ReplyTarget: replyTarget, Seq: seq, Content: content, Parts: parts,
+			ChannelKind: channelKind, ProjectID: uuidToString(projectID),
+			InitiatorType: canonicalMessageInitiatorType(authorType),
+			InitiatorID:   uuidToString(authorID), InitiatorName: authorName,
+		}
+		h.attachCanonicalMessageMemories(ctx, identity.WorkspaceID, agentID, &message)
+		delivery := protocol.AgentDeliverPayload{
+			AgentID: agentIDText, Target: target, Seq: seq,
+			DeliveryID: "message:" + message.ID + ":agent:" + agentIDText,
+			Message:    message,
+		}
+		if !h.AgentDeliveryNotifier.NotifyWorkspaceAgentDelivery(identity.WorkspaceID, identity.DaemonID, delivery) {
+			slog.Debug("Computer Agent Message redelivery deferred", "workspace_id", identity.WorkspaceID, "computer_id", identity.DaemonID, "agent_id", agentIDText, "delivery_id", delivery.DeliveryID, "seq", seq)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate unacknowledged Computer Agent Messages: %w", err)
+	}
+	return nil
 }
 
 func canonicalMessageInitiatorType(authorType string) string {

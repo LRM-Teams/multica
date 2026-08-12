@@ -100,9 +100,6 @@ func (c *MessageCoordinator) PrepareCoverage(request CoverageRequest) (CoverageO
 	if c.closed {
 		return CoverageOffer{}, fmt.Errorf("%w: Inbox coordinator is closed", ErrCoverageRequestInvalid)
 	}
-	if request.Kind != CoverageRead && c.recovery.status != messageRecoveryReady {
-		return CoverageOffer{}, fmt.Errorf("%w: Message freshness is unknown", ErrCoverageRequestInvalid)
-	}
 	if request.Kind == CoverageHold && !c.boundaryHealthy {
 		return CoverageOffer{}, fmt.Errorf("%w: Context Boundary health is unknown", ErrCoverageRequestInvalid)
 	}

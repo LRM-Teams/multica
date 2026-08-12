@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +11,22 @@ import (
 	"testing"
 	"time"
 )
+
+func TestPiCLIBackendRejectsResidentMixedRunSurface(t *testing.T) {
+	cli := &piBackend{cfg: Config{Logger: slog.Default()}}
+	if _, ok := any(cli).(PiRPCBackend); ok {
+		t.Fatal("one-shot pi CLI backend must not implement PiRPCBackend")
+	}
+	if _, err := AsPiRPCBackend(cli); !errors.Is(err, ErrPiCLIResidentUnsupported) {
+		t.Fatalf("AsPiRPCBackend(cli) err=%v, want ErrPiCLIResidentUnsupported", err)
+	}
+	rpc := NewPiRPCBackend(Config{Logger: slog.Default()})
+	t.Cleanup(rpc.Close)
+	got, err := AsPiRPCBackend(rpc)
+	if err != nil || got == nil {
+		t.Fatalf("AsPiRPCBackend(rpc) = %v, %v", got, err)
+	}
+}
 
 func TestBuildPiArgsNoToolAllowlist(t *testing.T) {
 	// Extension tools registered via Pi's registerTool() must not be
@@ -587,6 +604,52 @@ func TestPiExecuteToolUseTurnDoesNotEarlyComplete(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for result")
+	}
+}
+
+func TestBuildPiRPCArgsLoadsCaptureExtensionWithNormalToolsEnabled(t *testing.T) {
+	captureExt := filepath.Join(t.TempDir(), "capture.mjs")
+	writeTestFile(t, captureExt, []byte("// capture"))
+	args := buildPiRPCArgs("/tmp/s.jsonl", ExecOptions{piCaptureExtension: captureExt}, slog.Default())
+	foundCapture := false
+	for i, arg := range args {
+		if arg == "--tools" && i+1 < len(args) && args[i+1] == "" {
+			t.Fatalf("capture must load with normal tools enabled, got empty allowlist: %#v", args)
+		}
+		if arg == "--extension" && i+1 < len(args) && args[i+1] == captureExt {
+			foundCapture = true
+		}
+	}
+	if !foundCapture {
+		t.Fatalf("expected trusted capture extension in RPC args: %#v", args)
+	}
+}
+
+func TestBuildPiRPCArgsBlocksCustomExtensionOverrideWhenCaptureLoaded(t *testing.T) {
+	captureExt := filepath.Join(t.TempDir(), "capture.mjs")
+	writeTestFile(t, captureExt, []byte("// capture"))
+	evilExt := filepath.Join(t.TempDir(), "evil.mjs")
+	writeTestFile(t, evilExt, []byte("// evil"))
+	args := buildPiRPCArgs("/tmp/s.jsonl", ExecOptions{
+		piCaptureExtension: captureExt,
+		CustomArgs:         []string{"--extension", evilExt, "-e", evilExt},
+	}, slog.Default())
+	foundCapture := false
+	for i, arg := range args {
+		if arg == "--extension" || arg == "-e" {
+			if i+1 >= len(args) {
+				t.Fatalf("extension flag missing value: %#v", args)
+			}
+			if args[i+1] == evilExt {
+				t.Fatalf("custom args must not inject untrusted extensions while capture is loaded: %#v", args)
+			}
+			if args[i+1] == captureExt {
+				foundCapture = true
+			}
+		}
+	}
+	if !foundCapture {
+		t.Fatalf("trusted capture extension missing after custom-arg filtering: %#v", args)
 	}
 }
 

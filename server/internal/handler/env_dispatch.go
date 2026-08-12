@@ -120,22 +120,57 @@ type EnvDispatchResponse struct {
 // FrozenRunDAGResponse is the sanitized, immutable public view of a completed
 // mixed-RL run. It intentionally projects only the frozen DAG data; raw
 // provider payloads, credentials, SSE, and materialized tensors never cross
-// this boundary.
+// this boundary. Associations are nested under segments as provider_calls per
+// the frozen-DAG contract; a top-level associations list is never emitted.
 type FrozenRunDAGResponse struct {
 	RunID         string                                `json:"run_id"`
 	ProjectID     string                                `json:"project_id"`
 	WorkspaceID   string                                `json:"workspace_id"`
 	Status        string                                `json:"status"`
+	RunStatus     string                                `json:"run_status"`
 	SnapshotID    string                                `json:"snapshot_id"`
 	SnapshotHash  string                                `json:"snapshot_hash"`
 	SchemaVersion string                                `json:"schema_version"`
 	FrozenAt      time.Time                             `json:"frozen_at"`
-	CaptureGaps   []service.FrozenDAGCaptureGapRecord   `json:"capture_gaps"`
+	CaptureGaps   []FrozenRunDAGCaptureGapResponse      `json:"capture_gaps"`
 	RunAgents     []service.FrozenDAGRunAgentRecord     `json:"run_agents"`
 	ProviderCalls []service.FrozenDAGProviderCallRecord `json:"provider_calls"`
-	Segments      []service.FrozenDAGSegmentRecord      `json:"segments"`
-	Associations  []service.FrozenDAGAssociationRecord  `json:"associations"`
+	Segments      []FrozenRunDAGSegmentResponse         `json:"segments"`
 	Edges         []service.CausalEdgeRecord            `json:"edges"`
+}
+
+// FrozenRunDAGSegmentResponse nests call associations under each segment.
+type FrozenRunDAGSegmentResponse struct {
+	SegmentID         string                            `json:"segment_id"`
+	RunAgentID        string                            `json:"run_agent_id"`
+	Kind              string                            `json:"kind"`
+	CanonicalActionID string                            `json:"canonical_action_id,omitempty"`
+	SegmentOrdinal    int64                             `json:"segment_ordinal"`
+	Reward            *float64                          `json:"reward,omitempty"`
+	RewardSource      string                            `json:"reward_source,omitempty"`
+	ProviderCalls     []FrozenRunDAGAssociationResponse `json:"provider_calls"`
+}
+
+// FrozenRunDAGAssociationResponse is the contract-facing call association.
+type FrozenRunDAGAssociationResponse struct {
+	CallID          string `json:"call_id"`
+	CallOrdinal     int64  `json:"call_ordinal"`
+	AssociationKind string `json:"association_kind"`
+}
+
+// FrozenRunDAGCaptureGapResponse is the sanitized capture-gap locator.
+type FrozenRunDAGCaptureGapResponse struct {
+	RunAgentID string `json:"run_agent_id"`
+	TurnID     string `json:"turn_id"`
+	Reason     string `json:"reason"`
+}
+
+// FrozenRunDAGPollingResponse is returned while a mixed run is not yet frozen.
+type FrozenRunDAGPollingResponse struct {
+	RunID               string `json:"run_id"`
+	Status              string `json:"status"`
+	QuietCandidateSince any    `json:"quiet_candidate_since"`
+	DeadlineAt          any    `json:"deadline_at"`
 }
 
 func (response EnvDispatchResponse) MarshalJSON() ([]byte, error) {
@@ -402,16 +437,12 @@ func (h *Handler) GetFrozenRunDAG(w http.ResponseWriter, r *http.Request) {
 	}
 	if run.Status != "completed" && run.Status != "failed_timeout" {
 		w.Header().Set("Retry-After", "1")
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"run_id":                run.RunID.String(),
-			"status":                run.Status,
-			"quiet_candidate_since": timeValueForJSON(run.QuietCandidateSince),
-			"deadline_at":           timeValueForJSON(run.TimeoutDeadlineAt),
-		})
+		writeJSON(w, http.StatusAccepted, frozenRunDAGPollingResponse(run))
 		return
 	}
-	ledger := service.NewProviderCallLedger(h.Queries, h.TxStarter)
-	dag, err := ledger.GetFrozenDAG(r.Context(), runID, run.FrozenSnapshotID.String)
+	dag, err := service.NewMixedRLFreezeService(h.Queries, h.TxStarter).GetFrozenRunDAG(
+		r.Context(), runID, run.FrozenSnapshotID.String,
+	)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "read frozen mixed run DAG: "+err.Error())
 		return
@@ -426,22 +457,59 @@ func timeValueForJSON(value pgtype.Timestamptz) any {
 	return value.Time
 }
 
+func frozenRunDAGPollingResponse(run db.EnvDispatchRun) FrozenRunDAGPollingResponse {
+	return FrozenRunDAGPollingResponse{
+		RunID:               run.RunID.String(),
+		Status:              run.Status,
+		QuietCandidateSince: timeValueForJSON(run.QuietCandidateSince),
+		DeadlineAt:          timeValueForJSON(run.TimeoutDeadlineAt),
+	}
+}
+
 func frozenRunDAGResponse(dag service.FrozenDAGRecord) FrozenRunDAGResponse {
+	associationsBySegment := make(map[string][]FrozenRunDAGAssociationResponse, len(dag.Segments))
+	for _, association := range dag.Associations {
+		associationsBySegment[association.SegmentID] = append(
+			associationsBySegment[association.SegmentID],
+			FrozenRunDAGAssociationResponse{
+				CallID: association.ProviderCallID, CallOrdinal: association.CallOrdinal,
+				AssociationKind: association.AssociationKind,
+			},
+		)
+	}
+	segments := make([]FrozenRunDAGSegmentResponse, 0, len(dag.Segments))
+	for _, segment := range dag.Segments {
+		nested := associationsBySegment[segment.SegmentID]
+		if nested == nil {
+			nested = []FrozenRunDAGAssociationResponse{}
+		}
+		item := FrozenRunDAGSegmentResponse{
+			SegmentID: segment.SegmentID, RunAgentID: segment.RunAgentID.String(),
+			Kind: segment.Kind, SegmentOrdinal: segment.SegmentOrdinal,
+			RewardSource: segment.RewardSource, ProviderCalls: nested,
+		}
+		if segment.CanonicalActionID.Valid {
+			item.CanonicalActionID = segment.CanonicalActionID.String()
+		}
+		if segment.Reward.Valid {
+			reward := segment.Reward.Float64
+			item.Reward = &reward
+		}
+		segments = append(segments, item)
+	}
+	gaps := make([]FrozenRunDAGCaptureGapResponse, 0, len(dag.CaptureGaps))
+	for _, gap := range dag.CaptureGaps {
+		gaps = append(gaps, FrozenRunDAGCaptureGapResponse{
+			RunAgentID: gap.RunAgentID.String(), TurnID: gap.TurnID.String(), Reason: gap.Reason,
+		})
+	}
 	return FrozenRunDAGResponse{
-		RunID:         dag.Run.RunID.String(),
-		ProjectID:     dag.Run.ProjectID.String(),
-		WorkspaceID:   dag.Run.WorkspaceID.String(),
-		Status:        dag.Run.Status,
-		SnapshotID:    dag.Snapshot.SnapshotID,
-		SnapshotHash:  dag.Snapshot.SnapshotHash,
-		SchemaVersion: dag.Snapshot.SchemaVersion,
-		FrozenAt:      dag.Run.FrozenAt,
-		CaptureGaps:   dag.CaptureGaps,
-		RunAgents:     dag.RunAgents,
-		ProviderCalls: dag.ProviderCalls,
-		Segments:      dag.Segments,
-		Associations:  dag.Associations,
-		Edges:         dag.Edges,
+		RunID: dag.Run.RunID.String(), ProjectID: dag.Run.ProjectID.String(),
+		WorkspaceID: dag.Run.WorkspaceID.String(), Status: dag.Run.Status, RunStatus: dag.Run.Status,
+		SnapshotID: dag.Snapshot.SnapshotID, SnapshotHash: dag.Snapshot.SnapshotHash,
+		SchemaVersion: dag.Snapshot.SchemaVersion, FrozenAt: dag.Run.FrozenAt,
+		CaptureGaps: gaps, RunAgents: dag.RunAgents, ProviderCalls: dag.ProviderCalls,
+		Segments: segments, Edges: dag.Edges,
 	}
 }
 

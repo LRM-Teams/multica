@@ -57,6 +57,159 @@ func TestResidentTurnCaptureIdentityRetainsBoundaryForGapReporting(t *testing.T)
 	}
 }
 
+func TestNewPiCaptureExtensionIsReadOnlyFinalRequestAndFinalMessageOnly(t *testing.T) {
+	extPath, logPath, err := newPiCaptureExtension()
+	if err != nil {
+		t.Fatalf("newPiCaptureExtension: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(extPath)
+		_ = os.Remove(logPath)
+	})
+	source, err := os.ReadFile(extPath)
+	if err != nil {
+		t.Fatalf("read capture extension: %v", err)
+	}
+	text := string(source)
+	for _, want := range []string{"before_provider_request", "turn_end", "record(\"provider_request\"", "record(\"turn_end\""} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("capture extension missing final-boundary hook %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{
+		"message_update", "text_delta", "sse", "EventSource",
+		"event.payload =", "event.message =", "registerTool", "pi.send",
+	} {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(forbidden)) {
+			t.Fatalf("capture extension must stay read-only / non-SSE; found %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestBuildResidentTurnCapturePreservesTypedAssistantBlocks(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	finalMessage := `{"role":"assistant","blocks":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"hello"},{"type":"toolCall","id":"tool-1","name":"multica","arguments":{"command":"message send"}}],"stopReason":"toolUse"}`
+	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"synthetic-model","messages":[]}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(finalMessage)},
+	})
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(capture.ProviderCalls))
+	}
+	var decoded struct {
+		Role   string `json:"role"`
+		Blocks []struct {
+			Type string `json:"type"`
+		} `json:"blocks"`
+	}
+	if err := json.Unmarshal(capture.ProviderCalls[0].FinalAssistantMessage, &decoded); err != nil {
+		t.Fatalf("decode final assistant message: %v", err)
+	}
+	if decoded.Role != "assistant" || len(decoded.Blocks) != 3 {
+		t.Fatalf("typed blocks = %+v, want assistant with thinking/text/toolCall", decoded)
+	}
+	gotTypes := []string{decoded.Blocks[0].Type, decoded.Blocks[1].Type, decoded.Blocks[2].Type}
+	if gotTypes[0] != "thinking" || gotTypes[1] != "text" || gotTypes[2] != "toolCall" {
+		t.Fatalf("block types = %v, want [thinking text toolCall]", gotTypes)
+	}
+	if capture.ProviderCalls[0].StopReason != "toolUse" || !capture.ProviderCalls[0].ResponseComplete {
+		t.Fatalf("call metadata = %+v, want complete toolUse", capture.ProviderCalls[0])
+	}
+}
+
+func TestBuildResidentTurnCaptureNormalizesContentArrayIntoTypedBlocks(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m"}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}`)},
+	})
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(capture.ProviderCalls[0].FinalAssistantMessage, &decoded); err != nil {
+		t.Fatalf("decode final message: %v", err)
+	}
+	blocks, ok := decoded["blocks"].([]any)
+	if !ok || len(blocks) == 0 {
+		t.Fatalf("final assistant message must expose typed blocks, got %s", capture.ProviderCalls[0].FinalAssistantMessage)
+	}
+	if _, hasContent := decoded["content"]; hasContent {
+		t.Fatalf("final assistant message must not retain raw content arrays: %s", capture.ProviderCalls[0].FinalAssistantMessage)
+	}
+}
+
+func TestBuildResidentTurnCaptureCollapsesHiddenProviderRetries(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","attempt":1}`)},
+		{Kind: "provider_request", At: "2026-08-12T00:00:00.500Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","attempt":2}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"ok"}],"stopReason":"stop"}`)},
+	})
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("hidden retries must collapse to one logical call, got %d", len(capture.ProviderCalls))
+	}
+	if !strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), `"attempt":2`) {
+		t.Fatalf("collapsed call must keep the final provider request, got %s", capture.ProviderCalls[0].RawProviderRequest)
+	}
+	if strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), `"attempt":1`) {
+		t.Fatalf("collapsed call must not retain superseded retry payloads: %s", capture.ProviderCalls[0].RawProviderRequest)
+	}
+}
+
+func TestBuildResidentTurnCaptureIgnoresSSEChunkRecords(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-1"}
+	capture, err := buildResidentTurnCapture(binding, 1, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m"}`)},
+		{Kind: "message_update", At: "2026-08-12T00:00:00.200Z", Payload: json.RawMessage(`{"type":"text_delta","delta":"partial sse"}`)},
+		{Kind: "sse_chunk", At: "2026-08-12T00:00:00.300Z", Payload: json.RawMessage(`{"data":"stream"}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"final"}],"stopReason":"stop"}`)},
+	})
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(capture.ProviderCalls))
+	}
+	encoded := string(capture.ProviderCalls[0].FinalAssistantMessage) + string(capture.ProviderCalls[0].RawProviderRequest)
+	for _, forbidden := range []string{"partial sse", "sse_chunk", "text_delta", `"data":"stream"`} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("capture retained SSE material %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestBuildResidentTurnCaptureDropsPreBoundaryHistoricalCalls(t *testing.T) {
+	binding := PiRunBinding{PiRunIdentity: PiRunIdentity{RunID: "run-1", RunAgentID: "run-agent-1"}, SessionID: "pi-session", CaptureBoundary: "boundary-2"}
+	capture, err := buildResidentTurnCapture(binding, 2, 1, []piCaptureRecord{
+		{Kind: "provider_request", At: "2026-08-12T00:00:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","capture_boundary":"boundary-1","call":"historical"}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:00:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"old"}],"stopReason":"stop","capture_boundary":"boundary-1"}`)},
+		{Kind: "provider_request", At: "2026-08-12T00:01:00Z", Payload: json.RawMessage(`{"provider":"synthetic","model":"m","capture_boundary":"boundary-2","call":"current"}`)},
+		{Kind: "turn_end", At: "2026-08-12T00:01:01Z", Message: json.RawMessage(`{"role":"assistant","blocks":[{"type":"text","text":"new"}],"stopReason":"stop","capture_boundary":"boundary-2"}`)},
+	})
+	if err != nil {
+		t.Fatalf("buildResidentTurnCapture: %v", err)
+	}
+	if capture.CaptureBoundary != "boundary-2" {
+		t.Fatalf("capture boundary = %q, want boundary-2", capture.CaptureBoundary)
+	}
+	if len(capture.ProviderCalls) != 1 {
+		t.Fatalf("post-boundary calls = %d, want 1 current call", len(capture.ProviderCalls))
+	}
+	if !strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), `"call":"current"`) {
+		t.Fatalf("expected current-boundary request, got %s", capture.ProviderCalls[0].RawProviderRequest)
+	}
+	if strings.Contains(string(capture.ProviderCalls[0].RawProviderRequest), "historical") {
+		t.Fatalf("historical pre-boundary call leaked into capture: %s", capture.ProviderCalls[0].RawProviderRequest)
+	}
+}
+
 func fakePiRPCProcessScript() string {
 	return `#!/bin/sh
 	printf x >> "$PI_RPC_TEST_STARTS"

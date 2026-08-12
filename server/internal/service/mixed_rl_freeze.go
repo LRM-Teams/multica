@@ -111,6 +111,9 @@ func (s *MixedRLFreezeService) Freeze(ctx context.Context, runID pgtype.UUID, ti
 				}
 				terminalIDs = append(terminalIDs, terminalID)
 			}
+			if err := finalizeMixedRLCausalEdges(ctx, qtx, qledger, runID); err != nil {
+				return frozen, err
+			}
 			allCalls, err := qtx.ListMixedRLProviderCallsCanonical(ctx, runID)
 			if err != nil {
 				return frozen, err
@@ -143,6 +146,13 @@ func (s *MixedRLFreezeService) Freeze(ctx context.Context, runID pgtype.UUID, ti
 		return MixedRLFreezeResult{}, err
 	}
 	return MixedRLFreezeResult{Snapshot: snapshot, Run: terminalRun}, nil
+}
+
+// GetFrozenRunDAG returns the immutable run-scoped snapshot. Readiness is the
+// mixed run lifecycle alone; callers must not consult root-task status or
+// dense-per-session coverage for this path.
+func (s *MixedRLFreezeService) GetFrozenRunDAG(ctx context.Context, runID pgtype.UUID, snapshotID string) (FrozenDAGRecord, error) {
+	return NewProviderCallLedger(s.queries, s.txStarter).GetFrozenDAG(ctx, runID, snapshotID)
 }
 
 // ReapMixedRLQuiescence is the server scheduler entry point. It re-evaluates

@@ -1288,6 +1288,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/v1/source-tasks/{sourceTaskID}/materialize", h.MaterializeSourceTaskTemplate)
 			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
 			r.Get("/api/v1/env-dispatch/runs/{runID}/dag", h.GetFrozenRunDAG)
+			r.Post("/api/v1/env-dispatch/runs/{runID}/offline-trajectories:resolve", h.ResolveOfflineTrajectories)
 			r.Post("/api/v1/env-dispatch/runs/{runID}/turn-captures", h.AgentTransportUploadTurnCapture)
 			r.Post("/api/v1/env-dispatch/runs/{runID}/turn-capture-gaps", h.AgentTransportReportTurnCaptureGap)
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)

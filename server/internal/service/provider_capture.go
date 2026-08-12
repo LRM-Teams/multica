@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -81,6 +84,9 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCapture(ctx context.Context, i
 	if input.Batch.TurnID != input.TurnID {
 		return TrustedTurnCaptureResult{}, errors.New("capture batch turn does not match trusted turn")
 	}
+	if err := prepareTrustedTurnCapture(&input); err != nil {
+		return TrustedTurnCaptureResult{}, err
+	}
 	if input.Batch.CallCount != int32(len(input.Calls)) ||
 		input.Batch.ActionCount != int32(len(input.Actions)) ||
 		input.Batch.ConsumptionCount != int32(len(input.Consumptions)) {
@@ -105,10 +111,12 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCapture(ctx context.Context, i
 		if !run.FrozenSnapshotID.Valid {
 			return TrustedTurnCaptureResult{}, errors.New("terminal run has no frozen snapshot")
 		}
-		if err := qtx.RecordMixedRLLateEvent(ctx, db.RecordMixedRLLateEventParams{
+		summary, _ := json.Marshal(map[string]int{
+			"call_count": len(input.Calls), "action_count": len(input.Actions), "consumption_count": len(input.Consumptions),
+		})
+		if err := (&ProviderCallLedger{queries: qtx}).RecordLateEvent(ctx, LateEventInput{
 			EventID: eventID, RunID: input.RunID, RunAgentID: input.RunAgentID, TurnID: input.TurnID,
-			Reason: "turn_capture_after_freeze", Summary: []byte(`{"call_count":0,"action_count":0,"consumption_count":0}`),
-			SnapshotID: run.FrozenSnapshotID,
+			Reason: "turn_capture_after_freeze", Summary: summary, SnapshotID: run.FrozenSnapshotID.String,
 		}); err != nil {
 			return TrustedTurnCaptureResult{}, err
 		}
@@ -172,6 +180,9 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCapture(ctx context.Context, i
 			return TrustedTurnCaptureResult{}, err
 		}
 	}
+	if err := assignMixedRLSegmentsForCapture(ctx, qtx, ledger, input); err != nil {
+		return TrustedTurnCaptureResult{}, err
+	}
 	completedAt := input.CompletedAt
 	if completedAt.IsZero() {
 		completedAt = time.Now().UTC()
@@ -182,6 +193,8 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCapture(ctx context.Context, i
 	if err != nil {
 		return TrustedTurnCaptureResult{}, err
 	}
+	// Activity counters remain owned by the WebSocket/daemon transport. Capture
+	// persistence must not decrement unfinished-capture or active-turn counts.
 	if err := tx.Commit(ctx); err != nil {
 		return TrustedTurnCaptureResult{}, err
 	}
@@ -239,9 +252,9 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCaptureGap(ctx context.Context
 		if !eventID.Valid {
 			eventID = pgtype.UUID{Bytes: uuid.New(), Valid: true}
 		}
-		if err := qtx.RecordMixedRLLateEvent(ctx, db.RecordMixedRLLateEventParams{
+		if err := (&ProviderCallLedger{queries: qtx}).RecordLateEvent(ctx, LateEventInput{
 			EventID: eventID, RunID: input.RunID, RunAgentID: input.RunAgentID, TurnID: input.TurnID,
-			Reason: "turn_capture_gap_after_freeze", Summary: input.Summary, SnapshotID: run.FrozenSnapshotID,
+			Reason: "turn_capture_gap_after_freeze", Summary: input.Summary, SnapshotID: run.FrozenSnapshotID.String,
 		}); err != nil {
 			return TrustedTurnCaptureResult{}, err
 		}
@@ -291,6 +304,175 @@ func (s *ProviderCaptureService) AcceptTrustedTurnCaptureGap(ctx context.Context
 		return TrustedTurnCaptureResult{}, err
 	}
 	return TrustedTurnCaptureResult{Run: mixedRLRunRecord(updated), Turn: residentTurnRecord(turn)}, nil
+}
+
+func prepareTrustedTurnCapture(input *TrustedTurnCapture) error {
+	if input.Batch.PayloadHash == "" {
+		return errors.New("payload_hash is required")
+	}
+	seenOrdinal := make(map[int64]struct{}, len(input.Calls))
+	var previousOrdinal int64
+	for i := range input.Calls {
+		call := &input.Calls[i]
+		if call.CallOrdinal <= 0 {
+			return errors.New("provider call ordinal must be positive")
+		}
+		if _, dup := seenOrdinal[call.CallOrdinal]; dup {
+			return fmt.Errorf("overlapping provider call ordinal %d", call.CallOrdinal)
+		}
+		if previousOrdinal > 0 && call.CallOrdinal < previousOrdinal {
+			return errors.New("provider call ordinals must be non-decreasing")
+		}
+		seenOrdinal[call.CallOrdinal] = struct{}{}
+		previousOrdinal = call.CallOrdinal
+		if err := validateRawProviderRequest(call.RawProviderRequest); err != nil {
+			return err
+		}
+		derived := deriveProviderCallTrainingEligibility(*call)
+		call.TrainingEligible = derived
+		if call.RequestHash == "" {
+			call.RequestHash = sha256Prefixed(call.RawProviderRequest)
+		}
+		if call.ResponseHash == "" {
+			call.ResponseHash = sha256Prefixed(call.FinalAssistantMessage)
+		}
+		call.RunID = input.RunID
+		call.RunAgentID = input.RunAgentID
+		call.TurnID = input.TurnID
+	}
+	for i := range input.Actions {
+		action := &input.Actions[i]
+		action.RunID = input.RunID
+		action.RunAgentID = input.RunAgentID
+		action.TurnID = input.TurnID
+		if action.Status == "" {
+			action.Status = "succeeded"
+		}
+		if !action.ActionID.Valid {
+			action.ActionID = pgtype.UUID{Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte(
+				input.TurnID.String()+":action:"+action.Kind+":"+action.CanonicalID.String()+":"+fmt.Sprint(action.ActionOrdinal),
+			)), Valid: true}
+		}
+	}
+	for i := range input.Consumptions {
+		consumption := &input.Consumptions[i]
+		consumption.RunID = input.RunID
+		consumption.RunAgentID = input.RunAgentID
+		consumption.TurnID = input.TurnID
+		if !consumption.ConsumptionID.Valid {
+			consumption.ConsumptionID = pgtype.UUID{Bytes: uuid.NewSHA1(uuid.NameSpaceURL, []byte(
+				input.TurnID.String()+":consumption:"+consumption.ChannelMessageID.String()+":"+consumption.EffectiveFromCallID,
+			)), Valid: true}
+		}
+	}
+	input.Batch.CallCount = int32(len(input.Calls))
+	input.Batch.ActionCount = int32(len(input.Actions))
+	input.Batch.ConsumptionCount = int32(len(input.Consumptions))
+	return nil
+}
+
+func deriveProviderCallTrainingEligibility(call ProviderCallInput) bool {
+	return call.Status == "completed" && call.ResponseComplete && (call.StopReason == "stop" || call.StopReason == "toolUse")
+}
+
+func sha256Prefixed(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+// assignMixedRLSegmentsForCapture creates message/reaction segments for
+// successful actions and assigns unowned calls in canonical order with
+// first-success owned + sibling shared_producer associations.
+func assignMixedRLSegmentsForCapture(ctx context.Context, qtx *db.Queries, ledger *ProviderCallLedger, input TrustedTurnCapture) error {
+	actions := append([]VisibleActionInput(nil), input.Actions...)
+	sort.SliceStable(actions, func(i, j int) bool {
+		if actions[i].CreatedAt.Equal(actions[j].CreatedAt) {
+			return actions[i].ActionOrdinal < actions[j].ActionOrdinal
+		}
+		return actions[i].CreatedAt.Before(actions[j].CreatedAt)
+	})
+	allCalls, err := qtx.ListMixedRLProviderCallsCanonical(ctx, input.RunID)
+	if err != nil {
+		return err
+	}
+	agentCalls := make([]db.PiProviderCall, 0, len(allCalls))
+	callByID := make(map[string]db.PiProviderCall, len(allCalls))
+	for _, call := range allCalls {
+		if call.RunAgentID != input.RunAgentID {
+			continue
+		}
+		agentCalls = append(agentCalls, call)
+		callByID[call.CallID] = call
+	}
+	associations, err := qtx.ListMixedRLSegmentCallsCanonical(ctx, input.RunID)
+	if err != nil {
+		return err
+	}
+	owned := make(map[string]string, len(associations))
+	for _, association := range associations {
+		if association.AssociationKind == "owned" {
+			owned[association.ProviderCallID] = association.SegmentID
+		}
+	}
+	nextOrdinal, err := qtx.CountMixedRLSegments(ctx, input.RunID)
+	if err != nil {
+		return err
+	}
+	for _, action := range actions {
+		if action.Status != "succeeded" {
+			continue
+		}
+		if action.Kind != "message" && action.Kind != "reaction" {
+			return fmt.Errorf("unsupported visible action kind %q", action.Kind)
+		}
+		if !action.CanonicalID.Valid {
+			return errors.New("successful visible action requires a canonical id")
+		}
+		nextOrdinal++
+		segmentID := action.Kind + ":" + action.CanonicalID.String()
+		if _, err := ledger.InsertSegment(ctx, SegmentInput{
+			SegmentID: segmentID, RunID: input.RunID, RunAgentID: input.RunAgentID,
+			Kind: action.Kind, CanonicalActionID: action.CanonicalID.String(),
+			SegmentOrdinal: nextOrdinal, ProvisionalAt: action.CreatedAt,
+		}); err != nil {
+			return err
+		}
+		producer := action.ProducerCallID
+		if producer == "" {
+			continue
+		}
+		if ownerSegment, alreadyOwned := owned[producer]; alreadyOwned {
+			_ = ownerSegment
+			call := callByID[producer]
+			if err := ledger.AssociateProviderCall(ctx, SegmentCallAssociationInput{
+				SegmentID: segmentID, ProviderCallID: producer,
+				CallOrdinal: call.CallOrdinal, AssociationKind: "shared_producer",
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+		producerCall, ok := callByID[producer]
+		if !ok {
+			return fmt.Errorf("producer call %q is not in the trusted run-agent scope", producer)
+		}
+		for _, call := range agentCalls {
+			if _, alreadyOwned := owned[call.CallID]; alreadyOwned {
+				continue
+			}
+			if call.CallOrdinal > producerCall.CallOrdinal {
+				continue
+			}
+			if err := ledger.AssociateProviderCall(ctx, SegmentCallAssociationInput{
+				SegmentID: segmentID, ProviderCallID: call.CallID,
+				CallOrdinal: call.CallOrdinal, AssociationKind: "owned",
+			}); err != nil {
+				return err
+			}
+			owned[call.CallID] = segmentID
+		}
+	}
+	return nil
 }
 
 // ensureTrustedResidentTurn creates the missing durable turn before capture

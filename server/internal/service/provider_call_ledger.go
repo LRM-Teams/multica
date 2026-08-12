@@ -223,15 +223,15 @@ type CausalEdgeInput struct {
 }
 
 type CausalEdgeRecord struct {
-	EdgeID               pgtype.UUID
-	SnapshotID           string
-	RunID                pgtype.UUID
-	SourceSegmentID      string
-	DestinationSegmentID string
-	Type                 string
-	TriggerMessageID     pgtype.UUID
-	DestinationCallID    string
-	EdgeOrdinal          int64
+	EdgeID               pgtype.UUID `json:"edge_id,omitempty"`
+	SnapshotID           string      `json:"snapshot_id,omitempty"`
+	RunID                pgtype.UUID `json:"run_id,omitempty"`
+	SourceSegmentID      string      `json:"src_segment_id"`
+	DestinationSegmentID string      `json:"dst_segment_id"`
+	Type                 string      `json:"type"`
+	TriggerMessageID     pgtype.UUID `json:"trigger_message_id"`
+	DestinationCallID    string      `json:"dst_call_id,omitempty"`
+	EdgeOrdinal          int64       `json:"edge_ordinal"`
 }
 
 type FrozenSnapshotInput struct {
@@ -540,6 +540,7 @@ func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input Frozen
 	}
 	expectedStatus := locked.Status
 	if input.RunStatus == "failed_timeout" {
+		now := time.Now().UTC()
 		activeTurns, listErr := qtx.ListMixedRLActiveResidentTurns(ctx, input.RunID)
 		if listErr != nil {
 			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, listErr
@@ -553,10 +554,18 @@ func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input Frozen
 				return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, gapErr
 			}
 			if _, settleErr := qtx.CompleteMixedRLResidentTurn(ctx, db.CompleteMixedRLResidentTurnParams{
-				TurnID: turn.TurnID, Status: "capture_gap", CompletedAt: timestamptz(time.Now().UTC()),
+				TurnID: turn.TurnID, Status: "capture_gap", CompletedAt: timestamptz(now),
 			}); settleErr != nil {
 				return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, settleErr
 			}
+		}
+		// Observable unfinished calls already persisted in an accepted batch are
+		// aborted/ineligible. Turns whose batch never arrived stay capture gaps
+		// and must not invent synthetic provider-call rows.
+		if _, abortErr := qtx.AbortMixedRLUnfinishedProviderCalls(ctx, db.AbortMixedRLUnfinishedProviderCallsParams{
+			CompletedAt: timestamptz(now), RunID: input.RunID,
+		}); abortErr != nil {
+			return FrozenSnapshotRecord{}, EnvDispatchRunRecord{}, abortErr
 		}
 		settled, settleErr := qtx.AdjustMixedRLRunActivity(ctx, db.AdjustMixedRLRunActivityParams{
 			RunID: input.RunID, ActiveTurnDelta: -locked.ActiveTurnCount,
@@ -680,6 +689,22 @@ func (l *ProviderCallLedger) FreezeAndComplete(ctx context.Context, input Frozen
 func (l *ProviderCallLedger) GetFrozenSnapshot(ctx context.Context, runID pgtype.UUID) (FrozenSnapshotRecord, error) {
 	row, err := l.queries.GetMixedRLFrozenSnapshot(ctx, runID)
 	return frozenSnapshotRecord(row), err
+}
+
+// RecordLateEvent persists an audit-only post-freeze event. It never mutates
+// associations, eligibility, edges, or the snapshot hash.
+func (l *ProviderCallLedger) RecordLateEvent(ctx context.Context, input LateEventInput) error {
+	if err := requireMixedRLQueries(l.queries); err != nil {
+		return err
+	}
+	if input.SnapshotID == "" {
+		return errors.New("late events require the frozen snapshot identity")
+	}
+	return l.queries.RecordMixedRLLateEvent(ctx, db.RecordMixedRLLateEventParams{
+		EventID: input.EventID, RunID: input.RunID, RunAgentID: input.RunAgentID,
+		TurnID: input.TurnID, Reason: input.Reason, Summary: input.Summary,
+		SnapshotID: text(input.SnapshotID),
+	})
 }
 
 func providerCallRecord(row db.PiProviderCall) ProviderCallRecord {

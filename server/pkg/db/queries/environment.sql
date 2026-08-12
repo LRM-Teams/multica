@@ -323,7 +323,7 @@ WITH upserted AS (
   RETURNING run.run_id
 )
 SELECT delivery_id, run_id, channel_message_id, source_recipient_agent_id,
-       run_agent_id, state, queued_at, settled_at, created_at
+       run_agent_id, state, queued_at, settled_at, created_at, inserted
 FROM upserted
 WHERE NOT inserted
    OR state NOT IN ('pending', 'queued', 'accepted')

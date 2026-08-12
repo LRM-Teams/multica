@@ -81,9 +81,9 @@ type MachineUpgradeStore interface {
 	ClaimQueuedLegacy(ctx context.Context, daemonID, runtimeID, sourceVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	AcceptLegacy(ctx context.Context, daemonID, id, runtimeID, resolvedTarget string) (*MachineUpgrade, error)
 	AttestLegacy(ctx context.Context, daemonID, id, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
-	Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string, runtimeIDs []string) (*MachineUpgrade, error)
+	Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string) (*MachineUpgrade, error)
 	Attest(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
-	CommitTakeover(ctx context.Context, daemonID, id, generation, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error)
+	CommitTakeover(ctx context.Context, daemonID, id, generation, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, workspaceIDs []string) (*MachineUpgrade, error)
 	AttestComputer(ctx context.Context, daemonID, id, generation, cliVersion string, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error)
 	BeginRollback(ctx context.Context, daemonID, id, generation, errorCode, errorMessage string) (*MachineUpgrade, error)
 	AttestRollback(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
@@ -107,6 +107,29 @@ func (e *machineUpgradeConflictError) Error() string {
 func (e *machineUpgradeConflictError) Active() *MachineUpgrade { return e.active }
 
 const activeMachineUpgradeConstraint = "machine_upgrade_one_active_per_daemon_idx"
+
+// machineUpgradeComputerRuntimeScope is the one definition of the Runtime
+// recovery scope for a Computer upgrade. Workspace bindings define the modern
+// Computer scope; the no-binding branch keeps pre-binding Computers recoverable.
+const machineUpgradeComputerRuntimeScope = `
+	runtime.daemon_id = $1
+	AND (
+		NOT EXISTS (
+			SELECT 1 FROM computer_workspace_bindings
+			WHERE daemon_id = $1 AND active = TRUE AND revoked_at IS NULL
+		)
+		OR EXISTS (
+			SELECT 1 FROM computer_workspace_bindings AS binding
+			WHERE binding.daemon_id = $1
+			  AND binding.workspace_id = runtime.workspace_id
+			  AND binding.active = TRUE AND binding.revoked_at IS NULL
+		)
+	)`
+
+const machineUpgradeComputerRuntimeSelect = `
+	SELECT runtime.id FROM agent_runtime AS runtime
+	WHERE ` + machineUpgradeComputerRuntimeScope + `
+	ORDER BY runtime.id`
 
 type PostgresMachineUpgradeStore struct{ db updatePostgresDB }
 
@@ -340,14 +363,16 @@ func (s *PostgresMachineUpgradeStore) AttestLegacy(ctx context.Context, daemonID
 		strings.TrimSpace(daemonID), strings.TrimSpace(id), strings.TrimSpace(runtimeID)))
 }
 
-// Accept captures one daemon process generation and the complete sibling
-// runtime identity set before any later registration can mark convergence.
-func (s *PostgresMachineUpgradeStore) Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string, runtimeIDs []string) (*MachineUpgrade, error) {
+// Accept captures one Computer generation plus one machine-wide Workspace and
+// Runtime snapshot before any later registration can mark convergence. Both
+// sets come from the same statement snapshot: Workspace scope must never be
+// machine-wide while Runtime scope is limited to the heartbeat carrier's
+// Workspace.
+func (s *PostgresMachineUpgradeStore) Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string) (*MachineUpgrade, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("machine upgrade store is not configured")
 	}
-	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
-	if strings.TrimSpace(generation) == "" || strings.TrimSpace(runningVersion) == "" || len(runtimeIDs) == 0 {
+	if strings.TrimSpace(generation) == "" || strings.TrimSpace(runningVersion) == "" {
 		return nil, errMachineUpgradeAttestationRejected
 	}
 	op, err := s.Get(ctx, daemonID, id)
@@ -371,7 +396,7 @@ func (s *PostgresMachineUpgradeStore) Accept(ctx context.Context, daemonID, id, 
 		return nil, errMachineUpgradeAcceptanceConflict
 	}
 	if op.AcceptedGeneration != nil {
-		if *op.AcceptedGeneration != generation || !sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) || op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, &resolvedTarget) {
+		if *op.AcceptedGeneration != generation || op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, &resolvedTarget) {
 			return nil, errMachineUpgradeAcceptanceConflict
 		}
 		return op, nil
@@ -383,14 +408,16 @@ func (s *PostgresMachineUpgradeStore) Accept(ctx context.Context, daemonID, id, 
 	return scanMachineUpgrade(s.db.QueryRow(ctx, `
 		UPDATE machine_upgrade
 		SET phase = $3, resolved_target = $4, source_version = $5, accepted_generation = $6,
-			accepted_runtime_ids = $7::uuid[],
+			accepted_runtime_ids = ARRAY(`+machineUpgradeComputerRuntimeSelect+`),
 			accepted_workspace_ids = ARRAY(
 				SELECT workspace_id FROM computer_workspace_bindings
-				WHERE daemon_id = $1 AND active = TRUE ORDER BY workspace_id
+				WHERE daemon_id = $1 AND active = TRUE AND revoked_at IS NULL
+				ORDER BY workspace_id
 			), accepted_at = now(), updated_at = now()
 		WHERE daemon_id = $1 AND id = $2 AND phase = 'starting' AND accepted_generation IS NULL
+		  AND EXISTS (`+machineUpgradeComputerRuntimeSelect+`)
 		RETURNING `+machineUpgradeColumns,
-		strings.TrimSpace(daemonID), strings.TrimSpace(id), string(phase), strings.TrimSpace(resolvedTarget), strings.TrimSpace(runningVersion), strings.TrimSpace(generation), runtimeIDs))
+		strings.TrimSpace(daemonID), strings.TrimSpace(id), string(phase), strings.TrimSpace(resolvedTarget), strings.TrimSpace(runningVersion), strings.TrimSpace(generation)))
 }
 
 // Progress is the daemon-owned phase projection for a previously accepted
@@ -547,7 +574,7 @@ func (s *PostgresMachineUpgradeStore) AttestComputer(ctx context.Context, daemon
 // checks the immutable acceptance snapshot and changes Computer generation in
 // the same transaction. Until this succeeds the candidate cannot heartbeat or
 // register, so a rejected candidate never fences the incumbent.
-func (s *PostgresMachineUpgradeStore) CommitTakeover(ctx context.Context, daemonID, id, generation, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, runtimeIDs, workspaceIDs []string) (*MachineUpgrade, error) {
+func (s *PostgresMachineUpgradeStore) CommitTakeover(ctx context.Context, daemonID, id, generation, cliVersion string, predecessorComputerGeneration, candidateComputerGeneration int64, workspaceIDs []string) (*MachineUpgrade, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("machine upgrade store is not configured")
 	}
@@ -555,10 +582,9 @@ func (s *PostgresMachineUpgradeStore) CommitTakeover(ctx context.Context, daemon
 	id = strings.TrimSpace(id)
 	generation = strings.TrimSpace(generation)
 	cliVersion = strings.TrimSpace(cliVersion)
-	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
 	workspaceIDs = normalizedMachineRuntimeIDs(workspaceIDs)
 	if daemonID == "" || id == "" || generation == "" || cliVersion == "" ||
-		predecessorComputerGeneration < 1 || candidateComputerGeneration != predecessorComputerGeneration+1 {
+		predecessorComputerGeneration < 1 || candidateComputerGeneration != predecessorComputerGeneration+1 || len(workspaceIDs) == 0 {
 		return nil, errMachineUpgradeAttestationRejected
 	}
 	tx, err := s.db.Begin(ctx)
@@ -574,7 +600,6 @@ func (s *PostgresMachineUpgradeStore) CommitTakeover(ctx context.Context, daemon
 	if op == nil || (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) ||
 		op.AcceptedGeneration == nil || *op.AcceptedGeneration != generation ||
 		op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(cliVersion)) ||
-		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) ||
 		!sameMachineRuntimeSet(op.AcceptedWorkspaceIDs, workspaceIDs) {
 		return nil, errMachineUpgradeAttestationRejected
 	}

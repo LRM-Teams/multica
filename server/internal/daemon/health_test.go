@@ -182,7 +182,9 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	journal := &machineUpgradeJournal{
 		ID: "upgrade-1", Generation: "generation-a", SourceVersion: "v9.9.9", TargetVersion: "v10.0.0",
 		IncumbentGeneration: 1, IncumbentGenerationKnown: true, PredecessorComputerGeneration: 11,
-		RuntimeIDs:   []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
+		// Runtime recovery evidence may be incomplete before takeover. Computer
+		// identity and Workspace binding scope are the takeover fence.
+		RuntimeIDs:   []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
 		WorkspaceIDs: []string{"11111111-1111-1111-1111-111111111111"}, Phase: "handoff",
 	}
 	if err := d.writeMachineUpgradeJournal(journal); err != nil {
@@ -193,10 +195,9 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	}
 
 	expected := MachineUpgradeTakeoverProof{
-		UpgradeID: "upgrade-1", Generation: "generation-a", DaemonID: "daemon-1",
+		UpgradeID: "upgrade-1", Generation: "generation-a", ComputerID: "daemon-1",
 		PredecessorComputerGeneration: 11, PredecessorVersionStoreGeneration: 1,
 		CandidateComputerGeneration: 12, CandidatePID: os.Getpid(), TargetVersion: "v10.0.0",
-		RuntimeIDs:   []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
 		WorkspaceIDs: []string{"11111111-1111-1111-1111-111111111111"}, Phase: "takeover_ready",
 	}
 	handler := d.localMachineUpgradeTakeoverHandler()
@@ -230,7 +231,7 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 		t.Fatalf("unauthenticated takeover status = %d, want 401", rec.Code)
 	}
 	wrong := expected
-	wrong.DaemonID = "daemon-stale"
+	wrong.ComputerID = "daemon-stale"
 	if rec := request(wrong, "profile-secret"); rec.Code != http.StatusConflict {
 		t.Fatalf("wrong-daemon takeover status = %d body=%s, want 409", rec.Code, rec.Body.String())
 	}
@@ -250,9 +251,6 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	}
 	if !d.pauseClaims {
 		t.Fatal("takeover CAS released claims before normal candidate startup")
-	}
-	if got := stringSetFromAny(upstreamProof["runtime_ids"]); !sameStringSet(got, expected.RuntimeIDs) {
-		t.Fatalf("upstream runtime proof = %#v, want %#v", got, expected.RuntimeIDs)
 	}
 	if got := stringSetFromAny(upstreamProof["workspace_ids"]); !sameStringSet(got, expected.WorkspaceIDs) {
 		t.Fatalf("upstream Workspace proof = %#v, want %#v", got, expected.WorkspaceIDs)

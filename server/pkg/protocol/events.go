@@ -127,6 +127,9 @@ const (
 	EventAutopilotRunStart = "autopilot:run_start"
 	EventAutopilotRunDone  = "autopilot:run_done"
 
+	// Computer events
+	EventComputerUpdated = "computer:updated"
+
 	// Daemon events
 	EventDaemonHeartbeat      = "daemon:heartbeat"
 	EventDaemonHeartbeatAck   = "daemon:heartbeat_ack"

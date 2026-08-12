@@ -1175,11 +1175,11 @@ func canOwnRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 
-// canManageMachineUpgrade permits a computer owner or a workspace owner/admin
-// to start, inspect, or cancel a daemon-scoped machine upgrade. Restart remains
-// computer-owner-only because it is a separate, immediate machine mutation.
+// canManageMachineUpgrade is Computer-owner-only. A Workspace role grants
+// authority over that Workspace, not over another person's machine-wide
+// Computer lifecycle.
 func canManageMachineUpgrade(member db.Member, rt db.AgentRuntime) bool {
-	return roleAllowed(member.Role, "owner", "admin") || canOwnRuntime(member, rt)
+	return canOwnRuntime(member, rt)
 }
 
 // canUseRuntimeForAgent reports whether a workspace member is allowed to

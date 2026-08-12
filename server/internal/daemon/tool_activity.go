@@ -220,12 +220,8 @@ var toolDetailKind = map[string]string{
 	"collab_tool_call":      "collaborating",
 }
 
-// maxActivityCommandRunes is the source-side bound for command narrative text
-// that becomes the Activity timeline body. The previous 100-rune clip made
-// multi-flag shell / multica invocations unreadable in the Activity tab; keep
-// a hard ceiling so a pathological dump cannot blow the wire fact envelope
-// (aligned with activityprojection.maxTimelineBodyBytes = 4000).
-const maxActivityCommandRunes = 4000
+// maxActivityCommandRunes matches Raft's source-side command clip (100).
+const maxActivityCommandRunes = 100
 
 // toolActivityFact builds the wire fact for a tool-use observation: the
 // detail kind the projection labels, and the narrative text that becomes the

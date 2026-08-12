@@ -96,16 +96,17 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
   const { t } = useT("agents");
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
-  // Prefer body (new projection: body_kind=command). Fall back to subtext when
-  // title is Running command (legacy rows that only carried a clipped command
-  // in subtext before the body projection landed).
+  // UI-first command readability: today's projection keeps the (often clipped)
+  // shell text in subtext with body empty. Prefer body when present; otherwise
+  // promote Running-command subtext into the mono + Copy block so the Activity
+  // tab is not stuck with a muted single-line-looking span.
   const bodyText = row.body?.trim() ?? "";
   const isRunningCommandTitle = /^Running command/.test(row.title ?? "");
-  const legacyCommandSubtext =
+  const commandFromSubtext =
     !bodyText && (row.body_kind === "command" || isRunningCommandTitle)
       ? (row.subtext?.trim() ?? "")
       : "";
-  const displayCommand = bodyText || legacyCommandSubtext;
+  const displayCommand = bodyText || commandFromSubtext;
   const plainSubtext = !displayCommand ? row.subtext?.trim() : undefined;
   const bodyIsLong = Boolean(displayCommand && isLongActivityCommand(displayCommand));
   const exactTime = formatExactTime(row.occurred_at, exactTimeFormatter);

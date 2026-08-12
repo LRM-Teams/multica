@@ -173,15 +173,6 @@ func projectNarrativeTimelineRow(body protocol.AgentActivityNarrativeBody, fallb
 		case "message_received":
 			row.Title = "Working"
 			row.Subtext = text
-		case "running_command":
-			// Full command goes in Body so the Activity tab can render a mono
-			// block + Copy without line-clamp. Subtext stays empty — compact
-			// surfaces only use ProjectSummary (label only, no command text).
-			row.Title = "Running command"
-			if text != "" && text != row.Title {
-				row.Body = text
-				row.BodyKind = "command"
-			}
 		default:
 			if text != "" && text != row.Title {
 				row.Subtext = text

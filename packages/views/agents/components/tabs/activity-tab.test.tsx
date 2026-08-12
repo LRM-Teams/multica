@@ -86,13 +86,16 @@ describe("ActivityTab", () => {
     await waitFor(() => expect(copyText).toHaveBeenCalledWith(command));
   });
 
-  it("falls back to subtext for legacy Running command rows without body", () => {
-    const command = "go test ./internal/handler -count=1";
+  it("promotes Running command subtext into the mono command block (current API shape)", () => {
+    // Production projection still puts the command in subtext with body empty.
+    // UI-first fix: render that subtext as the command block + Copy, not muted text.
+    const command =
+      '/bin/bash -lc \'pwd && rg --files -g "!*.git" | head -80 && git status --short\'…';
     runnerActivity.mockReturnValue({
       data: {
         summary: { label: "Running command...", tone: "warning", visibility: "visible" },
         timeline: [{
-          id: "row-legacy",
+          id: "row-current",
           occurred_at: "2026-08-06T12:00:00Z",
           title: "Running command",
           subtext: command,
@@ -108,6 +111,7 @@ describe("ActivityTab", () => {
     expect(screen.getByTestId("activity-command-block").querySelector("code")?.textContent).toBe(
       command,
     );
+    expect(screen.queryByTestId("runner-activity-subtext")).toBeNull();
   });
 
   it("renders a server-projected soft-hold row (warning tone) with its reason subtext", () => {

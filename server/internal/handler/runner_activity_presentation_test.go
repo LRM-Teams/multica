@@ -42,8 +42,8 @@ func TestProjectRunnerActivityTimelineEntryKeepsCommandText(t *testing.T) {
 		Body: []byte(`{"text":"go test ./internal/handler","activity_kind":"working","detail_kind":"running_command"}`),
 	}
 	row := projectRunnerActivityTimelineEntry(entry, activityprojection.Summary{Label: "Online", Tone: "success"}, nil)
-	if row.Title != "Running command" || row.Body != "go test ./internal/handler" || row.BodyKind != "command" || row.Subtext != "" {
-		t.Fatalf("row = %+v, want command text in body", row)
+	if row.Title != "Running command" || row.Subtext != "go test ./internal/handler" {
+		t.Fatalf("row = %+v, want command text preserved", row)
 	}
 }
 

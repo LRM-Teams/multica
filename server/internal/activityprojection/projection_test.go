@@ -109,16 +109,16 @@ func TestProjectTimelineEntryUsesEventLocalLifecycleInsteadOfLatestSnapshot(t *t
 	}
 }
 
-func TestProjectTimelineEntryShowsCommandTextAsBody(t *testing.T) {
+func TestProjectTimelineEntryShowsCommandTextAsSubtext(t *testing.T) {
 	row := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"pnpm test","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
-	if row.Title != "Running command" || row.Body != "pnpm test" || row.Subtext != "" || row.Tone != "warning" || row.BodyKind != "command" {
-		t.Fatalf("command row = %+v, want title Running command with the command as body", row)
+	if row.Title != "Running command" || row.Subtext != "pnpm test" || row.Tone != "warning" || row.BodyKind != "none" {
+		t.Fatalf("command row = %+v, want title Running command with the command as subtext", row)
 	}
 	// The generic label narrative (no command in the tool input) must not
-	// echo the title as its own body.
+	// echo the title as its own subtext.
 	plain := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "narrative", Body: []byte(`{"text":"Running command","activity_kind":"working","detail_kind":"running_command"}`)}, Summary{Label: "Online", Tone: "success"})
-	if plain.Title != "Running command" || plain.Subtext != "" || plain.Body != "" {
-		t.Fatalf("generic command row = %+v, want no body/subtext", plain)
+	if plain.Title != "Running command" || plain.Subtext != "" {
+		t.Fatalf("generic command row = %+v, want no subtext", plain)
 	}
 }
 

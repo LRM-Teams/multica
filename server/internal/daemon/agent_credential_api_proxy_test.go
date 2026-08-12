@@ -146,8 +146,9 @@ func TestCredentialProxyAssociatesCanonicalResponsesWithActiveProviderContext(t 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := newCredentialProxyTestDaemon(t, http.StatusCreated, tt.responseBody)
+			turnToken := d.beginCanonicalActionTurn("agent-1")
 			d.SetActiveProviderToolContext(ActiveProviderToolContext{
-				AgentID: "agent-1", CallID: tt.callID, ToolCallID: tt.toolCallID,
+				AgentID: "agent-1", CallID: tt.callID, ToolCallID: tt.toolCallID, TurnToken: turnToken,
 			})
 
 			for range 2 {
@@ -208,12 +209,15 @@ func TestCredentialProxyRejectsNonCanonicalResponses(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := newCredentialProxyTestDaemon(t, tt.status, tt.responseBody)
+			turnToken := d.beginCanonicalActionTurn("agent-1")
 			ctx := tt.context
 			if ctx == nil {
 				ctx = &defaultContext
 			}
 			if ctx.AgentID != "" {
-				d.SetActiveProviderToolContext(*ctx)
+				turnContext := *ctx
+				turnContext.TurnToken = turnToken
+				d.SetActiveProviderToolContext(turnContext)
 			}
 
 			rec := serveCredentialProxyTestRequest(t, d, tt.method, tt.path, `{}`)
@@ -233,7 +237,8 @@ func TestCredentialProxyRejectsNonCanonicalResponses(t *testing.T) {
 func TestCredentialProxyIgnoresAgentDeclaredProvenanceInRequestBody(t *testing.T) {
 	const canonicalID = "70000000-0000-4000-8000-000000000351"
 	d := newCredentialProxyTestDaemon(t, http.StatusOK, `{"created":true,"message":{"id":"`+canonicalID+`"}}`)
-	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "C19", ToolCallID: "tool-1"})
+	turnToken := d.beginCanonicalActionTurn("agent-1")
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "C19", ToolCallID: "tool-1", TurnToken: turnToken})
 
 	rec := serveCredentialProxyTestRequest(t, d, http.MethodPost, "/api/agent/messages/send", `{
 		"target":"channel:one",
@@ -259,7 +264,8 @@ func TestCredentialProxyIgnoresAgentDeclaredProvenanceInRequestBody(t *testing.T
 func TestCredentialProxyCanonicalAssociationsAreRaceSafe(t *testing.T) {
 	const canonicalID = "70000000-0000-4000-8000-000000000361"
 	d := newCredentialProxyTestDaemon(t, http.StatusOK, `{"created":true,"message":{"id":"`+canonicalID+`"}}`)
-	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "C21", ToolCallID: "tool-race"})
+	turnToken := d.beginCanonicalActionTurn("agent-1")
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: "agent-1", CallID: "C21", ToolCallID: "tool-race", TurnToken: turnToken})
 
 	var wg sync.WaitGroup
 	for range 20 {
@@ -277,6 +283,88 @@ func TestCredentialProxyCanonicalAssociationsAreRaceSafe(t *testing.T) {
 	got := d.ObservedCanonicalActionAssociations("agent-1")
 	if len(got) != 1 || got[0].CanonicalID != canonicalID {
 		t.Fatalf("concurrent associations = %+v, want one deduplicated association", got)
+	}
+}
+
+func TestCredentialProxyAssociatesResponseWithIngressContextSnapshot(t *testing.T) {
+	const canonicalID = "70000000-0000-4000-8000-000000000373"
+	requestArrived := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(requestArrived)
+		<-releaseResponse
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"created":true,"message":{"id":"`+canonicalID+`"}}`)
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
+		ID: "credential-1", AgentID: "agent-1", Token: "cached-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("write cached credential: %v", err)
+	}
+	d := &Daemon{cfg: cfg}
+	turn1 := d.beginCanonicalActionTurn("agent-1")
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{
+		AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn1,
+	})
+
+	recorder := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		recorder <- serveCredentialProxyTestRequest(t, d, http.MethodPost, "/api/agent/messages/send", `{}`)
+	}()
+	<-requestArrived
+	d.clearActiveProviderToolContext("agent-1", turn1, "tool-1")
+	turn2 := d.beginCanonicalActionTurn("agent-1")
+	d.SetActiveProviderToolContext(ActiveProviderToolContext{
+		AgentID: "agent-1", CallID: "tool-2", ToolCallID: "tool-2", TurnToken: turn2,
+	})
+	close(releaseResponse)
+	if rec := <-recorder; rec.Code != http.StatusCreated {
+		t.Fatalf("proxy status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	drained1 := d.endCanonicalActionTurn("agent-1", turn1)
+	if len(drained1.Associations) != 1 || drained1.Associations[0].ToolCallID != "tool-1" || drained1.Associations[0].TurnToken != turn1 {
+		t.Fatalf("turn1 associations = %+v, want ingress tool-1 context", drained1.Associations)
+	}
+	drained2 := d.endCanonicalActionTurn("agent-1", turn2)
+	if len(drained2.Associations) != 0 {
+		t.Fatalf("response was rebound to replacement context: %+v", drained2.Associations)
+	}
+}
+
+func TestCanonicalActionTurnsDrainOnlyMatchingToken(t *testing.T) {
+	d := &Daemon{}
+	turn1 := d.beginCanonicalActionTurn("agent-1")
+	context1 := ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-1", ToolCallID: "tool-1", TurnToken: turn1}
+	d.SetActiveProviderToolContext(context1)
+	d.observeCanonicalActionOutcome(context1, "message", "70000000-0000-4000-8000-000000000374", true)
+
+	turn2 := d.beginCanonicalActionTurn("agent-1")
+	context2 := ActiveProviderToolContext{AgentID: "agent-1", CallID: "tool-2", ToolCallID: "tool-2", TurnToken: turn2}
+	d.SetActiveProviderToolContext(context2)
+	d.observeCanonicalActionOutcome(context2, "reaction", "70000000-0000-4000-8000-000000000375", true)
+
+	drained1 := d.endCanonicalActionTurn("agent-1", turn1)
+	if len(drained1.Associations) != 1 || drained1.Associations[0].TurnToken != turn1 {
+		t.Fatalf("turn1 drain = %+v", drained1.Associations)
+	}
+	active2, ok := d.activeProviderToolContextSnapshot("agent-1")
+	if !ok || active2.TurnToken != turn2 || active2.ToolCallID != "tool-2" {
+		t.Fatalf("turn1 drain cleared turn2 active context: %+v, ok=%v", active2, ok)
+	}
+	d.observeCanonicalActionOutcome(active2, "message", "70000000-0000-4000-8000-000000000376", true)
+	drained2 := d.endCanonicalActionTurn("agent-1", turn2)
+	if len(drained2.Associations) != 2 {
+		t.Fatalf("turn2 drain = %+v, want both turn2 records", drained2.Associations)
+	}
+	for _, association := range drained2.Associations {
+		if association.TurnToken != turn2 {
+			t.Fatalf("turn2 stole foreign association: %+v", drained2.Associations)
+		}
 	}
 }
 

@@ -160,10 +160,13 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 	if err != nil {
 		return err
 	}
+	var canonicalActionTurn canonicalActionTurnToken
+	if mixed {
+		canonicalActionTurn = d.beginCanonicalActionTurn(agentID)
+	}
 	err = d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, preparedMessages, func() {
 		runner.observeMessageLifecycle(agentID, runtimeID)
 	}, func() {
-		d.beginCanonicalActionTurn(agentID)
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:start", protocol.MixedRunActivityActiveTurn, 1)
 			// Capture-batch accounting opens with the resident turn and closes
@@ -173,16 +176,14 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		d.recordResidentMessageBatch(workspaceID, runtimeID, agentID, preparedMessages, "runtime_handoff_accepted", "accepted", "")
 		runner.observeMessageAccepted(agentID, runtimeID, preparedMessages)
 	}, func(message agent.Message) {
-		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, message)
+		d.reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, message)
 		runner.observeResidentMessageRuntime(agentID, runtimeID, message)
 	}, func(turnErr error, generation uint64, capture *agent.ResidentTurnCapture) {
 		if mixed {
 			d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":active:end", protocol.MixedRunActivityActiveTurn, -1)
-			if d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, turnID, turnErr, capture) {
+			if d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, turnID, canonicalActionTurn, turnErr, capture) {
 				d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID, "turn:"+turnID+":capture:end", protocol.MixedRunActivityUnfinishedCaptureBatch, -1)
 			}
-		} else {
-			d.endCanonicalActionTurn(agentID)
 		}
 		outcome, reasonCode := "completed", ""
 		if turnErr != nil {
@@ -204,6 +205,9 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 		})
 	})
 	if err != nil {
+		if mixed {
+			d.endCanonicalActionTurn(agentID, canonicalActionTurn)
+		}
 		outcome := "rejected"
 		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
 			outcome = "deferred"
@@ -224,8 +228,8 @@ func (d *Daemon) handoffIdleMessageBatch(ctx context.Context, agentID, runtimeID
 // daemon releases the matching unfinished-capture counter. A failed upload is
 // deliberately left unfinished; a successful server gap report is the only
 // alternate terminal outcome.
-func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, activityTurnID string, turnErr error, capture *agent.ResidentTurnCapture) bool {
-	associations := d.endCanonicalActionTurn(agentID)
+func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, activityTurnID string, turnToken canonicalActionTurnToken, turnErr error, capture *agent.ResidentTurnCapture) bool {
+	drained := d.endCanonicalActionTurn(agentID, turnToken)
 	if d.client == nil || strings.TrimSpace(d.client.baseURL) == "" {
 		return false
 	}
@@ -242,7 +246,10 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 	if turnErr != nil {
 		gapReason = "provider_turn_failed"
 	}
-	if turnErr == nil && capture != nil && capture.Complete {
+	if drained.Overflow {
+		gapReason = "canonical_action_overflow"
+	}
+	if turnErr == nil && !drained.Overflow && capture != nil && capture.Complete {
 		payload := protocol.TurnCaptureUpload{
 			AgentID: agentID, RuntimeID: runtimeID, CaptureBatchID: capture.CaptureBatchID,
 			Turn: protocol.TurnCaptureTurn{
@@ -261,7 +268,7 @@ func (d *Daemon) reportResidentTurnCapture(workspaceID, agentID, runtimeID, runI
 				StartedAt: call.StartedAt.UTC().Format(time.RFC3339Nano), CompletedAt: call.CompletedAt.UTC().Format(time.RFC3339Nano),
 			})
 		}
-		payload.VisibleActions = resolvedTurnCaptureVisibleActions(capture.ProviderCalls, associations)
+		payload.VisibleActions = resolvedTurnCaptureVisibleActions(capture.ProviderCalls, drained.Associations)
 		response, err := d.client.UploadTurnCapture(reportCtx, runID, payload, credential.Token)
 		if err == nil && response.Accepted {
 			return true
@@ -338,19 +345,19 @@ func mixedRunCaptureGapIdentity(runAgentID, activityTurnID string, capture *agen
 // reportMixedRunToolActivity tracks inflight tool calls of a mixed-run turn.
 // User-facing Activity emission stays with the Workspace Runner; this reports
 // only the durable mixed-run transition deltas.
-func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, message agent.Message) {
+func (d *Daemon) reportMixedRunToolActivity(agentID, runtimeID, runID, runAgentID, turnID string, turnToken canonicalActionTurnToken, message agent.Message) {
 	if runID == "" || runAgentID == "" || turnID == "" || strings.TrimSpace(message.CallID) == "" {
 		return
 	}
 	switch message.Type {
 	case agent.MessageToolUse:
 		d.SetActiveProviderToolContext(ActiveProviderToolContext{
-			AgentID: agentID, CallID: message.CallID, ToolCallID: message.CallID,
+			AgentID: agentID, CallID: message.CallID, ToolCallID: message.CallID, TurnToken: turnToken,
 		})
 		d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID,
 			"turn:"+turnID+":tool:"+message.CallID+":start", protocol.MixedRunActivityInflightTool, 1)
 	case agent.MessageToolResult:
-		d.clearActiveProviderToolContext(agentID, message.CallID)
+		d.clearActiveProviderToolContext(agentID, turnToken, message.CallID)
 		d.reportMixedRunActivity(agentID, runtimeID, runID, runAgentID,
 			"turn:"+turnID+":tool:"+message.CallID+":end", protocol.MixedRunActivityInflightTool, -1)
 	}

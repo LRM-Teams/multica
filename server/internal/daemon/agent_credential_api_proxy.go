@@ -22,7 +22,10 @@ type ActiveProviderToolContext struct {
 	AgentID    string
 	CallID     string
 	ToolCallID string
+	TurnToken  canonicalActionTurnToken
 }
+
+type canonicalActionTurnToken uint64
 
 // CanonicalActionAssociation records a successful canonical message or
 // reaction observed by the credential proxy while a provider/tool context was
@@ -32,13 +35,26 @@ type CanonicalActionAssociation struct {
 	CanonicalID    string
 	ProducerCallID string
 	ToolCallID     string
+	TurnToken      canonicalActionTurnToken
 	SucceededAt    time.Time
 }
 
+type canonicalActionTurnState struct {
+	agentID      string
+	associations []CanonicalActionAssociation
+	overflow     bool
+}
+
+type canonicalActionTurnDrain struct {
+	Associations []CanonicalActionAssociation
+	Overflow     bool
+}
+
 type credentialProxyProvenanceState struct {
-	mu           sync.Mutex
-	active       map[string]ActiveProviderToolContext
-	associations map[string][]CanonicalActionAssociation
+	mu        sync.Mutex
+	nextToken canonicalActionTurnToken
+	active    map[string]ActiveProviderToolContext
+	turns     map[canonicalActionTurnToken]*canonicalActionTurnState
 }
 
 var credentialProxyProvenanceByDaemon sync.Map // *Daemon -> *credentialProxyProvenanceState
@@ -46,16 +62,16 @@ var credentialProxyProvenanceByDaemon sync.Map // *Daemon -> *credentialProxyPro
 func provenanceStateFor(d *Daemon) *credentialProxyProvenanceState {
 	if d == nil {
 		return &credentialProxyProvenanceState{
-			active:       make(map[string]ActiveProviderToolContext),
-			associations: make(map[string][]CanonicalActionAssociation),
+			active: make(map[string]ActiveProviderToolContext),
+			turns:  make(map[canonicalActionTurnToken]*canonicalActionTurnState),
 		}
 	}
 	if existing, ok := credentialProxyProvenanceByDaemon.Load(d); ok {
 		return existing.(*credentialProxyProvenanceState)
 	}
 	created := &credentialProxyProvenanceState{
-		active:       make(map[string]ActiveProviderToolContext),
-		associations: make(map[string][]CanonicalActionAssociation),
+		active: make(map[string]ActiveProviderToolContext),
+		turns:  make(map[canonicalActionTurnToken]*canonicalActionTurnState),
 	}
 	actual, _ := credentialProxyProvenanceByDaemon.LoadOrStore(d, created)
 	return actual.(*credentialProxyProvenanceState)
@@ -71,8 +87,14 @@ func (d *Daemon) SetActiveProviderToolContext(ctx ActiveProviderToolContext) {
 	if agentID == "" {
 		return
 	}
+	turn, ok := state.turns[ctx.TurnToken]
+	if !ok || turn.agentID != agentID {
+		return
+	}
 	if strings.TrimSpace(ctx.CallID) == "" {
-		delete(state.active, agentID)
+		if active, exists := state.active[agentID]; exists && active.TurnToken == ctx.TurnToken {
+			delete(state.active, agentID)
+		}
 		return
 	}
 	ctx.AgentID = agentID
@@ -81,44 +103,72 @@ func (d *Daemon) SetActiveProviderToolContext(ctx ActiveProviderToolContext) {
 	state.active[agentID] = ctx
 }
 
-// beginCanonicalActionTurn atomically advances the agent's turn-scoped
-// provenance boundary. Any records left by an interrupted prior turn are
-// discarded before the next provider input can run.
-func (d *Daemon) beginCanonicalActionTurn(agentID string) {
+// beginCanonicalActionTurn creates an isolated provenance boundary. Existing
+// turns for the same agent remain intact until their matching token drains.
+func (d *Daemon) beginCanonicalActionTurn(agentID string) canonicalActionTurnToken {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	agentID = strings.TrimSpace(agentID)
-	delete(state.active, agentID)
-	delete(state.associations, agentID)
+	if agentID == "" {
+		return 0
+	}
+	state.nextToken++
+	if state.nextToken == 0 {
+		state.nextToken++
+	}
+	token := state.nextToken
+	state.turns[token] = &canonicalActionTurnState{agentID: agentID}
+	return token
 }
 
 // clearActiveProviderToolContext clears only the matching tool. A late result
 // for an older tool must not clear a newer active tool context.
-func (d *Daemon) clearActiveProviderToolContext(agentID, toolCallID string) {
+func (d *Daemon) clearActiveProviderToolContext(agentID string, turnToken canonicalActionTurnToken, toolCallID string) {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	agentID = strings.TrimSpace(agentID)
 	toolCallID = strings.TrimSpace(toolCallID)
-	if active, ok := state.active[agentID]; ok && active.ToolCallID == toolCallID {
+	if active, ok := state.active[agentID]; ok && active.TurnToken == turnToken && active.ToolCallID == toolCallID {
 		delete(state.active, agentID)
 	}
 }
 
 // endCanonicalActionTurn atomically clears active context and drains the
 // current turn's associations so they can be uploaded at most once.
-func (d *Daemon) endCanonicalActionTurn(agentID string) []CanonicalActionAssociation {
+func (d *Daemon) endCanonicalActionTurn(agentID string, turnToken canonicalActionTurnToken) canonicalActionTurnDrain {
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	agentID = strings.TrimSpace(agentID)
-	delete(state.active, agentID)
-	src := state.associations[agentID]
-	delete(state.associations, agentID)
-	out := make([]CanonicalActionAssociation, len(src))
-	copy(out, src)
-	return out
+	if active, ok := state.active[agentID]; ok && active.TurnToken == turnToken {
+		delete(state.active, agentID)
+	}
+	turn, ok := state.turns[turnToken]
+	if !ok || turn.agentID != agentID {
+		return canonicalActionTurnDrain{}
+	}
+	delete(state.turns, turnToken)
+	out := make([]CanonicalActionAssociation, len(turn.associations))
+	copy(out, turn.associations)
+	return canonicalActionTurnDrain{Associations: out, Overflow: turn.overflow}
+}
+
+func (d *Daemon) activeProviderToolContextSnapshot(agentID string) (ActiveProviderToolContext, bool) {
+	state := provenanceStateFor(d)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	agentID = strings.TrimSpace(agentID)
+	active, ok := state.active[agentID]
+	if !ok || active.TurnToken == 0 || strings.TrimSpace(active.ToolCallID) == "" {
+		return ActiveProviderToolContext{}, false
+	}
+	turn, exists := state.turns[active.TurnToken]
+	if !exists || turn.agentID != agentID {
+		return ActiveProviderToolContext{}, false
+	}
+	return active, true
 }
 
 // ObservedCanonicalActionAssociations returns trusted associations recorded for
@@ -127,20 +177,24 @@ func (d *Daemon) ObservedCanonicalActionAssociations(agentID string) []Canonical
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	src := state.associations[strings.TrimSpace(agentID)]
-	out := make([]CanonicalActionAssociation, len(src))
-	copy(out, src)
+	agentID = strings.TrimSpace(agentID)
+	var out []CanonicalActionAssociation
+	for _, turn := range state.turns {
+		if turn.agentID == agentID {
+			out = append(out, turn.associations...)
+		}
+	}
 	return out
 }
 
 // observeCanonicalActionOutcome associates a canonical send/reaction ID with
 // the active provider/tool context only when the upstream canonical operation
 // succeeded. Agent-declared provenance is never consulted.
-func (d *Daemon) observeCanonicalActionOutcome(agentID, kind, canonicalID string, succeeded bool) {
+func (d *Daemon) observeCanonicalActionOutcome(providerContext ActiveProviderToolContext, kind, canonicalID string, succeeded bool) {
 	if !succeeded {
 		return
 	}
-	agentID = strings.TrimSpace(agentID)
+	agentID := strings.TrimSpace(providerContext.AgentID)
 	kind = strings.TrimSpace(kind)
 	canonicalID = strings.TrimSpace(canonicalID)
 	if agentID == "" || (kind != "message" && kind != "reaction") {
@@ -153,23 +207,25 @@ func (d *Daemon) observeCanonicalActionOutcome(agentID, kind, canonicalID string
 	state := provenanceStateFor(d)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	active, ok := state.active[agentID]
-	if !ok || strings.TrimSpace(active.ToolCallID) == "" {
+	turn, ok := state.turns[providerContext.TurnToken]
+	if !ok || turn.agentID != agentID || strings.TrimSpace(providerContext.ToolCallID) == "" {
 		return
 	}
-	for _, existing := range state.associations[agentID] {
+	for _, existing := range turn.associations {
 		if existing.Kind == kind && existing.CanonicalID == canonicalID {
 			return
 		}
 	}
-	if len(state.associations[agentID]) >= canonicalActionAssociationLimitPerTurn {
+	if len(turn.associations) >= canonicalActionAssociationLimitPerTurn {
+		turn.overflow = true
 		return
 	}
-	state.associations[agentID] = append(state.associations[agentID], CanonicalActionAssociation{
+	turn.associations = append(turn.associations, CanonicalActionAssociation{
 		Kind:           kind,
 		CanonicalID:    canonicalID,
-		ProducerCallID: active.CallID,
-		ToolCallID:     active.ToolCallID,
+		ProducerCallID: providerContext.CallID,
+		ToolCallID:     providerContext.ToolCallID,
+		TurnToken:      providerContext.TurnToken,
 		SucceededAt:    time.Now().UTC(),
 	})
 }
@@ -207,6 +263,7 @@ func (d *Daemon) credentialProxyAgentAPIHandler() http.HandlerFunc {
 			http.Error(w, "agent_id and workspace_id are required", http.StatusBadRequest)
 			return
 		}
+		providerContext, hasProviderContext := d.activeProviderToolContextSnapshot(agentID)
 		credential, ok := readCachedAgentCredentialForMessage(d.cfg, workspaceID, agentID, time.Now())
 		if !ok {
 			http.Error(w, "agent credential is unavailable", http.StatusConflict)
@@ -241,8 +298,8 @@ func (d *Daemon) credentialProxyAgentAPIHandler() http.HandlerFunc {
 		kind, canonicalID, ok := canonicalActionFromProxyResponse(
 			r.Method, r.URL.Path, response.StatusCode, captured.Bytes(),
 		)
-		if ok && !captured.Overflowed() {
-			d.observeCanonicalActionOutcome(agentID, kind, canonicalID, true)
+		if ok && !captured.Overflowed() && hasProviderContext {
+			d.observeCanonicalActionOutcome(providerContext, kind, canonicalID, true)
 		}
 	}
 }

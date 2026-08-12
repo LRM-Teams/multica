@@ -381,7 +381,8 @@ func TestResidentMessageRuntimeCapture_BindsProxyActionToProviderCallAndDrainsTu
 
 	second := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-2", "turn-2", "batch-2", "provider-call-2", "second")
 	second.ProviderCalls[0].FinalAssistantMessage = capture.ProviderCalls[0].FinalAssistantMessage
-	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-turn-2", nil, &second) {
+	secondTurnToken := d.beginCanonicalActionTurn(agentID)
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-turn-2", secondTurnToken, nil, &second) {
 		t.Fatal("second capture was not accepted")
 	}
 
@@ -520,8 +521,6 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 	}}); err != nil {
 		t.Fatalf("handoff: %v", err)
 	}
-	d.SetActiveProviderToolContext(ActiveProviderToolContext{AgentID: agentID, CallID: "tool-gap", ToolCallID: "tool-gap"})
-	d.observeCanonicalActionOutcome(agentID, "message", "70000000-0000-4000-8000-000000000372", true)
 	backend.finish(nil)
 
 	deadline := time.After(2 * time.Second)
@@ -545,6 +544,74 @@ func TestResidentMessageRuntimeCapture_MissingBatchReportsCaptureGap(t *testing.
 		case <-deadline:
 			t.Fatal("missing-batch path did not report a capture gap and release unfinished capture")
 		}
+	}
+}
+
+func TestResidentMessageRuntimeCapture_ActionOverflowReportsGapWithoutUpload(t *testing.T) {
+	const (
+		workspaceID = "11111111-1111-1111-1111-111111111111"
+		runtimeID   = "22222222-2222-2222-2222-222222222222"
+		agentID     = "33333333-3333-3333-3333-333333333333"
+		runID       = "run-overflow"
+		runAgentID  = "run-agent-overflow"
+	)
+	var (
+		mu      sync.Mutex
+		uploads int
+		gaps    []protocol.TurnCaptureGapReport
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-captures":
+			mu.Lock()
+			uploads++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureUploadResponse{Accepted: true})
+		case "/api/v1/env-dispatch/runs/" + runID + "/turn-capture-gaps":
+			var gap protocol.TurnCaptureGapReport
+			if err := json.NewDecoder(r.Body).Decode(&gap); err != nil {
+				t.Errorf("decode gap: %v", err)
+			}
+			mu.Lock()
+			gaps = append(gaps, gap)
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(protocol.TurnCaptureGapResponse{Accepted: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: t.TempDir(), ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, workspaceID, runtimeID, agentID, AgentCredentialResponse{
+		ID: "credential-1", AgentID: agentID, Token: "durable-agent-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("write credential: %v", err)
+	}
+	d := &Daemon{cfg: cfg, client: NewClient(upstream.URL), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	turnToken := d.beginCanonicalActionTurn(agentID)
+	toolContext := ActiveProviderToolContext{AgentID: agentID, CallID: "tool-overflow", ToolCallID: "tool-overflow", TurnToken: turnToken}
+	d.SetActiveProviderToolContext(toolContext)
+	for index := 0; index <= canonicalActionAssociationLimitPerTurn; index++ {
+		canonicalID := fmt.Sprintf("70000000-0000-4000-8000-%012x", index+1)
+		d.observeCanonicalActionOutcome(toolContext, "message", canonicalID, true)
+	}
+	capture := residentTurnCaptureForBoundaryTest(runID, runAgentID, "boundary-overflow", "turn-overflow", "batch-overflow", "provider-call", "overflow")
+	if !d.reportResidentTurnCapture(workspaceID, agentID, runtimeID, runID, runAgentID, "activity-overflow", turnToken, nil, &capture) {
+		t.Fatal("overflow gap was not accepted")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if uploads != 0 {
+		t.Fatalf("overflow emitted %d complete uploads", uploads)
+	}
+	if len(gaps) != 1 || gaps[0].Reason != "canonical_action_overflow" {
+		t.Fatalf("overflow gaps = %+v", gaps)
+	}
+	if drained := d.endCanonicalActionTurn(agentID, turnToken); len(drained.Associations) != 0 || drained.Overflow {
+		t.Fatalf("overflow state survived terminal gap: %+v", drained)
 	}
 }
 

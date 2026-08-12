@@ -309,7 +309,7 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	first := dial()
 	defer first.Close()
 	// An acknowledgement before ready must not reach the new boundary.
-	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", QueueState: protocol.AgentStartQueueQueued})
+	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
 	time.Sleep(20 * time.Millisecond)
 	if accepted.Load() != 0 {
 		t.Fatal("unready connection mutated Runner state")
@@ -319,7 +319,7 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment},
 	})
 	waitForRunner(t, hub, "daemon-1", "workspace-1")
-	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", QueueState: protocol.AgentStartQueueQueued})
+	write(first, protocol.EventAgentStartAck, protocol.AgentStartAckPayload{AgentID: "agent-a", LaunchID: "launch-a", StartDispatchID: "dispatch-a", QueueState: protocol.AgentStartQueueQueued})
 	deadline := time.Now().Add(time.Second)
 	for accepted.Load() != 1 {
 		if time.Now().After(deadline) {

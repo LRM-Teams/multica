@@ -158,12 +158,15 @@
 
 ### 1.4 权限（Slice 1 横切，每项实现时遵守）
 
-- [ ] **S1-P1 权限与多租户检查清单落地**
+- [x] **S1-P1 权限与多租户检查清单落地**
   - **目标**：私有笔记仅 owner；分享页按 `note_page_share`；一切按 `workspace_id` 过滤；写回记录 actor（user/agent）。
   - **要做**：为 S1 新增的每个 endpoint 补成员校验 + 笔记 ACL；共享笔记的写回提案创建者与确认者可分离但都需有权。
   - **不要做**：用「知道 UUID」绕过分享模型。
   - **依赖**：与 S1 其他项同步完成（最后做一次总复核也可）
   - **完成标准**：无权用户访问关联/写回 API 得 403/404（与项目现有风格一致）；有测例。
+  - **已落地（2026-08-12）**：
+    - 复核：issue-refs / create-issue / writebacks 均经 `notesWorkspaceAndUser` + `loadAccessibleNote`（私有→404，分享协作可读写回）
+    - 测例：`TestNoteWritebackRequiresNoteAccessForOutsider`、`TestNoteWritebackAllowsSharedCollaborator`、`TestNoteWritebackRecordsMemberActor`、`TestNotePageIssueRefDeleteRequiresNoteAccess`、`TestSharedCollaboratorCanCreateIssueFromNote`（既有 outsider 测例仍覆盖 refs/create-issue）
 
 ---
 

@@ -11,6 +11,8 @@ export interface NotePage {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  /** Structured note→issue refs (S1-R3). Present on detail; may be empty on list. */
+  refs?: NotePageIssueRef[];
 }
 
 export interface NotePageListResponse {
@@ -76,16 +78,22 @@ export interface NoteAIJob {
   updated_at?: string;
 }
 
-/** Stable note → issue link (S1-R1). Slice 1 is issue-only. */
+/** Stable note → issue link (S1-R1 / S1-R3). */
 export interface NotePageIssueRef {
   type: "issue";
-  page_id: string;
-  issue_id: string;
-  workspace_id: string;
-  identifier: string;
-  title: string;
-  number: number;
-  created_at: string;
+  /** Issue UUID. Always present. */
+  id: string;
+  /** Identifier label when accessible; omitted when inaccessible. */
+  label?: string | null;
+  accessible: boolean;
+  page_id?: string;
+  /** @deprecated Prefer `id`; kept for older clients during transition. */
+  issue_id?: string;
+  workspace_id?: string;
+  identifier?: string;
+  title?: string;
+  number?: number;
+  created_at?: string;
 }
 
 export interface NotePageIssueRefListResponse {

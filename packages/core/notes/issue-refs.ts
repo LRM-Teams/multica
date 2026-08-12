@@ -24,7 +24,11 @@ export async function syncNotePageIssueRefsFromContent(
 ): Promise<{ added: number; removed: number; errors: string[] }> {
   const desired = new Set(extractIssueIdsFromNoteMarkdown(content));
   const listed = await api.listNotePageIssueRefs(pageId);
-  const existing = new Set(listed.refs.map((ref) => ref.issue_id.toLowerCase()));
+  const existing = new Set(
+    listed.refs
+      .map((ref) => (ref.id || ref.issue_id || "").toLowerCase())
+      .filter(Boolean),
+  );
 
   const toAdd = [...desired].filter((id) => !existing.has(id));
   const toRemove = [...existing].filter((id) => !desired.has(id));

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,18 +13,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// NotePageIssueRefResponse is one note→issue link (S1-R1).
-// Inaccessible or cross-workspace issues are omitted from list results, not
-// returned with a leaked label.
+// NotePageIssueRefResponse is a structured note→issue link (S1-R1 / S1-R3).
+//
+// Contract for agents/clients:
+//   - Always: type, id, accessible
+//   - When accessible=true: label (+ detail fields)
+//   - When accessible=false: no label/title/identifier — only type+id
 type NotePageIssueRefResponse struct {
-	Type        string `json:"type"`
-	PageID      string `json:"page_id"`
-	IssueID     string `json:"issue_id"`
-	WorkspaceID string `json:"workspace_id"`
-	Identifier  string `json:"identifier"`
-	Title       string `json:"title"`
-	Number      int32  `json:"number"`
-	CreatedAt   string `json:"created_at"`
+	Type        string  `json:"type"`
+	ID          string  `json:"id"`
+	Label       *string `json:"label,omitempty"`
+	Accessible  bool    `json:"accessible"`
+	PageID      string  `json:"page_id,omitempty"`
+	IssueID     string  `json:"issue_id,omitempty"`
+	WorkspaceID string  `json:"workspace_id,omitempty"`
+	Identifier  string  `json:"identifier,omitempty"`
+	Title       string  `json:"title,omitempty"`
+	Number      *int32  `json:"number,omitempty"`
+	CreatedAt   string  `json:"created_at,omitempty"`
 }
 
 type NotePageIssueRefListResponse struct {
@@ -32,6 +39,96 @@ type NotePageIssueRefListResponse struct {
 
 type notePageIssueRefCreateRequest struct {
 	IssueID string `json:"issue_id"`
+}
+
+func accessibleIssueRef(
+	pageID, issueID, workspaceID, createdAt, prefix, title string,
+	number int32,
+) NotePageIssueRefResponse {
+	identifier := prefix + "-" + strconv.Itoa(int(number))
+	label := identifier
+	num := number
+	return NotePageIssueRefResponse{
+		Type:        "issue",
+		ID:          issueID,
+		Label:       &label,
+		Accessible:  true,
+		PageID:      pageID,
+		IssueID:     issueID,
+		WorkspaceID: workspaceID,
+		Identifier:  identifier,
+		Title:       title,
+		Number:      &num,
+		CreatedAt:   createdAt,
+	}
+}
+
+func inaccessibleIssueRef(issueID string) NotePageIssueRefResponse {
+	return NotePageIssueRefResponse{
+		Type:       "issue",
+		ID:         issueID,
+		Accessible: false,
+	}
+}
+
+// loadNotePageIssueRefs returns association rows for a note page.
+// Inaccessible / cross-workspace targets are included with accessible=false
+// and without label/title (S1-R3).
+func (h *Handler) loadNotePageIssueRefs(ctx context.Context, pageID, pageWorkspaceID pgtype.UUID) ([]NotePageIssueRefResponse, error) {
+	rows, err := h.DB.Query(ctx, `
+SELECT
+  r.page_id,
+  r.issue_id,
+  r.workspace_id,
+  r.created_at,
+  i.id IS NOT NULL AND i.workspace_id = r.workspace_id AS accessible,
+  i.number,
+  i.title,
+  w.issue_prefix
+FROM note_page_issue_ref r
+LEFT JOIN issue i ON i.id = r.issue_id AND i.workspace_id = $2
+LEFT JOIN workspace w ON w.id = i.workspace_id
+WHERE r.page_id = $1
+ORDER BY r.created_at ASC, r.issue_id ASC`, pageID, pageWorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	refs := make([]NotePageIssueRefResponse, 0)
+	for rows.Next() {
+		var (
+			pageUUID, issueUUID, refWorkspaceID pgtype.UUID
+			createdAt                           pgtype.Timestamptz
+			accessible                          bool
+			number                              pgtype.Int4
+			title, prefix                       pgtype.Text
+		)
+		if err := rows.Scan(
+			&pageUUID, &issueUUID, &refWorkspaceID, &createdAt,
+			&accessible, &number, &title, &prefix,
+		); err != nil {
+			return nil, err
+		}
+		issueID := uuidToString(issueUUID)
+		if !accessible || !number.Valid || !prefix.Valid {
+			refs = append(refs, inaccessibleIssueRef(issueID))
+			continue
+		}
+		refs = append(refs, accessibleIssueRef(
+			uuidToString(pageUUID),
+			issueID,
+			uuidToString(refWorkspaceID),
+			timestampToString(createdAt),
+			prefix.String,
+			title.String,
+			number.Int32,
+		))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return refs, nil
 }
 
 func (h *Handler) ListNotePageIssueRefs(w http.ResponseWriter, r *http.Request) {
@@ -44,51 +141,8 @@ func (h *Handler) ListNotePageIssueRefs(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
-SELECT
-  r.page_id,
-  r.issue_id,
-  r.workspace_id,
-  r.created_at,
-  i.number,
-  i.title,
-  w.issue_prefix
-FROM note_page_issue_ref r
-JOIN issue i ON i.id = r.issue_id AND i.workspace_id = r.workspace_id
-JOIN workspace w ON w.id = r.workspace_id
-WHERE r.page_id = $1
-  AND r.workspace_id = $2
-ORDER BY r.created_at ASC, i.number ASC`, page.ID, page.WorkspaceID)
+	refs, err := h.loadNotePageIssueRefs(r.Context(), page.ID, page.WorkspaceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list note issue refs")
-		return
-	}
-	defer rows.Close()
-
-	refs := make([]NotePageIssueRefResponse, 0)
-	for rows.Next() {
-		var (
-			pageID, issueID, refWorkspaceID pgtype.UUID
-			createdAt                       pgtype.Timestamptz
-			number                          int32
-			title, prefix                   string
-		)
-		if err := rows.Scan(&pageID, &issueID, &refWorkspaceID, &createdAt, &number, &title, &prefix); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to list note issue refs")
-			return
-		}
-		refs = append(refs, NotePageIssueRefResponse{
-			Type:        "issue",
-			PageID:      uuidToString(pageID),
-			IssueID:     uuidToString(issueID),
-			WorkspaceID: uuidToString(refWorkspaceID),
-			Identifier:  prefix + "-" + strconv.Itoa(int(number)),
-			Title:       title,
-			Number:      number,
-			CreatedAt:   timestampToString(createdAt),
-		})
-	}
-	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list note issue refs")
 		return
 	}
@@ -152,16 +206,15 @@ RETURNING created_at`, page.ID, issueUUID, page.WorkspaceID, userID).Scan(&creat
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, NotePageIssueRefResponse{
-		Type:        "issue",
-		PageID:      uuidToString(page.ID),
-		IssueID:     uuidToString(issueUUID),
-		WorkspaceID: uuidToString(page.WorkspaceID),
-		Identifier:  issuePrefix + "-" + strconv.Itoa(int(issueNumber)),
-		Title:       issueTitle,
-		Number:      issueNumber,
-		CreatedAt:   timestampToString(createdAt),
-	})
+	writeJSON(w, http.StatusCreated, accessibleIssueRef(
+		uuidToString(page.ID),
+		uuidToString(issueUUID),
+		uuidToString(page.WorkspaceID),
+		timestampToString(createdAt),
+		issuePrefix,
+		issueTitle,
+		issueNumber,
+	))
 }
 
 func (h *Handler) DeleteNotePageIssueRef(w http.ResponseWriter, r *http.Request) {

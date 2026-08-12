@@ -47,7 +47,7 @@ func TestNotePageIssueRefCreateListDelete(t *testing.T) {
 	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
-	if created.Type != "issue" || created.PageID != noteID || created.IssueID != issueID || created.Number != number || created.Identifier == "" || created.Title == "" {
+	if created.Type != "issue" || created.ID != issueID || created.PageID != noteID || created.IssueID != issueID || !created.Accessible || created.Label == nil || *created.Label == "" || created.Number == nil || *created.Number != number || created.Identifier == "" || created.Title == "" {
 		t.Fatalf("created ref = %#v", created)
 	}
 
@@ -61,8 +61,8 @@ func TestNotePageIssueRefCreateListDelete(t *testing.T) {
 	if err := json.NewDecoder(listRec.Body).Decode(&listed); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(listed.Refs) != 1 || listed.Refs[0].IssueID != issueID {
-		t.Fatalf("listed refs = %#v, want one ref for %s", listed.Refs, issueID)
+	if len(listed.Refs) != 1 || listed.Refs[0].ID != issueID || !listed.Refs[0].Accessible {
+		t.Fatalf("listed refs = %#v, want one accessible ref for %s", listed.Refs, issueID)
 	}
 
 	// Idempotent re-create returns 201 with the same link.
@@ -125,13 +125,13 @@ func TestNotePageIssueRefRejectsForeignWorkspaceIssue(t *testing.T) {
 	}
 }
 
-func TestNotePageIssueRefListOmitsInaccessibleIssueRows(t *testing.T) {
+func TestNotePageIssueRefListMarksInaccessibleWithoutLeaking(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
-	noteID := createNotePageForAITest(t, "Omit inaccessible "+uuid.NewString())
+	noteID := createNotePageForAITest(t, "Mark inaccessible "+uuid.NewString())
 	localIssueID, _ := createIssueForNoteRefTest(t, testWorkspaceID, "Visible issue "+uuid.NewString())
 
 	var otherWorkspaceID string
@@ -145,9 +145,8 @@ func TestNotePageIssueRefListOmitsInaccessibleIssueRows(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, otherWorkspaceID)
 	})
-	foreignIssueID, _ := createIssueForNoteRefTest(t, otherWorkspaceID, "Should not list "+uuid.NewString())
+	foreignIssueID, _ := createIssueForNoteRefTest(t, otherWorkspaceID, "Should not leak title "+uuid.NewString())
 
-	// Local accessible ref via API.
 	createRec := httptest.NewRecorder()
 	testHandler.CreateNotePageIssueRef(createRec, withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/issue-refs", map[string]any{
 		"issue_id": localIssueID,
@@ -156,7 +155,7 @@ func TestNotePageIssueRefListOmitsInaccessibleIssueRows(t *testing.T) {
 		t.Fatalf("create local ref: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
 	}
 
-	// Simulate an inconsistent row (wrong issue for this workspace). List must omit it.
+	// Inconsistent row: issue belongs to another workspace.
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO note_page_issue_ref (page_id, issue_id, workspace_id, created_by)
 		VALUES ($1, $2, $3, $4)
@@ -173,13 +172,51 @@ func TestNotePageIssueRefListOmitsInaccessibleIssueRows(t *testing.T) {
 	if err := json.NewDecoder(listRec.Body).Decode(&listed); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(listed.Refs) != 1 || listed.Refs[0].IssueID != localIssueID {
-		t.Fatalf("listed = %#v, want only local issue %s (foreign omitted)", listed.Refs, localIssueID)
+	if len(listed.Refs) != 2 {
+		t.Fatalf("listed = %#v, want accessible + inaccessible", listed.Refs)
 	}
+
+	byID := map[string]NotePageIssueRefResponse{}
 	for _, ref := range listed.Refs {
-		if ref.IssueID == foreignIssueID {
-			t.Fatalf("foreign issue leaked in list: %#v", ref)
-		}
+		byID[ref.ID] = ref
+	}
+	local := byID[localIssueID]
+	if !local.Accessible || local.Label == nil || local.Title == "" {
+		t.Fatalf("local ref = %#v, want accessible with label/title", local)
+	}
+	foreign := byID[foreignIssueID]
+	if foreign.Accessible || foreign.Label != nil || foreign.Title != "" || foreign.Identifier != "" {
+		t.Fatalf("foreign ref = %#v, want accessible=false with no leaked fields", foreign)
+	}
+}
+
+func TestGetNotePageIncludesStructuredRefs(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	noteID := createNotePageForAITest(t, "Detail refs "+uuid.NewString())
+	issueID, _ := createIssueForNoteRefTest(t, testWorkspaceID, "Detail linked "+uuid.NewString())
+
+	createRec := httptest.NewRecorder()
+	testHandler.CreateNotePageIssueRef(createRec, withURLParam(newRequest(http.MethodPost, "/api/notes/pages/"+noteID+"/issue-refs", map[string]any{
+		"issue_id": issueID,
+	}), "id", noteID))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	getRec := httptest.NewRecorder()
+	testHandler.GetNotePage(getRec, withURLParam(newRequest(http.MethodGet, "/api/notes/pages/"+noteID, nil), "id", noteID))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetNotePage: expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var page NotePageResponse
+	if err := json.NewDecoder(getRec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if len(page.Refs) != 1 || page.Refs[0].ID != issueID || !page.Refs[0].Accessible || page.Refs[0].Label == nil {
+		t.Fatalf("page.refs = %#v, want one accessible structured ref", page.Refs)
 	}
 }
 

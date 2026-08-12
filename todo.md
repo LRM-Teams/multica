@@ -95,12 +95,16 @@
     - 无权限 chip 显示「不可见/Unavailable」，不展示 title
     - 测试：`issue-refs.test.ts`、`issue-reference-suggestion.test.tsx`、`issue-chip.test.tsx`
 
-- [ ] **S1-R3 Agent/服务端可读结构化 refs**
+- [x] **S1-R3 Agent/服务端可读结构化 refs**
   - **目标**：后端或 agent 工具拿到的是结构化 ref 列表，不是只能正则扫正文。
   - **要做**：在笔记详情或专用 endpoint 返回 `refs: [{ type, id, label?, accessible }]`；ACL 过滤。
   - **不要做**：把整篇私有笔记无差别塞进任意 agent 上下文（那是 Slice 2 + 授权）。
   - **依赖**：S1-R1
   - **完成标准**：API 契约 + 测试：有权/无权两种 fixture。
+  - **已落地（2026-08-12）**：
+    - `GET .../issue-refs` 与 `GET .../pages/{id}` 均返回结构化 refs
+    - `accessible=true` 带 `label`/详情；`accessible=false` 仅 `type`+`id`，不泄露 title
+    - 测试：`TestNotePageIssueRefListMarksInaccessibleWithoutLeaking`、`TestGetNotePageIncludesStructuredRefs`、schema 测
 
 ### 1.2 动作：笔记 → 创建 Issue
 

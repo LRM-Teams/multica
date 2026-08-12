@@ -64,6 +64,32 @@ import type {
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 
+export const NotePageIssueRefSchema: z.ZodType<NotePageIssueRef> = z.object({
+  type: z.literal("issue").default("issue"),
+  id: z.string().default(""),
+  label: z.string().nullable().optional(),
+  accessible: z.boolean().default(false),
+  page_id: z.string().optional(),
+  issue_id: z.string().optional(),
+  workspace_id: z.string().optional(),
+  identifier: z.string().optional(),
+  title: z.string().optional(),
+  number: z.number().optional(),
+  created_at: z.string().optional(),
+}).loose();
+
+export const NotePageIssueRefListResponseSchema: z.ZodType<NotePageIssueRefListResponse> = z.object({
+  refs: z.array(NotePageIssueRefSchema).default([]),
+}).loose();
+
+export const EMPTY_NOTE_PAGE_ISSUE_REF: NotePageIssueRef = {
+  type: "issue",
+  id: "",
+  accessible: false,
+};
+
+export const EMPTY_NOTE_PAGE_ISSUE_REF_LIST: NotePageIssueRefListResponse = { refs: [] };
+
 export const NotePageSchema: z.ZodType<NotePage> = z.object({
   id: z.string().default(""),
   workspace_id: z.string().default(""),
@@ -77,6 +103,7 @@ export const NotePageSchema: z.ZodType<NotePage> = z.object({
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
   deleted_at: z.string().nullable().default(null),
+  refs: z.array(NotePageIssueRefSchema).optional(),
 }).loose();
 
 export const NotePageListResponseSchema: z.ZodType<NotePageListResponse> = z.object({
@@ -96,37 +123,10 @@ export const EMPTY_NOTE_PAGE: NotePage = {
   created_at: "",
   updated_at: "",
   deleted_at: null,
+  refs: [],
 };
 
 export const EMPTY_NOTE_PAGE_LIST: NotePageListResponse = { pages: [] };
-
-export const NotePageIssueRefSchema: z.ZodType<NotePageIssueRef> = z.object({
-  type: z.literal("issue").default("issue"),
-  page_id: z.string().default(""),
-  issue_id: z.string().default(""),
-  workspace_id: z.string().default(""),
-  identifier: z.string().default(""),
-  title: z.string().default(""),
-  number: z.number().default(0),
-  created_at: z.string().default(""),
-}).loose();
-
-export const NotePageIssueRefListResponseSchema: z.ZodType<NotePageIssueRefListResponse> = z.object({
-  refs: z.array(NotePageIssueRefSchema).default([]),
-}).loose();
-
-export const EMPTY_NOTE_PAGE_ISSUE_REF: NotePageIssueRef = {
-  type: "issue",
-  page_id: "",
-  issue_id: "",
-  workspace_id: "",
-  identifier: "",
-  title: "",
-  number: 0,
-  created_at: "",
-};
-
-export const EMPTY_NOTE_PAGE_ISSUE_REF_LIST: NotePageIssueRefListResponse = { refs: [] };
 
 export const NoteAIEditResultSchema = z.object({
   action: z.enum(["insert", "replace_selection", "replace_page", "patch"]),

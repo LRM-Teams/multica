@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -18,7 +20,7 @@ func TestWorkspaceRunnerAttachmentReplayUsesExactWorkspaceRuntimeSet(t *testing.
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
 	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 3, CorrelationID: "attach-1",
+		AgentID: "agent-1", RuntimeID: "runtime-1", AttachmentGeneration: 1, LifecycleSeq: 3,
 	}); err != nil {
 		t.Fatalf("seed Attachment replay cursor: %v", err)
 	}
@@ -104,8 +106,9 @@ func TestWorkspaceRunnerAttachmentAttachPersistsInboxWithoutLaunchingProcess(t *
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
 	payload := protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
 	}
 	receipt, err := runner.applyAttachmentAttach(payload)
 	if err != nil || receipt != protocol.WorkspaceRunnerAgentAttachedPayload(payload) {
@@ -137,7 +140,7 @@ func TestWorkspaceRunnerAttachmentAttachRejectsWrongRuntimeBeforeInboxCreation(t
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, "workspace-1", nil)
 	_, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: "agent-1", RuntimeID: "runtime-other", AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "wrong-runtime",
+		AgentID: "agent-1", RuntimeID: "runtime-other", AttachmentGeneration: 1, LifecycleSeq: 1,
 	})
 	if err == nil {
 		t.Fatal("cross-Workspace Runtime Attachment was accepted")
@@ -147,31 +150,70 @@ func TestWorkspaceRunnerAttachmentAttachRejectsWrongRuntimeBeforeInboxCreation(t
 	}
 }
 
-func TestWorkspaceRunnerManagedStartRequiresMatchingAttachment(t *testing.T) {
+func TestWorkspaceRunnerManagedStartCreatesInboxWithoutAttachment(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
 	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
 	d.mu.Lock()
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
-	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: "start-1"}
-	if _, _, _, err := runner.startManagedAgent(start); err == nil {
-		t.Fatal("unattached Agent start was accepted")
-	}
-	if _, found := runner.processes.Snapshot(agentID); found {
-		t.Fatal("unattached Agent start created a managed launch")
-	}
-	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
-	}); err != nil {
-		t.Fatalf("attach Agent before start: %v", err)
-	}
-	ack, status, session, err := runner.startManagedAgent(start)
+	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1"}
+	ack, status, session, err := runner.startManagedAgent(context.Background(), start)
 	if err != nil {
-		t.Fatalf("attached Agent start: %v", err)
+		t.Fatalf("server-authorized Agent start: %v", err)
 	}
 	if ack.AgentID != agentID || ack.LaunchID == "" || status.LaunchID != ack.LaunchID || session.LaunchID != ack.LaunchID {
 		t.Fatalf("managed start result ack=%+v status=%+v session=%+v", ack, status, session)
+	}
+}
+
+func TestWorkspaceRunnerManagedStartWaitsForCapacityBeforeProvider(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir(), MaxAgentProcesses: 1}, nil)
+	workspaceID := "workspace-1"
+	for _, runtimeID := range []string{"runtime-1", "runtime-2"} {
+		d.mu.Lock()
+		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+		d.mu.Unlock()
+	}
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	providerStarted := make(chan string, 2)
+	runner.ensureResidentRuntime = func(_ context.Context, agentID, _ string) error {
+		providerStarted <- agentID
+		return nil
+	}
+	first := protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1"}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), first); err != nil {
+		t.Fatalf("start first Agent: %v", err)
+	}
+	if got := <-providerStarted; got != first.AgentID {
+		t.Fatalf("first provider Agent = %q", got)
+	}
+
+	second := protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-2", RuntimeID: "runtime-2", LaunchID: "launch-2"}
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, err := runner.startManagedAgent(context.Background(), second)
+		done <- err
+	}()
+	select {
+	case got := <-providerStarted:
+		t.Fatalf("queued provider started before admission: %q", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := runner.processes.Stop(agentProcessCallback{AgentID: first.AgentID, LaunchID: first.LaunchID}); err != nil {
+		t.Fatalf("release first Agent capacity: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("promoted Agent start: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("promoted Agent did not start")
+	}
+	if got := <-providerStarted; got != second.AgentID {
+		t.Fatalf("promoted provider Agent = %q", got)
 	}
 }
 
@@ -182,19 +224,20 @@ func TestWorkspaceRunnerManagedStopRejectsStaleLaunchID(t *testing.T) {
 	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
 	if _, err := runner.applyAttachmentAttach(protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
 	}); err != nil {
 		t.Fatalf("attach Agent before start: %v", err)
 	}
-	first, _, _, err := runner.startManagedAgent(protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: "start-1"})
+	first, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1"})
 	if err != nil {
 		t.Fatalf("start initial managed Agent: %v", err)
 	}
 	if err := runner.processes.Stop(agentProcessCallback{AgentID: agentID, LaunchID: first.LaunchID}); err != nil {
 		t.Fatalf("stop initial managed launch: %v", err)
 	}
-	replacement, _, _, err := runner.startManagedAgent(protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: "start-2"})
+	replacement, _, _, err := runner.startManagedAgent(context.Background(), protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-2"})
 	if err != nil {
 		t.Fatalf("start replacement managed Agent: %v", err)
 	}
@@ -207,6 +250,60 @@ func TestWorkspaceRunnerManagedStopRejectsStaleLaunchID(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRunnerManagedStartRejectsRuntimeMoveWithoutStopAndKeepsInbox(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, agentID := "workspace-1", "agent-1"
+	for _, runtimeID := range []string{"runtime-old", "runtime-new"} {
+		d.mu.Lock()
+		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+		d.mu.Unlock()
+	}
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
+	old := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: "runtime-old", LaunchID: "launch-old"}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), old); err != nil {
+		t.Fatalf("start old Runtime: %v", err)
+	}
+	if _, err := runner.registerManagedAgentStart(protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: "runtime-new", LaunchID: "launch-new"}); err == nil {
+		t.Fatal("runtime move without stop was accepted")
+	}
+	_, runtimeID, ok := runner.inboxes.Resolve(agentID)
+	if !ok || runtimeID != old.RuntimeID {
+		t.Fatalf("rejected runtime move changed Inbox: runtime=%q exists=%v", runtimeID, ok)
+	}
+}
+
+func TestWorkspaceRunnerManagedStopClosesProviderAndInbox(t *testing.T) {
+	d := New(Config{WorkspacesRoot: t.TempDir()}, nil)
+	workspaceID, runtimeID, agentID := "workspace-1", "runtime-1", "agent-1"
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
+	runner.ensureResidentRuntime = func(context.Context, string, string) error { return nil }
+	backend := &canonicalRuntimeTestBackend{}
+	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend,
+	}
+	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1"}
+	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {
+		t.Fatalf("start managed Agent: %v", err)
+	}
+	status, err := runner.stopManagedAgent(protocol.WorkspaceRunnerAgentStopPayload{AgentID: agentID, LaunchID: start.LaunchID})
+	if err != nil {
+		t.Fatalf("stop managed Agent: %v", err)
+	}
+	if status.Status != protocol.AgentStatusInactive || backend.forceKillCount() != 0 {
+		t.Fatalf("stop status=%+v force_kills=%d", status, backend.forceKillCount())
+	}
+	if _, _, found := runner.inboxes.Resolve(agentID); found {
+		t.Fatal("managed stop retained Agent Inbox")
+	}
+	if _, found := runner.processes.Snapshot(agentID); found {
+		t.Fatal("managed stop retained APM launch")
+	}
+}
+
 func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *testing.T) {
 	root := t.TempDir()
 	d := New(Config{WorkspacesRoot: root}, nil)
@@ -216,16 +313,16 @@ func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *te
 	d.mu.Unlock()
 	runner, _ := attachTestWorkspaceRunner(t, d, workspaceID, nil)
 	attach := protocol.WorkspaceRunnerAgentAttachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1, CorrelationID: "attach-1",
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 1,
 	}
 	if _, err := runner.applyAttachmentAttach(attach); err != nil {
 		t.Fatalf("apply Attachment attach: %v", err)
 	}
-	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, StartDispatchID: "start-1", ReadinessPolicy: agentRuntimeReadinessFirstEvent}); err != nil {
+	if _, err := runner.processes.Start(agentProcessStartRequest{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "start-1", ReadinessPolicy: agentRuntimeReadinessFirstEvent}); err != nil {
 		t.Fatalf("start managed Agent for detach: %v", err)
 	}
 	detach := protocol.WorkspaceRunnerAgentDetachPayload{
-		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2, CorrelationID: "detach-1",
+		AgentID: agentID, RuntimeID: runtimeID, AttachmentGeneration: 1, LifecycleSeq: 2,
 	}
 	receipt, err := runner.applyAttachmentDetach(detach)
 	if err != nil || receipt != protocol.WorkspaceRunnerAgentDetachedPayload(detach) {
@@ -247,12 +344,12 @@ func TestWorkspaceRunnerAttachmentDetachTearsDownOnlyMatchingVolatileState(t *te
 		t.Fatalf("duplicate detach did not converge: %v", err)
 	}
 	reattach := attach
-	reattach.AttachmentGeneration, reattach.LifecycleSeq, reattach.CorrelationID = 2, 3, "attach-2"
+	reattach.AttachmentGeneration, reattach.LifecycleSeq = 2, 3
 	if _, err := runner.applyAttachmentAttach(reattach); err != nil {
 		t.Fatalf("reattach did not recover preserved Inbox state: %v", err)
 	}
 	stale := detach
-	stale.LifecycleSeq, stale.CorrelationID = 4, "stale-detach-1"
+	stale.LifecycleSeq = 4
 	if _, err := runner.applyAttachmentDetach(stale); err != nil {
 		t.Fatalf("stale detach did not converge harmlessly: %v", err)
 	}

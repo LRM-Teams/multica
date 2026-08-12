@@ -1867,7 +1867,7 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 	if len(restored.Skills) != 1 || restored.Skills[0].ID != skillID {
 		t.Errorf("RestoreAgent: expected 1 skill %s, got %+v", skillID, restored.Skills)
 	}
-	if len(notifier.starts) != 1 || notifier.starts[0].AgentID != agentID || notifier.starts[0].LifecycleSeq < 1 || notifier.starts[0].AttachmentGeneration < 1 || notifier.starts[0].CorrelationID == "" {
+	if len(notifier.starts) != 1 || notifier.starts[0].AgentID != agentID || notifier.starts[0].LifecycleSeq < 1 || notifier.starts[0].AttachmentGeneration < 1 {
 		t.Fatalf("RestoreAgent owner start projection = %+v", notifier.starts)
 	}
 }

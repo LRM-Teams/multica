@@ -13,11 +13,12 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		WorkspaceRunnerReadyPayload{
 			WorkspaceID: "workspace-1", DaemonInstanceID: "daemon-instance-1",
 			ActiveCapabilities: []string{DaemonCapabilityWorkspaceRunnerAttachment},
+			RunningAgents:      []string{"agent-1"},
 		},
 		WorkspaceRunnerPingPayload{PingID: "ping-1"},
 		WorkspaceRunnerPongPayload{PingID: "ping-1"},
-		WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"},
-		AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: AgentStartQueueQueued},
+		WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", LaunchID: "launch-1"},
+		AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", QueueState: AgentStartQueueQueued},
 		WorkspaceRunnerAgentStopPayload{AgentID: "agent-1", LaunchID: "launch-1"},
 		AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: AgentStatusActive},
 		AgentSessionPayload{AgentID: "agent-1", LaunchID: "launch-1", ProviderSessionID: "session-1", RuntimeGeneration: 2},
@@ -34,7 +35,7 @@ func TestWorkspaceRunnerActivityFramesUseRaftWireNames(t *testing.T) {
 		encoded.Write(data)
 	}
 	wire := encoded.String()
-	for _, field := range []string{`"workspaceId"`, `"daemonInstanceId"`, `"startDispatchId"`, `"launchId"`, `"queueState"`, `"clientSequence"`, `"producerFactId"`, `"observedAt"`, `"probeId"`} {
+	for _, field := range []string{`"workspaceId"`, `"daemonInstanceId"`, `"runningAgents"`, `"launchId"`, `"queueState"`, `"clientSequence"`, `"producerFactId"`, `"observedAt"`, `"probeId"`} {
 		if !strings.Contains(wire, field) {
 			t.Fatalf("runner Activity wire %s does not contain %s", wire, field)
 		}
@@ -59,8 +60,8 @@ func TestWorkspaceRunnerActivityValidationRejectsInvalidBoundaryData(t *testing.
 	}{
 		{name: "missing ready identity", value: WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1"}},
 		{name: "missing hard-cut capability", value: WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"}},
-		{name: "unknown start state", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: "ready"}},
-		{name: "negative queue age", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", StartDispatchID: "dispatch-1", QueueState: AgentStartQueueQueued, QueueAgeMS: -1}},
+		{name: "unknown start state", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", QueueState: "ready"}},
+		{name: "negative queue age", value: AgentStartAckPayload{AgentID: "agent-1", LaunchID: "launch-1", QueueState: AgentStartQueueQueued, QueueAgeMS: -1}},
 		{name: "unknown status", value: AgentStatusPayload{AgentID: "agent-1", LaunchID: "launch-1", Status: "online"}},
 		{name: "negative generation", value: AgentSessionPayload{AgentID: "agent-1", LaunchID: "launch-1", RuntimeGeneration: -1}},
 		{name: "zero sequence", value: AgentActivityPayload{Snapshot: AgentActivitySnapshot{AgentID: "agent-1", LaunchID: "launch-1", DaemonInstanceID: "daemon-instance-1", ProducerFactID: "fact-1", ObservedAt: observedAt, ActivityKind: ActivityKindWorking}}},
@@ -90,6 +91,11 @@ func TestWorkspaceRunnerReadyCapabilityValidation(t *testing.T) {
 	duplicate.ActiveCapabilities = []string{DaemonCapabilityWorkspaceRunnerAttachment, DaemonCapabilityWorkspaceRunnerAttachment}
 	if err := duplicate.Validate(); err == nil {
 		t.Fatal("duplicate ready capabilities were accepted")
+	}
+	duplicateAgent := valid
+	duplicateAgent.RunningAgents = []string{"agent-1", "agent-1"}
+	if err := duplicateAgent.Validate(); err == nil {
+		t.Fatal("duplicate running Agent identities were accepted")
 	}
 }
 

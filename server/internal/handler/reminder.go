@@ -1025,22 +1025,21 @@ func (h *Handler) publishLatestReminderProjection(ctx context.Context, reminder 
 }
 
 type agentAttachmentCommand struct {
-	agentID, runtimeID, workspaceID, daemonID, correlationID string
-	attachmentGeneration, lifecycleSeq                       int64
+	agentID, runtimeID, workspaceID, daemonID string
+	attachmentGeneration, lifecycleSeq        int64
 }
 
 func (h *Handler) latestAgentAttachmentCommand(ctx context.Context, agentID, runtimeID, eventType string) (agentAttachmentCommand, bool) {
 	var command agentAttachmentCommand
 	err := h.DB.QueryRow(ctx, `
 		SELECT e.agent_id::text, e.runtime_id::text, e.workspace_id::text,
-		       r.daemon_id::text, e.attachment_generation, e.lifecycle_seq,
-		       e.correlation_id::text
+		       r.daemon_id::text, e.attachment_generation, e.lifecycle_seq
 		FROM agent_attachment_projection_event e
 		JOIN agent_runtime r ON r.id = e.runtime_id
 		WHERE e.agent_id::text = $1 AND e.runtime_id::text = $2 AND e.event_type = $3
 		ORDER BY e.lifecycle_seq DESC LIMIT 1`, agentID, runtimeID, eventType).Scan(
 		&command.agentID, &command.runtimeID, &command.workspaceID, &command.daemonID,
-		&command.attachmentGeneration, &command.lifecycleSeq, &command.correlationID,
+		&command.attachmentGeneration, &command.lifecycleSeq,
 	)
 	return command, err == nil
 }
@@ -1055,7 +1054,7 @@ func (h *Handler) projectReminderOwnerStart(ctx context.Context, agentID, runtim
 	}
 	h.ReminderNotifier.NotifyAgentAttachmentAdded(command.workspaceID, command.daemonID, protocol.WorkspaceRunnerAgentAttachPayload{
 		AgentID: command.agentID, RuntimeID: command.runtimeID, AttachmentGeneration: command.attachmentGeneration,
-		LifecycleSeq: command.lifecycleSeq, CorrelationID: command.correlationID,
+		LifecycleSeq: command.lifecycleSeq,
 	})
 }
 
@@ -1069,7 +1068,7 @@ func (h *Handler) projectReminderOwnerStop(ctx context.Context, agentID, runtime
 	}
 	h.ReminderNotifier.NotifyAgentAttachmentRemoved(command.workspaceID, command.daemonID, protocol.WorkspaceRunnerAgentDetachPayload{
 		AgentID: command.agentID, RuntimeID: command.runtimeID, AttachmentGeneration: command.attachmentGeneration,
-		LifecycleSeq: command.lifecycleSeq, CorrelationID: command.correlationID,
+		LifecycleSeq: command.lifecycleSeq,
 	})
 }
 

@@ -98,19 +98,17 @@ type messageDeliveryAcceptance struct {
 }
 
 // acceptMessageDelivery is the Raft-aligned per-Agent acceptance seam. It
-// first gives an idle resident Runtime the concrete body. When that is not
-// currently possible, the Agent's Pending projection takes responsibility.
-// Either outcome permits the transport ACK; a rejected coordinator does not.
+// gives the current launch's durable Pending projection responsibility before
+// attempting provider handoff. That is Raft's APM-accepted boundary: provider
+// startup may still be deferred, while an unknown/stale launch is not ACKed.
 func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (messageDeliveryAcceptance, error) {
+	launch, managed := runner.processes.Snapshot(delivery.AgentID)
+	if !managed || launch.QueueState == protocol.AgentStartQueueQueued {
+		return messageDeliveryAcceptance{}, fmt.Errorf("Agent %q has not been accepted by APM", delivery.AgentID)
+	}
 	coordinator, runtimeID, ok := runner.messageCoordinator(delivery.AgentID)
-	if !ok {
-		if _, err := runner.ensureMessageInbox(delivery.AgentID, ""); err != nil {
-			return messageDeliveryAcceptance{}, err
-		}
-		coordinator, runtimeID, ok = runner.messageCoordinator(delivery.AgentID)
-		if !ok {
-			return messageDeliveryAcceptance{}, fmt.Errorf("no Message coordinator for Agent %q", delivery.AgentID)
-		}
+	if !ok || runtimeID != launch.RuntimeID {
+		return messageDeliveryAcceptance{}, fmt.Errorf("APM Agent %q has no Inbox for Runtime %q", delivery.AgentID, launch.RuntimeID)
 	}
 	delivery.Message.RunID = delivery.RunID
 	delivery.Message.RunAgentID = delivery.RunAgentID
@@ -129,10 +127,6 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 	runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 		runner.config.WorkspaceID, runtimeID, delivery, "coordinator_accepted", string(result.outcome), "",
 	))
-	if !accepted {
-		return result, nil
-	}
-
 	runIdentity, identityErr := residentPiRunIdentity(delivery.RunID, delivery.RunAgentID)
 	if identityErr != nil {
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
@@ -155,10 +149,8 @@ func (runner *WorkspaceRunner) acceptMessageDelivery(ctx context.Context, delive
 		result.outcome = messageDeliveryProviderAccepted
 	}
 	if err != nil {
-		outcome := "failed"
-		if errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown") {
-			outcome = "deferred"
-		}
+		deferred := errors.Is(err, ErrCanonicalAgentRuntimeBusy) || strings.Contains(err.Error(), "freshness is unknown")
+		outcome := map[bool]string{true: "deferred", false: "failed"}[deferred]
 		runner.recordDiagnostic(canonicalMessageDiagnosticEvent(
 			runner.config.WorkspaceID, runtimeID, delivery, "context_boundary_persisted", outcome, canonicalMessageFailureReason(err),
 		))

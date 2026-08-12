@@ -106,8 +106,8 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 		return db.Agent{}, actionCommitError(500, "", "unknown action state")
 	}
 
-	// prepared -> create Agent + #general membership + durable first-start
-	// intent + snapshots in one tx.
+	// prepared -> create Agent + #general membership + durable desired Runner
+	// launch + snapshots in one tx.
 	qtx := h.Queries.WithTx(tx)
 	if strings.TrimSpace(createParams.Name) == "" {
 		return db.Agent{}, errIdentityHandleInvalid
@@ -121,10 +121,6 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 	if err := ensureAgentGeneralMembership(ctx, tx, wsUUID, created.ID); err != nil {
 		return db.Agent{}, err
 	}
-	if _, err := ensureAgentDurableStartIntent(ctx, tx, wsUUID, created.ID, createParams.RuntimeID); err != nil {
-		return db.Agent{}, err
-	}
-
 	finalPayload := agentActionFinalPayload(createParams, preExisting.proposed)
 	finalPayloadRaw, err := json.Marshal(finalPayload)
 	if err != nil {
@@ -227,33 +223,9 @@ func (h *Handler) publishAgentActionMessageUpdated(ctx context.Context, wsUUID, 
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessageUpdated, msg.WorkspaceID, "member", uuidToString(committerID), parseUUID(msg.ChannelID), msg)
 }
 
-// ensureAgentDurableStartIntent records the first-start request in the same
-// transaction as the Agent identity. A later dispatcher may retry delivery,
-// but it must always use this original start_dispatch_id.
-type agentStartIntentQueryer interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
-func ensureAgentDurableStartIntent(ctx context.Context, queryer agentStartIntentQueryer, wsUUID, agentID, runtimeID pgtype.UUID) (pgtype.UUID, error) {
-	var dispatchID pgtype.UUID
-	if !runtimeID.Valid {
-		return dispatchID, nil
-	}
-	err := queryer.QueryRow(ctx, `
-		INSERT INTO agent_start_intent (
-			start_dispatch_id, agent_id, workspace_id, runtime_id, status
-		) VALUES (gen_random_uuid(), $1, $2, $3, 'pending')
-		ON CONFLICT (agent_id) DO NOTHING
-		RETURNING start_dispatch_id
-	`, agentID, wsUUID, runtimeID).Scan(&dispatchID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return dispatchID, err
-	}
-	return dispatchID, nil
-}
-
 // createAgentManagedTx is the single transaction-scoped Agent creation path:
-// identity, #general membership, and first-start intent are one atomic unit.
+// identity and #general membership are one atomic unit. The database Agent
+// trigger creates its desired Runner launch in that same transaction.
 // Callers may add role-specific records in the same transaction, but must not
 // duplicate the generic Agent creation steps.
 func (h *Handler) createAgentManagedTx(ctx context.Context, tx pgx.Tx, qtx *db.Queries, wsUUID pgtype.UUID, params db.CreateAgentParams, displayName string) (db.Agent, error) {
@@ -269,9 +241,6 @@ func (h *Handler) createAgentManagedTx(ctx context.Context, tx pgx.Tx, qtx *db.Q
 		return db.Agent{}, err
 	}
 	if err := ensureAgentGeneralMembership(ctx, tx, wsUUID, created.ID); err != nil {
-		return db.Agent{}, err
-	}
-	if _, err := ensureAgentDurableStartIntent(ctx, tx, wsUUID, created.ID, params.RuntimeID); err != nil {
 		return db.Agent{}, err
 	}
 	return created, nil

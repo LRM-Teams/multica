@@ -204,39 +204,56 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 		case protocol.EventDaemonAgentStart:
 			var start protocol.WorkspaceRunnerAgentStartPayload
-			if json.Unmarshal(message.Payload, &start) != nil {
+			if json.Unmarshal(message.Payload, &start) != nil || start.Validate() != nil || !connection.deliveries.Pause(start.AgentID, start.LaunchID) {
 				continue
 			}
-			ack, status, session, err := runner.startManagedAgent(start)
+			ack, err := runner.registerManagedAgentStart(start)
 			if err != nil {
+				connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
 				if runner.logger != nil {
-					runner.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "reason", "start_rejected", "error", err)
+					runner.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "reason", "start_rejected", "error", err)
 				}
+				failConnection(err)
 				continue
 			}
-			if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {
-				return err
-			}
-			if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
-				return err
-			}
-			if err := writeFrame(protocol.EventAgentSession, session); err != nil {
-				return err
-			}
+			go func() {
+				status, session, err := runner.completeManagedAgentStart(connection.ctx, start, ack)
+				if err != nil {
+					connection.deliveries.RejectStart(start.AgentID, start.LaunchID)
+					if runner.logger != nil {
+						runner.logger.Warn("Workspace Runner start rejected", "workspace_id", workspaceID, "agent_id", start.AgentID, "runtime_id", start.RuntimeID, "launch_id", start.LaunchID, "reason", "start_rejected", "error", err)
+					}
+					failConnection(err)
+					return
+				}
+				if err := writeFrame(protocol.EventAgentStartAck, ack); err != nil {
+					failConnection(err)
+					return
+				}
+				if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
+					failConnection(err)
+					return
+				}
+				if err := writeFrame(protocol.EventAgentSession, session); err != nil {
+					failConnection(err)
+					return
+				}
+				connection.deliveries.Resume(start.AgentID, start.LaunchID)
+			}()
 		case protocol.EventDaemonAgentStop:
 			var stop protocol.WorkspaceRunnerAgentStopPayload
 			if json.Unmarshal(message.Payload, &stop) != nil || stop.Validate() != nil {
 				continue
 			}
-			launch, found := runner.processes.Snapshot(stop.AgentID)
-			if !found || launch.LaunchID != stop.LaunchID {
+			status, err := runner.stopManagedAgent(stop)
+			if err != nil {
+				if runner.logger != nil {
+					runner.logger.Warn("Workspace Runner stop rejected", "workspace_id", workspaceID, "agent_id", stop.AgentID, "launch_id", stop.LaunchID, "reason", "stop_rejected", "error", err)
+				}
+				failConnection(err)
 				continue
 			}
-			if err := runner.processes.Stop(agentProcessCallback{AgentID: stop.AgentID, LaunchID: stop.LaunchID}); err != nil {
-				continue
-			}
-			producer.RemoveManaged(stop.AgentID, stop.LaunchID)
-			if err := writeFrame(protocol.EventAgentStatus, protocol.AgentStatusPayload{AgentID: stop.AgentID, LaunchID: stop.LaunchID, Status: protocol.AgentStatusInactive}); err != nil {
+			if err := writeFrame(protocol.EventAgentStatus, status); err != nil {
 				return err
 			}
 		case protocol.EventAgentAttach:
@@ -297,6 +314,8 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentAttachmentReplayAck, ack); err != nil {
 				return err
 			}
+			// Message recovery owns per-Agent snapshot/cursors, but starts only
+			// after the connection's Attachment handshake has a stable scope.
 			attachmentReplayComplete = true
 			runner.beginMessageRecoveryForAll(func(request protocol.AgentRecoveryRequest) error {
 				return writeFrame(protocol.EventAgentRecoveryRequest, request)

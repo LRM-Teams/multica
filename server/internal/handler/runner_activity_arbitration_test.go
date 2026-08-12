@@ -60,7 +60,7 @@ func TestWorkspaceRunnerReadyFencesPriorDaemonInstanceAgentsOffline(t *testing.T
 		VALUES ($1, $2, $3, 'daemon-1', 'old-instance', $4, 1, 'fact-1', 'online', now())`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
 		t.Fatal(err)
 	}
-	if err := testHandler.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance"); err != nil {
+	if err := testHandler.recordWorkspaceRunnerReady(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "new-instance", nil); err != nil {
 		t.Fatal(err)
 	}
 	var kind, detail, status string

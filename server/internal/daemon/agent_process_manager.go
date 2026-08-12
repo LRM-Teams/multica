@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -24,15 +25,14 @@ type agentProcessManager struct {
 	newID        func() string
 	onTransition func(agentLifecycleTransition)
 
-	agents     map[string]*managedAgentProcess
-	dispatches map[string]protocol.AgentStartAckPayload
-	queued     []string
+	agents map[string]*managedAgentProcess
+	queued []string
 }
 
 type agentProcessStartRequest struct {
 	AgentID         string
 	RuntimeID       string
-	StartDispatchID string
+	LaunchID        string
 	ReadinessPolicy string
 	DeliveryMode    string
 }
@@ -83,6 +83,7 @@ type managedAgentProcess struct {
 	readinessPolicy   string
 	deliveryMode      string
 	capacityGrant     agentProcessCapacityGrant
+	admitted          chan struct{}
 	managed           bool
 	sequence          int64
 	transitions       map[string]*openLifecycleTransition
@@ -106,7 +107,6 @@ func newAgentProcessManager(workspaceID string, admission agentProcessAdmission,
 		newID:        func() string { return uuid.NewString() },
 		onTransition: onTransition,
 		agents:       make(map[string]*managedAgentProcess),
-		dispatches:   make(map[string]protocol.AgentStartAckPayload),
 	}
 }
 
@@ -119,10 +119,10 @@ func (m *agentProcessManager) Close() {
 	}
 	m.mu.Lock()
 	for _, managed := range m.agents {
+		m.signalAdmissionLocked(managed)
 		m.releaseLocked(managed)
 	}
 	m.agents = nil
-	m.dispatches = nil
 	m.queued = nil
 	m.mu.Unlock()
 }
@@ -138,23 +138,22 @@ func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if accepted, ok := m.dispatches[request.StartDispatchID]; ok {
-		return accepted, nil
-	}
 	if existing := m.agents[request.AgentID]; existing != nil && existing.managed {
 		if existing.runtimeID != request.RuntimeID {
-			m.stopLocked(existing)
+			return protocol.AgentStartAckPayload{}, errors.New("managed Agent must stop its current Runtime before starting another")
 		} else {
-			accepted := m.acceptanceLocked(existing, request.StartDispatchID, protocol.AgentStartQueueRebound)
-			m.dispatches[request.StartDispatchID] = accepted
-			return accepted, nil
+			if existing.launchID == request.LaunchID {
+				return m.acceptanceLocked(existing, existing.queueState), nil
+			}
+			m.rebindLaunchLocked(existing, request.LaunchID)
+			return m.acceptanceLocked(existing, protocol.AgentStartQueueRebound), nil
 		}
 	}
 
 	managed := &managedAgentProcess{
-		agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: m.newID(), managed: true,
+		agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: request.LaunchID, managed: true,
 		readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode,
-		transitions: make(map[string]*openLifecycleTransition),
+		admitted: make(chan struct{}), transitions: make(map[string]*openLifecycleTransition),
 	}
 	m.agents[request.AgentID] = managed
 	if !m.acquireLocked(managed) {
@@ -164,9 +163,36 @@ func (m *agentProcessManager) Start(request agentProcessStartRequest) (protocol.
 	} else {
 		m.beginProcessLocked(managed)
 	}
-	accepted := m.acceptanceLocked(managed, request.StartDispatchID, managed.queueState)
-	m.dispatches[request.StartDispatchID] = accepted
-	return accepted, nil
+	return m.acceptanceLocked(managed, managed.queueState), nil
+}
+
+// WaitForAdmission blocks until the exact managed launch owns a machine-wide
+// process slot. A queued start is locally durable in APM, but it must not
+// start a provider or report active before this fence opens.
+func (m *agentProcessManager) WaitForAdmission(ctx context.Context, callback agentProcessCallback) error {
+	if m == nil {
+		return errors.New("agent process manager is not configured")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.mu.Lock()
+	managed, err := m.currentLocked(callback, false)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	admitted := managed.admitted
+	m.mu.Unlock()
+	select {
+	case <-admitted:
+		m.mu.Lock()
+		_, err := m.currentLocked(callback, false)
+		m.mu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (m *agentProcessManager) Stop(callback agentProcessCallback) error {
@@ -347,11 +373,24 @@ func (m *agentProcessManager) Snapshot(agentID string) (agentProcessManagerSnaps
 	return agentProcessManagerSnapshot{AgentID: managed.agentID, RuntimeID: managed.runtimeID, LaunchID: managed.launchID, ProcessInstanceID: managed.processInstanceID, QueueState: managed.queueState, Managed: managed.managed}, true
 }
 
-func (m *agentProcessManager) startLocked(request agentProcessStartRequest) (protocol.AgentStartAckPayload, error) {
-	if accepted, ok := m.dispatches[request.StartDispatchID]; ok {
-		return accepted, nil
+func (m *agentProcessManager) RunningAgentIDs() []string {
+	if m == nil {
+		return nil
 	}
-	managed := &managedAgentProcess{agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: m.newID(), readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode, managed: true, transitions: make(map[string]*openLifecycleTransition)}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]string, 0, len(m.agents))
+	for agentID, managed := range m.agents {
+		if managed != nil && managed.managed && managed.queueState != protocol.AgentStartQueueQueued {
+			ids = append(ids, agentID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (m *agentProcessManager) startLocked(request agentProcessStartRequest) (protocol.AgentStartAckPayload, error) {
+	managed := &managedAgentProcess{agentID: request.AgentID, runtimeID: request.RuntimeID, launchID: request.LaunchID, readinessPolicy: request.ReadinessPolicy, deliveryMode: request.DeliveryMode, admitted: make(chan struct{}), managed: true, transitions: make(map[string]*openLifecycleTransition)}
 	m.agents[request.AgentID] = managed
 	if !m.acquireLocked(managed) {
 		managed.queueState = protocol.AgentStartQueueQueued
@@ -360,22 +399,57 @@ func (m *agentProcessManager) startLocked(request agentProcessStartRequest) (pro
 	} else {
 		m.beginProcessLocked(managed)
 	}
-	accepted := m.acceptanceLocked(managed, request.StartDispatchID, managed.queueState)
-	m.dispatches[request.StartDispatchID] = accepted
-	return accepted, nil
+	return m.acceptanceLocked(managed, managed.queueState), nil
 }
 
-func (m *agentProcessManager) acceptanceLocked(managed *managedAgentProcess, dispatchID, queueState string) protocol.AgentStartAckPayload {
+func (m *agentProcessManager) acceptanceLocked(managed *managedAgentProcess, queueState string) protocol.AgentStartAckPayload {
 	age := int64(0)
 	if queueState == protocol.AgentStartQueueQueued {
 		age = 1
 	}
-	return protocol.AgentStartAckPayload{AgentID: managed.agentID, LaunchID: managed.launchID, StartDispatchID: dispatchID, QueueState: queueState, QueueDepth: len(m.queued), QueueAgeMS: age}
+	return protocol.AgentStartAckPayload{AgentID: managed.agentID, LaunchID: managed.launchID, QueueState: queueState, QueueDepth: len(m.queued), QueueAgeMS: age}
+}
+
+// rebindLaunchLocked adopts the server's current launch epoch without
+// restarting a healthy same-Runtime residency. The admission grant follows the
+// epoch so callbacks from the previous launch are fenced immediately.
+func (m *agentProcessManager) rebindLaunchLocked(managed *managedAgentProcess, launchID string) {
+	wasQueued := managed.queueState == protocol.AgentStartQueueQueued
+	m.releaseLocked(managed)
+	managed.launchID = launchID
+	managed.admitted = make(chan struct{})
+	if wasQueued {
+		m.queued = removeQueuedAgent(m.queued, managed.agentID)
+		m.closeAllLocked(managed, "superseded")
+	}
+	if !m.acquireLocked(managed) {
+		managed.queueState = protocol.AgentStartQueueQueued
+		m.queued = append(m.queued, managed.agentID)
+		m.enterLocked(managed, "process_residency", "queued")
+		return
+	}
+	if wasQueued {
+		m.beginProcessLocked(managed)
+		return
+	}
+	m.signalAdmissionLocked(managed)
 }
 
 func (m *agentProcessManager) beginProcessLocked(managed *managedAgentProcess) {
 	managed.queueState = protocol.AgentStartQueueStarting
+	m.signalAdmissionLocked(managed)
 	m.enterLocked(managed, "process_residency", "starting")
+}
+
+func (m *agentProcessManager) signalAdmissionLocked(managed *managedAgentProcess) {
+	if managed == nil || managed.admitted == nil {
+		return
+	}
+	select {
+	case <-managed.admitted:
+	default:
+		close(managed.admitted)
+	}
 }
 
 func (m *agentProcessManager) readyLocked(managed *managedAgentProcess) {
@@ -388,6 +462,7 @@ func (m *agentProcessManager) readyLocked(managed *managedAgentProcess) {
 }
 
 func (m *agentProcessManager) stopLocked(managed *managedAgentProcess) {
+	m.signalAdmissionLocked(managed)
 	m.releaseLocked(managed)
 	m.queued = removeQueuedAgent(m.queued, managed.agentID)
 	m.closeAllLocked(managed, "terminal")
@@ -509,7 +584,7 @@ func (m *agentProcessManager) emitLocked(transition agentLifecycleTransition) {
 }
 
 func validateAgentProcessStartRequest(request agentProcessStartRequest) error {
-	for name, value := range map[string]string{"agent_id": request.AgentID, "runtime_id": request.RuntimeID, "start_dispatch_id": request.StartDispatchID} {
+	for name, value := range map[string]string{"agent_id": request.AgentID, "runtime_id": request.RuntimeID, "launch_id": request.LaunchID} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", name)
 		}

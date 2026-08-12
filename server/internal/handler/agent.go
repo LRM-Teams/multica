@@ -65,11 +65,6 @@ type AgentResponse struct {
 	// gating is a separate card.
 	ProviderBlockedUntil *string `json:"provider_blocked_until,omitempty"`
 	ProviderBlockDetail  string  `json:"provider_block_detail,omitempty"`
-	// StartIntentStatus is the durable Computer lifecycle for an Agent's first
-	// start. It is intentionally separate from receipt/acceptance and from the
-	// regular task-derived Agent status.
-	StartIntentStatus      string `json:"start_intent_status,omitempty"`
-	StartIntentFailureCode string `json:"start_intent_failure_code,omitempty"`
 	// RuntimePinnedVersion (task #81) is non-nil when the daemon's
 	// MULTICA_PINNED_VERSION reported this machine as pinned. This only
 	// reflects the daemon's local intent — the server does not yet enforce
@@ -231,38 +226,6 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		byRuntimeID[key] = append(byRuntimeID[key], i)
 	}
 
-	// The durable first-start lifecycle is an Agent read-model fact. Load it
-	// before any runtime cursor so a single-connection pool cannot deadlock,
-	// and keep it independent from runtime heartbeat reachability.
-	if len(agentIDs) > 0 {
-		rows, err := h.DB.Query(ctx, `
-			SELECT agent_id::text, status, COALESCE(failure_code, '')
-			FROM agent_start_intent
-			WHERE agent_id = ANY($1::uuid[])`, agentIDs)
-		if err != nil {
-			slog.Warn("failed to load agent start intent statuses", "error", err)
-		} else {
-			statuses := make(map[string]struct{ status, failure string })
-			for rows.Next() {
-				var agentID, status, failure string
-				if err := rows.Scan(&agentID, &status, &failure); err != nil {
-					slog.Warn("scan agent start intent status", "error", err)
-					continue
-				}
-				statuses[agentID] = struct{ status, failure string }{status, failure}
-			}
-			if err := rows.Err(); err != nil {
-				slog.Warn("iterate agent start intent statuses", "error", err)
-			}
-			rows.Close()
-			for i := range resps {
-				if status, ok := statuses[resps[i].ID]; ok {
-					resps[i].StartIntentStatus = status.status
-					resps[i].StartIntentFailureCode = status.failure
-				}
-			}
-		}
-	}
 	if len(runtimeIDs) == 0 {
 		return
 	}
@@ -1247,10 +1210,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
-	// LRM-2343 deliberately does not project the legacy owner-start event
-	// here. The transaction wrote one durable agent_start_intent; heartbeat
-	// delivery is its only first-start transport, so an unavailable Computer
-	// cannot lose (or duplicate) the initial local setup.
+	h.reconcileConnectedRuntime(r.Context(), workspaceID, created.RuntimeID)
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AgentCreated(
 		ownerID,
@@ -1796,6 +1756,11 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		// new runtime so the old daemon cannot lease them and 403 on
 		// ensure-credential (LRM-927 / #1628 companion).
 		h.reassignClaimableInboxEventsAfterAgentRuntimeMove(r.Context(), updated.ID, existing.RuntimeID, updated.RuntimeID)
+		workspaceID := uuidToString(updated.WorkspaceID)
+		// Stop the old placement before starting the new one. If either Runner
+		// is offline its next ready frame executes the same idempotent reconcile.
+		h.reconcileConnectedRuntime(r.Context(), workspaceID, existing.RuntimeID)
+		h.reconcileConnectedRuntime(r.Context(), workspaceID, updated.RuntimeID)
 	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)

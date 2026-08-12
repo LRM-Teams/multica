@@ -21,13 +21,64 @@ type workspaceRunnerDeliveryDispatcher struct {
 	mu      sync.Mutex
 	queues  map[string][]protocol.AgentDeliverPayload
 	running map[string]bool
+	paused  map[string]string
 }
 
 func newWorkspaceRunnerDeliveryDispatcher(ctx context.Context, handle func(context.Context, protocol.AgentDeliverPayload)) *workspaceRunnerDeliveryDispatcher {
 	return &workspaceRunnerDeliveryDispatcher{
 		ctx: ctx, handle: handle,
-		queues: make(map[string][]protocol.AgentDeliverPayload), running: make(map[string]bool),
+		queues: make(map[string][]protocol.AgentDeliverPayload), running: make(map[string]bool), paused: make(map[string]string),
 	}
+}
+
+// Pause holds only this Agent's deliveries while agent:start establishes its
+// provider. The socket reader and every other Agent remain independent.
+func (d *workspaceRunnerDeliveryDispatcher) Pause(agentID, launchID string) bool {
+	if d == nil || strings.TrimSpace(agentID) == "" || strings.TrimSpace(launchID) == "" {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.ctx.Err() != nil || d.paused[agentID] == launchID {
+		return false
+	}
+	d.paused[agentID] = launchID
+	return true
+}
+
+// Resume releases deliveries in their original order after agent:start has
+// been accepted. No delivery can be ACKed before that point.
+func (d *workspaceRunnerDeliveryDispatcher) Resume(agentID, launchID string) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	if d.paused[agentID] != launchID {
+		d.mu.Unlock()
+		return
+	}
+	delete(d.paused, agentID)
+	if len(d.queues[agentID]) > 0 && !d.running[agentID] && d.ctx.Err() == nil {
+		d.running[agentID] = true
+		go d.drain(agentID)
+	}
+	d.mu.Unlock()
+}
+
+// RejectStart forgets only the volatile buffer. The server still owns every
+// unACKed delivery and will replay it after a later successful start.
+func (d *workspaceRunnerDeliveryDispatcher) RejectStart(agentID, launchID string) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	if d.paused[agentID] != launchID {
+		d.mu.Unlock()
+		return
+	}
+	delete(d.paused, agentID)
+	delete(d.queues, agentID)
+	d.mu.Unlock()
 }
 
 func (d *workspaceRunnerDeliveryDispatcher) Enqueue(delivery protocol.AgentDeliverPayload) bool {
@@ -40,7 +91,7 @@ func (d *workspaceRunnerDeliveryDispatcher) Enqueue(delivery protocol.AgentDeliv
 		return false
 	}
 	d.queues[delivery.AgentID] = append(d.queues[delivery.AgentID], delivery)
-	if !d.running[delivery.AgentID] {
+	if d.paused[delivery.AgentID] == "" && !d.running[delivery.AgentID] {
 		d.running[delivery.AgentID] = true
 		go d.drain(delivery.AgentID)
 	}
@@ -57,6 +108,11 @@ func (d *workspaceRunnerDeliveryDispatcher) drain(agentID string) {
 			return
 		}
 		queue := d.queues[agentID]
+		if d.paused[agentID] != "" {
+			delete(d.running, agentID)
+			d.mu.Unlock()
+			return
+		}
 		if len(queue) == 0 {
 			delete(d.queues, agentID)
 			delete(d.running, agentID)

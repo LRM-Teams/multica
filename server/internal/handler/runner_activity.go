@@ -67,10 +67,10 @@ func (h *Handler) HandleWorkspaceRunnerFrame(ctx context.Context, identity daemo
 		if ready.WorkspaceID != identity.WorkspaceID || ready.DaemonInstanceID != daemonInstanceID {
 			return errors.New("Runner ready identity does not match current connection")
 		}
-		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID); err != nil {
+		if err := h.recordWorkspaceRunnerReady(ctx, identity, daemonInstanceID, ready.RunningAgents); err != nil {
 			return err
 		}
-		if err := h.dispatchPendingRunnerLaunches(ctx, identity); err != nil {
+		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
 			return err
 		}
 		return h.dispatchPendingRunnerStops(ctx, identity)
@@ -261,7 +261,7 @@ func (h *Handler) recordMixedRunActivityTransition(ctx context.Context, identity
 // recordWorkspaceRunnerReady fences launches owned by an older daemon process.
 // A Computer may already be connected while none of its prior Agent processes
 // have restarted; those Agents stay Offline until a new launch is reported.
-func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string) error {
+func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemonws.ClientIdentity, daemonInstanceID string, runningAgentIDs []string) error {
 	return h.runnerPresenceLocked(func() error {
 		workspaceID, err := util.ParseUUID(identity.WorkspaceID)
 		if err != nil {
@@ -283,7 +283,7 @@ func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemo
 		FROM agent_activity_launch l
 		WHERE l.workspace_id = s.workspace_id AND l.agent_id = s.agent_id
 		  AND l.workspace_id = $1 AND l.daemon_id = $2
-		  AND l.daemon_instance_id <> $3 AND l.status = 'active'
+		  AND l.daemon_instance_id <> $3 AND l.status IN ('accepted', 'active')
 		RETURNING s.agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
 		if err != nil {
 			return fmt.Errorf("fence prior Runner snapshots: %w", err)
@@ -302,11 +302,27 @@ func (h *Handler) recordWorkspaceRunnerReady(ctx context.Context, identity daemo
 			return fmt.Errorf("iterate fenced Runner Agents: %w", err)
 		}
 		rows.Close()
+		if len(runningAgentIDs) == 0 {
+			if _, err := tx.Exec(ctx, `
+				UPDATE agent_activity_launch
+				SET status = 'inactive', updated_at = now()
+				WHERE workspace_id = $1 AND daemon_id = $2
+				  AND daemon_instance_id = $3 AND status IN ('accepted', 'active')`, workspaceID, identity.DaemonID, daemonInstanceID); err != nil {
+				return fmt.Errorf("fence absent Runner residencies: %w", err)
+			}
+		} else if _, err := tx.Exec(ctx, `
+			UPDATE agent_activity_launch
+			SET status = 'inactive', updated_at = now()
+			WHERE workspace_id = $1 AND daemon_id = $2
+			  AND daemon_instance_id = $3 AND status IN ('accepted', 'active')
+			  AND NOT (agent_id = ANY($4::uuid[]))`, workspaceID, identity.DaemonID, daemonInstanceID, runningAgentIDs); err != nil {
+			return fmt.Errorf("fence absent Runner residencies: %w", err)
+		}
 		rows, err = tx.Query(ctx, `
 		UPDATE agent_activity_launch
 		SET status = 'inactive', updated_at = now()
 		WHERE workspace_id = $1 AND daemon_id = $2
-		  AND daemon_instance_id <> $3 AND status = 'active'
+		  AND daemon_instance_id <> $3 AND status IN ('accepted', 'active')
 		RETURNING agent_id`, workspaceID, identity.DaemonID, daemonInstanceID)
 		if err != nil {
 			return fmt.Errorf("fence prior Runner launches: %w", err)
@@ -383,8 +399,7 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 				last_producer_fact_id = '',
 				last_activity_fingerprint = '',
 				updated_at = now()
-			WHERE agent_activity_launch.start_dispatch_id = ''
-			   OR agent_activity_launch.status = 'inactive'
+			WHERE agent_activity_launch.status = 'inactive'
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
 			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
 			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id)`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
@@ -414,39 +429,38 @@ func (h *Handler) recordRunnerStartAcknowledgement(ctx context.Context, identity
 		if err != nil {
 			return err
 		}
+		var desiredLaunchID string
+		if err := h.DB.QueryRow(ctx, `
+			SELECT launch_id::text FROM agent_runner_launch_projection
+			WHERE workspace_id = $1 AND agent_id = $2 AND runtime_id = $3`, workspaceID, agentID, runtimeID).Scan(&desiredLaunchID); err != nil {
+			return fmt.Errorf("load desired Runner launch: %w", err)
+		}
+		if desiredLaunchID != acknowledgement.LaunchID {
+			return errors.New("stale Workspace Runner start acknowledgement")
+		}
 		command, err := h.DB.Exec(ctx, `
 			INSERT INTO agent_activity_launch (
 				workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id,
-				status, start_dispatch_id, queue_state, queue_depth, queue_age_ms, accepted_at
-			) VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8, $9, $10, now())
+				status, queue_state, queue_depth, queue_age_ms, accepted_at
+			) VALUES ($1, $2, $3, $4, $5, $6, 'accepted', $7, $8, $9, now())
 			ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
 				runtime_id = EXCLUDED.runtime_id, daemon_id = EXCLUDED.daemon_id,
 				daemon_instance_id = EXCLUDED.daemon_instance_id, launch_id = EXCLUDED.launch_id,
-				status = 'accepted', start_dispatch_id = EXCLUDED.start_dispatch_id,
+				status = 'accepted',
 				queue_state = EXCLUDED.queue_state, queue_depth = EXCLUDED.queue_depth,
 				queue_age_ms = EXCLUDED.queue_age_ms, accepted_at = COALESCE(agent_activity_launch.accepted_at, now()),
 				last_client_sequence = 0, last_producer_fact_id = '', last_activity_fingerprint = '', updated_at = now()
 			WHERE agent_activity_launch.status = 'inactive'
 			   OR (agent_activity_launch.daemon_id = EXCLUDED.daemon_id
 			       AND agent_activity_launch.daemon_instance_id = EXCLUDED.daemon_instance_id
-			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id
-			       AND agent_activity_launch.start_dispatch_id = EXCLUDED.start_dispatch_id)`,
+			       AND agent_activity_launch.launch_id = EXCLUDED.launch_id)`,
 			workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, acknowledgement.LaunchID,
-			acknowledgement.StartDispatchID, acknowledgement.QueueState, acknowledgement.QueueDepth, acknowledgement.QueueAgeMS)
+			acknowledgement.QueueState, acknowledgement.QueueDepth, acknowledgement.QueueAgeMS)
 		if err != nil {
 			return fmt.Errorf("persist Runner start acknowledgement: %w", err)
 		}
 		if command.RowsAffected() != 1 {
 			return errors.New("stale Workspace Runner start acknowledgement")
-		}
-		if _, err := h.DB.Exec(ctx, `
-			UPDATE agent_start_intent
-			SET status = CASE WHEN $4 = 'queued' THEN 'queued' ELSE 'accepted' END,
-			    lifecycle_seq = GREATEST(lifecycle_seq, 1), accepted_at = COALESCE(accepted_at, now()),
-			    reported_at = now(), updated_at = now()
-			WHERE start_dispatch_id::text = $1 AND agent_id = $2 AND runtime_id = $3
-			  AND status = 'pending'`, acknowledgement.StartDispatchID, agentID, runtimeID, acknowledgement.QueueState); err != nil {
-			return fmt.Errorf("record accepted Runner launch intent: %w", err)
 		}
 		return nil
 	})

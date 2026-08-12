@@ -124,7 +124,7 @@ func (h *Handler) createAgentWithIdentity(ctx context.Context, q *db.Queries, pa
 
 // createAgentWithIdentityTx keeps a duplicate handle attempt from aborting its
 // caller's larger provisioning transaction. Agent creation now commonly shares
-// that transaction with #general membership and a first-start intent, so a
+// that transaction with #general membership and a desired Runner launch, so a
 // PostgreSQL savepoint is required before retrying a unique-constraint conflict.
 func (h *Handler) createAgentWithIdentityTx(ctx context.Context, tx pgx.Tx, q *db.Queries, params db.CreateAgentParams, handleSeed, displaySeed string) (db.Agent, error) {
 	base, displayName, err := agentIdentityPlan(handleSeed, displaySeed)

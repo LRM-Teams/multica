@@ -184,13 +184,6 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to load Wendy")
 			return
 		}
-		// Setup predating the durable first-start contract may already have a
-		// bound Wendy without the intent that gives the Computer her placement.
-		// Keep this idempotent completion path as a repair boundary too.
-		if _, err := ensureAgentDurableStartIntent(r.Context(), h.DB, wsUUID, agent.ID, agent.RuntimeID); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to repair Wendy startup")
-			return
-		}
 		dmID := ""
 		if ch, ok := h.ensureWindyDM(r, workspaceID, parseUUID(userID), agent.ID); ok {
 			dmID = ch.ID
@@ -295,9 +288,6 @@ func (h *Handler) provisionOnboardingAgent(ctx context.Context, workspaceID, cre
 			return db.Agent{}, false, err
 		}
 		if err := h.ensureOnboardingAgentWelcomeTx(ctx, tx, workspaceID, agent.ID); err != nil {
-			return db.Agent{}, false, err
-		}
-		if _, err := ensureAgentDurableStartIntent(ctx, tx, workspaceID, agent.ID, agent.RuntimeID); err != nil {
 			return db.Agent{}, false, err
 		}
 		if err := tx.Commit(ctx); err != nil {

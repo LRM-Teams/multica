@@ -144,7 +144,7 @@ func TestWorkspaceRunnerCanonicalMessageDiagnosticsFollowRealDeliveryPath(t *tes
 			phase, _ := record["phase"].(string)
 			found[phase] = true
 		}
-		if (found["provider_finished"] && found["context_boundary_persisted"]) || time.Now().After(deadline) {
+		if (found["provider_finished"] && found["context_boundary_persisted"] && found["ack_sent"]) || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)

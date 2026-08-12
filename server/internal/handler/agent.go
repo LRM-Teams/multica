@@ -1759,8 +1759,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		workspaceID := uuidToString(updated.WorkspaceID)
 		// Stop the old placement before starting the new one. If either Runner
 		// is offline its next ready frame executes the same idempotent reconcile.
-		h.reconcileConnectedRuntime(r.Context(), workspaceID, existing.RuntimeID)
-		h.reconcileConnectedRuntime(r.Context(), workspaceID, updated.RuntimeID)
+		h.reconcileConnectedRuntimes(r.Context(), workspaceID, existing.RuntimeID, updated.RuntimeID)
 	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)

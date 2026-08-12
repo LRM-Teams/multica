@@ -140,18 +140,38 @@ func (h *Handler) reconcileWorkspaceRunnerLaunches(ctx context.Context, identity
 }
 
 func (h *Handler) reconcileConnectedRuntime(ctx context.Context, workspaceID string, runtimeID pgtype.UUID) {
-	if h == nil || h.DB == nil || h.DaemonHub == nil || !runtimeID.Valid {
+	h.reconcileConnectedRuntimes(ctx, workspaceID, runtimeID)
+}
+
+// reconcileConnectedRuntimes resolves mutable Runtime placement into the
+// immutable Workspace Runner identity and deduplicates by daemon. A move
+// within one Computer therefore emits one stop/start sequence; a move across
+// Computers reconciles the old and new Runners independently.
+func (h *Handler) reconcileConnectedRuntimes(ctx context.Context, workspaceID string, runtimeIDs ...pgtype.UUID) {
+	if h == nil || h.DB == nil || h.DaemonHub == nil {
 		return
 	}
-	var daemonID string
-	if err := h.DB.QueryRow(ctx, `SELECT COALESCE(daemon_id::text, '') FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&daemonID); err != nil || daemonID == "" {
-		return
+	identities := make(map[string]daemonws.ClientIdentity)
+	for _, runtimeID := range runtimeIDs {
+		if !runtimeID.Valid {
+			continue
+		}
+		var daemonID string
+		if err := h.DB.QueryRow(ctx, `SELECT COALESCE(daemon_id::text, '') FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&daemonID); err != nil || daemonID == "" {
+			continue
+		}
+		if identity, connected := h.DaemonHub.WorkspaceRunnerIdentity(daemonID, workspaceID); connected {
+			identities[daemonID] = identity
+		}
 	}
-	identity, connected := h.DaemonHub.WorkspaceRunnerIdentity(daemonID, workspaceID)
-	if !connected {
-		return
+	daemonIDs := make([]string, 0, len(identities))
+	for daemonID := range identities {
+		daemonIDs = append(daemonIDs, daemonID)
 	}
-	if err := h.reconcileWorkspaceRunnerLaunches(ctx, identity); err != nil {
-		slog.Warn("Workspace Runner lifecycle reconcile after placement change failed", "workspace_id", workspaceID, "daemon_id", daemonID, "runtime_id", uuidToString(runtimeID), "error", err)
+	sort.Strings(daemonIDs)
+	for _, daemonID := range daemonIDs {
+		if err := h.reconcileWorkspaceRunnerLaunches(ctx, identities[daemonID]); err != nil {
+			slog.Warn("Workspace Runner lifecycle reconcile after placement change failed", "workspace_id", workspaceID, "daemon_id", daemonID, "error", err)
+		}
 	}
 }

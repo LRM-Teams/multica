@@ -441,11 +441,16 @@ func normalizeOfflineTrajectoryV1(src OfflineCallSource) (*NormalizedOfflineTraj
 
 func unsupportedProviderRequestSemantics(request map[string]any) string {
 	for key := range request {
-		switch key {
+		normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+		switch normalized {
 		case "system", "messages", "tools", "model", "provider", "temperature",
 			"top_p", "top_k", "max_tokens", "max_output_tokens", "stop", "stop_sequences",
 			"presence_penalty", "frequency_penalty", "tool_choice", "stream",
 			"metadata", "user", "n", "api_kind", "capture_boundary", "attempt":
+			continue
+		case "authorization", "api_key", "apikey", "access_token", "token", "password",
+			"secret", "x_api_key":
+			// Credential material is redacted later; it never changes model input.
 			continue
 		case "audio", "input_audio", "images", "image", "attachments", "files",
 			"modalities", "response_format", "prediction", "web_search_options":

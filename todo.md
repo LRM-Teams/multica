@@ -144,12 +144,17 @@
     - Accept / Reject 调 S1-W1 API；accept 后本地更新笔记正文
     - 测试：`note-writeback-review.test.tsx`、`writeback-preview.test.ts`
 
-- [ ] **S1-W3 Issue/Run 完成时生成写回提案**
+- [x] **S1-W3 Issue/Run 完成时生成写回提案**
   - **目标**：工作结束 → 自动（或一键）生成针对关联笔记的待审写回。
   - **要做**：当 Issue 完成（及/或关联 run 成功结束）且存在笔记→Issue 关联时，生成摘要提案指向该笔记；摘要含结果要点 + evidence。
   - **不要做**：Slice 1 做全量 Activity/thinking 回放；不做 Research；不做机器源。
   - **依赖**：S1-R1、S1-W1、S1-W2
   - **完成标准**：集成测或 handler 测：完成 Issue → 出现 pending 提案 → accept 后笔记含 evidence 链接。
+  - **已落地（2026-08-12）**：
+    - Issue `status` 转入 `done` 时（UpdateIssue / BatchUpdateIssues）为每个关联笔记创建 pending `append` 写回
+    - 摘要含 issue mention chip markdown；evidence 含 issue（若有则附最新 completed run）
+    - 同笔记同 issue 的 pending 提案幂等跳过
+    - 测试：`TestIssueDoneCreatesPendingNoteWritebackAndAcceptApplies`
 
 ### 1.4 权限（Slice 1 横切，每项实现时遵守）
 

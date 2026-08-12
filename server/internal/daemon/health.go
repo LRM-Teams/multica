@@ -85,7 +85,9 @@ func (d *Daemon) healthHandler(startedAt time.Time) http.HandlerFunc {
 		// as ready — they gate on this status. Consumers that only know
 		// "running" (older CLI/desktop) safely treat "starting" as not-ready.
 		status := "starting"
-		if d.ready.Load() {
+		if d.machineUpgradeTakeover != nil && d.machineUpgradeTakeover.isReady() && !d.ready.Load() {
+			status = "takeover_ready"
+		} else if d.ready.Load() {
 			status = "running"
 		}
 

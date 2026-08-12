@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -109,6 +110,12 @@ func TestMachineUpgrade_CanonicalRouteSharesOneDaemonOperation(t *testing.T) {
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+	})
 
 	firstW, first := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	if firstW.Code != http.StatusOK || first.Phase != MachineUpgradeQueued {
@@ -295,6 +302,81 @@ func TestMachineUpgrade_ComputerAttestationRequiresExactAcceptedRuntimeSet(t *te
 	)
 	if err != nil || replayed.ID != completed.ID || replayed.Phase != MachineUpgradeCompleted {
 		t.Fatalf("completed Computer proof replay = %+v err=%v", replayed, err)
+	}
+}
+
+func TestMachineUpgrade_TakeoverCommitsComputerGenerationOnlyAfterExactProof(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO computer_identity_owner (daemon_id, user_id) VALUES ($1, $2)`, daemonID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_identity_owner WHERE daemon_id=$1`, daemonID)
+	})
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.10")
+	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
+	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := testHandler.MachineUpgradeStore.Accept(
+		context.Background(), daemonID, created.ID, "generation-a", "v9.9.9", "v9.9.10",
+		[]string{firstRuntimeID, secondRuntimeID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err = testHandler.MachineUpgradeStore.Progress(context.Background(), daemonID, created.ID, MachineUpgradeVerifying, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err = testHandler.MachineUpgradeStore.Progress(context.Background(), daemonID, created.ID, MachineUpgradeHandoff, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO computer_generation (daemon_id, generation) VALUES ($1, 66)
+		ON CONFLICT (daemon_id) DO UPDATE SET generation=66`, daemonID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM computer_generation WHERE daemon_id=$1`, daemonID)
+	})
+
+	request := func(predecessor, candidate int64, runtimeIDs []string) *httptest.ResponseRecorder {
+		req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/computer/machine-upgrades/"+created.ID+"/takeover", map[string]any{
+			"daemon_id": daemonID, "generation_id": "generation-a", "cli_version": "v9.9.10",
+			"predecessor_computer_generation": predecessor, "candidate_computer_generation": candidate,
+			"runtime_ids": runtimeIDs, "workspace_ids": accepted.AcceptedWorkspaceIDs,
+		})
+		req.Header.Set("X-Computer-Generation", strconv.FormatInt(candidate, 10))
+		req = withURLParam(req, "upgradeId", created.ID)
+		w := httptest.NewRecorder()
+		testHandler.CommitComputerMachineUpgradeTakeover(w, req)
+		return w
+	}
+
+	if w := request(64, 65, []string{firstRuntimeID, secondRuntimeID}); w.Code != http.StatusConflict {
+		t.Fatalf("stale predecessor status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := request(66, 67, []string{firstRuntimeID}); w.Code != http.StatusConflict {
+		t.Fatalf("incomplete candidate set status=%d body=%s", w.Code, w.Body.String())
+	}
+	var generation int64
+	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 66 {
+		t.Fatalf("rejected proof changed generation=%d err=%v", generation, err)
+	}
+
+	if w := request(66, 67, []string{secondRuntimeID, firstRuntimeID}); w.Code != http.StatusOK {
+		t.Fatalf("exact takeover status=%d body=%s accepted=%+v", w.Code, w.Body.String(), accepted)
+	}
+	if err := testPool.QueryRow(context.Background(), `SELECT generation FROM computer_generation WHERE daemon_id=$1`, daemonID).Scan(&generation); err != nil || generation != 67 {
+		t.Fatalf("takeover generation=%d err=%v", generation, err)
+	}
+	if w := request(66, 67, []string{firstRuntimeID, secondRuntimeID}); w.Code != http.StatusOK {
+		t.Fatalf("takeover replay status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

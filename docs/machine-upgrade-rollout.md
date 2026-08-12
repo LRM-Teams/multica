@@ -5,6 +5,15 @@ staging, and an Active VersionStore pointer are progress only; server
 completion requires a capable successor generation plus the complete runtime
 set captured at acceptance.
 
+For a standalone resident, candidate verification is local-first. The target
+binds the exclusive control port and proves its exact PID, binary version,
+VersionStore generation, and configured Runtime/Workspace shape without
+calling heartbeat or registration. The server then performs one atomic
+predecessor-to-candidate Computer generation CAS. Only after that ownership
+change may the candidate run normal authenticated startup and complete the
+accepted Runtime/Workspace registration proof. Rejection before the CAS leaves
+the incumbent generation valid and does not enter server rollback.
+
 ## Deployment order
 
 1. Apply migrations `288_machine_upgrade_contract`,

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,71 @@ type attestComputerMachineUpgradeRequest struct {
 	CLIVersion   string   `json:"cli_version"`
 	RuntimeIDs   []string `json:"runtime_ids"`
 	WorkspaceIDs []string `json:"workspace_ids"`
+}
+
+type commitComputerMachineUpgradeTakeoverRequest struct {
+	DaemonID                      string   `json:"daemon_id"`
+	GenerationID                  string   `json:"generation_id"`
+	CLIVersion                    string   `json:"cli_version"`
+	PredecessorComputerGeneration int64    `json:"predecessor_computer_generation"`
+	CandidateComputerGeneration   int64    `json:"candidate_computer_generation"`
+	RuntimeIDs                    []string `json:"runtime_ids"`
+	WorkspaceIDs                  []string `json:"workspace_ids"`
+}
+
+// CommitComputerMachineUpgradeTakeover atomically replaces the incumbent
+// Computer generation after exact local candidate proof. It intentionally
+// does not use requireCurrentComputerGeneration: the authenticated caller is
+// the not-yet-active candidate, and this endpoint itself owns the one legal
+// predecessor-to-candidate transition.
+func (h *Handler) CommitComputerMachineUpgradeTakeover(w http.ResponseWriter, r *http.Request) {
+	if h.MachineUpgradeStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "machine upgrade store is not configured")
+		return
+	}
+	var req commitComputerMachineUpgradeTakeoverRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.DaemonID = strings.TrimSpace(req.DaemonID)
+	if req.DaemonID == "" || strings.TrimSpace(req.GenerationID) == "" || strings.TrimSpace(req.CLIVersion) == "" ||
+		req.PredecessorComputerGeneration < 1 || req.CandidateComputerGeneration != req.PredecessorComputerGeneration+1 {
+		writeError(w, http.StatusBadRequest, "complete takeover identity is required")
+		return
+	}
+	headerGeneration, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-Computer-Generation")), 10, 64)
+	if err != nil || headerGeneration != req.CandidateComputerGeneration {
+		writeCodedError(w, http.StatusConflict, "stale_computer_generation", "takeover credential does not match candidate Computer generation")
+		return
+	}
+	if tokenDaemon := middleware.DaemonIDFromContext(r.Context()); tokenDaemon != "" && !strings.EqualFold(tokenDaemon, req.DaemonID) {
+		writeError(w, http.StatusForbidden, "Computer credential scope mismatch")
+		return
+	}
+	if err := h.authorizeComputerOwnerRequest(r.Context(), r, req.DaemonID); err != nil {
+		if errors.Is(err, errComputerConnectionUnauthorized) {
+			writeError(w, http.StatusForbidden, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to authorize Computer owner")
+		}
+		return
+	}
+	for field, ids := range map[string][]string{"runtime_ids": req.RuntimeIDs, "workspace_ids": req.WorkspaceIDs} {
+		for _, id := range ids {
+			if _, err := util.ParseUUID(id); err != nil {
+				writeError(w, http.StatusBadRequest, field+" must contain immutable UUIDs")
+				return
+			}
+		}
+	}
+	op, err := h.MachineUpgradeStore.CommitTakeover(r.Context(), req.DaemonID, chi.URLParam(r, "upgradeId"), req.GenerationID, req.CLIVersion,
+		req.PredecessorComputerGeneration, req.CandidateComputerGeneration, req.RuntimeIDs, req.WorkspaceIDs)
+	if err != nil {
+		h.writeMachineUpgradeDaemonError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
 }
 
 // AttestComputerMachineUpgrade is the successor's complete machine proof.
@@ -343,6 +409,8 @@ func (h *Handler) writeMachineUpgradeDaemonError(w http.ResponseWriter, err erro
 		writeError(w, http.StatusNotFound, "machine upgrade not found")
 	case errors.Is(err, errMachineUpgradeAcceptanceConflict), errors.Is(err, errMachineUpgradeAttestationRejected):
 		writeCodedError(w, http.StatusConflict, "machine_upgrade_attestation_rejected", err.Error())
+	case errors.Is(err, errStaleComputerGeneration):
+		writeCodedError(w, http.StatusConflict, "stale_computer_generation", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "machine upgrade operation failed: "+err.Error())
 	}

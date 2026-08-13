@@ -17,14 +17,9 @@ not advance a task or satisfy a delivery gate.
 If the prompt contains `## Durable Research Run task`, follow its task ID,
 attempt ID, versions, objective, acceptance criteria, and result contract.
 
-1. Read the current snapshot before work:
-
-```bash
-multica research session get <session-id> --output json
-```
-
-For a dispatched task attempt, pass the attempt ID so the server returns the
-frozen dispatch manifest instead of live session state that may have advanced:
+1. Read the attempt-bound snapshot before work. Agent data-plane reads require
+the dispatched Attempt ID so the server returns only the frozen manifest; an
+unscoped live-session read is rejected:
 
 ```bash
 multica research session get <session-id> --attempt-id <attempt-id> --output json

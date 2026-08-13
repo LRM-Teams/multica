@@ -366,10 +366,24 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	if err != nil {
 		return RunSnapshot{}, err
 	}
-	return RunSnapshot{
+	snapshot := RunSnapshot{
 		Run: run, Contract: contract, Method: method, Questions: questions, Tasks: tasks, Attempts: attempts,
 		Sources: sources, Observations: observations, Claims: claims, Gate: gate,
-	}, nil
+	}
+	passportEnabled, err := e.store.SessionArtifactPassportEnabled(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	if passportEnabled {
+		projection, projectionErr := (artifactProjectionModule{store: e.store}).Load(
+			ctx, workspaceID, sessionID, artifactProjectionScope{},
+		)
+		if projectionErr != nil {
+			return RunSnapshot{}, projectionErr
+		}
+		snapshot.ArtifactProjection = &projection
+	}
+	return snapshot, nil
 }
 
 func (e *Engine) SnapshotForAttempt(ctx context.Context, sessionID, workspaceID, attemptID string) (RunSnapshot, error) {

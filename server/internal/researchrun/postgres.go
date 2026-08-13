@@ -735,6 +735,16 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		PolicyWatermark:  policyWatermark,
 		ManifestFiltered: true,
 	}
+	if manifestID != "" {
+		allowed[manifestID] = struct{}{}
+	}
+	projection, projectionErr := (artifactProjectionModule{store: s}).Load(ctx, workspaceID, sessionID, artifactProjectionScope{
+		AllowedArtifactIDs: allowed, IncludeEvaluationPrivate: true,
+	})
+	if projectionErr != nil {
+		return RunSnapshot{}, projectionErr
+	}
+	filtered.ArtifactProjection = &projection
 	if gateSnapshot, found, gateErr := loadManifestGateSnapshotPool(ctx, s.pool, workspaceID, sessionID, attemptID); gateErr != nil {
 		return RunSnapshot{}, gateErr
 	} else if found {

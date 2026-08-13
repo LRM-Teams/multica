@@ -162,6 +162,7 @@ export function ResearchD5Chrome({
 
           <ResearchSessionChromeActions
             {...actionProps}
+            className="d5-chrome-actions"
             session={session}
             pendingSubstantiveGoal={pendingSubstantiveGoal}
             onConfirmSubstantiveGoal={onConfirmSubstantiveGoal}

@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  useEffect,
+  useId,
+  useRef,
+  type RefObject,
+} from "react";
 import type { TypedGraphNode } from "@multica/core/research";
 import type { ExecutionRow } from "../execution-overlay";
 import { Button } from "@multica/ui/components/ui/button";
@@ -75,11 +81,15 @@ function ResearchAgentInspectorBody({
   typedNode,
   onClose,
   onOpenAgentConfig,
+  closeButtonRef,
+  titleId,
 }: {
   row: ExecutionRow;
   typedNode?: TypedGraphNode | null;
   onClose: () => void;
   onOpenAgentConfig?: () => void;
+  closeButtonRef?: RefObject<HTMLButtonElement | null>;
+  titleId?: string;
 }) {
   const { t } = useT("research");
   const payloadObjective = objectiveFromTypedNode(typedNode);
@@ -94,6 +104,7 @@ function ResearchAgentInspectorBody({
     <>
       <header className="agent-head">
         <button
+          ref={closeButtonRef}
           type="button"
           className="agent-close"
           onClick={onClose}
@@ -104,7 +115,7 @@ function ResearchAgentInspectorBody({
         <div className="who">
           <div className="agent-big-avatar">{row.initials || row.name.slice(0, 2).toUpperCase()}</div>
           <div>
-            <b>{row.name}</b>
+            <b id={titleId}>{row.name}</b>
             <span>{row.action || row.actionDetail || row.status}</span>
           </div>
         </div>
@@ -166,6 +177,35 @@ export function ResearchAgentInspector({
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
+  const titleId = useId();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const restoreFocusRef = useRef(true);
+  const rowId = row?.id ?? null;
+
+  useEffect(() => {
+    if (!open || !rowId || isMobile) return;
+    restoreFocusRef.current = true;
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = requestAnimationFrame(() => {
+      closeButtonRef.current?.focus({ preventScroll: true });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (restoreFocusRef.current && previousFocusRef.current?.isConnected) {
+        previousFocusRef.current.focus({ preventScroll: true });
+      }
+      previousFocusRef.current = null;
+    };
+  }, [isMobile, open, rowId]);
+
+  const handleOpenAgentConfig = onOpenAgentConfig
+    ? () => {
+        restoreFocusRef.current = false;
+        onOpenAgentConfig();
+      }
+    : undefined;
 
   if (!open || !row) return null;
 
@@ -194,7 +234,7 @@ export function ResearchAgentInspector({
             row={row}
             typedNode={typedNode}
             onClose={onClose}
-            onOpenAgentConfig={onOpenAgentConfig}
+            onOpenAgentConfig={handleOpenAgentConfig}
           />
         </SheetContent>
       </Sheet>
@@ -203,15 +243,25 @@ export function ResearchAgentInspector({
 
   return (
     <aside
+      role="dialog"
+      aria-labelledby={titleId}
       data-testid="research-agent-inspector"
       data-placement="overlay"
       className={cn("research-agent-inspector open", className)}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
     >
       <ResearchAgentInspectorBody
         row={row}
         typedNode={typedNode}
         onClose={onClose}
-        onOpenAgentConfig={onOpenAgentConfig}
+        onOpenAgentConfig={handleOpenAgentConfig}
+        closeButtonRef={closeButtonRef}
+        titleId={titleId}
       />
     </aside>
   );

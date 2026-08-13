@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ResearchGraphNode } from "@multica/core/types";
@@ -64,6 +64,34 @@ describe("TrajectoryExplorer (LRM-1480 / UI-06)", () => {
     expect(cards.length).toBe(3);
     await user.click(cards[1]!);
     expect(onSelect).toHaveBeenCalledWith("b");
+  });
+
+  it("uses roving focus with arrows and Home/End across trajectory commits", () => {
+    const nodes = [
+      node("a", "Question", "done", "theme-main"),
+      node("b", "Branch task", "active", "theme-b"),
+      node("c", "Result", "done", "theme-b"),
+    ];
+    const onSelect = vi.fn();
+    renderWithI18n(
+      <TrajectoryExplorer
+        nodes={nodes}
+        sessionStatus="running"
+        onSelect={onSelect}
+        onJumpToCanvas={vi.fn()}
+        onOpenNodeDetail={vi.fn()}
+      />,
+    );
+    const cards = screen.getAllByTestId("trajectory-commit-card");
+    expect(cards.map((card) => card.tabIndex)).toEqual([0, -1, -1]);
+
+    cards[0]!.focus();
+    fireEvent.keyDown(cards[0]!, { key: "ArrowDown" });
+    expect(onSelect).toHaveBeenLastCalledWith("b");
+    fireEvent.keyDown(cards[1]!, { key: "End" });
+    expect(onSelect).toHaveBeenLastCalledWith("c");
+    fireEvent.keyDown(cards[2]!, { key: "Home" });
+    expect(onSelect).toHaveBeenLastCalledWith("a");
   });
 
   it("localizes graph, overview, and status semantics", () => {

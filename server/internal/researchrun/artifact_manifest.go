@@ -276,6 +276,9 @@ func loadManifestAuthorizedArtifactIDsPool(
 		}
 		return nil, false, err
 	}
+	if err = verifyAttemptManifestReadGrantPool(ctx, pool, workspaceID, sessionID, attemptID); err != nil {
+		return nil, false, err
+	}
 	rows, err := pool.Query(ctx, `
 		SELECT v.artifact_id::text
 		FROM research_artifact_context_entry e
@@ -303,6 +306,59 @@ func loadManifestAuthorizedArtifactIDsPool(
 		return nil, false, err
 	}
 	return ids, true, nil
+}
+
+func verifyAttemptManifestReadGrantPool(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, sessionID, attemptID string,
+) error {
+	var authorized bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM research_artifact_context_manifest m
+		  JOIN research_task_attempt a
+		    ON (a.workspace_id, a.session_id, a.id, a.task_id) =
+		       (m.workspace_id, m.session_id, m.attempt_id, m.task_id)
+		  JOIN research_artifact_policy_grant normal
+		    ON (normal.workspace_id, normal.session_id, normal.id, normal.revision) =
+		       (m.workspace_id, m.session_id, m.normal_grant_id, m.normal_grant_revision)
+		  LEFT JOIN research_artifact_policy_grant evaluation
+		    ON (evaluation.workspace_id, evaluation.session_id, evaluation.id, evaluation.revision) =
+		       (m.workspace_id, m.session_id, m.evaluation_grant_id, m.evaluation_grant_revision)
+		  WHERE m.workspace_id = $1::uuid
+		    AND m.session_id = $2::uuid
+		    AND m.attempt_id = $3::uuid
+		    AND normal.principal_kind = 'agent'
+		    AND normal.principal_id = a.assigned_agent_id
+		    AND normal.purpose = m.purpose
+		    AND normal.policy_version = m.policy_version
+		    AND normal.status = 'active'
+		    AND normal.evaluation_private = false
+		    AND normal.normal_clearance IS NOT NULL
+		    AND research_artifact_access_level_allowed(normal.normal_clearance)
+		    AND (
+		      (m.purpose = 'task_execution' AND m.evaluation_grant_id IS NULL)
+		      OR
+		      (m.purpose = 'evaluation'
+		       AND evaluation.id IS NOT NULL
+		       AND evaluation.principal_kind = 'agent'
+		       AND evaluation.principal_id = a.assigned_agent_id
+		       AND evaluation.purpose = m.purpose
+		       AND evaluation.policy_version = m.policy_version
+		       AND evaluation.status = 'active'
+		       AND evaluation.evaluation_private = true)
+		    )
+		)
+	`, workspaceID, sessionID, attemptID).Scan(&authorized)
+	if err != nil {
+		return fmt.Errorf("verify attempt manifest read grant: %w", err)
+	}
+	if !authorized {
+		return fmt.Errorf("%w: attempt manifest grant no longer authorizes task context", ErrInvalidTransition)
+	}
+	return nil
 }
 
 func loadAttemptManifestSummaryPool(

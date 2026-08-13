@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import enResearch from "../../locales/en/research.json";
 
@@ -594,23 +594,53 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     expect(pendingParams.getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("creation failure shows an inline error row with retry and keeps the draft", () => {
+  it("creation failure retries the exact validated request without losing focus or draft", () => {
     const reset = vi.fn();
+    const mutate = vi.fn();
     mutationRef.current = {
-      mutate: vi.fn(),
+      mutate,
       isPending: false,
-      isError: true,
-      error: new Error("network down"),
+      isError: false,
+      error: null,
       reset,
     };
-    render(<ResearchListPage />);
+    const { rerender } = render(<ResearchListPage />);
     const textarea = screen.getByPlaceholderText(enResearch.goal_placeholder) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "Vector DB comparison" } });
+    fireEvent.click(screen.getByTestId("research-create-submit"));
+    expect(mutate).toHaveBeenCalledTimes(1);
+
+    mutationRef.current = {
+      ...mutationRef.current,
+      isError: true,
+      error: new Error("network down"),
+    };
+    rerender(<ResearchListPage />);
     expect(textarea.value).toBe("Vector DB comparison");
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(screen.getByText("network down")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: enResearch.list.retry }));
+    const retry = screen.getByRole("button", { name: enResearch.list.retry });
+    retry.focus();
+    fireEvent.click(retry);
     expect(reset).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledTimes(2);
+    expect(mutate.mock.calls[1]?.[0]).toEqual(mutate.mock.calls[0]?.[0]);
+
+    const retrying = screen.getByRole("button", {
+      name: enResearch.connectivity.retrying,
+    }) as HTMLButtonElement;
+    expect(retrying.disabled).toBe(false);
+    expect(retrying).toHaveAttribute("aria-disabled", "true");
+    expect(document.activeElement).toBe(retrying);
+    fireEvent.click(retrying);
+    expect(mutate).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      const options = mutate.mock.calls[1]?.[1] as
+        | { onSettled?: () => void }
+        | undefined;
+      options?.onSettled?.();
+    });
   });
 });
 

@@ -111,6 +111,7 @@ export function ResearchListPage() {
     () => readResearchListPersist()?.status ?? null,
   );
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+  const [createRetrying, setCreateRetrying] = useState(false);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
@@ -122,6 +123,10 @@ export function ResearchListPage() {
   const pendingFocusSessionId = useRef<string | null>(
     readResearchListPersist()?.sessionId ?? null,
   );
+  const lastCreateParamsRef = useRef<ReturnType<typeof normalizeCreateParams> | null>(
+    null,
+  );
+  const lastCreateErrorRef = useRef<string | null>(null);
 
   const {
     goal,
@@ -220,6 +225,7 @@ export function ResearchListPage() {
       nav.push(paths.researchDetail(res.session.id));
     },
   });
+  const createBusy = create.isPending || createRetrying;
 
   const sessions = data?.sessions ?? [];
   const filterActive = isSessionListFilterActive(titleQuery, statusFilter);
@@ -367,7 +373,7 @@ export function ResearchListPage() {
   };
 
   const submitCreate = () => {
-    if (create.isPending) return;
+    if (createBusy) return;
     const language = i18n?.language;
     const result = validateCreateComposer({
       goal,
@@ -393,6 +399,7 @@ export function ResearchListPage() {
       fieldErrors: null,
       params: result.params,
     }));
+    lastCreateParamsRef.current = result.params;
     create.mutate(result.params);
   };
 
@@ -403,17 +410,30 @@ export function ResearchListPage() {
       : create.isError
         ? t(($) => $.home.create_failed)
         : null;
+  if (createError) lastCreateErrorRef.current = createError;
+  const visibleCreateError =
+    createError ?? (createRetrying ? lastCreateErrorRef.current : null);
 
   const retryCreate = () => {
+    if (createBusy) return;
+    const params = lastCreateParamsRef.current;
+    if (!params) {
+      create.reset();
+      focusComposer();
+      return;
+    }
+    setCreateRetrying(true);
     create.reset();
-    focusComposer();
+    create.mutate(params, {
+      onSettled: () => setCreateRetrying(false),
+    });
   };
 
   // Scroll the composer into view once the error banner mounts so the retry is visible.
   useEffect(() => {
-    if (!createError) return;
+    if (!visibleCreateError) return;
     composerCardRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [createError]);
+  }, [visibleCreateError]);
 
   const filterScopeParts: string[] = [];
   if (titleQuery.trim()) {
@@ -616,7 +636,7 @@ export function ResearchListPage() {
                         templatePrompt: next,
                       }))
                     }
-                    disabled={create.isPending}
+                    disabled={createBusy}
                   />
                 ) : null}
                 {fieldErrors?.goal ? (
@@ -641,15 +661,15 @@ export function ResearchListPage() {
                       type="button"
                       variant="outline"
                       // LRM-1236 — pending must stay focusable (same root cause as LRM-1213).
-                      aria-disabled={create.isPending || undefined}
+                      aria-disabled={createBusy || undefined}
                       onClick={() => {
-                        if (create.isPending) return;
+                        if (createBusy) return;
                         setComposer((prev) => ({ ...prev, paramsOpen: true }));
                       }}
                       className={cn(
                         "h-10 w-full shrink-0 rounded-full px-3.5 text-sm font-medium md:h-9 md:w-auto",
                         HERO_CTA_SECONDARY_CLASS,
-                        create.isPending && "opacity-50 cursor-not-allowed",
+                        createBusy && "opacity-50 cursor-not-allowed",
                       )}
                       data-testid="research-create-params-open"
                       aria-label={t(($) => $.create_params.open_aria)}
@@ -660,15 +680,15 @@ export function ResearchListPage() {
                     <Button
                       onClick={submitCreate}
                       // LRM-1236 — keep the activated CTA in tab order while mutate is pending.
-                      aria-disabled={create.isPending || undefined}
+                      aria-disabled={createBusy || undefined}
                       data-testid="research-create-submit"
                       className={cn(
                         "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground md:h-9 md:w-auto",
                         HERO_CTA_PRIMARY_CLASS,
-                        create.isPending && "opacity-50 cursor-not-allowed",
+                        createBusy && "opacity-50 cursor-not-allowed",
                       )}
                     >
-                      {create.isPending ? (
+                      {createBusy ? (
                         <>
                           <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
                           {t(($) => $.home.creating)}
@@ -708,17 +728,27 @@ export function ResearchListPage() {
                 }
               />
 
-              {createError ? (
+              {visibleCreateError ? (
                 <div
                   role="alert"
                   className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/9 px-3 py-2"
                 >
                   <div className="flex min-w-0 items-center gap-2 text-sm text-destructive">
                     <AlertCircle className="size-4 shrink-0" aria-hidden />
-                    <span className="truncate">{createError}</span>
+                    <span className="truncate">{visibleCreateError}</span>
                   </div>
-                  <Button variant="outline" size="sm" onClick={retryCreate}>
-                    {t(($) => $.list.retry)}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-disabled={createRetrying || undefined}
+                    aria-busy={createRetrying || undefined}
+                    className={createRetrying ? "cursor-not-allowed opacity-50" : undefined}
+                    onClick={retryCreate}
+                  >
+                    {t(($) =>
+                      createRetrying ? $.connectivity.retrying : $.list.retry,
+                    )}
                   </Button>
                 </div>
               ) : null}

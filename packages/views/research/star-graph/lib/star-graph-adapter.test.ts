@@ -109,10 +109,10 @@ describe("toStarGraphNodeView — full view", () => {
     expect(v.headerLabel).toBeUndefined();
   });
 
-  it("emits an accessible header label for non-S tiers", () => {
+  it("leaves localized tier headers to the rendering boundary", () => {
     const v = toStarGraphNodeView(node({ node_kind: "claim", importance: 3 }));
     expect(v.tier).toBe("xl");
-    expect(v.headerLabel).toBe("稳定结论");
+    expect(v.headerLabel).toBeUndefined();
   });
 
   it("shows a projection summary on result tiers without inventing one", () => {

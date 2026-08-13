@@ -1013,6 +1013,57 @@
       "hidden_count": "{{count}} hidden by filter"
     },
     "new_frontier_label": "NEW FRONTIERS",
+    "star_graph": {
+      "canvas_label": "Research constellation canvas",
+      "tier_headers": {
+        "xxl": "MASTER SYNTHESIS",
+        "xl": "STABLE RESULT",
+        "l": "IMPORTANT RESULT",
+        "m": "INTERMEDIATE RESULT"
+      },
+      "metrics": {
+        "documents": "{{count}} documents",
+        "confidence": "Confidence {{value}}%",
+        "conclusions": "{{count}} conclusions",
+        "document_badge": "DOC · {{count}}"
+      },
+      "zoom": {
+        "out": "Zoom out",
+        "in": "Zoom in",
+        "fit": "Fit to content"
+      },
+      "map_key": {
+        "aria_label": "Constellation map key",
+        "title": "Map key",
+        "agent_tier": "Agent",
+        "help": "Reopen constellation guide",
+        "tiers": {
+          "xxl": "Final synthesis with the broadest scope and strongest visual emphasis.",
+          "xl": "Stable fused result with supporting evidence and conclusions.",
+          "l": "Important result with its available round and metrics.",
+          "m": "Intermediate result or scoped research direction.",
+          "s": "Agent work node showing its current execution state."
+        },
+        "relations": {
+          "decompose": {
+            "label": "Decompose",
+            "description": "A goal or direction splits into child directions or tasks."
+          },
+          "support": {
+            "label": "Support",
+            "description": "A result supports another result or conclusion."
+          },
+          "challenge": {
+            "label": "Challenge",
+            "description": "A result challenges or contradicts another conclusion."
+          },
+          "newdir": {
+            "label": "New direction",
+            "description": "A new exploration direction branches from existing work."
+          }
+        }
+      }
+    },
     "canvas": {
       "loading": "Loading constellation…",
       "error": "Could not load the typed research graph.",

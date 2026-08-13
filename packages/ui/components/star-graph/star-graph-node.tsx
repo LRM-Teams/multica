@@ -49,6 +49,13 @@ export interface StarGraphNodeProps {
   agentBadge?: string;
   /** Live metrics for XL/XXL/L. */
   metrics?: StarGraphNodeMetrics;
+  /** Fully formatted localized metric strings supplied by the product layer. */
+  metricText?: {
+    documentCount?: string;
+    confidence?: string;
+    conclusionCount?: string;
+    documentBadge?: string;
+  };
   /** Override the computed accessible name (D5 keyboard/SR contract). */
   accessibleName?: string;
   /** Explicitly busy (spinner/pulse). */
@@ -71,6 +78,7 @@ export function StarGraphNode({
   headerLabel,
   agentBadge,
   metrics,
+  metricText,
   busy,
   accessibleName,
   style,
@@ -98,7 +106,7 @@ export function StarGraphNode({
   const showDocumentBadge =
     (token.tier === "xxl" || token.tier === "xl" || token.tier === "l") &&
     documentCount != null;
-  const metricSummary = metricsText(metrics, showDocumentBadge);
+  const metricSummary = metricsSummaryText(metrics, metricText, showDocumentBadge);
 
   return (
     <button
@@ -165,7 +173,7 @@ export function StarGraphNode({
       </span>
       {showDocumentBadge && (
         <span data-testid="star-graph-document-badge" className="sg-document-badge">
-          DOC · {documentCount}
+          {metricText?.documentBadge ?? `DOC · ${documentCount}`}
         </span>
       )}
       {stateToken.glyph !== "none" && (
@@ -209,18 +217,23 @@ function SNodeContent({
   );
 }
 
-function metricsText(
+function metricsSummaryText(
   metrics: StarGraphNodeMetrics | undefined,
+  localized: StarGraphNodeProps["metricText"],
   omitDocumentCount = false,
 ): string {
   if (!metrics) return "";
   const parts: string[] = [];
   if (metrics.round) parts.push(`R${metrics.round}`);
   if (!omitDocumentCount && metrics.documentCount != null) {
-    parts.push(`${metrics.documentCount} 文档`);
+    parts.push(localized?.documentCount ?? `DOC · ${metrics.documentCount}`);
   }
-  if (metrics.confidence != null) parts.push(`置信 ${metrics.confidence}%`);
-  if (metrics.conclusionCount != null) parts.push(`${metrics.conclusionCount} 结论`);
+  if (metrics.confidence != null) {
+    parts.push(localized?.confidence ?? `${metrics.confidence}%`);
+  }
+  if (metrics.conclusionCount != null) {
+    parts.push(localized?.conclusionCount ?? `Σ · ${metrics.conclusionCount}`);
+  }
   return parts.join(" · ");
 }
 

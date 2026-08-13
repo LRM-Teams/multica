@@ -166,6 +166,54 @@ func TestReminderCacheReplaysUnackedServerReceiptOnlyOnReconnect(t *testing.T) {
 	}
 }
 
+func TestReminderFireResultAcknowledgesOnlyItsAttemptedOccurrence(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	cache := newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	cache.onFireDelivery = func(protocol.ReminderTimerJob) bool { return true }
+
+	first := reminderJob("recurring", "owner-a", 1, now.Add(-2*time.Minute))
+	first.LocalInput = &protocol.ReminderLocalInputPayload{Title: "first due"}
+	if !cache.upsert(first) {
+		t.Fatal("first occurrence upsert rejected")
+	}
+	clock.fire(len(clock.timers) - 1)
+
+	second := reminderJob("recurring", "owner-a", 2, now.Add(-time.Minute))
+	second.LocalInput = &protocol.ReminderLocalInputPayload{Title: "second due"}
+	if !cache.upsert(second) {
+		t.Fatal("second occurrence upsert rejected")
+	}
+	clock.fire(len(clock.timers) - 1)
+	if got := cache.pendingFireReceipts(); len(got) != 2 {
+		t.Fatalf("pending recurring receipts before ACK = %+v, want two", got)
+	}
+
+	writes := make(chan []byte, 1)
+	d := &Daemon{
+		reminderCache:  cache,
+		reminderWrites: writes,
+		reminderWSDone: make(chan struct{}),
+		runtimeIndex:   map[string]Runtime{"test": {ID: "test"}},
+	}
+	third := reminderJob("recurring", "owner-a", 3, now.Add(time.Hour))
+	if err := d.handleReminderFireResult(protocol.ReminderFireResultPayload{
+		Ack: protocol.ReminderFireAckPayload{
+			AgentID:    first.OwnerAgentID,
+			ReminderID: first.ReminderID,
+			Version:    first.Version,
+		},
+		Projection: reminderProjection(3, "test", "upsert", third, false),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	receipts := cache.pendingFireReceipts()
+	if len(receipts) != 1 || receipts[0].Job.Version != second.Version || !receipts[0].WakeEnqueued || receipts[0].ServerAcked {
+		t.Fatalf("pending recurring receipts after exact ACK = %+v, want only unacked version 2", receipts)
+	}
+}
+
 func TestReminderCacheSnapshotKeepsInFlightReceipt(t *testing.T) {
 	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
 	clock := &fakeReminderClock{now: now}

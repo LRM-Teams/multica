@@ -68,7 +68,7 @@ func seedDueReminder(t *testing.T, agentID, channelID, messageID, cadence, timez
 	return reminderID
 }
 
-func fireReminderAttempt(h *Handler, reminderID string) error {
+func fireReminderAttemptResult(h *Handler, reminderID string) (*protocol.ReminderFireResultPayload, protocol.ReminderFireAttemptPayload, error) {
 	var agentID, workspaceID, runtimeID string
 	var version, placementGeneration int64
 	if err := testPool.QueryRow(context.Background(), `
@@ -76,22 +76,28 @@ func fireReminderAttempt(h *Handler, reminderID string) error {
 		FROM agent_reminder reminder
 		JOIN agent ON agent.id = reminder.agent_id
 		WHERE reminder.id = $1`, reminderID).Scan(&agentID, &workspaceID, &runtimeID, &version); err != nil {
-		return err
+		return nil, protocol.ReminderFireAttemptPayload{}, err
 	}
 	if err := testPool.QueryRow(context.Background(), `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&placementGeneration); err != nil {
-		return err
+		return nil, protocol.ReminderFireAttemptPayload{}, err
 	}
-	_, err := h.HandleDaemonReminderFireAttempt(context.Background(), daemonws.ClientIdentity{
-		WorkspaceID: workspaceID,
-		RuntimeIDs:  []string{runtimeID},
-	}, protocol.ReminderFireAttemptPayload{
+	payload := protocol.ReminderFireAttemptPayload{
 		AgentID:             agentID,
 		RuntimeID:           runtimeID,
 		PlacementGeneration: placementGeneration,
 		ReminderID:          reminderID,
 		Version:             version,
 		FiredAtClient:       time.Now().UTC().Format(time.RFC3339Nano),
-	})
+	}
+	result, err := h.HandleDaemonReminderFireAttempt(context.Background(), daemonws.ClientIdentity{
+		WorkspaceID: workspaceID,
+		RuntimeIDs:  []string{runtimeID},
+	}, payload)
+	return result, payload, err
+}
+
+func fireReminderAttempt(h *Handler, reminderID string) error {
+	_, _, err := fireReminderAttemptResult(h, reminderID)
 	return err
 }
 
@@ -1387,8 +1393,15 @@ func TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot(t *testing.T) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_reminder SET fire_at = now() - interval '5 seconds' WHERE id = $1`, reminderID); err != nil {
 		t.Fatal(err)
 	}
-	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+	result, attempt, err := fireReminderAttemptResult(fixture.handler, reminderID)
+	if err != nil {
 		t.Fatalf("fire recurring reminder: %v", err)
+	}
+	if result == nil || result.Ack.AgentID != attempt.AgentID || result.Ack.ReminderID != attempt.ReminderID || result.Ack.Version != attempt.Version {
+		t.Fatalf("recurring fire ACK=%+v, want exact attempted owner/reminder/version %+v", result, attempt)
+	}
+	if result.Projection.Version != attempt.Version+1 || result.Projection.EventType != "upsert" {
+		t.Fatalf("recurring canonical projection=%+v, want next-version upsert independent of ACK identity", result.Projection)
 	}
 	var status string
 	var nextFire, nextCadence time.Time

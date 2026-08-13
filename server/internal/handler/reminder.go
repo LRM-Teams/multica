@@ -1524,6 +1524,17 @@ func (h *Handler) enqueueReminderFireResultTx(ctx context.Context, tx pgx.Tx, ru
 	return scanReminderProjection(tx.QueryRow(ctx, `SELECT `+reminderProjectionSelectColumns()+` FROM agent_reminder_daemon_projection_event WHERE seq = $1`, seq))
 }
 
+func reminderFireResult(payload protocol.ReminderFireAttemptPayload, projection protocol.ReminderProjectionEvent) *protocol.ReminderFireResultPayload {
+	return &protocol.ReminderFireResultPayload{
+		Ack: protocol.ReminderFireAckPayload{
+			AgentID:    payload.AgentID,
+			ReminderID: payload.ReminderID,
+			Version:    payload.Version,
+		},
+		Projection: projection,
+	}
+}
+
 func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error) {
 	agentID, err := util.ParseUUID(strings.TrimSpace(payload.AgentID))
 	if err != nil || !agentID.Valid {
@@ -1601,7 +1612,7 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 			if err := tx.Commit(ctx); err != nil {
 				return nil, err
 			}
-			return &protocol.ReminderFireResultPayload{Projection: event}, nil
+			return reminderFireResult(payload, event), nil
 		}
 		return nil, err
 	}
@@ -1617,7 +1628,7 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
-		return &protocol.ReminderFireResultPayload{Projection: event}, nil
+		return reminderFireResult(payload, event), nil
 	}
 	cadenceSlot := reminder.FireAt
 	if reminder.CadenceNextAt.Valid {
@@ -1641,7 +1652,7 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
-		return &protocol.ReminderFireResultPayload{Projection: event}, nil
+		return reminderFireResult(payload, event), nil
 	}
 	if err != nil {
 		return nil, err
@@ -1679,7 +1690,7 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 			return nil, err
 		}
 	}
-	return &protocol.ReminderFireResultPayload{Projection: event}, nil
+	return reminderFireResult(payload, event), nil
 }
 
 func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID, runtimeID pgtype.UUID, placementGeneration, fireVersion int64, buildLegacyOwnerInput bool) (*reminderFireCommit, error) {

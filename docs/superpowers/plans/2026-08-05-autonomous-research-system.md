@@ -1017,6 +1017,7 @@ surface 矩阵仍未完成。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
+  - [x] F4a-ingestion：`source_ingestion.go` 冻结五类摄入意图（screened retrieval、Agent direct evidence、user attachment、workspace artifact、API dataset）及确定性审计指纹。检索摄入必须绑定完整 Search Plan → Query Execution → Source Candidate → accepted Screening Decision 谱系；所有非检索类型禁止伪造任何 Search/Screening 标识，URL 凭据、非法哈希和未来采集时间 fail closed。该切片只完成接纳前合同；持久化 ingestion kind、数据库约束和 Result materialization 接线仍待后续切片，不能据此宣称 Source Snapshot 写入链已经闭合。
 
 退出条件：报告中的每个来源可反向追到查询和筛选；重复镜像不能冒充独立支持；失败查询可被定向改写。
 

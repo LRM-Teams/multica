@@ -145,6 +145,10 @@ func ReciprocalArtifactPassportGuardTriggerNames() []string {
 		"research_run_event_artifact_passport_guard",
 		"research_graph_node_artifact_passport_guard",
 		"research_graph_edge_artifact_passport_guard",
+		"research_hypothesis_artifact_passport_guard",
+		"research_branch_artifact_passport_guard",
+		"research_insight_artifact_passport_guard",
+		"research_inquiry_edge_artifact_passport_guard",
 	}
 }
 

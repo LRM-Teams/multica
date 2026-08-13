@@ -322,18 +322,18 @@
   right: auto;
   width: auto;
 }
-.research-agent-inspector .agent-head {
+.research-agent-inspector-content .agent-head {
   position: relative;
   padding: 15px;
   border-bottom: 1px solid var(--border);
   background: linear-gradient(135deg, var(--accent), var(--secondary));
 }
-.research-agent-inspector .who {
+.research-agent-inspector-content .who {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.research-agent-inspector .agent-big-avatar {
+.research-agent-inspector-content .agent-big-avatar {
   width: 42px;
   height: 42px;
   display: grid;
@@ -344,7 +344,7 @@
   color: var(--secondary-foreground);
   font-weight: 900;
 }
-.research-agent-inspector .agent-close {
+.research-agent-inspector-content .agent-close {
   position: absolute;
   right: 11px;
   top: 11px;
@@ -353,38 +353,38 @@
   color: var(--muted-foreground);
   cursor: pointer;
 }
-.research-agent-inspector .agent-body {
+.research-agent-inspector-content .agent-body {
   padding: 14px;
 }
-.research-agent-inspector .agent-objective {
+.research-agent-inspector-content .agent-objective {
   padding: 11px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--secondary);
 }
-.research-agent-inspector .agent-objective small {
+.research-agent-inspector-content .agent-objective small {
   display: block;
   color: var(--muted-foreground);
   font-size: 8px;
   font-weight: 800;
   margin-bottom: 4px;
 }
-.research-agent-inspector .work-block h4 {
+.research-agent-inspector-content .work-block h4 {
   margin: 14px 0 7px;
   color: var(--muted-foreground);
   font-size: 8px;
   font-weight: 800;
   letter-spacing: 0.1em;
 }
-.research-agent-inspector .work-item {
+.research-agent-inspector-content .work-item {
   padding: 7px 7px 7px 20px;
   border-bottom: 1px solid var(--border);
   color: color-mix(in oklab, var(--foreground) 78%, var(--muted-foreground));
   font-size: 9px;
   line-height: 1.4;
 }
-.research-agent-inspector .work-item.done::before,
-.research-agent-inspector .work-item.live::before {
+.research-agent-inspector-content .work-item.done::before,
+.research-agent-inspector-content .work-item.live::before {
   content: "";
   position: absolute;
   left: 4px;
@@ -393,16 +393,16 @@
   height: 7px;
   border-radius: 50%;
 }
-.research-agent-inspector .work-item {
+.research-agent-inspector-content .work-item {
   position: relative;
 }
-.research-agent-inspector .work-item.done::before {
+.research-agent-inspector-content .work-item.done::before {
   background: var(--success);
 }
-.research-agent-inspector .work-item.live::before {
+.research-agent-inspector-content .work-item.live::before {
   background: var(--primary);
 }
-.research-agent-inspector .agent-foot {
+.research-agent-inspector-content .agent-foot {
   display: flex;
   gap: 6px;
   padding: 11px 14px;

@@ -426,7 +426,7 @@ func TestDispatchFailsWhenArtifactVersionContentHashChanges(t *testing.T) {
 	`, fixture.workspaceID, run.SessionID, claimID, mutatedHash)
 	err = casArtifactVersionRepresentationTx(
 		ctx, tx, fixture.workspaceID, run.SessionID, entry.VersionRowID,
-		entry.ContentHash, entry.RepresentationHash,
+		entry.ContentHash, entry.RepresentationBytes, entry.RepresentationHash,
 	)
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("representation CAS err=%v want ErrInvalidTransition", err)

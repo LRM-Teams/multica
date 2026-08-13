@@ -27,7 +27,7 @@ var chapterD15Coverage = map[int]string{
 	10: "covered", // structural subject isolation + real subject/grader frozen-manifest dispatch
 	11: "partial", // dispatch race: eligibility/state/hash/lifecycle after rolled-back intent
 	12: "partial", // dispatch normalized locks + concurrent shared-candidate test
-	13: "partial", // eligibility + representation CAS
+	13: "covered", // eligibility and representation CAS abort complete dispatch writes
 	14: "covered", // replay/prompt/outbox binding tests
 	15: "partial", // dispatch transaction recovery matrix
 	16: "covered", // historical live vs frozen manifest tests

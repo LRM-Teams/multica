@@ -55,8 +55,13 @@ func casArtifactVersionRepresentationTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, versionRowID string,
-	contentHash, representationHash string,
+	contentHash string,
+	representationBytes []byte,
+	representationHash string,
 ) error {
+	if contentHashFromPayload(representationBytes) != representationHash {
+		return fmt.Errorf("%w: artifact representation bytes/hash CAS failed", ErrInvalidTransition)
+	}
 	var matched bool
 	err := tx.QueryRow(ctx, `
 		SELECT true
@@ -72,7 +77,6 @@ func casArtifactVersionRepresentationTx(
 	if err != nil {
 		return err
 	}
-	_ = representationHash
 	return nil
 }
 

@@ -335,6 +335,13 @@ Workspace Agent. Preparing a proposal does not create the Agent; an authorized
 human must commit it exactly once.
 _Avoid_: Agent creation draft, autonomous hire, executable suggestion
 
+### Resident Agent Process
+
+The currently running provider process for one Agent on one runtime. While it
+is alive, later configuration changes do not replace it. A new process starts
+only after an explicit Agent Restart Mode or after the process has died.
+_Avoid_: fingerprint restart, implicit stop+start, hash-based recycle, one-shot slot
+
 ## Research
 
 ### Research Session

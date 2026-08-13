@@ -156,17 +156,14 @@ func TestAgentLifecycleExecutorResetSessionKillsBeforeClearingServerState(t *tes
 		RuntimeID:   runtimeID,
 		Provider:    "pi",
 		Executable:  "/usr/local/bin/pi",
-		Model:       "model-a",
 		WorkDir:     "/var/lib/multica/agent-a/workspace",
 		Environment: stable,
-		WorkspaceID: "workspace-a",
 	})
 	if err != nil {
 		t.Fatalf("newCanonicalAgentRuntimeIdentity: %v", err)
 	}
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identity,
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 	})
 	if err != nil {

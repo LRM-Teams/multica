@@ -162,7 +162,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		runner.inboxes.Close()
 	})
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: fakeRuntime,
+		backend: fakeRuntime,
 	}
 	if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
@@ -570,7 +570,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		}
 		d.attachWorkspaceRunner(runner)
 		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
-			mode: canonicalRuntimeResident, backend: normal,
+			backend: normal,
 		}
 		if _, err := d.ensureIdleMessageCoordinator(workspaceID, agentID, runtimeID); err != nil {
 			t.Fatalf("ensureIdleMessageCoordinator: %v", err)

@@ -135,7 +135,6 @@ func (fx *raftRestartFixture) acquireBusy(t *testing.T) {
 	}
 	lease, err := fx.pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
-		Mode:               canonicalRuntimeResident,
 		CanonicalSessionID: fx.sessionID,
 		Factory:            fx.probe.factory,
 	})
@@ -295,7 +294,6 @@ func TestProductionStartAppliesComposerSessionToAcquire(t *testing.T) {
 			}
 			lease, err := fx.pool.acquire(canonicalAgentRuntimeAcquireRequest{
 				Identity: identity,
-				Mode:     canonicalRuntimeResident,
 				Factory:  fx.probe.factory,
 			})
 			if err != nil {

@@ -3729,10 +3729,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, fmt.Errorf("create task execution root: %w", err)
 	}
 	codexVersion := d.agentVersion("codex")
-	openclawBin := ""
-	if provider == "openclaw" {
-		openclawBin = entry.Path
-	}
 	var agentMcpConfig json.RawMessage
 	if task.Agent != nil {
 		agentMcpConfig = task.Agent.McpConfig
@@ -3741,7 +3737,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentRoot:    executionRoot,
 		Provider:     provider,
 		CodexVersion: codexVersion,
-		OpenclawBin:  openclawBin,
 		McpConfig:    agentMcpConfig,
 		Task:         taskCtx,
 	}, d.logger)
@@ -3964,22 +3959,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
 	}
-	// Point OpenClaw at the Agent-scoped synthesized config. The config pins
-	// agents.defaults.workspace (and any agents.list[].workspace) to the
-	// Agent workspace, so the CLI's native skill scanner picks up Agent skills
-	// skills written under {workDir}/skills/. Falls back silently when the
-	// preparer didn't run (non-openclaw provider, or write failure).
-	if env.OpenclawConfigPath != "" {
-		agentEnv["OPENCLAW_CONFIG_PATH"] = env.OpenclawConfigPath
-	}
-	// Grant the wrapper config permission to $include the user's active
-	// config across directories. OpenClaw's $include defaults to confining
-	// resolution to the wrapper's own directory; without this, the
-	// wrapper-out-of-envRoot $include into ~/.openclaw/openclaw.json is
-	// rejected and the run boots with no user-registered agents.
-	if rootsValue, ok := composeOpenclawIncludeRoots(env.OpenclawIncludeRoot, os.Getenv("OPENCLAW_INCLUDE_ROOTS")); ok {
-		agentEnv["OPENCLAW_INCLUDE_ROOTS"] = rootsValue
-	}
 	// Inject user-configured custom_env (agent-scoped) plus claim-time
 	// scoped_secrets after channel/project filtering (LRM-953). Channel A
 	// secrets must not enter channel B; project secrets require a bound
@@ -4091,19 +4070,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		EphemeralSession:          restrictedExecution,
 		MaxOutputTokens:           restrictedMaxOutputTokens,
 	}
-	// Some providers do not reliably load the Agent-scoped runtime config files we
-	// write into the Agent workspace:
-	//   - kiro and kimi are wrapped through their own CLIs whose cwd handling
-	//     is opaque enough that we can't trust the file-based path either.
-	// OpenClaw is pinned to the Agent workspace by prepareOpenclawConfig and
-	// loads AGENTS.md there, so inlining the same kernel would duplicate it.
-	// Pass the compact runtime kernel inline only for providers whose file load
-	// path is still opaque. Turn-specific workflow remains in the user prompt.
-	//
-	// Hermes is intentionally excluded: ACP sessions start in the task cwd and
-	// Hermes loads AGENTS.md / .agent_context itself. Prepending the full runtime
-	// brief into the ACP user prompt duplicates that context, bloats every turn,
-	// and has triggered upstream safety filters on harmless tasks.
+	// Kiro's CLI cwd handling is opaque enough that we can't trust the
+	// file-based runtime config path. Pass the compact runtime kernel inline
+	// so it still sees workflow / identity / skills. Turn-specific workflow
+	// remains in the user prompt.
 	if restrictedExecution || providerNeedsInlineSystemPrompt(provider) {
 		execOpts.SystemPrompt = runtimeBrief
 	}
@@ -5172,40 +5142,6 @@ func mergeSkillsForEnv(primary, secondary []SkillData) []SkillData {
 	return merged
 }
 
-// composeOpenclawIncludeRoots returns the value the daemon should set for
-// OPENCLAW_INCLUDE_ROOTS on the child openclaw process so its `$include`
-// loader will follow the wrapper's reference out of envRoot into the
-// user's active config directory.
-//
-// addRoot is the directory we must grant (typically dirname of the user's
-// active openclaw.json). userValue is whatever the daemon's own
-// environment already has under OPENCLAW_INCLUDE_ROOTS — the user's own
-// cross-directory layout. We prepend addRoot, dedupe by string equality,
-// drop empty path segments, and return ok=false when there's nothing to
-// grant (addRoot is empty — fresh install case), so callers can leave the
-// env var alone in that case.
-//
-// Path separator is the OS-native list separator (`:` on Unix, `;` on
-// Windows) to match how OpenClaw splits the env var.
-func composeOpenclawIncludeRoots(addRoot, userValue string) (string, bool) {
-	if addRoot == "" {
-		return "", false
-	}
-	parts := []string{addRoot}
-	seen := map[string]struct{}{addRoot: {}}
-	for _, p := range strings.Split(userValue, string(os.PathListSeparator)) {
-		if p == "" {
-			continue
-		}
-		if _, dup := seen[p]; dup {
-			continue
-		}
-		seen[p] = struct{}{}
-		parts = append(parts, p)
-	}
-	return strings.Join(parts, string(os.PathListSeparator)), true
-}
-
 func resolvedTaskAgentID(task Task) string {
 	if task.Agent != nil && task.Agent.ID != "" {
 		return task.Agent.ID
@@ -5376,8 +5312,6 @@ func defaultArgsForProvider(cfg Config, provider string) []string {
 		args = cfg.ClaudeArgs
 	case "codex":
 		args = cfg.CodexArgs
-	case "codebuddy":
-		args = cfg.CodebuddyArgs
 	default:
 		return nil
 	}

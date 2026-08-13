@@ -7,7 +7,7 @@
 Give this instruction to your AI agent:
 
 ```
-Fetch https://cdn.leagent.me/computer/CLI_INSTALL.md and follow the instructions to install Multica CLI, connect one Workspace, and start the Computer on this machine.
+Fetch https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/CLI_INSTALL.md and follow the instructions to install Multica CLI, log in, and start the daemon on this machine.
 ```
 
 ---
@@ -37,29 +37,8 @@ printf 'Multica path: %s\n' "${CLI_PATH:-not installed}"
 Run:
 
 ```bash
-curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
+curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
 ```
-
-The default version selector is `latest` (the production recommendation). Use
-the same `--version` option for the release recommended by test or an exact
-immutable release:
-
-```bash
-curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version test
-curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --version vX.Y.Z-alpha.N
-```
-
-`latest` and `test` select `production` and `test` from the single mutable
-`metainfo.json`. An exact tag reads that version's immutable manifest and fails if the
-manifest tag differs. Automation may set `MULTICA_VERSION` to the same values
-instead of passing the option. Test web deployments show an exact version in
-their copy-ready command so the Computer package is locked to that deployment.
-There are no root channel files. A missing or malformed `metainfo.json` is a
-release-feed failure; clients do not fall back to another mutable pointer.
-
-The installer writes the verified binary to `$HOME/.local/bin/multica`.
-`multica computer upgrade` replaces that same file and keeps a `.prev`
-sibling for rollback. The Computer process is that PATH binary.
 
 Then verify:
 
@@ -85,12 +64,11 @@ if [ "$ARCH" = "x86_64" ]; then
 fi
 PLATFORM="${OS}-${ARCH}"
 
-# Fetch production from the canonical environment metainfo
-curl -fsSL https://cdn.leagent.me/computer/metainfo.json -o /tmp/multica-metainfo.json
-jq '.environments.production' /tmp/multica-metainfo.json >/tmp/multica-manifest.json
-LATEST=$(jq -r '.tag' /tmp/multica-manifest.json)
-URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/multica-manifest.json)
-SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/multica-manifest.json)
+# Fetch the release manifest
+curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/latest.json -o /tmp/latest.json
+LATEST=$(jq -r '.tag' /tmp/latest.json)
+URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/latest.json)
+SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/latest.json)
 
 # Download, verify, and extract
 curl -sL "$URL" -o /tmp/multica.tar.gz
@@ -101,13 +79,9 @@ if [ "$ACTUAL_SHA256" != "$SHA256" ]; then
 fi
 tar -xzf /tmp/multica.tar.gz -C /tmp multica
 mkdir -p "$HOME/.local/bin"
-chmod +x /tmp/multica
-BINARY_SHA256=$(shasum -a 256 /tmp/multica 2>/dev/null | awk '{print $1}' || sha256sum /tmp/multica | awk '{print $1}')
-/tmp/multica installer-activate \
-  --version "$LATEST" \
-  --sha256 "$BINARY_SHA256" \
-  --launcher "$HOME/.local/bin/multica"
-rm /tmp/multica /tmp/multica.tar.gz /tmp/multica-manifest.json /tmp/multica-metainfo.json
+mv /tmp/multica "$HOME/.local/bin/multica"
+chmod +x "$HOME/.local/bin/multica"
+rm /tmp/multica.tar.gz /tmp/latest.json
 ```
 
 Make the user-owned directory available in the current shell:
@@ -167,42 +141,37 @@ If `command -v multica` still reports an older system path after installation:
 2. Confirm `$HOME/.local/bin/multica version` succeeds.
 3. Remove the old system binary through the machine owner or administrator's normal software-management process. The Multica installer deliberately does not modify it.
 4. Run `hash -r` (or restart the shell) and confirm `command -v multica` resolves to `$HOME/.local/bin/multica`.
-5. A Computer resident that was already started from the old path keeps that executable.
-   Wait until no Agent task is running, then restart it
-	explicitly through the canonical binary:
+5. A daemon that was already started from the old path keeps that executable.
+   Wait until no agent task is running on the affected profile, then restart it
+   explicitly through the canonical binary:
 
 ```bash
-"$HOME/.local/bin/multica" computer status
-"$HOME/.local/bin/multica" computer restart
-"$HOME/.local/bin/multica" computer status
+"$HOME/.local/bin/multica" daemon status
+"$HOME/.local/bin/multica" daemon restart
+"$HOME/.local/bin/multica" daemon status
 "$HOME/.local/bin/multica" version
 ```
 
-Profiles cannot select a second resident. Do not restart while an Agent task is
-active. Adoption is complete when `computer status` reports the same `Version`
-as the canonical `multica version`.
+For every named profile that was started from the old installation, repeat the
+same adoption gate with the profile before `daemon`:
+
+```bash
+"$HOME/.local/bin/multica" --profile staging daemon restart
+"$HOME/.local/bin/multica" --profile staging daemon status
+```
+
+Do not restart while an agent task is active. Adoption is complete when
+`daemon status` reports the same `Version` as the canonical `multica version`.
 
 ### Option C: Windows (PowerShell)
 
 Run in PowerShell (no admin required):
 
 ```powershell
-irm https://cdn.leagent.me/computer/install.ps1 | iex
+irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | iex
 ```
 
-This downloads the latest Windows binary from the release feed, verifies it,
-and installs it to `%USERPROFILE%\AppData\Local\multica\multica.exe`, then
-adds that directory to your user PATH.
-
-Use the same `-Version` parameter for the release recommended by test or an
-exact immutable release:
-
-```powershell
-& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version test
-& ([scriptblock]::Create((irm https://cdn.leagent.me/computer/install.ps1))) -Version vX.Y.Z-alpha.N
-```
-
-Automation may set `$env:MULTICA_VERSION` to the same values.
+This downloads the latest Windows binary from the release feed, installs it to `%USERPROFILE%\.multica\bin\`, and adds it to your user PATH.
 
 Verify:
 
@@ -216,20 +185,19 @@ multica version
 
 ---
 
-## Step 3: Connect one Workspace
+## Step 3: Log in
 
 Run:
 
 ```bash
-multica setup /<workspace-slug>
+multica login
 ```
 
 **Important:** This command opens a browser window for OAuth authentication. Tell the user:
 
 > "A browser window will open for Multica login. Please complete the authentication in your browser, then come back here."
 
-Wait for the command to complete. It connects exactly the requested Workspace
-and starts the one machine-wide resident detached.
+Wait for the command to complete. It will automatically discover and watch all workspaces the user belongs to.
 
 Verify:
 
@@ -240,50 +208,42 @@ multica auth status
 Expected output should show the authenticated user and server URL.
 
 **If login fails:**
-- On a headless machine, open the printed verification URL on another device
-  and enter the printed device code.
-- Production is fixed to the leagent.me service. For an operator-controlled
-  test service, rerun setup with
-  `--environment test --server-url <api-origin> --app-url <app-origin>`; arbitrary custom production
-  origins are not supported.
+- If no browser is available (headless environment), the user can generate a Personal Access Token at `https://app.multica.ai/settings` and run: `multica login --token <mul_...>` (use `--token=` with an empty value to be prompted interactively).
+- If the server URL needs to be customized: `multica config set server_url <url>` before logging in.
 
 ---
 
-## Step 4: Verify the Computer resident
+## Step 4: Start the daemon
 
-Setup already starts the one detached resident. Check its current truth:
+First, check if the daemon is already running:
 
 ```bash
-multica computer status
+multica daemon status
 ```
 
 - **If status is "running" and this was not a migration from another install
   path**: skip to **Step 5**.
 - **If status is "running" from an older install path**: do not silently skip
-  it. Finish active work, then follow the canonical Computer adoption gate in
+  it. Finish active work, then follow the canonical daemon adoption gate in
   Step 2 before continuing.
 - **If status is "stopped"**: start it:
 
 ```bash
-multica computer start
+multica daemon start
 ```
 
 Wait 3 seconds, then verify:
 
 ```bash
-multica computer status
+multica daemon status
 ```
 
-Expected output shows the stable Computer Identity, selected environment and
-its fixed package source (`stable` for production, `preview` for test), running resident version, and the configured Workspace
-connection. Zero detected AI tools does not make Computer setup fail.
+Expected output should show `running` status with detected agents (e.g. `claude`, `codex`, `opencode`, `pi`, `cursor-agent`, `kiro-cli`, `grok`).
 
-**If the Computer fails to start:**
-- Check logs: `multica computer logs`.
-- Run `multica computer doctor` for process, environment, package source, connection,
-  and migration evidence.
-- A singleton error means the one machine-wide resident is already owned; it
-  never means a second profile should be created.
+**If daemon fails to start:**
+- Check logs: `multica daemon logs`
+- If a port conflict occurs, the daemon may already be running under a different profile.
+- If no agents are detected, ensure at least one AI CLI (`claude`, `codex`, `opencode`, `pi`, `cursor-agent`, `kiro-cli`, or `grok`) is installed and on the `$PATH`.
 
 ---
 
@@ -292,18 +252,17 @@ connection. Zero detected AI tools does not make Computer setup fail.
 Run:
 
 ```bash
-multica computer status
+multica daemon status
 ```
 
 Confirm:
 1. Status is `running`
-2. The configured and resident environment/package source agree
-3. The requested Workspace connection is accepted
+2. At least one agent is listed (e.g. `claude`, `codex`, `opencode`, `pi`, `cursor-agent`, `kiro-cli`, or `grok`)
+3. At least one workspace is being watched
 
-If no AI coding tool is detected, Computer setup is still complete. Tell the
-user separately:
+If the agents list is empty, tell the user:
 
-> "The Multica Computer is connected, but no supported AI coding tool was detected. Install one supported CLI, then run `multica computer restart`."
+> "The Multica daemon is running but no AI agent CLIs were detected. Please install at least one supported CLI (`claude`, `codex`, `opencode`, `pi`, `cursor-agent`, `kiro-cli`, or `grok`), then restart the daemon with `multica daemon stop && multica daemon start`."
 
 ---
 
@@ -311,4 +270,4 @@ user separately:
 
 When all steps are complete, inform the user:
 
-> "Multica CLI is installed and the Computer is connected to the requested Workspace. You can inspect it with `multica computer status` and follow service logs with `multica computer logs -f`."
+> "Multica CLI is installed and the daemon is running. Agents in your workspaces can now execute tasks on this machine. You can manage workspaces with `multica workspace list` and view daemon logs with `multica daemon logs -f`."

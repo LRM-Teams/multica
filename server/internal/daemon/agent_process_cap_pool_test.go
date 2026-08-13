@@ -18,11 +18,8 @@ func identityForAgent(t *testing.T, agentID, runtimeID string) canonicalAgentRun
 		RuntimeID:   runtimeID,
 		Provider:    "pi",
 		Executable:  "/usr/local/bin/pi",
-		Model:       "model-a",
-		Thinking:    "high",
 		WorkDir:     "/tmp/" + agentID,
 		Environment: map[string]string{},
-		WorkspaceID: "ws-a",
 	})
 	if err != nil {
 		t.Fatalf("identity: %v", err)
@@ -37,7 +34,6 @@ func acquireResident(t *testing.T, pool *canonicalAgentRuntimePool, probe *canon
 	}
 	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identityForAgent(t, agentID, runtimeID),
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 		Context:  ctx,
 		Now:      time.Now(),
@@ -152,7 +148,6 @@ func TestAgentProcessCapWaitsWhenAllRunning(t *testing.T) {
 	started := time.Now()
 	_, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: identityForAgent(t, "agent-waiter", "rt"),
-		Mode:     canonicalRuntimeResident,
 		Factory:  probe.factory,
 		Context:  ctx,
 	})
@@ -211,7 +206,6 @@ func TestAgentProcessCapConcurrentDoesNotExceed(t *testing.T) {
 			id = "agent-" + itoa(i)
 			lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 				Identity: identityForAgent(t, id, "rt"),
-				Mode:     canonicalRuntimeResident,
 				Factory:  probe.factory,
 				Context:  context.Background(),
 			})
@@ -265,9 +259,10 @@ func (p *canonicalAgentRuntimePool) agentHasLiveForTest(agentID string) bool {
 // silence unused import if agent not referenced
 var _ agent.Backend
 
-// configDrift closes live backend then create fails → live count drops and
-// capacity is freed so another agent can acquire (Alice #1923 nit).
-func TestAgentProcessCapConfigDriftCreateFailFreesCapacity(t *testing.T) {
+// Explicit invalidate then failed create must free capacity so another
+// agent can acquire (Alice #1923 nit). Live-process reuse must not kill
+// just because the next factory would fail.
+func TestAgentProcessCapInvalidateCreateFailFreesCapacity(t *testing.T) {
 	pool := newCanonicalAgentRuntimePool()
 	pool.setMaxAgentProcesses(1)
 	probe := &canonicalRuntimeFactoryProbe{}
@@ -277,23 +272,24 @@ func TestAgentProcessCapConfigDriftCreateFailFreesCapacity(t *testing.T) {
 	if got := pool.countLiveAgentsForTest(); got != 1 {
 		t.Fatalf("live=%d want 1", got)
 	}
+	if err := pool.invalidateSession("agent-a", "rt"); err != nil {
+		t.Fatalf("invalidateSession: %v", err)
+	}
 
 	failFactory := func(_ agent.Config) (agent.Backend, func(), error) {
 		return nil, nil, errors.New("boom create")
 	}
 	id := identityForAgent(t, "agent-a", "rt")
-	id.Model = "model-drifted"
 	_, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity: id,
-		Mode:     canonicalRuntimeResident,
 		Factory:  failFactory,
 		Context:  context.Background(),
 	})
 	if err == nil {
-		t.Fatal("expected create failure after drift")
+		t.Fatal("expected create failure after invalidate")
 	}
 	if got := pool.countLiveAgentsForTest(); got != 0 {
-		t.Fatalf("after drift-fail live=%d want 0 (capacity must free)", got)
+		t.Fatalf("after invalidate-fail live=%d want 0 (capacity must free)", got)
 	}
 
 	// Cap free: a different agent can acquire immediately.

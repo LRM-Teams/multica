@@ -159,14 +159,14 @@ describe("MachineCodeAgentsSection", () => {
     renderSection(
       makeMachine([
         makeRuntime({
-          provider: "kimi",
+          provider: "kiro",
           metadata: { version: "9.9.9" },
         }),
       ]),
     );
 
-    expect(screen.getByText("kimi")).toBeInTheDocument();
-    expect(screen.getByTestId("provider-logo-kimi")).toBeInTheDocument();
+    expect(screen.getByText("kiro")).toBeInTheDocument();
+    expect(screen.getByTestId("provider-logo-kiro")).toBeInTheDocument();
     expect(screen.getByText("v9.9.9")).toBeInTheDocument();
   });
 

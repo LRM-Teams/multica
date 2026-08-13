@@ -9,8 +9,8 @@ import (
 // a turn/surface role change must not rotate the provider process.
 //
 // ManagedRole is channel-scoped (same agent can be group_manager in A and
-// member in B). It must not live on the process identity or fingerprint.
-func TestBarryCanonicalRuntimeFingerprintExcludesManagedRole(t *testing.T) {
+// member in B). It must not live on the process identity.
+func TestBarryCanonicalRuntimeIdentityExcludesManagedRole(t *testing.T) {
 	// Compile/structural control: field must not exist on the identity type.
 	rt := reflect.TypeOf(canonicalAgentRuntimeIdentity{})
 	if _, ok := rt.FieldByName("ManagedRole"); ok {
@@ -28,19 +28,11 @@ func TestBarryCanonicalRuntimeFingerprintExcludesManagedRole(t *testing.T) {
 		Executable:  "/usr/local/bin/grok",
 		WorkDir:     "/var/lib/multica/agent-a/workspace",
 		Environment: map[string]string{"PATH": "/usr/bin"},
-		WorkspaceID: "workspace-a",
 	}
-	a, err := newCanonicalAgentRuntimeIdentity(base)
-	if err != nil {
+	if _, err := newCanonicalAgentRuntimeIdentity(base); err != nil {
 		t.Fatalf("identity A: %v", err)
 	}
-	// Role only appears on full TaskContextForEnv / prompt path — not here.
-	// Two builds with identical process-stable params must match.
-	b, err := newCanonicalAgentRuntimeIdentity(base)
-	if err != nil {
+	if _, err := newCanonicalAgentRuntimeIdentity(base); err != nil {
 		t.Fatalf("identity B: %v", err)
-	}
-	if gotA, gotB := a.fingerprint(), b.fingerprint(); gotA != gotB {
-		t.Fatalf("fingerprint unstable: a=%s b=%s", gotA, gotB)
 	}
 }

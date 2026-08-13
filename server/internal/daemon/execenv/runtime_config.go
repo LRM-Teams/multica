@@ -15,7 +15,7 @@ import (
 )
 
 // runtimeMarkerBegin and runtimeMarkerEnd delimit the Multica-managed brief
-// inside the runtime config file (CLAUDE.md / AGENTS.md / GEMINI.md). The
+// inside the runtime config file (CLAUDE.md / AGENTS.md). The
 // markers exist so writeRuntimeConfigFile can:
 //
 //   - preserve Agent-authored content in the same file,
@@ -133,17 +133,11 @@ func sanitizeInlineCodeForBrief(value string) string {
 //
 // For Claude:   writes {workDir}/CLAUDE.md  (skills discovered natively from .claude/skills/)
 // For Codex:    writes {workDir}/AGENTS.md  (skills discovered natively via CODEX_HOME)
-// For Copilot:  writes {workDir}/AGENTS.md  (skills discovered natively from .github/skills/)
 // For OpenCode: writes {workDir}/AGENTS.md  (skills discovered natively from .opencode/skills/)
-// For OpenClaw: writes {workDir}/AGENTS.md  (skills discovered natively from {workDir}/skills/ via Agent-scoped openclaw-config.json that pins agents.defaults.workspace)
-// For Hermes:   writes {workDir}/AGENTS.md  (skills fall back to .agent_context/skills/; AGENTS.md points there)
-// For Gemini:   writes {workDir}/GEMINI.md  (discovered natively by the Gemini CLI)
 // For Pi:       writes {workDir}/AGENTS.md  (skills discovered natively from .pi/skills/)
 // For Cursor:   writes {workDir}/AGENTS.md  (skills discovered natively from .cursor/skills/)
-// For Kimi:        writes {workDir}/AGENTS.md  (Kimi Code CLI reads AGENTS.md natively; skills auto-discovered from project skills dirs)
-// For Kiro:        writes {workDir}/AGENTS.md  (Kiro CLI reads AGENTS.md natively; skills auto-discovered from project skills dirs)
-// For Antigravity: writes {workDir}/AGENTS.md  (agy CLI reads AGENTS.md natively; skills discovered natively from .agents/skills/ — see https://antigravity.google/docs/gcli-migration)
-// For Grok:        writes {workDir}/AGENTS.md  (Grok CLI reads AGENTS.md natively; skills from .grok/skills/)
+// For Kiro:     writes {workDir}/AGENTS.md  (Kiro CLI reads AGENTS.md natively; skills auto-discovered from project skills dirs)
+// For Grok Build: writes {workDir}/AGENTS.md  (reads AGENTS.md natively; skills from .grok/skills/)
 func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (string, error) {
 	content := buildMetaSkillContent(provider, ctx)
 	return writeRuntimeConfig(workDir, provider, content)
@@ -505,12 +499,10 @@ func CleanupSidecarsConfined(envRoot, confineRoot string) error {
 // added to one side cannot drift past the other.
 func runtimeConfigPath(workDir, provider string) string {
 	switch provider {
-	case "claude", "codebuddy":
+	case "claude":
 		return filepath.Join(workDir, "CLAUDE.md")
-	case "codex", "copilot", "opencode", "openclaw", "hermes", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
+	case "codex", "opencode", "pi", "cursor", "kiro", "grok":
 		return filepath.Join(workDir, "AGENTS.md")
-	case "gemini":
-		return filepath.Join(workDir, "GEMINI.md")
 	default:
 		return ""
 	}
@@ -1215,12 +1207,10 @@ func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []Ski
 		b.WriteString("Installed skills (durable agent-local mirror; open the absolute path listed):\n\n")
 	} else {
 		switch provider {
-		case "claude", "codebuddy":
+		case "claude":
 			b.WriteString("Installed skills (also under `.claude/skills/`):\n\n")
-		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
+		case "codex", "opencode", "pi", "cursor", "kiro", "grok":
 			b.WriteString("Installed skills (files are on disk at the listed locations):\n\n")
-		case "gemini", "hermes":
-			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
 		default:
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
 		}
@@ -1240,26 +1230,18 @@ func renderSkillIndexWithSlugs(b *strings.Builder, provider string, skills []Ski
 		} else {
 			location = fmt.Sprintf(".agent_context/skills/%s/SKILL.md", slug)
 			switch provider {
-			case "claude", "codebuddy":
+			case "claude":
 				location = fmt.Sprintf(".claude/skills/%s/SKILL.md", slug)
 			case "codex":
 				location = fmt.Sprintf("$CODEX_HOME/skills/%s/SKILL.md", slug)
-			case "copilot":
-				location = fmt.Sprintf(".github/skills/%s/SKILL.md", slug)
 			case "opencode":
 				location = fmt.Sprintf(".opencode/skills/%s/SKILL.md", slug)
-			case "openclaw":
-				location = fmt.Sprintf("skills/%s/SKILL.md", slug)
 			case "pi":
 				location = fmt.Sprintf(".pi/skills/%s/SKILL.md", slug)
 			case "cursor":
 				location = fmt.Sprintf(".cursor/skills/%s/SKILL.md", slug)
-			case "kimi":
-				location = fmt.Sprintf(".kimi/skills/%s/SKILL.md", slug)
 			case "kiro":
 				location = fmt.Sprintf(".kiro/skills/%s/SKILL.md", slug)
-			case "antigravity":
-				location = fmt.Sprintf(".agents/skills/%s/SKILL.md", slug)
 			case "grok":
 				location = fmt.Sprintf(".grok/skills/%s/SKILL.md", slug)
 			}

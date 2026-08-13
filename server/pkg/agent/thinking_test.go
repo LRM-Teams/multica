@@ -16,9 +16,6 @@ func TestSlowDiscoveryCachesCoverChatBursts(t *testing.T) {
 	if modelCacheTTL < 10*time.Minute {
 		t.Fatalf("modelCacheTTL = %s, want at least 10m", modelCacheTTL)
 	}
-	if codebuddyHelpTTL < 10*time.Minute {
-		t.Fatalf("codebuddyHelpTTL = %s, want at least 10m", codebuddyHelpTTL)
-	}
 }
 
 // ── Claude help parsing ──────────────────────────────────────────────

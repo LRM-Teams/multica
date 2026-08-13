@@ -2,12 +2,9 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,12 +16,7 @@ import (
 
 var ErrCanonicalAgentRuntimeBusy = errors.New("canonical agent runtime busy")
 
-type canonicalRuntimeMode string
-
 const (
-	canonicalRuntimeResident canonicalRuntimeMode = "resident"
-	canonicalRuntimeOneShot  canonicalRuntimeMode = "one_shot"
-
 	// canonicalIdleAcceptTimeout bounds how long a canonical Message handoff may
 	// wait for the resident runtime to accept an idle input batch. A busy or
 	// unresponsive runtime must never block the recovery/Flush path forever
@@ -37,13 +29,15 @@ const (
 	canonicalIdleAcceptTimeout = 20 * time.Second
 )
 
-// canonicalAgentRuntimeIdentity contains only process-stable configuration.
-// The logical slot is always agent×runtime. The fingerprint decides whether
-// that slot's provider backend must restart; it never creates another slot.
+// canonicalAgentRuntimeIdentity locates the agent×runtime slot and carries
+// the facts needed to start a process. It is not a recycle key: a live
+// resident is reused as-is. Model, MCP, AGENTS, and other create-time
+// bake-ins take effect on the next explicit restart/reset or after the
+// process dies — never by hashing the next acquire against the slot.
 //
 // Product (Frank/Parker 2026-07-28): one long-lived resident session per
 // agent×runtime across channel/DM/thread. Delivery and requester facts are
-// per-message details — never fingerprint / force-fresh inputs.
+// per-message details — never recycle / force-fresh inputs.
 type canonicalAgentRuntimeIdentity struct {
 	AgentID      string
 	RuntimeID    string
@@ -57,8 +51,6 @@ type canonicalAgentRuntimeIdentity struct {
 	CustomArgs   []string
 	Environment  map[string]string
 
-	// Slow-changing process boundary (fingerprint). Prefer restart when unsure;
-	// never put delivery, requester, Issue, or other per-turn fields here.
 	WorkspaceID         string
 	AgentInstructions   string
 	WorkspaceContext    string
@@ -117,50 +109,6 @@ func (i canonicalAgentRuntimeIdentity) slotKey() string {
 	return i.AgentID + "\x00" + i.RuntimeID
 }
 
-func (i canonicalAgentRuntimeIdentity) fingerprint() string {
-	type canonical struct {
-		Provider            string      `json:"provider"`
-		Executable          string      `json:"executable"`
-		Model               string      `json:"model"`
-		Thinking            string      `json:"thinking"`
-		WorkDir             string      `json:"work_dir"`
-		SystemPrompt        string      `json:"system_prompt"`
-		MCP                 string      `json:"mcp"`
-		CustomArgs          []string    `json:"custom_args"`
-		Environment         [][2]string `json:"environment"`
-		WorkspaceID         string      `json:"workspace_id"`
-		AgentInstructions   string      `json:"agent_instructions"`
-		WorkspaceContext    string      `json:"workspace_context"`
-		StartupStaticDigest string      `json:"startup_static_digest"`
-	}
-	keys := make([]string, 0, len(i.Environment))
-	for key := range i.Environment {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	environment := make([][2]string, 0, len(keys))
-	for _, key := range keys {
-		environment = append(environment, [2]string{key, i.Environment[key]})
-	}
-	payload, _ := json.Marshal(canonical{
-		Provider:            i.Provider,
-		Executable:          i.Executable,
-		Model:               i.Model,
-		Thinking:            i.Thinking,
-		WorkDir:             i.WorkDir,
-		SystemPrompt:        i.SystemPrompt,
-		MCP:                 i.MCP,
-		CustomArgs:          append([]string(nil), i.CustomArgs...),
-		Environment:         environment,
-		WorkspaceID:         i.WorkspaceID,
-		AgentInstructions:   i.AgentInstructions,
-		WorkspaceContext:    i.WorkspaceContext,
-		StartupStaticDigest: i.StartupStaticDigest,
-	})
-	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
 func cloneStringMap(source map[string]string) map[string]string {
 	if len(source) == 0 {
 		return map[string]string{}
@@ -180,25 +128,24 @@ func isCanonicalResidentProvider(provider string) bool {
 	return agent.Capabilities(provider).CanonicalResident
 }
 
-func canonicalRuntimeModeFor(provider, executionProfile string) (canonicalRuntimeMode, error) {
+func requireCanonicalResidentProvider(provider, executionProfile string) error {
 	if executionProfile != executionProfileFull {
-		return "", fmt.Errorf("execution profile %q must not use the canonical agent session", executionProfile)
+		return fmt.Errorf("execution profile %q must not use the canonical agent session", executionProfile)
 	}
 	trimmed := strings.TrimSpace(provider)
 	if trimmed == "" {
-		return "", errors.New("provider is required")
+		return errors.New("provider is required")
 	}
-	if isCanonicalResidentProvider(trimmed) {
-		return canonicalRuntimeResident, nil
+	if !isCanonicalResidentProvider(trimmed) {
+		return fmt.Errorf("provider %q has no resident adapter", trimmed)
 	}
-	return canonicalRuntimeOneShot, nil
+	return nil
 }
 
 type canonicalRuntimeBackendFactory func(agent.Config) (agent.Backend, func(), error)
 
 type canonicalAgentRuntimeAcquireRequest struct {
 	Identity           canonicalAgentRuntimeIdentity
-	Mode               canonicalRuntimeMode
 	CanonicalSessionID string
 	BackendConfig      agent.Config
 	Factory            canonicalRuntimeBackendFactory
@@ -254,8 +201,6 @@ type canonicalAgentRuntimePool struct {
 
 type canonicalAgentRuntimeSlot struct {
 	mu                             sync.Mutex
-	fingerprint                    string
-	mode                           canonicalRuntimeMode
 	provider                       string
 	running                        bool
 	idleSince                      time.Time
@@ -323,9 +268,6 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	if p == nil {
 		return nil, errors.New("canonical agent runtime pool is nil")
 	}
-	if request.Mode != canonicalRuntimeResident && request.Mode != canonicalRuntimeOneShot {
-		return nil, fmt.Errorf("unsupported canonical runtime mode %q", request.Mode)
-	}
 	if request.Factory == nil {
 		return nil, errors.New("canonical runtime backend factory is required")
 	}
@@ -340,8 +282,6 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	request.Identity.RuntimeID = strings.TrimSpace(request.Identity.RuntimeID)
 	request.Identity.Provider = strings.TrimSpace(request.Identity.Provider)
 	request.Identity.Executable = strings.TrimSpace(request.Identity.Executable)
-	request.Identity.Model = strings.TrimSpace(request.Identity.Model)
-	request.Identity.Thinking = strings.TrimSpace(request.Identity.Thinking)
 	request.Identity.WorkDir = strings.TrimSpace(request.Identity.WorkDir)
 	request.Identity.Environment = stableEnvironment
 	key := request.Identity.slotKey()
@@ -353,7 +293,6 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		request.Identity.WorkDir == "" {
 		return nil, errors.New("canonical runtime provider, executable, and work_dir are required")
 	}
-	fingerprint := request.Identity.fingerprint()
 	resumeSessionID := strings.TrimSpace(request.CanonicalSessionID)
 	if request.CanonicalSessionID == "" {
 		if next, ok := p.takeNextResumeSession(request.Identity.AgentID, request.Identity.RuntimeID); ok {
@@ -365,22 +304,17 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		now = time.Now()
 	}
 
-	// #35: resident acquires may need a new live process for this agent.
-	// Reserve capacity (and close idle other-runtime slots for rebind) before
-	// locking the target slot. One-shot does not retain a pool backend and is
-	// not counted toward the cap (Parker: v1 one-shot out of scope).
-	reserved := false
-	if request.Mode == canonicalRuntimeResident {
-		if err := p.reserveAgentProcessCapacity(request.Context, request.Identity.AgentID, request.Identity.RuntimeID); err != nil {
-			return nil, err
-		}
-		reserved = true
-		defer func() {
-			if reserved {
-				p.releaseAgentProcessReservation(request.Identity.AgentID)
-			}
-		}()
+	// #35: reserve capacity (and close idle other-runtime slots) before
+	// locking the target slot.
+	if err := p.reserveAgentProcessCapacity(request.Context, request.Identity.AgentID, request.Identity.RuntimeID); err != nil {
+		return nil, err
 	}
+	reserved := true
+	defer func() {
+		if reserved {
+			p.releaseAgentProcessReservation(request.Identity.AgentID)
+		}
+	}()
 
 	p.mu.Lock()
 	slot := p.slots[key]
@@ -395,9 +329,6 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	// slot.mu (reserve/count take p.mu then slot.mu — reverse order deadlocks).
 	publishLiveAfterUnlock := false
 	clearReservationAfterUnlock := false
-	// closedLiveForRecreate: configDrift (or similar) closed a live backend under
-	// this lock. If recreate fails we must wake capacity waiters after unlock.
-	closedLiveForRecreate := false
 	reservationAgentID := request.Identity.AgentID
 	defer func() {
 		slot.mu.Unlock()
@@ -406,35 +337,20 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		}
 		if publishLiveAfterUnlock {
 			p.publishLiveAgentProcessCount()
-		} else if closedLiveForRecreate {
-			// Failed to re-attach after closing live process — free the cap slot.
-			p.signalAgentProcessCapacityFreed()
 		}
 	}()
 	if slot.running {
 		return nil, ErrCanonicalAgentRuntimeBusy
 	}
 
-	// Fingerprint drift (slow config / AGENTS digest) → dispose process and recreate.
-	// Cross-surface chat change alone does NOT dispose or force-fresh Prior.
-	configDrift := slot.fingerprint != "" &&
-		(slot.fingerprint != fingerprint || slot.mode != request.Mode)
-	if configDrift {
-		if slot.backend != nil {
-			closedLiveForRecreate = true
-		}
-		slot.closeBackend()
-	}
-	prevFingerprint := slot.fingerprint
-	prevMode := slot.mode
-	slot.fingerprint = fingerprint
-	slot.mode = request.Mode
-	slot.provider = request.Identity.Provider
+	// Live process → reuse. No hash, no implicit stop+start.
+	// Model/MCP/AGENTS baked at start stay until explicit restart/reset
+	// or the process dies.
+	reused := slot.backend != nil
 	slot.running = true
 
 	var backend agent.Backend
 	var closeBackend func()
-	reused := request.Mode == canonicalRuntimeResident && !configDrift && slot.backend != nil
 	if reused {
 		backend = slot.backend
 		closeBackend = slot.close
@@ -443,8 +359,6 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		if request.BeforeCreate != nil {
 			if err := request.BeforeCreate(); err != nil {
 				slot.running = false
-				slot.fingerprint = prevFingerprint
-				slot.mode = prevMode
 				return nil, fmt.Errorf("canonical runtime before-create: %w", err)
 			}
 		}
@@ -459,8 +373,6 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 					processCleanup()
 				}
 				slot.running = false
-				slot.fingerprint = prevFingerprint
-				slot.mode = prevMode
 				return nil, fmt.Errorf("prepare canonical runtime process: %w", err)
 			}
 		}
@@ -470,14 +382,10 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 				processCleanup()
 			}
 			slot.running = false
-			slot.fingerprint = prevFingerprint
-			slot.mode = prevMode
 			return nil, fmt.Errorf("create canonical runtime backend: %w", err)
 		}
 		if created == nil {
 			slot.running = false
-			slot.fingerprint = prevFingerprint
-			slot.mode = prevMode
 			if closeFn != nil {
 				closeFn()
 			}
@@ -488,32 +396,26 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		}
 		backend = created
 		closeBackend = combineRuntimeCleanup(closeFn, processCleanup)
-		if request.Mode == canonicalRuntimeResident {
-			slot.backend = created
-			slot.close = closeBackend
-			// New resident process is up — clear any server-side "crashed"
-			// fact from a prior idle death. First-ever create is a no-op clear.
-			// Fire async: we still hold slot.mu here and subscribers may do I/O.
-			agentID, runtimeID := request.Identity.AgentID, request.Identity.RuntimeID
-			go p.notifyResidentRecovered(agentID, runtimeID)
-		}
+		slot.backend = created
+		slot.close = closeBackend
+		slot.provider = request.Identity.Provider
+		// New resident process is up — clear any server-side "crashed"
+		// fact from a prior idle death. First-ever create is a no-op clear.
+		// Fire async: we still hold slot.mu here and subscribers may do I/O.
+		agentID, runtimeID := request.Identity.AgentID, request.Identity.RuntimeID
+		go p.notifyResidentRecovered(agentID, runtimeID)
 	}
 
 	wrapped := &canonicalSessionBackend{
 		backend:            backend,
 		canonicalSessionID: resumeSessionID,
 	}
-	// Resident success: backend attached/reused counts as live. Drop pending
-	// reservation + publish gauge only after slot.mu is released.
-	if request.Mode == canonicalRuntimeResident {
-		reserved = false
-		clearReservationAfterUnlock = true
-		publishLiveAfterUnlock = true
-	}
+	reserved = false
+	clearReservationAfterUnlock = true
+	publishLiveAfterUnlock = true
 	return &canonicalAgentRuntimeLease{
 		slot:      slot,
 		backend:   wrapped,
-		mode:      request.Mode,
 		turnClose: closeBackend,
 		pool:      p,
 	}, nil
@@ -565,7 +467,6 @@ func clearCanonicalResumeIfPresent(backend agent.Backend) {
 type canonicalAgentRuntimeLease struct {
 	slot      *canonicalAgentRuntimeSlot
 	backend   agent.Backend
-	mode      canonicalRuntimeMode
 	turnClose func()
 	pool      *canonicalAgentRuntimePool
 	once      sync.Once
@@ -594,11 +495,7 @@ func (l *canonicalAgentRuntimeLease) releaseAt(healthy bool, now time.Time) {
 			l.slot.mu.Unlock()
 			return
 		}
-		if l.mode == canonicalRuntimeOneShot {
-			if l.turnClose != nil {
-				l.turnClose()
-			}
-		} else if !healthy {
+		if !healthy {
 			if l.slot.backend != nil {
 				closedLive = true
 			}
@@ -704,7 +601,7 @@ func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string
 		return false
 	}
 	defer slot.mu.Unlock()
-	return slot.mode == canonicalRuntimeResident && slot.backend != nil
+	return slot.backend != nil
 }
 
 func (p *canonicalAgentRuntimePool) bindResidentPiRunIdentity(ctx context.Context, agentID, runtimeID string, identity agent.PiRunIdentity) (agent.PiRunBinding, error) {
@@ -760,7 +657,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(
 		slot.mu.Unlock()
 		return ErrCanonicalAgentRuntimeBusy
 	}
-	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
+	if slot.backend == nil {
 		slot.mu.Unlock()
 		return errors.New("canonical resident runtime is unavailable")
 	}
@@ -936,8 +833,7 @@ func (p *canonicalAgentRuntimePool) failResidentMessageInputAttempt(slot *canoni
 	}
 	freed := slot.backend != nil
 	slot.closeBackend()
-	slot.fingerprint = ""
-	slot.mode = ""
+	
 	return freed
 }
 
@@ -976,7 +872,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 		slot.mu.Unlock()
 		return ErrCanonicalAgentRuntimeBusy
 	}
-	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
+	if slot.backend == nil {
 		slot.mu.Unlock()
 		return errors.New("canonical resident runtime is unavailable")
 	}
@@ -1007,8 +903,7 @@ func (p *canonicalAgentRuntimePool) handoffIdleReminderInput(ctx context.Context
 			if slot.invalidateAfterInput {
 				freed = slot.backend != nil
 				slot.closeBackend()
-				slot.fingerprint = ""
-				slot.mode = ""
+				
 			}
 		}
 		slot.mu.Unlock()
@@ -1113,7 +1008,7 @@ func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agent
 	if !slot.running {
 		return errors.New("canonical resident runtime is idle")
 	}
-	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
+	if slot.backend == nil {
 		return errors.New("canonical resident runtime is unavailable")
 	}
 	if snapshot.Fingerprint == slot.lastPendingNoticeFingerprint &&
@@ -1184,8 +1079,7 @@ func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAg
 			slot.idleSince = time.Now()
 			freed = slot.backend != nil
 			slot.closeBackend()
-			slot.fingerprint = ""
-			slot.mode = ""
+			
 			completed = true
 		} else if slot.piRunIdentity != nil {
 			if backend, ok := slot.backend.(agent.PiRPCBackend); ok {
@@ -1222,8 +1116,7 @@ func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAg
 			if slot.invalidateAfterInput {
 				freed = slot.backend != nil
 				slot.closeBackend()
-				slot.fingerprint = ""
-				slot.mode = ""
+				
 			}
 			completed = true
 		}
@@ -1299,8 +1192,6 @@ func (p *canonicalAgentRuntimePool) invalidateSession(agentID, runtimeID string)
 		freed = true
 	}
 	slot.closeBackend()
-	slot.fingerprint = ""
-	slot.mode = ""
 	slot.idleSince = time.Time{}
 	return nil
 }
@@ -1340,8 +1231,6 @@ func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID st
 	defer slot.mu.Unlock()
 	if !slot.running {
 		slot.closeBackend()
-		slot.fingerprint = ""
-		slot.mode = ""
 		slot.idleSince = time.Time{}
 		return nil
 	}
@@ -1388,8 +1277,6 @@ func (p *canonicalAgentRuntimePool) revokeResidentPiRunIdentity(agentID, runtime
 	}
 	if !slot.running {
 		slot.closeBackend()
-		slot.fingerprint = ""
-		slot.mode = ""
 		slot.idleSince = time.Time{}
 		return nil
 	}
@@ -1505,7 +1392,7 @@ func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []Resid
 	var events []ResidentRuntimeCrashEvent
 	for _, ref := range refs {
 		ref.slot.mu.Lock()
-		if ref.slot.running || ref.slot.mode != canonicalRuntimeResident || ref.slot.backend == nil {
+		if ref.slot.running || ref.slot.backend == nil {
 			ref.slot.mu.Unlock()
 			continue
 		}
@@ -1521,8 +1408,6 @@ func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []Resid
 		}
 		provider := ref.slot.provider
 		ref.slot.closeBackend()
-		ref.slot.fingerprint = ""
-		ref.slot.mode = ""
 		ref.slot.mu.Unlock()
 
 		agentID, runtimeID := splitCanonicalSlotKey(ref.key)
@@ -1618,33 +1503,26 @@ func (p *canonicalAgentRuntimePool) forceTerminateAll() error {
 	return nil
 }
 
-func defaultCanonicalRuntimeFactory(provider string, mode canonicalRuntimeMode) canonicalRuntimeBackendFactory {
+func defaultCanonicalRuntimeFactory(provider string) canonicalRuntimeBackendFactory {
 	return func(config agent.Config) (agent.Backend, func(), error) {
-		if mode == canonicalRuntimeResident {
-			switch provider {
-			case "pi":
-				return newCanonicalPiResidentBackend(config)
-			case "grok":
-				return newCanonicalGrokResidentBackend(config)
-			case "cursor":
-				return newCanonicalCursorResidentBackend(config)
-			case "opencode":
-				return newCanonicalOpenCodeResidentBackend(config)
-			case "kiro":
-				return newCanonicalKiroResidentBackend(config)
-			case "codex":
-				return newCanonicalCodexResidentBackend(config)
-			case "claude":
-				return newCanonicalClaudeResidentBackend(config)
-			default:
-				return nil, nil, fmt.Errorf("provider %q has no resident adapter", provider)
-			}
+		switch provider {
+		case "pi":
+			return newCanonicalPiResidentBackend(config)
+		case "grok":
+			return newCanonicalGrokResidentBackend(config)
+		case "cursor":
+			return newCanonicalCursorResidentBackend(config)
+		case "opencode":
+			return newCanonicalOpenCodeResidentBackend(config)
+		case "kiro":
+			return newCanonicalKiroResidentBackend(config)
+		case "codex":
+			return newCanonicalCodexResidentBackend(config)
+		case "claude":
+			return newCanonicalClaudeResidentBackend(config)
+		default:
+			return nil, nil, fmt.Errorf("provider %q has no resident adapter", provider)
 		}
-		backend, err := agent.New(provider, config)
-		if err != nil {
-			return nil, nil, err
-		}
-		return backend, nil, nil
 	}
 }
 
@@ -1657,15 +1535,13 @@ func (p *canonicalAgentRuntimePool) acquireCanonicalAgentRuntime(
 	executionProfile string,
 	config agent.Config,
 ) (*canonicalAgentRuntimeLease, error) {
-	mode, err := canonicalRuntimeModeFor(identity.Provider, executionProfile)
-	if err != nil {
+	if err := requireCanonicalResidentProvider(identity.Provider, executionProfile); err != nil {
 		return nil, err
 	}
 	return p.acquire(canonicalAgentRuntimeAcquireRequest{
 		Identity:           identity,
-		Mode:               mode,
 		CanonicalSessionID: canonicalSessionID,
 		BackendConfig:      config,
-		Factory:            defaultCanonicalRuntimeFactory(identity.Provider, mode),
+		Factory:            defaultCanonicalRuntimeFactory(identity.Provider),
 	})
 }

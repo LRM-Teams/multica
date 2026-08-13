@@ -344,7 +344,7 @@ func TestWorkspaceRunnerManagedStopClosesProviderAndInbox(t *testing.T) {
 	runner.ensureResidentRuntime = func(context.Context, string, string, *agent.PiRunIdentity) error { return nil }
 	backend := &canonicalRuntimeTestBackend{}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
-		mode: canonicalRuntimeResident, backend: backend,
+		backend: backend,
 	}
 	start := protocol.WorkspaceRunnerAgentStartPayload{AgentID: agentID, RuntimeID: runtimeID, LaunchID: "launch-1", StartDispatchID: "launch-1" + "-dispatch"}
 	if _, _, _, err := runner.startManagedAgent(context.Background(), start); err != nil {

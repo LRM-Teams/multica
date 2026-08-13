@@ -15,7 +15,6 @@ type testPrepareParams struct {
 	AgentID        string
 	Provider       string
 	CodexVersion   string
-	OpenclawBin    string
 	McpConfig      json.RawMessage
 	Task           TaskContextForEnv
 }
@@ -35,7 +34,6 @@ func prepareTestEnvironment(params testPrepareParams, logger *slog.Logger) (*Env
 		AgentRoot:    agentRoot,
 		Provider:     params.Provider,
 		CodexVersion: params.CodexVersion,
-		OpenclawBin:  params.OpenclawBin,
 		McpConfig:    params.McpConfig,
 		Task:         params.Task,
 	}, logger)

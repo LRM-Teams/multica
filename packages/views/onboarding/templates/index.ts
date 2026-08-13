@@ -49,5 +49,5 @@ const CONTENT_LANG_BY_LOCALE: Record<SupportedLocale, ContentLang> = {
 export function pickContentLang(
   language: string | null | undefined,
 ): ContentLang {
-  return CONTENT_LANG_BY_LOCALE[matchLocale(language ? [language] : [])];
+  return CONTENT_LANG_BY_LOCALE[matchLocale(language ? [language] : [])] ?? "en";
 }

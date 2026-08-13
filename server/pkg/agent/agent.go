@@ -1,6 +1,6 @@
 // Package agent provides a unified interface for executing prompts via
-// coding agents (Claude Code, CodeBuddy, Codex, Copilot, OpenCode, OpenClaw,
-// Hermes, Gemini, Pi, Cursor, Kimi, Kiro, Antigravity, Grok). It mirrors the happy-cli
+// coding agents (Claude Code, Codex, OpenCode, Pi, Cursor, Kiro, Grok).
+// Every shipped provider is canonical-resident. It mirrors the happy-cli
 // AgentBackend pattern, translated to idiomatic Go.
 package agent
 
@@ -401,7 +401,7 @@ type RuntimeTokenStats struct {
 
 // Config configures a Backend instance.
 type Config struct {
-	ExecutablePath string            // path to CLI binary (claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro-cli, agy, grok)
+	ExecutablePath string            // path to CLI binary (claude, codex, opencode, pi, cursor, kiro-cli, grok)
 	Env            map[string]string // extra environment variables
 	Logger         *slog.Logger
 	// ResidentOptions are the stable agent-scoped defaults used when a native
@@ -417,20 +417,13 @@ type Config struct {
 // test instead of silently shipping a provider that fails closed on every
 // capability. Do not reintroduce a parallel literal of these type strings.
 var agentConstructors = map[string]func(Config) Backend{
-	"claude":      func(cfg Config) Backend { return &claudeBackend{cfg: cfg} },
-	"codebuddy":   func(cfg Config) Backend { return &codebuddyBackend{cfg: cfg} },
-	"codex":       func(cfg Config) Backend { return &codexBackend{cfg: cfg} },
-	"copilot":     func(cfg Config) Backend { return &copilotBackend{cfg: cfg} },
-	"opencode":    func(cfg Config) Backend { return &opencodeBackend{cfg: cfg} },
-	"openclaw":    func(cfg Config) Backend { return &openclawBackend{cfg: cfg} },
-	"hermes":      func(cfg Config) Backend { return &hermesBackend{cfg: cfg} },
-	"gemini":      func(cfg Config) Backend { return &geminiBackend{cfg: cfg} },
-	"pi":          func(cfg Config) Backend { return &piBackend{cfg: cfg} },
-	"cursor":      func(cfg Config) Backend { return &cursorBackend{cfg: cfg} },
-	"kimi":        func(cfg Config) Backend { return &kimiBackend{cfg: cfg} },
-	"kiro":        func(cfg Config) Backend { return &kiroBackend{cfg: cfg} },
-	"antigravity": func(cfg Config) Backend { return &antigravityBackend{cfg: cfg} },
-	"grok":        func(cfg Config) Backend { return &grokBackend{cfg: cfg} },
+	"claude":   func(cfg Config) Backend { return &claudeBackend{cfg: cfg} },
+	"codex":    func(cfg Config) Backend { return &codexBackend{cfg: cfg} },
+	"opencode": func(cfg Config) Backend { return &opencodeBackend{cfg: cfg} },
+	"pi":       func(cfg Config) Backend { return &piBackend{cfg: cfg} },
+	"cursor":   func(cfg Config) Backend { return &cursorBackend{cfg: cfg} },
+	"kiro":     func(cfg Config) Backend { return &kiroBackend{cfg: cfg} },
+	"grok":     func(cfg Config) Backend { return &grokBackend{cfg: cfg} },
 }
 
 // KnownAgentTypes returns every agent type New() accepts (agentConstructors'
@@ -452,7 +445,7 @@ func New(agentType string, cfg Config) (Backend, error) {
 
 	ctor, ok := agentConstructors[agentType]
 	if !ok {
-		return nil, fmt.Errorf("unknown agent type: %q (supported: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok)", agentType)
+		return nil, fmt.Errorf("unknown agent type: %q (supported: claude, codex, opencode, pi, cursor, kiro, grok)", agentType)
 	}
 	return ctor(cfg), nil
 }
@@ -469,20 +462,13 @@ func DetectVersion(ctx context.Context, executablePath string) (string, error) {
 // environment variables are deliberately omitted so the string is a hint
 // about *what* users are extending, not a dump of the full command line.
 var launchHeaders = map[string]string{
-	"antigravity": "agy -p (print mode)",
-	"claude":      "claude (stream-json)",
-	"codebuddy":   "codebuddy (stream-json)",
-	"codex":       "codex app-server",
-	"copilot":     "copilot (json)",
-	"cursor":      "cursor-agent (stream-json)",
-	"gemini":      "gemini (stream-json)",
-	"grok":        "grok (streaming-json)",
-	"hermes":      "hermes acp",
-	"kimi":        "kimi acp",
-	"kiro":        "kiro-cli acp",
-	"openclaw":    "openclaw agent (json)",
-	"opencode":    "opencode run (json)",
-	"pi":          "pi (json mode)",
+	"claude":   "claude (stream-json)",
+	"codex":    "codex app-server",
+	"cursor":   "cursor-agent (stream-json)",
+	"grok":     "grok (streaming-json)",
+	"kiro":     "kiro-cli acp",
+	"opencode": "opencode run (json)",
+	"pi":       "pi (json mode)",
 }
 
 // LaunchHeader returns the user-visible launch skeleton for agentType, or an

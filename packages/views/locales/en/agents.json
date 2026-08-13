@@ -236,7 +236,7 @@
     "select_required": "Select a model",
     "default_provider": "Default (provider)",
     "managed_by_runtime_title": "Model selection is managed by this runtime.",
-    "managed_by_runtime_hint": "Configure the model on the runtime host (e.g. Hermes reads it from its own config file).",
+    "managed_by_runtime_hint": "Configure the model on the runtime host (the CLI reads it from its own config file).",
     "discovery_failed": "discovery failed",
     "clear_full": "Clear selection (use provider default)",
     "scanning_on_computer": "Checking models on this Computer…",
@@ -359,7 +359,7 @@
       "save_failed_toast": "Failed to save custom arguments"
     },
     "mcp_config": {
-      "intro": "MCP server configuration forwarded to the runtime CLI (Claude via --mcp-config, Codex via $CODEX_HOME/config.toml, Hermes/Kimi/Kiro via ACP mcpServers, OpenCode via OPENCODE_CONFIG_CONTENT, OpenClaw via the per-task config wrapper). Stored verbatim and may contain secrets — only the agent owner and workspace admins can read it. Leave empty to fall back to the CLI's own default. For OpenClaw HTTP/SSE entries use OpenClaw's own field name (e.g. \"transport\": \"streamable-http\") instead of Claude's \"type\".",
+      "intro": "MCP server configuration forwarded to the runtime CLI (Claude via --mcp-config, Codex via $CODEX_HOME/config.toml, Cursor via .cursor/mcp.json, Kiro via ACP mcpServers, OpenCode via OPENCODE_CONFIG_CONTENT, Pi via --mcp-config). Stored verbatim and may contain secrets — only the agent owner and workspace admins can read it. Leave empty to fall back to the CLI's own default.",
       "placeholder": "{\n  \"mcpServers\": {\n    \"fetch\": {\n      \"command\": \"uvx\",\n      \"args\": [\"mcp-server-fetch\"]\n    }\n  }\n}",
       "editor_aria": "MCP config JSON editor",
       "clear_action": "Clear",

@@ -137,6 +137,7 @@ type Daemon struct {
 	wsConnState   string
 
 	reminderCache                    *reminderCache
+	localReminderInbox               *LocalReminderInbox
 	agentAttachments                 *localAgentAttachmentRegistry
 	reminderWSMu                     sync.RWMutex
 	reminderWrites                   chan<- []byte
@@ -344,9 +345,11 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, nil)
-	d.reminderCache.onFireDelivery = d.onReminderTimer
-	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
 	d.agentAttachments = newLocalAgentAttachmentRegistry(cfg.WorkspacesRoot, logger)
+	d.localReminderInbox = &LocalReminderInbox{daemon: d}
+	d.reminderCache.onFireDelivery = d.localReminderInbox.AcceptDue
+	d.reminderCache.onFireReceipt = d.queueReminderFireReceipt
+	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	d.machineUpgradeStageFn = d.runStageUpdate
@@ -1027,6 +1030,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityMemoryCrossDeviceSync,
 		protocol.DaemonCapabilityRestrictedExecution,
 		protocol.DaemonCapabilityReminderVersionedCache,
+		protocol.DaemonCapabilityReminderLocalInbox,
 		protocol.DaemonCapabilityReminderTransientInput,
 		protocol.DaemonCapabilityAgentLifecycleActions,
 		protocol.DaemonCapabilityMachineUpgrade,

@@ -364,6 +364,42 @@ func TestReminderOwnerInputTransportFailureIsFinalAfterCommit(t *testing.T) {
 	}
 }
 
+func TestReminderLocalInboxProjectionIsTheOnlyWakePath(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{localReminderInbox: true}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "local reminder anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+	var generation int64
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COALESCE(max(placement_generation), 0)
+		FROM agent_reminder_daemon_owner_event
+		WHERE agent_id = $1`, fixture.agentIDs[0]).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{fixture.runtimeIDs[0]}}
+	snapshot, err := fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identity, protocol.ReminderSnapshotRequestPayload{
+		AgentID: fixture.agentIDs[0], RuntimeID: fixture.runtimeIDs[0], PlacementGeneration: generation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Reminders) != 1 || snapshot.Reminders[0].ReminderID != reminderID || snapshot.Reminders[0].LocalInput == nil {
+		t.Fatalf("local Reminder snapshot = %+v", snapshot)
+	}
+	local := snapshot.Reminders[0].LocalInput
+	if local.Title == "" || !local.Anchor.Available || local.Anchor.MessageID != anchor.ID || local.Anchor.ReplyTarget != "#"+fixture.channel.Name || local.Occurrence.OccurrenceID != reminderID+":1" {
+		t.Fatalf("local Reminder input projection = %+v", local)
+	}
+
+	notifier := &capturedReminderOwnerInputNotifier{result: true}
+	fixture.handler.ReminderOwnerInputNotifier = notifier
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(notifier.snapshot()); got != 0 {
+		t.Fatalf("local-Inbox runtime also received %d server-pushed owner inputs", got)
+	}
+}
+
 func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHistory(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	agentID := fixture.agentIDs[0]
@@ -636,7 +672,7 @@ func TestReminderCurrentOwnerCheckpointRecoversAckedDefinitionToOccurrenceHistor
 }
 
 func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{localReminderInbox: true}, {localReminderInbox: true}})
 	agentID := fixture.agentIDs[0]
 	runtimeID := fixture.runtimeIDs[0]
 	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
@@ -671,7 +707,7 @@ func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *te
 		t.Fatal(err)
 	}
 	forcedReset, ok := forcedEnd.RuntimeResets[runtimeID]
-	if len(forcedEvents) != 0 || !ok || forcedReset.ProjectionWatermark < 1 || len(forcedReset.Owners) != 1 || len(forcedReset.Owners[0].Reminders) != 1 || forcedReset.Owners[0].Reminders[0].ReminderID != reminderID {
+	if len(forcedEvents) != 0 || !ok || forcedReset.ProjectionWatermark < 1 || len(forcedReset.Owners) != 1 || len(forcedReset.Owners[0].Reminders) != 1 || forcedReset.Owners[0].Reminders[0].ReminderID != reminderID || forcedReset.Owners[0].Reminders[0].LocalInput == nil {
 		t.Fatalf("forced canonical reset with zero ack events=%+v end=%+v", forcedEvents, forcedEnd)
 	}
 	events, end, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{
@@ -689,6 +725,9 @@ func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *te
 	}
 	if projection == nil {
 		t.Fatalf("replay omitted reminder %s: %+v", reminderID, events)
+	}
+	if projection.Reminder.LocalInput == nil {
+		t.Fatalf("replay omitted local Reminder input: %+v", projection)
 	}
 	if projection.PlacementGeneration != generation || generation < 1 {
 		t.Fatalf("projection generation=%d owner generation=%d", projection.PlacementGeneration, generation)
@@ -927,7 +966,7 @@ func TestDaemonReminderFireAttemptRejectsStaleCancelledAndCrossOwner(t *testing.
 	}
 }
 
-func TestReminderFireRequiresTransientOwnerInputCapability(t *testing.T) {
+func TestReminderFireRequiresLocalInboxOrTransientInputCapability(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")

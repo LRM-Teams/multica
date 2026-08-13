@@ -988,6 +988,21 @@ func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) bool {
 	})
 }
 
+func (d *Daemon) queueReminderFireReceipt(receipt reminderDueReceipt) bool {
+	attachment, ok := d.currentAttachmentForAgent(receipt.Job.OwnerAgentID)
+	if !ok {
+		return false
+	}
+	return d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{
+		AgentID:             receipt.Job.OwnerAgentID,
+		RuntimeID:           attachment.RuntimeID,
+		PlacementGeneration: int64(attachment.AttachmentGeneration),
+		ReminderID:          receipt.Job.ReminderID,
+		Version:             receipt.Job.Version,
+		FiredAtClient:       receipt.FiredAtClient,
+	})
+}
+
 func signalTaskWakeup(taskWakeups chan<- taskWakeup, runtimeID string) {
 	select {
 	case taskWakeups <- taskWakeup{runtimeID: runtimeID}:

@@ -213,7 +213,7 @@ func TestReminderCacheOnlyFireResultRearmsSameVersionAttempt(t *testing.T) {
 	}
 }
 
-func TestReminderCacheFireAttemptsOnceUntilReconnectSnapshot(t *testing.T) {
+func TestReminderCacheDoesNotRepeatDurableDueAcrossReconnectSnapshot(t *testing.T) {
 	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
 	clock := &fakeReminderClock{now: now}
 	var fired []protocol.ReminderTimerJob
@@ -243,19 +243,19 @@ func TestReminderCacheFireAttemptsOnceUntilReconnectSnapshot(t *testing.T) {
 		t.Fatalf("same-connection snapshot rearmed attempted version = %d, %v", installed, err)
 	}
 
-	// A reconnect clears only the ephemeral attempt fence. If the server never
-	// committed, its snapshot restores the same due version exactly once.
+	// A reconnect clears only the ephemeral attempt fence. The durable receipt
+	// still suppresses the same server version: reconnect replays the receipt,
+	// never a second local Agent wake.
 	cache.beginConnection()
 	cache.resume()
-	if installed, err := cache.snapshot("runtime-a", "agent-a", 1, []protocol.ReminderTimerJob{job}); err != nil || installed != 1 {
+	if installed, err := cache.snapshot("runtime-a", "agent-a", 1, []protocol.ReminderTimerJob{job}); err != nil || installed != 0 {
 		t.Fatalf("reconnect snapshot recovery = %d, %v", installed, err)
 	}
-	if len(clock.timers) != 2 || clock.delays[1] != 0 {
-		t.Fatalf("recovered timers/delay=%d/%v want 2/0", len(clock.timers), clock.delays)
+	if len(clock.timers) != 1 {
+		t.Fatalf("reconnect rearmed durable due timer: timers=%d delays=%v", len(clock.timers), clock.delays)
 	}
-	clock.fire(1)
-	if len(fired) != 2 {
-		t.Fatalf("recovered version attempts=%d want 2 total across two connections", len(fired))
+	if len(fired) != 1 {
+		t.Fatalf("durable due wake attempts=%d want 1 across reconnect", len(fired))
 	}
 }
 

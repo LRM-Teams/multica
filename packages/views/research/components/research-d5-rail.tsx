@@ -9,9 +9,24 @@ import {
 } from "react";
 import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@multica/ui/components/ui/sheet";
 import { useT } from "../../i18n/use-t";
 
 export type ResearchD5RailMode = "chat" | "detail";
+
+type ResearchD5RailContentProps = {
+  mode: ResearchD5RailMode;
+  onModeChange: (mode: ResearchD5RailMode) => void;
+  chatPanel: ReactNode;
+  detailPanel: ReactNode;
+  composer?: ReactNode;
+};
 
 export function ResearchD5Rail({
   mode,
@@ -23,12 +38,7 @@ export function ResearchD5Rail({
   className,
   id,
   ...rest
-}: {
-  mode: ResearchD5RailMode;
-  onModeChange: (mode: ResearchD5RailMode) => void;
-  chatPanel: ReactNode;
-  detailPanel: ReactNode;
-  composer?: ReactNode;
+}: ResearchD5RailContentProps & {
   onClose?: () => void;
   className?: string;
 } & Pick<ComponentProps<"aside">, "id" | "inert" | "aria-hidden">) {
@@ -130,5 +140,40 @@ export function ResearchD5Rail({
         <div className="d5-rail-footer">{composer}</div>
       ) : null}
     </aside>
+  );
+}
+
+/** Mobile context surface with real dialog/focus/escape semantics. */
+export function ResearchD5MobileRail({
+  open,
+  onOpenChange,
+  ...railProps
+}: ResearchD5RailContentProps & {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useT("research");
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="bottom"
+        showCloseButton={false}
+        data-testid="research-d5-mobile-rail"
+        className="d5-mobile-rail-sheet h-[min(72dvh,560px)] gap-0 overflow-hidden rounded-t-2xl border-t border-border bg-card p-0 text-foreground"
+      >
+        <SheetHeader className="sr-only">
+          <SheetTitle>{t(($) => $.d5.rail.mobile_title)}</SheetTitle>
+          <SheetDescription>
+            {t(($) => $.d5.rail.mobile_description)}
+          </SheetDescription>
+        </SheetHeader>
+        <ResearchD5Rail
+          {...railProps}
+          onClose={() => onOpenChange(false)}
+          className="h-full"
+        />
+      </SheetContent>
+    </Sheet>
   );
 }

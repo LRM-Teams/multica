@@ -141,6 +141,19 @@ All three preserve the server-side Agent identity, configuration, chat history,
 and Issues.
 _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
 
+## Standalone Agent Chat
+
+### Standalone Agent Chat
+
+A 1:1 conversation with one Agent that is not a Workspace Message thread. The
+FAB and the isolated bubble are the same surface. It carries that Agent's
+memory and skills. A user line is a `chat_message`; the Computer is woken by
+Raft `agent:deliver` of that line, not by an inbox Task. A missing resident
+process is not an ACK: the service starts the desired launch and redelivers
+the unacked line, same as a channel Message. A visible reply is leftover
+assistant prose written into the conversation that woke this turn.
+_Avoid_: isolated bubble as a second product, DM bubble, FAB chat, inbox task
+
 ## Agent Status Semantics
 
 ### Agent Presence

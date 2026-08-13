@@ -1049,7 +1049,18 @@
     "detail": {
       "open_report": "打开完整报告",
       "continue_deepening": "继续深挖",
-      "continue_message": "请继续深挖这个方向：{{title}}"
+      "continue_pending": "正在排队…",
+      "continue_failed": "无法继续此路径，请刷新后重试。",
+      "permission_denied": "你没有继续此路径的权限。",
+      "session_terminal": "本次调研已经结束。",
+      "node_stale": "该节点已变化，画布已刷新，请重试。",
+      "state_version_conflict": "该路径已变化，请查看刷新后的节点再重试。",
+      "action_not_allowed": "当前状态下不能继续此节点。",
+      "idempotency_conflict": "本次请求与之前的操作冲突，请刷新后重试。",
+      "invalid_request": "该节点无法接受此请求。",
+      "run_not_running": "请先恢复调研会话，再继续此路径。",
+      "not_retryable": "当前状态下无法重试此节点。",
+      "no_eligible_member": "当前没有可接手此路径的调研 Agent。"
     },
     "summary": {
       "title": "调研星图 · 已加载 {{loaded}} 条方向",

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@multica/core/api";
+import { api, ApiError } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import type {
   AgentPanelIdentitySnapshot,
@@ -29,6 +29,7 @@ import type {
   ResearchGraphNode,
   ResearchProductRoundCard,
 } from "@multica/core/types";
+import { createSafeId } from "@multica/core/utils";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
@@ -127,6 +128,43 @@ import {
 
 function mutationErrorToast(fallback: string, err: unknown) {
   showErrorToast(err instanceof Error && err.message ? err.message : fallback);
+}
+
+type ResearchNodeCommandErrorKey =
+  | "permission_denied"
+  | "session_terminal"
+  | "node_stale"
+  | "state_version_conflict"
+  | "action_not_allowed"
+  | "idempotency_conflict"
+  | "invalid_request"
+  | "run_not_running"
+  | "not_retryable"
+  | "no_eligible_member";
+
+function researchNodeCommandErrorKey(error: unknown): ResearchNodeCommandErrorKey | null {
+  if (!(error instanceof ApiError) || (error.status !== 403 && error.status !== 409)) {
+    return null;
+  }
+  if (!error.body || typeof error.body !== "object") return null;
+  const messageKey = (error.body as Record<string, unknown>).message_key;
+  if (typeof messageKey !== "string") return null;
+  const key = messageKey.replace(/^research\.node_command\./, "");
+  switch (key) {
+    case "permission_denied":
+    case "session_terminal":
+    case "node_stale":
+    case "state_version_conflict":
+    case "action_not_allowed":
+    case "idempotency_conflict":
+    case "invalid_request":
+    case "run_not_running":
+    case "not_retryable":
+    case "no_eligible_member":
+      return key;
+    default:
+      return null;
+  }
 }
 
 export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
@@ -327,6 +365,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const reportControllerRef = useRef<{ open: () => void } | null>(null);
+  const continueRequestRef = useRef<{
+    sessionId: string;
+    nodeId: string;
+    requestId: string;
+  } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
@@ -341,6 +384,68 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
     },
     onError: (err) => mutationErrorToast(t(($) => $.session_page.send_failed), err),
+  });
+
+  const continueNode = useMutation({
+    mutationFn: (node: ResearchGraphNode) => {
+      const current = continueRequestRef.current;
+      const requestId =
+        current?.sessionId === sessionId && current.nodeId === node.id
+          ? current.requestId
+          : createSafeId();
+      continueRequestRef.current = { sessionId, nodeId: node.id, requestId };
+      return api.postResearchNodeCommand(sessionId, node.id, {
+        action: "continue",
+        client_request_id: requestId,
+      });
+    },
+    onSuccess: (_response, node) => {
+      if (continueRequestRef.current?.nodeId === node.id) {
+        continueRequestRef.current = null;
+      }
+    },
+    onError: (error) => {
+      const key = researchNodeCommandErrorKey(error);
+      switch (key) {
+        case "permission_denied":
+          showErrorToast(t(($) => $.d5.detail.permission_denied));
+          break;
+        case "session_terminal":
+          showErrorToast(t(($) => $.d5.detail.session_terminal));
+          break;
+        case "node_stale":
+          showErrorToast(t(($) => $.d5.detail.node_stale));
+          break;
+        case "state_version_conflict":
+          showErrorToast(t(($) => $.d5.detail.state_version_conflict));
+          break;
+        case "action_not_allowed":
+          showErrorToast(t(($) => $.d5.detail.action_not_allowed));
+          break;
+        case "idempotency_conflict":
+          showErrorToast(t(($) => $.d5.detail.idempotency_conflict));
+          break;
+        case "invalid_request":
+          showErrorToast(t(($) => $.d5.detail.invalid_request));
+          break;
+        case "run_not_running":
+          showErrorToast(t(($) => $.d5.detail.run_not_running));
+          break;
+        case "not_retryable":
+          showErrorToast(t(($) => $.d5.detail.not_retryable));
+          break;
+        case "no_eligible_member":
+          showErrorToast(t(($) => $.d5.detail.no_eligible_member));
+          break;
+        default:
+          showErrorToast(t(($) => $.d5.detail.continue_failed));
+      }
+    },
+    onSettled: () => {
+      void refetch();
+      void refetchTypedGraph();
+      projectionGateway.refetch();
+    },
   });
 
   const stop = useMutation({
@@ -840,10 +945,9 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 placement="inline"
                 onClose={() => handleSelectCanvasNode(null)}
                 onOpenReport={() => reportControllerRef.current?.open()}
-                onContinueDeepening={() =>
-                  postUser(
-                    t(($) => $.d5.detail.continue_message, { title: selectedNode.title }),
-                  )
+                onContinueDeepening={() => continueNode.mutate(selectedNode)}
+                continueDeepeningPending={
+                  continueNode.isPending
                 }
               />
             ) : (

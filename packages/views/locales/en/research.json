@@ -1049,7 +1049,18 @@
     "detail": {
       "open_report": "Open full report",
       "continue_deepening": "Continue deepening",
-      "continue_message": "Please continue deepening the research on: {{title}}"
+      "continue_pending": "Queuing…",
+      "continue_failed": "Could not continue this path. Refresh and try again.",
+      "permission_denied": "You do not have permission to continue this path.",
+      "session_terminal": "This research session is already finished.",
+      "node_stale": "This node changed. The canvas has been refreshed; try again.",
+      "state_version_conflict": "This path changed. Review the refreshed node before retrying.",
+      "action_not_allowed": "This node cannot be continued in its current state.",
+      "idempotency_conflict": "This request conflicts with an earlier action. Refresh and try again.",
+      "invalid_request": "This node cannot accept that request.",
+      "run_not_running": "Resume the research session before continuing this path.",
+      "not_retryable": "This node is not retryable in its current state.",
+      "no_eligible_member": "No eligible research agent is available for this path."
     },
     "summary": {
       "title": "Constellation · {{loaded}} loaded directions",

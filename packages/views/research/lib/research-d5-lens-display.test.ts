@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { TypedGraphResponse } from "@multica/core/research";
 import { buildStarCanvasViewModel } from "../star-graph";
-import { buildD5LensDisplayHints, isResearchD5Lens } from "./research-d5-lens-display";
+import {
+  buildD5LensDisplayHints,
+  focusD5LensDisplayHints,
+  isResearchD5Lens,
+} from "./research-d5-lens-display";
 
 const typed = {
   session_id: "s1",
@@ -73,5 +77,52 @@ describe("isResearchD5Lens", () => {
   it("accepts known lens ids", () => {
     expect(isResearchD5Lens("confidence")).toBe(true);
     expect(isResearchD5Lens("nope")).toBe(false);
+  });
+});
+
+describe("focusD5LensDisplayHints", () => {
+  it("lets selected first-order relations override the broad relations lens", () => {
+    const broad = buildD5LensDisplayHints("relations", typed, model);
+    const focused = focusD5LensDisplayHints(
+      broad,
+      model,
+      "high",
+      new Set(["high", "round1", "agent"]),
+    )!;
+
+    expect(focused.emphasizedNodeIds).toEqual(
+      new Set(["high", "agent", "round1"]),
+    );
+    expect(focused.dimmedNodeIds.has("low")).toBe(true);
+    expect(focused.emphasizedRelationIds).toEqual(new Set(["e1", "e2"]));
+  });
+
+  it("dims relations outside the selected node's direct neighborhood", () => {
+    const extended = {
+      ...model,
+      relations: [
+        ...model.relations,
+        {
+          ...model.relations[0]!,
+          id: "e3",
+          fromNodeId: "low",
+          toNodeId: "unknown",
+        },
+      ],
+    };
+    const focused = focusD5LensDisplayHints(
+      undefined,
+      extended,
+      "high",
+      new Set(["high", "round1", "agent"]),
+    )!;
+
+    expect(focused.dimmedRelationIds.has("e3")).toBe(true);
+    expect(focused.emphasizedRelationIds.has("e3")).toBe(false);
+  });
+
+  it("preserves the active lens when no node is selected", () => {
+    const broad = buildD5LensDisplayHints("relations", typed, model);
+    expect(focusD5LensDisplayHints(broad, model, null, undefined)).toBe(broad);
   });
 });

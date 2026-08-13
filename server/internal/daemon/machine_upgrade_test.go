@@ -18,6 +18,7 @@ import (
 )
 
 func TestHandleMachineUpgradeAcceptsOnlyExactRunningVersion(t *testing.T) {
+	overrideVersionStoreRoot(t, t.TempDir())
 	accepted := make(chan map[string]string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/daemon/runtimes/runtime-1/machine-upgrades/upgrade-1/accept" {
@@ -50,6 +51,7 @@ func TestHandleMachineUpgradeAcceptsOnlyExactRunningVersion(t *testing.T) {
 }
 
 func TestHandleMachineUpgradeAlreadyCurrentAttestsEveryWorkspaceConnection(t *testing.T) {
+	overrideVersionStoreRoot(t, t.TempDir())
 	previousDetect := detectAgentVersion
 	detectAgentVersion = func(context.Context, string) (string, error) { return "codex-cli 9.9.9", nil }
 	t.Cleanup(func() { detectAgentVersion = previousDetect })
@@ -402,8 +404,8 @@ func TestInterruptedMachineUpgradeRecoveryDoesNotReplayJournalSupersededByExplic
 	}
 
 	restarted, err := d.recoverInterruptedMachineUpgrade(context.Background())
-	if err != nil || restarted {
-		t.Fatalf("superseded recovery restarted=%v err=%v", restarted, err)
+	if restarted || err == nil || !strings.Contains(err.Error(), "candidate_ready journal requires target") {
+		t.Fatalf("stale candidate_ready recovery restarted=%v err=%v, want fail-closed target mismatch", restarted, err)
 	}
 	if restartCalls != 0 {
 		t.Fatalf("superseded recovery restarted process %d times", restartCalls)
@@ -482,9 +484,9 @@ func TestInterruptedMachineUpgradeRecoveryDoesNotSupersedeRollbackPending(t *tes
 	}
 }
 
-func TestCreateMachineUpgradeJournalRequiresIncumbentGenerationEvidence(t *testing.T) {
+func TestCreateMachineUpgradeJournalFailsWhenStateDirUnavailable(t *testing.T) {
 	previousRoot := versionStoreRootFn
-	versionStoreRootFn = func() (string, error) { return "", fmt.Errorf("VersionStore unavailable") }
+	versionStoreRootFn = func() (string, error) { return "", fmt.Errorf("machine state unavailable") }
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
 
 	d := &Daemon{}
@@ -493,7 +495,7 @@ func TestCreateMachineUpgradeJournalRequiresIncumbentGenerationEvidence(t *testi
 		ID: "upgrade-1", AcceptedGeneration: &acceptedGeneration,
 	}, "v9.9.9", "v10.0.0")
 	if err == nil || journal != nil {
-		t.Fatalf("journal=%+v err=%v, want fail-closed evidence error", journal, err)
+		t.Fatalf("journal=%+v err=%v, want fail-closed state-dir error", journal, err)
 	}
 }
 
@@ -801,24 +803,12 @@ func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale
 	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
 
-	previousOpen := openVersionStoreFn
-	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
-		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
+	previousStage := stageReleaseFn
+	stageReleaseFn = func(targetVersion string, _ time.Duration, _ string) (string, error) {
+		t.Setenv("HOME", filepath.Dir(storeRoot))
+		return cli.WriteReleaseScratch(targetVersion, []byte("#!/bin/sh\necho 'multica 0.4.17'\n"))
 	}
-	t.Cleanup(func() { openVersionStoreFn = previousOpen })
-
-	previousStage := downloadAndStageReleaseFn
-	downloadAndStageReleaseFn = func(
-		ctx context.Context,
-		store *cli.VersionStore,
-		targetVersion string,
-		_ time.Duration,
-		_ string,
-	) (cli.StageReleaseResult, error) {
-		candidate := []byte("#!/bin/sh\necho 'multica 0.4.17'\n")
-		return cli.StageReleaseBytes(ctx, store, targetVersion, candidate, "asset.tar.gz")
-	}
-	t.Cleanup(func() { downloadAndStageReleaseFn = previousStage })
+	t.Cleanup(func() { stageReleaseFn = previousStage })
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/accept") {
@@ -854,16 +844,8 @@ func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale
 		TargetVersion: "v0.4.17",
 	})
 
-	store, err := openVersionStoreFn(storeRoot)
-	if err != nil {
-		t.Fatalf("open version store: %v", err)
-	}
-	state, err := store.ReadActivationState()
-	if err != nil {
-		t.Fatalf("read activation state: %v", err)
-	}
-	if state.ActiveVersion != "v0.4.17" {
-		t.Fatalf("active version = %q, want the accepted target v0.4.17", state.ActiveVersion)
+	if d.stagedUpgradePath == "" {
+		t.Fatal("accepted target was not staged")
 	}
 }
 
@@ -985,32 +967,12 @@ func TestMachineUpgradeHandoffFailsClosedWhenClaimIsStillInFlightAtDeadline(t *t
 	d.exitClaim()
 }
 
-func configureMachineUpgradeRecoveryVersionStore(t *testing.T, versions ...string) *cli.VersionStore {
+func configureMachineUpgradeRecoveryVersionStore(t *testing.T, _ ...string) {
 	t.Helper()
 	storeRoot := filepath.Join(t.TempDir(), "store")
 	previousRoot := versionStoreRootFn
 	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
-
-	previousOpen := openVersionStoreFn
-	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
-		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
-	}
-	t.Cleanup(func() { openVersionStoreFn = previousOpen })
-
-	store, err := openVersionStoreFn(storeRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for generation, version := range versions {
-		if _, err := cli.StageReleaseBytes(context.Background(), store, version, []byte("candidate"), "asset.tar.gz"); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.CompareAndSwapActivation(context.Background(), uint64(generation), version); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return store
 }
 
 func stringPtr(value string) *string { return &value }

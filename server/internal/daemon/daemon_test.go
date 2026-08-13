@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -298,26 +296,22 @@ func TestTriggerRestart_BrewPrefixUnavailable_NoKnownPrefix_KeepsExecutable(t *t
 // counterpart to cmd_daemon.go's resolveDaemonLaunchBinary, covering the
 // (rare) triggerRestart callers that reach restartBinaryPath's fallback
 // without d.restartBinary already set.
-func TestTriggerRestart_PrefersVersionStoreActiveOverExecutable(t *testing.T) {
+func TestTriggerRestart_PrefersInstallPath(t *testing.T) {
 	originalIsBrewInstall := isBrewInstall
 	t.Cleanup(func() { isBrewInstall = originalIsBrewInstall })
 	isBrewInstall = func() bool { return false }
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	storeRoot := filepath.Join(home, ".local", "share", "multica")
-	store, err := cli.NewVersionStore(storeRoot, "linux", func(context.Context, string, string) error { return nil })
+	install, err := cli.DefaultInstallPath()
 	if err != nil {
-		t.Fatalf("NewVersionStore: %v", err)
+		t.Fatal(err)
 	}
-	data := []byte("multica-v0.3.88")
-	sum := sha256.Sum256(data)
-	staged, err := store.StageBinary(context.Background(), "v0.3.88", data, hex.EncodeToString(sum[:]), 0o755)
-	if err != nil {
-		t.Fatalf("StageBinary: %v", err)
+	if err := os.MkdirAll(filepath.Dir(install), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v0.3.88"); err != nil {
-		t.Fatalf("CompareAndSwapActivation: %v", err)
+	if err := os.WriteFile(install, []byte("path-computer"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 
 	d := &Daemon{
@@ -325,8 +319,8 @@ func TestTriggerRestart_PrefersVersionStoreActiveOverExecutable(t *testing.T) {
 	}
 	d.triggerRestart()
 
-	if got := d.RestartBinary(); got != staged.BinaryPath {
-		t.Fatalf("restart binary = %q, want staged Active path %q", got, staged.BinaryPath)
+	if got := d.RestartBinary(); got != install {
+		t.Fatalf("restart binary = %q, want install path %q", got, install)
 	}
 }
 

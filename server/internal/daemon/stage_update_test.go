@@ -26,30 +26,12 @@ func TestRunStageUpdateDoesNotTouchSiblingExecutable(t *testing.T) {
 	if err := os.WriteFile(fakeExe, original, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	storeRoot := filepath.Join(root, "store")
-	prevRoot := versionStoreRootFn
-	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
-	t.Cleanup(func() { versionStoreRootFn = prevRoot })
-
-	prevStage := downloadAndStageReleaseFn
-	downloadAndStageReleaseFn = func(
-		ctx context.Context,
-		store *cli.VersionStore,
-		targetVersion string,
-		_ time.Duration,
-		_ string,
-	) (cli.StageReleaseResult, error) {
-		data := []byte("candidate-v0.3.78")
-		return cli.StageReleaseBytes(ctx, store, targetVersion, data, "asset.tar.gz")
+	t.Setenv("HOME", root)
+	prevStage := stageReleaseFn
+	stageReleaseFn = func(targetVersion string, _ time.Duration, _ string) (string, error) {
+		return cli.WriteReleaseScratch(targetVersion, []byte("candidate-v0.3.78"))
 	}
-	t.Cleanup(func() { downloadAndStageReleaseFn = prevStage })
-
-	// Verifier no-op so StageBinary accepts our fake payload.
-	prevOpen := openVersionStoreFn
-	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
-		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
-	}
-	t.Cleanup(func() { openVersionStoreFn = prevOpen })
+	t.Cleanup(func() { stageReleaseFn = prevStage })
 
 	d := &Daemon{
 		cfg:    Config{CLIVersion: "v0.3.77"},
@@ -84,31 +66,15 @@ func TestRunStageUpdateUsesServerDispatchedBaseURLWithNoEnvVarFallback(t *testin
 	t.Setenv(cli.ReleaseManifestBaseURLEnv, "") // explicitly no env var fallback
 
 	root := t.TempDir()
-	storeRoot := filepath.Join(root, "store")
-	prevRoot := versionStoreRootFn
-	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
-	t.Cleanup(func() { versionStoreRootFn = prevRoot })
-
-	prevOpen := openVersionStoreFn
-	openVersionStoreFn = func(root string) (*cli.VersionStore, error) {
-		return cli.NewVersionStore(root, "linux", func(context.Context, string, string) error { return nil })
-	}
-	t.Cleanup(func() { openVersionStoreFn = prevOpen })
+	t.Setenv("HOME", root)
 
 	var gotServerDispatched string
-	prevStage := downloadAndStageReleaseFn
-	downloadAndStageReleaseFn = func(
-		ctx context.Context,
-		store *cli.VersionStore,
-		targetVersion string,
-		_ time.Duration,
-		serverDispatched string,
-	) (cli.StageReleaseResult, error) {
+	prevStage := stageReleaseFn
+	stageReleaseFn = func(targetVersion string, _ time.Duration, serverDispatched string) (string, error) {
 		gotServerDispatched = serverDispatched
-		data := []byte("candidate-v0.3.78")
-		return cli.StageReleaseBytes(ctx, store, targetVersion, data, "asset.tar.gz")
+		return cli.WriteReleaseScratch(targetVersion, []byte("candidate-v0.3.78"))
 	}
-	t.Cleanup(func() { downloadAndStageReleaseFn = prevStage })
+	t.Cleanup(func() { stageReleaseFn = prevStage })
 
 	d := &Daemon{
 		cfg:    Config{CLIVersion: "v0.3.77"},
@@ -127,6 +93,45 @@ func TestRunStageUpdateUsesServerDispatchedBaseURLWithNoEnvVarFallback(t *testin
 	}
 	if gotServerDispatched != "https://server-dispatched.example.com/computer" {
 		t.Fatalf("downloadAndStageReleaseFn's serverDispatched = %q, want the heartbeat-cached value (check and download must converge on the same base URL)", gotServerDispatched)
+	}
+}
+
+func TestCommitStagedActivationSwapsInstallPathAndKeepsPrev(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	install, err := cli.DefaultInstallPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(install), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(install, []byte("old-path-computer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := cli.WriteReleaseScratch("v0.4.17", []byte("new-path-computer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{
+		cfg:               Config{CLIVersion: "v0.4.16"},
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		stagedUpgradePath: staged,
+	}
+	got, err := d.commitStagedActivation(context.Background(), "upgrade-1", "v0.4.17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != install {
+		t.Fatalf("restart path = %q, want install path %q", got, install)
+	}
+	current, err := os.ReadFile(install)
+	if err != nil || string(current) != "new-path-computer" {
+		t.Fatalf("install path = %q, %v", current, err)
+	}
+	prev, err := os.ReadFile(install + ".prev")
+	if err != nil || string(prev) != "old-path-computer" {
+		t.Fatalf("prev = %q, %v", prev, err)
 	}
 }
 

@@ -3,7 +3,6 @@ package daemon
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -16,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -128,22 +126,6 @@ func TestDetachedMachineUpgradeTakeoverRequiresExactAuthenticatedProof(t *testin
 	previousRoot := versionStoreRootFn
 	versionStoreRootFn = func() (string, error) { return filepath.Join(root, "store"), nil }
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
-	store, err := cli.NewVersionStore(filepath.Join(root, "store"), "linux", func(context.Context, string, string) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, version := range []string{"v9.9.9", "v10.0.0"} {
-		data := []byte("binary-" + version)
-		if _, err := store.StageBinary(context.Background(), version, data, fmt.Sprintf("%x", sha256.Sum256(data)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := store.CompareAndSwapActivation(context.Background(), 0, "v9.9.9"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CompareAndSwapActivation(context.Background(), 1, "v10.0.0"); err != nil {
-		t.Fatal(err)
-	}
 
 	attestations := 0
 	var upstreamProof map[string]any

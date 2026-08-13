@@ -257,6 +257,7 @@ import {
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
 import {
+  CONVERSATION_LIST_PANE_BG,
   CONVERSATION_SIDEBAR_ROW_ACTIVE,
   CONVERSATION_SIDEBAR_ROW_IDLE,
   CONVERSATION_SIDEBAR_UNREAD_BADGE,
@@ -3100,14 +3101,14 @@ export function ChannelsPage({
   };
 
   // Channel list pane. Full-width on mobile (list-first); a 280px sidebar on
-  // desktop. LRM-551 lock A: same chrome plane as app sidebar (`bg-sidebar`);
-  // 1px `border-r border-border` only beside the stream pane (dropped on
-  // mobile where the list stands alone). Search is explicit `bg-background`
-  // so it reads as an inset white field on sidebar chrome.
+  // desktop. Surface plane (`bg-background`) so it stays distinct from the
+  // app-sidebar chrome. 1px `border-r border-border` only beside the stream
+  // pane (dropped on mobile where the list stands alone).
   const listPane = (
     <aside
       className={cn(
-        "flex flex-1 min-h-0 flex-col bg-sidebar",
+        "flex flex-1 min-h-0 flex-col",
+        CONVERSATION_LIST_PANE_BG,
         isMobile ? "min-w-0" : "border-r border-border",
       )}
     >
@@ -3319,7 +3320,7 @@ export function ChannelsPage({
                         <ContextMenu key={channel.id}>
                           <ContextMenuTrigger
                             render={
-                              <div className="group/archived relative mb-0.5 rounded-lg transition-colors hover:bg-sidebar-accent" />
+                              <div className={cn("group/archived relative mb-0.5 rounded-lg transition-colors", CONVERSATION_SIDEBAR_ROW_IDLE)} />
                             }
                           >
                             <button

@@ -195,6 +195,10 @@
 - Avatar/Profile/列表/筛选只显示绿色 Online、灰色或空心 Offline；加载时省略。Working/Thinking/Error 属于独立 Activity 槽，不能把头像点染黄或加 pulse。Disconnected 是 Computer 词汇；Stopped/Blocked/Crashed 只进诊断、Timeline 或 recovery，不进紧凑 Agent Presence。
 - **物**：服务端 `internal/handler/agent_presence.go`、`daemonws.Hub` current-Runner disconnect fence、`agent_presence_test.go`；Web `agents/agent-presence.ts`、`agent-presence-updaters.ts`、`use-realtime-sync.ts`；`actor-avatar.tsx` 与 `agents/presence-contract.test.ts`。结构守卫会阻止 Runtime/Task/Health 推导、per-avatar Activity 染色和旧 hook 回流。
 
+### 2.9 Messages 左两列不得同色 — `可执行`（⑤）
+- **契约**：workspace 导航 = `bg-sidebar`；会话列表 = `bg-background`。LRM-551 lock A（两列同走 sidebar chrome）已否——同色会把导航和会话列表糊成一块。
+- **物**：`conversation-sidebar-styles.ts` 的 `CONVERSATION_LIST_PANE_BG` / 行选中 `bg-muted` / hover `bg-accent`；`channels-page-list-bg.test.ts` + `conversation-sidebar-styles.test.ts`。规范源：`docs/design-product-surfaces.md`。
+
 ## 3. 属性显示（跨面）
 
 ### 3.1 本家属性语法 — `可执行`（task #518）

@@ -290,6 +290,14 @@
     transparent 2px 6px
   );
 }
+.sg-line-demo.sg-neutral {
+  height: 1px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--muted-foreground) 0 3px,
+    transparent 3px 7px
+  );
+}
 
 /* ---- On-boarding guide (3-step, skippable) ---- */
 .sg-guide {

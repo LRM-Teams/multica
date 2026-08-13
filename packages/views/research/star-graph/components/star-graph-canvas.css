@@ -37,7 +37,8 @@
 .sg-edge-support,
 .sg-edge-challenge,
 .sg-edge-newdir,
-.sg-edge-merge {
+.sg-edge-merge,
+.sg-edge-neutral {
   fill: none;
   stroke-width: 1.5;
   opacity: 0.68;
@@ -59,6 +60,11 @@
 .sg-edge-merge {
   stroke: url(#sg-merge-gradient);
   stroke-width: 2.5;
+}
+.sg-edge-neutral {
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 3 5;
+  opacity: 0.48;
 }
 .sg-cluster-boundary {
   position: absolute;

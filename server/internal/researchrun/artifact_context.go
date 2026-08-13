@@ -39,6 +39,7 @@ type artifactVersionCandidate struct {
 	RepresentationBytes []byte
 	RepresentationHash  string
 	OmissionReason      string
+	DomainStatus        string
 }
 
 type dispatchManifestPlan struct {
@@ -93,9 +94,7 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 			omissions = append(omissions, candidate)
 			continue
 		}
-		admitted, deny := m.policy.LegacyAdmissionAllowed(
-			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
-		)
+		admitted, deny := m.policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts())
 		if !admitted {
 			candidate.OmissionReason = m.policy.ManifestOmissionReason(deny)
 			omissions = append(omissions, candidate)
@@ -136,6 +135,13 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		ManifestHash:        manifestHash,
 		Purpose:             purpose,
 	}, nil
+}
+
+func (candidate artifactVersionCandidate) legacyAdmissionFacts() legacyAdmissionFacts {
+	return legacyAdmissionFacts{
+		Kind: candidate.Kind, Lifecycle: candidate.Lifecycle,
+		Provenance: candidate.Provenance, DomainStatus: candidate.DomainStatus,
+	}
 }
 
 func sortManifestEntryCandidates(entries []artifactVersionCandidate) {
@@ -217,7 +223,20 @@ func loadArtifactVersionCandidates(
 		  v.access_level,
 		  p.lifecycle_status,
 		  p.provenance_completeness,
-		  v.content_hash
+		  v.content_hash,
+		  COALESCE(CASE p.entity_kind
+		    WHEN 'task' THEN (SELECT t.status FROM research_task t
+		      WHERE (t.workspace_id,t.session_id,t.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'claim' THEN (SELECT c.status FROM research_claim c
+		      WHERE (c.workspace_id,c.session_id,c.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'source_snapshot' THEN (SELECT s.verification_status FROM research_source_snapshot s
+		      WHERE (s.workspace_id,s.session_id,s.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'observation' THEN (SELECT o.verification_status FROM research_observation o
+		      WHERE (o.workspace_id,o.session_id,o.id)=(p.workspace_id,p.session_id,p.id))
+		    WHEN 'evidence_link' THEN (SELECT e.verification_status FROM research_claim_evidence e
+		      WHERE (e.workspace_id,e.session_id,e.id)=(p.workspace_id,p.session_id,p.id))
+		    ELSE ''
+		  END, '') AS domain_status
 		FROM research_artifact_passport p
 		JOIN research_artifact_version v
 		  ON v.workspace_id = p.workspace_id
@@ -241,7 +260,7 @@ func loadArtifactVersionCandidates(
 		if err = rows.Scan(
 			&candidate.VersionRowID, &candidate.ArtifactID, &kindRaw,
 			&candidate.Version, &candidate.EligibilityRevision,
-			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash,
+			&accessRaw, &lifecycleRaw, &provenanceRaw, &candidate.ContentHash, &candidate.DomainStatus,
 		); err != nil {
 			return nil, err
 		}

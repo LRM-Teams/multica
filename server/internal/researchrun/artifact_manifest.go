@@ -474,9 +474,7 @@ func loadLegacyManifestVisibleArtifactIDsTx(
 		if module.policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
 			continue
 		}
-		admitted, _ := module.policy.LegacyAdmissionAllowed(
-			candidate.Kind, candidate.Lifecycle, candidate.Provenance,
-		)
+		admitted, _ := module.policy.LegacyAdmissionAllowedFacts(candidate.legacyAdmissionFacts())
 		if !admitted {
 			continue
 		}

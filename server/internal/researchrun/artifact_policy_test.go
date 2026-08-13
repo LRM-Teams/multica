@@ -78,6 +78,65 @@ func TestArtifactPolicyLegacyAdmissionMatrix(t *testing.T) {
 	}
 }
 
+func TestArtifactPolicyLegacyDomainAdmissionMatrix(t *testing.T) {
+	policy := ArtifactPolicy{}
+	base := legacyAdmissionFacts{
+		Lifecycle:  ArtifactLifecycleRegistered,
+		Provenance: ArtifactProvenancePartial,
+	}
+	tests := []struct {
+		name, status string
+		kind         ArtifactEntityKind
+		wantOK       bool
+	}{
+		{name: "task pending", kind: ArtifactKindTask, status: "pending", wantOK: true},
+		{name: "task ready", kind: ArtifactKindTask, status: "ready", wantOK: true},
+		{name: "task dispatching", kind: ArtifactKindTask, status: "dispatching", wantOK: true},
+		{name: "task running", kind: ArtifactKindTask, status: "running", wantOK: true},
+		{name: "task succeeded lineage", kind: ArtifactKindTask, status: "succeeded", wantOK: true},
+		{name: "task failed lineage", kind: ArtifactKindTask, status: "failed", wantOK: true},
+		{name: "task blocked lineage", kind: ArtifactKindTask, status: "blocked", wantOK: true},
+		{name: "task obsolete lineage", kind: ArtifactKindTask, status: "obsolete", wantOK: true},
+		{name: "task cancelled lineage", kind: ArtifactKindTask, status: "cancelled", wantOK: true},
+		{name: "task unknown", kind: ArtifactKindTask, status: "paused"},
+		{name: "attempt dispatching", kind: ArtifactKindAttempt, status: "dispatching", wantOK: true},
+		{name: "attempt running", kind: ArtifactKindAttempt, status: "running", wantOK: true},
+		{name: "attempt cancelling", kind: ArtifactKindAttempt, status: "cancelling", wantOK: true},
+		{name: "attempt succeeded lineage", kind: ArtifactKindAttempt, status: "succeeded", wantOK: true},
+		{name: "attempt failed lineage", kind: ArtifactKindAttempt, status: "failed", wantOK: true},
+		{name: "attempt cancelled lineage", kind: ArtifactKindAttempt, status: "cancelled", wantOK: true},
+		{name: "attempt lost lineage", kind: ArtifactKindAttempt, status: "lost", wantOK: true},
+		{name: "attempt obsolete invalid", kind: ArtifactKindAttempt, status: "obsolete"},
+		{name: "claim proposed", kind: ArtifactKindClaim, status: "proposed", wantOK: true},
+		{name: "claim supported", kind: ArtifactKindClaim, status: "supported", wantOK: true},
+		{name: "claim disputed", kind: ArtifactKindClaim, status: "disputed", wantOK: true},
+		{name: "claim refuted lineage", kind: ArtifactKindClaim, status: "refuted", wantOK: true},
+		{name: "claim unresolved", kind: ArtifactKindClaim, status: "unresolved", wantOK: true},
+		{name: "claim superseded", kind: ArtifactKindClaim, status: "superseded"},
+		{name: "claim unknown", kind: ArtifactKindClaim, status: "accepted"},
+		{name: "source pending", kind: ArtifactKindSourceSnapshot, status: "pending", wantOK: true},
+		{name: "source verified", kind: ArtifactKindSourceSnapshot, status: "verified", wantOK: true},
+		{name: "source rejected", kind: ArtifactKindSourceSnapshot, status: "rejected"},
+		{name: "observation unknown", kind: ArtifactKindObservation, status: "unknown"},
+		{name: "evidence verified", kind: ArtifactKindEvidenceLink, status: "verified", wantOK: true},
+		{name: "context manifest never legacy admitted", kind: ArtifactKindContextManifest},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			facts := base
+			facts.Kind = tc.kind
+			facts.DomainStatus = tc.status
+			ok, deny := policy.LegacyAdmissionAllowedFacts(facts)
+			if ok != tc.wantOK {
+				t.Fatalf("ok=%v deny=%q want ok=%v", ok, deny, tc.wantOK)
+			}
+			if !tc.wantOK && deny != ArtifactDenyDomainFact {
+				t.Fatalf("deny=%q want %q", deny, ArtifactDenyDomainFact)
+			}
+		})
+	}
+}
+
 func TestArtifactPolicyAccessMatrix(t *testing.T) {
 	policy := ArtifactPolicy{}
 	clearances := []ArtifactClearance{

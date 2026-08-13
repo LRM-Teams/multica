@@ -230,9 +230,11 @@ export function mergeTypedGraphPages(
   const clusterById = new Map<string, TypedGraphCluster>();
   const first = pages[0]!;
   let graphVersion = first.graph_version ?? 0;
+  let totalNodeCount = first.total_node_count ?? null;
 
   for (const page of pages) {
     graphVersion = Math.max(graphVersion, page.graph_version ?? 0);
+    if (page.total_node_count != null) totalNodeCount = page.total_node_count;
     for (const node of page.nodes ?? []) {
       if (!node?.id) continue;
       if (!nodeById.has(node.id)) orderedNodeIds.push(node.id);
@@ -255,7 +257,7 @@ export function mergeTypedGraphPages(
   const merged: TypedGraphResponse = {
     session_id: first.session_id,
     graph_version: graphVersion,
-    total_node_count: first.total_node_count ?? null,
+    total_node_count: totalNodeCount,
     nodes: orderedNodeIds.map((id) => nodeById.get(id)!),
     edges: [...edgeByKey.values()],
     clusters: [...clusterById.values()],
@@ -272,12 +274,30 @@ export function mergeTypedGraphPages(
   const budget = options?.nodeBudget ?? RESEARCH_TYPED_GRAPH_CACHE_NODE_BUDGET;
   if (merged.nodes.length <= budget) return merged;
 
+  const rootId = selectTypedGraphRootCandidateId(merged.nodes);
   const keepIds = selectTypedGraphNodeIdsWithinBudget(
     orderedNodeIds,
     budget,
-    options?.pinNodeIds ?? [],
+    [rootId, ...(options?.pinNodeIds ?? [])],
   );
   return filterTypedGraphToNodeIds(merged, keepIds);
+}
+
+/** Mirrors the deterministic layout root precedence before cache trimming. */
+export function selectTypedGraphRootCandidateId(
+  nodes: readonly TypedGraphNode[],
+): string {
+  const ordered = [...nodes]
+    .filter((node) => node.id)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return (
+    ordered.find((node) => (node.level || "").trim().toLowerCase() === "xxl") ??
+    ordered.find(
+      (node) =>
+        !node.cluster_id && !node.parent_id && !node.derived_from,
+    ) ??
+    ordered[0]
+  )?.id ?? "";
 }
 
 function selectTypedGraphNodeIdsWithinBudget(
@@ -285,12 +305,14 @@ function selectTypedGraphNodeIdsWithinBudget(
   budget: number,
   pinNodeIds: readonly string[],
 ): Set<string> {
-  const keep = new Set(pinNodeIds.filter(Boolean));
-  for (let i = orderedNodeIds.length - 1; i >= 0 && keep.size < budget; i -= 1) {
-    keep.add(orderedNodeIds[i]!);
-  }
+  const limit = Math.max(0, Math.floor(budget));
+  const keep = new Set<string>();
   for (const pin of pinNodeIds) {
+    if (keep.size >= limit) break;
     if (pin) keep.add(pin);
+  }
+  for (let i = orderedNodeIds.length - 1; i >= 0 && keep.size < limit; i -= 1) {
+    keep.add(orderedNodeIds[i]!);
   }
   return keep;
 }

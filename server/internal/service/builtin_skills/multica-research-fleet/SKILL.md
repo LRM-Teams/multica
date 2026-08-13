@@ -32,6 +32,11 @@ represented by a bounded excerpt plus content hash; exact Observation quotes
 were already checked against the immutable full snapshot at ingestion. V3–V5
 non-plan tasks inherit the accepted Method for the current goal/plan version.
 V4/V5 also expose the accepted Claim-level evidence standards.
+The top-level compatibility `sources`, `messages`, `product_rounds`,
+`thought_strategies`, and `report` families contain only the representations
+frozen for this Attempt. Later session activity never appears in that view.
+Ordinary task reads do not receive Stage Evaluation content; it remains in the
+separate evaluation-private compartment for an independently authorized grader.
 
 2. Perform the assigned investigation according to `run.method`. Explore
 beyond the first plausible answer. For V4/V5, each Claim references an accepted

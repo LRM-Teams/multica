@@ -307,7 +307,7 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	authorized.Purpose = plan.Purpose
 	authorized.PolicyWatermark = plan.PolicyWatermark
 	plan = authorized
-	if err = freezeEvidenceRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
+	if err = freezeManifestRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
 		return dispatchManifestPlan{}, err
 	}
 	plan.ManifestHash = hashDispatchManifest(dispatchManifestHashInput{

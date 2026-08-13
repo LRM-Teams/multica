@@ -1025,6 +1025,10 @@
   "d5": {
     "brand_title": "Research Constellation · D5",
     "brand_subtitle": "XXL / XL / L / M 成果节点 · S 级 Agent 工作节点",
+    "projection": {
+      "classic": "经典投影",
+      "classic_hint": "当前会话暂不支持 V6 实时投影，正在使用经典投影视图"
+    },
     "lens_group": "显示 Lens",
     "lens": {
       "relations": "关系",

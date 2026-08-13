@@ -854,6 +854,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         goalHistory={goalHistory}
         goalImpact={goalImpact}
         typedGraphNodes={displayTypedGraph?.nodes ?? []}
+        projectionSource={projectionGateway.source}
         session={session}
         contract={data.run?.contract}
         canConfirm={canConfirm}

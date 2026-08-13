@@ -17,3 +17,11 @@ export function useRunnerActivitySummary(
       data.items.find((item) => item.agent_id === agentId)?.summary ?? null,
   });
 }
+
+/** Same Workspace-batched summary query, without per-agent select. */
+export function useRunnerActivitySummaries(wsId: string | undefined) {
+  return useQuery({
+    ...runnerActivitySummaryOptions(wsId ?? ""),
+    enabled: !!wsId,
+  });
+}

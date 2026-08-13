@@ -97,6 +97,7 @@ import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-name";
 import { projectListOptions } from "@multica/core/projects/queries";
 import type {
   AgentPanelIdentitySnapshot,
@@ -241,6 +242,7 @@ import {
 } from "./conversation-surface";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { ConversationActivityStrip } from "./conversation-activity-strip";
+import { ComposerAgentActivityStrip } from "./composer-agent-activity-strip";
 import {
   dmAgentBubbleActivity,
   useAgentBubbleActivityByAgent,
@@ -1173,6 +1175,22 @@ export function ChannelsPage({
   // <ThreadPanel highlightMessageId> below) and skip it here.
   const isThreadDeepLink = !!threadDeepLinkId;
   const { data: channelMembers = [], isPending: membersPending } = useQuery(channelMembersOptions(active?.id ?? ""));
+  const channelActivityAgents = useMemo(
+    () =>
+      channelMembers.flatMap((member) => {
+        if (member.member_type !== "agent") return [];
+        const display = member.display_name?.trim() ?? "";
+        const handle = member.name?.trim() ?? "";
+        const name =
+          display && !isDirectoryActorMiss(display)
+            ? display
+            : handle && !isDirectoryActorMiss(handle)
+              ? handle
+              : "";
+        return [{ agentId: member.member_id, name }];
+      }),
+    [channelMembers],
+  );
   // LRM-872 / LRM-879 — server per-row can_remove (inviter + WS admin). Only
   // ordinary group channels expose the endpoint (system/DM → 404).
   const memberCapsEnabled =
@@ -4208,6 +4226,7 @@ export function ChannelsPage({
                 </ReadOnlyConversationBanner>
               ) : (
                 <>
+                  <ComposerAgentActivityStrip agents={channelActivityAgents} />
                   <ConversationActivityStrip typingActors={activeTypingActors} />
                   <Composer
                     surface="channel"

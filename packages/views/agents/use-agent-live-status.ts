@@ -14,6 +14,18 @@ const RUNNER_TONE_DOT_CLASS: Record<string, string> = {
   success: "bg-emerald-500",
 };
 
+/** Server-arbitrated Runner summary → compact composer / cue view. */
+export function projectRunnerActivitySummary(
+  summary: { label: string; tone: string; visibility: string } | null | undefined,
+): AgentLiveStatusView | null {
+  if (!summary || summary.visibility !== "visible") return null;
+  return {
+    label: summary.label,
+    textClass: "text-foreground",
+    dotClass: RUNNER_TONE_DOT_CLASS[summary.tone] ?? "bg-muted-foreground",
+  };
+}
+
 /**
  * Live Online/Offline name-row status (LRM-248). Does not project Activity
  * verbs — those live on `useAgentActivityProjection` / the composer strip.
@@ -46,15 +58,5 @@ export function useAgentActivityProjection(
 ): AgentLiveStatusView | null {
   const { data: summary } = useRunnerActivitySummary(wsId, agentId);
 
-  return useMemo(
-    () => {
-      if (!summary || summary.visibility !== "visible") return null;
-      return {
-        label: summary.label,
-        textClass: "text-foreground",
-        dotClass: RUNNER_TONE_DOT_CLASS[summary.tone] ?? "bg-muted-foreground",
-      };
-    },
-    [summary],
-  );
+  return useMemo(() => projectRunnerActivitySummary(summary), [summary]);
 }

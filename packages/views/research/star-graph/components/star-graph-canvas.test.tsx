@@ -138,6 +138,10 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     expect(screen.getByTestId("star-graph-map-key")).toBeTruthy();
     expect(screen.getByTestId("star-graph-zoom-controls")).toBeTruthy();
     expect(screen.getByTestId("star-graph-summary").textContent).toContain("调研星图");
+    expect(screen.getByTestId("star-graph-document-badge").textContent).toBe("DOC · 12");
+    expect(screen.getByRole("button", { name: /Stable A/ }).textContent).not.toContain(
+      "12 文档",
+    );
   });
 
   it("selects a node without treating map-key buttons as canvas nodes", () => {

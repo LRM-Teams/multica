@@ -1,5 +1,10 @@
 # Research Live Canvas V6 设计规格（2026-08-06）
 
+> **状态：技术能力参考，不再定义第二套会话页面。** 当前产品目标与集成顺序以
+> `docs/research/constellation-d5-product-contract.md` 为准。V6 Snapshot/Delta、
+> 30-kind、Insight、Dispute 与 Trajectory 能力应逐步并入现有 D5 星图壳，
+> 不另建 Research Session 主界面。
+
 > **性质**：调研会话主工作台的目标设计与前端执行合同，不是 3 个孤立特效的展示稿。
 > **后端依据**：`2026-08-05-autonomous-research-system.md` §7.1/7.2/9.1/10/12、`2026-08-03-research-run-backend-design.md`、`presence-contract-v2.md`。
 > **前端依据**：`packages/core/adapters/**`、`packages/core/types/research-v6.ts`、`packages/core/hooks/research-v6*/**`、`packages/views/research/graph-model/**`、现有 camera/motion/trajectory 基建。

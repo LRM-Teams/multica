@@ -1,5 +1,10 @@
 # Research Session Canvas UI Design (2026-07-29)
 
+> **Status: superseded as a product target.** This document records the first
+> canvas migration. The active production contract is
+> `docs/research/constellation-d5-product-contract.md`. Reuse its historical
+> API and interaction rationale only where it does not conflict with D5.
+
 ## Summary
 
 Replace the current three-column Research session shell with a **canvas-first command surface**: an infinite exploration graph is the primary observation channel (who is working, progress, forks, dead ends, findings, pitfalls). A **card-style fleet chat** sits in a **hideable right drawer** for watching agents talk among themselves; the user rarely interrupts and only messages **罗纳尔多**. Closed chat restores full-bleed canvas; a **bottom-right FAB** reopens it.

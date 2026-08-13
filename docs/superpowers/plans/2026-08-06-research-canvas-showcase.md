@@ -1,5 +1,10 @@
 # Research Live Canvas V6 — 并行实现计划
 
+> **Status: historical slice plan.** Most listed slices have landed as
+> independent modules. Production integration and remaining work are tracked
+> by `docs/research/constellation-d5-product-contract.md`; unchecked items in
+> this file must not be interpreted as the current implementation status.
+
 > **设计合同**：`docs/superpowers/specs/2026-08-06-research-canvas-showcase-design.md`
 > **基线**：最新 `origin/dev`，所有 PR base=`dev`。
 > **执行方式**：10 个 Agent 各领 1 个独立 Issue、独立 worktree/branch/PR；完成后再领下一项。

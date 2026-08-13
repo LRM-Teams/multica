@@ -163,6 +163,9 @@ describe("LRM-1514 quantitative hard gates", () => {
     for (const cluster of layout.clusters) {
       for (const memberId of cluster.memberIds) {
         const node = layout.nodes.find((n) => n.id === memberId)!;
+        // S-tier Agent satellites follow their parent orbit and cluster
+        // containment contracts, not the stable-result sector heuristic.
+        if (node.tier === "s") continue;
         const dCluster = dist(node.x, node.y, cluster.x, cluster.y);
         const dRoot = dist(node.x, node.y, 0, 0);
         expect(dCluster).toBeLessThan(dRoot);

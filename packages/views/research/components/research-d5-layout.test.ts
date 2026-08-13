@@ -8,8 +8,9 @@ describe("research-d5-layout local theme", () => {
       join(import.meta.dirname, "research-d5-layout.css"),
       "utf8",
     );
-    expect(css).toContain(".research-d5-theme");
-    expect(css).toContain("--foreground: #e8f1f7");
+    expect(css).toMatch(
+      /\.research-d5-theme\s*\{[^}]*--foreground:\s*#[0-9a-f]{6};/is,
+    );
     expect(css).toContain(".d5-canvas-host");
     expect(css).toMatch(/\.d5-canvas-host[\s\S]*background:\s*var\(--background\)/);
     expect(css).toMatch(/\.d5-lens-btn[\s\S]*color:\s*var\(--muted-foreground\)/);

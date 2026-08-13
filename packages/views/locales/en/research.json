@@ -1037,7 +1037,7 @@
       "relations": "Relations",
       "confidence": "Confidence",
       "agent": "Agent",
-      "lineage": "Lineage"
+      "lineage": "Round lineage"
     },
     "rail": {
       "mobile_title": "Research context",

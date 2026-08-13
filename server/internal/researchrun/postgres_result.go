@@ -315,19 +315,6 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 		return err
 	}
 	rationale := truncateBytes(method.MethodRationale, 8192)
-	var decisionID string
-	err = tx.QueryRow(ctx, `
-		INSERT INTO research_decision (
-			workspace_id, session_id, decision_kind, actor_type, actor_id,
-			goal_version, plan_version, inputs, outcome, rationale
-		) VALUES ($1::uuid, $2::uuid, 'research_method', 'agent', $3::uuid,
-		          $4, $5, $6, $7, $8)
-		RETURNING id::text
-	`, state.workspaceID, state.run.SessionID, agentID, state.run.GoalVersion,
-		state.targetPlan, inputs, outcome, rationale).Scan(&decisionID)
-	if err != nil {
-		return err
-	}
 	kind := artifactKindForDecision("research_method")
 	contentHash, err := ArtifactContentHash(kind, map[string]any{
 		"decision_kind": "research_method",
@@ -339,6 +326,79 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 		"outcome":       json.RawMessage(outcome),
 		"rationale":     rationale,
 	})
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT decision.id::text, decision.actor_type, COALESCE(decision.actor_id::text, ''),
+		       decision.inputs, decision.outcome, decision.rationale,
+		       COALESCE(passport.entity_kind, ''), COALESCE(passport.current_version, 0),
+		       COALESCE(passport.lifecycle_status, ''), COALESCE(passport.provenance_completeness, ''),
+		       COALESCE(version.content_hash, ''),
+		       COALESCE(version.access_level, ''), COALESCE(version.hash_origin, ''),
+		       COALESCE(version.goal_version, 0), COALESCE(version.plan_version, 0),
+		       COALESCE(version.produced_by_attempt_id::text, '')
+		FROM research_decision decision
+		LEFT JOIN research_artifact_passport passport
+		  ON passport.workspace_id = decision.workspace_id AND passport.session_id = decision.session_id
+		 AND passport.id = decision.id
+		LEFT JOIN research_artifact_version version
+		  ON version.workspace_id = passport.workspace_id AND version.session_id = passport.session_id
+		 AND version.artifact_id = passport.id AND version.version = passport.current_version
+		WHERE decision.workspace_id = $1::uuid AND decision.session_id = $2::uuid
+		  AND decision.decision_kind = 'research_method'
+		  AND decision.goal_version = $3 AND decision.plan_version = $4
+		ORDER BY decision.created_at, decision.id
+		FOR UPDATE OF decision
+	`, state.workspaceID, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
+	if err != nil {
+		return err
+	}
+	existing := 0
+	for rows.Next() {
+		var decisionID, actorType, actorID, existingRationale string
+		var entityKind, lifecycle, provenance, existingHash, accessLevel, hashOrigin string
+		var producedByAttemptID string
+		var currentVersion, existingGoalVersion, existingPlanVersion int
+		var existingInputs, existingOutcome []byte
+		if err = rows.Scan(
+			&decisionID, &actorType, &actorID, &existingInputs, &existingOutcome, &existingRationale,
+			&entityKind, &currentVersion, &lifecycle, &provenance, &existingHash, &accessLevel, &hashOrigin,
+			&existingGoalVersion, &existingPlanVersion, &producedByAttemptID,
+		); err != nil {
+			rows.Close()
+			return err
+		}
+		existing++
+		if existing > 1 || actorType != "agent" || actorID != agentID ||
+			!semanticJSONEqual(existingInputs, inputs) || !semanticJSONEqual(existingOutcome, outcome) ||
+			existingRationale != rationale || entityKind != string(kind) || currentVersion != 1 ||
+			lifecycle != string(ArtifactLifecycleRegistered) || provenance != string(ArtifactProvenanceComplete) ||
+			existingHash != contentHash || existingGoalVersion != state.run.GoalVersion || existingPlanVersion != state.targetPlan ||
+			accessLevel != string(state.outputAccess) || hashOrigin != string(ArtifactHashOriginProduction) ||
+			producedByAttemptID != state.attemptID {
+			rows.Close()
+			return fmt.Errorf("%w: research method version was reused for different content", ErrResultConflict)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if existing == 1 {
+		return nil
+	}
+	var decisionID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO research_decision (
+			workspace_id, session_id, decision_kind, actor_type, actor_id,
+			goal_version, plan_version, inputs, outcome, rationale
+		) VALUES ($1::uuid, $2::uuid, 'research_method', 'agent', $3::uuid,
+		          $4, $5, $6, $7, $8)
+		RETURNING id::text
+	`, state.workspaceID, state.run.SessionID, agentID, state.run.GoalVersion,
+		state.targetPlan, inputs, outcome, rationale).Scan(&decisionID)
 	if err != nil {
 		return err
 	}

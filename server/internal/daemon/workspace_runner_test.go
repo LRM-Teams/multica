@@ -171,7 +171,8 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			return
 		}
 		var accepted protocol.AgentStartAckPayload
-		for responses := 0; responses < 3; {
+		var sawAck, sawActive, sawSession bool
+		for !sawAck || !sawActive || !sawSession {
 			_, raw, err = conn.ReadMessage()
 			if err != nil {
 				t.Error(err)
@@ -182,14 +183,22 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 				t.Error(err)
 				return
 			}
-			if msg.Type == protocol.EventAgentStartAck {
+			switch msg.Type {
+			case protocol.EventAgentStartAck:
 				if err := json.Unmarshal(msg.Payload, &accepted); err != nil {
 					t.Error(err)
 					return
 				}
+				sawAck = true
+			case protocol.EventAgentStatus:
+				var candidate protocol.AgentStatusPayload
+				if json.Unmarshal(msg.Payload, &candidate) == nil && candidate.Status == protocol.AgentStatusActive {
+					sawActive = true
+				}
+			case protocol.EventAgentSession:
+				sawSession = true
 			}
 			frames <- msg
-			responses++
 		}
 		stop, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStop, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStopPayload{AgentID: accepted.AgentID, LaunchID: accepted.LaunchID})})
 		if err := conn.WriteMessage(websocket.TextMessage, stop); err != nil {
@@ -236,7 +245,7 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 	})
 	go func() { errCh <- runner.runConnection(ctx) }()
 	var ready, ack, status, inactive, session protocol.Message
-	for i := 0; i < 5; i++ {
+	for ready.Type == "" || ack.Type == "" || status.Type == "" || session.Type == "" || inactive.Type == "" {
 		select {
 		case msg := <-frames:
 			switch msg.Type {
@@ -257,7 +266,13 @@ func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) 
 			case protocol.EventAgentSession:
 				session = msg
 			case protocol.EventAgentActivity:
-				t.Fatalf("managed start/stop invented lifecycle Activity: %+v", msg)
+				var activity protocol.AgentActivityPayload
+				if err := json.Unmarshal(msg.Payload, &activity); err != nil {
+					t.Fatal(err)
+				}
+				if activity.Snapshot.DetailKind != "starting" {
+					t.Fatalf("managed start/stop invented lifecycle Activity: %+v", msg)
+				}
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for Runner frames")

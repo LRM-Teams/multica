@@ -1,13 +1,23 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
+import { WorkspaceSlugProvider } from "@multica/core/paths";
 import enAgents from "../../../locales/en/agents.json";
 import enCommon from "../../../locales/en/common.json";
 
 const runnerActivity = vi.fn();
+const listChannels = vi.hoisted(() => vi.fn());
 vi.mock("@multica/core/agents", () => ({ useRunnerActivity: (...args: unknown[]) => runnerActivity(...args) }));
 vi.mock("@multica/ui/lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../../../common/use-viewing-timezone", () => ({ useViewingTimezone: () => "UTC" }));
+vi.mock("@multica/core/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/api")>();
+  return {
+    ...actual,
+    api: { ...actual.api, listChannels: (...args: unknown[]) => listChannels(...args) },
+  };
+});
 
 import { ActivityTab } from "./activity-tab";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -16,14 +26,23 @@ const agent = { id: "agent-1", workspace_id: "workspace-1" } as never;
 const TEST_RESOURCES = { en: { agents: enAgents, common: enCommon } };
 
 function renderActivityTab() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <ActivityTab agent={agent} />
-    </I18nProvider>,
+    <QueryClientProvider client={queryClient}>
+      <WorkspaceSlugProvider slug="acme">
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <ActivityTab agent={agent} />
+        </I18nProvider>
+      </WorkspaceSlugProvider>
+    </QueryClientProvider>,
   );
 }
 
 describe("ActivityTab", () => {
+  beforeEach(() => {
+    listChannels.mockResolvedValue([]);
+  });
+
   it("renders the server-projected rows in the previous chronological timeline UI", () => {
     runnerActivity.mockReturnValue({
       data: {
@@ -137,10 +156,33 @@ describe("ActivityTab", () => {
     });
     renderActivityTab();
     expect(screen.getByText("Message held — review newer messages before sending")).toBeInTheDocument();
-    expect(screen.getByText("3 newer messages available — review then resend")).toHaveClass(
-      "block",
-      "break-words",
-    );
+    const subtext = screen.getByTestId("runner-activity-subtext");
+    expect(subtext).toHaveClass("block", "break-words");
+    expect(subtext).toHaveTextContent("3 newer messages available — review then resend");
+  });
+
+  it("turns a target channel handle into a workspace channel link", async () => {
+    listChannels.mockResolvedValue([{ id: "chan-1", name: "general", kind: "group" }]);
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Updating reminder...", tone: "warning", visibility: "visible" },
+        timeline: [{
+          id: "row-target",
+          occurred_at: "2026-08-13T02:01:50Z",
+          title: "Updating reminder",
+          subtext: "target: #general\nfreshness updates: 0 newer messages",
+          tone: "warning",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    const link = await screen.findByRole("link", { name: "#general" });
+    expect(link).toHaveAttribute("href", "/acme/channels/chan-1");
+    expect(screen.getByTestId("runner-activity-subtext").textContent).toContain("target: #general");
   });
 
   it("does not invent a summary when the server withholds it", () => {

@@ -14,6 +14,7 @@ import {
   foldActivityCommandPreview,
   isLongActivityCommand,
 } from "./activity-command-body";
+import { ActivitySubtext } from "./activity-subtext";
 
 const TONE_DOT: Record<string, string> = {
   neutral: "bg-muted-foreground/40",
@@ -92,7 +93,15 @@ function TimelineBodyBlock({
   );
 }
 
-function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineRow; exactTimeFormatter: Intl.DateTimeFormat }) {
+function TimelineRow({
+  row,
+  workspaceId,
+  exactTimeFormatter,
+}: {
+  row: RunnerActivityTimelineRow;
+  workspaceId: string;
+  exactTimeFormatter: Intl.DateTimeFormat;
+}) {
   const { t } = useT("agents");
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -173,12 +182,7 @@ function TimelineRow({ row, exactTimeFormatter }: { row: RunnerActivityTimelineR
             ) : null}
           </>
         ) : plainSubtext ? (
-          <span
-            data-testid="runner-activity-subtext"
-            className="mt-0.5 block whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-muted-foreground"
-          >
-            {plainSubtext}
-          </span>
+          <ActivitySubtext text={plainSubtext} workspaceId={workspaceId} />
         ) : null}
       </div>
     </article>
@@ -288,7 +292,14 @@ export function ActivityTab({ agent }: { agent: Agent }) {
       ) : (
         <div className="relative flex flex-col" data-testid="activity-timeline">
           <div className="pointer-events-none absolute bottom-2 left-[5px] top-2 w-[1.5px] bg-border" aria-hidden data-testid="activity-timeline-spine" />
-          {timeline.map((row) => <TimelineRow key={row.id} row={row} exactTimeFormatter={exactTimeFormatter} />)}
+          {timeline.map((row) => (
+            <TimelineRow
+              key={row.id}
+              row={row}
+              workspaceId={agent.workspace_id}
+              exactTimeFormatter={exactTimeFormatter}
+            />
+          ))}
         </div>
       )}
       <StreamBottomAnchor

@@ -670,6 +670,7 @@ export function ResearchConstellationWorkspace({
             summaryDetail={summaryDetail}
             filterHiddenNote={filterHiddenNote}
             clusterLabels={clusterLabels}
+            frontierLabel={t(($) => $.d5.new_frontier_label)}
             lensHints={lensHints}
             motionDirectives={motionDirectives}
             showMapKey

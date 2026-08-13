@@ -66,6 +66,7 @@ export interface StarGraphCanvasProps {
   filterHiddenNote?: string;
   showMapKey?: boolean;
   clusterLabels?: ReadonlyMap<string, string>;
+  frontierLabel?: string;
   lensHints?: D5LensDisplayHints;
   motionDirectives?: ReadonlyMap<string, MotionDirective | null>;
   onHelp?: () => void;
@@ -104,6 +105,7 @@ export function StarGraphCanvas({
   filterHiddenNote,
   showMapKey = true,
   clusterLabels,
+  frontierLabel,
   lensHints,
   motionDirectives,
   onHelp,
@@ -649,6 +651,8 @@ export function StarGraphCanvas({
       >
         <StarGraphClusterLayer
           clusters={model.clusters}
+          frontiers={model.frontiers}
+          frontierLabel={frontierLabel}
           clusterLabels={clusterLabels}
           hiddenCounts={clusterHiddenCounts}
           hiddenCountLabel={hiddenCountLabel}

@@ -84,6 +84,7 @@ export interface StarCanvasViewModel {
   entities: StarEntityView[];
   relations: StarRelationView[];
   clusters: StarGraphLayoutResult["clusters"];
+  frontiers: StarGraphLayoutResult["frontiers"];
   rootId: string | null;
   version: string;
   stats: StarGraphLayoutResult["stats"];
@@ -123,6 +124,7 @@ function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
   return {
     id: n.id,
     tier: tier as StarGraphLayoutTier,
+    nodeKind: n.node_type,
     clusterId: n.cluster_id && n.cluster_id !== "" ? n.cluster_id : null,
     parentId: n.parent_id || n.derived_from || null,
   };
@@ -286,6 +288,7 @@ export function buildStarCanvasViewModel(
     entities,
     relations: relationsView,
     clusters: result.clusters,
+    frontiers: result.frontiers ?? [],
     rootId: result.rootId,
     version: result.version,
     stats,
@@ -306,6 +309,7 @@ export function rebaseStarCanvasIntoViewModel(
     | "entities"
     | "relations"
     | "clusters"
+    | "frontiers"
     | "rootId"
     | "version"
     | "stats"
@@ -338,6 +342,7 @@ export function rebaseStarCanvasIntoViewModel(
       to: r.to,
     })),
     clusters: model.clusters,
+    frontiers: model.frontiers,
     rootId: model.rootId,
     version: model.version,
     stats: { reused: 0, moved: 0, total: model.entities.length },
@@ -368,6 +373,7 @@ export function rebaseStarCanvasIntoViewModel(
     entities,
     relations: relationsView,
     clusters: translated.clusters,
+    frontiers: translated.frontiers ?? [],
     rootId: translated.rootId,
     version: translated.version,
     stats: { ...model.stats, ...translated.stats },
@@ -385,7 +391,7 @@ export function rebaseStarCanvasIntoViewModel(
 export function extractLayoutResultFromViewModel(
   model: Pick<
     StarCanvasViewModel,
-    "entities" | "relations" | "clusters" | "rootId" | "version" | "stats"
+    "entities" | "relations" | "clusters" | "frontiers" | "rootId" | "version" | "stats"
   >,
 ): StarGraphLayoutResult {
   return {
@@ -410,6 +416,7 @@ export function extractLayoutResultFromViewModel(
       to: r.to,
     })),
     clusters: model.clusters,
+    frontiers: model.frontiers,
     rootId: model.rootId,
     version: model.version,
     stats: model.stats,

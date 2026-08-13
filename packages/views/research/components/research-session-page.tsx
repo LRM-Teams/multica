@@ -192,7 +192,8 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     sessionId,
     runId: sessionId,
     transports: {
-      loadV6Snapshot: (runId) => api.getResearchV6ProjectionSnapshot(runId),
+      loadV6Snapshot: (runId, signal) =>
+        api.getResearchV6ProjectionSnapshot(runId, { signal }),
       loadV5Session: async (id) => {
         const snapshot = await api.getResearchSessionSnapshot(id);
         return { sessionId: id, nodes: snapshot.nodes, edges: snapshot.edges };

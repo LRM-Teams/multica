@@ -75,6 +75,31 @@ describe("ApiClient Research V6 snapshot identity boundary", () => {
     const client = new ApiClient("https://api.example.test");
     await expect(
       client.getResearchV6ProjectionSnapshot(requestedRunId),
-    ).rejects.toThrow("run identity validation");
+    ).rejects.toThrow("snapshot identity validation");
+  });
+
+  it("rejects a paginated first page instead of presenting it as the complete graph", async () => {
+    const snapshot = researchV6FixtureSnapshot();
+    snapshot.next_cursor = "next-page";
+    stubResponse(snapshot);
+    const client = new ApiClient("https://api.example.test");
+    await expect(
+      client.getResearchV6ProjectionSnapshot(snapshot.run_id),
+    ).rejects.toThrow("complete snapshot identity validation");
+  });
+
+  it("forwards the caller AbortSignal to the V6 request", async () => {
+    const snapshot = researchV6FixtureSnapshot();
+    stubResponse(snapshot);
+    const client = new ApiClient("https://api.example.test");
+    const controller = new AbortController();
+    await client.getResearchV6ProjectionSnapshot(snapshot.run_id, {
+      signal: controller.signal,
+    });
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/research/v6/runs/${snapshot.run_id}/projection/snapshot`),
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 });

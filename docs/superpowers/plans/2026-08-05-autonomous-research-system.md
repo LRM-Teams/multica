@@ -1026,6 +1026,7 @@ surface 矩阵仍未完成。
 - [ ] 实现触发策略、固定输入版本、幂等执行和状态变化应用。
 - [ ] 实现每 Result 的 Assimilation Check、peer_synthesis、原 Agent Integration Contribution 和离线/退出参与者处理。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。
+  - [x] G4a-merge-decision：`integration_merge.go` 冻结 Claim、Question、Hypothesis 三类同类实体的服务端候选判定。精确语义指纹或达到版本化 semantic/lexical/entity 阈值才可提议合并；kind、访问权、终态、scope、method、time 任一不相容都返回稳定、有序拒绝理由。输入顺序不改变实体对身份或审计指纹，Agent prose 不能替代 server-computed signals。该切片只完成决策合同；候选持久化、相似度计算 Adapter、合并应用事务与 Event 尚待后续接线。
 - [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。
 - [ ] 后续任务 Context 读取跨 Agent 的最新 Integration Snapshot。
 

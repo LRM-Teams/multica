@@ -891,6 +891,7 @@
     "reconnect_failed_hint": "请检查网络后重试；上次已加载的调研仍保留在屏幕上。",
     "server_error_title": "服务异常",
     "server_error_hint": "调研服务返回错误（5xx）。可重试，不会白屏丢掉会话壳。",
+    "technical_details": "技术详情",
     "retry": "重试",
     "retrying": "重试中…",
     "waiting_network": "等待网络恢复",

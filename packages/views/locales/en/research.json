@@ -891,6 +891,7 @@
     "reconnect_failed_hint": "Check the network, then retry. Your last loaded research is still on screen.",
     "server_error_title": "Server error",
     "server_error_hint": "The research service returned an error (5xx). You can retry without losing this session shell.",
+    "technical_details": "Technical details",
     "retry": "Retry",
     "retrying": "Retrying…",
     "waiting_network": "Waiting for network",

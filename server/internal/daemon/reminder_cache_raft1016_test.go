@@ -108,6 +108,64 @@ func TestReminderCacheRetriesUntilWakeEnqueued(t *testing.T) {
 	}
 }
 
+func TestReminderCacheReplaysUnackedServerReceiptOnlyOnReconnect(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	wakeAttempts := 0
+	receiptAttempts := 0
+	cache := newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	cache.fireRetryDelay = time.Second
+	cache.onFireDelivery = func(protocol.ReminderTimerJob) bool {
+		wakeAttempts++
+		return true
+	}
+	cache.onFireReceipt = func(reminderDueReceipt) bool {
+		receiptAttempts++
+		return true
+	}
+	job := raft1016Job(now)
+	job.LocalInput = &protocol.ReminderLocalInputPayload{Title: "local due"}
+	if !cache.upsert(job) {
+		t.Fatal("upsert rejected")
+	}
+
+	clock.fire(0)
+	if wakeAttempts != 1 || receiptAttempts != 1 {
+		t.Fatalf("initial attempts wake=%d receipt=%d, want 1/1", wakeAttempts, receiptAttempts)
+	}
+	activeRetryTimers := 0
+	for _, timer := range clock.timers[1:] {
+		if !timer.stopped {
+			activeRetryTimers++
+		}
+	}
+	if activeRetryTimers != 0 {
+		t.Fatalf("active retry timers after local wake = %d, want 0 before reconnect", activeRetryTimers)
+	}
+
+	cache.suspend()
+	cache.resume()
+	if wakeAttempts != 1 {
+		t.Fatalf("local wake attempts after reconnect = %d, want exactly one", wakeAttempts)
+	}
+	if receiptAttempts != 2 {
+		t.Fatalf("server receipt attempts after reconnect = %d, want one replay", receiptAttempts)
+	}
+
+	identity := reminderDueIdentity{OwnerAgentID: job.OwnerAgentID, ReminderID: job.ReminderID, Version: job.Version}
+	if !cache.ackFireReceipt(identity) {
+		t.Fatal("server ack rejected")
+	}
+	if got := cache.pendingFireReceipts(); len(got) != 0 {
+		t.Fatalf("pending receipts after ack = %+v", got)
+	}
+	cache.suspend()
+	cache.resume()
+	if receiptAttempts != 2 {
+		t.Fatalf("server receipt attempts after ack reconnect = %d, want no replay", receiptAttempts)
+	}
+}
+
 func TestReminderCacheSnapshotKeepsInFlightReceipt(t *testing.T) {
 	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
 	clock := &fakeReminderClock{now: now}
@@ -321,4 +379,101 @@ func TestOnReminderTimerDoesNotMarkWakeWhenWebsocketUnavailable(t *testing.T) {
 			cache.resume()
 		})
 	})
+}
+
+func TestReminderDueTimerAcceptsLocalInboxWithoutServerTransport(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	runtime := &reminderOwnerInputFakeRuntime{}
+	d := newReminderOwnerInputDaemon(t, runtime, true)
+	d.reminderCache = newReminderCache(clock, d.logger, nil)
+	d.reminderCache.onFireDelivery = d.localReminderInbox.AcceptDue
+	d.reminderCache.onFireReceipt = d.queueReminderFireReceipt
+
+	job := protocol.ReminderTimerJob{
+		ReminderID:   "reminder-a",
+		OwnerAgentID: "agent-a",
+		Version:      4,
+		FireAt:       now.Add(-time.Minute).Format(time.RFC3339Nano),
+		LocalInput: &protocol.ReminderLocalInputPayload{
+			Title: "Review the deployment",
+			Anchor: protocol.ReminderOwnerInputAnchor{
+				Available: true, ChannelID: "channel-a", MessageID: "message-a",
+				Target: "channel:channel-a", ReplyTarget: "#general",
+			},
+			Occurrence: protocol.ReminderLocalInputOccurrence{
+				OccurrenceID: "reminder-a:4",
+				ScheduledFor: now.Add(-time.Minute).Format(time.RFC3339Nano),
+				DueAt:        now.Add(-time.Minute).Format(time.RFC3339Nano),
+			},
+		},
+	}
+	if !d.reminderCache.upsert(job) {
+		t.Fatal("upsert rejected")
+	}
+	clock.fire(0)
+
+	inputs := runtime.snapshot()
+	if len(inputs) != 1 {
+		t.Fatalf("local Reminder inputs = %d, want 1 without a server transport", len(inputs))
+	}
+	if got := inputs[0]; got.ReminderID != job.ReminderID || got.Version != job.Version || got.Title != job.LocalInput.Title || got.Anchor.ReplyTarget != "#general" {
+		t.Fatalf("local Reminder input = %+v", got)
+	}
+	receipts := d.reminderCache.pendingFireReceipts()
+	if len(receipts) != 1 || !receipts[0].WakeEnqueued || receipts[0].ServerAcked {
+		t.Fatalf("local due receipt = %+v, want local wake with pending server receipt", receipts)
+	}
+
+	// Replaying the same durable receipt may resend the server receipt, but it
+	// must not inject the already-accepted local Inbox item a second time.
+	d.reminderCache.suspend()
+	d.reminderCache.resume()
+	if got := len(runtime.snapshot()); got != 1 {
+		t.Fatalf("local Reminder inputs after receipt replay = %d, want 1", got)
+	}
+}
+
+func TestReminderDueTimerRetainsLocalInboxItemUntilResidentIsIdle(t *testing.T) {
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	runtime := &reminderOwnerInputFakeRuntime{}
+	d := newReminderOwnerInputDaemon(t, runtime, true)
+	d.reminderCache = newReminderCache(clock, d.logger, nil)
+	d.reminderCache.fireRetryDelay = time.Second
+	d.reminderCache.onFireDelivery = d.localReminderInbox.AcceptDue
+	d.reminderCache.onFireReceipt = d.queueReminderFireReceipt
+	d.canonicalRuntimes.slots["agent-a\x00runtime-a"].running = true
+
+	job := protocol.ReminderTimerJob{
+		ReminderID: "reminder-b", OwnerAgentID: "agent-a", Version: 2,
+		FireAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+		LocalInput: &protocol.ReminderLocalInputPayload{
+			Title: "Retry after compaction",
+			Occurrence: protocol.ReminderLocalInputOccurrence{
+				OccurrenceID: "reminder-b:2",
+				ScheduledFor: now.Add(-time.Minute).Format(time.RFC3339Nano),
+				DueAt:        now.Add(-time.Minute).Format(time.RFC3339Nano),
+			},
+		},
+	}
+	if !d.reminderCache.upsert(job) {
+		t.Fatal("upsert rejected")
+	}
+	clock.fire(0)
+	if got := len(runtime.snapshot()); got != 0 {
+		t.Fatalf("busy resident accepted %d local Reminder inputs", got)
+	}
+	if receipts := d.reminderCache.pendingFireReceipts(); len(receipts) != 1 || receipts[0].WakeEnqueued {
+		t.Fatalf("busy local receipt = %+v, want retained unenqueued due", receipts)
+	}
+
+	d.canonicalRuntimes.slots["agent-a\x00runtime-a"].running = false
+	clock.fire(len(clock.timers) - 1)
+	if got := len(runtime.snapshot()); got != 1 {
+		t.Fatalf("idle retry local Reminder inputs = %d, want 1", got)
+	}
+	if receipts := d.reminderCache.pendingFireReceipts(); len(receipts) != 1 || !receipts[0].WakeEnqueued {
+		t.Fatalf("idle retry receipt = %+v, want wake enqueued", receipts)
+	}
 }

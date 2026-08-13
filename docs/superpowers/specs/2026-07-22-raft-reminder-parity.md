@@ -4,7 +4,7 @@
 - Parent: Multica task #654
 - Replaces the delivery scope in `2026-07-08-agent-reminders-design.md`; that document remains the historical V1 implementation baseline.
 - Current code baseline: merged PR #870 provides the Reminder definition/occurrence/lifecycle model, permissions, CLI/API, and human read API. The Agent Card frontend and user-facing Reminder Activity fast-follow remain unshipped. The shared server scheduler is explicitly **not** the final parity architecture and must not be released as the normal Reminder trigger path.
-- 2026-08-11 correction: Raft parity keeps timer projection/fire-attempt on the dedicated `reminder.*` control plane, but the post-commit resident input is best-effort and transient. Multica carries that input on Workspace Runner `agent:deliver` with `kind:"reminder", transient:true`; it is not a durable Message wake and there is no `reminder.owner_input` event.
+- 2026-08-13 correction (supersedes the 2026-08-11 transport ruling): Raft 1.0.16 materializes a Computer-local Inbox item and wakes the owner locally; `fire_attempt` is only the Server receipt. The one-second fire retry exists only until local wake enqueue succeeds; an unacknowledged Server receipt is then retained durably and replayed when the Computer connection becomes ready, not by a receipt-only periodic timer. Workspace Runner transient input remains rolling-upgrade compatibility for daemons without `reminder_local_inbox_v1`, never a simultaneous second wake.
 
 ## Outcome
 
@@ -21,7 +21,7 @@ Live Raft probe on this task (Reminder `ffee888c`, 2026-07-22 09:25–09:26 CST)
 1. **The Agent owns the Reminder.** Only the author Agent may schedule, snooze, update, cancel, or inspect its full CLI lifecycle log. Ownership never transfers.
 2. **Humans observe; they do not operate.** Agent Card is read-only in V3. It must not expose Schedule, Snooze, Update, Cancel, or Dismiss actions. A human who wants a change asks the Agent.
 3. **Every Agent-created Reminder has an immutable anchor.** Creation requires a `message_id` resolved to a readable channel message or thread. Schedule edits never retarget the anchor.
-4. **Reminder inputs are author-only.** Fire attempts one transient resident input for the author. It must not wake other Agents merely because they can see the anchored surface.
+4. **Reminder inputs are author-only.** The owner Computer admits one local Inbox item for the author. It must not wake other Agents merely because they can see the anchored surface.
 5. **Reminder is not Autopilot.** Reminder is a self-owned follow-up signal tied to conversational context. Autopilot is a standing job/task. Scheduler mechanics may be reused; data, permissions, and surfaces must not be merged.
 6. **Fired is not completed work.** `fired` means the platform emitted the due wake and recorded it. It does not claim that the Agent produced the intended report, message, or external result.
 7. **The owner daemon owns time.** The server owns durable definitions, authorization, and commit-time idempotency; the daemon owns the versioned cache and timer. A periodic server scan is not an allowed normal fire path.
@@ -107,20 +107,20 @@ Snapshot owner discovery comes only from a daemon-local running/idle AgentManage
 2. A successful cancel or terminalization transaction advances `version`. After commit, the server sends `reminder.cancel {reminderId, version}`. A stale cancel may not remove a newer cached timer.
 3. On daemon connect/reconnect, every running or idle Agent requests `reminder.snapshot`. The server returns exactly that Agent's active Reminder jobs. The daemon replaces only that owner's cache entries and rejects any snapshot job whose owner differs from the requested Agent.
 4. Cache ordering matches Raft: an upsert whose version is less than or equal to the cached version is ignored; a cancel older than the cached version is ignored. Snapshot is the authoritative reconnect projection for that owner.
-5. The daemon owns the local timer. When it becomes due, it removes the cached timer and sends `reminder.fire_attempt` with owner Agent ID, Reminder ID, version, and client fire timestamp. The daemon does not create a receipt, lifecycle row, or wake itself.
+5. The daemon owns the local timer. When it becomes due, it persists a due receipt, admits the bounded `local_input` through `LocalReminderInbox`, then sends `reminder.fire_attempt` with owner Agent ID, Reminder ID, version, and client fire timestamp. The server still owns lifecycle rows; the local receipt owns wake deduplication and reconnect recovery.
 
 ### Server fire commit
 
 1. The server accepts only a fire attempt whose owner, active definition, and version still match durable state. Stale, cancelled, terminal, cross-owner, and duplicate attempts are harmless no-ops with a canonical result.
 2. The accepted attempt atomically claims one occurrence and emits one visible fire receipt in the anchored channel/thread as a typed, localized system event. It is not ordinary conversational content: it must not enter message search, unread counts, quote/reply, or reactions. When the anchor message is unavailable, both the canonical fallback and localized projection explicitly say `Anchor unavailable` without metadata. Durable observability lives in the lifecycle ledger and Agent Card history. The receipt itself dispatches zero ambient or directed wakes to other Agents.
-3. After that transaction commits, the server attempts one owner-only transient resident input with Reminder ID/title, exact target, anchor context, cadence/occurrence data, and the normal reply-target contract. It uses Workspace Runner `agent:deliver` with `kind:"reminder", transient:true`; it does not enter MessageCoordinator, cursor/replay/ACK, or Activity.
+3. After that transaction commits, the server sends no second input to a daemon advertising `reminder_local_inbox_v1`. For rolling upgrades only, a daemon that has the versioned cache plus the legacy transient capability but lacks Local Inbox receives one Workspace Runner transient input.
 4. The same transaction appends one `fired` lifecycle event and either terminalizes the one-shot definition or advances the recurring definition, increments version, and projects the next `reminder.upsert` after commit.
 
 ### Recovery boundary
 
 - Daemon restart or reconnect rebuilds local timers from an owner-scoped snapshot; a due Reminder is attempted immediately after restoration.
-- A Reminder scheduled while its owner daemon is offline remains durable on the server and enters the daemon cache on the next snapshot. If the owner becomes busy, compacting, or unavailable after fire commit, the transient resident input is discarded and is not replayed.
-- A lost, duplicate, or replayed fire attempt cannot duplicate the occurrence, receipt, lifecycle event, or wake. Reconnect snapshot reprojects every still-active definition whose attempt did not commit.
+- A Reminder scheduled while its owner daemon is offline remains durable on the server and enters the daemon cache on the next snapshot. If the owner is busy, compacting, or temporarily unavailable at due time, the local receipt remains pending and retries resident admission.
+- A lost, duplicate, or replayed fire attempt cannot duplicate the occurrence, receipt, lifecycle event, or local wake. A reconnect snapshot cannot re-arm a due identity already represented by a durable local receipt. While local wake enqueue is still failing, the one-second retry may resend the same idempotent Server receipt as part of that fire dispatch. Once local wake is enqueued, periodic retry stops; an unacknowledged receipt remains durable and is replayed only when the Computer connection becomes ready, then removed on ACK.
 - The server must not run a periodic due-row scan as the normal trigger or race its own timer against the daemon. Any temporary migration bridge must be separately approved, observable, time-bounded, and removed before parity release.
 
 Correctness gates:

@@ -90,6 +90,7 @@ type reminderCache struct {
 	clock            reminderClock
 	onFire           func(protocol.ReminderTimerJob)
 	onFireDelivery   func(protocol.ReminderTimerJob) bool
+	onFireReceipt    func(reminderDueReceipt) bool
 	fireRetryDelay   time.Duration
 	fireRetryTimers  map[string]reminderTimer
 	dispatching      map[string]bool
@@ -646,6 +647,14 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 		if _, err := time.Parse(time.RFC3339, job.FireAt); err != nil {
 			continue
 		}
+		identity := reminderDueIdentity{OwnerAgentID: job.OwnerAgentID, ReminderID: job.ReminderID, Version: job.Version}
+		if findReceiptIndex(c.receipts[job.ReminderID], identity) >= 0 {
+			// The local due fact is already durable. A reconnect snapshot may
+			// replay the still-scheduled server definition until its receipt is
+			// committed, but it must not arm a second local wake for the same
+			// owner/revision.
+			continue
+		}
 		fence, exists := c.fences[job.ReminderID]
 		if exists && (fence.LastSeq > watermark || job.Version < fence.Version || (fence.Terminal && job.Version <= fence.Version)) {
 			// Task #69: also silent before. Legitimate most of the time
@@ -866,8 +875,8 @@ func (c *reminderCache) resume() {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if !c.suspended {
+		c.mu.Unlock()
 		return
 	}
 	c.suspended = false
@@ -876,6 +885,14 @@ func (c *reminderCache) resume() {
 		if err == nil {
 			c.armLocked(entry.job, fireAt)
 		}
+	}
+	receipts := make([]reminderDueReceipt, 0)
+	for _, pending := range c.receipts {
+		receipts = append(receipts, pending...)
+	}
+	c.mu.Unlock()
+	for _, receipt := range receipts {
+		c.dispatchFire(receipt)
 	}
 }
 
@@ -990,6 +1007,18 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 	c.clearFireRetryLocked(identity)
 	c.mu.Unlock()
 
+	// A successfully accepted local Inbox item is never injected twice. The
+	// durable receipt may still be replayed until the server acknowledges it.
+	if receipt.WakeEnqueued {
+		if !receipt.ServerAcked && c.onFireReceipt != nil {
+			c.deliverFireReceipt(receipt)
+		}
+		c.mu.Lock()
+		delete(c.dispatching, key)
+		c.mu.Unlock()
+		return
+	}
+
 	wakeEnqueued := false
 	func() {
 		defer func() {
@@ -999,6 +1028,16 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 		}()
 		wakeEnqueued = c.deliverFire(receipt.Job)
 	}()
+	receiptQueued := false
+	if !receipt.ServerAcked && c.onFireReceipt != nil {
+		receiptQueued = c.deliverFireReceipt(receipt)
+	}
+	// Rolling-upgrade compatibility: a legacy projection has no local Inbox
+	// material, so its queued fire attempt remains the wake handoff. New
+	// projections never use this branch.
+	if receipt.Job.LocalInput == nil {
+		wakeEnqueued = receiptQueued || wakeEnqueued
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1025,6 +1064,15 @@ func (c *reminderCache) dispatchFire(receipt reminderDueReceipt) {
 		c.receipts[receipt.Job.ReminderID] = pending
 	}
 	_ = c.persistLocked()
+}
+
+func (c *reminderCache) deliverFireReceipt(receipt reminderDueReceipt) (queued bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil && c.logger != nil {
+			c.logger.Error("reminder fire receipt panicked", "reminder_id", receipt.Job.ReminderID, "error", recovered)
+		}
+	}()
+	return c.onFireReceipt(receipt)
 }
 
 func (c *reminderCache) scheduleFireRetryLocked(receipt reminderDueReceipt) {

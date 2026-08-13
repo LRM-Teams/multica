@@ -126,8 +126,6 @@ export function StarGraphNode({
       data-node-id={nodeId}
       tabIndex={tabIndex}
       aria-label={readable}
-      data-node-id={nodeId}
-      tabIndex={tabIndex}
       onClick={onOpen}
       data-tier={tier}
       data-state={state}

@@ -54,9 +54,9 @@ marker from launcher to candidate. A v2 launcher waits for the explicit
 `takeover_ready` state. When a
 new candidate is spawned by a pre-v2 launcher, it projects the historical
 `running`/`handoff` loopback shape from the durable receipt so that launcher can
-authorize the same local proof. This compatibility projection does not
-start preflight, register runtimes, connect WebSocket, or claim work; those
-remain blocked until the local proof commits.
+authorize the same local proof. A v2 candidate continues into preflight,
+registration, and WebSocket after that local prepare. A pre-v2 candidate
+still waits for the incumbent loopback commit before those steps.
 
 ## CLI
 

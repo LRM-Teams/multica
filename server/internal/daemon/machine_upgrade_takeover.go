@@ -14,10 +14,10 @@ import (
 )
 
 // machineUpgradeTakeover owns the complete detached-candidate coordination
-// boundary. Daemon startup prepares locally, then waits until the incumbent
-// accepts the local PID+version proof. Cloud generation CAS is not part of
-// this wait. The candidate cannot reach heartbeat, registration, or WebSocket
-// startup while that local wait is closed.
+// boundary. A v2 candidate prepares locally, answers PID+version on local
+// control, and continues into authenticated startup. A pre-v2 candidate still
+// waits for the incumbent's loopback commit. Cloud generation CAS is not
+// part of either wait.
 type machineUpgradeTakeover struct {
 	mu        sync.Mutex
 	ready     atomic.Bool
@@ -50,6 +50,24 @@ func (t *machineUpgradeTakeover) waitForCommit(ctx context.Context) error {
 	case <-t.committed:
 		return nil
 	}
+}
+
+// startDetachedMachineUpgrade is the resident startup gate. v2 continues
+// after local prepare; older candidates still wait for loopback commit.
+func (d *Daemon) startDetachedMachineUpgrade(ctx context.Context) error {
+	if d == nil || !d.cfg.DetachedMachineUpgradeCandidate {
+		return nil
+	}
+	if err := d.machineUpgradeTakeover.prepare(d); err != nil {
+		return fmt.Errorf("prepare detached Machine Upgrade takeover: %w", err)
+	}
+	if d.cfg.MachineUpgradeTakeoverProtocol == MachineUpgradeTakeoverProtocolV2 {
+		return nil
+	}
+	if err := d.machineUpgradeTakeover.waitForCommit(ctx); err != nil {
+		return fmt.Errorf("wait for detached Machine Upgrade takeover: %w", err)
+	}
+	return nil
 }
 
 // prepare proves only local facts: exact journal lineage, committed Active

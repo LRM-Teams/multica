@@ -468,12 +468,8 @@ func (d *Daemon) attestComputerMachineUpgrade(ctx context.Context, workspaceIDs 
 	if !sameStringSet(journal.RuntimeIDs, runtimeIDs) {
 		return fmt.Errorf("successor Runtime set does not match accepted complete set")
 	}
-	// A detached candidate attests only after the incumbent accepted the local
-	// PID+version proof. Before that point Run is blocked in the takeover
-	// module and cannot reach this function.
-	if d.cfg.DetachedMachineUpgradeCandidate && journal.Phase != "takeover_committed" {
-		return nil
-	}
+	// A v2 detached candidate is already live after local prepare, while
+	// journal phase may still be handoff until an older launcher POSTs commit.
 	if err := d.client.AttestComputerUpgrade(ctx, d.cfg.DaemonID, journal.ID, journal.Generation, d.cfg.CLIVersion, runtimeIDs, workspaceIDs); err != nil {
 		return err
 	}

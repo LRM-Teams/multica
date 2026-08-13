@@ -431,14 +431,24 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 	state.targetPlan = state.task.PlanVersion
 	state.stale = state.task.GoalVersion != state.run.GoalVersion || state.task.PlanVersion != state.run.PlanVersion
 	state.verified = verificationTask(state.task.Kind)
+	if attemptStatus == AttemptStatusSucceeded {
+		if existingRequestID != in.Result.ClientRequestID || existingHash != in.Hash ||
+			assignedAgentID != in.AgentID || assignedInboxTaskID == "" || assignedInboxTaskID != in.InboxTaskID {
+			return acceptedResultState{}, nil, ErrResultConflict
+		}
+		passportEnabled, replayErr := sessionArtifactPassportEnabled(ctx, tx, in.SessionID, state.workspaceID)
+		if replayErr != nil {
+			return acceptedResultState{}, nil, replayErr
+		}
+		if passportEnabled {
+			if replayErr = verifyAcceptedResultReplayTx(ctx, tx, state.workspaceID, in); replayErr != nil {
+				return acceptedResultState{}, nil, replayErr
+			}
+		}
+		return state, &AcceptResultOutcome{Replayed: true, TaskID: state.task.ID, TaskKind: state.task.Kind, GoalVersion: state.task.GoalVersion, PlanVersion: state.task.PlanVersion}, nil
+	}
 	if assignedAgentID != in.AgentID || assignedInboxTaskID == "" || assignedInboxTaskID != in.InboxTaskID {
 		return acceptedResultState{}, nil, ErrAttemptNotAssigned
-	}
-	if attemptStatus == AttemptStatusSucceeded {
-		if existingRequestID == in.Result.ClientRequestID && existingHash == in.Hash {
-			return state, &AcceptResultOutcome{Replayed: true, TaskID: state.task.ID, TaskKind: state.task.Kind, GoalVersion: state.task.GoalVersion, PlanVersion: state.task.PlanVersion}, nil
-		}
-		return acceptedResultState{}, nil, ErrResultConflict
 	}
 	if attemptStatus != AttemptStatusDispatching && attemptStatus != AttemptStatusRunning {
 		return acceptedResultState{}, nil, fmt.Errorf("%w: attempt is %s", ErrInvalidTransition, attemptStatus)
@@ -447,6 +457,91 @@ func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (ac
 		return acceptedResultState{}, nil, fmt.Errorf("%w: run is %s", ErrInvalidTransition, runStatus)
 	}
 	return state, nil, nil
+}
+
+func verifyAcceptedResultReplayTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID string,
+	in AcceptResultInput,
+) error {
+	if err := verifyAcceptanceManifestHashTx(ctx, tx, workspaceID, in.SessionID, in.AttemptID); err != nil {
+		if errors.Is(err, ErrInvalidTransition) {
+			return fmt.Errorf("%w: accepted manifest hash changed", ErrResultConflict)
+		}
+		return err
+	}
+
+	var bindingMatches bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM research_result_artifact r
+		  JOIN research_artifact_passport p
+		    ON (p.workspace_id, p.session_id, p.id) = (r.workspace_id, r.session_id, r.id)
+		  JOIN research_artifact_version rv
+		    ON rv.workspace_id = p.workspace_id
+		   AND rv.session_id = p.session_id
+		   AND rv.artifact_id = p.id
+		   AND rv.version = p.current_version
+		  JOIN research_artifact_context_manifest m
+		    ON m.workspace_id = r.workspace_id
+		   AND m.session_id = r.session_id
+		   AND m.attempt_id = r.attempt_id
+		  WHERE r.workspace_id = $1::uuid
+		    AND r.session_id = $2::uuid
+		    AND r.attempt_id = $3::uuid
+		    AND r.client_request_id = $4
+		    AND r.content_hash = $5
+		    AND p.entity_kind = 'result_artifact'
+		    AND p.produced_by_attempt_id = r.attempt_id
+		    AND rv.content_hash = r.content_hash
+		    AND NOT EXISTS (
+		      SELECT e.artifact_version_id
+		      FROM research_artifact_context_entry e
+		      WHERE (e.workspace_id, e.session_id, e.manifest_id) =
+		            (m.workspace_id, m.session_id, m.id)
+		      EXCEPT
+		      SELECT ref.input_version_id
+		      FROM research_artifact_input_reference ref
+		      WHERE ref.workspace_id = r.workspace_id
+		        AND ref.session_id = r.session_id
+		        AND ref.consumer_version_id = rv.id
+		        AND ref.relation = 'acceptance_input'
+		        AND ref.manifest_id = m.id
+		    )
+		    AND NOT EXISTS (
+		      SELECT ref.input_version_id
+		      FROM research_artifact_input_reference ref
+		      WHERE ref.workspace_id = r.workspace_id
+		        AND ref.session_id = r.session_id
+		        AND ref.consumer_version_id = rv.id
+		        AND ref.relation = 'acceptance_input'
+		        AND ref.manifest_id = m.id
+		      EXCEPT
+		      SELECT e.artifact_version_id
+		      FROM research_artifact_context_entry e
+		      WHERE (e.workspace_id, e.session_id, e.manifest_id) =
+		            (m.workspace_id, m.session_id, m.id)
+		    )
+		    AND NOT EXISTS (
+		      SELECT 1
+		      FROM research_artifact_input_reference ref
+		      WHERE ref.workspace_id = r.workspace_id
+		        AND ref.session_id = r.session_id
+		        AND ref.consumer_version_id = rv.id
+		        AND ref.relation = 'acceptance_input'
+		        AND ref.manifest_id IS DISTINCT FROM m.id
+		    )
+		)
+	`, workspaceID, in.SessionID, in.AttemptID, in.Result.ClientRequestID, in.Hash).Scan(&bindingMatches)
+	if err != nil {
+		return err
+	}
+	if !bindingMatches {
+		return fmt.Errorf("%w: accepted result manifest, resolved versions, or lineage changed", ErrResultConflict)
+	}
+	return nil
 }
 
 func prepareReplan(ctx context.Context, tx pgx.Tx, state acceptedResultState) error {

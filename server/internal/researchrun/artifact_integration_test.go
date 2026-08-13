@@ -203,16 +203,28 @@ func TestCreateDispatchIntentPersistsManifestBoundOutbox(t *testing.T) {
 	if manifestID == "" || manifestHash == "" || requestHash == "" {
 		t.Fatalf("outbox binding incomplete: manifest_id=%q manifest_hash=%q request_hash=%q", manifestID, manifestHash, requestHash)
 	}
-	var manifestAttemptID string
+	var manifestAttemptID, grantID, grantPrincipalID, grantClearance string
+	var grantRevision int64
 	if err = pool.QueryRow(ctx, `
-		SELECT attempt_id::text
-		FROM research_artifact_context_manifest
-		WHERE id = $1::uuid
-	`, manifestID).Scan(&manifestAttemptID); err != nil {
+		SELECT m.attempt_id::text, g.id::text, g.principal_id::text,
+		       g.normal_clearance, m.normal_grant_revision
+		FROM research_artifact_context_manifest m
+		JOIN research_artifact_policy_grant g
+		  ON g.workspace_id = m.workspace_id
+		 AND g.session_id = m.session_id
+		 AND g.id = m.normal_grant_id
+		WHERE m.id = $1::uuid
+	`, manifestID).Scan(
+		&manifestAttemptID, &grantID, &grantPrincipalID, &grantClearance, &grantRevision,
+	); err != nil {
 		t.Fatalf("load manifest row: %v", err)
 	}
 	if manifestAttemptID != attempt.ID {
 		t.Fatalf("manifest attempt=%q want=%q", manifestAttemptID, attempt.ID)
+	}
+	if grantID == "" || grantPrincipalID != fixture.agentID || grantClearance != "raw" || grantRevision != 1 {
+		t.Fatalf("manifest grant id=%q principal=%q clearance=%q revision=%d",
+			grantID, grantPrincipalID, grantClearance, grantRevision)
 	}
 }
 

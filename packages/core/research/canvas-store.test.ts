@@ -19,6 +19,7 @@ describe("useResearchCanvasStore (LRM-1497 shared client state)", () => {
       viewport: null,
       viewportBySession: {},
       selectedNodeId: null,
+      selectedNodeBySession: {},
       filter: emptyCanvasFilter(),
     });
   });
@@ -65,6 +66,34 @@ describe("useResearchCanvasStore (LRM-1497 shared client state)", () => {
     expect(useResearchCanvasStore.getState().selectedNodeId).toBe("b");
     useResearchCanvasStore.getState().clearSelection();
     expect(useResearchCanvasStore.getState().selectedNodeId).toBeNull();
+  });
+
+  it("isolates and clears persisted selections by research session", () => {
+    const store = useResearchCanvasStore.getState();
+    store.selectSessionNode("session-a", "node-a");
+    store.selectSessionNode("session-b", "node-b");
+    expect(useResearchCanvasStore.getState().selectedNodeBySession).toEqual({
+      "session-a": "node-a",
+      "session-b": "node-b",
+    });
+
+    store.selectSessionNode("session-a", null);
+    expect(useResearchCanvasStore.getState().selectedNodeBySession).toEqual({
+      "session-b": "node-b",
+    });
+  });
+
+  it("bounds retained session selections", () => {
+    for (let index = 0; index < 24; index += 1) {
+      useResearchCanvasStore
+        .getState()
+        .selectSessionNode(`session-${index}`, `node-${index}`);
+    }
+
+    const saved = useResearchCanvasStore.getState().selectedNodeBySession;
+    expect(Object.keys(saved)).toHaveLength(20);
+    expect(saved["session-0"]).toBeUndefined();
+    expect(saved["session-23"]).toBe("node-23");
   });
 
   it("merges partial filter updates and clears with clearFilter", () => {

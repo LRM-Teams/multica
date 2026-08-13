@@ -176,9 +176,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     isFetchingNextPage: typedGraphFetchingNextPage,
     isFetching: typedGraphFetching,
   } = useInfiniteQuery(researchGraphTypedInfiniteOptions(wsId, sessionId));
-  const selectedNodeId = useResearchCanvasStore((s) => s.selectedNodeId);
-  const selectCanvasNode = useResearchCanvasStore((s) => s.selectNode);
-  const clearCanvasSelection = useResearchCanvasStore((s) => s.clearSelection);
+  const selectedNodeId = useResearchCanvasStore(
+    (s) => s.selectedNodeBySession[sessionId] ?? null,
+  );
+  const selectSessionCanvasNode = useResearchCanvasStore(
+    (s) => s.selectSessionNode,
+  );
   const clearCanvasFilter = useResearchCanvasStore((s) => s.clearFilter);
   const typedGraph = useMemo(
     () =>
@@ -264,15 +267,14 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
   useEffect(() => {
-    clearCanvasSelection();
     clearCanvasFilter();
-  }, [sessionId, clearCanvasFilter, clearCanvasSelection]);
+  }, [sessionId, clearCanvasFilter]);
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
-      selectCanvasNode(node?.id ?? null);
+      selectSessionCanvasNode(sessionId, node?.id ?? null);
       if (node) dispatch({ type: "setFamily", family: dimensionFamilyOf(node) });
     },
-    [selectCanvasNode],
+    [selectSessionCanvasNode, sessionId],
   );
   const handleFocusDetailNode = useCallback(
     (nodeId: string) => {
@@ -297,8 +299,14 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       typedGraph: displayTypedGraph,
     });
     if (!resolved) return;
-    selectCanvasNode(linkedNodeId);
-  }, [data, displayTypedGraph, nav.searchParams, selectCanvasNode]);
+    selectSessionCanvasNode(sessionId, linkedNodeId);
+  }, [
+    data,
+    displayTypedGraph,
+    nav.searchParams,
+    selectSessionCanvasNode,
+    sessionId,
+  ]);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
     agentId: string;

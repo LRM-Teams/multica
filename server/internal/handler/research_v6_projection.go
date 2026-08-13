@@ -120,18 +120,36 @@ func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6Proje
 	var detail map[string]any
 	_ = json.Unmarshal(node.Payload, &detail)
 	if raw, ok := detail["kind"].(string); ok && raw != "" {
-		kind = raw
+		kind = normalizeResearchV6EntityKind(raw)
 	}
-	for _, key := range []string{"task_id", "attempt_id", "question_id", "claim_id"} {
-		if raw, ok := detail[key].(string); ok && raw != "" {
-			entityID = raw
-			break
+	if kind != "generic" {
+		for _, key := range []string{"task_id", "attempt_id", "question_id", "claim_id"} {
+			if raw, ok := detail[key].(string); ok && raw != "" {
+				entityID = raw
+				break
+			}
 		}
 	}
 	id := runID + ":" + kind + ":" + entityID
 	created := node.CreatedAt
 	updated := node.UpdatedAt
 	return researchV6ProjectionNode{ID: id, RunID: runID, EntityKind: kind, EntityID: entityID, NodeKind: kind, NodeSubtype: node.NodeType, SchemaVersion: 1, Title: node.Title, Summary: node.Summary, Status: node.Status, Importance: 0.5, ActorAgentID: node.ActorAgentID, CreatedAt: &created, UpdatedAt: &updated, Detail: detail}
+}
+
+func normalizeResearchV6EntityKind(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "root", "generic", "gate",
+		"task", "attempt", "result_artifact", "search_plan", "query_execution",
+		"source_candidate", "screening_decision", "source_snapshot", "observation",
+		"claim", "question", "hypothesis", "branch", "insight", "insight_derivation",
+		"integration_round", "integration_contribution", "dispute", "dispute_position",
+		"deliberation", "deliberation_turn", "decision", "team_formation", "team_membership",
+		"divergence_pass", "capability_observation", "report_revision", "evaluation_defect",
+		"monitoring_cycle", "episode":
+		return strings.TrimSpace(raw)
+	default:
+		return "generic"
+	}
 }
 
 func (h *Handler) GetResearchV6ProjectionSnapshot(w http.ResponseWriter, r *http.Request) {

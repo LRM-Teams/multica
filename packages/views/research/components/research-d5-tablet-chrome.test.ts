@@ -9,20 +9,22 @@ const css = readFileSync(
 );
 
 function tabletBlock(): string {
-  const marker = "@media (min-width: 768px) and (max-width: 1199px)";
+  const marker = "@media (min-width: 960px) and (max-width: 1199px)";
   const start = css.indexOf(marker);
   return start < 0 ? "" : css.slice(start);
 }
 
 describe("D5 tablet command bar", () => {
-  it("moves the Goal surface to a full-width second row", () => {
+  it("keeps wide-tablet chrome on one row and collapses only the lens group", () => {
     const tablet = tabletBlock();
-    expect(tablet).toMatch(/\.d5-chrome-top\s*\{[^}]*flex-wrap:\s*wrap/s);
     expect(tablet).toMatch(
-      /\.d5-goal-slot\s*\{[^}]*order:\s*3[^}]*flex:\s*1 1 100%/s,
+      /\.d5-goal-slot\s*\{[^}]*min-width:\s*260px/s,
     );
     expect(tablet).toMatch(
-      /\.d5-brand\s*\{[^}]*flex:\s*1 1 auto[^}]*min-width:\s*0/s,
+      /\.d5-lens-group\s*\{[^}]*display:\s*none/s,
+    );
+    expect(tablet).toMatch(
+      /\.d5-lens-overflow-trigger\s*\{[^}]*display:\s*inline-flex/s,
     );
   });
 });

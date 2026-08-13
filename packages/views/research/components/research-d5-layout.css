@@ -173,7 +173,7 @@
 .d5-rail-toggle {
   position: absolute;
   right: 12px;
-  bottom: 12px;
+  bottom: calc(116px + env(safe-area-inset-bottom));
   z-index: 40;
 }
 .d5-rail-toggle-desktop {
@@ -370,7 +370,7 @@
     min-width: 0;
   }
 }
-@media (min-width: 768px) and (max-width: 1199px) {
+@media (min-width: 768px) and (max-width: 959px) {
   .d5-chrome-top {
     flex-wrap: wrap;
     gap: 10px 12px;
@@ -404,10 +404,36 @@
   }
 }
 
+@media (min-width: 960px) and (max-width: 1199px) {
+  .d5-chrome-top {
+    gap: 10px;
+    padding-inline: 14px;
+  }
+  .d5-brand {
+    min-width: 170px;
+  }
+  .d5-goal-slot {
+    min-width: 260px;
+    padding-inline: 0;
+  }
+  .d5-lens-group {
+    display: none;
+  }
+  .d5-lens-overflow-trigger {
+    display: inline-flex;
+  }
+  .d5-workspace[data-d5-rail-open="true"] {
+    --d5-inspector-right: 336px;
+  }
+  .d5-rail {
+    width: 320px;
+  }
+}
+
 /* The dashboard sidebar reduces the actual workbench width without changing
    the browser viewport. Container queries keep D5 chrome responsive to the
    space it really owns on both Web and Desktop. */
-@container research-d5 (max-width: 1200px) {
+@container research-d5 (max-width: 960px) {
   .d5-chrome-top {
     flex-wrap: wrap;
     gap: 10px 12px;

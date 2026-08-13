@@ -343,6 +343,28 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 	if err := writeFrame(protocol.EventAgentAttachmentReplayReq, attachmentReplay); err != nil {
 		return err
 	}
+	var controlStarted bool
+	var stopControl context.CancelFunc
+	var controlDone chan struct{}
+	startControl := func() {
+		if controlStarted {
+			return
+		}
+		controlStarted = true
+		controlCtx, cancelControl := context.WithCancel(connection.ctx)
+		stopControl = cancelControl
+		controlDone = make(chan struct{})
+		go func() {
+			defer close(controlDone)
+			runner.runControlPlaneHeartbeats(controlCtx, connection)
+		}()
+	}
+	defer func() {
+		if controlStarted {
+			stopControl()
+			<-controlDone
+		}
+	}()
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -360,6 +382,18 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			if err := writeFrame(protocol.EventWorkspaceRunnerPong, protocol.WorkspaceRunnerPongPayload{PingID: ping.PingID}); err != nil {
 				return err
+			}
+		case protocol.EventDaemonHeartbeatAck:
+			var ack HeartbeatResponse
+			if json.Unmarshal(message.Payload, &ack) != nil || ack.RuntimeID == "" || !runner.ownsRuntime(ack.RuntimeID) {
+				continue
+			}
+			if runner.controlHeartbeatAck != nil {
+				lifetime := runner.life
+				if lifetime == nil {
+					lifetime = context.Background()
+				}
+				runner.controlHeartbeatAck(lifetime, &ack)
 			}
 		case protocol.EventDaemonAgentStart:
 			var start protocol.WorkspaceRunnerAgentStartPayload
@@ -480,6 +514,7 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			if err := writeFrame(protocol.EventAgentAttachmentReplayAck, ack); err != nil {
 				return err
 			}
+			startControl()
 		case protocol.EventMixedRunActivityAck:
 			var activityAck protocol.MixedRunActivityTransitionAckPayload
 			if json.Unmarshal(message.Payload, &activityAck) != nil || activityAck.Validate() != nil {
@@ -522,6 +557,68 @@ func (runner *WorkspaceRunner) serveConnection(connection *workspaceRunnerConnec
 			}
 			if err := writeFrame(protocol.EventAgentActivity, activity); err != nil {
 				return err
+			}
+		}
+	}
+}
+
+func (runner *WorkspaceRunner) ownsRuntime(runtimeID string) bool {
+	if runner == nil || runner.runtimeSet == nil || runtimeID == "" {
+		return false
+	}
+	for _, current := range runner.runtimeSet().RuntimeIDs {
+		if current == runtimeID {
+			return true
+		}
+	}
+	return false
+}
+
+func (runner *WorkspaceRunner) runControlPlaneHeartbeats(ctx context.Context, connection *workspaceRunnerConnection) {
+	if runner == nil || runner.controlHeartbeatPayload == nil {
+		return
+	}
+	interval := runner.controlHeartbeatInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	var changes <-chan struct{}
+	unsubscribe := func() {}
+	if runner.controlHeartbeatChanges != nil {
+		changes, unsubscribe = runner.controlHeartbeatChanges()
+	}
+	defer unsubscribe()
+	send := func() bool {
+		if runner.runtimeSet == nil {
+			return true
+		}
+		for _, runtimeID := range runner.runtimeSet().RuntimeIDs {
+			if ctx.Err() != nil {
+				return false
+			}
+			if err := runner.sendOnConnection(connection, protocol.EventDaemonHeartbeat, runner.controlHeartbeatPayload(runtimeID)); err != nil {
+				connection.Close()
+				return false
+			}
+		}
+		return true
+	}
+	if !send() {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-changes:
+			if !send() {
+				return
+			}
+		case <-ticker.C:
+			if !send() {
+				return
 			}
 		}
 	}

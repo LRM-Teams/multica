@@ -51,6 +51,10 @@ type workspaceRunnerDependencies struct {
 	requestReminderSnapshot     func(string)
 	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
 	removeDetachedReminderAgent func(string) error
+	controlHeartbeatInterval    time.Duration
+	controlHeartbeatPayload     func(string) protocol.DaemonHeartbeatRequestPayload
+	controlHeartbeatAck         func(context.Context, *HeartbeatResponse)
+	controlHeartbeatChanges     func() (<-chan struct{}, func())
 	now                         func() time.Time
 	onTransition                func(agentLifecycleTransition)
 }
@@ -82,6 +86,10 @@ type WorkspaceRunner struct {
 	requestReminderSnapshot     func(string)
 	handleReminderInput         func(context.Context, protocol.ReminderOwnerInputPayload)
 	removeDetachedReminderAgent func(string) error
+	controlHeartbeatInterval    time.Duration
+	controlHeartbeatPayload     func(string) protocol.DaemonHeartbeatRequestPayload
+	controlHeartbeatAck         func(context.Context, *HeartbeatResponse)
+	controlHeartbeatChanges     func() (<-chan struct{}, func())
 
 	residency *agentResidencyStore
 	life      context.Context
@@ -151,6 +159,10 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		requestReminderSnapshot:     dependencies.requestReminderSnapshot,
 		handleReminderInput:         dependencies.handleReminderInput,
 		removeDetachedReminderAgent: dependencies.removeDetachedReminderAgent,
+		controlHeartbeatInterval:    dependencies.controlHeartbeatInterval,
+		controlHeartbeatPayload:     dependencies.controlHeartbeatPayload,
+		controlHeartbeatAck:         dependencies.controlHeartbeatAck,
+		controlHeartbeatChanges:     dependencies.controlHeartbeatChanges,
 		residency:                   newAgentResidencyStore(now),
 		life:                        life,
 		lifeStop:                    lifeStop,
@@ -310,15 +322,23 @@ func (runner *WorkspaceRunner) runConnection(ctx context.Context) error {
 	}()
 	if err := connection.Write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
 		WorkspaceID: workspaceID, DaemonInstanceID: runner.config.DaemonInstanceID,
-		RunningAgents: runner.processes.RunningAgentIDs(),
-		ActiveCapabilities: []string{
-			protocol.DaemonCapabilityWorkspaceRunnerAttachment,
-			protocol.DaemonCapabilityReminderTransientInput,
-		},
+		RunningAgents:      runner.processes.RunningAgentIDs(),
+		ActiveCapabilities: runner.activeCapabilities(),
 	}); err != nil {
 		return err
 	}
 	return runner.serveConnection(connection, conn)
+}
+
+func (runner *WorkspaceRunner) activeCapabilities() []string {
+	capabilities := []string{
+		protocol.DaemonCapabilityWorkspaceRunnerAttachment,
+		protocol.DaemonCapabilityReminderTransientInput,
+	}
+	if runner != nil && runner.controlHeartbeatPayload != nil && runner.controlHeartbeatAck != nil {
+		capabilities = append(capabilities, protocol.DaemonCapabilityWorkspaceRunnerControlPlane)
+	}
+	return capabilities
 }
 
 func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error) {
@@ -362,7 +382,16 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 			d.handleReminderOwnerInput(ctx, payload)
 		},
 		removeDetachedReminderAgent: d.removeDetachedReminderAgent,
-		now:                         time.Now,
-		onTransition:                onTransition,
+		controlHeartbeatInterval:    d.cfg.HeartbeatInterval,
+		controlHeartbeatPayload:     d.controlPlaneHeartbeatPayload,
+		controlHeartbeatAck:         d.handleWSHeartbeatAck,
+		controlHeartbeatChanges: func() (<-chan struct{}, func()) {
+			if d.updateObservation == nil {
+				return nil, func() {}
+			}
+			return d.updateObservation.Subscribe()
+		},
+		now:          time.Now,
+		onTransition: onTransition,
 	})
 }

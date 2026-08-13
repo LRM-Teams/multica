@@ -65,15 +65,20 @@ func TestWorkspaceRunnerReadyPingAndReconnectUseFixedIdentity(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		_, raw, err = conn.ReadMessage()
-		if err != nil {
-			t.Error(err)
-			return
-		}
 		var pongFrame protocol.Message
 		var pong protocol.WorkspaceRunnerPongPayload
-		if json.Unmarshal(raw, &pongFrame) != nil || pongFrame.Type != protocol.EventWorkspaceRunnerPong || json.Unmarshal(pongFrame.Payload, &pong) != nil {
-			t.Errorf("invalid pong frame: %s", raw)
+		for pongFrame.Type != protocol.EventWorkspaceRunnerPong {
+			_, raw, err = conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if json.Unmarshal(raw, &pongFrame) != nil {
+				continue
+			}
+		}
+		if json.Unmarshal(pongFrame.Payload, &pong) != nil {
+			t.Errorf("invalid pong frame: %s", pongFrame.Payload)
 			return
 		}
 		observations <- observation{ready: ready, pong: pong}
@@ -568,6 +573,123 @@ func TestWorkspaceRunnerFailedProviderStartPublishesInactiveOnCurrentConnection(
 		}
 	case <-ctx.Done():
 		t.Fatal("failed provider start did not publish inactive status")
+	}
+}
+
+func TestWorkspaceRunnerOwnsCurrentControlPlaneHeartbeat(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	heartbeats := make(chan protocol.DaemonHeartbeatRequestPayload, 1)
+	acks := make(chan *HeartbeatResponse, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Error(err)
+			return
+		}
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var frame protocol.Message
+			if json.Unmarshal(raw, &frame) != nil {
+				continue
+			}
+			if frame.Type == protocol.EventWorkspaceRunnerReady {
+				var ready protocol.WorkspaceRunnerReadyPayload
+				if json.Unmarshal(frame.Payload, &ready) != nil {
+					t.Error("invalid ready payload")
+					return
+				}
+				found := false
+				for _, capability := range ready.ActiveCapabilities {
+					found = found || capability == protocol.DaemonCapabilityWorkspaceRunnerControlPlane
+				}
+				if !found {
+					t.Error("ready did not advertise Workspace Runner control plane")
+					return
+				}
+				continue
+			}
+			if frame.Type == protocol.EventAgentAttachmentReplayReq {
+				var request protocol.WorkspaceRunnerAttachmentReplayRequest
+				if json.Unmarshal(frame.Payload, &request) != nil {
+					t.Error("invalid Attachment replay request")
+					return
+				}
+				end, _ := json.Marshal(protocol.Message{
+					Type: protocol.EventAgentAttachmentReplayEnd,
+					Payload: marshalRaw(protocol.WorkspaceRunnerAttachmentReplayEnd{
+						RuntimeCursors: request.RuntimeCursors,
+					}),
+				})
+				if err := conn.WriteMessage(websocket.TextMessage, end); err != nil {
+					t.Error(err)
+					return
+				}
+				continue
+			}
+			if frame.Type != protocol.EventDaemonHeartbeat {
+				continue
+			}
+			var heartbeat protocol.DaemonHeartbeatRequestPayload
+			if json.Unmarshal(frame.Payload, &heartbeat) != nil {
+				t.Error("invalid heartbeat payload")
+				return
+			}
+			heartbeats <- heartbeat
+			ack, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonHeartbeatAck, Payload: marshalRaw(protocol.DaemonHeartbeatAckPayload{
+				RuntimeID: heartbeat.RuntimeID, Status: "ok",
+			})})
+			if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+				t.Error(err)
+				return
+			}
+			<-r.Context().Done()
+			return
+		}
+	}))
+	defer server.Close()
+
+	d := New(Config{
+		ServerBaseURL: server.URL, DaemonID: "daemon-1", ComputerGeneration: 7,
+		WorkspacesRoot: t.TempDir(), HeartbeatInterval: 10 * time.Millisecond,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	runner, err := d.newWorkspaceRunner("ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.controlHeartbeatAck = func(_ context.Context, ack *HeartbeatResponse) {
+		acks <- ack
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	go runner.runConnection(ctx)
+	select {
+	case heartbeat := <-heartbeats:
+		if heartbeat.RuntimeID != "runtime-1" || heartbeat.ComputerGeneration != 7 {
+			t.Fatalf("heartbeat = %+v, want runtime-1 generation 7", heartbeat)
+		}
+	case <-ctx.Done():
+		t.Fatal("Workspace Runner did not send the current control-plane heartbeat")
+	}
+	select {
+	case ack := <-acks:
+		if ack.RuntimeID != "runtime-1" || ack.Status != "ok" {
+			t.Fatalf("consumed heartbeat acknowledgement = %+v", ack)
+		}
+	case <-ctx.Done():
+		t.Fatal("Workspace Runner did not consume its heartbeat acknowledgement")
 	}
 }
 

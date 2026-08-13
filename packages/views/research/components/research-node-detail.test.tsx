@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type {
   ResearchFleetMember,
   ResearchGraphNode,
@@ -15,6 +15,20 @@ vi.mock("../../i18n/use-t", () => ({
       fn({
         overlay: { detail_close: "Close detail" },
         panel: { weight: "Weight" },
+        actions: { cancel: "Cancel" },
+        ring: {
+          continue: "Continue research",
+          fork: "Fork",
+          retry: "Retry",
+          reassign: "Reassign",
+          reassign_confirm: "Confirm reassign?",
+        },
+        d5: {
+          detail: {
+            open_report: "Open report",
+            command_pending: "Applying…",
+          },
+        },
         node: {
           goal: "Goal",
           subquestion: "Sub",
@@ -223,6 +237,52 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
       "min-w-0",
       "[overflow-wrap:anywhere]",
     );
+  });
+
+  it("keeps a pending node command focusable and suppresses reactivation", () => {
+    const onNodeCommand = vi.fn();
+    render(
+      <ResearchNodeDetail
+        node={node}
+        sources={sources}
+        open
+        placement="inline"
+        onNodeCommand={onNodeCommand}
+        pendingNodeCommand="continue"
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Applying…" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+    button.focus();
+    fireEvent.click(button);
+    expect(button).toHaveFocus();
+    expect(onNodeCommand).not.toHaveBeenCalled();
+  });
+
+  it("confirms reassign through an accessible dialog", () => {
+    const onNodeCommand = vi.fn();
+    render(
+      <ResearchNodeDetail
+        node={{
+          ...node,
+          node_type: "task",
+          status: "running",
+          payload: { task_id: "task-1" },
+        }}
+        sources={sources}
+        open
+        placement="inline"
+        onNodeCommand={onNodeCommand}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Confirm reassign?");
+    expect(onNodeCommand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("research-node-reassign-confirm"));
+    expect(onNodeCommand).toHaveBeenCalledWith("reassign");
   });
 
   it("shows dead-end reason when node is blocked", () => {
@@ -537,7 +597,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(screen.getByText("Discover and select sources")).toBeInTheDocument();
     expect(screen.getByText("Required role:")).toBeInTheDocument();
     expect(screen.getByText("Reviewable evidence package")).toBeInTheDocument();
-    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
     expect(screen.getByText("Sources 2")).toBeInTheDocument();
     expect(screen.getByText("Observations 3")).toBeInTheDocument();
     expect(screen.getByText("Claims 1")).toBeInTheDocument();

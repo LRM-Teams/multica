@@ -283,7 +283,7 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
 
     const selected = screen.getByRole("button", { name: /Stable A/ });
     expect(selected).toHaveAttribute("tabindex", "0");
-    expect(screen.getByRole("button", { name: /Master goal/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /Research goal/ })).toHaveAttribute(
       "tabindex",
       "-1",
     );
@@ -352,7 +352,7 @@ describe("StarGraphCanvas (Slice A renderer)", () => {
     stable.focus();
     fireEvent.keyDown(stable, { key: "Home" });
 
-    const goal = screen.getByRole("button", { name: /Master goal/ });
+    const goal = screen.getByRole("button", { name: /Research goal/ });
     expect(document.activeElement).toBe(goal);
     expect(goal).toHaveAttribute("tabindex", "0");
     expect(stable).toHaveAttribute("tabindex", "-1");

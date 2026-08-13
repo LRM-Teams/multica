@@ -13,7 +13,8 @@ export function resolveAgentInspectorRow(
   rows: readonly ExecutionRow[],
   node: TypedGraphNode | null | undefined,
 ): ExecutionRow | null {
-  const actorId = node?.actor_agent_id?.trim();
+  if (!node) return null;
+  const actorId = node.actor_agent_id?.trim();
   if (!actorId) return null;
 
   const projected = rows.find((row) => row.id === actorId);

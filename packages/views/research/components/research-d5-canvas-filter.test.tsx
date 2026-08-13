@@ -3,7 +3,12 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchCanvasFilter } from "@multica/core/research";
 import { ResearchD5CanvasFilter } from "./research-d5-canvas-filter";
 
-const { storeState, setFilter, clearFilter, emptyCanvasFilter } = vi.hoisted(() => {
+const {
+  storeState,
+  setSessionFilter,
+  clearSessionFilter,
+  emptyCanvasFilter,
+} = vi.hoisted(() => {
   // Inline empty filter — vi.hoisted runs before module imports initialize.
   const emptyCanvasFilter = (): ResearchCanvasFilter => ({
     status: null,
@@ -12,16 +17,21 @@ const { storeState, setFilter, clearFilter, emptyCanvasFilter } = vi.hoisted(() 
     cluster: null,
     query: "",
   });
-  const storeState: { filter: ResearchCanvasFilter } = {
-    filter: emptyCanvasFilter(),
+  const storeState: { filterBySession: Record<string, ResearchCanvasFilter> } = {
+    filterBySession: { "session-a": emptyCanvasFilter() },
   };
-  const setFilter = vi.fn((partial: Partial<ResearchCanvasFilter>) => {
-    storeState.filter = { ...storeState.filter, ...partial };
+  const setSessionFilter = vi.fn(
+    (sessionId: string, partial: Partial<ResearchCanvasFilter>) => {
+      storeState.filterBySession[sessionId] = {
+        ...(storeState.filterBySession[sessionId] ?? emptyCanvasFilter()),
+        ...partial,
+      };
+    },
+  );
+  const clearSessionFilter = vi.fn((sessionId: string) => {
+    storeState.filterBySession[sessionId] = emptyCanvasFilter();
   });
-  const clearFilter = vi.fn(() => {
-    storeState.filter = emptyCanvasFilter();
-  });
-  return { storeState, setFilter, clearFilter, emptyCanvasFilter };
+  return { storeState, setSessionFilter, clearSessionFilter, emptyCanvasFilter };
 });
 
 vi.mock("@multica/core/research", async (importOriginal) => {
@@ -30,29 +40,30 @@ vi.mock("@multica/core/research", async (importOriginal) => {
     ...actual,
     useResearchCanvasStore: (
       selector: (state: {
-        filter: typeof storeState.filter;
-        setFilter: typeof setFilter;
-        clearFilter: typeof clearFilter;
+        filterBySession: typeof storeState.filterBySession;
+        setSessionFilter: typeof setSessionFilter;
+        clearSessionFilter: typeof clearSessionFilter;
       }) => unknown,
     ) =>
       selector({
-        filter: storeState.filter,
-        setFilter,
-        clearFilter,
+        filterBySession: storeState.filterBySession,
+        setSessionFilter,
+        clearSessionFilter,
       }),
   };
 });
 
 describe("ResearchD5CanvasFilter", () => {
   beforeEach(() => {
-    storeState.filter = emptyCanvasFilter();
-    setFilter.mockClear();
-    clearFilter.mockClear();
+    storeState.filterBySession = { "session-a": emptyCanvasFilter() };
+    setSessionFilter.mockClear();
+    clearSessionFilter.mockClear();
   });
 
   it("writes status filter to the canvas store", () => {
     render(
       <ResearchD5CanvasFilter
+        sessionId="session-a"
         options={{
           statuses: ["running", "done"],
           tiers: [],
@@ -67,14 +78,20 @@ describe("ResearchD5CanvasFilter", () => {
       target: { value: "running" },
     });
 
-    expect(setFilter).toHaveBeenCalledWith({ status: "running" });
-    expect(storeState.filter.status).toBe("running");
+    expect(setSessionFilter).toHaveBeenCalledWith("session-a", {
+      status: "running",
+    });
+    expect(storeState.filterBySession["session-a"]?.status).toBe("running");
   });
 
   it("clears an active filter", () => {
-    storeState.filter = { ...emptyCanvasFilter(), status: "running" };
+    storeState.filterBySession["session-a"] = {
+      ...emptyCanvasFilter(),
+      status: "running",
+    };
     render(
       <ResearchD5CanvasFilter
+        sessionId="session-a"
         options={{
           statuses: ["running"],
           tiers: [],
@@ -86,7 +103,7 @@ describe("ResearchD5CanvasFilter", () => {
 
     fireEvent.click(screen.getByTestId("research-d5-filter-trigger"));
     fireEvent.click(screen.getByTestId("research-d5-filter-clear"));
-    expect(clearFilter).toHaveBeenCalled();
-    expect(storeState.filter.status).toBeNull();
+    expect(clearSessionFilter).toHaveBeenCalledWith("session-a");
+    expect(storeState.filterBySession["session-a"]?.status).toBeNull();
   });
 });

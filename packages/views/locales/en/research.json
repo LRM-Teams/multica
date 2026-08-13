@@ -106,6 +106,8 @@
   },
   "session_page": {
     "load_failed": "Failed to load session",
+    "load_failed_hint": "The session response could not be used. Retry to load the latest research state.",
+    "technical_details": "Technical details",
     "retry": "Retry",
     "canvas_forming_title": "Canvas forming",
     "canvas_forming_hint": "The fleet is placing nodes — they will show up here.",
@@ -505,6 +507,40 @@
     "decision": "Decision"
   },
   "node_card": {
+    "task_meta": "Task",
+    "agent_legend": "Agent {{id}}",
+    "kinds": {
+      "task": "Task",
+      "attempt": "Attempt",
+      "result_artifact": "Result artifact",
+      "search_plan": "Search plan",
+      "query_execution": "Query execution",
+      "source_candidate": "Source candidate",
+      "screening_decision": "Screening decision",
+      "source_snapshot": "Source snapshot",
+      "observation": "Observation",
+      "claim": "Claim",
+      "question": "Question",
+      "hypothesis": "Hypothesis",
+      "branch": "Branch",
+      "insight": "Insight",
+      "insight_derivation": "Insight derivation",
+      "integration_round": "Integration round",
+      "integration_contribution": "Integration contribution",
+      "dispute": "Dispute",
+      "dispute_position": "Dispute position",
+      "deliberation": "Deliberation",
+      "deliberation_turn": "Deliberation turn",
+      "decision": "Decision",
+      "team_formation": "Team formation",
+      "team_membership": "Team membership",
+      "capability_observation": "Capability observation",
+      "divergence_pass": "Divergence pass",
+      "monitoring_cycle": "Monitoring cycle",
+      "report_revision": "Report revision",
+      "evaluation_defect": "Evaluation defect",
+      "episode": "Run summary"
+    },
     "generic_type": "Unknown type",
     "generic_unrecognized": "Unrecognized type",
     "generic_raw": "Raw: ",
@@ -891,6 +927,7 @@
     "reconnect_failed_hint": "Check the network, then retry. Your last loaded research is still on screen.",
     "server_error_title": "Server error",
     "server_error_hint": "The research service returned an error (5xx). You can retry without losing this session shell.",
+    "technical_details": "Technical details",
     "retry": "Retry",
     "retrying": "Retrying…",
     "waiting_network": "Waiting for network",
@@ -1025,12 +1062,16 @@
   "d5": {
     "brand_title": "Research Constellation · D5",
     "brand_subtitle": "XXL / XL / L / M results · S agent work nodes",
+    "projection": {
+      "classic": "Classic",
+      "classic_hint": "Classic projection view; live V6 projection is not available for this session"
+    },
     "lens_group": "Display lenses",
     "lens": {
       "relations": "Relations",
       "confidence": "Confidence",
       "agent": "Agent",
-      "lineage": "Lineage"
+      "lineage": "Round lineage"
     },
     "rail": {
       "mobile_title": "Research context",
@@ -1043,13 +1084,25 @@
     "goal_panel": {
       "title": "Goal versions",
       "version": "v{{version}}",
+      "round": "round {{round}}",
+      "round_with_budget": "round {{round}} / {{budget}}",
       "current": "Current",
       "impact": "{{labeledNodes}} of {{totalNodes}} nodes tagged with a goal version"
     },
     "detail": {
       "open_report": "Open full report",
-      "continue_deepening": "Continue deepening",
-      "continue_message": "Please continue deepening the research on: {{title}}"
+      "command_pending": "Applying…",
+      "command_failed": "Could not apply this node action. Refresh and try again.",
+      "permission_denied": "You do not have permission to continue this path.",
+      "session_terminal": "This research session is already finished.",
+      "node_stale": "This node changed. The canvas has been refreshed; try again.",
+      "state_version_conflict": "This path changed. Review the refreshed node before retrying.",
+      "action_not_allowed": "This node cannot be continued in its current state.",
+      "idempotency_conflict": "This request conflicts with an earlier action. Refresh and try again.",
+      "invalid_request": "This node cannot accept that request.",
+      "run_not_running": "Resume the research session before continuing this path.",
+      "not_retryable": "This node is not retryable in its current state.",
+      "no_eligible_member": "No eligible research agent is available for this path."
     },
     "summary": {
       "title": "Constellation · {{loaded}} loaded directions",
@@ -1154,6 +1207,7 @@
     "canvas": {
       "loading": "Loading constellation…",
       "error": "Could not load the typed research graph.",
+      "interface_error_details": "Technical details",
       "stale_title": "Constellation may be out of date.",
       "stale_body": "The last loaded graph remains visible while refresh is unavailable.",
       "stale_announcement": "Constellation refresh failed. The last loaded graph remains visible.",

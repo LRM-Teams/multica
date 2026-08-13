@@ -133,10 +133,27 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
     const onRetry = vi.fn();
     render(
       <ResearchConstellationWorkspace
-        typedGraph={undefined}
+        typedGraph={{
+          session_id: "s1",
+          graph_version: 0,
+          total_node_count: 0,
+          nodes: [],
+          edges: [],
+          clusters: [],
+          lineage: {
+            derived: {},
+            merged: {},
+            superseded: {},
+            restarted: {},
+            invalidated: {},
+            supersedes: {},
+          },
+        }}
         typedLoading={false}
-        typedError
-        projectionErrorReason="V6 interface error"
+        typedError={false}
+        projectionMismatch
+        snapshotNodeCount={3}
+        typedGraphSessionId="s1"
         onRetryTypedGraph={onRetry}
         retryTypedGraphPending
         snapshotNodes={snapshotNodes}
@@ -155,6 +172,11 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
     );
 
     const retry = screen.getByRole("button", { name: "Retrying…" });
+    expect(screen.getByText("Could not load the typed research graph.")).toBeTruthy();
+    expect(screen.getByText("Technical details")).toBeTruthy();
+    const diagnostics = screen.getByTestId("research-projection-error-diagnostics");
+    expect(diagnostics).not.toHaveAttribute("open");
+    expect(diagnostics).toHaveTextContent("V6 interface error");
     expect(retry).toHaveAttribute("aria-disabled", "true");
     expect(retry).not.toBeDisabled();
     retry.focus();
@@ -193,13 +215,14 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("disables retry while typed graph recovery is pending", () => {
+  it("keeps retry focused and suppresses reactivation while recovery is pending", async () => {
+    const onRetry = vi.fn();
     render(
       <ResearchConstellationWorkspace
         typedGraph={undefined}
         typedLoading={false}
         typedError
-        onRetryTypedGraph={() => {}}
+        onRetryTypedGraph={onRetry}
         retryTypedGraphPending
         snapshotNodes={[]}
         selectedNode={null}
@@ -216,7 +239,13 @@ describe("ResearchConstellationWorkspace typed graph recovery", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+    const retry = screen.getByRole("button", { name: "Retrying…" });
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    expect(retry).not.toBeDisabled();
+    retry.focus();
+    await userEvent.click(retry);
+    expect(retry).toHaveFocus();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 });
 

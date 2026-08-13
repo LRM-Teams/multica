@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -16,9 +18,19 @@ describe("D5 trajectory selection seam", () => {
       source.indexOf("const handleTrajectorySelect = useCallback("),
       source.indexOf("const graphRemainingCount"),
     );
-    expect(handler).toContain("setReportOpen(false)");
-    expect(handler).toContain("setInspectorAgentId(null)");
+    expect(handler).toContain("closeOverlay()");
     expect(handler).not.toContain('setRailMode("detail")');
     expect(handler).not.toContain("setRailOpen(true)");
+  });
+
+  it("reopens the detail rail only for a full ordinary-node open", () => {
+    const handler = source.slice(
+      source.indexOf("const handleCanvasSelect = useCallback("),
+      source.indexOf("const handleTrajectorySelect = useCallback("),
+    );
+    expect(handler).toContain('setRailMode("detail")');
+    expect(handler).toContain("setRailOpen(true)");
+    expect(handler).toContain("openAgentInspector");
+    expect(handler).toContain("openReport");
   });
 });

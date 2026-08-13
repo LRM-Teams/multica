@@ -56,6 +56,8 @@ export function ResearchSessionGoalCard({
   onConfirmSubstantive,
   confirmSubstantivePending = false,
   goalVersion = null,
+  productRound = null,
+  productRoundBudget = null,
   goalHistory = [],
   goalImpact = null,
   className,
@@ -71,6 +73,8 @@ export function ResearchSessionGoalCard({
   onConfirmSubstantive?: (proposal: string) => void | Promise<void>;
   confirmSubstantivePending?: boolean;
   goalVersion?: number | null;
+  productRound?: number | null;
+  productRoundBudget?: number | null;
   goalHistory?: readonly GoalVersionEntry[];
   goalImpact?: { labeledNodes: number; totalNodes: number } | null;
   className?: string;
@@ -164,6 +168,19 @@ export function ResearchSessionGoalCard({
     >
       <span className="shrink-0 text-[10px] font-extrabold tracking-wide text-brand">
         {t(($) => $.goal_card.label)}
+        {goalVersion != null
+          ? ` · ${t(($) => $.d5.goal_panel.version, { version: goalVersion })}`
+          : null}
+        {productRound != null && productRound > 0
+          ? ` · ${
+              productRoundBudget != null && productRoundBudget > 0
+                ? t(($) => $.d5.goal_panel.round_with_budget, {
+                    round: productRound,
+                    budget: productRoundBudget,
+                  })
+                : t(($) => $.d5.goal_panel.round, { round: productRound })
+            }`
+          : null}
       </span>
       {model.state === "loading" ? (
         <Loader2

@@ -175,9 +175,15 @@ describe("LRM-1497 render-layer view-model — geometry precision (AC: endpoints
     expect(layoutKindForEdgeType("supports")).toBe("support");
     expect(layoutKindForEdgeType("contradicts")).toBe("challenge");
     expect(layoutKindForEdgeType("derived_from")).toBe("decompose");
+    expect(layoutKindForEdgeType("decomposes")).toBe("decompose");
+    expect(layoutKindForEdgeType("depends_on")).toBe("decompose");
+    expect(layoutKindForEdgeType("tests")).toBe("decompose");
+    expect(layoutKindForEdgeType("produced")).toBe("decompose");
     expect(layoutKindForEdgeType("merged_from")).toBe("support");
+    expect(layoutKindForEdgeType("integrates")).toBe("support");
     expect(layoutKindForEdgeType("restart_of")).toBe("newdir");
-    expect(layoutKindForEdgeType("discussed_by")).toBe("support");
+    expect(layoutKindForEdgeType("discussed_by")).toBe("challenge");
+    expect(layoutKindForEdgeType("staffed_by")).toBe("support");
     const vm = buildStarCanvasViewModel(fixture());
     const kind = new Map(vm.relations.map((r) => [`${r.fromNodeId}->${r.toNodeId}`, r.kind]));
     const edgeType = new Map(vm.relations.map((r) => [`${r.fromNodeId}->${r.toNodeId}`, r.edgeType]));
@@ -191,9 +197,27 @@ describe("LRM-1497 render-layer view-model — geometry precision (AC: endpoints
 
 describe("LRM-1497 view-model — viewport-safe rebase (AC: 3 viewports, no occlusion)", () => {
   const CASES: Array<{ label: string; viewport: { width: number; height: number }; panel: number }> = [
-    { label: "1440x900", viewport: { width: 1440, height: 900 }, panel: 360 },
-    { label: "1920x1080", viewport: { width: 1920, height: 1080 }, panel: 360 },
-    { label: "narrow 768x900", viewport: { width: 768, height: 900 }, panel: 0 },
+    {
+      label: "1440x900 runtime canvas with 360 rail already excluded",
+      viewport: { width: 1080, height: 900 },
+      panel: 0,
+    },
+    {
+      label: "1920x1080 runtime canvas with 360 rail already excluded",
+      viewport: { width: 1560, height: 1080 },
+      panel: 0,
+    },
+    {
+      label: "768x900 runtime canvas with 320 rail already excluded",
+      viewport: { width: 448, height: 900 },
+      panel: 0,
+    },
+    { label: "mobile 360x800", viewport: { width: 360, height: 800 }, panel: 0 },
+    {
+      label: "1440x900 at 200% browser zoom",
+      viewport: { width: 720, height: 450 },
+      panel: 0,
+    },
   ];
 
   for (const { label, viewport, panel } of CASES) {

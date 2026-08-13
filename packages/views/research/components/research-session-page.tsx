@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@multica/core/api";
+import { api, ApiError } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import type {
   AgentPanelIdentitySnapshot,
@@ -27,8 +27,10 @@ import {
 import type {
   ResearchClarificationQuestion,
   ResearchGraphNode,
+  ResearchNodeCommandAction,
   ResearchProductRoundCard,
 } from "@multica/core/types";
+import { createSafeId } from "@multica/core/utils";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
@@ -129,6 +131,43 @@ function mutationErrorToast(fallback: string, err: unknown) {
   showErrorToast(err instanceof Error && err.message ? err.message : fallback);
 }
 
+type ResearchNodeCommandErrorKey =
+  | "permission_denied"
+  | "session_terminal"
+  | "node_stale"
+  | "state_version_conflict"
+  | "action_not_allowed"
+  | "idempotency_conflict"
+  | "invalid_request"
+  | "run_not_running"
+  | "not_retryable"
+  | "no_eligible_member";
+
+function researchNodeCommandErrorKey(error: unknown): ResearchNodeCommandErrorKey | null {
+  if (!(error instanceof ApiError) || (error.status !== 403 && error.status !== 409)) {
+    return null;
+  }
+  if (!error.body || typeof error.body !== "object") return null;
+  const messageKey = (error.body as Record<string, unknown>).message_key;
+  if (typeof messageKey !== "string") return null;
+  const key = messageKey.replace(/^research\.node_command\./, "");
+  switch (key) {
+    case "permission_denied":
+    case "session_terminal":
+    case "node_stale":
+    case "state_version_conflict":
+    case "action_not_allowed":
+    case "idempotency_conflict":
+    case "invalid_request":
+    case "run_not_running":
+    case "not_retryable":
+    case "no_eligible_member":
+      return key;
+    default:
+      return null;
+  }
+}
+
 export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   return (
     <ResearchSessionBoundary sessionId={sessionId}>
@@ -182,7 +221,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   const selectSessionCanvasNode = useResearchCanvasStore(
     (s) => s.selectSessionNode,
   );
-  const clearCanvasFilter = useResearchCanvasStore((s) => s.clearFilter);
   const typedGraph = useMemo(
     () =>
       typedGraphPages?.pages.length
@@ -266,9 +304,6 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     researchSessionUiReducer,
     INITIAL_RESEARCH_SESSION_UI_STATE,
   );
-  useEffect(() => {
-    clearCanvasFilter();
-  }, [sessionId, clearCanvasFilter]);
   const handleSelectCanvasNode = useCallback(
     (node: ResearchGraphNode | null) => {
       selectSessionCanvasNode(sessionId, node?.id ?? null);
@@ -327,6 +362,12 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
   // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const reportControllerRef = useRef<{ open: () => void } | null>(null);
+  const nodeCommandRequestRef = useRef<{
+    sessionId: string;
+    nodeId: string;
+    action: ResearchNodeCommandAction;
+    requestId: string;
+  } | null>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
@@ -341,6 +382,84 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
       void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
     },
     onError: (err) => mutationErrorToast(t(($) => $.session_page.send_failed), err),
+  });
+
+  const nodeCommand = useMutation({
+    mutationFn: ({
+      node,
+      action,
+    }: {
+      node: ResearchGraphNode;
+      action: ResearchNodeCommandAction;
+    }) => {
+      const current = nodeCommandRequestRef.current;
+      const requestId =
+        current?.sessionId === sessionId &&
+        current.nodeId === node.id &&
+        current.action === action
+          ? current.requestId
+          : createSafeId();
+      nodeCommandRequestRef.current = {
+        sessionId,
+        nodeId: node.id,
+        action,
+        requestId,
+      };
+      return api.postResearchNodeCommand(sessionId, node.id, {
+        action,
+        client_request_id: requestId,
+      });
+    },
+    onSuccess: (_response, variables) => {
+      if (
+        nodeCommandRequestRef.current?.nodeId === variables.node.id &&
+        nodeCommandRequestRef.current.action === variables.action
+      ) {
+        nodeCommandRequestRef.current = null;
+      }
+    },
+    onError: (error) => {
+      const key = researchNodeCommandErrorKey(error);
+      switch (key) {
+        case "permission_denied":
+          showErrorToast(t(($) => $.d5.detail.permission_denied));
+          break;
+        case "session_terminal":
+          showErrorToast(t(($) => $.d5.detail.session_terminal));
+          break;
+        case "node_stale":
+          showErrorToast(t(($) => $.d5.detail.node_stale));
+          break;
+        case "state_version_conflict":
+          showErrorToast(t(($) => $.d5.detail.state_version_conflict));
+          break;
+        case "action_not_allowed":
+          showErrorToast(t(($) => $.d5.detail.action_not_allowed));
+          break;
+        case "idempotency_conflict":
+          showErrorToast(t(($) => $.d5.detail.idempotency_conflict));
+          break;
+        case "invalid_request":
+          showErrorToast(t(($) => $.d5.detail.invalid_request));
+          break;
+        case "run_not_running":
+          showErrorToast(t(($) => $.d5.detail.run_not_running));
+          break;
+        case "not_retryable":
+          showErrorToast(t(($) => $.d5.detail.not_retryable));
+          break;
+        case "no_eligible_member":
+          showErrorToast(t(($) => $.d5.detail.no_eligible_member));
+          break;
+        default:
+          showErrorToast(t(($) => $.d5.detail.command_failed));
+      }
+    },
+    onSettled: () => {
+      void refetch();
+      void refetchTypedGraph();
+      projectionGateway.refetch();
+    },
   });
 
   const stop = useMutation({
@@ -489,11 +608,31 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
           className="flex h-full flex-col items-center justify-center gap-3 px-6 py-12 text-center"
         >
           <AlertCircle className="size-6 text-destructive" aria-hidden />
-          <p className="text-sm text-destructive">
-            {error instanceof Error && error.message
-              ? error.message
-              : t(($) => $.session_page.load_failed)}
-          </p>
+          <div className="max-w-md space-y-1.5">
+            <h2 className="text-sm font-medium text-destructive">
+              {t(($) => $.session_page.load_failed)}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {t(($) => $.session_page.load_failed_hint)}
+            </p>
+            {error instanceof Error && error.message ? (
+              <details
+                data-testid="research-session-load-error-diagnostics"
+                className="pt-1 text-left text-xs text-muted-foreground"
+              >
+                <summary className="cursor-pointer text-center">
+                  {t(($) => $.session_page.technical_details)}
+                </summary>
+                <code
+                  lang="en"
+                  dir="ltr"
+                  className="mt-2 block max-h-24 overflow-auto rounded-md bg-muted/60 p-2 whitespace-pre-wrap break-words"
+                >
+                  {error.message}
+                </code>
+              </details>
+            ) : null}
+          </div>
           <Button
             type="button"
             variant="outline"
@@ -735,6 +874,7 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
         goalHistory={goalHistory}
         goalImpact={goalImpact}
         typedGraphNodes={displayTypedGraph?.nodes ?? []}
+        projectionSource={projectionGateway.source}
         session={session}
         contract={data.run?.contract}
         canConfirm={canConfirm}
@@ -840,10 +980,11 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
                 placement="inline"
                 onClose={() => handleSelectCanvasNode(null)}
                 onOpenReport={() => reportControllerRef.current?.open()}
-                onContinueDeepening={() =>
-                  postUser(
-                    t(($) => $.d5.detail.continue_message, { title: selectedNode.title }),
-                  )
+                onNodeCommand={(action) =>
+                  nodeCommand.mutate({ node: selectedNode, action })
+                }
+                pendingNodeCommand={
+                  nodeCommand.isPending ? nodeCommand.variables?.action : null
                 }
               />
             ) : (

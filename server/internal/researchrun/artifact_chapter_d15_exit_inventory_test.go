@@ -17,7 +17,7 @@ const chapterD15EnforceComplete = false
 var chapterD15Coverage = map[int]string{
 	1:  "partial", // migration 318–330 roundtrip tests
 	2:  "partial", // trigger/constraint name inventory tests
-	3:  "partial", // migration FK negative fixtures
+	3:  "partial", // migration 326 relationship FKs cover same-scope plus cross-session/workspace negatives
 	4:  "partial", // deferred guard tests in migration suite
 	5:  "partial", // immutability/watermark CAS tests
 	6:  "partial", // backfill diagnostic tests in migration 319

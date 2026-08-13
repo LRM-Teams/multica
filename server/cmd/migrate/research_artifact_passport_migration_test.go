@@ -1501,13 +1501,32 @@ func TestResearchArtifactScopedRelationshipFKs326RoundTrips(t *testing.T) {
 	}
 
 	workspaceID := "10000000-0000-4000-8000-000000000001"
+	otherWorkspaceID := "10000000-0000-4000-8000-000000000002"
 	sessionID := "20000000-0000-4000-8000-000000000001"
 	otherSessionID := "20000000-0000-4000-8000-000000000002"
+	otherWorkspaceSessionID := "20000000-0000-4000-8000-000000000003"
 	localTaskID := "30000000-0000-4000-8000-000000000003"
 	localDependsTaskID := "30000000-0000-4000-8000-000000000004"
 	foreignTaskID := "30000000-0000-4000-8000-000000000005"
+	otherWorkspaceTaskID := "30000000-0000-4000-8000-000000000006"
+	localQuestionID := "31000000-0000-4000-8000-000000000001"
+	localParentQuestionID := "31000000-0000-4000-8000-000000000002"
+	foreignQuestionID := "31000000-0000-4000-8000-000000000003"
+	otherWorkspaceQuestionID := "31000000-0000-4000-8000-000000000004"
+	localClaimID := "32000000-0000-4000-8000-000000000001"
+	foreignClaimID := "32000000-0000-4000-8000-000000000002"
+	otherWorkspaceClaimID := "32000000-0000-4000-8000-000000000003"
+	localSnapshotID := "33000000-0000-4000-8000-000000000001"
+	foreignSnapshotID := "33000000-0000-4000-8000-000000000002"
+	otherWorkspaceSnapshotID := "33000000-0000-4000-8000-000000000003"
+	localObservationID := "34000000-0000-4000-8000-000000000001"
+	foreignObservationID := "34000000-0000-4000-8000-000000000002"
+	otherWorkspaceObservationID := "34000000-0000-4000-8000-000000000003"
+	localEvidenceID := "35000000-0000-4000-8000-000000000001"
+	localSourceID := "36000000-0000-4000-8000-000000000001"
+	localAttemptID := "37000000-0000-4000-8000-000000000001"
 
-	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid)`, workspaceID); err != nil {
+	if _, err = conn.Exec(ctx, `INSERT INTO workspace (id) VALUES ($1::uuid),($2::uuid)`, workspaceID, otherWorkspaceID); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
 	for _, id := range []string{sessionID, otherSessionID} {
@@ -1515,14 +1534,66 @@ func TestResearchArtifactScopedRelationshipFKs326RoundTrips(t *testing.T) {
 			t.Fatalf("seed session %s: %v", id, err)
 		}
 	}
+	if _, err = conn.Exec(ctx, `INSERT INTO research_session (id,workspace_id) VALUES ($1::uuid,$2::uuid)`, otherWorkspaceSessionID, otherWorkspaceID); err != nil {
+		t.Fatalf("seed other workspace session: %v", err)
+	}
 	if _, err = conn.Exec(ctx, `
 		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
 		VALUES
-		  ($1::uuid, $4::uuid, $5::uuid, 'local-task', 1, 1),
-		  ($2::uuid, $4::uuid, $5::uuid, 'local-depends', 1, 1),
-		  ($3::uuid, $4::uuid, $6::uuid, 'foreign-task', 1, 1)
-	`, localTaskID, localDependsTaskID, foreignTaskID, workspaceID, sessionID, otherSessionID); err != nil {
+		  ($1::uuid, $5::uuid, $6::uuid, 'local-task', 1, 1),
+		  ($2::uuid, $5::uuid, $6::uuid, 'local-depends', 1, 1),
+		  ($3::uuid, $5::uuid, $7::uuid, 'foreign-task', 1, 1),
+		  ($4::uuid, $8::uuid, $9::uuid, 'other-workspace-task', 1, 1)
+	`, localTaskID, localDependsTaskID, foreignTaskID, otherWorkspaceTaskID,
+		workspaceID, sessionID, otherSessionID, otherWorkspaceID, otherWorkspaceSessionID); err != nil {
 		t.Fatalf("seed tasks: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_question (id,workspace_id,session_id,client_key,goal_version,plan_version) VALUES
+		 ($1::uuid,$5::uuid,$6::uuid,'local-question',1,1),
+		 ($2::uuid,$5::uuid,$6::uuid,'local-parent-question',1,1),
+		 ($3::uuid,$5::uuid,$7::uuid,'foreign-question',1,1),
+		 ($4::uuid,$8::uuid,$9::uuid,'other-workspace-question',1,1)
+	`, localQuestionID, localParentQuestionID, foreignQuestionID, otherWorkspaceQuestionID,
+		workspaceID, sessionID, otherSessionID, otherWorkspaceID, otherWorkspaceSessionID); err != nil {
+		t.Fatalf("seed questions: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_claim (id,workspace_id,session_id,goal_version,plan_version) VALUES
+		 ($1::uuid,$4::uuid,$5::uuid,1,1),($2::uuid,$4::uuid,$6::uuid,1,1),($3::uuid,$7::uuid,$8::uuid,1,1)
+	`, localClaimID, foreignClaimID, otherWorkspaceClaimID, workspaceID, sessionID,
+		otherSessionID, otherWorkspaceID, otherWorkspaceSessionID); err != nil {
+		t.Fatalf("seed claims: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_source_snapshot (id,workspace_id,session_id) VALUES
+		 ($1::uuid,$4::uuid,$5::uuid),($2::uuid,$4::uuid,$6::uuid),($3::uuid,$7::uuid,$8::uuid)
+	`, localSnapshotID, foreignSnapshotID, otherWorkspaceSnapshotID, workspaceID, sessionID,
+		otherSessionID, otherWorkspaceID, otherWorkspaceSessionID); err != nil {
+		t.Fatalf("seed snapshots: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_observation (id,workspace_id,session_id) VALUES
+		 ($1::uuid,$4::uuid,$5::uuid),($2::uuid,$4::uuid,$6::uuid),($3::uuid,$7::uuid,$8::uuid)
+	`, localObservationID, foreignObservationID, otherWorkspaceObservationID, workspaceID, sessionID,
+		otherSessionID, otherWorkspaceID, otherWorkspaceSessionID); err != nil {
+		t.Fatalf("seed observations: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO research_source (id,workspace_id,session_id) VALUES ($1::uuid,$2::uuid,$3::uuid)`,
+		localSourceID, workspaceID, sessionID); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_claim_evidence (id,workspace_id,session_id,claim_id,observation_id)
+		VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid)
+	`, localEvidenceID, workspaceID, sessionID, localClaimID, localObservationID); err != nil {
+		t.Fatalf("seed evidence: %v", err)
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task_attempt (id,workspace_id,session_id,task_id)
+		VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid)
+	`, localAttemptID, workspaceID, sessionID, localTaskID); err != nil {
+		t.Fatalf("seed attempt: %v", err)
 	}
 
 	up318, _ := readMigrationPair(t, "318_research_artifact_passport")
@@ -1553,6 +1624,24 @@ func TestResearchArtifactScopedRelationshipFKs326RoundTrips(t *testing.T) {
 	`, workspaceID, sessionID, localTaskID, localDependsTaskID); err != nil {
 		t.Fatalf("set same-scope parent task: %v", err)
 	}
+	positiveRelationships := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{"task question", `UPDATE research_task SET question_id=$1::uuid WHERE id=$2::uuid`, []any{localQuestionID, localTaskID}},
+		{"question links", `UPDATE research_question SET parent_question_id=$1::uuid,created_by_task_id=$2::uuid,answer_claim_id=$3::uuid WHERE id=$4::uuid`, []any{localParentQuestionID, localTaskID, localClaimID, localQuestionID}},
+		{"snapshot producer", `UPDATE research_source_snapshot SET produced_by_task_id=$1::uuid WHERE id=$2::uuid`, []any{localTaskID, localSnapshotID}},
+		{"observation links", `UPDATE research_observation SET source_snapshot_id=$1::uuid,produced_by_task_id=$2::uuid WHERE id=$3::uuid`, []any{localSnapshotID, localTaskID, localObservationID}},
+		{"claim producer", `UPDATE research_claim SET produced_by_task_id=$1::uuid WHERE id=$2::uuid`, []any{localTaskID, localClaimID}},
+		{"evidence verifier", `UPDATE research_claim_evidence SET verified_by_task_id=$1::uuid WHERE id=$2::uuid`, []any{localTaskID, localEvidenceID}},
+		{"source snapshot", `UPDATE research_source SET source_snapshot_id=$1::uuid WHERE id=$2::uuid`, []any{localSnapshotID, localSourceID}},
+	}
+	for _, relationship := range positiveRelationships {
+		if _, err = conn.Exec(ctx, relationship.query, relationship.args...); err != nil {
+			t.Fatalf("set same-scope %s: %v", relationship.name, err)
+		}
+	}
 
 	if _, err = conn.Exec(ctx, `
 		UPDATE research_task
@@ -1561,12 +1650,54 @@ func TestResearchArtifactScopedRelationshipFKs326RoundTrips(t *testing.T) {
 	`, workspaceID, sessionID, localTaskID, foreignTaskID); err == nil {
 		t.Fatal("expected cross-session parent_task_id update to fail")
 	}
+	if _, err = conn.Exec(ctx, `UPDATE research_task SET parent_task_id=$1::uuid WHERE id=$2::uuid`, otherWorkspaceTaskID, localTaskID); err == nil {
+		t.Fatal("expected cross-workspace parent_task_id update to fail")
+	}
 
 	if _, err = conn.Exec(ctx, `
 		INSERT INTO research_task_dependency (workspace_id, session_id, task_id, depends_on_task_id)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid)
 	`, workspaceID, sessionID, localTaskID, foreignTaskID); err == nil {
 		t.Fatal("expected cross-session dependency insert to fail")
+	}
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_task_dependency (workspace_id,session_id,task_id,depends_on_task_id)
+		VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid)
+	`, workspaceID, sessionID, localTaskID, otherWorkspaceTaskID); err == nil {
+		t.Fatal("expected cross-workspace dependency insert to fail")
+	}
+
+	negativeRelationships := []struct {
+		name               string
+		query              string
+		crossSessionArgs   []any
+		crossWorkspaceArgs []any
+	}{
+		{"attempt task", `UPDATE research_task_attempt SET task_id=$1::uuid WHERE id=$2::uuid`, []any{foreignTaskID, localAttemptID}, []any{otherWorkspaceTaskID, localAttemptID}},
+		{"task question", `UPDATE research_task SET question_id=$1::uuid WHERE id=$2::uuid`, []any{foreignQuestionID, localTaskID}, []any{otherWorkspaceQuestionID, localTaskID}},
+		{"question parent", `UPDATE research_question SET parent_question_id=$1::uuid WHERE id=$2::uuid`, []any{foreignQuestionID, localQuestionID}, []any{otherWorkspaceQuestionID, localQuestionID}},
+		{"question creator", `UPDATE research_question SET created_by_task_id=$1::uuid WHERE id=$2::uuid`, []any{foreignTaskID, localQuestionID}, []any{otherWorkspaceTaskID, localQuestionID}},
+		{"question answer", `UPDATE research_question SET answer_claim_id=$1::uuid WHERE id=$2::uuid`, []any{foreignClaimID, localQuestionID}, []any{otherWorkspaceClaimID, localQuestionID}},
+		{"snapshot producer", `UPDATE research_source_snapshot SET produced_by_task_id=$1::uuid WHERE id=$2::uuid`, []any{foreignTaskID, localSnapshotID}, []any{otherWorkspaceTaskID, localSnapshotID}},
+		{"observation source", `UPDATE research_observation SET source_snapshot_id=$1::uuid WHERE id=$2::uuid`, []any{foreignSnapshotID, localObservationID}, []any{otherWorkspaceSnapshotID, localObservationID}},
+		{"observation producer", `UPDATE research_observation SET produced_by_task_id=$1::uuid WHERE id=$2::uuid`, []any{foreignTaskID, localObservationID}, []any{otherWorkspaceTaskID, localObservationID}},
+		{"claim producer", `UPDATE research_claim SET produced_by_task_id=$1::uuid WHERE id=$2::uuid`, []any{foreignTaskID, localClaimID}, []any{otherWorkspaceTaskID, localClaimID}},
+		{"evidence claim", `UPDATE research_claim_evidence SET claim_id=$1::uuid WHERE id=$2::uuid`, []any{foreignClaimID, localEvidenceID}, []any{otherWorkspaceClaimID, localEvidenceID}},
+		{"evidence observation", `UPDATE research_claim_evidence SET observation_id=$1::uuid WHERE id=$2::uuid`, []any{foreignObservationID, localEvidenceID}, []any{otherWorkspaceObservationID, localEvidenceID}},
+		{"evidence verifier", `UPDATE research_claim_evidence SET verified_by_task_id=$1::uuid WHERE id=$2::uuid`, []any{foreignTaskID, localEvidenceID}, []any{otherWorkspaceTaskID, localEvidenceID}},
+		{"legacy source snapshot", `UPDATE research_source SET source_snapshot_id=$1::uuid WHERE id=$2::uuid`, []any{foreignSnapshotID, localSourceID}, []any{otherWorkspaceSnapshotID, localSourceID}},
+	}
+	for _, relationship := range negativeRelationships {
+		for _, boundary := range []struct {
+			name string
+			args []any
+		}{{"cross-session", relationship.crossSessionArgs}, {"cross-workspace", relationship.crossWorkspaceArgs}} {
+			t.Run(relationship.name+"/"+boundary.name, func(t *testing.T) {
+				if _, updateErr := conn.Exec(ctx, relationship.query, boundary.args...); updateErr == nil {
+					t.Fatalf("expected %s %s relationship to fail", boundary.name, relationship.name)
+				}
+			})
+		}
 	}
 
 	if _, err = conn.Exec(ctx, down326); err != nil {

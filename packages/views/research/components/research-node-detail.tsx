@@ -1165,6 +1165,7 @@ export function ResearchNodeDetail({
   placement,
   onOpenReport,
   onContinueDeepening,
+  continueDeepeningPending = false,
   onFocusNode,
 }: {
   node: ResearchGraphNode;
@@ -1179,6 +1180,7 @@ export function ResearchNodeDetail({
   placement?: "overlay-card" | "sheet" | "inline";
   onOpenReport?: () => void;
   onContinueDeepening?: () => void;
+  continueDeepeningPending?: boolean;
   onFocusNode?: (nodeId: string) => void;
 }) {
   const { t } = useT("research");
@@ -1221,8 +1223,16 @@ export function ResearchNodeDetail({
               </Button>
             ) : null}
             {onContinueDeepening ? (
-              <Button type="button" size="sm" variant="outline" onClick={onContinueDeepening}>
-                {t(($) => $.d5.detail.continue_deepening)}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={continueDeepeningPending}
+                onClick={onContinueDeepening}
+              >
+                {continueDeepeningPending
+                  ? t(($) => $.d5.detail.continue_pending)
+                  : t(($) => $.d5.detail.continue_deepening)}
               </Button>
             ) : null}
           </footer>

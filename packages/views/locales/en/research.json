@@ -106,6 +106,8 @@
   },
   "session_page": {
     "load_failed": "Failed to load session",
+    "load_failed_hint": "The session response could not be used. Retry to load the latest research state.",
+    "technical_details": "Technical details",
     "retry": "Retry",
     "canvas_forming_title": "Canvas forming",
     "canvas_forming_hint": "The fleet is placing nodes — they will show up here.",

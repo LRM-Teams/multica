@@ -21,4 +21,15 @@ describe("ResearchD5Chrome", () => {
     expect(src).toContain("onKeyDown={handleLensKeyDown}");
     expect(src).toContain("resolveD5LensNavigationIndex");
   });
+
+  it("announces the active lens in the responsive overflow picker", () => {
+    const src = readFileSync(
+      join(import.meta.dirname, "research-d5-chrome.tsx"),
+      "utf8",
+    );
+    expect(src).toContain(
+      'aria-label={`${t(($) => $.d5.lens_group)}: ${t(($) => $.d5.lens[activeLens])}`}',
+    );
+    expect(src).toContain("aria-pressed={activeLens === lens}");
+  });
 });

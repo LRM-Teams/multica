@@ -3,6 +3,7 @@ import type {
   ResearchReportSourceRef,
   ResearchSource,
 } from "@multica/core/types";
+import { safeSourceUrl } from "./safe-source-url";
 
 export type CitationCardSource = Pick<
   ResearchSource,
@@ -30,14 +31,7 @@ export function isCitationSourceDegraded(
   const url = (source.url ?? "").trim();
   // Empty shell with no recoverable identity → same as fetch failure.
   if (!title && !url) return true;
-  if (url) {
-    try {
-      // eslint-disable-next-line no-new
-      new URL(url);
-    } catch {
-      return true;
-    }
-  }
+  if (url && !safeSourceUrl(url)) return true;
   return false;
 }
 

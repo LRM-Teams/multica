@@ -38,6 +38,66 @@ func TestHashManifestEntriesDeterministic(t *testing.T) {
 	}
 }
 
+func TestDispatchManifestHashBindsAuthorizationScope(t *testing.T) {
+	base := dispatchManifestHashInput{
+		WorkspaceID:         "11111111-1111-1111-1111-111111111111",
+		SessionID:           "22222222-2222-2222-2222-222222222222",
+		AttemptID:           "33333333-3333-3333-3333-333333333333",
+		TaskID:              "44444444-4444-4444-4444-444444444444",
+		Purpose:             ArtifactPurposeTaskExecution,
+		PolicyVersion:       LegacyV1V5CompatPolicy,
+		PolicyWatermark:     7,
+		ThroughStateVersion: 11,
+		Entries: []artifactVersionCandidate{{
+			VersionRowID:        "55555555-5555-5555-5555-555555555555",
+			ArtifactID:          "66666666-6666-6666-6666-666666666666",
+			Kind:                ArtifactKindClaim,
+			Version:             2,
+			EligibilityRevision: 3,
+			Representation:      "full",
+			RepresentationHash:  "sha256:representation",
+		}},
+	}
+	want := hashDispatchManifest(base)
+
+	tests := []struct {
+		name   string
+		mutate func(*dispatchManifestHashInput)
+	}{
+		{"workspace", func(in *dispatchManifestHashInput) { in.WorkspaceID = "different" }},
+		{"session", func(in *dispatchManifestHashInput) { in.SessionID = "different" }},
+		{"attempt", func(in *dispatchManifestHashInput) { in.AttemptID = "different" }},
+		{"task", func(in *dispatchManifestHashInput) { in.TaskID = "different" }},
+		{"purpose", func(in *dispatchManifestHashInput) { in.Purpose = ArtifactPurposeEvaluation }},
+		{"policy version", func(in *dispatchManifestHashInput) { in.PolicyVersion = "different" }},
+		{"policy watermark", func(in *dispatchManifestHashInput) { in.PolicyWatermark++ }},
+		{"state watermark", func(in *dispatchManifestHashInput) { in.ThroughStateVersion++ }},
+		{"version row", func(in *dispatchManifestHashInput) { in.Entries[0].VersionRowID = "different" }},
+		{"representation", func(in *dispatchManifestHashInput) { in.Entries[0].RepresentationHash = "different" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := base
+			changed.Entries = append([]artifactVersionCandidate(nil), base.Entries...)
+			tc.mutate(&changed)
+			if got := hashDispatchManifest(changed); got == want {
+				t.Fatalf("hash did not bind %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestDispatchManifestHashCanonicalizesEntryOrder(t *testing.T) {
+	first := artifactVersionCandidate{VersionRowID: "v1", ArtifactID: "b", Kind: ArtifactKindClaim, Version: 1, EligibilityRevision: 1, Representation: "full", RepresentationHash: "h1"}
+	second := artifactVersionCandidate{VersionRowID: "v2", ArtifactID: "a", Kind: ArtifactKindObservation, Version: 1, EligibilityRevision: 1, Representation: "full", RepresentationHash: "h2"}
+	base := dispatchManifestHashInput{WorkspaceID: "w", SessionID: "s", AttemptID: "a", TaskID: "t", Purpose: ArtifactPurposeTaskExecution, PolicyVersion: "p", PolicyWatermark: 1, ThroughStateVersion: 2, Entries: []artifactVersionCandidate{first, second}}
+	reversed := base
+	reversed.Entries = []artifactVersionCandidate{second, first}
+	if hashDispatchManifest(base) != hashDispatchManifest(reversed) {
+		t.Fatal("manifest hash must use canonical entry order")
+	}
+}
+
 func TestVerifyManifestPromptShadow(t *testing.T) {
 	live := RunSnapshot{
 		Sources:      []SourceSnapshotView{{ID: "s1"}, {ID: "s2"}},

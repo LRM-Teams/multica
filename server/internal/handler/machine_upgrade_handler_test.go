@@ -19,6 +19,11 @@ import (
 
 func createMachineUpgradeSiblingRuntimes(t *testing.T, ownerID string) (string, string, string) {
 	t.Helper()
+	return createMachineUpgradeRuntimesWithProviders(t, ownerID, "claude", "codex")
+}
+
+func createMachineUpgradeRuntimesWithProviders(t *testing.T, ownerID string, firstProvider, secondProvider string) (string, string, string) {
+	t.Helper()
 	if testPool == nil {
 		t.Skip("database not available")
 	}
@@ -38,7 +43,7 @@ func createMachineUpgradeSiblingRuntimes(t *testing.T, ownerID string) (string, 
 		t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, id) })
 		return id
 	}
-	first, second := create("claude"), create("codex")
+	first, second := create(firstProvider), create(secondProvider)
 	// Machine Upgrade is keyed by daemon ID rather than runtime FKs, so remove
 	// its test rows before the fixture tears down the owning test user.
 	t.Cleanup(func() {
@@ -382,6 +387,37 @@ func TestMachineUpgrade_ComputerAttestationRequiresExactAcceptedRuntimeSet(t *te
 	)
 	if err != nil || replayed.ID != completed.ID || replayed.Phase != MachineUpgradeCompleted {
 		t.Fatalf("completed Computer proof replay = %+v err=%v", replayed, err)
+	}
+}
+
+func TestMachineUpgrade_ComputerAttestationAllowsRetiredProviderGap(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	claudeID, retiredID, daemonID := createMachineUpgradeRuntimesWithProviders(t, testUserID, "claude", "antigravity")
+	bindMachineUpgradeWorkspace(t, daemonID, testWorkspaceID, testUserID)
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	firstRuntime := getMachineUpgradeRuntime(t, claudeID)
+	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := testHandler.MachineUpgradeStore.Accept(
+		context.Background(), daemonID, created.ID, "generation-retired", "v9.9.9", "v9.9.9",
+	)
+	if err != nil {
+		t.Fatalf("accept machine upgrade: %v", err)
+	}
+	if !sameMachineRuntimeSet(accepted.AcceptedRuntimeIDs, []string{claudeID, retiredID}) {
+		t.Fatalf("accepted Runtimes = %v", accepted.AcceptedRuntimeIDs)
+	}
+
+	completed, err := testHandler.MachineUpgradeStore.AttestComputer(
+		context.Background(), daemonID, created.ID, "generation-retired", "v9.9.9",
+		[]string{claudeID}, accepted.AcceptedWorkspaceIDs,
+	)
+	if err != nil || completed.Phase != MachineUpgradeCompleted ||
+		!sameMachineRuntimeSet(completed.AttestedRuntimeIDs, []string{claudeID}) {
+		t.Fatalf("retired-provider Computer proof = %+v err=%v", completed, err)
 	}
 }
 

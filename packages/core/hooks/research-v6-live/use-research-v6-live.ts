@@ -11,7 +11,11 @@ import { researchV6Keys } from "../research-v6/queries";
 import { useResearchV6ProjectionStore } from "../research-v6/store";
 import type { ResearchV6LiveProjectionControllerOptions } from "./types";
 import { createRealtimeLiveSource } from "./realtime-source";
-import type { ResearchV6LiveSource, LiveConnectionStatus } from "./types";
+import type {
+  ResearchV6LiveSource,
+  LiveConnectionStatus,
+  ProjectionSyncStatus,
+} from "./types";
 import { ResearchV6LiveProjectionController } from "./controller";
 
 export interface UseResearchV6LiveProjectionArgs {
@@ -35,6 +39,8 @@ export interface UseResearchV6LiveProjectionResult {
   pendingDeltaCount: number;
   awaitedSequence: number | null;
   resyncRequestedCount: number;
+  projectionSyncStatus: ProjectionSyncStatus;
+  malformedFrameCount: number;
   /** Connection state — strictly apart from data state. */
   liveStatus: LiveConnectionStatus;
   reconnectAttempts: number;
@@ -191,6 +197,8 @@ export function useResearchV6LiveProjection({
     pendingDeltaCount: runSlice?.pendingDeltaCount ?? 0,
     awaitedSequence: runSlice?.awaitingSequence ?? null,
     resyncRequestedCount: runSlice?.resyncRequestedCount ?? 0,
+    projectionSyncStatus: controller?.getSyncStatus() ?? "idle",
+    malformedFrameCount: controller?.getMalformedFrameCount() ?? 0,
     liveStatus,
     reconnectAttempts,
     disconnected: liveStatus === "disconnected" || liveStatus === "idle",

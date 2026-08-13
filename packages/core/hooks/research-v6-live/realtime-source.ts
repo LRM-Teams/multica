@@ -44,11 +44,14 @@ export function createRealtimeLiveSource(
   };
 
   return {
-    connect(onDelta) {
+    connect(onDelta, onMalformedFrame) {
       onDeltaListeners.add(onDelta);
       const unsubEvent = bus.subscribeEvent(RESEARCH_V6_GRAPH_UPDATED_EVENT, (payload) => {
         const delta = parseResearchV6Delta(payload);
-        if (!delta) return;
+        if (!delta) {
+          onMalformedFrame?.(payload);
+          return;
+        }
         for (const listener of onDeltaListeners) listener(delta);
       });
       emitStatus("connected");

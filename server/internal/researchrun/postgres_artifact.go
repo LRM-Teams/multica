@@ -121,14 +121,22 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 	}
 	if tag.RowsAffected() == 0 {
 		var currentVersion *int32
+		var currentAccess *string
 		err = tx.QueryRow(ctx, `
-			SELECT current_version FROM research_artifact_passport
-			WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
-		`, in.WorkspaceID, in.SessionID, in.EntityID).Scan(&currentVersion)
+			SELECT p.current_version, v.access_level
+			FROM research_artifact_passport p
+			LEFT JOIN research_artifact_version v
+			  ON (v.workspace_id, v.session_id, v.artifact_id, v.version) =
+			     (p.workspace_id, p.session_id, p.id, p.current_version)
+			WHERE p.workspace_id = $1::uuid AND p.session_id = $2::uuid AND p.id = $3::uuid
+		`, in.WorkspaceID, in.SessionID, in.EntityID).Scan(&currentVersion, &currentAccess)
 		if err != nil {
 			return err
 		}
 		if currentVersion != nil {
+			if currentAccess == nil || !(ArtifactPolicy{}).NormalAccessDominates(ArtifactAccessLevel(*currentAccess), in.AccessLevel) {
+				return fmt.Errorf("%w: existing artifact access %q cannot accept %q-tainted output", ErrInvalidTransition, stringPtrValue(currentAccess), in.AccessLevel)
+			}
 			return nil
 		}
 	}
@@ -171,6 +179,13 @@ func registerArtifactPassportTx(ctx context.Context, tx pgx.Tx, in registerArtif
 		SELECT research_artifact_record_artifact_create_mutation($1::uuid, $2::uuid, $3::uuid)
 	`, in.WorkspaceID, in.SessionID, in.EntityID)
 	return err
+}
+
+func stringPtrValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func registerRunSessionArtifactTx(ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, sourceCreatedAt time.Time) error {
@@ -294,6 +309,18 @@ func ensureDomainArtifactPassportTx(
 	sourceCreatedAt time.Time,
 	goalVersion, planVersion *int32,
 ) error {
+	return ensureDomainArtifactPassportWithAccessTx(ctx, tx, kind, workspaceID, sessionID, entityID, sourceCreatedAt, goalVersion, planVersion, ArtifactAccessRaw)
+}
+
+func ensureDomainArtifactPassportWithAccessTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	kind ArtifactEntityKind,
+	workspaceID, sessionID, entityID string,
+	sourceCreatedAt time.Time,
+	goalVersion, planVersion *int32,
+	accessLevel ArtifactAccessLevel,
+) error {
 	return registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
 		WorkspaceID:     workspaceID,
 		SessionID:       sessionID,
@@ -302,5 +329,6 @@ func ensureDomainArtifactPassportTx(
 		SourceCreatedAt: &sourceCreatedAt,
 		GoalVersion:     goalVersion,
 		PlanVersion:     planVersion,
+		AccessLevel:     accessLevel,
 	})
 }

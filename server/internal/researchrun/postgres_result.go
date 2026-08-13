@@ -14,13 +14,14 @@ import (
 )
 
 type acceptedResultState struct {
-	workspaceID string
-	attemptID   string
-	task        Task
-	run         Run
-	stale       bool
-	targetPlan  int
-	verified    bool
+	workspaceID  string
+	attemptID    string
+	task         Task
+	run          Run
+	stale        bool
+	targetPlan   int
+	verified     bool
+	outputAccess ArtifactAccessLevel
 }
 
 func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) (AcceptResultOutcome, error) {
@@ -44,6 +45,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		}
 		return AcceptResultOutcome{}, err
 	}
+	state.outputAccess = ArtifactAccessRaw
 
 	artifactPassportEnabled, err := sessionArtifactPassportEnabled(ctx, tx, in.SessionID, state.workspaceID)
 	if err != nil {
@@ -62,6 +64,10 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 			return AcceptResultOutcome{}, err
 		}
 		if err = lockAcceptanceManifestAuthorizationTargetsTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+		state.outputAccess, err = deriveManifestOutputAccessTx(ctx, tx, state.workspaceID, in.SessionID, in.AttemptID)
+		if err != nil {
 			return AcceptResultOutcome{}, err
 		}
 	}
@@ -175,7 +181,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	if artifactPassportEnabled {
 		resultID, persistErr := persistAcceptedResultArtifactTx(
 			ctx, tx, state.workspaceID, in.SessionID, in.AttemptID,
-			state.run.OrchestratorVersion, in.Result, resultJSON, in.Hash, acceptancePolicyWatermark,
+			state.run.OrchestratorVersion, in.Result, resultJSON, in.Hash, acceptancePolicyWatermark, state.outputAccess,
 		)
 		if persistErr != nil {
 			return AcceptResultOutcome{}, classifyResultConstraint(persistErr)
@@ -321,7 +327,7 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 	if err != nil {
 		return err
 	}
-	return ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision("research_method"), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)))
+	return ensureDomainArtifactPassportWithAccessTx(ctx, tx, artifactKindForDecision("research_method"), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess)
 }
 
 func isEvidenceTask(kind TaskKind) bool {
@@ -485,7 +491,7 @@ func materializeQuestions(ctx context.Context, tx pgx.Tx, state acceptedResultSt
 		}
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindQuestion, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindQuestion, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -632,7 +638,7 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 		} else if err == nil {
 			created++
 			taskIDs[proposal.ClientKey] = id
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindTask, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindTask, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
 				return 0, err
 			}
 		}
@@ -825,7 +831,7 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 		ids[source.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindSourceSnapshot, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil); err != nil {
+			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindSourceSnapshot, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil, state.outputAccess); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -856,7 +862,7 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			// Legacy source projection already exists for this snapshot.
 		} else if err != nil {
 			return nil, 0, err
-		} else if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindLegacySource, state.workspaceID, state.run.SessionID, legacySourceID, time.Now(), nil, nil); err != nil {
+		} else if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindLegacySource, state.workspaceID, state.run.SessionID, legacySourceID, time.Now(), nil, nil, state.outputAccess); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -911,7 +917,7 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 		ids[observation.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindObservation, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil); err != nil {
+			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindObservation, state.workspaceID, state.run.SessionID, id, time.Now(), nil, nil, state.outputAccess); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -984,7 +990,7 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		ids[claim.ClientKey] = id
 		if !existed {
 			created++
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindClaim, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindClaim, state.workspaceID, state.run.SessionID, id, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -1021,7 +1027,7 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				truncateBytes(evidence.Rationale, 4096), usesEvidenceFitnessContract(state.run.OrchestratorVersion)).Scan(&evidenceID); err != nil {
 				return nil, 0, err
 			}
-			if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID, evidenceID, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+			if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindEvidenceLink, state.workspaceID, state.run.SessionID, evidenceID, time.Now(), int32Ptr(int32(state.task.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
 				return nil, 0, err
 			}
 			if err = recordVerificationPolicyMutationTx(ctx, tx, state.workspaceID, state.run.SessionID, evidenceID); err != nil {
@@ -1083,7 +1089,7 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		state.task.AssignedAgentID).Scan(&reportID); err != nil {
 		return "", err
 	}
-	if err = ensureDomainArtifactPassportTx(ctx, tx, ArtifactKindReportRevision, state.workspaceID, state.run.SessionID, reportID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan))); err != nil {
+	if err = ensureDomainArtifactPassportWithAccessTx(ctx, tx, ArtifactKindReportRevision, state.workspaceID, state.run.SessionID, reportID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess); err != nil {
 		return "", err
 	}
 	sections := map[string]reportStructuredSection{}
@@ -1210,7 +1216,7 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	if err != nil {
 		return err
 	}
-	return ensureDomainArtifactPassportTx(ctx, tx, artifactKindForDecision(string(state.task.Kind)), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)))
+	return ensureDomainArtifactPassportWithAccessTx(ctx, tx, artifactKindForDecision(string(state.task.Kind)), state.workspaceID, state.run.SessionID, decisionID, time.Now(), int32Ptr(int32(state.run.GoalVersion)), int32Ptr(int32(state.targetPlan)), state.outputAccess)
 }
 
 func loadReportClaimKeys(ctx context.Context, tx pgx.Tx, reportID string) ([]string, error) {

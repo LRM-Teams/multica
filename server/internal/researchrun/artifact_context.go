@@ -596,6 +596,7 @@ func persistAcceptedResultArtifactTx(
 	resultJSON []byte,
 	contentHash string,
 	policyWatermark int64,
+	accessLevel ArtifactAccessLevel,
 ) (string, error) {
 	resultID := uuid.NewString()
 	if err := registerArtifactPassportTx(ctx, tx, registerArtifactPassportInput{
@@ -604,7 +605,7 @@ func persistAcceptedResultArtifactTx(
 		EntityID:               resultID,
 		Kind:                   ArtifactKindResultArtifact,
 		ProvenanceCompleteness: ArtifactProvenanceComplete,
-		AccessLevel:            ArtifactAccessRaw,
+		AccessLevel:            accessLevel,
 		HashOrigin:             ArtifactHashOriginProduction,
 		ContentHash:            contentHash,
 		ProducedByAttemptID:    attemptID,

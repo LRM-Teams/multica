@@ -319,7 +319,32 @@
     "reassign": "Reassign",
     "standby": "Standing by",
     "composer_hint": "Enter to send · Shift+Enter for newline",
-    "sending": "Sending…"
+    "sending": "Sending…",
+    "generated": {
+      "process": "Process",
+      "member_ready": "{{count}} members ready",
+      "domain": "Domain · {{value}}",
+      "dimensions": "{{count}} adaptive dimensions",
+      "stage": "Stage · {{value}}",
+      "merged_failures": "{{count}} similar failures merged.",
+      "delivery": "Draft / delivery",
+      "waiting": "Continues after prerequisites finish",
+      "ops": {
+        "session_kickoff": "Kickoff confirmed",
+        "wake_failed": "Wake-up",
+        "graph_append": "Graph updated",
+        "source_upsert": "Source recorded",
+        "report_patch": "Report updated",
+        "stage_eval": "Stage evaluated",
+        "session_stopped": "Stopped",
+        "session_resumed": "Resumed",
+        "roster_hire": "Fleet · hire",
+        "roster_optimize": "Fleet · optimize",
+        "roster_archive": "Fleet · archive",
+        "product_round_judgment": "Product-round decision",
+        "clarification_question": "Clarification"
+      }
+    }
   },
   "interrupt": {
     "title": "Session interrupted",

@@ -6,7 +6,20 @@ import {
   nextStageWaitingCard,
   presenceRunningCards,
   shortProcessLine,
+  type FleetStepGeneratedLabels,
 } from "./fleet-step-cards";
+
+const EN_LABELS: FleetStepGeneratedLabels = {
+  opTitles: { graph_append: "Graph updated" },
+  process: "Process",
+  memberReady: (count) => `${count} members ready`,
+  domain: (value) => `Domain · ${value}`,
+  dimensions: (count) => `${count} adaptive dimensions`,
+  stage: (value) => `Stage · ${value}`,
+  mergedFailures: (count) => `${count} similar failures merged.`,
+  delivery: "Draft / delivery",
+  waiting: "Continues after prerequisites finish",
+};
 
 function msg(
   partial: Partial<ResearchMessage> & Pick<ResearchMessage, "id" | "body">,
@@ -34,6 +47,53 @@ describe("shortProcessLine", () => {
 });
 
 describe("buildFleetChatFeed", () => {
+  it("localizes only frontend-generated facts and preserves backend content", () => {
+    const feed = buildFleetChatFeed(
+      [
+        msg({
+          id: "localized",
+          body: "Canonical backend evidence",
+          meta: {
+            op: "graph_append",
+            member_count: 3,
+            fine_domain: "finance",
+            dimensions: 4,
+            stage: "s2_sources",
+          },
+        }),
+      ],
+      EN_LABELS,
+    );
+    const card = feed[0];
+    expect(card?.kind).toBe("step");
+    if (card?.kind !== "step") return;
+    expect(card.title).toBe("Graph updated");
+    expect(card.summaryHeadline).toBe("Canonical backend evidence");
+    expect(card.bullets).toEqual([
+      "3 members ready",
+      "Domain · finance",
+      "4 adaptive dimensions",
+      "Stage · s2_sources",
+    ]);
+  });
+
+  it("localizes merged-failure and waiting-card chrome", () => {
+    const failures = buildFleetChatFeed(
+      [
+        msg({ id: "f1", body: "failed", meta: { op: "wake_failed" } }),
+        msg({ id: "f2", body: "failed again", meta: { op: "wake_failed" } }),
+      ],
+      EN_LABELS,
+    );
+    expect(failures[0]?.kind === "step" && failures[0].summaryDetail).toBe(
+      "2 similar failures merged.",
+    );
+    expect(nextStageWaitingCard("s3_validation", "running", EN_LABELS)).toMatchObject({
+      title: "Draft / delivery",
+      summaryHeadline: "Continues after prerequisites finish",
+    });
+  });
+
   it("keeps chat bubbles and maps process ops to done cards", () => {
     const feed = buildFleetChatFeed([
       msg({

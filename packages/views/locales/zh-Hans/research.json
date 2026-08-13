@@ -319,7 +319,32 @@
     "reassign": "改派",
     "standby": "已就位",
     "composer_hint": "Enter 发送 · Shift+Enter 换行",
-    "sending": "发送中…"
+    "sending": "发送中…",
+    "generated": {
+      "process": "过程",
+      "member_ready": "成员 {{count}} 人就位",
+      "domain": "领域 · {{value}}",
+      "dimensions": "自适应维度 {{count}}",
+      "stage": "阶段 · {{value}}",
+      "merged_failures": "已合并 {{count}} 次同类失败，不再刷屏。",
+      "delivery": "成稿 / 交付",
+      "waiting": "前置步骤完成后继续",
+      "ops": {
+        "session_kickoff": "开题确认",
+        "wake_failed": "唤醒",
+        "graph_append": "图更新",
+        "source_upsert": "来源入库",
+        "report_patch": "报告更新",
+        "stage_eval": "阶段评估",
+        "session_stopped": "已停止",
+        "session_resumed": "已恢复",
+        "roster_hire": "编制 · 招聘",
+        "roster_optimize": "编制 · 优化",
+        "roster_archive": "编制 · 归档",
+        "product_round_judgment": "产品轮判定",
+        "clarification_question": "澄清提问"
+      }
+    }
   },
   "interrupt": {
     "title": "会话中断",

@@ -53,6 +53,7 @@ import {
   buildFleetChatFeed,
   nextStageWaitingCard,
   presenceRunningCards,
+  type FleetStepGeneratedLabels,
   type FleetStepCardModel,
 } from "../lib/fleet-step-cards";
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
@@ -597,9 +598,45 @@ function ResearchSessionPageContent({ sessionId }: { sessionId: string }) {
     postUser(formatClarificationSkipReply(question));
   };
 
-  const chatFeed = buildFleetChatFeed(messages);
+  const fleetStepLabels: FleetStepGeneratedLabels = {
+    opTitles: {
+      session_kickoff: t(($) => $.step_card.generated.ops.session_kickoff),
+      wake_failed: t(($) => $.step_card.generated.ops.wake_failed),
+      graph_append: t(($) => $.step_card.generated.ops.graph_append),
+      source_upsert: t(($) => $.step_card.generated.ops.source_upsert),
+      report_patch: t(($) => $.step_card.generated.ops.report_patch),
+      stage_eval: t(($) => $.step_card.generated.ops.stage_eval),
+      session_stopped: t(($) => $.step_card.generated.ops.session_stopped),
+      session_resumed: t(($) => $.step_card.generated.ops.session_resumed),
+      roster_hire: t(($) => $.step_card.generated.ops.roster_hire),
+      roster_optimize: t(($) => $.step_card.generated.ops.roster_optimize),
+      roster_archive: t(($) => $.step_card.generated.ops.roster_archive),
+      product_round_judgment: t(
+        ($) => $.step_card.generated.ops.product_round_judgment,
+      ),
+      clarification_question: t(
+        ($) => $.step_card.generated.ops.clarification_question,
+      ),
+    },
+    process: t(($) => $.step_card.generated.process),
+    memberReady: (count) =>
+      t(($) => $.step_card.generated.member_ready, { count }),
+    domain: (value) => t(($) => $.step_card.generated.domain, { value }),
+    dimensions: (count) =>
+      t(($) => $.step_card.generated.dimensions, { count }),
+    stage: (value) => t(($) => $.step_card.generated.stage, { value }),
+    mergedFailures: (count) =>
+      t(($) => $.step_card.generated.merged_failures, { count }),
+    delivery: t(($) => $.step_card.generated.delivery),
+    waiting: t(($) => $.step_card.generated.waiting),
+  };
+  const chatFeed = buildFleetChatFeed(messages, fleetStepLabels);
   const runningCards = presenceRunningCards(presence, fleet.members);
-  const waitingCard = nextStageWaitingCard(session.current_stage, session.status);
+  const waitingCard = nextStageWaitingCard(
+    session.current_stage,
+    session.status,
+    fleetStepLabels,
+  );
   const showStop = canStop || runningCards.length > 0;
   // LRM-992 — drawer/FAB four-state mode (align with fleet strip language).
   // Live stream / stop chrome counts as in-progress activity (not empty stub).

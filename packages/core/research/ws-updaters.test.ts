@@ -120,6 +120,51 @@ describe("applyResearchWSEvent", () => {
     expect(qc.invalidateQueries).not.toHaveBeenCalled();
   });
 
+  it("rejects a graph entity whose embedded session conflicts with its envelope", () => {
+    const qc = makeQc({
+      ...EMPTY_RESEARCH_SNAPSHOT,
+      session: { ...EMPTY_RESEARCH_SNAPSHOT.session, id: "s1" },
+      nodes: [],
+    });
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:graph_updated",
+      payload: {
+        session_id: "s1",
+        node: { id: "foreign", session_id: "s2", title: "Other session" },
+      },
+    });
+
+    const data = qc.getData() as typeof EMPTY_RESEARCH_SNAPSHOT;
+    expect(data.nodes).toEqual([]);
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.snapshot("ws", "s1"),
+    });
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.graphTypedInfinite("ws", "s1"),
+    });
+  });
+
+  it("rejects a message whose embedded session conflicts with its envelope", () => {
+    const qc = makeQc({
+      ...EMPTY_RESEARCH_SNAPSHOT,
+      session: { ...EMPTY_RESEARCH_SNAPSHOT.session, id: "s1" },
+      messages: [],
+    });
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:message",
+      payload: {
+        session_id: "s1",
+        message: { id: "foreign", session_id: "s2", body: "Wrong session" },
+      },
+    });
+
+    const data = qc.getData() as typeof EMPTY_RESEARCH_SNAPSHOT;
+    expect(data.messages).toEqual([]);
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.snapshot("ws", "s1"),
+    });
+  });
+
   it("removes snapshot cache when session is deleted", () => {
     const qc = makeQc({
       ...EMPTY_RESEARCH_SNAPSHOT,

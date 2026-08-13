@@ -896,6 +896,8 @@
   "trajectory_explorer": {
     "title": "轨迹探索器",
     "loading": "正在加载轨迹",
+    "graph_label": "探索轨迹图",
+    "overview_label": "轨迹概览",
     "empty": "尚无探索轨迹",
     "empty_hint": "开始新的研究或等待结果出现。",
     "error": "轨迹加载失败",

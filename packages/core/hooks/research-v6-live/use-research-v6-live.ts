@@ -175,6 +175,7 @@ export function useResearchV6LiveProjection({
   useEffect(() => {
     if (!snapshot || isPending || !controller) return;
     controller.seedSnapshot(snapshot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, isPending, controller, runId]);
 
   const applyDelta = useCallback(

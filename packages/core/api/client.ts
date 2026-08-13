@@ -4733,12 +4733,18 @@ export class ApiClient {
   ): Promise<import("../research/queries").ResearchPresenceResponse> {
     const { ResearchPresenceResponseSchema } = await import("../research/schemas");
     const raw = await this.fetch(`/api/research/sessions/${id}/presence`);
-    const parsed = parseWithFallback(
-      raw,
-      ResearchPresenceResponseSchema,
-      { session_id: id, presence: {} },
-      { endpoint: "GET /api/research/sessions/:id/presence" },
-    );
+    const result = ResearchPresenceResponseSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "GET /api/research/sessions/:id/presence response failed schema validation",
+      );
+    }
+    const parsed = result.data;
+    if (parsed.session_id !== "" && parsed.session_id !== id) {
+      throw new Error(
+        "GET /api/research/sessions/:id/presence response failed session validation",
+      );
+    }
     return { ...parsed, session_id: parsed.session_id || id };
   }
 
@@ -4805,10 +4811,23 @@ export class ApiClient {
     id: string,
     data: { body: string; target_agent_id?: string },
   ): Promise<import("../types/research").ResearchMessage> {
-    return this.fetch(`/api/research/sessions/${id}/messages`, {
+    const { ResearchMessageSchema } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${id}/messages`, {
       method: "POST",
       body: JSON.stringify(data),
     });
+    const result = ResearchMessageSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "POST /api/research/sessions/:id/messages response failed schema validation",
+      );
+    }
+    if (result.data.session_id !== "" && result.data.session_id !== id) {
+      throw new Error(
+        "POST /api/research/sessions/:id/messages response failed session validation",
+      );
+    }
+    return { ...result.data, session_id: result.data.session_id || id };
   }
 
   async steerResearchRun(
@@ -4830,15 +4849,50 @@ export class ApiClient {
     if (parsed === null) {
       throw new Error("Invalid research steering response");
     }
+    if (parsed.run.session_id !== id) {
+      throw new Error(
+        "POST /api/research/sessions/:id/steer response failed session validation",
+      );
+    }
     return parsed.run;
   }
 
+  private async parseResearchSessionMutationResponse(
+    raw: unknown,
+    id: string,
+    endpoint: string,
+  ): Promise<import("../types/research").ResearchSession> {
+    const { ResearchSessionSchema } = await import("../research/schemas");
+    const result = ResearchSessionSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(`${endpoint} response failed schema validation`);
+    }
+    if (result.data.id !== id) {
+      throw new Error(`${endpoint} response failed session validation`);
+    }
+    return result.data;
+  }
+
   async confirmResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/confirm`, { method: "POST" });
+    const raw = await this.fetch(`/api/research/sessions/${id}/confirm`, {
+      method: "POST",
+    });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/confirm",
+    );
   }
 
   async stopResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/stop`, { method: "POST" });
+    const raw = await this.fetch(`/api/research/sessions/${id}/stop`, {
+      method: "POST",
+    });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/stop",
+    );
   }
 
   async deleteResearchSession(id: string): Promise<void> {
@@ -4849,10 +4903,15 @@ export class ApiClient {
     id: string,
     data: import("../types/research").ResearchHandoffRequest,
   ): Promise<import("../types/research").ResearchSession> {
-    return this.fetch(`/api/research/sessions/${id}/handoff`, {
+    const raw = await this.fetch(`/api/research/sessions/${id}/handoff`, {
       method: "POST",
       body: JSON.stringify(data),
     });
+    return this.parseResearchSessionMutationResponse(
+      raw,
+      id,
+      "POST /api/research/sessions/:id/handoff",
+    );
   }
 
   /** LRM-911 / LRM-913 — list end-of-round judgment cards. */
@@ -4867,15 +4926,33 @@ export class ApiClient {
       const raw = await this.fetch(
         `/api/research/sessions/${sessionId}/product-rounds`,
       );
-      return parseWithFallback(
-        raw,
-        ListResearchProductRoundCardsResponseSchema,
-        EMPTY_RESEARCH_PRODUCT_ROUNDS,
-        { endpoint: "GET /api/research/sessions/:id/product-rounds" },
-      );
-    } catch {
-      // Route absent until LRM-911 merges — FE still renders process/node fallbacks.
-      return EMPTY_RESEARCH_PRODUCT_ROUNDS;
+      const result = ListResearchProductRoundCardsResponseSchema.safeParse(raw);
+      if (!result.success) {
+        throw new Error(
+          "GET /api/research/sessions/:id/product-rounds response failed schema validation",
+        );
+      }
+      if (
+        result.data.rounds.some(
+          (card) => card.session_id !== "" && card.session_id !== sessionId,
+        )
+      ) {
+        throw new Error(
+          "GET /api/research/sessions/:id/product-rounds response failed session validation",
+        );
+      }
+      return {
+        rounds: result.data.rounds.map((card) => ({
+          ...card,
+          session_id: card.session_id || sessionId,
+        })),
+      };
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 404 || error.status === 501)) {
+        // Optional capability is genuinely absent; D5 keeps its process fallback.
+        return EMPTY_RESEARCH_PRODUCT_ROUNDS;
+      }
+      throw error;
     }
   }
 
@@ -4883,7 +4960,25 @@ export class ApiClient {
     sessionId: string,
     round: number,
   ): Promise<import("../types/research").ResearchProductRoundCard> {
-    return this.fetch(`/api/research/sessions/${sessionId}/product-rounds/${round}`);
+    const { ResearchProductRoundCardSchema } = await import("../research/schemas");
+    const raw = await this.fetch(
+      `/api/research/sessions/${sessionId}/product-rounds/${round}`,
+    );
+    const result = ResearchProductRoundCardSchema.safeParse(raw);
+    if (!result.success) {
+      throw new Error(
+        "GET /api/research/sessions/:id/product-rounds/:round response failed schema validation",
+      );
+    }
+    if (result.data.session_id !== "" && result.data.session_id !== sessionId) {
+      throw new Error(
+        "GET /api/research/sessions/:id/product-rounds/:round response failed session validation",
+      );
+    }
+    return {
+      ...result.data,
+      session_id: result.data.session_id || sessionId,
+    };
   }
 
   // ---- Research V6 Graph Projection (design doc 7.1 / 7.2) ----

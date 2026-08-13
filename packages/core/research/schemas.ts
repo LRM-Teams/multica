@@ -40,7 +40,7 @@ export const ResearchFleetSchema = z
   })
   .passthrough();
 
-const ResearchSessionSchema = z
+export const ResearchSessionSchema = z
   .object({
     id: z.string(),
     workspace_id: z.string(),
@@ -219,7 +219,7 @@ const ResearchMatchDecisionSchema = z
   })
   .passthrough();
 
-const ResearchMessageSchema = z
+export const ResearchMessageSchema = z
   .object({
     id: z.string(),
     session_id: z.string().optional().default(""),

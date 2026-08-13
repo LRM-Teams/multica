@@ -1016,6 +1016,10 @@
     "canvas": {
       "loading": "正在加载调研星图…",
       "error": "无法加载 typed 调研图。",
+      "stale_title": "星图可能不是最新状态。",
+      "stale_body": "刷新暂不可用，继续保留上次已加载的可信图。",
+      "stale_announcement": "星图刷新失败，当前继续显示上次已加载的图。",
+      "recovered_announcement": "星图已恢复刷新并同步至最新状态。",
       "projection_mismatch_title": "星图投影暂不可用",
       "projection_mismatch_body": "会话快照已有图节点，但 typed 星图投影尚未就绪。请重试或等待下一次同步。",
       "projection_mismatch_diagnostics": "快照节点：{{snapshotCount}} · Typed 节点：{{typedCount}}"

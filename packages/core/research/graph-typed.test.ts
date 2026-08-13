@@ -186,6 +186,19 @@ describe("mergeTypedGraphPages", () => {
     expect(merged.lineage.merged.n3).toEqual(["n2"]);
   });
 
+  it("uses the latest explicit total while retaining the last known value", () => {
+    const page = (total: number | null): TypedGraphResponse =>
+      ({
+        ...EMPTY_TYPED_GRAPH,
+        session_id: "s1",
+        total_node_count: total,
+        nodes: [{ id: `n-${total}`, level: "m" }],
+      }) as unknown as TypedGraphResponse;
+
+    expect(mergeTypedGraphPages([page(10), page(12)]).total_node_count).toBe(12);
+    expect(mergeTypedGraphPages([page(10), page(null)]).total_node_count).toBe(10);
+  });
+
   it("evicts oldest page nodes when merged cache exceeds the node budget", () => {
     // Partial fixtures for merge/budget behavior only — cast via unknown so
     // strict tsc does not require a full TypedGraphNode for every stub row.

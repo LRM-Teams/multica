@@ -230,9 +230,11 @@ export function mergeTypedGraphPages(
   const clusterById = new Map<string, TypedGraphCluster>();
   const first = pages[0]!;
   let graphVersion = first.graph_version ?? 0;
+  let totalNodeCount = first.total_node_count ?? null;
 
   for (const page of pages) {
     graphVersion = Math.max(graphVersion, page.graph_version ?? 0);
+    if (page.total_node_count != null) totalNodeCount = page.total_node_count;
     for (const node of page.nodes ?? []) {
       if (!node?.id) continue;
       if (!nodeById.has(node.id)) orderedNodeIds.push(node.id);
@@ -255,7 +257,7 @@ export function mergeTypedGraphPages(
   const merged: TypedGraphResponse = {
     session_id: first.session_id,
     graph_version: graphVersion,
-    total_node_count: first.total_node_count ?? null,
+    total_node_count: totalNodeCount,
     nodes: orderedNodeIds.map((id) => nodeById.get(id)!),
     edges: [...edgeByKey.values()],
     clusters: [...clusterById.values()],

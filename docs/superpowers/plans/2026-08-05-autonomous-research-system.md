@@ -1016,6 +1016,7 @@ surface 矩阵仍未完成。
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
+  - [x] F3c-independence：`source_independence.go` 以 `research-source-independence-v1` 对 publisher、owner、dataset、syndication 的可定位事实做保守传递闭包；共享任一依赖的来源进入同一 family，family 最多一个代表能计作独立支持，且该代表必须同时具有 verified publisher 与 owner。缺少验证不会因 URL 不同而获得独立票数；输入/事实顺序不影响 family 与决定指纹。持久 family registry、与 F3 duplicate cluster 合并及 Gate 计数接线仍待 F3d。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
 
 退出条件：报告中的每个来源可反向追到查询和筛选；重复镜像不能冒充独立支持；失败查询可被定向改写。

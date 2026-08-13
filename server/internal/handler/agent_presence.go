@@ -63,7 +63,7 @@ func (h *Handler) runnerPresenceLocked(fn func() error) error {
 }
 
 func (h *Handler) projectRunnerLaunchPresence(workspaceID string, launch *runnerLaunchPresence) string {
-	if launch == nil || launch.status != protocol.AgentStatusActive {
+	if launch == nil || (launch.status != "accepted" && launch.status != protocol.AgentStatusActive) {
 		return AgentPresenceOffline
 	}
 	source := h.currentRunnerPresenceSource()

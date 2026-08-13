@@ -1056,6 +1056,7 @@ surface 矩阵仍未完成。
 - [ ] 实现 Capability Observation，记录 Agent/model/provider/tool/Adapter 的分组结果。
 - [ ] 路由同时考虑能力要求、权限、独立性、可用性、成本和足够样本的历史表现。
 - [ ] 实现 capability gap 和现有招聘/配置功能的 Adapter；不可满足时显式阻塞。
+  - [x] J3a-gap-action：`capability_gap_action.go` 把已证明的 routing gap 确定性映射为 `activate_existing | configure_existing | propose_team_formation | blocked`。策略先拒绝已有 active eligible Agent 的 stale gap，再选择无需配置的可激活 Agent、最少授权配置变更的现有 Agent，最后才提出组队；合同、Agent 上限、预算、工具或来源权限不足均返回明确阻塞理由。动作 identity 与审计指纹对 Agent/权限输入顺序稳定。该切片只完成 Adapter 决策；#3146 route output、现有 Agent mutation、#3147 Formation authorization、Decision/Event 和状态回读仍待后续接线。
 - [ ] 实现 Run 固定 Director 身份、Agent principal 授权检查、用户改派 Decision 和错误身份拒绝测试。
 - [ ] 实现 Contract 组队授权、Team Formation Decision、Research Team Membership、创建幂等和 Agent 退出处理。
 - [ ] 对 Agent Reach 等外部项目做离线 Adapter 对照评测，通过后才接生产流量。

@@ -99,6 +99,7 @@ func runHandlerTests(m *testing.M) int {
 	})
 	emailSvc := service.NewEmailService()
 	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, analytics.NoopClient{}, Config{AllowSignup: true})
+	testHandler.AgentLifecycleNotifier = acceptingAgentLifecycleNotifier{}
 	// httptest.NewRequest defaults RemoteAddr to 192.0.2.1, so every webhook
 	// test in the suite shares one IP bucket. With the production default
 	// (30/min) the budget runs out partway through the suite and unrelated
@@ -128,6 +129,12 @@ func runHandlerTests(m *testing.M) int {
 		}
 	}
 	return code
+}
+
+type acceptingAgentLifecycleNotifier struct{}
+
+func (acceptingAgentLifecycleNotifier) NotifyAgentLifecycle(_ string, _ string, payload protocol.WorkspaceRunnerAgentLifecyclePayload) bool {
+	return payload.Validate() == nil
 }
 
 // ensureAgentInboxTestFixtureDefaults keeps low-level SQL fixtures concise

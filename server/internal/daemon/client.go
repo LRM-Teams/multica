@@ -751,13 +751,6 @@ func (c *Client) ReportMemoryCurationResult(ctx context.Context, runtimeID, runI
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/memory-curation/%s/result", runtimeID, runID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
-// ReportAgentLifecycleOperationResult sends the outcome of an agent lifecycle
-// operation (task #52) back to the server so the operation record transitions
-// out of running/scheduled into succeeded/failed.
-func (c *Client) ReportAgentLifecycleOperationResult(ctx context.Context, runtimeID, operationID string, result map[string]any) error {
-	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-lifecycle/%s/result", runtimeID, operationID), result, nil, c.tokenForRuntime(runtimeID))
-}
-
 // ResetAgentRuntimeSession clears every server-owned provider resume pointer
 // for this agent and runtime. The operation ID makes retries idempotent.
 func (c *Client) ResetAgentRuntimeSession(ctx context.Context, operationID, agentID, runtimeID string) error {

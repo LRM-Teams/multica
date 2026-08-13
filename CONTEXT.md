@@ -142,6 +142,13 @@ One of three explicit ways to restart an Agent runtime:
 
 All three preserve the server-side Agent identity, configuration, chat history,
 and Issues.
+
+The server operation is only the user-visible request/result record. Execution
+is one direct Workspace Runner command with an immediate accepted/duplicate
+receipt and one terminal result. Restart is never dispatched in parallel over
+heartbeat or as a separate managed-launch stop. The Runner keeps only a bounded
+in-process receipt cache; an unavailable or timed-out command fails visibly and
+is not replayed automatically after a process restart.
 _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
 
 ## Standalone Agent Chat

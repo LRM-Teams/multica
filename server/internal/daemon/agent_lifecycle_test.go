@@ -5,43 +5,19 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type lifecycleResetRecorder struct {
 	calls  []agentLifecycleExecutionRequest
 	err    error
 	onCall func()
-}
-
-type blockingLifecycleResetter struct {
-	calls   atomic.Int32
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (r *blockingLifecycleResetter) ResetAgentRuntimeSession(ctx context.Context, _, _, _ string) error {
-	r.calls.Add(1)
-	select {
-	case r.entered <- struct{}{}:
-	default:
-	}
-	select {
-	case <-r.release:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func (r *lifecycleResetRecorder) ResetAgentRuntimeSession(_ context.Context, operationID, agentID, runtimeID string) error {
@@ -60,64 +36,6 @@ func TestDaemonNewWiresLifecycleSessionResetClient(t *testing.T) {
 	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if d.agentLifecycleExecutor == nil || d.agentLifecycleExecutor.sessionReset != d.client {
 		t.Fatal("production lifecycle executor is missing the daemon session reset client")
-	}
-}
-
-// A five-second server delivery lease can expire while a slow restart is
-// still executing. Coalesce that redelivery in-memory; after completion the
-// durable command ledger remains the authority for later terminal replays.
-func TestHandleAgentLifecycleOperationCoalescesConcurrentRedelivery(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(server.Close)
-
-	resetter := &blockingLifecycleResetter{
-		entered: make(chan struct{}, 1),
-		release: make(chan struct{}),
-	}
-	d := New(Config{WorkspacesRoot: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	d.client = NewClient(server.URL)
-	d.client.SetToken("test-token")
-	d.agentLifecycleExecutor = &agentLifecycleExecutor{
-		runtimes:     newCanonicalAgentRuntimePool(),
-		sessionReset: resetter,
-	}
-	pending := protocol.DaemonHeartbeatPendingAgentLifecycleOperation{
-		OperationID: uuid.NewString(),
-		WorkspaceID: uuid.NewString(),
-		AgentID:     uuid.NewString(),
-		RuntimeID:   uuid.NewString(),
-		ActionKind:  string(agentLifecycleActionResetSessionRestart),
-	}
-
-	done := make(chan struct{}, 2)
-	go func() {
-		d.handleAgentLifecycleOperation(context.Background(), pending)
-		done <- struct{}{}
-	}()
-	select {
-	case <-resetter.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("first lifecycle delivery did not start")
-	}
-	go func() {
-		d.handleAgentLifecycleOperation(context.Background(), pending)
-		done <- struct{}{}
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("duplicate lifecycle delivery did not return")
-	}
-	if got := resetter.calls.Load(); got != 1 {
-		t.Fatalf("concurrent lifecycle executions = %d, want 1", got)
-	}
-	close(resetter.release)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("first lifecycle delivery did not finish")
 	}
 }
 

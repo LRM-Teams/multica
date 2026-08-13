@@ -1585,3 +1585,68 @@ func TestWorkspaceRunnerMixedRunActivityAcknowledgesOnlyCommittedTransition(t *t
 		t.Fatalf("ack = %+v, want committed transition only", ack)
 	}
 }
+
+func TestWorkspaceRunnerAgentLifecycleCommandAndReceiptUseCurrentCapableRunner(t *testing.T) {
+	hub := NewHub()
+	received := make(chan string, 1)
+	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, raw json.RawMessage) error {
+		if eventType == protocol.EventAgentLifecycleAck {
+			var ack protocol.WorkspaceRunnerAgentLifecycleAckPayload
+			if err := json.Unmarshal(raw, &ack); err != nil {
+				return err
+			}
+			received <- ack.OperationID
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	write := func(eventType string, payload any) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(protocol.EventWorkspaceRunnerReady, protocol.WorkspaceRunnerReadyPayload{
+		WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1",
+		ActiveCapabilities: []string{protocol.DaemonCapabilityWorkspaceRunnerAttachment, protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle},
+	})
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	command := protocol.WorkspaceRunnerAgentLifecyclePayload{
+		OperationID: "operation-1", WorkspaceID: "workspace-1", AgentID: "agent-1", RuntimeID: "runtime-1", ActionKind: "restart",
+	}
+	if !hub.NotifyAgentLifecycle("workspace-1", "daemon-1", command) {
+		t.Fatal("lifecycle command was not delivered")
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frame protocol.Message
+	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != protocol.EventDaemonAgentLifecycle {
+		t.Fatalf("lifecycle frame = %+v, err=%v", frame, err)
+	}
+	write(protocol.EventAgentLifecycleAck, protocol.WorkspaceRunnerAgentLifecycleAckPayload{
+		OperationID: command.OperationID, AgentID: command.AgentID, RuntimeID: command.RuntimeID, Outcome: protocol.AgentLifecycleCommandAccepted,
+	})
+	select {
+	case operationID := <-received:
+		if operationID != command.OperationID {
+			t.Fatalf("receipt operation_id = %q", operationID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle acknowledgement was not forwarded")
+	}
+}

@@ -25,6 +25,8 @@ const (
 	agentLifecycleFullResetRestart    AgentLifecycleActionKind = "full_reset_restart"
 )
 
+const agentLifecycleCommandTimeout = 120 * time.Second
+
 const (
 	agentLifecycleScheduled = "scheduled"
 	agentLifecycleRunning   = "running"
@@ -209,22 +211,62 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to create agent lifecycle operation")
 		return
 	}
-	// Always immediate now (#112): dispatch every accepted create. The old
-	// scheduled/after_current_run branch is gone — it never auto-fired.
-	if status == agentLifecycleRunning && h.AgentLifecycleDispatchStore != nil {
-		if _, err := h.AgentLifecycleDispatchStore.Create(
-			r.Context(), op.ID, uuidToString(lockedAgent.ID), uuidToString(runtime.ID),
-			uuidToString(lockedAgent.WorkspaceID), string(req.ActionKind),
-		); err != nil {
-			// The operation row is already committed; a dispatch failure
-			// here must not roll that back or the client sees a phantom
-			// "running" operation nobody will ever act on. Log-and-continue:
-			// the operation sits at status=running until GetAgentLifecycleOperation
-			// polling eventually shows it stuck, which is visible, not silent.
-			slog.Warn("failed to create agent lifecycle dispatch", "operation_id", op.ID, "error", err)
+	// Raft-style direct command: one operation row, one Workspace Runner
+	// command, one accepted receipt, one terminal result. There is no parallel
+	// heartbeat queue or destructive replay scheduler.
+	dispatched := h.AgentLifecycleNotifier != nil && runtime.DaemonID.Valid && h.AgentLifecycleNotifier.NotifyAgentLifecycle(
+		uuidToString(lockedAgent.WorkspaceID), runtime.DaemonID.String,
+		protocol.WorkspaceRunnerAgentLifecyclePayload{
+			OperationID: op.ID,
+			WorkspaceID: uuidToString(lockedAgent.WorkspaceID),
+			AgentID:     uuidToString(lockedAgent.ID),
+			RuntimeID:   uuidToString(runtime.ID),
+			ActionKind:  string(req.ActionKind),
+		},
+	)
+	if !dispatched {
+		if failed, failErr := h.failAgentLifecycleDispatch(r.Context(), lockedAgent.ID, parseUUID(op.ID), runtime.ID, "workspace Runner is unavailable"); failErr != nil {
+			slog.Warn("failed to record unavailable Agent lifecycle command", "operation_id", op.ID, "error", failErr)
+		} else if failed != nil {
+			op = failed
 		}
 	}
 	writeJSON(w, http.StatusAccepted, op)
+}
+
+func (h *Handler) failAgentLifecycleDispatch(ctx context.Context, agentID, operationID, runtimeID pgtype.UUID, reason string) (*AgentLifecycleOperation, error) {
+	if h == nil || h.DB == nil {
+		return nil, errors.New("database is unavailable")
+	}
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE agent_lifecycle_operation
+		SET status = 'failed', step = 'dispatch', reason_code = $1, finished_at = now()
+		WHERE id = $2 AND agent_id = $3 AND runtime_id = $4 AND status = 'running'
+	`, reason, operationID, agentID, runtimeID); err != nil {
+		return nil, err
+	}
+	return getAgentLifecycleOperation(ctx, h.DB, agentID, operationID)
+}
+
+// SweepTimedOutAgentLifecycleOperations is a business-record backstop, not a
+// delivery scheduler. It never replays a destructive command; it only clears
+// a visible running operation whose accepted command never produced a result.
+func SweepTimedOutAgentLifecycleOperations(ctx context.Context, exec dbExecutor) (int64, error) {
+	if exec == nil {
+		return 0, errors.New("database is unavailable")
+	}
+	commandTag, err := exec.Exec(ctx, `
+		UPDATE agent_lifecycle_operation
+		SET status = 'failed', step = 'timeout',
+		    reason_code = 'workspace Runner command did not finish before timeout',
+		    finished_at = now()
+		WHERE status = 'running'
+		  AND started_at < now() - ($1 * interval '1 second')
+	`, int64(agentLifecycleCommandTimeout/time.Second))
+	if err != nil {
+		return 0, err
+	}
+	return commandTag.RowsAffected(), nil
 }
 
 func (h *Handler) GetAgentLifecycleOperation(w http.ResponseWriter, r *http.Request) {
@@ -246,6 +288,63 @@ func (h *Handler) GetAgentLifecycleOperation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, op)
+}
+
+type agentLifecycleResultRequest struct {
+	Status     string `json:"status"`
+	Step       string `json:"step"`
+	ReasonCode string `json:"reason_code"`
+}
+
+// ReportAgentLifecycleOperationResult is retained for compatibility with a
+// command already accepted by an older daemon during a rolling upgrade. New
+// daemons return the same terminal receipt on the Workspace Runner socket.
+func (h *Handler) ReportAgentLifecycleOperationResult(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	if !ok {
+		return
+	}
+	operationID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "operationId"), "operation_id")
+	if !ok {
+		return
+	}
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return
+	}
+	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(rt.WorkspaceID)) {
+		return
+	}
+	var req agentLifecycleResultRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(req.Status))
+	if status != agentLifecycleSucceeded && status != agentLifecycleFailed {
+		writeError(w, http.StatusBadRequest, "status must be succeeded or failed")
+		return
+	}
+	if h.DB == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent lifecycle is unavailable")
+		return
+	}
+	commandTag, err := h.DB.Exec(r.Context(), `
+		UPDATE agent_lifecycle_operation
+		SET status = $1, step = $2, reason_code = $3, finished_at = now()
+		WHERE id = $4 AND runtime_id = $5 AND status IN ('running', 'scheduled')
+	`, status, req.Step, req.ReasonCode, operationID, runtimeUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record agent lifecycle result")
+		return
+	}
+	if commandTag.RowsAffected() == 0 {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
 }
 
 func (h *Handler) loadAgentLifecycleTarget(w http.ResponseWriter, r *http.Request) (db.Agent, bool) {
@@ -462,7 +561,7 @@ func agentLifecycleInitialStep(status string) string {
 
 func agentLifecycleCapabilityPresent(capabilities []string) bool {
 	for _, capability := range capabilities {
-		if capability == protocol.DaemonCapabilityAgentLifecycleActions {
+		if capability == protocol.DaemonCapabilityWorkspaceRunnerAgentLifecycle {
 			return true
 		}
 	}

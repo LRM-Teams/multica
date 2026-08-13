@@ -205,7 +205,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if rdb != nil {
 		h.ModelListStore = handler.NewRedisModelListStore(rdb)
 		h.RestartStore = handler.NewRedisRestartStore(rdb)
-		h.AgentLifecycleDispatchStore = handler.NewRedisAgentLifecycleDispatchStore(rdb, h.DB)
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)

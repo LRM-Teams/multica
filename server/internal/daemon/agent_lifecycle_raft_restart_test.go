@@ -55,7 +55,6 @@ type raftRestartFixture struct {
 	memoryPath  string
 	sessionID   string
 	sessions    *agentRuntimeSessionStore
-	commands    *agentLifecycleCommandLedger
 	starter     *recordingLifecycleStarter
 	pool        *canonicalAgentRuntimePool
 	probe       *canonicalRuntimeFactoryProbe
@@ -74,7 +73,6 @@ func newRaftRestartFixture(t *testing.T) *raftRestartFixture {
 		runtimeID:   uuid.NewString(),
 		sessionID:   "provider-session-keep-me",
 		sessions:    newAgentRuntimeSessionStore(root),
-		commands:    newAgentLifecycleCommandLedger(root),
 		starter:     &recordingLifecycleStarter{},
 		pool:        newCanonicalAgentRuntimePool(),
 		probe:       &canonicalRuntimeFactoryProbe{},
@@ -94,7 +92,6 @@ func newRaftRestartFixture(t *testing.T) *raftRestartFixture {
 		workspacesRoot: root,
 		runtimes:       fx.pool,
 		sessions:       fx.sessions,
-		commands:       fx.commands,
 		starter:        fx.starter,
 	}
 	return fx
@@ -477,46 +474,5 @@ func TestProductionDaemonWiresSessionInvalidateForAllRestartModes(t *testing.T) 
 	}
 	if got != "" {
 		t.Fatalf("local session after failed remote reset = %q, want empty", got)
-	}
-}
-
-func TestRaftRestartCommandReplayIsIdempotent(t *testing.T) {
-	fx := newRaftRestartFixture(t)
-	commandID := uuid.NewString()
-	full := agentLifecycleExecutionRequest{
-		OperationID: commandID,
-		WorkspaceID: fx.workspaceID,
-		AgentID:     fx.agentID,
-		RuntimeID:   fx.runtimeID,
-		ActionKind:  agentLifecycleActionFullResetRestart,
-	}
-	if err := fx.executor.Execute(context.Background(), full); err != nil {
-		t.Fatalf("first full_reset: %v", err)
-	}
-	layout, err := execenv.ResolveAgentWorkspaceLayout(fx.root, fx.workspaceID, fx.agentID)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
-	kept := filepath.Join(layout.AgentRoot, "after-first-reset.txt")
-	if err := os.WriteFile(kept, []byte("do not wipe again"), 0o600); err != nil {
-		t.Fatalf("write post-reset file: %v", err)
-	}
-
-	if err := fx.executor.Execute(context.Background(), full); err != nil {
-		t.Fatalf("replay same id + same kind: %v", err)
-	}
-	if _, err := os.Stat(kept); err != nil {
-		t.Fatalf("replay wiped workspace a second time: %v", err)
-	}
-
-	mismatch := full
-	mismatch.ActionKind = agentLifecycleActionRestart
-	err = fx.executor.Execute(context.Background(), mismatch)
-	if err == nil {
-		t.Fatal("same id + different kind succeeded, want fail closed")
-	}
-	var stepErr *agentLifecycleExecutionError
-	if !errors.As(err, &stepErr) {
-		t.Fatalf("mismatch error = %v, want lifecycle step error", err)
 	}
 }

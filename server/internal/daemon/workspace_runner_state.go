@@ -46,6 +46,7 @@ type workspaceRunnerDependencies struct {
 	openInbox                   inboxCoordinatorFactory
 	runtimeSet                  func() AgentAttachmentRuntimeSet
 	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
+	executeAgentLifecycle       func(context.Context, protocol.WorkspaceRunnerAgentLifecyclePayload) protocol.WorkspaceRunnerAgentLifecycleResultPayload
 	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
 	mixedRunActivityReplay      func(send func(string, any) error)
 	requestReminderSnapshot     func(string)
@@ -81,6 +82,7 @@ type WorkspaceRunner struct {
 
 	runtimeSet                  func() AgentAttachmentRuntimeSet
 	ensureResidentRuntime       func(context.Context, string, string, *agent.PiRunIdentity) error
+	executeAgentLifecycle       func(context.Context, protocol.WorkspaceRunnerAgentLifecyclePayload) protocol.WorkspaceRunnerAgentLifecycleResultPayload
 	mixedRunActivityAck         func(protocol.MixedRunActivityTransitionAckPayload) error
 	mixedRunActivityReplay      func(send func(string, any) error)
 	requestReminderSnapshot     func(string)
@@ -154,6 +156,7 @@ func newWorkspaceRunner(config WorkspaceRunnerConfig, dependencies workspaceRunn
 		diagnostics:                 dependencies.diagnostics,
 		runtimeSet:                  dependencies.runtimeSet,
 		ensureResidentRuntime:       dependencies.ensureResidentRuntime,
+		executeAgentLifecycle:       dependencies.executeAgentLifecycle,
 		mixedRunActivityAck:         dependencies.mixedRunActivityAck,
 		mixedRunActivityReplay:      dependencies.mixedRunActivityReplay,
 		requestReminderSnapshot:     dependencies.requestReminderSnapshot,
@@ -371,6 +374,7 @@ func (d *Daemon) newWorkspaceRunner(workspaceID string) (*WorkspaceRunner, error
 			return d.attachmentRuntimeSet(workspaceID)
 		},
 		ensureResidentRuntime: d.ensureResidentMessageRuntime,
+		executeAgentLifecycle: d.executeAgentLifecycleCommand,
 		mixedRunActivityAck:   d.ackMixedRunActivity,
 		mixedRunActivityReplay: func(send func(string, any) error) {
 			d.replayMixedRunActivity(workspaceID, send)

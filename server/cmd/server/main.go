@@ -173,6 +173,7 @@ func main() {
 	var reminderNotifier daemonws.ReminderNotifier = daemonHub
 	var reminderOwnerInputNotifier daemonws.ReminderOwnerInputNotifier = daemonHub
 	var agentDeliveryNotifier daemonws.AgentDeliveryNotifier = daemonHub
+	var agentLifecycleNotifier daemonws.AgentLifecycleNotifier = daemonHub
 
 	// MUL-1138: when REDIS_URL is set, route fanout through a Redis relay so
 	// multiple API nodes can deliver each other's events. Without it the hub
@@ -229,6 +230,7 @@ func main() {
 				reminderNotifier = relayNotifier
 				reminderOwnerInputNotifier = relayNotifier
 				agentDeliveryNotifier = relayNotifier
+				agentLifecycleNotifier = relayNotifier
 			default:
 				relayReadRedis = newNamedRedisClient(opts, "realtime-read")
 				sharded := realtime.NewShardedStreamRelay(hub, relayWriteRedis, relayReadRedis, relayConfig)
@@ -239,6 +241,7 @@ func main() {
 				reminderNotifier = relayNotifier
 				reminderOwnerInputNotifier = relayNotifier
 				agentDeliveryNotifier = relayNotifier
+				agentLifecycleNotifier = relayNotifier
 			}
 			relay.Start(relayCtx)
 			broadcaster = realtime.NewDualWriteBroadcaster(hub, relay)
@@ -365,6 +368,7 @@ func main() {
 	h.ReminderNotifier = reminderNotifier
 	h.ReminderOwnerInputNotifier = reminderOwnerInputNotifier
 	h.AgentDeliveryNotifier = agentDeliveryNotifier
+	h.AgentLifecycleNotifier = agentLifecycleNotifier
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -396,7 +400,7 @@ func main() {
 	}
 
 	// Start background sweeper to mark stale runtimes as offline.
-	go runRuntimeSweeper(sweepCtx, queries, liveness, taskSvc, bus, h.AgentLifecycleDispatchStore)
+	go runRuntimeSweeper(sweepCtx, queries, liveness, taskSvc, bus, pool)
 	go runRunnerActivityReaper(sweepCtx, h)
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)

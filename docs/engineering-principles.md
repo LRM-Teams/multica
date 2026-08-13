@@ -370,10 +370,11 @@
 - 代理 URL 可能携带凭据：持久配置仍走原子 `0600` config；CLI show/set receipt 只能显示 presence，禁止回显原值。没有真实 caller 的“image pull”等能力不得虚报覆盖；新增 subprocess caller 只有继承 canonical daemon env 才自动纳入。
 - **物**：`applyProxyConfig` 的 env-over-config、大小写归一、NO_PROXY 去重+loopback 回归；`taskWakeupDialer` 必须使用 `http.ProxyFromEnvironment`。双向 mutation gate 固定为：配置 `HTTP_PROXY` 时 proxy decision 必须非空（删 Proxy hook 即红）；目标命中 `NO_PROXY` 时 decision 必须为空（强制走 proxy 即红）。
 
-### 4.15 Agent 重启控制面直接替换为 Raft 风格组合 — `仅文档`（新协议尚未落地）
-- 舍弃现有 `agent_lifecycle_operation` 编排，不做适配、双写或兼容层。服务端按 Raft 的边界组合 stop / session reset / workspace reset / start，机器继续用 status / session / Activity 事件表达运行时事实，不另建 phase-event ledger。
-- 复用 Raft 架构不等于继承其丢失窗口：每条命令必须有稳定 ID，破坏性命令必须幂等，Computer 必须持久保留终态并重试到 server ACK；start ACK 只代表受理，ready 只能由后续 status/session 证明。Full Reset 必须先取得 runtime 已停止且 provider lease 已释放的可靠证据，之后才能删除并重建完整 Agent Workspace。
-- Activity 沿用 Raft 的 `Stopped` / `Starting` / `Working` 叙事；stop 事件附带 restart mode 与是否强制中断 active turn，不再发明 request/phase/completion 三套 Activity。三种模式和完整理由见 `docs/adr/0009-three-agent-restart-modes.md`。
+### 4.15 Agent 重启控制面直接替换为 Raft 风格组合 — `可执行`（②单一 Runner 命令 + ⑤三模式/回执回归；owner: @Codex）
+- `agent_lifecycle_operation` 只保留用户可见的 request/result 业务记录，不再承担派发编排。每次创建只发送一条 Workspace Runner `agent:lifecycle` 命令；禁止同时走 heartbeat pending queue、Redis delivery lease 或额外 `agent:stop` 投影。机器本地依次组合 stop / optional session reset / optional workspace reset / start，并继续用 status / session / Activity 表达运行时事实，不另建 phase-event ledger。
+- 命令 ID 稳定；Runner 在进程内用 bounded receipt cache 返回 `accepted|duplicate` 并只执行一次，终态通过同一 socket 回传。该 cache 不是 durable queue：Runner 不在线时操作立即失败，已受理但无终态时业务记录超时失败；服务端不得在重连后自动重放 `full_reset_restart` 等破坏性命令。Full Reset 必须先确认 provider lease 已释放，之后才能删除并重建完整 Agent Workspace。
+- Activity 固定为 `Stopped → Starting → Idle/Working`，不再把 Restart 拆成另一条 managed-launch stop/start 控制流。三种模式和完整理由见 `docs/adr/0009-three-agent-restart-modes.md`。
+- **物**：`WorkspaceRunnerAgentLifecyclePayload/Ack/Result`、`agentLifecycleReceiptCache`、`HandleWorkspaceRunnerFrame` 的 accepted/terminal 落库、三种模式 Activity 与 busy-turn force-interrupt 回归；旧 `AgentLifecycleDispatchStore`、heartbeat lifecycle envelope 和本地 `.multica/lifecycle-commands` ledger 不得恢复。
 
 ### 4.16 调研进度只认服务端账本，Agent prose 不得推进状态 — `可执行`（① canonical ledger + ② strict envelope + ③单一调度器 + ⑤迁移/幂等回归；owner: @Codex ✅ 已签）
 - Research Run Module 拥有目标/计划版本、问题前沿、任务及尝试、来源快照、Observation、Claim/Evidence、Decision、事件序列和交付门槛。Agent 只实现有界 Research Task Interface；聊天、画布节点和旧版报告接口都是 projection 或兼容入口，不能成为 canonical progress。普通群聊仍按消息驱动，不能宣称具备 Research Run 的恢复、证据和交付语义。

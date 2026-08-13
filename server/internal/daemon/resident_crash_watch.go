@@ -65,64 +65,48 @@ func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
 	}
 }
 
-// handleAgentLifecycleOperation carries out one queued /api/agents/{id}/lifecycle
-// operation (task #52) via the daemon's own agentLifecycleExecutor — the
-// piece that existed, tested, but unwired since PR #1198 — and reports the
-// result back so the server-side operation record leaves running/scheduled.
-// For "restart" this ends up calling the same canonicalAgentRuntimePool.invalidateSession
-// primitive task #42① used directly; going through the executor instead
-// picks up its hasActiveTurn busy-check for free and gives "reset_session_restart"/
-// "full_reset_restart" a real path once agentLifecycleExecutor.sessionReset is wired.
-func (d *Daemon) handleAgentLifecycleOperation(ctx context.Context, pending protocol.DaemonHeartbeatPendingAgentLifecycleOperation) {
-	if d.agentLifecycleExecutor == nil {
-		d.logger.Warn("agent lifecycle operation dispatched but executor is not configured",
-			"operation_id", pending.OperationID, "agent_id", pending.AgentID, "runtime_id", pending.RuntimeID)
-		return
+func (d *Daemon) executeAgentLifecycleCommand(ctx context.Context, command protocol.WorkspaceRunnerAgentLifecyclePayload) protocol.WorkspaceRunnerAgentLifecycleResultPayload {
+	result := protocol.WorkspaceRunnerAgentLifecycleResultPayload{
+		OperationID: command.OperationID,
+		AgentID:     command.AgentID,
+		RuntimeID:   command.RuntimeID,
+		Status:      "failed",
+		Step:        "dispatch",
 	}
-	if _, loaded := d.agentLifecycleOperations.LoadOrStore(pending.OperationID, struct{}{}); loaded {
-		d.logger.Debug("agent lifecycle operation already in flight",
-			"operation_id", pending.OperationID, "agent_id", pending.AgentID, "runtime_id", pending.RuntimeID)
-		return
+	if d == nil || d.agentLifecycleExecutor == nil {
+		result.ReasonCode = "Agent lifecycle executor is unavailable"
+		return result
 	}
-	defer d.agentLifecycleOperations.Delete(pending.OperationID)
-	d.logger.Info("agent lifecycle operation requested",
-		"operation_id", pending.OperationID, "agent_id", pending.AgentID,
-		"runtime_id", pending.RuntimeID, "action_kind", pending.ActionKind)
-
+	if d.logger != nil {
+		d.logger.Info("agent lifecycle operation requested", "operation_id", command.OperationID, "agent_id", command.AgentID, "runtime_id", command.RuntimeID, "action_kind", command.ActionKind)
+	}
 	execErr := d.agentLifecycleExecutor.Execute(ctx, agentLifecycleExecutionRequest{
-		OperationID: pending.OperationID,
-		WorkspaceID: pending.WorkspaceID,
-		AgentID:     pending.AgentID,
-		RuntimeID:   pending.RuntimeID,
-		ActionKind:  agentLifecycleActionKind(pending.ActionKind),
+		OperationID: command.OperationID,
+		WorkspaceID: command.WorkspaceID,
+		AgentID:     command.AgentID,
+		RuntimeID:   command.RuntimeID,
+		ActionKind:  agentLifecycleActionKind(command.ActionKind),
 	})
-
-	result := map[string]any{}
 	if execErr != nil {
-		d.logger.Warn("agent lifecycle operation failed",
-			"operation_id", pending.OperationID, "agent_id", pending.AgentID,
-			"runtime_id", pending.RuntimeID, "error", execErr)
-		result["status"] = "failed"
-		result["reason_code"] = execErr.Error()
+		result.ReasonCode = execErr.Error()
 		var stepErr *agentLifecycleExecutionError
 		if errors.As(execErr, &stepErr) {
-			result["step"] = stepErr.Step
-			result["reason_code"] = stepErr.Err.Error()
+			result.Step = stepErr.Step
+			result.ReasonCode = stepErr.Err.Error()
 		}
-	} else {
-		result["status"] = "succeeded"
-		// A human explicitly asked for this operation, so give the runtime a
-		// fresh crash-retry budget instead of leaving it flagged crash-looping
-		// from history predating the restart — and clear the server-side
-		// crashed display fact so GET /agents stops saying "crashed".
-		d.residentCrashBackoff.clear(pending.AgentID, pending.RuntimeID)
-		d.clearAgentProviderCrashedOnServer(pending.RuntimeID, pending.AgentID)
+		if d.logger != nil {
+			d.logger.Warn("agent lifecycle operation failed", "operation_id", command.OperationID, "agent_id", command.AgentID, "runtime_id", command.RuntimeID, "error", execErr)
+		}
+		return result
 	}
-
-	if err := d.client.ReportAgentLifecycleOperationResult(ctx, pending.RuntimeID, pending.OperationID, result); err != nil {
-		d.logger.Warn("failed to report agent lifecycle operation result",
-			"operation_id", pending.OperationID, "runtime_id", pending.RuntimeID, "error", err)
-	}
+	result.Status = "succeeded"
+	result.Step = ""
+	result.ReasonCode = ""
+	// A human explicitly asked for this operation, so give the runtime a
+	// fresh crash-retry budget and clear the server-side crashed display fact.
+	d.residentCrashBackoff.clear(command.AgentID, command.RuntimeID)
+	d.clearAgentProviderCrashedOnServer(command.RuntimeID, command.AgentID)
+	return result
 }
 
 // onResidentRuntimeCrash is the daemon's own subscriber to crash events —

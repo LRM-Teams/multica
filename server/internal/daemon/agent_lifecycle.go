@@ -34,6 +34,18 @@ type agentLifecycleSessionResetter interface {
 	ResetAgentRuntimeSession(ctx context.Context, operationID, agentID, runtimeID string) error
 }
 
+type agentLifecycleStartRequest struct {
+	CommandID   string
+	WorkspaceID string
+	AgentID     string
+	RuntimeID   string
+	SessionID   string
+}
+
+type agentLifecycleStarter interface {
+	Start(ctx context.Context, req agentLifecycleStartRequest) error
+}
+
 type agentLifecycleActivityObserver interface {
 	Stopped(request agentLifecycleExecutionRequest, interrupted bool)
 	Started(request agentLifecycleExecutionRequest)
@@ -44,7 +56,6 @@ type agentLifecycleExecutor struct {
 	runtimes       *canonicalAgentRuntimePool
 	sessionReset   agentLifecycleSessionResetter
 	sessions       *agentRuntimeSessionStore
-	commands       *agentLifecycleCommandLedger
 	starter        agentLifecycleStarter
 	activity       agentLifecycleActivityObserver
 	logger         *slog.Logger
@@ -63,8 +74,8 @@ func (e *agentLifecycleExecutionError) Unwrap() error { return e.Err }
 
 // Execute performs one restart command: stop (force if busy) → optional
 // session invalidate → optional workspace reset → start. A start against a
-// still-running process is refused (not a silent rebind). Destructive steps
-// are idempotent on the same command id.
+// still-running process is refused (not a silent rebind). Duplicate command
+// acceptance is owned by the Workspace Runner receipt cache.
 func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifecycleExecutionRequest) error {
 	if err := validateAgentLifecycleExecutionRequest(request); err != nil {
 		return lifecycleStepError("validate", err)
@@ -75,14 +86,6 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	if err := e.validateDependencies(request); err != nil {
 		return lifecycleStepError("validate", err)
 	}
-	replay, err := e.beginCommand(request)
-	if err != nil {
-		return lifecycleStepError("validate", err)
-	}
-	if replay {
-		return nil
-	}
-
 	// #112 / #62: all lifecycle restart kinds force-interrupt a busy turn.
 	interrupted := e.runtimes != nil && e.runtimes.hasLiveLease(request.AgentID, request.RuntimeID)
 	if err := e.stopRuntime(ctx, request); err != nil {
@@ -114,9 +117,6 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	}
 	if e.activity != nil {
 		e.activity.Started(request)
-	}
-	if err := e.commitCommand(request); err != nil {
-		return lifecycleStepError("validate", err)
 	}
 	return nil
 }
@@ -159,20 +159,6 @@ func (e *agentLifecycleExecutor) resetSession(ctx context.Context, request agent
 		return lifecycleStepError("reset_session", err)
 	}
 	return nil
-}
-
-func (e *agentLifecycleExecutor) beginCommand(request agentLifecycleExecutionRequest) (bool, error) {
-	if e == nil || e.commands == nil {
-		return false, nil
-	}
-	return e.commands.Begin(request.OperationID, string(request.ActionKind))
-}
-
-func (e *agentLifecycleExecutor) commitCommand(request agentLifecycleExecutionRequest) error {
-	if e == nil || e.commands == nil {
-		return nil
-	}
-	return e.commands.Commit(request.OperationID, string(request.ActionKind))
 }
 
 func (e *agentLifecycleExecutor) stopRuntime(ctx context.Context, request agentLifecycleExecutionRequest) error {

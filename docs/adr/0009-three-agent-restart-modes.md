@@ -20,25 +20,32 @@ All three modes may force-interrupt an active turn. Full Reset cannot remove the
 Agent Workspace until Machine Service has reliable evidence that the runtime
 process has stopped and its provider lease has been released.
 
-The lifecycle control path replaces Multica's existing Agent Lifecycle
-Operation implementation; it does not adapt, dual-write, or preserve that path.
-It follows Raft's composition instead: the server coordinates machine commands
-for stop, session reset, workspace reset, and start, while the machine publishes
-Agent status, session, and Activity events. The three product modes are composed
-as follows:
+The lifecycle control path keeps `agent_lifecycle_operation` only as the
+user-visible request/result record; it removes the old dispatch orchestration.
+It follows Raft's direct Computer boundary: the server sends one stable
+Workspace Runner lifecycle command, and the machine composes stop, optional
+session reset, optional workspace reset, and start while publishing Agent
+status, session, and Activity events. The three product modes are composed as
+follows:
 
 1. `restart`: stop, then start with the retained session.
 2. `reset_session_restart`: stop, reset the session, then start fresh.
 3. `full_reset_restart`: stop, reset the session, reset the workspace, then
    start fresh.
 
-We copy Raft's boundaries and event vocabulary, not its known loss windows.
-Every command carries a stable command ID, destructive commands are idempotent,
-and the Machine Service retains and retries the terminal command result until
-the server acknowledges it. A start acknowledgement means the command was
-accepted, not that the Agent is ready; readiness comes from the later status and
-session events. Workspace reset reports success only after deletion and
+Every command carries the operation's stable ID. The Workspace Runner keeps a
+bounded in-process receipt cache: the first delivery returns `accepted`, a local
+relay duplicate returns `duplicate`, and destructive work runs once in that
+process. This receipt cache is deliberately not a durable queue. An unavailable
+Runner fails the operation immediately; an accepted command without a terminal
+result times out visibly, and the server never replays a destructive Full Reset
+after reconnect. Acceptance is not readiness; readiness comes from later status
+and session events. Workspace reset reports success only after deletion and
 reprovisioning complete.
+
+The removed paths must not return in parallel: no Agent lifecycle payload on
+daemon heartbeat, no Redis delivery lease, no local `.multica/lifecycle-commands`
+ledger, and no extra managed-launch `agent:stop` projection.
 
 Frontend Activity consumes those same lifecycle events rather than a separate
 operation-phase event stream. It shows Raft-style `Stopped`, `Starting`, and

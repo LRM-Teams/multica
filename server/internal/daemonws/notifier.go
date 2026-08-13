@@ -31,6 +31,13 @@ type AgentDeliveryNotifier interface {
 	NotifyWorkspaceAgentDelivery(workspaceID, daemonID string, payload protocol.AgentDeliverPayload) bool
 }
 
+// AgentLifecycleNotifier is a one-shot Workspace Runner command transport.
+// It intentionally has no delivery lease or replay scheduler; the Runner's
+// bounded receipt cache coalesces relay duplicates after acceptance.
+type AgentLifecycleNotifier interface {
+	NotifyAgentLifecycle(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentLifecyclePayload) bool
+}
+
 // RelayNotifier sends task wakeups to the local daemon hub and, when Redis is
 // configured, publishes the same wakeup through the shared realtime relay so
 // every API node can attempt local delivery.
@@ -91,6 +98,29 @@ func (n *RelayNotifier) NotifyWorkspaceAgentDelivery(workspaceID, daemonID strin
 		scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
 		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, eventID); err != nil {
 			slog.Warn("workspace Runner agent delivery relay publish failed", "error", err, "workspace_id", workspaceID, "daemon_id", daemonID, "delivery_id", payload.DeliveryID)
+		} else {
+			delivered = true
+		}
+	}
+	return delivered
+}
+
+func (n *RelayNotifier) NotifyAgentLifecycle(workspaceID, daemonID string, payload protocol.WorkspaceRunnerAgentLifecyclePayload) bool {
+	if workspaceID == "" || daemonID == "" || payload.Validate() != nil {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentLifecycle, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	delivered := false
+	if n.local != nil {
+		delivered = n.local.NotifyAgentLifecycle(workspaceID, daemonID, payload)
+	}
+	if n.relay != nil {
+		scopeID := workspaceRunnerRelayScopeID(daemonID, workspaceID)
+		if err := n.relay.PublishWithID(realtime.ScopeDaemonWorkspaceRunner, scopeID, "", frame, "agent-lifecycle:"+payload.OperationID); err != nil {
+			slog.Warn("workspace Runner lifecycle command publish failed", "workspace_id", workspaceID, "daemon_id", daemonID, "operation_id", payload.OperationID, "error", err)
 		} else {
 			delivered = true
 		}

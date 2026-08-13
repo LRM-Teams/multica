@@ -106,6 +106,8 @@
   },
   "session_page": {
     "load_failed": "会话加载失败",
+    "load_failed_hint": "当前会话响应无法使用，请重试以加载最新调研状态。",
+    "technical_details": "技术详情",
     "retry": "重试",
     "canvas_forming_title": "画布组建中",
     "canvas_forming_hint": "调研团正在落子，节点会出现在这里。",
@@ -505,6 +507,40 @@
     "decision": "裁决"
   },
   "node_card": {
+    "task_meta": "任务",
+    "agent_legend": "Agent {{id}}",
+    "kinds": {
+      "task": "任务",
+      "attempt": "尝试",
+      "result_artifact": "结果工件",
+      "search_plan": "检索计划",
+      "query_execution": "查询执行",
+      "source_candidate": "来源候选",
+      "screening_decision": "筛选决定",
+      "source_snapshot": "来源快照",
+      "observation": "观测",
+      "claim": "论断",
+      "question": "问题",
+      "hypothesis": "假设",
+      "branch": "分支",
+      "insight": "洞察",
+      "insight_derivation": "洞察推导",
+      "integration_round": "整合轮次",
+      "integration_contribution": "整合贡献",
+      "dispute": "争议",
+      "dispute_position": "争议立场",
+      "deliberation": "审议",
+      "deliberation_turn": "审议回合",
+      "decision": "决策",
+      "team_formation": "组队",
+      "team_membership": "团队成员",
+      "capability_observation": "能力观测",
+      "divergence_pass": "发散扫描",
+      "monitoring_cycle": "监测周期",
+      "report_revision": "报告修订",
+      "evaluation_defect": "评测缺陷",
+      "episode": "运行摘要"
+    },
     "generic_type": "未知类型",
     "generic_unrecognized": "无法识别的类型",
     "generic_raw": "原始: ",
@@ -891,6 +927,7 @@
     "reconnect_failed_hint": "请检查网络后重试；上次已加载的调研仍保留在屏幕上。",
     "server_error_title": "服务异常",
     "server_error_hint": "调研服务返回错误（5xx）。可重试，不会白屏丢掉会话壳。",
+    "technical_details": "技术详情",
     "retry": "重试",
     "retrying": "重试中…",
     "waiting_network": "等待网络恢复",
@@ -1025,6 +1062,10 @@
   "d5": {
     "brand_title": "Research Constellation · D5",
     "brand_subtitle": "XXL / XL / L / M 成果节点 · S 级 Agent 工作节点",
+    "projection": {
+      "classic": "经典投影",
+      "classic_hint": "当前会话暂不支持 V6 实时投影，正在使用经典投影视图"
+    },
     "lens_group": "显示 Lens",
     "lens": {
       "relations": "关系",
@@ -1043,13 +1084,25 @@
     "goal_panel": {
       "title": "目标版本",
       "version": "v{{version}}",
+      "round": "第 {{round}} 轮",
+      "round_with_budget": "第 {{round}} / {{budget}} 轮",
       "current": "当前",
       "impact": "{{totalNodes}} 个节点中有 {{labeledNodes}} 个已标注目标版本"
     },
     "detail": {
       "open_report": "打开完整报告",
-      "continue_deepening": "继续深挖",
-      "continue_message": "请继续深挖这个方向：{{title}}"
+      "command_pending": "正在执行…",
+      "command_failed": "无法执行此节点操作，请刷新后重试。",
+      "permission_denied": "你没有继续此路径的权限。",
+      "session_terminal": "本次调研已经结束。",
+      "node_stale": "该节点已变化，画布已刷新，请重试。",
+      "state_version_conflict": "该路径已变化，请查看刷新后的节点再重试。",
+      "action_not_allowed": "当前状态下不能继续此节点。",
+      "idempotency_conflict": "本次请求与之前的操作冲突，请刷新后重试。",
+      "invalid_request": "该节点无法接受此请求。",
+      "run_not_running": "请先恢复调研会话，再继续此路径。",
+      "not_retryable": "当前状态下无法重试此节点。",
+      "no_eligible_member": "当前没有可接手此路径的调研 Agent。"
     },
     "summary": {
       "title": "调研星图 · 已加载 {{loaded}} 条方向",
@@ -1154,6 +1207,7 @@
     "canvas": {
       "loading": "正在加载调研星图…",
       "error": "无法加载 typed 调研图。",
+      "interface_error_details": "技术详情",
       "stale_title": "星图可能不是最新状态。",
       "stale_body": "刷新暂不可用，继续保留上次已加载的可信图。",
       "stale_announcement": "星图刷新失败，当前继续显示上次已加载的图。",

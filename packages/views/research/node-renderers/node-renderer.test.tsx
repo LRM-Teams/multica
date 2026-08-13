@@ -7,6 +7,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchV6UnknownKindDiagnostic } from "@multica/core/types/research-v6";
 import { NodeRenderer } from "./node-renderer";
 import type { ResearchV6ProjectionNode } from "@multica/core/types/research-v6";
+import { RESEARCH_V6_NODE_KINDS } from "@multica/core/research-v6/registry";
+import enResearch from "../../locales/en/research.json";
+import zhResearch from "../../locales/zh-Hans/research.json";
 
 const BASE: ResearchV6ProjectionNode = {
   id: "run:e:1",
@@ -81,6 +84,21 @@ describe("NodeRenderer — 8 states (AC2)", () => {
   });
 });
 
+describe("NodeRenderer — localized V6 kind contract", () => {
+  it("covers every canonical V6 kind in both supported locales", () => {
+    for (const kind of RESEARCH_V6_NODE_KINDS) {
+      expect(enResearch.node_card.kinds[kind]).toBeTruthy();
+      expect(zhResearch.node_card.kinds[kind]).toBeTruthy();
+    }
+  });
+
+  it("renders the active locale label instead of the core registry copy", () => {
+    render(<NodeRenderer node={node("idle", { node_kind: "task" })} />);
+    expect(screen.getByText("Task")).toBeTruthy();
+    expect(screen.queryByText("任务")).toBeNull();
+  });
+});
+
 describe("NodeRenderer — generic degradation (AC1)", () => {
   it("unknown kind renders GenericNodeCard without throwing", () => {
     const diagnostics: ResearchV6UnknownKindDiagnostic[] = [];
@@ -123,6 +141,12 @@ describe("NodeRenderer — footer meta", () => {
     expect(screen.getByTestId("node-meta")).toBeTruthy();
     expect(screen.getByTestId("node-evidence-count")).toBeTruthy();
     expect(screen.getByText("5")).toBeTruthy();
+  });
+
+  it("localizes the task footer marker", () => {
+    render(<NodeRenderer node={node("running", { task_id: "task:1" })} />);
+    expect(screen.getAllByText("Task").length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("任务")).toBeNull();
   });
 
   it("shows 'no evidence' muted style for zero evidence", () => {

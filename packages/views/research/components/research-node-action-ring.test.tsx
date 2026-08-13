@@ -24,21 +24,22 @@ const base = {
   created_at: "2026-07-31T00:00:00Z",
   updated_at: "2026-07-31T00:00:00Z",
 } as unknown as ResearchGraphNode;
+const taskBound = { ...base, payload: { task_id: "task-1" } };
 
 describe("ringActionsForNode (LRM-848 / LRM-981)", () => {
   it("makes retry primary on dead_end", () => {
-    const actions = ringActionsForNode({ ...base, node_type: "dead_end" });
+    const actions = ringActionsForNode({ ...taskBound, node_type: "dead_end" });
     expect(actions[0]).toMatchObject({ id: "retry", primary: true });
     expect(actions.find((a) => a.id === "detail")).toBeTruthy();
   });
 
   it("makes retry primary on refuted and failed status", () => {
-    expect(ringActionsForNode({ ...base, node_type: "refuted" })[0]).toMatchObject({
+    expect(ringActionsForNode({ ...taskBound, node_type: "refuted" })[0]).toMatchObject({
       id: "retry",
       primary: true,
     });
     expect(
-      ringActionsForNode({ ...base, node_type: "probe", status: "failed" })[0],
+      ringActionsForNode({ ...taskBound, node_type: "probe", status: "failed" })[0],
     ).toMatchObject({ id: "retry", primary: true });
   });
 
@@ -47,6 +48,12 @@ describe("ringActionsForNode (LRM-848 / LRM-981)", () => {
     expect(actions[0]).toMatchObject({ id: "fork", group: "explore" });
     expect(actions.some((a) => a.id === "retry")).toBe(false);
     expect(actions.some((a) => a.id === "reassign")).toBe(false);
+  });
+
+  it("hides task-only recovery actions when the node has no task anchor", () => {
+    const actions = ringActionsForNode({ ...base, node_type: "probe", status: "failed" });
+    expect(actions.some((action) => action.id === "retry")).toBe(false);
+    expect(actions.some((action) => action.id === "reassign")).toBe(false);
   });
 
   it("marks system node types that skip the ring", () => {
@@ -60,7 +67,7 @@ describe("ResearchNodeActionRing", () => {
     const onAction = vi.fn();
     render(
       <ResearchNodeActionRing
-        node={{ ...base, node_type: "dead_end" }}
+        node={{ ...taskBound, node_type: "dead_end" }}
         mode="ring"
         onAction={onAction}
         onClose={vi.fn()}
@@ -90,7 +97,7 @@ describe("ResearchNodeActionRing", () => {
   it("hides unavailable actions instead of leaking disabled engineering reasons", () => {
     render(
       <ResearchNodeActionRing
-        node={{ ...base, node_type: "probe", status: "active" }}
+        node={{ ...taskBound, node_type: "probe", status: "active" }}
         mode="ring"
         onAction={vi.fn()}
         onClose={vi.fn()}
@@ -104,7 +111,7 @@ describe("ResearchNodeActionRing", () => {
   it("arrows rove focus across ring items", () => {
     render(
       <ResearchNodeActionRing
-        node={{ ...base, node_type: "dead_end" }}
+        node={{ ...taskBound, node_type: "dead_end" }}
         mode="ring"
         onAction={vi.fn()}
         onClose={vi.fn()}

@@ -707,7 +707,7 @@ func (s *PostgresStore) TaskContextForAttempt(ctx context.Context, attemptID, wo
 		return RunSnapshot{}, err
 	}
 	if !ok {
-		return snapshot, nil
+		return RunSnapshot{}, fmt.Errorf("%w: attempt has no frozen artifact manifest", ErrInvalidTransition)
 	}
 	filtered := filterRunSnapshotByManifest(snapshot, allowed)
 	manifestID, manifestHash, policyWatermark, _, summaryErr := loadAttemptManifestSummaryPool(

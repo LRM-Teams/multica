@@ -71,7 +71,11 @@ import {
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import type { ResearchD5Lens } from "../lib/research-d5-lens";
 import { buildGoalVersionHistory, summarizeGoalImpact } from "../lib/research-d5-goal-history";
-import { resolveResearchCanvasNode, enrichResearchNodeForDetail } from "../lib/resolve-research-canvas-node";
+import {
+  enrichResearchNodeForDetail,
+  mergeResearchCanvasNodes,
+  resolveResearchCanvasNode,
+} from "../lib/resolve-research-canvas-node";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -207,6 +211,18 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         : undefined,
     [typedGraphPages, selectedNodeId],
   );
+  const detailGraphNodes = useMemo(
+    () => mergeResearchCanvasNodes(data?.nodes ?? [], typedGraph),
+    [data?.nodes, typedGraph],
+  );
+  const detailGraphEdges = useMemo(() => {
+    const byId = new Map((data?.edges ?? []).map((edge) => [edge.id, edge]));
+    for (const edge of typedGraph?.edges ?? []) {
+      const key = edge.id || `${edge.from_node_id}:${edge.edge_type}:${edge.to_node_id}`;
+      if (!byId.has(key)) byId.set(key, edge);
+    }
+    return Array.from(byId.values());
+  }, [data?.edges, typedGraph?.edges]);
   useEffect(() => {
     const fromUrl = nav.searchParams.get("lens");
     if (isResearchD5Lens(fromUrl) && fromUrl !== d5Lens) {
@@ -235,6 +251,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       if (node) dispatch({ type: "setFamily", family: dimensionFamilyOf(node) });
     },
     [selectCanvasNode],
+  );
+  const handleFocusDetailNode = useCallback(
+    (nodeId: string) => {
+      const node = resolveResearchCanvasNode(nodeId, {
+        snapshotNodes: data?.nodes,
+        typedGraph,
+      });
+      if (node) handleSelectCanvasNode(enrichResearchNodeForDetail(node, typedGraph));
+    },
+    [data?.nodes, handleSelectCanvasNode, typedGraph],
   );
   useEffect(() => {
     if (!data) return;
@@ -687,6 +713,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 sources={sources}
                 run={data.run}
                 members={fleet.members}
+                graphNodes={detailGraphNodes}
+                graphEdges={detailGraphEdges}
+                onFocusNode={handleFocusDetailNode}
                 open
                 placement="inline"
                 onClose={() => handleSelectCanvasNode(null)}

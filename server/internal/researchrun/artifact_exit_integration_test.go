@@ -476,15 +476,22 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
 	var headerBytes []byte
+	var headerHash, policyVersion string
+	var policyWatermark int64
 	if err = pool.QueryRow(ctx, `
-		SELECT gate_snapshot_bytes
+		SELECT gate_snapshot_bytes, gate_snapshot_hash, policy_version, policy_watermark
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&headerBytes); err != nil {
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(
+		&headerBytes, &headerHash, &policyVersion, &policyWatermark,
+	); err != nil {
 		t.Fatalf("load gate snapshot: %v", err)
 	}
 	if len(headerBytes) == 0 {
 		t.Fatal("expected frozen gate snapshot bytes on manifest")
+	}
+	if headerHash != contentHashFromPayload(headerBytes) || policyVersion != LegacyV1V5CompatPolicy {
+		t.Fatalf("frozen gate binding hash=%q policy=%q", headerHash, policyVersion)
 	}
 
 	frozen, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
@@ -519,6 +526,23 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	if liveCount <= frozenCount {
 		t.Fatalf("live unfinished=%d frozen=%d want live > frozen", liveCount, frozenCount)
 	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_policy_state
+		SET watermark = watermark + 1, updated_at = now()
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, fixture.workspaceID, run.SessionID); err != nil {
+		t.Fatalf("advance live policy watermark: %v", err)
+	}
+	var livePolicyWatermark int64
+	if err = pool.QueryRow(ctx, `
+		SELECT watermark FROM research_artifact_policy_state
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+	`, fixture.workspaceID, run.SessionID).Scan(&livePolicyWatermark); err != nil {
+		t.Fatalf("load live policy watermark: %v", err)
+	}
+	if livePolicyWatermark <= policyWatermark {
+		t.Fatalf("live policy watermark=%d frozen=%d", livePolicyWatermark, policyWatermark)
+	}
 
 	frozenAfter, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
 	if err != nil {
@@ -529,6 +553,17 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	}
 	if gateResultsEqual(frozenAfter.Gate, liveGate) {
 		t.Fatalf("frozen gate should differ from live gate after mutation")
+	}
+
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_artifact_context_manifest
+		SET gate_snapshot_bytes = gate_snapshot_bytes || decode('00', 'hex')
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID); err != nil {
+		t.Fatalf("corrupt frozen gate bytes: %v", err)
+	}
+	if _, err = store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("corrupt frozen gate error=%v want ErrInvalidTransition", err)
 	}
 }
 

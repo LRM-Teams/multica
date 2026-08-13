@@ -548,11 +548,12 @@ func loadManifestGateSnapshotPool(
 	workspaceID, sessionID, attemptID string,
 ) (GateResult, bool, error) {
 	var raw []byte
+	var storedHash, policyVersion string
 	err := pool.QueryRow(ctx, `
-		SELECT gate_snapshot_bytes
+		SELECT gate_snapshot_bytes, gate_snapshot_hash, policy_version
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, workspaceID, sessionID, attemptID).Scan(&raw)
+	`, workspaceID, sessionID, attemptID).Scan(&raw, &storedHash, &policyVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GateResult{}, false, nil
 	}
@@ -561,6 +562,15 @@ func loadManifestGateSnapshotPool(
 	}
 	if len(raw) == 0 {
 		return GateResult{}, false, nil
+	}
+	if policyVersion != LegacyV1V5CompatPolicy {
+		return GateResult{}, false, fmt.Errorf(
+			"%w: manifest gate snapshot policy version %q is unsupported",
+			ErrInvalidTransition, policyVersion,
+		)
+	}
+	if storedHash == "" || contentHashFromPayload(raw) != storedHash {
+		return GateResult{}, false, fmt.Errorf("%w: manifest gate snapshot hash mismatch", ErrInvalidTransition)
 	}
 	var gate GateResult
 	if err = json.Unmarshal(raw, &gate); err != nil {

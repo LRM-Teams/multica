@@ -996,6 +996,11 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-gate-1 证据：D-enabled Attempt 的 Gate 从 Manifest 冻结字节读取，并在解码前校验
+独立 SHA-256 与 `legacy-v1-v5-compat-v1` policy version；dispatch 后新增 Task 或推进 live
+policy watermark 不会改变旧 Attempt 的 Gate，而任意冻结字节损坏均 fail closed。既有
+V1–V5 Prompt/Result/decoder golden fixtures 同时保持通过，§15.17 已收口且没有改写旧 rubric。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchConstellationWorkspace } from "./research-constellation-workspace";
 import type { TypedGraphResponse } from "@multica/core/research";
 import type { ResearchGraphNode } from "@multica/core/types";
+import enResearch from "../../locales/en/research.json";
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => false,
@@ -44,27 +45,11 @@ vi.mock("@multica/core/research", async (importOriginal) => {
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (selector: (bundle: Record<string, unknown>) => string) =>
-      selector({
-        d5: {
-          canvas: {
-            loading: "Loading constellation…",
-            error: "Could not load the typed research graph.",
-            projection_mismatch_title: "Star-map projection unavailable",
-            projection_mismatch_body: "Typed projection missing.",
-            projection_mismatch_diagnostics:
-              "Snapshot nodes: {{snapshotCount}} · Typed nodes: {{typedCount}}",
-          },
-          rail: { hide: "Hide", show: "Show", chat_tab: "Chat", detail_tab: "Detail" },
-          summary: {
-            title: "Constellation · {{loaded}} loaded directions",
-            detail: "{{stable}} stable",
-          },
-          report: { title: "Node report", empty_summary: "No summary" },
-        },
-        session_page: { retry: "Retry" },
-        interrupt: { retrying: "Retrying…" },
-      }),
+    t: (selector: (bundle: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
+      const raw = selector(enResearch);
+      if (typeof raw !== "string" || !vars) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? ""));
+    },
   }),
 }));
 

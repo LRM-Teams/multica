@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ResearchGraphNode } from "@multica/core/types";
@@ -128,5 +128,45 @@ describe("TrajectoryExplorer (LRM-1480 / UI-06)", () => {
     expect(detail).toBeInTheDocument();
     await user.click(screen.getByTestId("trajectory-detail-jump"));
     expect(onJump).toHaveBeenCalledWith("a");
+  });
+
+  it("closes inline detail on Escape and restores focus to the selected commit", async () => {
+    const nodes = [node("a", "Question", "done", "theme-main")];
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    renderWithI18n(
+      <TrajectoryExplorer
+        nodes={nodes}
+        sessionStatus="running"
+        onSelect={onSelect}
+        onJumpToCanvas={vi.fn()}
+        onOpenNodeDetail={vi.fn()}
+      />,
+    );
+
+    const commit = screen.getByTestId("trajectory-commit-card");
+    await user.click(commit);
+    const explorer = screen.getByTestId("trajectory-explorer");
+    fireEvent.keyDown(explorer, { key: "Escape" });
+
+    expect(onSelect).toHaveBeenLastCalledWith(null);
+    expect(screen.getByTestId("trajectory-detail-empty")).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toBe(commit));
+  });
+
+  it("localizes inline detail status", () => {
+    renderWithI18n(
+      <TrajectoryExplorer
+        nodes={[node("a", "问题", "abandoned", "theme-main")]}
+        selectedId="a"
+        sessionStatus="running"
+        onSelect={vi.fn()}
+        onJumpToCanvas={vi.fn()}
+        onOpenNodeDetail={vi.fn()}
+      />,
+      { locale: "zh-Hans" },
+    );
+
+    expect(screen.getByTestId("trajectory-detail")).toHaveTextContent("已放弃");
   });
 });

@@ -11,6 +11,7 @@ import type {
   SourceStrategyModel,
 } from "../lib/m2-visibility";
 import { resolveSourceStrategyMode } from "../lib/m2-visibility";
+import { safeSourceUrl } from "../report/safe-source-url";
 
 /** 360px drawer → one column; wider sheets can dual-column via auto-fit. */
 const CARD_GRID =
@@ -164,22 +165,25 @@ function StrategyCard({
       ) : null}
       {chip.samples.length > 0 ? (
         <ul className="mt-2 space-y-1 border-t border-border/50 pt-2">
-          {chip.samples.map((s) => (
-            <li key={s.id} className="min-w-0 truncate text-[11px]">
-              {s.url ? (
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="font-medium text-brand underline-offset-2 hover:underline"
-                >
-                  {s.title}
-                </a>
-              ) : (
-                <span className="text-muted-foreground">{s.title}</span>
-              )}
-            </li>
-          ))}
+          {chip.samples.map((s) => {
+            const href = safeSourceUrl(s.url);
+            return (
+              <li key={s.id} className="min-w-0 truncate text-[11px]">
+                {href ? (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="font-medium text-brand underline-offset-2 hover:underline"
+                  >
+                    {s.title}
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground">{s.title}</span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </article>

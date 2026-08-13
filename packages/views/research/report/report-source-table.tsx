@@ -9,6 +9,7 @@ import {
   type SourceFailureReasonCode,
 } from "./report-source-degrade";
 import { weightTier } from "./report-weight";
+import { safeSourceUrl } from "./safe-source-url";
 
 function WeightBadge({ weight }: { weight: number }) {
   const tier = weightTier(weight);
@@ -87,6 +88,7 @@ export function ReportSourceTable({ sources }: { sources: ResearchSource[] }) {
             const label = s.title || s.url || s.source_class;
             // Localized reason only — never append raw payload codes (ETIMEDOUT, etc.).
             const reasonText = failed && reasonCode ? reasonLabel(reasonCode) : null;
+            const href = failed ? null : safeSourceUrl(s.url);
             return (
               <tr
                 key={s.id}
@@ -111,9 +113,9 @@ export function ReportSourceTable({ sources }: { sources: ResearchSource[] }) {
                   <TypeChip value={s.source_class} />
                 </td>
                 <td className="px-3 py-2.5 align-middle">
-                  {s.url && !failed ? (
+                  {href ? (
                     <a
-                      href={s.url}
+                      href={href}
                       target="_blank"
                       rel="noreferrer noopener"
                       className="font-medium text-brand underline-offset-2 hover:underline"

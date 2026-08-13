@@ -996,6 +996,12 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-recovery-3 证据：真实 `AcceptResult` 在 `after_begin`、`before_commit`、
+`after_commit` 三个故障点均有 PostgreSQL 恢复矩阵；回滚必须恢复 Result Artifact、
+Passport/Version、Input Reference、Policy Mutation、Method、Question/Task、Attempt/Task
+状态和 accepted Event 的完整基线，未知提交结果的相同请求只能幂等重放为唯一写集。
+§15.22 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

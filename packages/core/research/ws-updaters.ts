@@ -140,6 +140,16 @@ export function applyResearchWSEvent(
     case "research_session:status_changed": {
       if (payload.deleted === true) {
         qc.removeQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+        qc.removeQueries({
+          queryKey: researchKeys.graphTypedInfinite(wsId, sessionId),
+        });
+        qc.removeQueries({
+          queryKey: ["research", wsId, "graph-typed", sessionId],
+        });
+        qc.removeQueries({ queryKey: researchKeys.presence(wsId, sessionId) });
+        qc.removeQueries({
+          queryKey: researchKeys.productRounds(wsId, sessionId),
+        });
         void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
         break;
       }

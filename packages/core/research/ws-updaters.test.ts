@@ -16,9 +16,9 @@ function makeQc(initial: unknown) {
       return next;
     },
     invalidateQueries: vi.fn(),
-    removeQueries: ({ queryKey }: { queryKey: unknown }) => {
+    removeQueries: vi.fn(({ queryKey }: { queryKey: unknown }) => {
       store.delete(JSON.stringify(queryKey));
-    },
+    }),
     getData: () => store.get(JSON.stringify(researchKeys.snapshot("ws", "s1"))),
   } as unknown as QueryClient & { getData: () => unknown };
 }
@@ -130,6 +130,18 @@ describe("applyResearchWSEvent", () => {
       payload: { session_id: "s1", deleted: true },
     });
     expect(qc.getData()).toBeUndefined();
+    expect(qc.removeQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.graphTypedInfinite("ws", "s1"),
+    });
+    expect(qc.removeQueries).toHaveBeenCalledWith({
+      queryKey: ["research", "ws", "graph-typed", "s1"],
+    });
+    expect(qc.removeQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.presence("ws", "s1"),
+    });
+    expect(qc.removeQueries).toHaveBeenCalledWith({
+      queryKey: researchKeys.productRounds("ws", "s1"),
+    });
     expect(qc.invalidateQueries).toHaveBeenCalled();
   });
 

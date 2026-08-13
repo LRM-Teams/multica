@@ -1805,6 +1805,205 @@ func TestResearchArtifactPassportDCompletion328RoundTrips(t *testing.T) {
 	}
 }
 
+func TestResearchArtifactCurrentVersionPolicyGuard356RoundTrips(t *testing.T) {
+	pool := openTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("research_artifact_d356_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, cleanupErr := pool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE"); cleanupErr != nil {
+			t.Logf("drop schema %s: %v", schema, cleanupErr)
+		}
+	})
+	if _, err = conn.Exec(ctx, "SET search_path TO "+quotedSchema+", public"); err != nil {
+		t.Fatalf("set search path: %v", err)
+	}
+	if _, err = conn.Exec(ctx, researchArtifactPassportLegacySchema); err != nil {
+		t.Fatalf("create legacy research schema: %v", err)
+	}
+
+	workspaceID := "10000000-0000-4000-8000-000000000001"
+	sessionID := "20000000-0000-4000-8000-000000000001"
+	taskID := "30000000-0000-4000-8000-000000000001"
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO workspace (id) VALUES ($1::uuid);
+		INSERT INTO research_session (id, workspace_id) VALUES ($2::uuid, $1::uuid);
+		INSERT INTO research_task (id, workspace_id, session_id, client_key, goal_version, plan_version)
+		VALUES ($3::uuid, $1::uuid, $2::uuid, 'version-policy', 1, 1);
+	`, workspaceID, sessionID, taskID); err != nil {
+		t.Fatalf("seed version fixture: %v", err)
+	}
+
+	for _, name := range []string{
+		"318_research_artifact_passport",
+		"319_research_artifact_passport_backfill",
+		"320_research_artifact_reciprocal_guards",
+		"321_research_artifact_policy_coupling_guards",
+		"322_research_artifact_policy_ledger_guards",
+		"323_research_artifact_integrity_guards",
+		"324_research_artifact_link_policy_guards",
+	} {
+		upSQL, _ := readMigrationPair(t, name)
+		if _, err = conn.Exec(ctx, upSQL); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+	}
+	up356, down356 := readMigrationPair(t, "356_research_artifact_current_version_policy_guard")
+	if _, err = conn.Exec(ctx, up356); err != nil {
+		t.Fatalf("apply 356 up: %v", err)
+	}
+
+	if _, err = conn.Exec(ctx, `
+		INSERT INTO research_artifact_version (
+		  workspace_id, session_id, artifact_id, version,
+		  schema_name, schema_version, canonicalization_version,
+		  content_hash, access_level, hash_origin
+		) VALUES (
+		  $1::uuid, $2::uuid, $3::uuid, 2,
+		  'task', 'legacy-v1', 'research-artifact-c14n-v1',
+		  'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+		  'raw', 'production'
+		)
+	`, workspaceID, sessionID, taskID); err != nil {
+		t.Fatalf("insert immutable version 2: %v", err)
+	}
+
+	directTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin direct-pointer tx: %v", err)
+	}
+	if _, err = directTx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET current_version = 2
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
+	`, workspaceID, sessionID, taskID); err != nil {
+		_ = directTx.Rollback(ctx)
+		t.Fatalf("stage direct pointer update: %v", err)
+	}
+	if err = directTx.Commit(ctx); err == nil {
+		t.Fatal("expected current_version change without policy generation to fail")
+	} else {
+		_ = directTx.Rollback(ctx)
+	}
+
+	orphanLedgerTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin orphan-ledger tx: %v", err)
+	}
+	var orphanWatermark int64
+	if err = orphanLedgerTx.QueryRow(ctx, `
+		SELECT research_artifact_reserve_policy_watermark($1::uuid, $2::uuid)
+	`, workspaceID, sessionID).Scan(&orphanWatermark); err != nil {
+		_ = orphanLedgerTx.Rollback(ctx)
+		t.Fatalf("reserve orphan-ledger watermark: %v", err)
+	}
+	if _, err = orphanLedgerTx.Exec(ctx, `
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision,
+		  old_current_version, new_current_version
+		) VALUES ($1::uuid, $2::uuid, $4, 'current_version', $3::uuid, 0, 1, 1, 2)
+	`, workspaceID, sessionID, taskID, orphanWatermark); err != nil {
+		_ = orphanLedgerTx.Rollback(ctx)
+		t.Fatalf("stage orphan current_version mutation: %v", err)
+	}
+	if err = orphanLedgerTx.Commit(ctx); err == nil {
+		t.Fatal("expected current_version mutation without pointer update to fail")
+	} else {
+		_ = orphanLedgerTx.Rollback(ctx)
+	}
+
+	wrongKindTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin wrong-kind tx: %v", err)
+	}
+	var watermark int64
+	if err = wrongKindTx.QueryRow(ctx, `
+		SELECT research_artifact_reserve_policy_watermark($1::uuid, $2::uuid)
+	`, workspaceID, sessionID).Scan(&watermark); err != nil {
+		_ = wrongKindTx.Rollback(ctx)
+		t.Fatalf("reserve wrong-kind watermark: %v", err)
+	}
+	if _, err = wrongKindTx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET current_version = 2, eligibility_revision = 2
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision,
+		  old_current_version, new_current_version
+		) VALUES ($1::uuid, $2::uuid, $4, 'eligibility', $3::uuid, 1, 2, 1, 2);
+	`, workspaceID, sessionID, taskID, watermark); err != nil {
+		_ = wrongKindTx.Rollback(ctx)
+		t.Fatalf("stage wrong-kind mutation: %v", err)
+	}
+	if err = wrongKindTx.Commit(ctx); err == nil {
+		t.Fatal("expected non-current_version mutation to fail pointer guard")
+	} else {
+		_ = wrongKindTx.Rollback(ctx)
+	}
+
+	positiveTx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin positive version tx: %v", err)
+	}
+	if err = positiveTx.QueryRow(ctx, `
+		SELECT research_artifact_reserve_policy_watermark($1::uuid, $2::uuid)
+	`, workspaceID, sessionID).Scan(&watermark); err != nil {
+		_ = positiveTx.Rollback(ctx)
+		t.Fatalf("reserve version watermark: %v", err)
+	}
+	if _, err = positiveTx.Exec(ctx, `
+		UPDATE research_artifact_passport
+		SET current_version = 2, eligibility_revision = 2
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid;
+		INSERT INTO research_artifact_policy_mutation (
+		  workspace_id, session_id, watermark, mutation_kind, artifact_id,
+		  old_eligibility_revision, new_eligibility_revision,
+		  old_current_version, new_current_version
+		) VALUES ($1::uuid, $2::uuid, $4, 'current_version', $3::uuid, 1, 2, 1, 2);
+	`, workspaceID, sessionID, taskID, watermark); err != nil {
+		_ = positiveTx.Rollback(ctx)
+		t.Fatalf("stage version publication: %v", err)
+	}
+	if err = positiveTx.Commit(ctx); err != nil {
+		t.Fatalf("commit coupled version publication: %v", err)
+	}
+
+	var currentVersion int
+	var eligibility, currentWatermark int64
+	if err = conn.QueryRow(ctx, `
+		SELECT p.current_version, p.eligibility_revision, ps.watermark
+		FROM research_artifact_passport p
+		JOIN research_artifact_policy_state ps
+		  ON ps.workspace_id = p.workspace_id AND ps.session_id = p.session_id
+		WHERE p.workspace_id = $1::uuid AND p.session_id = $2::uuid AND p.id = $3::uuid
+	`, workspaceID, sessionID, taskID).Scan(&currentVersion, &eligibility, &currentWatermark); err != nil {
+		t.Fatalf("load published version generation: %v", err)
+	}
+	if currentVersion != 2 || eligibility != 2 || currentWatermark != watermark {
+		t.Fatalf("published version=%d eligibility=%d watermark=%d want 2/2/%d",
+			currentVersion, eligibility, currentWatermark, watermark)
+	}
+
+	if _, err = conn.Exec(ctx, down356); err != nil {
+		t.Fatalf("apply 356 down: %v", err)
+	}
+	if _, err = conn.Exec(ctx, up356); err != nil {
+		t.Fatalf("reapply 356 up: %v", err)
+	}
+}
+
 func TestResearchResultArtifactBackfill329RoundTrips(t *testing.T) {
 	pool := openTestPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

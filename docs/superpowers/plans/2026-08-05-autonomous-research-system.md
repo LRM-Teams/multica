@@ -1075,6 +1075,7 @@ surface 矩阵仍未完成。
 
 - [ ] 实现 Research Monitor、Monitoring Cycle、`monitoring` 状态和调度资格。
 - [ ] 复用版本化 Search Plan，保存每次 Query Execution 和内容差异。
+  - [x] L2a：`ValidateMonitoringDiff` 冻结单次 Monitoring Cycle 的 workspace/session、Monitor、Cycle 和 Search Plan 版本，要求完整执行 Search Plan 中每个 canonical query key + hash，并以 Query Execution 绑定的前后工件版本/内容哈希验证 added/removed/modified/unchanged 差异；物质性分数由这些服务端解析事实计算，不接受 Agent 自报 aggregate delta。当前仅完成准入与计算合同；Monitor/Cycle/Query Execution/diff 持久化及 L1 cycle 决策接线仍待后续 L 切片。
 - [ ] 物质性变化触发增量 Inquiry/Integration/Report Revision；无变化写 Decision 后等待下一次。
 - [ ] 用户 pause/cancel/steering、凭据失效、来源永久不可达和预算耗尽都有明确状态转换。
 

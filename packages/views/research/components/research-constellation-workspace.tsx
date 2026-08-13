@@ -627,6 +627,7 @@ export function ResearchConstellationWorkspace({
         sources={sources}
         run={run}
         members={members}
+        typedNodes={typedGraph?.nodes}
         onClose={() => setReportOpen(false)}
         onSelectLineageNode={handleLineageSelect}
       />

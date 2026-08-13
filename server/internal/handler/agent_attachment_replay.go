@@ -119,7 +119,7 @@ func (h *Handler) acknowledgeAgentAttachmentCommand(ctx context.Context, identit
 		wantEvent, wantReceipt = "detach", "detached"
 	}
 	var shadowCorrelationID string
-	err := h.DB.QueryRow(ctx, `
+	err = h.DB.QueryRow(ctx, `
 		SELECT correlation_id::text
 		FROM agent_attachment_projection_event
 		WHERE lifecycle_seq = $1

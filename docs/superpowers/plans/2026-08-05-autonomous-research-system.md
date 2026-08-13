@@ -1015,6 +1015,7 @@ surface 矩阵仍未完成。
 
 - [ ] 增加 Search Plan、Query Execution、Source Candidate、Screening Decision。
 - [ ] Retrieval Adapter 统一查询、结果、游标、全文、成本、失败和安全元数据。
+  - [x] F2a：冻结 `RetrievalAdapter` Search/Fetch seam 与统一请求/响应、游标、全文、成本、失败和安全事实 contract；Research Run 对 canonical URL/identity、内容 hash、大小/MIME、redirect、DNS 地址、credential forwarding、scan disposition 和 retry policy fail closed。具体 provider Adapter、Corpus 持久化及 SSRF transport 测试仍属于 F2b/F2c，不能以本项替代。
 - [ ] 实现 URL/content/independence family/镜像去重和人工可审计筛除理由。
 - [ ] 现有 Source Snapshot 写入必须来自 accepted Screening Decision；非检索型直接证据要有明确 ingestion kind。
 

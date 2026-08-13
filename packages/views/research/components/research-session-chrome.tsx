@@ -188,7 +188,7 @@ export function ResearchSessionChrome({
             className={cn(
               "size-1.5 rounded-full",
               tone.dot,
-              status === "running" && "animate-pulse",
+              status === "running" && "animate-pulse motion-reduce:animate-none",
             )}
           />
           {statusLabel}

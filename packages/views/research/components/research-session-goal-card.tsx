@@ -164,7 +164,7 @@ export function ResearchSessionGoalCard({
       </span>
       {model.state === "loading" ? (
         <Loader2
-          className="size-3.5 shrink-0 animate-spin text-muted-foreground"
+          className="size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
           aria-hidden
         />
       ) : (

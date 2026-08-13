@@ -96,7 +96,7 @@ export function ResearchLiveStream({ sessionId }: { sessionId: string }) {
         </div>
         {isGenerating ? (
           <span
-            className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary"
+            className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary motion-reduce:animate-none"
             aria-hidden
           />
         ) : null}

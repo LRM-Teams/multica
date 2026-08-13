@@ -186,6 +186,12 @@
   opacity: 0.6;
   cursor: wait;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .sg-canvas-world {
+    will-change: auto;
+  }
+}
 .sg-lens-dim {
   opacity: 0.34;
   filter: saturate(0.55);

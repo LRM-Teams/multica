@@ -94,7 +94,7 @@ export function ResearchEvidencePulse({
           <div className="flex min-w-0 items-center gap-1.5">
             {mode === "loading" ? (
               <Loader2
-                className="size-3.5 shrink-0 animate-spin text-brand"
+                className="size-3.5 shrink-0 animate-spin text-brand motion-reduce:animate-none"
                 aria-hidden
               />
             ) : mode === "error" || mode === "permission" ? (

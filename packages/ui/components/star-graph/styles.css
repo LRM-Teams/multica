@@ -221,6 +221,16 @@
   to { transform: rotate(360deg); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .sg-node {
+    transition: none;
+  }
+  .sg-glyph[data-glyph="pulse"],
+  .sg-glyph[data-glyph="restart"] {
+    animation: none;
+  }
+}
+
 /* ---- Map Key (compact bottom tool area) ---- */
 .sg-map-key {
   display: flex;

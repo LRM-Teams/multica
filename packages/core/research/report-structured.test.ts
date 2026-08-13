@@ -49,6 +49,18 @@ describe("normalizeReportStructured", () => {
     );
   });
 
+  it("does not manufacture a source weight for structured reports", () => {
+    const result = normalizeReportStructured({
+      schema_version: 1,
+      title: "Report",
+      outline: [],
+      sections: [],
+      citations: [],
+      sources: [{ source_id: "src1", title: "Unknown score" }],
+    });
+    expect(result.structured?.sources[0]).not.toHaveProperty("credibility_weight");
+  });
+
   it("legacy empty fixture stays markdown_only", () => {
     const example = loadFixture("report-legacy-empty.example.json") as {
       structured: unknown;

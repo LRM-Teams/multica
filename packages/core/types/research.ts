@@ -183,9 +183,9 @@ export interface ResearchSource {
   url: string;
   title: string;
   source_class: string;
-  credibility_weight: number;
+  credibility_weight?: number | null;
   stance: string;
-  relevance: number;
+  relevance?: number | null;
   summary: string;
   excerpt: string;
   payload: Record<string, unknown> | unknown;
@@ -232,7 +232,7 @@ export interface ResearchReportSourceRef {
   source_id: string;
   title: string;
   url: string;
-  credibility_weight: number;
+  credibility_weight?: number | null;
   source_class: string;
 }
 

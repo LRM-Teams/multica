@@ -1099,9 +1099,11 @@ export function ResearchNodeDetailBody({
                     >
                       {s.title || s.url}
                     </a>
-                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                      {(s.credibility_weight ?? 0).toFixed(2)}
-                    </span>
+                    {typeof s.credibility_weight === "number" ? (
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        {s.credibility_weight.toFixed(2)}
+                      </span>
+                    ) : null}
                   </div>
                   {s.excerpt ? (
                     <p className="mt-1 line-clamp-3 text-[11px] text-muted-foreground">

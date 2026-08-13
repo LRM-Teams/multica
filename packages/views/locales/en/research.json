@@ -937,6 +937,7 @@
     "status_run": "running",
     "status_fail": "failed",
     "status_wait": "waiting",
+    "status_abandoned": "abandoned",
     "status_mute": "muted"
   },
   "canvas_plugins": {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import { buildTrajectoryLaneLayout } from "@multica/core/research";
@@ -59,6 +59,7 @@ export function TrajectoryExplorer({
   const [zoom, setZoom] = useState(1);
   const [showMinimap, setShowMinimap] = useState(true);
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
+  const explorerRef = useRef<HTMLDivElement>(null);
 
   const isCompleted =
     sessionStatus === "completed" ||
@@ -87,9 +88,17 @@ export function TrajectoryExplorer({
   }, [nodes, effectiveSelectedId]);
 
   const close = useCallback(() => {
+    const closingId = effectiveSelectedId;
     setLocalSelectedId(null);
     onSelect(null);
-  }, [onSelect]);
+    requestAnimationFrame(() => {
+      const root = explorerRef.current;
+      const commit = Array.from(
+        root?.querySelectorAll<HTMLElement>("[data-commit-id]") ?? [],
+      ).find((candidate) => candidate.dataset.commitId === closingId);
+      (commit ?? root)?.focus({ preventScroll: true });
+    });
+  }, [effectiveSelectedId, onSelect]);
 
   if (loading) {
     return (
@@ -150,6 +159,7 @@ export function TrajectoryExplorer({
 
   return (
     <div
+      ref={explorerRef}
       data-testid="trajectory-explorer"
       data-disabled={isCompleted ? "true" : "false"}
       className={cn(
@@ -157,6 +167,13 @@ export function TrajectoryExplorer({
         isCompleted ? "opacity-90" : "",
       )}
       aria-label={t((s) => s.trajectory_explorer.title)}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !effectiveSelectedId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }}
     >
       <TrajectoryToolbar
         nodes={nodes}

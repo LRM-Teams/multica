@@ -996,6 +996,11 @@ legacy rows 或 Run snapshot 前 fail closed；冻结 manifest 与 grader-privat
 无 Attempt 的同 workspace human live snapshot 保留为正向对照；§15.23 其余 principal
 surface 矩阵仍未完成。
 
+D-gate-1 证据：Dispatch Manifest 同时冻结 Gate bytes/hash 与
+`legacy-v1-v5-compat-v1` policy version；后续 canonical Task 变化会改变 live Gate，但
+Attempt Context、policy version 和从 Manifest 重放的 Prompt bytes 均保持不变，且同一
+orchestrator version 的 strict Result decoder 继续接受固定 V1–V5 envelope。§15.17 已收口。
+
 退出条件：服务端可证明每项 Agent 输入和输出的出处、版本与访问权限；越权引用在提交前失败。
 
 ### E. Inquiry Graph

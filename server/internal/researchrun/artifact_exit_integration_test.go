@@ -475,16 +475,21 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDispatchIntent: %v", err)
 	}
+	originalPrompt := loadIntegrationDispatchPrompt(t, ctx, pool, attempt.ID)
 	var headerBytes []byte
+	var frozenPolicyVersion string
 	if err = pool.QueryRow(ctx, `
-		SELECT gate_snapshot_bytes
+		SELECT gate_snapshot_bytes, policy_version
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&headerBytes); err != nil {
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&headerBytes, &frozenPolicyVersion); err != nil {
 		t.Fatalf("load gate snapshot: %v", err)
 	}
 	if len(headerBytes) == 0 {
 		t.Fatal("expected frozen gate snapshot bytes on manifest")
+	}
+	if frozenPolicyVersion != LegacyV1V5CompatPolicy {
+		t.Fatalf("manifest policy=%q want=%q", frozenPolicyVersion, LegacyV1V5CompatPolicy)
 	}
 
 	frozen, err := store.TaskContextForAttempt(ctx, attempt.ID, fixture.workspaceID)
@@ -529,6 +534,39 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	}
 	if gateResultsEqual(frozenAfter.Gate, liveGate) {
 		t.Fatalf("frozen gate should differ from live gate after mutation")
+	}
+
+	var persistedPolicyVersion string
+	if err = pool.QueryRow(ctx, `
+		SELECT policy_version
+		FROM research_artifact_context_manifest
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
+	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&persistedPolicyVersion); err != nil {
+		t.Fatalf("reload frozen policy version: %v", err)
+	}
+	if persistedPolicyVersion != frozenPolicyVersion {
+		t.Fatalf("manifest policy drifted %q→%q", frozenPolicyVersion, persistedPolicyVersion)
+	}
+
+	frozenPrompt, err := replayDispatchPromptFromManifest(ctx, store, fixture.workspaceID, attempt.ID)
+	if err != nil {
+		t.Fatalf("replay frozen prompt: %v", err)
+	}
+	if frozenPrompt != originalPrompt {
+		t.Fatalf("frozen policy changed V1-V5 prompt bytes")
+	}
+	resultRaw, err := json.Marshal(validPlanResult(t))
+	if err != nil {
+		t.Fatalf("encode fixed V1 result: %v", err)
+	}
+	decoded, decodedHash, err := DecodeAndValidateResultForVersion(
+		run.OrchestratorVersion, resultRaw, tasks[0], run.Config,
+	)
+	if err != nil {
+		t.Fatalf("frozen policy changed V1-V5 result decoder: %v", err)
+	}
+	if decoded.SchemaVersion != 1 || decodedHash == "" {
+		t.Fatalf("decoded result under frozen policy=%+v hash=%q", decoded, decodedHash)
 	}
 }
 

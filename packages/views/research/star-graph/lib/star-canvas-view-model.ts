@@ -137,6 +137,12 @@ function toLayoutNode(n: TypedGraphNode): StarGraphLayoutNode {
 export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation["kind"] {
   switch (edgeType) {
     case "leads_to":
+    case "decomposes":
+    case "depends_on":
+    case "tests":
+    case "triggered":
+    case "produced":
+    case "consumed":
     case "refines":
     case "escalated_to":
     case "decompose":
@@ -146,7 +152,15 @@ export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation
     case "supports":
     case "resolved_by":
     case "merged_from":
+    case "integrates":
+    case "reported_in":
+    case "reviewed_by":
+    case "revised_by":
+    case "staffed_by":
+    case "created_for":
+    case "retired_after":
       return "support";
+    case "discussed_by":
     case "challenged_by":
     case "contradicts":
     case "invalidates":
@@ -157,7 +171,6 @@ export function layoutKindForEdgeType(edgeType: string): StarGraphLayoutRelation
       return "challenge";
     case "restart_of":
       return "newdir";
-    case "discussed_by":
     default:
       // Neutral relation drives layout determinism without overloading the
       // challenge/support semantics; the real edgeType still styles the line.

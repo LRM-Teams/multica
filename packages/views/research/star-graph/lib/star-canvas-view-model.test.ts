@@ -175,9 +175,15 @@ describe("LRM-1497 render-layer view-model — geometry precision (AC: endpoints
     expect(layoutKindForEdgeType("supports")).toBe("support");
     expect(layoutKindForEdgeType("contradicts")).toBe("challenge");
     expect(layoutKindForEdgeType("derived_from")).toBe("decompose");
+    expect(layoutKindForEdgeType("decomposes")).toBe("decompose");
+    expect(layoutKindForEdgeType("depends_on")).toBe("decompose");
+    expect(layoutKindForEdgeType("tests")).toBe("decompose");
+    expect(layoutKindForEdgeType("produced")).toBe("decompose");
     expect(layoutKindForEdgeType("merged_from")).toBe("support");
+    expect(layoutKindForEdgeType("integrates")).toBe("support");
     expect(layoutKindForEdgeType("restart_of")).toBe("newdir");
-    expect(layoutKindForEdgeType("discussed_by")).toBe("support");
+    expect(layoutKindForEdgeType("discussed_by")).toBe("challenge");
+    expect(layoutKindForEdgeType("staffed_by")).toBe("support");
     const vm = buildStarCanvasViewModel(fixture());
     const kind = new Map(vm.relations.map((r) => [`${r.fromNodeId}->${r.toNodeId}`, r.kind]));
     const edgeType = new Map(vm.relations.map((r) => [`${r.fromNodeId}->${r.toNodeId}`, r.edgeType]));

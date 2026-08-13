@@ -40,6 +40,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		if runIdentity != nil {
 			if _, err := d.canonicalRuntimes.bindResidentPiRunIdentity(ctx, agentID, runtimeID, *runIdentity); err == nil {
 				if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
+					_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 					return fmt.Errorf("start resident provider process: %w", err)
 				}
 				return nil
@@ -54,6 +55,7 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 			}
 		} else {
 			if err := d.canonicalRuntimes.ensureResidentProcess(ctx, agentID, runtimeID); err != nil {
+				_ = d.canonicalRuntimes.invalidateSession(agentID, runtimeID)
 				return fmt.Errorf("start resident provider process: %w", err)
 			}
 			return nil

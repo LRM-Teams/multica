@@ -1185,6 +1185,43 @@ func TestCheckResidentLivenessSupportsMultipleSubscribers(t *testing.T) {
 	}
 }
 
+func TestEnsureResidentProcessFailsClosedWithoutStarter(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	agentID, runtimeID := "agent-a", "runtime-a"
+	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: &canonicalRuntimeTestBackend{}}
+	if err := pool.ensureResidentProcess(context.Background(), agentID, runtimeID); err == nil {
+		t.Fatal("non-starter backend was treated as a resident process")
+	}
+}
+
+func TestEnsureResidentProcessSucceedsWhenKnownAliveWithoutStarter(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	agentID, runtimeID := "agent-a", "runtime-a"
+	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: &aliveNonStarterBackend{}}
+	if err := pool.ensureResidentProcess(context.Background(), agentID, runtimeID); err != nil {
+		t.Fatalf("known-alive process: %v", err)
+	}
+}
+
+func TestEnsureResidentProcessFailsWhenStarterErrors(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	agentID, runtimeID := "agent-a", "runtime-a"
+	starter := &residentProcessStartProbe{err: errors.New("codex app-server did not start")}
+	pool.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{backend: starter}
+	if err := pool.ensureResidentProcess(context.Background(), agentID, runtimeID); err == nil {
+		t.Fatal("starter error was accepted as residency")
+	}
+	if starter.starts != 1 {
+		t.Fatalf("starter calls = %d, want 1", starter.starts)
+	}
+}
+
+type aliveNonStarterBackend struct {
+	canonicalRuntimeTestBackend
+}
+
+func (aliveNonStarterBackend) RuntimeAlive() (bool, bool) { return true, true }
+
 func TestCanonicalAgentRuntimePoolIsActivatedByWorkspaceRunnerMessageDelivery(t *testing.T) {
 	// Resident Runtime activation belongs to the same Runner method that owns
 	// Message acceptance, acknowledgement, and handoff ordering.

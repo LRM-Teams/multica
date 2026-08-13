@@ -51,6 +51,14 @@ func (r *idleMessageFakeRuntime) Execute(context.Context, string, agent.ExecOpti
 	return nil, nil
 }
 
+func (r *idleMessageFakeRuntime) EnsureResidentProcess(context.Context) error {
+	return nil
+}
+
+func (r *idleMessageFakeRuntime) RuntimeAlive() (bool, bool) {
+	return true, true
+}
+
 func (r *idleMessageFakeRuntime) AcceptMessageBatch(_ context.Context, messages []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

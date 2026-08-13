@@ -63,7 +63,9 @@ func (h *Handler) runnerPresenceLocked(fn func() error) error {
 }
 
 func (h *Handler) projectRunnerLaunchPresence(workspaceID string, launch *runnerLaunchPresence) string {
-	if launch == nil || (launch.status != "accepted" && launch.status != protocol.AgentStatusActive) {
+	// Online is process admission: only agent:status active on the current
+	// Runner. A start ACK (accepted + any queue_state) is a transport receipt.
+	if launch == nil || launch.status != protocol.AgentStatusActive {
 		return AgentPresenceOffline
 	}
 	source := h.currentRunnerPresenceSource()

@@ -8,6 +8,7 @@ export { createRealtimeLiveSource, RESEARCH_V6_GRAPH_UPDATED_EVENT } from "./rea
 export type { RealtimeBus, RealtimeLiveSourceOptions } from "./realtime-source";
 export type {
   LiveConnectionStatus,
+  ProjectionSyncStatus,
   LiveSourceDisconnect,
   ResearchV6LiveSource,
   ResearchV6LiveProjectionControllerOptions,

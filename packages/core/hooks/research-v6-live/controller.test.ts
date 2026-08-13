@@ -81,6 +81,7 @@ function makeLiveSource(config: {
 } = {}): {
   source: ResearchV6LiveSource;
   pushDelta: (d: ResearchV6Delta) => void;
+  pushMalformed: (payload?: unknown) => void;
   drop: () => void;
   reconnectBus: () => void;
   connected: () => boolean;
@@ -88,6 +89,7 @@ function makeLiveSource(config: {
   let onDelta: ((d: ResearchV6Delta) => void) | null = null;
   let reconnectHandler: (() => void) | null = null;
   let statusHandler: ((s: LiveConnectionStatus) => void) | null = null;
+  let malformedHandler: ((payload: unknown) => void) | null = null;
   let active = false;
 
   const emitStatus = (s: LiveConnectionStatus) => {
@@ -97,14 +99,16 @@ function makeLiveSource(config: {
 
   return {
     source: {
-      connect(onDeltaCb) {
+      connect(onDeltaCb, onMalformedFrame) {
         onDelta = onDeltaCb;
+        malformedHandler = onMalformedFrame ?? null;
         active = true;
         if (config.emitConnectedOnConnect !== false) emitStatus("connected");
         return {
           disconnect: () => {
             active = false;
             onDelta = null;
+            malformedHandler = null;
             emitStatus("disconnected");
           },
         };
@@ -125,6 +129,9 @@ function makeLiveSource(config: {
     pushDelta: (d) => {
       if (active) onDelta?.(d);
     },
+    pushMalformed: (payload = { invalid: true }) => {
+      if (active) malformedHandler?.(payload);
+    },
     drop: () => {
       active = false;
       emitStatus("reconnecting");
@@ -142,6 +149,7 @@ function makeLiveSource(config: {
 /** Transport with recorded calls and a controllable resume verdict. */
 function makeTransport(overrides: {
   snapshots?: ResearchV6Snapshot[];
+  snapshotFailures?: number;
   resumeVerdict?: ResearchV6ResumeVerdict;
 } = {}): {
   transport: ResearchV6ProjectionTransport;
@@ -153,9 +161,14 @@ function makeTransport(overrides: {
   let snapshotCalls = 0;
   let verdict = overrides.resumeVerdict ?? { ok: true, delta: makeDelta(1, 2, ["n-d2"]) };
   const ordered = (overrides.snapshots ?? []).slice();
+  let snapshotFailures = overrides.snapshotFailures ?? 0;
   const transport: ResearchV6ProjectionTransport = {
     loadSnapshot: async () => {
       snapshotCalls += 1;
+      if (snapshotFailures > 0) {
+        snapshotFailures -= 1;
+        throw new Error("snapshot unavailable");
+      }
       return ordered.shift() ?? makeSnapshot(2, ["n-snap"]);
     },
     loadDeltaPage: async () => null,
@@ -264,6 +277,39 @@ describe("ResearchV6LiveProjectionController", () => {
     expect(c.getClient().getState().snapshotId).toBe("snap-10");
     // Resync coalesced to one fresh snapshot load.
     expect(t.snapshotCalls).toBe(1);
+  });
+
+  it("keeps a failed malformed-frame resync pending and allows later repair cycles", async () => {
+    const live = makeLiveSource();
+    const t = makeTransport({
+      snapshotFailures: 1,
+      snapshots: [makeSnapshot(7, ["repaired"]), makeSnapshot(9, ["repaired-again"])],
+    });
+    const c = new ResearchV6LiveProjectionController("run-1", t.transport, live.source, {
+      autoConnect: true,
+    });
+    c.getClient().applySnapshot(makeSnapshot(3, ["preserved"]));
+    c.connect();
+
+    live.pushMalformed();
+    expect(c.getSyncStatus()).toBe("resyncing");
+    await vi.waitFor(() => expect(c.getSyncStatus()).toBe("failed"));
+    expect(c.getClient().getState().nodes.has("preserved")).toBe(true);
+    expect(c.getClient().getState().resyncRequestedCount).toBe(1);
+
+    await c.refresh();
+    expect(c.getSyncStatus()).toBe("idle");
+    expect(c.getClient().getState().snapshotId).toBe("snap-7");
+    expect(c.getClient().getState().resyncRequestedCount).toBe(0);
+
+    // A later malformed frame must start a fresh cycle; the prior request id
+    // cannot suppress it after the counter returns to zero.
+    live.pushMalformed();
+    await vi.waitFor(() => {
+      expect(c.getClient().getState().snapshotId).toBe("snap-9");
+    });
+    expect(c.getMalformedFrameCount()).toBe(2);
+    expect(t.snapshotCalls).toBe(3);
   });
 
   it("reconnect carries the last confirmed sequence and resyncs when server demands it", async () => {

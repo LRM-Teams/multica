@@ -90,8 +90,6 @@ export function StarGraphEntityLayer({
             }
             busy={entity.view.state === "run"}
             accessibleName={nodeAccessibleNames?.get(entity.id)}
-            nodeId={entity.id}
-            tabIndex={selected ? 0 : -1}
             className={cn(
               dimmed && "sg-lens-dim",
               emphasized && "sg-lens-emphasis",

@@ -599,8 +599,25 @@ export function ResearchConstellationWorkspace({
             className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
           >
             <p className="max-w-md text-sm text-destructive">
-              {projectionErrorReason || t(($) => $.d5.canvas.error)}
+              {t(($) => $.d5.canvas.error)}
             </p>
+            {projectionErrorReason ? (
+              <details
+                data-testid="research-projection-error-diagnostics"
+                className="max-w-md text-left text-xs text-muted-foreground"
+              >
+                <summary className="cursor-pointer text-center">
+                  {t(($) => $.d5.canvas.interface_error_details)}
+                </summary>
+                <code
+                  lang="en"
+                  dir="ltr"
+                  className="mt-2 block max-h-24 overflow-auto rounded-md bg-muted/60 p-2 whitespace-pre-wrap break-words"
+                >
+                  {projectionErrorReason}
+                </code>
+              </details>
+            ) : null}
             {onRetryTypedGraph ? (
               <ResearchPendingRetryButton
                 label={t(($) => $.session_page.retry)}

@@ -1170,6 +1170,7 @@
     "canvas": {
       "loading": "Loading constellation…",
       "error": "Could not load the typed research graph.",
+      "interface_error_details": "Technical details",
       "stale_title": "Constellation may be out of date.",
       "stale_body": "The last loaded graph remains visible while refresh is unavailable.",
       "stale_announcement": "Constellation refresh failed. The last loaded graph remains visible.",

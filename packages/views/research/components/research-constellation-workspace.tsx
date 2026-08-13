@@ -455,9 +455,25 @@ export function ResearchConstellationWorkspace({
         {typedError && !canvasModel && !projectionMismatch ? (
           <div
             role="alert"
-            className="grid h-full place-items-center px-6 text-center text-sm text-destructive"
+            data-testid="research-typed-graph-error"
+            className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
           >
-            {t(($) => $.d5.canvas.error)}
+            <p className="max-w-md text-sm text-destructive">
+              {t(($) => $.d5.canvas.error)}
+            </p>
+            {onRetryTypedGraph ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={retryTypedGraphPending}
+                onClick={onRetryTypedGraph}
+              >
+                {retryTypedGraphPending
+                  ? t(($) => $.interrupt.retrying)
+                  : t(($) => $.session_page.retry)}
+              </Button>
+            ) : null}
           </div>
         ) : null}
         {projectionMismatch ? (

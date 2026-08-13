@@ -145,6 +145,62 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
   });
 });
 
+describe("ResearchConstellationWorkspace typed graph recovery", () => {
+  it("offers a retry action when the initial typed graph request fails", async () => {
+    const onRetry = vi.fn();
+    render(
+      <ResearchConstellationWorkspace
+        typedGraph={undefined}
+        typedLoading={false}
+        typedError
+        onRetryTypedGraph={onRetry}
+        snapshotNodes={[]}
+        selectedNode={null}
+        onSelectNode={() => {}}
+        executionRows={[]}
+        onOpenAgentPanel={() => {}}
+        canvasMode="ready"
+        activeLens="relations"
+        sources={[]}
+        members={[]}
+        chatPanel={<div>chat</div>}
+        detailPanel={<div>detail</div>}
+        composer={<div>composer</div>}
+      />,
+    );
+
+    expect(screen.getByTestId("research-typed-graph-error")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables retry while typed graph recovery is pending", () => {
+    render(
+      <ResearchConstellationWorkspace
+        typedGraph={undefined}
+        typedLoading={false}
+        typedError
+        onRetryTypedGraph={() => {}}
+        retryTypedGraphPending
+        snapshotNodes={[]}
+        selectedNode={null}
+        onSelectNode={() => {}}
+        executionRows={[]}
+        onOpenAgentPanel={() => {}}
+        canvasMode="ready"
+        activeLens="relations"
+        sources={[]}
+        members={[]}
+        chatPanel={<div>chat</div>}
+        detailPanel={<div>detail</div>}
+        composer={<div>composer</div>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+  });
+});
+
 describe("ResearchConstellationWorkspace local theme", () => {
   it("mounts the D5 workspace shell inside the session canvas host", () => {
     render(

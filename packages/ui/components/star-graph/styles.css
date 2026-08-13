@@ -122,6 +122,16 @@
 .sg-node[data-state="pending-review"] {
   border-color: var(--sg-state-review);
 }
+.sg-node[data-state="run"]::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border: 1px dashed color-mix(in oklab, var(--sg-state-run) 72%, transparent);
+  border-radius: 50%;
+  opacity: 0.72;
+  pointer-events: none;
+  animation: sg-run-ring 1.8s ease-out infinite;
+}
 .sg-node:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 3px;
@@ -319,13 +329,18 @@
 @keyframes sg-spin {
   to { transform: rotate(360deg); }
 }
+@keyframes sg-run-ring {
+  0% { opacity: 0.78; transform: scale(0.96); }
+  72%, 100% { opacity: 0; transform: scale(1.1); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .sg-node {
     transition: none;
   }
   .sg-glyph[data-glyph="pulse"],
-  .sg-glyph[data-glyph="restart"] {
+  .sg-glyph[data-glyph="restart"],
+  .sg-node[data-state="run"]::after {
     animation: none;
   }
 }

@@ -77,10 +77,12 @@
 .sg-edge-challenge {
   stroke: var(--warning);
   stroke-dasharray: 6 6;
+  animation: sg-edge-flow 2.8s linear infinite;
 }
 .sg-edge-newdir {
   stroke: var(--research-stage-explore);
   stroke-dasharray: 2 7;
+  animation: sg-edge-flow 3.6s linear infinite reverse;
 }
 .sg-edge-merge {
   stroke: url(#sg-merge-gradient);
@@ -231,6 +233,13 @@
   .sg-canvas-world {
     will-change: auto;
   }
+  .sg-edge-challenge,
+  .sg-edge-newdir {
+    animation: none;
+  }
+}
+@keyframes sg-edge-flow {
+  to { stroke-dashoffset: -26; }
 }
 .sg-lens-dim {
   opacity: 0.34;

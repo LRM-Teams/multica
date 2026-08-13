@@ -1516,6 +1516,21 @@ func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 		history.Occurrences[0].Anchor.Href != nil {
 		t.Fatalf("deleted-anchor history = %+v, want unavailable without metadata", history.Occurrences)
 	}
+	var definitionStatus, occurrenceStatus string
+	var cancelled bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT reminder.status, occurrence.status, occurrence.terminal_reason IS NOT NULL
+		FROM agent_reminder reminder
+		JOIN agent_reminder_occurrence occurrence ON occurrence.reminder_id = reminder.id
+		WHERE reminder.id = $1`, reminderID).Scan(&definitionStatus, &occurrenceStatus, &cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if definitionStatus == "cancelled" || occurrenceStatus == "cancelled" || cancelled {
+		t.Fatalf("deleted-anchor fire cancelled the definition/occurrence (%s/%s), want a degraded fire with a wake", definitionStatus, occurrenceStatus)
+	}
+	if definitionStatus != "fired" || occurrenceStatus != "fired" {
+		t.Fatalf("deleted-anchor statuses = %s/%s, want fired/fired", definitionStatus, occurrenceStatus)
+	}
 }
 
 func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {

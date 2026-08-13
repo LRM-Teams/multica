@@ -399,7 +399,7 @@ func TestOnReminderTimerOwnerMissingWaitsForReconnectSnapshot(t *testing.T) {
 	cache := newReminderCache(clock, logger, nil)
 	writes := make(chan []byte, 4)
 	var d *Daemon
-	cache.onFire = func(job protocol.ReminderTimerJob) { d.onReminderTimer(job) }
+	cache.onFireDelivery = func(job protocol.ReminderTimerJob) bool { return d.onReminderTimer(job) }
 	d = &Daemon{
 		logger: logger, agentAttachments: mgr, reminderCache: cache,
 		runtimeIndex: map[string]Runtime{"runtime-x": {ID: "runtime-x", WorkspaceID: "workspace-x"}},
@@ -420,22 +420,26 @@ func TestOnReminderTimerOwnerMissingWaitsForReconnectSnapshot(t *testing.T) {
 	default:
 	}
 	logOutput := logBuf.String()
-	if !strings.Contains(logOutput, "owner missing from current Agent Attachment set; waiting for reconnect snapshot recovery") ||
+	if !strings.Contains(logOutput, "owner missing from current Agent Attachment set; retrying until owner wake can be enqueued") ||
 		!strings.Contains(logOutput, "reminder_id=r1") ||
 		!strings.Contains(logOutput, "agent_id=agent-x") ||
 		!strings.Contains(logOutput, "version=1") {
 		t.Fatalf("expected a Warn log naming reminder_id/agent_id/version, got: %s", logOutput)
 	}
 
-	// Owner registration alone cannot turn the lost attempt into a makeup wake.
+	// Raft 1.0.16 keeps the due fact and retries until the owner wake can be
+	// enqueued. Attachment alone is not a fire; the retry timer is.
+	if got := cache.pendingFireReceipts(); len(got) != 1 || got[0].WakeEnqueued {
+		t.Fatalf("missing-owner receipts = %+v, want one unenqueued due fact", got)
+	}
+	if len(clock.timers) < 2 {
+		t.Fatalf("timers scheduled after initial fire = %d, want a wake retry", len(clock.timers))
+	}
 	if _, err := mgr.Apply("workspace-x", AgentAttachmentEvent{
 		Kind: AgentAttachmentEventAttach, AgentID: "agent-x", RuntimeID: "runtime-x",
 		AttachmentGeneration: 1, LifecycleSeq: 1,
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
-	}
-	if len(clock.timers) != 1 {
-		t.Fatalf("timers scheduled after initial fire = %d, want no retry", len(clock.timers))
 	}
 	select {
 	case frame := <-writes:
@@ -443,30 +447,22 @@ func TestOnReminderTimerOwnerMissingWaitsForReconnectSnapshot(t *testing.T) {
 	default:
 	}
 
-	// A new connection clears the ephemeral attempt fence. The unchanged server
-	// snapshot can then recover the same due version because no commit happened.
-	cache.beginConnection()
-	cache.resume()
-	if installed, err := cache.snapshot("runtime-x", "agent-x", 1, []protocol.ReminderTimerJob{job}); err != nil || installed != 1 {
-		t.Fatalf("snapshot recovery installed=%d err=%v", installed, err)
-	}
-	if len(clock.timers) != 2 {
-		t.Fatalf("timers after reconnect snapshot=%d want 2 total", len(clock.timers))
-	}
-	clock.fire(1)
-
+	clock.fire(len(clock.timers) - 1)
 	select {
 	case frame := <-writes:
 		var msg protocol.Message
 		if err := json.Unmarshal(frame, &msg); err != nil || msg.Type != protocol.EventReminderFireAttempt {
-			t.Fatalf("recovered frame = %s, want a fire_attempt", frame)
+			t.Fatalf("retry frame = %s, want a fire_attempt", frame)
 		}
 		var attempt protocol.ReminderFireAttemptPayload
 		if err := json.Unmarshal(msg.Payload, &attempt); err != nil || attempt.ReminderID != "r1" || attempt.AgentID != "agent-x" || attempt.Version != 1 {
-			t.Fatalf("recovered fire_attempt payload = %s", msg.Payload)
+			t.Fatalf("retry fire_attempt payload = %s", msg.Payload)
 		}
 	default:
-		t.Fatal("reconnect snapshot did not recover the uncommitted due version")
+		t.Fatal("wake retry did not recover the uncommitted due version")
+	}
+	if got := cache.pendingFireReceipts(); len(got) != 1 || !got[0].WakeEnqueued || got[0].ServerAcked {
+		t.Fatalf("post-retry receipts = %+v, want wake enqueued and server unacked", got)
 	}
 }
 
@@ -1664,7 +1660,7 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	cache.setPersistence(root)
 	writes := make(chan []byte, 32)
 	var d *Daemon
-	cache.onFire = func(job protocol.ReminderTimerJob) { d.onReminderTimer(job) }
+	cache.onFireDelivery = func(job protocol.ReminderTimerJob) bool { return d.onReminderTimer(job) }
 	d = &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{

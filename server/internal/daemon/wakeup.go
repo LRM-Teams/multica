@@ -967,18 +967,16 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 	return nil
 }
 
-func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) {
+func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) bool {
 	attachment, ok := d.currentAttachmentForAgent(job.OwnerAgentID)
 	if !ok {
-		// The current connection has consumed its one attempt for this due
-		// version. Do not create a local retry or a delayed makeup wake. If the
-		// server never committed it, a reconnect snapshot can restore the same
-		// canonical version.
+		// Raft 1.0.16: a due fact stays local and retries until the owner wake
+		// can be enqueued. Do not tell the server a FIRED occurrence exists.
 		if d.logger != nil {
-			d.logger.Warn("reminder timer fired for an owner missing from current Agent Attachment set; waiting for reconnect snapshot recovery",
+			d.logger.Warn("reminder timer fired for an owner missing from current Agent Attachment set; retrying until owner wake can be enqueued",
 				"reminder_id", job.ReminderID, "agent_id", job.OwnerAgentID, "version", job.Version)
 		}
-		return
+		return false
 	}
 	d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{
 		AgentID:             job.OwnerAgentID,
@@ -988,6 +986,7 @@ func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) {
 		Version:             job.Version,
 		FiredAtClient:       time.Now().UTC().Format(time.RFC3339Nano),
 	})
+	return true
 }
 
 func signalTaskWakeup(taskWakeups chan<- taskWakeup, runtimeID string) {

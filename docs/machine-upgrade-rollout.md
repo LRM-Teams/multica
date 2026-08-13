@@ -109,8 +109,12 @@ this pre-activation shortcut because they require successor or rollback proof.
 
 ## Superseded recovery markers
 
-A retained `candidate_ready` journal may outlive its completed server operation
-when a later explicit install swaps another release onto PATH. Startup does not
-replay that phase from a VersionStore generation. Keep the old journal for
-diagnosis and terminal reconciliation. All earlier phases and `rollback_pending`
-continue to recover fail-closed.
+The PATH Computer is the live product, same as Raft. A leftover journal whose
+source and target both differ from the running binary is superseded by a later
+explicit PATH swap. Startup must not fail closed, replay that operation, or
+roll back to its source. Keep the old journal for diagnosis.
+
+Recovery still resumes when the running binary *is* the journal source or
+target: `accepted`/`staged` continue on the source, successor phases continue
+on the target, and `rollback_pending` only restores `.prev` while that same
+pair is still the live Computer.

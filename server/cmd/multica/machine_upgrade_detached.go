@@ -157,6 +157,7 @@ func acceptReadyDetachedCandidate(
 			terminateDetachedCandidate(child)
 			return valErr
 		}
+		return child.Process.Release()
 	} else {
 		observed, ok := detachedTakeoverProofFromHealth(health)
 		if !ok {

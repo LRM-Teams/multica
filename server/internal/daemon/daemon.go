@@ -844,13 +844,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// preflight is never misreported as a started daemon. resolveAuth has
 	// already run, so a missing token still fails fast before we begin serving.
 	go d.serveHealth(ctx, healthLn, time.Now())
-	if d.cfg.DetachedMachineUpgradeCandidate {
-		if err := d.machineUpgradeTakeover.prepare(d); err != nil {
-			return fmt.Errorf("prepare detached Machine Upgrade takeover: %w", err)
-		}
-		if err := d.machineUpgradeTakeover.waitForCommit(ctx); err != nil {
-			return fmt.Errorf("wait for detached Machine Upgrade takeover: %w", err)
-		}
+	if err := d.startDetachedMachineUpgrade(ctx); err != nil {
+		return err
 	}
 
 	// Renew the PAT before the first API call, then do the initial
@@ -874,9 +869,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("restore resident Agents: %w", err)
 	}
 	// A supervised target records local readiness after normal authenticated
-	// registration/preflight. A detached candidate remains in handoff until
-	// the incumbent validates its local PID+version proof; Attest then notifies
-	// the server that the local upgrade completed.
+	// registration/preflight. A v2 detached candidate is already live after
+	// local prepare; Attest notifies the server that the local upgrade completed.
 	if !d.cfg.DetachedMachineUpgradeCandidate {
 		if err := d.markMachineUpgradeCandidateReady(); err != nil {
 			d.logger.Warn("could not persist machine upgrade candidate readiness", "error", err)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -344,7 +345,7 @@ func (h *Handler) researchFleetPreview(ctx context.Context, fleet db.ResearchFle
 }
 
 func (h *Handler) requireResearchLeadActor(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID) (db.ResearchFleetMember, bool) {
-	agentIDRaw := r.Header.Get("X-Agent-ID")
+	agentIDRaw := researchFleetActorID(r, workspaceID)
 	if agentIDRaw == "" {
 		writeError(w, http.StatusForbidden, "research lead privileges require agent actor")
 		return db.ResearchFleetMember{}, false
@@ -365,7 +366,7 @@ func (h *Handler) requireResearchLeadActor(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) requireActiveFleetMember(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID) (db.ResearchFleetMember, bool) {
-	agentIDRaw := r.Header.Get("X-Agent-ID")
+	agentIDRaw := researchFleetActorID(r, workspaceID)
 	if agentIDRaw == "" {
 		writeError(w, http.StatusForbidden, "fleet member action requires agent actor")
 		return db.ResearchFleetMember{}, false
@@ -383,6 +384,16 @@ func (h *Handler) requireActiveFleetMember(w http.ResponseWriter, r *http.Reques
 		return db.ResearchFleetMember{}, false
 	}
 	return member, true
+}
+
+func researchFleetActorID(r *http.Request, workspaceID pgtype.UUID) string {
+	if principal, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if principal.WorkspaceID != uuidToString(workspaceID) {
+			return ""
+		}
+		return principal.AgentID
+	}
+	return r.Header.Get("X-Agent-ID")
 }
 
 func marshalJSONRaw(v any) []byte {

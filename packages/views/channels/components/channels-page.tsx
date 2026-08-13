@@ -1353,6 +1353,7 @@ export function ChannelsPage({
     [channelMembers],
   );
   // Group @ picker: workspace members + agents (Alice #1984 / Raft undelivered).
+  // The viewing human is excluded — @yourself is not a group notify target.
   // DM stays channel-member only (fail-closed).
   const mentionAllowedActorIds = useMemo(() => {
     if (!active || active.kind !== "group") return channelMemberIds;
@@ -1360,8 +1361,9 @@ export function ChannelsPage({
       workspaceUserIds: workspaceMembers.map((m) => m.user_id),
       workspaceAgentIds: agents.map((a) => a.id),
       channelMemberIds: channelMembers.map((m) => m.member_id),
+      viewerUserId: currentUserId,
     });
-  }, [active, agents, channelMemberIds, channelMembers, workspaceMembers]);
+  }, [active, agents, channelMemberIds, channelMembers, currentUserId, workspaceMembers]);
   const fetchMentionCandidates = useCallback<
     NonNullable<ContentEditorProps["fetchMentionCandidates"]>
   >(async (query, offset, signal) => {
@@ -1386,13 +1388,16 @@ export function ChannelsPage({
       group,
       secondaryLabel: candidate.handle ? `@${candidate.handle}` : undefined,
     });
+    const keep = (candidate: { type: string; id: string }) =>
+      !!candidate.id &&
+      !(candidate.type === "member" && candidate.id === currentUserId);
     const inChannel: ReturnType<typeof toItem>[] = [];
     for (const candidate of res.in_channel) {
-      if (candidate.id) inChannel.push(toItem(candidate, "in_channel"));
+      if (keep(candidate)) inChannel.push(toItem(candidate, "in_channel"));
     }
     const notInChannel: ReturnType<typeof toItem>[] = [];
     for (const candidate of res.not_in_channel) {
-      if (candidate.id) notInChannel.push(toItem(candidate, "not_in_channel"));
+      if (keep(candidate)) notInChannel.push(toItem(candidate, "not_in_channel"));
     }
     return {
       in_channel: inChannel,
@@ -1400,7 +1405,7 @@ export function ChannelsPage({
       has_more: res.has_more === true,
       next_offset: typeof res.next_offset === "number" ? res.next_offset : null,
     };
-  }, [active?.id]);
+  }, [active?.id, currentUserId]);
   // Channel-member agents + (on group) workspace agents so picker can inject
   // ids not already in the personal agent list.
   const channelAgentCandidates = useMemo<ContentEditorProps["scopedMentionAgents"]>(

@@ -52,7 +52,7 @@ import { ResearchAgentInspector } from "./research-agent-inspector";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
 import { ResearchCanvasProjectionMismatch } from "./research-canvas-projection-mismatch";
-import { ResearchD5Rail } from "./research-d5-rail";
+import { ResearchD5MobileRail, ResearchD5Rail } from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
 import "./research-d5-layout.css";
 
@@ -153,12 +153,13 @@ export function ResearchConstellationWorkspace({
   const reportController = useMemo<ResearchReportController>(
     () => ({
       open: () => {
+        if (isMobile) setRailOpen(false);
         setInspectorAgentId(null);
         setReportOpen(true);
       },
       close: () => setReportOpen(false),
     }),
-    [],
+    [isMobile, setRailOpen],
   );
 
   useEffect(() => {
@@ -399,12 +400,14 @@ export function ResearchConstellationWorkspace({
       const typedNode = typedGraph?.nodes.find((node) => node.id === nodeId);
       const level = (typedNode?.level || "").toLowerCase();
       if (level === "s" && typedNode?.actor_agent_id) {
+        if (isMobile) setRailOpen(false);
         setInspectorAgentId(typedNode.actor_agent_id);
         setReportOpen(false);
         return;
       }
       setInspectorAgentId(null);
       if (level === "l" || level === "xl" || level === "xxl") {
+        if (isMobile) setRailOpen(false);
         setReportOpen(true);
       }
     },
@@ -439,7 +442,7 @@ export function ResearchConstellationWorkspace({
       className={cn("d5-workspace", className)}
       data-testid="research-constellation-workspace"
       data-d5-lens={activeLens}
-      data-d5-rail-open={showDesktopRail ? "true" : "false"}
+      data-d5-rail-open={railOpen ? "true" : "false"}
     >
       <section
         ref={hostRef}
@@ -561,14 +564,14 @@ export function ResearchConstellationWorkspace({
       ) : null}
 
       {isMobile ? (
-        <ResearchD5Rail
+        <ResearchD5MobileRail
+          open={railOpen}
+          onOpenChange={setRailOpen}
           mode={railMode}
           onModeChange={setRailMode}
           chatPanel={chatPanel}
           detailPanel={detailPanel}
           composer={composer}
-          className={!railOpen ? "d5-rail-collapsed" : undefined}
-          {...(backgroundInert ? { inert: true } : {})}
         />
       ) : null}
 

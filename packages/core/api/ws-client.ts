@@ -3,6 +3,8 @@ import { type Logger, noopLogger } from "../logger";
 
 type EventHandler = (payload: unknown, actorId?: string, actorType?: string) => void;
 
+export type WSConnectionStatus = "idle" | "connecting" | "connected" | "disconnected";
+
 // Cap how much of an unparseable frame we put into the log. A malformed or
 // rogue server can stream arbitrarily large garbage, and the warn handler may
 // be a console / IPC bridge whose buffers we don't want to blow.
@@ -37,6 +39,8 @@ export class WSClient {
   private onReconnectCallbacks = new Set<() => void>();
   private anyHandlers = new Set<(msg: WSMessage) => void>();
   private logger: Logger;
+  private connectionStatus: WSConnectionStatus = "idle";
+  private connectionStatusListeners = new Set<(status: WSConnectionStatus) => void>();
 
   constructor(
     url: string,
@@ -58,6 +62,7 @@ export class WSClient {
   }
 
   connect() {
+    this.setConnectionStatus("connecting");
     const url = new URL(this.baseUrl);
     // Token is never sent as a URL query parameter — it would be logged by
     // proxies, CDNs, and browser history.  In cookie mode the HttpOnly cookie
@@ -113,6 +118,7 @@ export class WSClient {
     };
 
     this.ws.onclose = () => {
+      this.setConnectionStatus("disconnected");
       this.logger.warn("disconnected, reconnecting in 3s");
       this.reconnectTimer = setTimeout(() => this.connect(), 3000);
     };
@@ -124,6 +130,7 @@ export class WSClient {
   }
 
   private onAuthenticated() {
+    this.setConnectionStatus("connected");
     this.logger.info("connected");
     if (this.hasConnectedBefore) {
       for (const cb of this.onReconnectCallbacks) {
@@ -153,6 +160,24 @@ export class WSClient {
     this.handlers.clear();
     this.anyHandlers.clear();
     this.onReconnectCallbacks.clear();
+    this.setConnectionStatus("idle");
+  }
+
+  getConnectionStatus(): WSConnectionStatus {
+    return this.connectionStatus;
+  }
+
+  onConnectionStatus(callback: (status: WSConnectionStatus) => void) {
+    this.connectionStatusListeners.add(callback);
+    return () => {
+      this.connectionStatusListeners.delete(callback);
+    };
+  }
+
+  private setConnectionStatus(status: WSConnectionStatus) {
+    if (status === this.connectionStatus) return;
+    this.connectionStatus = status;
+    for (const listener of this.connectionStatusListeners) listener(status);
   }
 
   on(event: WSEventType, handler: EventHandler) {

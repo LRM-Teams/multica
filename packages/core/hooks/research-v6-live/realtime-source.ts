@@ -1,5 +1,6 @@
-import type { ResearchV6Delta } from "../../types/research-v6";
+import type { WSConnectionStatus } from "../../api/ws-client";
 import { parseResearchV6Delta } from "../../research-v6/schemas";
+import type { ResearchV6Delta } from "../../types/research-v6";
 import type { LiveConnectionStatus, ResearchV6LiveSource } from "./types";
 
 /**
@@ -11,6 +12,8 @@ export interface RealtimeBus {
   subscribeEvent: (event: string, handler: (payload: unknown) => void) => () => void;
   /** Register a callback run on a successful WS (re)connection. */
   onBusReconnect: (cb: () => void) => () => void;
+  /** Observe the authenticated socket lifecycle, not merely subscriptions. */
+  onBusConnectionStatus: (cb: (status: WSConnectionStatus) => void) => () => void;
 }
 
 /** The WS event that carries V6 graph projection updates. */
@@ -51,11 +54,17 @@ export function createRealtimeLiveSource(
         if (!delta) return;
         for (const listener of onDeltaListeners) listener(delta);
       });
-      emitStatus("connected");
+      const unsubStatus = bus.onBusConnectionStatus((status) => {
+        if (status === "connected") emitStatus("connected");
+        else if (status === "connecting") emitStatus("connecting");
+        else if (status === "disconnected") emitStatus("disconnected");
+        else emitStatus("idle");
+      });
 
       return {
         disconnect: () => {
           unsubEvent();
+          unsubStatus();
           onDeltaListeners.delete(onDelta);
           emitStatus("disconnected");
         },

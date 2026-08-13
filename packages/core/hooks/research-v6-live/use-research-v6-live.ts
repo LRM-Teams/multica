@@ -81,19 +81,20 @@ export function useResearchV6LiveProjection({
   const transportRef = useRef(defaultTransport);
   transportRef.current = defaultTransport;
 
-  const { subscribe, onReconnect } = useWS();
+  const { subscribe, onReconnect, onConnectionStatus } = useWS();
   const realtimeBus = useMemo(
     () => ({
       subscribeEvent: (event: string, handler: (payload: unknown) => void) =>
         subscribe(event as WSEventType, handler),
       onBusReconnect: (cb: () => void) => onReconnect(cb),
+      onBusConnectionStatus: onConnectionStatus,
     }),
-    [subscribe, onReconnect],
+    [subscribe, onReconnect, onConnectionStatus],
   );
-  const liveRef = useRef<ResearchV6LiveSource | null>(null);
-  if (!liveRef.current || liveRef.current !== liveOverride) {
-    liveRef.current = liveOverride ?? createRealtimeLiveSource(realtimeBus);
-  }
+  const resolvedLive = useMemo<ResearchV6LiveSource>(
+    () => liveOverride ?? createRealtimeLiveSource(realtimeBus),
+    [liveOverride, realtimeBus],
+  );
 
   // Server state: the raw snapshot (React Query). Errors/empty degrade.
   const { data: snapshot, isPending } = useQuery({
@@ -130,7 +131,7 @@ export function useResearchV6LiveProjection({
     const c = new ResearchV6LiveProjectionController(
       runId,
       transportRef.current,
-      liveRef.current!,
+      resolvedLive,
       optionsRef.current,
       client,
     );
@@ -153,8 +154,16 @@ export function useResearchV6LiveProjection({
       teardownRun(runId);
       setController(null);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId]);
+  }, [
+    autoConnect,
+    defaultTransport,
+    ensureClient,
+    gapTimeoutMs,
+    hydrate,
+    resolvedLive,
+    runId,
+    teardownRun,
+  ]);
 
   // Seed the projection cache from the fresh server snapshot (idempotent).
   useEffect(() => {

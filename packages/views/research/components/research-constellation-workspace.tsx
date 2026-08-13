@@ -70,6 +70,7 @@ import { ResearchCanvasProjectionMismatch } from "./research-canvas-projection-m
 import { ResearchCanvasStaleNotice } from "./research-canvas-stale-notice";
 import { ResearchD5MobileRail, ResearchD5Rail } from "./research-d5-rail";
 import { ResearchNodeReportModal } from "./research-node-report-modal";
+import { ResearchPendingRetryButton } from "./research-pending-retry-button";
 import "./research-d5-layout.css";
 
 export type ResearchReportController = {
@@ -601,17 +602,12 @@ export function ResearchConstellationWorkspace({
               {projectionErrorReason || t(($) => $.d5.canvas.error)}
             </p>
             {onRetryTypedGraph ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={retryTypedGraphPending}
-                onClick={onRetryTypedGraph}
-              >
-                {retryTypedGraphPending
-                  ? t(($) => $.interrupt.retrying)
-                  : t(($) => $.session_page.retry)}
-              </Button>
+              <ResearchPendingRetryButton
+                label={t(($) => $.session_page.retry)}
+                pendingLabel={t(($) => $.interrupt.retrying)}
+                pending={retryTypedGraphPending}
+                onRetry={onRetryTypedGraph}
+              />
             ) : null}
           </div>
         ) : null}

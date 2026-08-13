@@ -992,7 +992,8 @@ Manifest 不再仅依赖进程内硬编码 clearance。D 章尚未完成，最�
 
 ### E. Inquiry Graph
 
-- [ ] 一次冻结完整 V6 Plan/Result/Prompt/Gate JSON schema 设计，覆盖 Inquiry、Corpus、Integration、Dispute、Report 和 Evaluation；此时不把 V6 接到新 Run 默认值。
+- [x] 一次冻结完整 V6 Plan/Result/Prompt/Gate JSON schema 设计，覆盖 Inquiry、Corpus、Integration、Dispute、Report 和 Evaluation；此时不把 V6 接到新 Run 默认值。
+  - E1：`docs/contracts/research-run-v6.schema.json` 以独立四 envelope 和固定 SHA-256 冻结；`docs/research-run-v6-contract.md` 记录跨对象事务不变量与启用门。回归明确要求默认仍为 V5、V6 仍返回 unsupported；不能用共享 optional 字段放宽 V1–V5 strict decoder。
 - [ ] 增加 Hypothesis、Branch、Insight、Inquiry Edge schema、状态机和迁移。
   - [x] E2a：migration 348 建立四类 canonical Inquiry 表、tenant/session scoped FK、状态约束、frontier 索引，并把四类实体加入 Artifact Passport fail-closed kind registry；V6 默认值保持关闭。写入命令、完整多态端点守卫、环检测和状态转换仍待 E2b。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。

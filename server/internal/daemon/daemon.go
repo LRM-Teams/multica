@@ -315,11 +315,21 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		d.lifecycleDiagnostics = newLifecycleDiagnosticWriter(filepath.Join(cfg.WorkspacesRoot, ".multica", "lifecycle-diagnostics"), time.Now)
 	}
 	d.machineUpgradeLog = newMachineUpgradeEventLog(time.Now)
+	sessions := newAgentRuntimeSessionStore(cfg.WorkspacesRoot)
 	d.agentLifecycleExecutor = &agentLifecycleExecutor{
 		workspacesRoot: cfg.WorkspacesRoot,
 		runtimes:       d.canonicalRuntimes,
 		sessionReset:   d.client,
-		logger:         logger,
+		sessions:       sessions,
+		commands:       newAgentLifecycleCommandLedger(cfg.WorkspacesRoot),
+		starter: agentLifecycleResumeStarter{
+			runtimes: d.canonicalRuntimes,
+			sessions: sessions,
+			start: func(ctx context.Context, req agentLifecycleStartRequest) error {
+				return d.ensureResidentMessageRuntime(ctx, req.AgentID, req.RuntimeID, nil)
+			},
+		},
+		logger: logger,
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, nil)
@@ -4662,6 +4672,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					// Not Multica agent_session / agent_session_id (inbox
 					// wake/drain UUID) — different "session", task #109.
 					if msg.SessionID != "" && sessionPinned.CompareAndSwap(false, true) {
+						d.recordProviderSession(task.AgentID, task.RuntimeID, msg.SessionID)
 						pinCtx, pinCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						if err := d.client.PinTaskSession(pinCtx, taskID, msg.SessionID, opts.Cwd); err != nil {
 							taskLog.Warn("pin task session failed (task still runs; resume pointer lost for this cycle)", "error", err)

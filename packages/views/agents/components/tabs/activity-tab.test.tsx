@@ -167,6 +167,33 @@ describe("ActivityTab", () => {
     expect(subtext).toHaveTextContent("3 newer messages available — review then resend");
   });
 
+  it("links the target channel in a successful saved-Draft Activity", async () => {
+    listChannels.mockResolvedValue([{ id: "channel-1", name: "test123", kind: "group" }]);
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Online", tone: "success", visibility: "visible" },
+        timeline: [{
+          id: "row-draft-sent",
+          occurred_at: "2026-08-13T00:38:46Z",
+          title: "Send draft sent",
+          subtext: "target: #test123\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent",
+          tone: "success",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderActivityTab();
+    const link = await screen.findByRole("link", { name: "#test123" });
+    expect(link).toHaveAttribute("href", "/acme/channels/channel-1");
+    expect(link).not.toHaveTextContent("freshness updates");
+    expect(screen.getByTestId("runner-activity-subtext")).toHaveTextContent(
+      "freshness updates: 0 newer messages",
+    );
+  });
+
   it("turns a target channel handle into a workspace channel link", async () => {
     listChannels.mockResolvedValue([{ id: "chan-1", name: "general", kind: "group" }]);
     runnerActivity.mockReturnValue({

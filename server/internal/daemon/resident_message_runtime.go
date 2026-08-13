@@ -177,9 +177,16 @@ func (d *Daemon) ensureResidentMessageRuntime(ctx context.Context, agentID, runt
 		return fmt.Errorf("resident Message runtime identity: %w", err)
 	}
 
+	resumeSessionID := ""
+	if d.agentLifecycleExecutor != nil && d.agentLifecycleExecutor.sessions != nil {
+		if stored, err := d.agentLifecycleExecutor.sessions.Get(agentID, runtimeID); err == nil {
+			resumeSessionID = stored
+		}
+	}
 	lease, err := d.canonicalRuntimes.acquire(canonicalAgentRuntimeAcquireRequest{
-		Identity: identity,
-		Mode:     canonicalRuntimeResident,
+		Identity:           identity,
+		Mode:               canonicalRuntimeResident,
+		CanonicalSessionID: resumeSessionID,
 		BackendConfig: agent.Config{
 			ExecutablePath: entry.Path,
 			Env:            agentEnv,

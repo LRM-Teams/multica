@@ -245,6 +245,11 @@ type canonicalAgentRuntimePool struct {
 
 	recoverMu          sync.Mutex
 	recoverSubscribers []ResidentRuntimeRecoveredSubscriber
+
+	// nextResume is the composer-applied provider session for the next
+	// acquire when the caller does not pass CanonicalSessionID. An explicit
+	// empty value means "start fresh" after session reset.
+	nextResume map[string]string
 }
 
 type canonicalAgentRuntimeSlot struct {
@@ -275,6 +280,7 @@ func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
 		managedProcessGrants:    make(map[string]agentProcessCapacityGrant),
 		pendingManagedProcesses: make(map[string]pendingManagedProcess),
 		pendingAgents:           make(map[string]struct{}),
+		nextResume:              make(map[string]string),
 	}
 	p.capacityCond = sync.NewCond(&p.mu)
 	return p
@@ -349,6 +355,11 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	}
 	fingerprint := request.Identity.fingerprint()
 	resumeSessionID := strings.TrimSpace(request.CanonicalSessionID)
+	if request.CanonicalSessionID == "" {
+		if next, ok := p.takeNextResumeSession(request.Identity.AgentID, request.Identity.RuntimeID); ok {
+			resumeSessionID = next
+		}
+	}
 	now := request.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -629,6 +640,55 @@ func (p *canonicalAgentRuntimePool) slotCount() int {
 // usable resident provider process. It intentionally does not expose whether
 // the process is currently handling a Message; MessageCoordinator retains
 // that admission boundary.
+func (p *canonicalAgentRuntimePool) setNextResumeSession(agentID, runtimeID, sessionID string) {
+	if p == nil {
+		return
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.nextResume == nil {
+		p.nextResume = make(map[string]string)
+	}
+	p.nextResume[key] = strings.TrimSpace(sessionID)
+}
+
+func (p *canonicalAgentRuntimePool) takeNextResumeSession(agentID, runtimeID string) (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.nextResume == nil {
+		return "", false
+	}
+	sessionID, ok := p.nextResume[key]
+	if !ok {
+		return "", false
+	}
+	delete(p.nextResume, key)
+	return sessionID, true
+}
+
+func (p *canonicalAgentRuntimePool) hasLiveLease(agentID, runtimeID string) bool {
+	if p == nil {
+		return false
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot != nil {
+		slot.mu.Lock()
+	}
+	p.mu.Unlock()
+	if slot == nil {
+		return false
+	}
+	defer slot.mu.Unlock()
+	return slot.running
+}
+
 func (p *canonicalAgentRuntimePool) hasResidentBackend(agentID, runtimeID string) bool {
 	if p == nil {
 		return false

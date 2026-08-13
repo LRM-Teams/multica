@@ -50,7 +50,7 @@ export function ResearchServerErrorPage({
         onClick={onRetry}
       >
         <RefreshCw
-          className={cn("size-3.5", retrying && "animate-spin")}
+          className={cn("size-3.5", retrying && "animate-spin motion-reduce:animate-none")}
           aria-hidden
         />
         {retrying

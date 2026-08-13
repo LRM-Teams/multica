@@ -652,7 +652,7 @@ export function ResearchListPage() {
                     >
                       {create.isPending ? (
                         <>
-                          <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                          <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
                           {t(($) => $.home.creating)}
                         </>
                       ) : (

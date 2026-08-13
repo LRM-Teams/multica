@@ -293,7 +293,7 @@ export function HumanBoundaryCard({
     return frame(
       <div data-testid="human-boundary-loading" className="space-y-2">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
+          <Loader2 className="size-3.5 animate-spin text-brand motion-reduce:animate-none" aria-hidden />
           <span>{t(($) => $.m2.boundary_loading)}</span>
         </div>
         <ExpectedOutcomes items={expected} />

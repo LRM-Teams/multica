@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -26,15 +27,32 @@ func (d *Daemon) runStageUpdate(targetVersion string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("stage release failed: %w", err)
 	}
-	d.stagedUpgradePath = path
-	return fmt.Sprintf("Staged %s at %s; PATH unchanged", cli.NormalizeReleaseTag(targetVersion), path), nil
+	resolved := resolveStagedBinaryFile(path)
+	if resolved == "" {
+		return "", fmt.Errorf("stage release did not produce a regular file: %q", path)
+	}
+	d.stagedUpgradePath = resolved
+	return fmt.Sprintf("Staged %s at %s; PATH unchanged", cli.NormalizeReleaseTag(targetVersion), resolved), nil
+}
+
+// resolveStagedBinaryFile keeps only paths that are regular files. The
+// runStageUpdate status sentence is not a path and must never be exec'd.
+func resolveStagedBinaryFile(candidates ...string) string {
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		info, err := os.Stat(candidate)
+		if err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func (d *Daemon) verifyStagedBinary(targetVersion, stagedPath string) (string, error) {
-	path := strings.TrimSpace(stagedPath)
-	if path == "" {
-		path = strings.TrimSpace(d.stagedUpgradePath)
-	}
+	path := resolveStagedBinaryFile(d.stagedUpgradePath, stagedPath)
 	if path == "" {
 		return "", fmt.Errorf("staged binary path is empty")
 	}
@@ -54,7 +72,7 @@ func (d *Daemon) commitStagedActivation(_ context.Context, _, targetVersion stri
 	if err != nil {
 		return "", err
 	}
-	staged := strings.TrimSpace(d.stagedUpgradePath)
+	staged := resolveStagedBinaryFile(d.stagedUpgradePath)
 	if staged == "" || staged == installPath {
 		path, err := cli.StageReleaseScratch(targetVersion, cli.DefaultUpdateDownloadTimeout, d.releaseManifestBaseURLOverride())
 		if err != nil {

@@ -487,14 +487,24 @@ func persistManifestGateSnapshotTx(
 		return fmt.Errorf("encode manifest gate snapshot: %w", err)
 	}
 	hash := contentHashFromPayload(encoded)
+	members, err := listFleetMembersTx(ctx, tx, sessionID, workspaceID)
+	if err != nil {
+		return err
+	}
+	principalBytes, err := encodeManifestPrincipalHeader(members)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, `
 		UPDATE research_artifact_context_manifest
 		SET principal_header_bytes = $4,
-		    principal_header_hash = $5
+		    principal_header_hash = $5,
+		    gate_snapshot_bytes = $6,
+		    gate_snapshot_hash = $7
 		WHERE workspace_id = $1::uuid
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid
-	`, workspaceID, sessionID, manifestID, encoded, hash)
+	`, workspaceID, sessionID, manifestID, principalBytes, contentHashFromPayload(principalBytes), encoded, hash)
 	return err
 }
 
@@ -505,7 +515,7 @@ func loadManifestGateSnapshotPool(
 ) (GateResult, bool, error) {
 	var raw []byte
 	err := pool.QueryRow(ctx, `
-		SELECT principal_header_bytes
+		SELECT gate_snapshot_bytes
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
 	`, workspaceID, sessionID, attemptID).Scan(&raw)

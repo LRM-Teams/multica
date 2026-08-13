@@ -448,7 +448,7 @@ func TestTaskContextForAttemptUsesFrozenGateSnapshot(t *testing.T) {
 	}
 	var headerBytes []byte
 	if err = pool.QueryRow(ctx, `
-		SELECT principal_header_bytes
+		SELECT gate_snapshot_bytes
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
 	`, fixture.workspaceID, run.SessionID, attempt.ID).Scan(&headerBytes); err != nil {

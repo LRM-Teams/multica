@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -798,15 +800,30 @@ func TestHandleMachineUpgradeDifferentVersionStartsWithServerAcceptance(t *testi
 }
 
 func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale(t *testing.T) {
-	storeRoot := filepath.Join(t.TempDir(), "store")
+	if runtime.GOOS == "windows" {
+		t.Skip("scratch fixture is a POSIX --version script")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	storeRoot := filepath.Join(home, "store")
 	previousRoot := versionStoreRootFn
 	versionStoreRootFn = func() (string, error) { return storeRoot, nil }
 	t.Cleanup(func() { versionStoreRootFn = previousRoot })
 
+	install, err := cli.DefaultInstallPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(install), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(install, []byte("old-path-computer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	previousStage := stageReleaseFn
 	stageReleaseFn = func(targetVersion string, _ time.Duration, _ string) (string, error) {
-		t.Setenv("HOME", filepath.Dir(storeRoot))
-		return cli.WriteReleaseScratch(targetVersion, []byte("#!/bin/sh\necho 'multica 0.4.17'\n"))
+		return cli.WriteReleaseScratch(targetVersion, []byte("#!/bin/sh\necho 'multica "+targetVersion+"'\n"))
 	}
 	t.Cleanup(func() { stageReleaseFn = previousStage })
 
@@ -832,11 +849,13 @@ func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale
 		t.Fatalf("persist stale update observation: %v", err)
 	}
 
+	restarted := false
 	d := &Daemon{
 		cfg:               Config{CLIVersion: "v0.4.16"},
 		client:            NewClient(server.URL),
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		updateObservation: observation,
+		cancelFunc:        func() { restarted = true },
 	}
 	d.client.SetToken("test-token")
 	d.handleMachineUpgrade(context.Background(), "runtime-1", &PendingMachineUpgrade{
@@ -844,8 +863,19 @@ func TestHandleMachineUpgradeActivatesAcceptedTargetWhenUpdateObservationIsStale
 		TargetVersion: "v0.4.17",
 	})
 
-	if d.stagedUpgradePath == "" {
-		t.Fatal("accepted target was not staged")
+	journal, err := d.currentMachineUpgradeJournal()
+	if err != nil || journal == nil || journal.Phase != "handoff" || journal.TargetVersion != "v0.4.17" {
+		t.Fatalf("accepted target journal = %+v err=%v", journal, err)
+	}
+	if d.restartBinary != install {
+		t.Fatalf("restartBinary = %q, want PATH %q", d.restartBinary, install)
+	}
+	if !restarted {
+		t.Fatal("accepted target did not schedule restart")
+	}
+	got, err := os.ReadFile(install)
+	if err != nil || !strings.Contains(string(got), "multica v0.4.17") {
+		t.Fatalf("PATH after activation = %q err=%v", got, err)
 	}
 }
 

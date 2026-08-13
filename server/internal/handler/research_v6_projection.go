@@ -103,6 +103,7 @@ func (h *Handler) loadResearchV6Snapshot(r *http.Request) (researchV6Snapshot, e
 		}
 		edges = append(edges, researchV6ProjectionEdge{ID: runID + ":edge:" + e.ID, RunID: runID, FromNodeID: from, ToNodeID: to, EdgeType: e.EdgeType})
 	}
+	enrichResearchV6TopologyDetails(nodes, edges)
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
 	nodeBytes, _ := json.Marshal(nodes)
@@ -133,7 +134,7 @@ func mapResearchV6Node(runID string, node ResearchGraphNodeResp) researchV6Proje
 	id := runID + ":" + kind + ":" + entityID
 	created := node.CreatedAt
 	updated := node.UpdatedAt
-	return researchV6ProjectionNode{ID: id, RunID: runID, EntityKind: kind, EntityID: entityID, NodeKind: kind, NodeSubtype: node.NodeType, SchemaVersion: 1, Title: node.Title, Summary: node.Summary, Status: node.Status, Importance: 0.5, ActorAgentID: node.ActorAgentID, CreatedAt: &created, UpdatedAt: &updated, Detail: detail}
+	return researchV6ProjectionNode{ID: id, RunID: runID, EntityKind: kind, EntityID: entityID, NodeKind: kind, NodeSubtype: node.NodeType, SchemaVersion: 1, Title: node.Title, Summary: node.Summary, Status: node.Status, Importance: 0.5, ActorAgentID: node.ActorAgentID, CreatedAt: &created, UpdatedAt: &updated, Detail: canonicalResearchV6Detail(kind, node.Status, node.ActorAgentID, detail)}
 }
 
 func normalizeResearchV6EntityKind(raw string) string {

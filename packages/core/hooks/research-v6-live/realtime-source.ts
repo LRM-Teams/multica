@@ -17,7 +17,7 @@ export interface RealtimeBus {
 }
 
 /** The WS event that carries V6 graph projection updates. */
-export const RESEARCH_V6_GRAPH_UPDATED_EVENT = "research_session:graph_updated" as const;
+export const RESEARCH_V6_GRAPH_UPDATED_EVENT = "research_projection_v6:delta" as const;
 
 export interface RealtimeLiveSourceOptions {
   /** Treat explicit unsubscribe as a clean disconnect (vs a dropped socket). */
@@ -27,8 +27,8 @@ export interface RealtimeLiveSourceOptions {
 /**
  * Default production live source backed by the WSProvider realtime bus.
  *
- * Every `research_session:graph_updated` frame is parsed as a
- * `ResearchV6Delta` and pushed through; unparseable frames are dropped
+ * Every `research_projection_v6:delta` frame unwraps the run-scoped envelope,
+ * then parses its `delta`; unparseable frames are dropped
  * gracefully (lenient wire, matching the schemas convention) so one bad frame
  * never tears down the projection. When the bus reconnects, the caller
  * re-runs the server resume with the last confirmed sequence.
@@ -50,7 +50,11 @@ export function createRealtimeLiveSource(
     connect(onDelta, onMalformedFrame) {
       onDeltaListeners.add(onDelta);
       const unsubEvent = bus.subscribeEvent(RESEARCH_V6_GRAPH_UPDATED_EVENT, (payload) => {
-        const delta = parseResearchV6Delta(payload);
+        const envelope = payload as { run_id?: unknown; delta?: unknown };
+        const candidate = envelope && typeof envelope === "object" && "delta" in envelope
+          ? { ...(envelope.delta as object), run_id: envelope.run_id }
+          : payload;
+        const delta = parseResearchV6Delta(candidate);
         if (!delta) {
           onMalformedFrame?.(payload);
           return;

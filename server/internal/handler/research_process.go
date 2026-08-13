@@ -29,6 +29,27 @@ func (h *Handler) publishResearchGraph(workspaceID string, actorType, actorID st
 		"node":       mapGraphNodeWithEdge(node, edge),
 		"edge":       edgeResp,
 	})
+	// V6 is a separate, run-scoped transport. Keep the legacy event intact while
+	// new clients receive an explicit envelope and can reject cross-run frames.
+	if h.ResearchRun != nil {
+		runID := uuidToString(sessionID)
+		if snapshot, err := h.ResearchRun.Snapshot(context.Background(), runID, workspaceID); err == nil {
+			nodes, _ := projectRunV2Graph(snapshot)
+			var sequence int64
+			if err = h.DB.QueryRow(context.Background(), `SELECT COALESCE(max(sequence),0) FROM research_run_event WHERE workspace_id=$1::uuid AND session_id=$2::uuid`, workspaceID, runID).Scan(&sequence); err == nil {
+				upserts := make([]researchV6ProjectionNode, 0, len(nodes))
+				for _, projected := range nodes {
+					upserts = append(upserts, mapResearchV6Node(runID, projected))
+				}
+				from := sequence - 1
+				if from < 0 {
+					from = 0
+				}
+				delta := researchV6Delta{FromSequenceExclusive: from, ThroughSequence: sequence, NodeUpserts: upserts, EdgeUpserts: []researchV6ProjectionEdge{}, NodeTombstones: []string{}, EdgeTombstones: []string{}, AffectedRootNodeIDs: researchV6RootIDs(upserts)}
+				h.publish(protocol.EventResearchProjectionV6Delta, workspaceID, actorType, actorID, map[string]any{"run_id": runID, "delta": delta})
+			}
+		}
+	}
 }
 
 func (h *Handler) emitResearchProcessCard(

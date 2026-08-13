@@ -152,16 +152,15 @@ tracked separately in §11 and are not counted as integrated until merged.
 | Local node report | Integrated | Project quality/citation review decisions; canonical contributor, Attempt, evidence, and lineage sections are integrated |
 | Typed graph pagination/filter/lens/DOM budget | Integrated | Add viewport slice gateway when backend exists |
 | V6 schema, API, adapter | Integrated behind capability detection | Validate against a real server route when available |
-| V6 ordered live client | Implemented but not wired into the D5 shell | Resolve the WS event/envelope decision below before production wiring |
+| V6 ordered live client | Implemented with dedicated envelope consumer | Integrate the backend transport PR, then wire the D5 shell against a deployed run |
 | 30-kind cards, Insight, Dispute, trajectory | Integrated in D5 detail/lens surfaces | Complete deployed visual evidence |
-| V6 server snapshot/delta/resume | Not present on current dev | Backend dependency; explicit V5/D5 fallback remains required |
+| V6 server snapshot/delta/resume | Implemented in backend transport PR | Keep explicit V5/D5 fallback until that PR is integrated and deployed |
 
 ## 10. Delivery sequence
 
-1. Resolve the V6 realtime transport contract: the existing
-   `research_session:graph_updated` event carries V5 payloads, while the V6
-   client requires a run-routable ordered Delta. Decide either a dedicated V6
-   event or a versioned envelope containing both `run_id` and `delta`.
+1. Integrate the dedicated `research_projection_v6:delta` event with envelope
+   `{run_id, delta}` and the matching snapshot/delta/resume routes. The legacy
+   `research_session:graph_updated` event remains unchanged for V5 clients.
 2. Validate the full visual/performance/accessibility matrix against one
    deployed Web/Desktop revision and attach durable artifacts.
 3. Exercise the capability-gated V6 adapter/live client against real snapshot,
@@ -209,8 +208,8 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 | Shared Research frontend typecheck baseline | `612034aea`, PR #3024 | Integrated; V6 Dispute panel uses a type-only `ReactNode` import |
 | Strict V6 Delta/resume HTTP success boundary | `21ba93fad`, PR #3030 | Integrated; explicit JSON `null` alone means no Delta, while malformed non-null success is an interface error |
 | V6 reconnect Delta recovery | `fc2671ed7`, PR #3031 | Integrated; a successful resume verdict is applied through the same identity/order/gap/resync pipeline instead of being discarded |
-| V6 WS Delta routing envelope | Existing V5 `research_session:graph_updated` payloads plus a direct-Delta V6 listener | Protocol decision required: a workspace event must identify `run_id`, including mutation-free Delta frames |
-| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@fc2671ed7` | Backend blocked; explicit V5/D5 fallback required |
+| V6 WS Delta routing envelope | Dedicated `research_projection_v6:delta` with `{run_id, delta}` in backend transport PR | Await integration/deployed exercise; legacy V5 event remains intact |
+| Real V6 snapshot/delta/resume API | Backend transport PR adds the three paths consumed by `ApiClient` | Await integration/deployed exercise; explicit V5/D5 fallback remains until then |
 | Runtime visual/performance/accessibility matrix | No current deployed-session artifacts for this revision | Unverified; required before completion |
 
 ### Completion evidence rule

@@ -143,8 +143,8 @@ export class ResearchV6LiveProjectionController {
       this.applyDelta(delta);
     });
 
-    // If the source is already connected when we attach, surface that.
-    this.setStatus("connected");
+    // Connection truth comes only from `onStatusChange`. Registering a delta
+    // callback is not evidence that the authenticated socket is delivering.
     this.observeResync();
   }
 

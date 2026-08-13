@@ -137,7 +137,7 @@ research state. Refresh must reconstruct the same terminal graph.
   for reduced motion, background resume, and resync.
 - Each frontend change runs relevant Vitest, typecheck, and `pnpm react:doctor`.
 
-## 9. Implementation status at `dev@612812305`
+## 9. Implementation status at `dev@52a5388b4`
 
 Status in this table means code already present on `dev`. Open pull requests are
 tracked separately in §11 and are not counted as integrated until merged.
@@ -148,17 +148,20 @@ tracked separately in §11 and are not counted as integrated until merged.
 | Top command bar and goal history | Integrated | Visual polish against target |
 | Five-tier star graph, camera, clusters, relations | Integrated | Improve fact density and edge degradation |
 | Context rail, chat, node detail | Integrated | Validate the deployed responsive matrix |
-| Agent inspector and shared Agent panel | Integrated | Missing/archived fleet actor fallback is in PR #2978 |
+| Agent inspector and shared Agent panel | Integrated | Validate the deployed responsive matrix |
 | Local node report | Integrated | Project quality/citation review decisions; canonical contributor, Attempt, evidence, and lineage sections are integrated |
 | Typed graph pagination/filter/lens/DOM budget | Integrated | Add viewport slice gateway when backend exists |
-| V6 schema, API, adapter, ordered live client | Integrated behind capability detection | Validate against a real server route when available |
+| V6 schema, API, adapter | Integrated behind capability detection | Validate against a real server route when available |
+| V6 ordered live client | Implemented but not wired into the D5 shell | Resolve the WS event/envelope decision below before production wiring |
 | 30-kind cards, Insight, Dispute, trajectory | Integrated in D5 detail/lens surfaces | Complete visual evidence and remaining copy parity |
 | V6 server snapshot/delta/resume | Not present on current dev | Backend dependency; explicit V5/D5 fallback remains required |
 
 ## 10. Delivery sequence
 
-1. Merge and verify the remaining Agent inspector and node-card localisation
-   fallbacks (PRs #2978 and #2976).
+1. Resolve the V6 realtime transport contract: the existing
+   `research_session:graph_updated` event carries V5 payloads, while the V6
+   client requires a run-routable ordered Delta. Decide either a dedicated V6
+   event or a versioned envelope containing both `run_id` and `delta`.
 2. Validate the full visual/performance/accessibility matrix against one
    deployed Web/Desktop revision and attach durable artifacts.
 3. Exercise the capability-gated V6 adapter/live client against real snapshot,
@@ -174,25 +177,27 @@ the corresponding §9 row and replace the PR evidence with the merge SHA.
 
 | Contract surface | Current evidence | Delivery state |
 | --- | --- | --- |
-| Target D5 shell and shared Web/Desktop composition | `dev@612812305`, PR #2907 | Integrated |
+| Target D5 shell and shared Web/Desktop composition | `dev@52a5388b4`, PR #2907 | Integrated |
 | Canonical conversation change receipts | `2edba39a`, PR #2908 | Integrated |
 | Dispute and trajectory/Insight detail registration | `cee8dc2a`, `4cac759b`, PRs #2909–#2910 | Integrated |
 | Capability-gated V6 adapter in the existing D5 shell | `a0963726`, PR #2911 | Integrated; server capability absent |
 | Canvas keyboard focus and Escape restoration | `e9ef764c`, PR #2912 | Integrated |
-| Agent Attempt/lease facts and inspector focus | `a95806d1`, `e7e4097c`, PRs #2913, #2919; PR #2978 | Integrated; missing-member fallback awaiting merge |
+| Agent Attempt/lease facts and inspector focus | `a95806d1`, `e7e4097c`, `0fe34d207`, PRs #2913, #2919, #2978 | Integrated |
 | Unknown relation neutral degradation | `938401fc`, PR #2914 | Integrated |
 | Mobile context sheet | `87d6019f`, PR #2915 | Integrated |
 | Semantic light/dark colour tokens | `453117e3`, PR #2916 | Integrated |
 | Reduced-motion settlement | `97e7cb3b`, PR #2917 | Integrated |
-| V6 socket truth and ordered resync recovery | `b70cfc3b`, `19bb7100`, `8b5a942c`, PRs #2918, #2920, #2922 | Integrated; server capability absent |
+| V6 socket truth and ordered resync recovery engine | `b70cfc3b`, `19bb7100`, `8b5a942c`, PRs #2918, #2920, #2922 | Engine integrated; D5 production wiring awaits WS envelope decision |
 | Canvas load/stale projection recovery | `d10e76c5`, `ed0c9ce4`, PRs #2924, #2932; PRs #2963–#2973 | Integrated |
 | Lens keyboard access and selected neighbourhood focus | `748a82e3`, `7918beed`, PRs #2925, #2933 | Integrated |
 | Node report lineage, contributors, and attempt history | `471d7e29`, `ddf93eed`, PRs #2926–#2927 | Integrated |
 | Typed status/confidence fidelity | `a4ad3529`, PR #2928 | Integrated |
-| Canvas visual and accessibility localisation | `6b8d4853`, `efe31ec4`, `b3c28a38`, `4d272991`, PRs #2930–#2931, #2974–#2975; PR #2976 | Integrated; node-card localisation awaiting merge |
-| Session-isolated camera restoration | `fa389f8f`, PR #2934 | Integrated |
-| 25% overview and DOM/card budgets | `e8dd9b46`, PR #2923 plus existing budget modules | Integrated; runtime evidence still required |
-| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@612812305` | Backend blocked; explicit V5/D5 fallback required |
+| Canvas visual and accessibility localisation | `6b8d4853`, `efe31ec4`, `b3c28a38`, `4d272991`, `2e1dad935`, PRs #2930–#2931, #2974–#2976 | Integrated |
+| Session-isolated camera, selection, and inspector restoration | `fa389f8f`, `4d21b75ea`, `4707ce9d5`, PRs #2934, #2998–#2999 | Integrated |
+| 25% overview and DOM/card/node/edge budgets | `e8dd9b46`, `792ef4ac8`, `3dc864714`, PRs #2923, #2996–#2997 | Integrated; runtime evidence still required |
+| Session-isolated canvas filter restoration | PR #3002 | Awaiting merge; not integrated |
+| V6 WS Delta routing envelope | Existing V5 `research_session:graph_updated` payloads plus a direct-Delta V6 listener | Protocol decision required: a workspace event must identify `run_id`, including mutation-free Delta frames |
+| Real V6 snapshot/delta/resume API | No matching route under `server/` at `dev@52a5388b4` | Backend blocked; explicit V5/D5 fallback required |
 | Runtime visual/performance/accessibility matrix | No current deployed-session artifacts for this revision | Unverified; required before completion |
 
 ### Completion evidence rule

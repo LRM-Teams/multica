@@ -1006,6 +1006,7 @@ surface 矩阵仍未完成。
   - [x] E2a：migration 348 建立四类 canonical Inquiry 表、tenant/session scoped FK、状态约束、frontier 索引，并把四类实体加入 Artifact Passport fail-closed kind registry；V6 默认值保持关闭。写入命令、完整多态端点守卫、环检测和状态转换仍待 E2b。
   - [x] E2b-guard：migration 350 与 `inquiryModule` 冻结 Hypothesis/Branch/Insight 合法状态迁移，要求 Branch 终止理由，逐类验证多态端点，并禁止 `decomposes | depends_on | refines` 形成有向环；`dispute` 在 H 章实体落库前保持不可写。生产批量写命令、Artifact Passport 原子注册与 Run Event 仍待 E2b-write。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。
+  - [x] E3a：依据已冻结 `research-run-v6.schema.json` 建立未接入生产默认值的 `plan_result` 严格边界，覆盖 open-policy Method、Question/Hypothesis/Branch/Inquiry Edge、Task—Inquiry 引用、Search Plan 和服务端授权分支预算；assigned Contract goal/revision 进入 canonical result identity 而不私自扩展 wire schema。拒绝未知顶层字段、孤立实体、悬空引用、跨关系环、Task DAG 缺口和旧版本 expected result。原子持久化和生产 Planner Prompt 接线仍待 E3b，不能以本项表示 V6 已启用。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
 

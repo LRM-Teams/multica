@@ -3,8 +3,8 @@
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  background-color: #08121d;
-  background-image: radial-gradient(#20354b 1px, transparent 1px);
+  background-color: var(--background);
+  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
   background-size: 22px 22px;
 }
 .sg-canvas-root::after {
@@ -12,7 +12,11 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 50%, transparent 20%, rgba(4, 8, 13, 0.3) 95%);
+  background: radial-gradient(
+    circle at 50% 50%,
+    transparent 20%,
+    color-mix(in oklab, var(--foreground) 8%, transparent) 95%
+  );
 }
 .sg-canvas-world {
   position: absolute;
@@ -43,17 +47,17 @@
   opacity: 0.68;
 }
 .sg-edge-decompose {
-  stroke: #48d3e4;
+  stroke: var(--research-stage-define);
 }
 .sg-edge-support {
-  stroke: #58d69a;
+  stroke: var(--success);
 }
 .sg-edge-challenge {
-  stroke: #f4c56a;
+  stroke: var(--warning);
   stroke-dasharray: 6 6;
 }
 .sg-edge-newdir {
-  stroke: #aa8cff;
+  stroke: var(--research-stage-explore);
   stroke-dasharray: 2 7;
 }
 .sg-edge-merge {
@@ -62,9 +66,13 @@
 }
 .sg-cluster-boundary {
   position: absolute;
-  border: 1px dashed #2c4960;
+  border: 1px dashed var(--line-strong);
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(29, 63, 82, 0.1), transparent 70%);
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--primary) 8%, transparent),
+    transparent 70%
+  );
   z-index: 0;
 }
 .sg-cluster-label,
@@ -74,7 +82,7 @@
   top: 12px;
   transform: translateX(-50%);
   white-space: nowrap;
-  color: #526b80;
+  color: var(--muted-foreground);
   font:
     700 8px ui-monospace,
     SFMono-Regular,
@@ -90,9 +98,9 @@
   transform: translateX(-50%);
   padding: 2px 6px;
   border-radius: 999px;
-  border: 1px solid #2f5168;
-  background: rgba(8, 18, 29, 0.82);
-  color: #8eb0c8;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 88%, transparent);
+  color: var(--muted-foreground);
   font:
     700 8px ui-monospace,
     SFMono-Regular,
@@ -102,9 +110,13 @@
 }
 .sg-new-frontier-zone {
   position: absolute;
-  border: 1px dashed #554977;
+  border: 1px dashed var(--research-stage-explore);
   border-radius: 24px;
-  background: linear-gradient(145deg, rgba(36, 28, 53, 0.08), transparent);
+  background: linear-gradient(
+    145deg,
+    color-mix(in oklab, var(--research-stage-explore) 8%, transparent),
+    transparent
+  );
   z-index: 0;
 }
 .sg-new-frontier-label {
@@ -112,7 +124,7 @@
   left: auto;
   top: 10px;
   transform: none;
-  color: #776996;
+  color: var(--research-stage-explore);
 }
 .sg-zoom-controls {
   position: absolute;
@@ -122,28 +134,28 @@
   display: flex;
   gap: 4px;
   padding: 5px;
-  border: 1px solid #29394b;
+  border: 1px solid var(--border);
   border-radius: 11px;
-  background: rgba(13, 22, 34, 0.88);
+  background: color-mix(in oklab, var(--card) 88%, transparent);
   backdrop-filter: blur(8px);
 }
 .sg-zoom-controls button {
   border: 0;
   background: transparent;
-  color: #8fa0b3;
+  color: var(--muted-foreground);
   padding: 6px 8px;
   border-radius: 7px;
   cursor: pointer;
 }
 .sg-zoom-controls button:hover {
-  color: white;
-  background: #1a2735;
+  color: var(--foreground);
+  background: var(--secondary);
 }
 .sg-zoom-controls span {
   display: grid;
   place-items: center;
   min-width: 2.75rem;
-  color: #8fa0b3;
+  color: var(--muted-foreground);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
@@ -154,11 +166,11 @@
   top: 17px;
   max-width: min(320px, calc(100% - 40px));
   padding: 9px 12px;
-  border: 1px solid #26384a;
+  border: 1px solid var(--border);
   border-radius: 11px;
-  background: rgba(11, 20, 30, 0.88);
+  background: color-mix(in oklab, var(--card) 88%, transparent);
   backdrop-filter: blur(10px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 8px 24px color-mix(in oklab, var(--foreground) 14%, transparent);
 }
 .sg-summary-label b {
   display: block;

@@ -1032,7 +1032,17 @@
     "report": {
       "title": "Node report",
       "empty_summary": "No report summary is available for this node yet.",
-      "lineage_title": "Merged inputs",
+      "lineage_title": "Lineage",
+      "lineage": {
+        "derived_from": "Derived from",
+        "merged_from": "Merged inputs",
+        "parent": "Parent direction",
+        "children": "Child directions",
+        "used_by": "Used by",
+        "restart_of": "Restart of",
+        "superseded_by": "Superseded by",
+        "invalidated_by": "Invalidated by"
+      },
       "goal_version": "Goal version {{version}}"
     },
     "change_receipt": {

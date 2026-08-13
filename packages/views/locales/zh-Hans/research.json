@@ -1032,7 +1032,17 @@
     "report": {
       "title": "节点报告",
       "empty_summary": "该节点还没有可展示的报告摘要。",
-      "lineage_title": "融合输入",
+      "lineage_title": "演进关系",
+      "lineage": {
+        "derived_from": "派生自",
+        "merged_from": "融合输入",
+        "parent": "上级方向",
+        "children": "下级方向",
+        "used_by": "被用于",
+        "restart_of": "重启自",
+        "superseded_by": "被替代为",
+        "invalidated_by": "被否定于"
+      },
       "goal_version": "目标版本 {{version}}"
     },
     "change_receipt": {

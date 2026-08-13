@@ -75,6 +75,12 @@ must not be silently reinterpreted as supporting evidence.
 
 Cluster boundaries are display groupings backed by projection cluster facts.
 They are not canonical Insights and are never written back as research facts.
+The canonical `goal` is the visual origin at the leading edge of the field;
+an XXL master synthesis is a separate convergence destination. Goal-led graphs
+therefore progress left-to-right through result clusters instead of placing the
+largest node at the centre of a generic 360-degree radial map. S-tier Agent
+nodes remain inside the visual territory of their parent result. A New Frontier
+territory is rendered only when a canonical new-direction relation exists.
 
 ## 5. Conversation-driven graph changes
 

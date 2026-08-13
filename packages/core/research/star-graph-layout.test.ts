@@ -93,6 +93,35 @@ describe("LRM-1514 star-graph layout — D5 baseline from algorithm", () => {
       Math.abs(left.y - right.y),
     );
   });
+
+  it("separates a canonical goal origin from the XXL synthesis destination", () => {
+    const layout = layoutStarGraph([
+      { id: "origin", tier: "m", nodeKind: "goal" },
+      { id: "synthesis", tier: "xxl", nodeKind: "finding", clusterId: "result" },
+      { id: "result", tier: "xl", nodeKind: "finding", clusterId: "result" },
+    ]);
+    const origin = layout.nodes.find((node) => node.id === "origin")!;
+    const synthesis = layout.nodes.find((node) => node.id === "synthesis")!;
+
+    expect(layout.rootId).toBe("origin");
+    expect(origin).toMatchObject({ x: 0, y: 0 });
+    expect(synthesis.x).toBeGreaterThan(origin.x);
+  });
+
+  it("includes Agent satellites in cluster territory and renders canonical new directions", () => {
+    const layout = layoutStarGraph(
+      [
+        { id: "goal", tier: "xxl", nodeKind: "goal" },
+        { id: "result", tier: "xl", clusterId: "result" },
+        { id: "agent", tier: "s", parentId: "result" },
+        { id: "frontier", tier: "m" },
+      ],
+      [{ id: "new", fromNodeId: "goal", toNodeId: "frontier", kind: "newdir" }],
+    );
+
+    expect(layout.clusters[0]?.memberIds).toEqual(["agent", "result"]);
+    expect(layout.frontiers?.[0]?.memberIds).toEqual(["frontier"]);
+  });
 });
 
 describe("LRM-1514 quantitative hard gates", () => {

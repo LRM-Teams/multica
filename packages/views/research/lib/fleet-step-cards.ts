@@ -26,6 +26,30 @@ export type FleetChatFeedItem =
   | { kind: "chat"; message: ResearchMessage }
   | FleetStepCardModel;
 
+export type FleetStepGeneratedLabels = {
+  opTitles: Record<string, string>;
+  process: string;
+  memberReady: (count: number) => string;
+  domain: (value: string) => string;
+  dimensions: (count: number) => string;
+  stage: (value: string) => string;
+  mergedFailures: (count: number) => string;
+  delivery: string;
+  waiting: string;
+};
+
+const DEFAULT_GENERATED_LABELS: FleetStepGeneratedLabels = {
+  opTitles: {},
+  process: "Process",
+  memberReady: (count) => `${count} members ready`,
+  domain: (value) => `Domain · ${value}`,
+  dimensions: (count) => `${count} adaptive dimensions`,
+  stage: (value) => `Stage · ${value}`,
+  mergedFailures: (count) => `${count} similar failures merged.`,
+  delivery: "Draft / delivery",
+  waiting: "Continues after prerequisites finish",
+};
+
 function metaRecord(meta: unknown): Record<string, unknown> | null {
   if (!meta || typeof meta !== "object") return null;
   return meta as Record<string, unknown>;
@@ -66,49 +90,24 @@ function wakeMergeKey(message: ResearchMessage): string {
   return `${reason}::${actor}`;
 }
 
-function opTitleFallback(op: string): string {
-  switch (op) {
-    case "session_kickoff":
-      return "开题确认";
-    case "wake_failed":
-      return "唤醒";
-    case "graph_append":
-      return "图更新";
-    case "source_upsert":
-      return "来源入库";
-    case "report_patch":
-      return "报告更新";
-    case "stage_eval":
-      return "阶段评估";
-    case "session_stopped":
-      return "已停止";
-    case "session_resumed":
-      return "已恢复";
-    case "roster_hire":
-      return "编制 · 招聘";
-    case "roster_optimize":
-      return "编制 · 优化";
-    case "roster_archive":
-      return "编制 · 归档";
-    case "product_round_judgment":
-      return "产品轮判定";
-    case "clarification_question":
-      return "澄清提问";
-    default:
-      return op || "过程";
-  }
+function opTitleFallback(op: string, labels: FleetStepGeneratedLabels): string {
+  return labels.opTitles[op] || op || labels.process;
 }
 
-function bulletsFromMeta(message: ResearchMessage, op: string): string[] {
+function bulletsFromMeta(
+  message: ResearchMessage,
+  op: string,
+  labels: FleetStepGeneratedLabels,
+): string[] {
   const bullets: string[] = [];
   const members = metaNumber(message.meta, "member_count");
-  if (members != null) bullets.push(`成员 ${members} 人就位`);
+  if (members != null) bullets.push(labels.memberReady(members));
   const domain = metaString(message.meta, "fine_domain");
-  if (domain) bullets.push(`领域 · ${domain}`);
+  if (domain) bullets.push(labels.domain(domain));
   const dims = metaNumber(message.meta, "dimensions");
-  if (dims != null) bullets.push(`自适应维度 ${dims}`);
+  if (dims != null) bullets.push(labels.dimensions(dims));
   const stage = metaString(message.meta, "stage");
-  if (stage && op !== "session_kickoff") bullets.push(`阶段 · ${stage}`);
+  if (stage && op !== "session_kickoff") bullets.push(labels.stage(stage));
   const hint = metaString(message.meta, "recovery_hint");
   if (hint && op === "wake_failed") bullets.push(hint);
   return bullets.slice(0, 4);
@@ -126,10 +125,11 @@ function stepLabelFor(message: ResearchMessage): string | null {
 function processToStepCard(
   message: ResearchMessage,
   mergeCount = 1,
+  labels = DEFAULT_GENERATED_LABELS,
 ): FleetStepCardModel {
   const op = metaString(message.meta, "op") || "process";
   const title =
-    metaString(message.meta, "title") || opTitleFallback(op);
+    metaString(message.meta, "title") || opTitleFallback(op, labels);
   const reason = metaString(message.meta, "reason");
   const recoveryHint = metaString(message.meta, "recovery_hint");
   const headline =
@@ -138,7 +138,7 @@ function processToStepCard(
       : shortProcessLine(message.body || title, 80);
   const detail =
     op === "wake_failed" && mergeCount > 1
-      ? `已合并 ${mergeCount} 次同类失败，不再刷屏。`
+      ? labels.mergedFailures(mergeCount)
       : recoveryHint && op === "wake_failed"
         ? recoveryHint
         : "";
@@ -151,7 +151,7 @@ function processToStepCard(
     stepLabel: stepLabelFor(message),
     summaryHeadline: headline,
     summaryDetail: detail,
-    bullets: bulletsFromMeta(message, op),
+    bullets: bulletsFromMeta(message, op, labels),
     evidence: message.body?.trim() ? message.body : null,
     mergeCount,
     reason,
@@ -169,6 +169,7 @@ function processToStepCard(
  */
 export function buildFleetChatFeed(
   messages: ResearchMessage[],
+  labels: FleetStepGeneratedLabels = DEFAULT_GENERATED_LABELS,
 ): FleetChatFeedItem[] {
   const out: FleetChatFeedItem[] = [];
   const wakeBuckets = new Map<
@@ -196,16 +197,16 @@ export function buildFleetChatFeed(
       if (existing) {
         existing.count += 1;
         existing.latest = message;
-        out[existing.index] = processToStepCard(message, existing.count);
+        out[existing.index] = processToStepCard(message, existing.count, labels);
       } else {
         const index = out.length;
         wakeBuckets.set(key, { index, count: 1, latest: message });
-        out.push(processToStepCard(message, 1));
+        out.push(processToStepCard(message, 1, labels));
       }
       continue;
     }
 
-    out.push(processToStepCard(message, 1));
+    out.push(processToStepCard(message, 1, labels));
   }
 
   return out;
@@ -247,6 +248,7 @@ export function presenceRunningCards(
 export function nextStageWaitingCard(
   currentStage: string,
   sessionStatus: string,
+  labels: FleetStepGeneratedLabels = DEFAULT_GENERATED_LABELS,
 ): FleetStepCardModel | null {
   if (
     sessionStatus === "completed" ||
@@ -264,9 +266,9 @@ export function nextStageWaitingCard(
     kind: "step",
     id: `wait-${upcoming}`,
     status: "waiting",
-    title: upcoming === "s4_delivery" ? "成稿 / 交付" : upcoming,
+    title: upcoming === "s4_delivery" ? labels.delivery : upcoming,
     stepLabel: upcoming,
-    summaryHeadline: "前置步骤完成后继续",
+    summaryHeadline: labels.waiting,
     summaryDetail: "",
     bullets: [],
     evidence: null,

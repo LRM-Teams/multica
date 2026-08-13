@@ -94,8 +94,8 @@ func invokeAcceptWithBeforeCommitFault(t *testing.T, ctx context.Context, fx acc
 
 func assertAcceptanceRolledBack(t *testing.T, ctx context.Context, fx acceptanceRaceFixture) {
 	t.Helper()
-	var attemptStatus string
-	var resultArtifacts int
+	var attemptStatus, taskStatus string
+	var resultArtifacts, acceptedEvents int
 	if err := fx.pool.QueryRow(ctx, `
 		SELECT status FROM research_task_attempt WHERE id = $1::uuid
 	`, fx.attempt.ID).Scan(&attemptStatus); err != nil {
@@ -105,6 +105,14 @@ func assertAcceptanceRolledBack(t *testing.T, ctx context.Context, fx acceptance
 		t.Fatalf("attempt status=%q want dispatching after rolled-back accept", attemptStatus)
 	}
 	if err := fx.pool.QueryRow(ctx, `
+		SELECT status FROM research_task WHERE id = $1::uuid
+	`, fx.task.ID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != string(TaskStatusDispatching) {
+		t.Fatalf("task status=%q want dispatching after rolled-back accept", taskStatus)
+	}
+	if err := fx.pool.QueryRow(ctx, `
 		SELECT count(*)::int FROM research_result_artifact
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
 	`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&resultArtifacts); err != nil {
@@ -112,6 +120,16 @@ func assertAcceptanceRolledBack(t *testing.T, ctx context.Context, fx acceptance
 	}
 	if resultArtifacts != 0 {
 		t.Fatalf("result artifacts=%d want 0 after rolled-back accept", resultArtifacts)
+	}
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_run_event
+		WHERE workspace_id = $1::uuid AND session_id = $2::uuid
+		  AND event_type = 'task_result_accepted' AND payload->>'attempt_id' = $3
+	`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&acceptedEvents); err != nil {
+		t.Fatal(err)
+	}
+	if acceptedEvents != 0 {
+		t.Fatalf("accepted events=%d want 0 after rolled-back accept", acceptedEvents)
 	}
 }
 
@@ -151,6 +169,45 @@ func TestAcceptResultRaceRejectsWhenPreflightFactsChangeAfterRolledBackAccept(t 
 					SET lifecycle_status = 'withdrawn'
 					WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND id = $3::uuid
 				`, fx.fixture.workspaceID, fx.run.SessionID, fx.claimID)
+				return nil
+			},
+		},
+		{
+			name: "superseded_manifest_artifact",
+			mutate: func(ctx context.Context, fx acceptanceRaceFixture) error {
+				successorID := uuid.NewString()
+				seedIntegrationClaimArtifact(
+					t, ctx, fx.pool, fx.fixture.workspaceID, fx.run.SessionID,
+					successorID, "accept-race-successor", "verified successor claim",
+				)
+				decisionID := uuid.NewString()
+				tx, err := fx.pool.Begin(ctx)
+				if err != nil {
+					return err
+				}
+				defer tx.Rollback(ctx)
+				if _, err = tx.Exec(ctx, `
+					INSERT INTO research_decision (
+					  id, workspace_id, session_id, decision_kind, actor_type, actor_id,
+					  goal_version, plan_version, inputs, outcome, rationale
+					) VALUES ($1::uuid,$2::uuid,$3::uuid,'artifact_supersession','system',NULL,$4,$5,
+					          jsonb_build_object('superseded_artifact_id',$6::text,'successor_artifact_id',$7::text),
+					          '{"approved":true}'::jsonb,'successor invalidates the manifest input')
+				`, decisionID, fx.fixture.workspaceID, fx.run.SessionID, fx.run.GoalVersion,
+					fx.run.PlanVersion, fx.claimID, successorID); err != nil {
+					return err
+				}
+				backfillIntegrationDecisionPassport(
+					t, ctx, tx, fx.fixture.workspaceID, fx.run.SessionID, decisionID,
+					"artifact_supersession", fx.run.GoalVersion, fx.run.PlanVersion,
+				)
+				if err = tx.Commit(ctx); err != nil {
+					return err
+				}
+				supersedeIntegrationArtifact(
+					t, ctx, fx.pool, fx.fixture.workspaceID, fx.run.SessionID,
+					fx.claimID, successorID, decisionID,
+				)
 				return nil
 			},
 		},

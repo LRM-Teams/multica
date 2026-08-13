@@ -314,8 +314,28 @@ func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedStateAdvan
 			defer cleanupResearchRunFixture(pool, fx.fixture)
 			invokeAcceptWithBeforeCommitFault(t, ctx, fx)
 			assertAcceptanceRolledBack(t, ctx, fx)
+			var watermarkBeforeMutation int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&watermarkBeforeMutation); err != nil {
+				t.Fatal(err)
+			}
 			if err = tc.mutate(ctx, fx); err != nil {
 				t.Fatalf("advance unrelated state: %v", err)
+			}
+			var watermarkBeforeAccept int64
+			if err = pool.QueryRow(ctx, `
+				SELECT watermark FROM research_artifact_policy_state
+				WHERE workspace_id=$1::uuid AND session_id=$2::uuid
+			`, fx.fixture.workspaceID, fx.run.SessionID).Scan(&watermarkBeforeAccept); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "policy_watermark" && watermarkBeforeAccept != watermarkBeforeMutation+1 {
+				t.Fatalf("unrelated watermark advance=%d want %d", watermarkBeforeAccept, watermarkBeforeMutation+1)
+			}
+			if tc.name != "policy_watermark" && watermarkBeforeAccept != watermarkBeforeMutation {
+				t.Fatalf("non-policy mutation changed watermark from %d to %d", watermarkBeforeMutation, watermarkBeforeAccept)
 			}
 			outcome, acceptErr := fx.store.AcceptResult(ctx, fx.input)
 			if acceptErr != nil {
@@ -325,14 +345,46 @@ func TestAcceptResultRaceAcceptsAfterRolledBackAcceptWhenOnlyUnrelatedStateAdvan
 				t.Fatalf("outcome=%+v", outcome)
 			}
 			var resultArtifacts int
+			var acceptanceWatermark, finalWatermark, manifestWatermark int64
+			var resultCreateMutations int
 			if err = pool.QueryRow(ctx, `
-				SELECT count(*)::int FROM research_result_artifact
-				WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
-			`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(&resultArtifacts); err != nil {
+				SELECT count(*)::int, min(result.acceptance_policy_watermark), policy.watermark,
+				       manifest.policy_watermark,
+				       (SELECT count(*)::int
+				        FROM research_artifact_policy_mutation mutation
+				        WHERE mutation.workspace_id=result.workspace_id
+				          AND mutation.session_id=result.session_id
+				          AND mutation.artifact_id=result.id
+				          AND mutation.mutation_kind='artifact_create'
+				          AND mutation.watermark=result.acceptance_policy_watermark)
+				FROM research_result_artifact result
+				JOIN research_artifact_policy_state policy
+				  ON (policy.workspace_id,policy.session_id)=(result.workspace_id,result.session_id)
+				JOIN research_artifact_context_manifest manifest
+				  ON (manifest.workspace_id,manifest.session_id,manifest.attempt_id)=
+				     (result.workspace_id,result.session_id,result.attempt_id)
+				WHERE result.workspace_id = $1::uuid AND result.session_id = $2::uuid
+				  AND result.attempt_id = $3::uuid
+				GROUP BY policy.watermark, manifest.policy_watermark, result.workspace_id,
+				         result.session_id, result.id, result.acceptance_policy_watermark
+			`, fx.fixture.workspaceID, fx.run.SessionID, fx.attempt.ID).Scan(
+				&resultArtifacts, &acceptanceWatermark, &finalWatermark,
+				&manifestWatermark, &resultCreateMutations,
+			); err != nil {
 				t.Fatal(err)
 			}
 			if resultArtifacts != 1 {
 				t.Fatalf("result artifacts=%d want 1", resultArtifacts)
+			}
+			if acceptanceWatermark != watermarkBeforeAccept+1 || finalWatermark != acceptanceWatermark {
+				t.Fatalf("acceptance watermark=%d final=%d want reserved successor of %d",
+					acceptanceWatermark, finalWatermark, watermarkBeforeAccept)
+			}
+			if acceptanceWatermark <= manifestWatermark {
+				t.Fatalf("acceptance watermark=%d must follow manifest watermark=%d", acceptanceWatermark, manifestWatermark)
+			}
+			if resultCreateMutations != 1 {
+				t.Fatalf("Result artifact_create mutations at acceptance watermark=%d want 1", resultCreateMutations)
 			}
 		})
 	}

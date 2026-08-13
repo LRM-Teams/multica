@@ -33,7 +33,7 @@ var chapterD15Coverage = map[int]string{
 	16: "covered", // historical live vs frozen manifest tests
 	17: "partial", // frozen gate snapshot on TaskContextForAttempt
 	18: "partial", // accept race: eligibility/lifecycle/hash/manifest/repr/watermark/state after rollback
-	19: "partial", // unrelated watermark advance after rolled-back accept
+	19: "covered", // unrelated advance reauthorization + final acceptance watermark; affected eligibility rejects
 	20: "partial", // result lock-order concurrency + normalized manifest locks
 	21: "partial", // accept replay hash/lineage conflict
 	22: "partial", // result accept transaction recovery matrix

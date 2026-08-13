@@ -1,6 +1,9 @@
 package researchrun
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type InquiryEntityKind string
 type InquiryRelation string
@@ -35,6 +38,11 @@ type inquiryEdgeCommand struct {
 	Rationale string
 }
 
+type TaskInquiryTarget struct {
+	Kind     InquiryEntityKind `json:"kind"`
+	EntityID string            `json:"entity_id"`
+}
+
 // inquiryModule is the internal seam for Inquiry Graph invariants. Callers
 // submit intent; endpoint resolution, lifecycle rules and DAG rules remain
 // implementation details shared by production persistence and tests.
@@ -67,6 +75,21 @@ func (inquiryModule) ValidateEdge(command inquiryEdgeCommand) error {
 	}
 	if len(command.Rationale) > 32768 {
 		return fmt.Errorf("%w: inquiry edge rationale is too large", ErrInvalidContract)
+	}
+	return nil
+}
+
+func (inquiryModule) ValidateTaskTargets(targets []TaskInquiryTarget) error {
+	if len(targets) == 0 || len(targets) > 32 {
+		return fmt.Errorf("%w: a Task requires 1..32 Inquiry targets", ErrInvalidContract)
+	}
+	seen := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		key := string(target.Kind) + ":" + target.EntityID
+		if !inquiryKinds[target.Kind] || target.Kind == InquiryKindDispute || strings.TrimSpace(target.EntityID) == "" || seen[key] {
+			return fmt.Errorf("%w: invalid Task Inquiry target %q", ErrInvalidContract, key)
+		}
+		seen[key] = true
 	}
 	return nil
 }

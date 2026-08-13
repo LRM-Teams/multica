@@ -366,6 +366,26 @@ type ChannelInviteCandidatesResponse struct {
 	Candidates []ChannelInviteCandidateResponse `json:"candidates"`
 }
 
+// ChannelMentionCandidate is one @ picker row. Type matches the composer
+// mention vocabulary (member | agent), not channel_member.member_type.
+type ChannelMentionCandidate struct {
+	Type      string  `json:"type"`
+	ID        string  `json:"id"`
+	Handle    string  `json:"handle"`
+	Label     string  `json:"label"`
+	AvatarURL *string `json:"avatar_url,omitempty"`
+}
+
+// ChannelMentionCandidatesResponse is GET /api/channels/:id/mention-candidates.
+// in_channel is always the full matching membership. not_in_channel is a page
+// of workspace users/agents who are not members yet.
+type ChannelMentionCandidatesResponse struct {
+	InChannel    []ChannelMentionCandidate `json:"in_channel"`
+	NotInChannel []ChannelMentionCandidate `json:"not_in_channel"`
+	HasMore      bool                      `json:"has_more"`
+	NextOffset   *int                      `json:"next_offset,omitempty"`
+}
+
 type SendChannelMessageRequest struct {
 	Content             string                 `json:"content"`
 	Parts               []protocol.MessagePart `json:"parts"`
@@ -1335,6 +1355,174 @@ func (h *Handler) ListChannelInviteCandidates(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, http.StatusOK, ChannelInviteCandidatesResponse{Candidates: out})
+}
+
+const mentionCandidatePageDefault = 20
+const mentionCandidatePageMax = 100
+
+// ListChannelMentionCandidates returns the group @ picker roster.
+// Channel members are never paginated. Outsiders are a limit/offset page so
+// a large workspace cannot hide in-channel people behind ASCII sort order.
+func (h *Handler) ListChannelMentionCandidates(w http.ResponseWriter, r *http.Request) {
+	if rejectAgentOnHumanRoute(w, r, "ListChannelMentionCandidates") {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	qLower := strings.ToLower(q)
+	qLike := "%" + qLower + "%"
+	includeAll := qLower == ""
+	limit := boundedQueryInt(r, "limit", mentionCandidatePageDefault, mentionCandidatePageMax)
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	inChannel, err := h.listChannelMentionInChannel(r.Context(), parseUUID(workspaceID), channelID, includeAll, qLike)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel mention candidates")
+		return
+	}
+	outsiders, hasMore, err := h.listChannelMentionOutsiders(r.Context(), parseUUID(workspaceID), channelID, includeAll, qLike, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list channel mention candidates")
+		return
+	}
+
+	resp := ChannelMentionCandidatesResponse{
+		InChannel:    inChannel,
+		NotInChannel: outsiders,
+		HasMore:      hasMore,
+	}
+	if hasMore {
+		next := offset + len(outsiders)
+		resp.NextOffset = &next
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listChannelMentionInChannel(ctx context.Context, workspaceID, channelID pgtype.UUID, includeAll bool, qLike string) ([]ChannelMentionCandidate, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT CASE WHEN cm.member_type = 'user' THEN 'member' ELSE 'agent' END,
+		       cm.member_id,
+		       COALESCE(u.name, a.name, ''),
+		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
+		       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END
+		FROM channel_member cm
+		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
+		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
+		WHERE cm.channel_id = $1
+		  AND cm.workspace_id = $2
+		  AND (
+			$3::boolean
+			OR lower(COALESCE(u.name, a.name, '')) LIKE $4
+			OR lower(COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '')) LIKE $4
+		  )
+		ORDER BY lower(COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '')),
+		         lower(COALESCE(u.name, a.name, '')),
+		         cm.member_id`,
+		channelID, workspaceID, includeAll, qLike)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanChannelMentionCandidates(rows)
+}
+
+func (h *Handler) listChannelMentionOutsiders(ctx context.Context, workspaceID, channelID pgtype.UUID, includeAll bool, qLike string, limit, offset int) ([]ChannelMentionCandidate, bool, error) {
+	rows, err := h.DB.Query(ctx, `
+		WITH visible_agents AS (
+			SELECT a.id, a.name, COALESCE(NULLIF(a.display_name, ''), a.name) AS display_name,
+			       a.avatar_url
+			FROM agent a
+			WHERE a.workspace_id = $1
+			  AND a.archived_at IS NULL
+			  AND NOT EXISTS (
+				SELECT 1 FROM channel_member cm
+				WHERE cm.channel_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
+			  )
+			  AND (
+				$3::boolean
+				OR lower(a.name) LIKE $4
+				OR lower(COALESCE(NULLIF(a.display_name, ''), a.name)) LIKE $4
+			  )
+		), candidates AS (
+			SELECT 'member'::text AS type, m.user_id AS id,
+			       COALESCE(u.name, '') AS handle,
+			       COALESCE(NULLIF(u.display_name, ''), u.name, u.email) AS label,
+			       u.avatar_url
+			FROM member m
+			JOIN "user" u ON u.id = m.user_id
+			WHERE m.workspace_id = $1
+			  AND NOT EXISTS (
+				SELECT 1 FROM channel_member cm
+				WHERE cm.channel_id = $2 AND cm.member_type = 'user' AND cm.member_id = m.user_id
+			  )
+			  AND (
+				$3::boolean
+				OR lower(u.name) LIKE $4
+				OR lower(COALESCE(NULLIF(u.display_name, ''), u.name, u.email)) LIKE $4
+				OR lower(u.email) LIKE $4
+			  )
+			UNION ALL
+			SELECT 'agent'::text AS type, va.id AS id,
+			       va.name AS handle, va.display_name AS label, va.avatar_url
+			FROM visible_agents va
+		)
+		SELECT type, id, handle, label, avatar_url
+		FROM candidates
+		ORDER BY lower(label), lower(handle), id
+		LIMIT $5 OFFSET $6`,
+		workspaceID, channelID, includeAll, qLike, limit+1, offset)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	all, err := scanChannelMentionCandidates(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(all) > limit
+	if hasMore {
+		all = all[:limit]
+	}
+	return all, hasMore, nil
+}
+
+func scanChannelMentionCandidates(rows pgx.Rows) ([]ChannelMentionCandidate, error) {
+	out := []ChannelMentionCandidate{}
+	for rows.Next() {
+		var c ChannelMentionCandidate
+		var id pgtype.UUID
+		var avatar pgtype.Text
+		if err := rows.Scan(&c.Type, &id, &c.Handle, &c.Label, &avatar); err != nil {
+			return nil, err
+		}
+		c.ID = uuidToString(id)
+		c.AvatarURL = textToPtr(avatar)
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {

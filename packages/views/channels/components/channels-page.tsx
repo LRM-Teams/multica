@@ -1362,6 +1362,45 @@ export function ChannelsPage({
       channelMemberIds: channelMembers.map((m) => m.member_id),
     });
   }, [active, agents, channelMemberIds, channelMembers, workspaceMembers]);
+  const fetchMentionCandidates = useCallback<
+    NonNullable<ContentEditorProps["fetchMentionCandidates"]>
+  >(async (query, offset, signal) => {
+    const channelId = active?.id;
+    if (!channelId) {
+      return { in_channel: [], not_in_channel: [], has_more: false, next_offset: null };
+    }
+    const res = await api.listChannelMentionCandidates(channelId, {
+      q: query || undefined,
+      offset,
+      limit: 20,
+      signal,
+    });
+    const toItem = (
+      candidate: (typeof res.in_channel)[number],
+      group: "in_channel" | "not_in_channel",
+    ) => ({
+      id: candidate.id,
+      label: candidate.label || candidate.handle || candidate.id,
+      handle: candidate.handle,
+      type: candidate.type === "agent" ? ("agent" as const) : ("member" as const),
+      group,
+      secondaryLabel: candidate.handle ? `@${candidate.handle}` : undefined,
+    });
+    const inChannel: ReturnType<typeof toItem>[] = [];
+    for (const candidate of res.in_channel) {
+      if (candidate.id) inChannel.push(toItem(candidate, "in_channel"));
+    }
+    const notInChannel: ReturnType<typeof toItem>[] = [];
+    for (const candidate of res.not_in_channel) {
+      if (candidate.id) notInChannel.push(toItem(candidate, "not_in_channel"));
+    }
+    return {
+      in_channel: inChannel,
+      not_in_channel: notInChannel,
+      has_more: res.has_more === true,
+      next_offset: typeof res.next_offset === "number" ? res.next_offset : null,
+    };
+  }, [active?.id]);
   // Channel-member agents + (on group) workspace agents so picker can inject
   // ids not already in the personal agent list.
   const channelAgentCandidates = useMemo<ContentEditorProps["scopedMentionAgents"]>(
@@ -3502,6 +3541,9 @@ export function ChannelsPage({
             mentionChannelMemberIds={
               active?.kind === "group" ? channelMemberIds : null
             }
+            fetchMentionCandidates={
+              active?.kind === "group" ? fetchMentionCandidates : null
+            }
           />
         }
         // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- same thread send helper as onRestorePrevious
@@ -4250,6 +4292,9 @@ export function ChannelsPage({
                         scopedMentionAgents={channelAgentCandidates}
                         mentionChannelMemberIds={
                           active?.kind === "group" ? channelMemberIds : null
+                        }
+                        fetchMentionCandidates={
+                          active?.kind === "group" ? fetchMentionCandidates : null
                         }
                       />
                     }

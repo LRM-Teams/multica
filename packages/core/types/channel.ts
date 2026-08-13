@@ -204,6 +204,22 @@ export interface ChannelInviteCandidatesResponse {
   candidates: ChannelInviteCandidate[];
 }
 
+/** GET /api/channels/:id/mention-candidates row. */
+export interface ChannelMentionCandidate {
+  type: "member" | "agent";
+  id: string;
+  handle: string;
+  label: string;
+  avatar_url?: string | null;
+}
+
+export interface ChannelMentionCandidatesResponse {
+  in_channel: ChannelMentionCandidate[];
+  not_in_channel: ChannelMentionCandidate[];
+  has_more: boolean;
+  next_offset?: number | null;
+}
+
 export type ChannelMemberRole = "owner" | "manager" | "member";
 
 /**

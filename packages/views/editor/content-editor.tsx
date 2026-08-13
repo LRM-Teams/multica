@@ -144,6 +144,7 @@ interface ContentEditorProps {
    * headers. Does not filter the pool (that is `mentionAllowedActorIds`).
    */
   mentionChannelMemberIds?: ReadonlySet<string> | null;
+  fetchMentionCandidates?: import("./extensions/mention-suggestion").MentionCandidatesFetch | null;
   /** Enable the `/` command picker. Defaults false. */
   enableSlashCommands?: boolean;
   /**
@@ -253,6 +254,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       mentionAllowedActorIds,
       scopedMentionAgents,
       mentionChannelMemberIds,
+      fetchMentionCandidates,
       enableSlashCommands = false,
       slashCommandMode = "skill",
       attachments,
@@ -280,6 +282,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     const mentionChannelMemberIdsRef = useRef<ReadonlySet<string> | null>(
       mentionChannelMemberIds ?? null,
     );
+    const fetchMentionCandidatesRef = useRef(fetchMentionCandidates ?? null);
     const lastEmittedRef = useRef<string | null>(null);
 
     // In-session record of attachments freshly uploaded through this editor.
@@ -355,6 +358,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     mentionAllowedActorIdsRef.current = mentionAllowedActorIds ?? null;
     scopedMentionAgentsRef.current = scopedMentionAgents ?? null;
     mentionChannelMemberIdsRef.current = mentionChannelMemberIds ?? null;
+    fetchMentionCandidatesRef.current = fetchMentionCandidates ?? null;
 
     const queryClient = useQueryClient();
     const [emptyLineAiState, setEmptyLineAiState] = useState<EmptyLineAiState | null>(null);
@@ -415,6 +419,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           getMentionAllowedActorIds: () => mentionAllowedActorIdsRef.current,
           getMentionScopedAgents: () => scopedMentionAgentsRef.current,
           getMentionChannelMemberIds: () => mentionChannelMemberIdsRef.current,
+          getMentionCandidates: () => fetchMentionCandidatesRef.current,
           enableChannelReferences,
           enableIssueReferences,
           enableSlashCommands,

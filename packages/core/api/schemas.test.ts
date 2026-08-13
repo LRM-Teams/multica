@@ -45,6 +45,8 @@ import {
   EMPTY_RUNNER_ACTIVITY_SUMMARIES_RESPONSE,
   SendChatMessageResponseSchema,
   EMPTY_SEND_CHAT_MESSAGE_RESPONSE,
+  ChannelMentionCandidatesResponseSchema,
+  EMPTY_CHANNEL_MENTION_CANDIDATES,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
 
@@ -905,5 +907,36 @@ describe("ConversationHandleLookupSchema", () => {
       { endpoint: "GET /api/conversations/lookup" },
     );
     expect(wrongType).toEqual(EMPTY_CONVERSATION_HANDLE_LOOKUP);
+  });
+});
+
+describe("ChannelMentionCandidatesResponseSchema", () => {
+  it("parses a canonical mention-candidates page", () => {
+    const parsed = ChannelMentionCandidatesResponseSchema.parse({
+      in_channel: [{ type: "agent", id: "a1", handle: "li-wei", label: "里维" }],
+      not_in_channel: [{ type: "member", id: "u2", handle: "bob", label: "Bob" }],
+      has_more: true,
+      next_offset: 20,
+    });
+    expect(parsed.in_channel[0]?.label).toBe("里维");
+    expect(parsed.has_more).toBe(true);
+    expect(parsed.next_offset).toBe(20);
+  });
+
+  it("falls back when the body is malformed", () => {
+    expect(
+      parseWithFallback(null, ChannelMentionCandidatesResponseSchema, EMPTY_CHANNEL_MENTION_CANDIDATES, {
+        endpoint: "GET /api/channels/{id}/mention-candidates",
+      }),
+    ).toEqual(EMPTY_CHANNEL_MENTION_CANDIDATES);
+    const missing = parseWithFallback(
+      { in_channel: null, not_in_channel: "x" },
+      ChannelMentionCandidatesResponseSchema,
+      EMPTY_CHANNEL_MENTION_CANDIDATES,
+      { endpoint: "GET /api/channels/{id}/mention-candidates" },
+    );
+    expect(missing.in_channel).toEqual([]);
+    expect(missing.not_in_channel).toEqual([]);
+    expect(missing.has_more).toBe(false);
   });
 });

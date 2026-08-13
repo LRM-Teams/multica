@@ -979,6 +979,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [ ] 所有 Task Context 只从护照选择可见工件；Prompt 不能读取无权数据。
 - [ ] evaluation-private 与被评对象隔离。
   - [x] D-eval-1：Quality Gate/Citation Audit dispatch 使用 `evaluation` purpose，同时冻结同一 grader Agent 的 normal 与 evaluation-private 持久 grant；Stage Evaluation 私有 representation 只在 active evaluation grant、assigned Attempt 路径解码并进入 grader Prompt，普通任务继续 omission/fail-closed。完整 principal/revocation 矩阵仍由 §15.10/§15.23 退出测试收口。
+  - [x] D-eval-2：Prompt 入口在进入任一 V1–V5 builder 前结构性剥离 `EvaluationPrivate`，只在 Quality Gate/Citation Audit 普通 Prompt 完成后追加授权 grader context；真实 subject/grader dispatch 对照证明 subject 序列化不含私有 ID、passport hash、metadata 或 content，grader 获得 manifest 冻结版本且不会吸收 dispatch 后新增的私有工件。§15.10 已收口；完整 principal/revocation 矩阵仍由 §15.23 收口。
 
 当前实现状态：migration 318–335 已落地 Passport、不可变 Version、Result Artifact、
 Context Manifest、Input Reference、Policy mutation ledger、canonicalization registry、

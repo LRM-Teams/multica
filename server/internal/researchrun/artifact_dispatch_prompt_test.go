@@ -33,6 +33,35 @@ func TestEvaluationPrivatePromptOnlyForGraderTasks(t *testing.T) {
 	}
 }
 
+func TestTaskPromptSnapshotStructurallyIsolatesEvaluationPrivateContext(t *testing.T) {
+	private := []EvaluationPrivateContext{{
+		ID: "private-id", Stage: "private-stage", Findings: json.RawMessage(`[{"metadata":"private-metadata","content":"private-content"}]`),
+		Remediation: "private-remediation",
+	}}
+	for _, kind := range []TaskKind{
+		TaskKindPlan, TaskKindDiscover, TaskKindDeepRead, TaskKindVerify,
+		TaskKindCounterSearch, TaskKindSynthesize,
+	} {
+		sanitized, graderContext := isolateTaskPromptSnapshot(kindTask(kind), RunSnapshot{EvaluationPrivate: private})
+		if len(sanitized.EvaluationPrivate) != 0 || len(graderContext) != 0 {
+			t.Fatalf("subject kind %q retained private context: sanitized=%+v grader=%+v", kind, sanitized.EvaluationPrivate, graderContext)
+		}
+	}
+	for _, kind := range []TaskKind{TaskKindQualityGate, TaskKindCitationAudit} {
+		sanitized, graderContext := isolateTaskPromptSnapshot(kindTask(kind), RunSnapshot{EvaluationPrivate: private})
+		if len(sanitized.EvaluationPrivate) != 0 {
+			t.Fatalf("grader kind %q exposed private context to ordinary builder", kind)
+		}
+		if len(graderContext) != 1 || graderContext[0].ID != private[0].ID {
+			t.Fatalf("grader kind %q context=%+v", kind, graderContext)
+		}
+	}
+}
+
+func kindTask(kind TaskKind) Task {
+	return Task{Kind: kind}
+}
+
 func TestManifestPrincipalHeaderRoundTrip(t *testing.T) {
 	members := []FleetMember{
 		{AgentID: "agent-lead", Role: "lead", Status: "active", IsLead: true},

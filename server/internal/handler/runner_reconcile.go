@@ -58,7 +58,10 @@ func reduceRunnerLaunches(desired []runnerDesiredLaunch, observed []runnerObserv
 	actions := make([]runnerReconcileAction, 0, len(ordered)*2)
 	for _, agentID := range ordered {
 		want, wanted := desiredByAgent[agentID]
-		have, running := observedByAgent[agentID]
+		have, observed := observedByAgent[agentID]
+		// ACK / accepted is transport residency, not a live process. Only
+		// Active counts as running so an upgrade successor re-sends start.
+		running := observed && have.status == protocol.AgentStatusActive
 		mismatched := running && (!wanted || have.runtimeID != want.runtimeID || have.launchID != want.launchID)
 		if mismatched {
 			actions = append(actions, runnerReconcileAction{eventType: protocol.EventDaemonAgentStop, payload: protocol.WorkspaceRunnerAgentStopPayload{AgentID: have.agentID, LaunchID: have.launchID}})

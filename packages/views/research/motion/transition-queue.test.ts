@@ -7,7 +7,7 @@
  *  - Coalescing (spec §5.3), cap enforcement, budget truncation.
  *  - Interrupt (new same-lane event coalesces/cancels the pending one).
  *  - Background restore (Rule ⑥: settle immediately without replay).
- *  - Reduced motion (Rule ④: uniform fade, no displacement, instant layout).
+ *  - Reduced motion (Rule ④: immediate settlement, no playback queue).
  *  - Low-performance (Rule ⑤: halved budget, still settles).
  *
  * This module is a pure state layer — no DOM/RAF/React — so every test is a
@@ -201,7 +201,7 @@ describe("Background restore — Rule ⑥", () => {
 });
 
 describe("Reduced motion — Rule ④", () => {
-  it("plans a uniform fade with instant layout (zero stagger/start)", () => {
+  it("settles new events immediately without creating playback", () => {
     const profile: MotionProfile = { reducedMotion: true, lowPerformance: false };
     let state = createTransitionQueue({ nowMs: 0, profile });
     state = transitionQueueReducer(state, {
@@ -222,11 +222,8 @@ describe("Reduced motion — Rule ④", () => {
       },
       nowMs: 50,
     });
-    const live = [...state.queued.values()].flat().filter((e) => e.state !== "settled");
-    // All reduced-motion entries collapse to the uniform `reappear` verb.
-    expect(live.every((e) => e.verb === "reappear")).toBe(true);
-    // Instant layout: no stagger/start delay, all start immediately at enqueue.
-    expect(live.every((e) => e.plannedStartMs === e.enqueuedMs)).toBe(true);
+    expect(liveQueueSize(state)).toBe(0);
+    expect(state.queued.size).toBe(0);
   });
 
   it("still settles to an empty queue under reduced motion", () => {
@@ -235,8 +232,8 @@ describe("Reduced motion — Rule ④", () => {
       { reducedMotion: true, lowPerformance: false },
       1,
     );
-    const settled = fullySettle(final);
-    expect(liveQueueSize(settled)).toBe(0);
+    expect(liveQueueSize(final)).toBe(0);
+    expect(final.queued.size).toBe(0);
   });
 });
 

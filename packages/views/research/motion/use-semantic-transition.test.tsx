@@ -112,7 +112,7 @@ describe("useSemanticTransition — settleNow", () => {
 });
 
 describe("useSemanticTransition — profiles", () => {
-  it("collapses displacement to the uniform fade under reduced motion (Rule ④)", () => {
+  it("settles immediately under reduced motion (Rule ④)", () => {
     // Emulate the device-side reduced-motion signal so prefers-reduced-motion
     // resolves true even though jsdom's default matchMedia reports false.
     const nativeMatchMedia = window.matchMedia;
@@ -137,10 +137,8 @@ describe("useSemanticTransition — profiles", () => {
         });
       });
       expect(result.current.profile.reducedMotion).toBe(true);
-      const d = result.current.directiveFor("director-1");
-      expect(d!.style.animationName).toBe("research-motion-fade-in");
-      // Persistent escalate emphasis marker survives reduced-motion collapse.
-      expect(d!.markerClass).toContain("research-motion-marker-escalate-emphasis");
+      expect(result.current.queueSize).toBe(0);
+      expect(result.current.directiveFor("director-1")).toBeNull();
     } finally {
       window.matchMedia = nativeMatchMedia;
     }

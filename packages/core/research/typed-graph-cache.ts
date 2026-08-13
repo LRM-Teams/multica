@@ -14,6 +14,8 @@ export interface TypedGraphWsPatch {
   edge?: unknown;
   edges?: unknown;
   graphVersion?: number;
+  /** Envelope session identity used to reject cross-session entity payloads. */
+  sessionId?: string;
 }
 
 export interface TypedGraphPatchResult {
@@ -130,7 +132,27 @@ export function patchTypedGraphInfiniteData(
     return { patched: false, needsResync: false };
   }
 
+  if (patch.sessionId) {
+    const crossSessionNode =
+      node?.session_id && node.session_id !== patch.sessionId;
+    const crossSessionEdge = edgeList.some(
+      (edge) => edge.session_id && edge.session_id !== patch.sessionId,
+    );
+    if (crossSessionNode || crossSessionEdge) {
+      return { patched: false, needsResync: true };
+    }
+  }
+
   const currentVersion = Math.max(...data.pages.map((page) => page.graph_version ?? 0));
+  if (
+    patch.graphVersion != null &&
+    Number.isFinite(patch.graphVersion) &&
+    patch.graphVersion < currentVersion
+  ) {
+    // A delayed event was already superseded. Treat it as handled so callers
+    // do not refetch, but never let its older fields overwrite current facts.
+    return { patched: true, needsResync: false, data };
+  }
   if (
     patch.graphVersion != null &&
     Number.isFinite(patch.graphVersion) &&
@@ -181,6 +203,7 @@ export function applyTypedGraphWsPatch(
     const applied = patchTypedGraphInfiniteData(prev, {
       ...patch,
       graphVersion: graphVersionRaw,
+      sessionId,
     });
     result = applied;
     return applied.data ?? prev;

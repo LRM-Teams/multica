@@ -97,7 +97,7 @@ export function TrajectoryExplorer({
         data-testid="trajectory-loading"
         className="flex min-h-48 flex-col gap-3 px-3 py-4"
         aria-busy="true"
-        aria-label="Loading trajectory"
+        aria-label={t((s) => s.trajectory_explorer.loading)}
       >
         <div aria-hidden="true" className="h-8 w-full animate-pulse rounded bg-muted/50" />
         <div aria-hidden="true" className="h-5 w-2/3 animate-pulse rounded bg-muted/50" />
@@ -156,7 +156,7 @@ export function TrajectoryExplorer({
         "flex h-full min-h-0 flex-col overflow-hidden",
         isCompleted ? "opacity-90" : "",
       )}
-      aria-label="Trajectory explorer"
+      aria-label={t((s) => s.trajectory_explorer.title)}
     >
       <TrajectoryToolbar
         nodes={nodes}

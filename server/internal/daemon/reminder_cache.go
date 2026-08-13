@@ -337,13 +337,6 @@ func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) 
 			OwnerAgentID: event.AgentID, Version: event.Version, LastSeq: event.Seq, Terminal: event.Terminal,
 		}
 		delete(c.attemptedFires, event.ReminderID)
-		if event.EventType == "fire_result" {
-			for _, receipt := range append([]reminderDueReceipt(nil), c.receipts[event.ReminderID]...) {
-				if receipt.Job.OwnerAgentID == event.AgentID {
-					c.ackFireReceiptLocked(receiptIdentity(receipt))
-				}
-			}
-		}
 	}
 	c.runtimeCursors[event.RuntimeID] = event.Seq
 	if err := c.persistLocked(); err != nil {

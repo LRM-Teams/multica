@@ -678,7 +678,14 @@ type ReminderProjectionAckPayload struct {
 	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
 }
 
+type ReminderFireAckPayload struct {
+	AgentID    string `json:"agent_id"`
+	ReminderID string `json:"reminder_id"`
+	Version    int64  `json:"version"`
+}
+
 type ReminderFireResultPayload struct {
+	Ack        ReminderFireAckPayload  `json:"ack"`
 	Projection ReminderProjectionEvent `json:"projection"`
 }
 

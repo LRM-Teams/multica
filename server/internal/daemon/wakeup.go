@@ -534,7 +534,7 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				d.logger.Debug("reminder fire result invalid payload", "error", err)
 				continue
 			}
-			if err := d.handleReminderProjection(payload.Projection); err != nil {
+			if err := d.handleReminderFireResult(payload); err != nil {
 				return err
 			}
 		case protocol.EventReminderSnapshot:
@@ -661,6 +661,17 @@ func (d *Daemon) handleReminderProjection(payload protocol.ReminderProjectionEve
 		return nil
 	}
 	return d.ackReminderProjectionCursors(d.reminderCache.projectionCursors())
+}
+
+func (d *Daemon) handleReminderFireResult(payload protocol.ReminderFireResultPayload) error {
+	if d != nil && d.reminderCache != nil && payload.Ack.AgentID != "" && payload.Ack.ReminderID != "" && payload.Ack.Version > 0 {
+		d.reminderCache.ackFireReceipt(reminderDueIdentity{
+			OwnerAgentID: payload.Ack.AgentID,
+			ReminderID:   payload.Ack.ReminderID,
+			Version:      payload.Ack.Version,
+		})
+	}
+	return d.handleReminderProjection(payload.Projection)
 }
 
 func (d *Daemon) setReminderWS(writes chan<- []byte, done <-chan struct{}, closeFn func() error) {

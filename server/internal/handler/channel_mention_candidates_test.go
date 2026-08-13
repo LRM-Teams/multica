@@ -18,8 +18,9 @@ func TestListChannelMentionCandidatesKeepsInChannelAndPagesOutsiders(t *testing.
 
 	ctx := context.Background()
 	memberID := testUserID
+	otherMemberID := createChannelWorkspaceMemberWithRole(t, "member")
 	inChannelAgentID := seedMentionTestAgent(t, memberID, "li-wei-"+uuid.NewString()[:8], "里维")
-	channelID := seedChannelForTest(t, "mention-candidates-"+uuid.NewString(), memberID)
+	channelID := seedChannelForTest(t, "mention-candidates-"+uuid.NewString(), memberID, otherMemberID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, inChannelAgentID); err != nil {
@@ -46,8 +47,11 @@ func TestListChannelMentionCandidatesKeepsInChannelAndPagesOutsiders(t *testing.
 	if !channelMentionCandidatesContain(page.InChannel, "agent", inChannelAgentID) {
 		t.Fatalf("in-channel agent missing: %+v", page.InChannel)
 	}
-	if !channelMentionCandidatesContain(page.InChannel, "member", memberID) {
-		t.Fatalf("in-channel member missing: %+v", page.InChannel)
+	if channelMentionCandidatesContain(page.InChannel, "member", memberID) {
+		t.Fatalf("viewer should not be a group @ candidate: %+v", page.InChannel)
+	}
+	if !channelMentionCandidatesContain(page.InChannel, "member", otherMemberID) {
+		t.Fatalf("other in-channel member missing: %+v", page.InChannel)
 	}
 	if channelMentionCandidatesContain(page.NotInChannel, "agent", inChannelAgentID) {
 		t.Fatalf("in-channel agent leaked into not_in_channel")
@@ -133,6 +137,24 @@ func seedMentionTestAgent(t *testing.T, ownerID, name, displayName string) strin
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
 	})
 	return agentID
+}
+
+func TestDropViewerMentionCandidate(t *testing.T) {
+	rows := []ChannelMentionCandidate{
+		{Type: "member", ID: "self"},
+		{Type: "member", ID: "other"},
+		{Type: "agent", ID: "self"},
+	}
+	got := dropViewerMentionCandidate(rows, "self")
+	if channelMentionCandidatesContain(got, "member", "self") {
+		t.Fatalf("viewer member still present: %+v", got)
+	}
+	if !channelMentionCandidatesContain(got, "member", "other") {
+		t.Fatalf("other member dropped: %+v", got)
+	}
+	if !channelMentionCandidatesContain(got, "agent", "self") {
+		t.Fatalf("agent sharing viewer id dropped: %+v", got)
+	}
 }
 
 func channelMentionCandidatesContain(rows []ChannelMentionCandidate, typ, id string) bool {

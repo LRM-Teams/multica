@@ -1400,6 +1400,7 @@ func (h *Handler) ListChannelMentionCandidates(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to list channel mention candidates")
 		return
 	}
+	inChannel = dropViewerMentionCandidate(inChannel, userID)
 	outsiders, hasMore, err := h.listChannelMentionOutsiders(r.Context(), parseUUID(workspaceID), channelID, includeAll, qLike, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channel mention candidates")
@@ -1504,6 +1505,20 @@ func (h *Handler) listChannelMentionOutsiders(ctx context.Context, workspaceID, 
 		all = all[:limit]
 	}
 	return all, hasMore, nil
+}
+
+func dropViewerMentionCandidate(rows []ChannelMentionCandidate, viewerUserID string) []ChannelMentionCandidate {
+	if viewerUserID == "" || len(rows) == 0 {
+		return rows
+	}
+	out := make([]ChannelMentionCandidate, 0, len(rows))
+	for _, row := range rows {
+		if row.Type == "member" && row.ID == viewerUserID {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 func scanChannelMentionCandidates(rows pgx.Rows) ([]ChannelMentionCandidate, error) {

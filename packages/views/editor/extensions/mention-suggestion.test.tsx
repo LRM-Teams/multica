@@ -3,6 +3,7 @@ import { createRef, type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { issueKeys, PAGINATED_STATUSES } from "@multica/core/issues/queries";
+import { buildGroupMentionAllowedActorIds } from "../../channels/mention-scope";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { IssueStatus, ListIssuesCache } from "@multica/core/types";
 import type { QueryClient } from "@tanstack/react-query";
@@ -714,6 +715,41 @@ describe("createMentionSuggestion", () => {
     expect(items.find((i) => i.id === "a-in")?.group).toBe("in_channel");
     expect(items.find((i) => i.id === "u-out")?.group).toBe("not_in_channel");
     expect(items.find((i) => i.id === "a-out")?.group).toBe("not_in_channel");
+  });
+
+  it("does not offer the viewing human in a group-channel @ picker", () => {
+    const qc = fakeQc({
+      members: [
+        { user_id: "u1", name: "alice", display_name: "Alice", role: "member" },
+        { user_id: "u2", name: "bob", display_name: "Bob", role: "member" },
+      ],
+      agents: [
+        {
+          id: "a1",
+          name: "aegis",
+          display_name: "Aegis",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+    });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    const config = createMentionSuggestion(qc, {
+      getAllowedActorIds: () =>
+        buildGroupMentionAllowedActorIds({
+          workspaceUserIds: ["u1", "u2"],
+          workspaceAgentIds: ["a1"],
+          channelMemberIds: ["u1", "u2", "a1"],
+          viewerUserId: "u1",
+        }),
+    });
+    const items = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+
+    expect(items.some((i) => i.type === "member" && i.id === "u1")).toBe(false);
+    expect(items.some((i) => i.type === "member" && i.id === "u2")).toBe(true);
+    expect(items.some((i) => i.type === "agent" && i.id === "a1")).toBe(true);
   });
 
   it("#2115: selecting a regrouped in-channel row inserts that actor, not displayItems[index]", () => {

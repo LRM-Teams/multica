@@ -365,6 +365,13 @@ func TestDispatchOutboxPromptMatchesManifestBoundRequestHash(t *testing.T) {
 	if request.ManifestID == "" || request.ManifestID != storedManifestID || request.ManifestHash != storedManifestHash {
 		t.Fatalf("request manifest=%q/%q stored=%q/%q", request.ManifestID, request.ManifestHash, storedManifestID, storedManifestHash)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE research_dispatch_outbox SET manifest_hash=$2 WHERE attempt_id=$1::uuid`, attempt.ID,
+		"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"); err != nil {
+		t.Fatalf("tamper outbox manifest hash: %v", err)
+	}
+	if _, err = store.ClaimDispatchIntents(ctx, run.SessionID, uuid.NewString(), time.Minute, 1); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("claim tampered outbox err=%v", err)
+	}
 }
 
 func TestTaskContextForAttemptExcludesPostDispatchArtifacts(t *testing.T) {

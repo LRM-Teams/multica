@@ -5,25 +5,72 @@ import enAgents from "../../../locales/en/agents.json";
 import enCommon from "../../../locales/en/common.json";
 
 const runnerActivity = vi.fn();
+const channelsQuery = vi.fn();
+const navigationPush = vi.fn();
 vi.mock("@multica/core/agents", () => ({ useRunnerActivity: (...args: unknown[]) => runnerActivity(...args) }));
+vi.mock("@tanstack/react-query", () => ({ useQuery: (...args: unknown[]) => channelsQuery(...args) }));
+vi.mock("@multica/core/channels", () => ({ channelsOptions: (workspaceId: string) => ({ queryKey: ["channels", workspaceId] }) }));
+vi.mock("@multica/core/paths", () => ({ useWorkspacePaths: () => ({ channelDetail: (id: string) => `/test/channels/${id}` }) }));
 vi.mock("@multica/ui/lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../../../common/use-viewing-timezone", () => ({ useViewingTimezone: () => "UTC" }));
 
 import { ActivityTab } from "./activity-tab";
 import { copyText } from "@multica/ui/lib/clipboard";
+import { NavigationProvider } from "../../../navigation";
 
 const agent = { id: "agent-1", workspace_id: "workspace-1" } as never;
 const TEST_RESOURCES = { en: { agents: enAgents, common: enCommon } };
 
 function renderActivityTab() {
   return render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <ActivityTab agent={agent} />
-    </I18nProvider>,
+    <NavigationProvider value={{
+      push: navigationPush,
+      replace: vi.fn(),
+      back: vi.fn(),
+      pathname: "/test/members",
+      searchParams: new URLSearchParams(),
+      getShareableUrl: vi.fn((path: string) => path),
+    }}>
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <ActivityTab agent={agent} />
+      </I18nProvider>
+    </NavigationProvider>,
   );
 }
 
 describe("ActivityTab", () => {
+  it("links the target channel in a successful saved-Draft Activity", () => {
+    channelsQuery.mockReturnValue({ data: [{ id: "channel-1", name: "test123" }] });
+    runnerActivity.mockReturnValue({
+      data: {
+        summary: { label: "Online", tone: "success", visibility: "visible" },
+        timeline: [{
+          id: "row-draft-sent",
+          occurred_at: "2026-08-13T00:38:46Z",
+          title: "Send draft sent",
+          subtext: "target: #test123\nfreshness updates: 0 newer messages\ndecision: saved draft freshness check passed when sent",
+          tone: "success",
+          body_kind: "none",
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderActivityTab();
+
+    expect(screen.getByRole("link", { name: "#test123" })).toHaveAttribute(
+      "href",
+      "/test/channels/channel-1",
+    );
+    const link = screen.getByRole("link", { name: "#test123" });
+    expect(link).not.toHaveTextContent("freshness updates");
+    expect(screen.getByTestId("runner-activity-subtext")).toHaveTextContent(
+      "freshness updates: 0 newer messages",
+    );
+  });
+
   it("renders the server-projected rows in the previous chronological timeline UI", () => {
     runnerActivity.mockReturnValue({
       data: {

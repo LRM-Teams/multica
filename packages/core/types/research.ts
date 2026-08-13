@@ -635,6 +635,35 @@ export interface ResearchRunSnapshot {
   gate: { passed: boolean; findings: ResearchRunGateFinding[] };
   /** Bounded passport summary when snapshot is manifest-filtered for an attempt. */
   attempt_context?: ResearchAttemptArtifactContext;
+  /** Bounded passport metadata; content hashes and representations are never exposed. */
+  artifact_projection?: ResearchArtifactProjection;
+}
+
+export interface ResearchArtifactProjection {
+  projection_hash: string;
+  items: ResearchArtifactProjectionItem[];
+}
+
+export interface ResearchArtifactProjectionItem {
+  id: string;
+  run_id: string;
+  entity_kind: string;
+  entity_id: string;
+  current_version: number | null;
+  eligibility_revision: number;
+  lifecycle_status: string;
+  provenance_completeness: string;
+  schema_name: string;
+  schema_version: string;
+  access_level: string;
+  goal_version: number | null;
+  plan_version: number | null;
+  produced_by_task_id?: string;
+  produced_by_attempt_id?: string;
+  produced_by_agent_id?: string;
+  version_count: number;
+  input_reference_count: number;
+  output_reference_count: number;
 }
 
 /** Bounded passport metadata for D-enabled task-bound session reads. */

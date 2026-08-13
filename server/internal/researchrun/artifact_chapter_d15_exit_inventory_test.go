@@ -39,7 +39,7 @@ var chapterD15Coverage = map[int]string{
 	22: "partial", // result accept transaction recovery matrix
 	23: "partial", // handler cross-workspace 404 + no session metadata leak; full principal matrix open
 	24: "partial", // withdrawal omission + in-flight accept block
-	25: "partial", // attempt_context stable metadata + FE schema fallback
+	25: "covered", // stable passport-ID/hash projection + frozen Attempt scope + enum/FE fallback
 	26: "covered", // transaction structural guard tests
 }
 

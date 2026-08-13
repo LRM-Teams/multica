@@ -143,6 +143,92 @@ func TestMachineUpgradeJournalRestoresHandoffGeneration(t *testing.T) {
 	}
 }
 
+func TestAttestComputerMachineUpgradeAllowsRetiredProviderGap(t *testing.T) {
+	overrideVersionStoreRoot(t, t.TempDir())
+	attested := make(chan []string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/computer/machine-upgrades/upgrade-1/attest" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		ids, _ := body["runtime_ids"].([]any)
+		got := make([]string, 0, len(ids))
+		for _, id := range ids {
+			got = append(got, fmt.Sprint(id))
+		}
+		attested <- got
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	d := &Daemon{
+		cfg:                      Config{CLIVersion: "v10.0.0", DaemonID: "computer-1"},
+		client:                   NewClient(server.URL),
+		logger:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		machineUpgradeGeneration: "generation-successor",
+		workspaces: map[string]*workspaceState{
+			"workspace-1": newWorkspaceState("workspace-1", []string{"runtime-claude"}),
+		},
+	}
+	d.client.SetToken("test-token")
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-successor", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-claude", "runtime-antigravity"},
+		RuntimeProviders: map[string]string{
+			"runtime-claude":      "claude",
+			"runtime-antigravity": "antigravity",
+		},
+		WorkspaceIDs: []string{"workspace-1"},
+		Phase:        "takeover_committed",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.attestComputerMachineUpgrade(context.Background(), []string{"workspace-1"}); err != nil {
+		t.Fatalf("retired provider gap: %v", err)
+	}
+	select {
+	case got := <-attested:
+		if !sameStringSet(got, []string{"runtime-claude"}) {
+			t.Fatalf("attested runtime_ids = %v", got)
+		}
+	default:
+		t.Fatal("successor did not attest live Runtime set")
+	}
+}
+
+func TestAttestComputerMachineUpgradeRejectsMissingShippedProvider(t *testing.T) {
+	overrideVersionStoreRoot(t, t.TempDir())
+	d := &Daemon{
+		cfg:                      Config{CLIVersion: "v10.0.0", DaemonID: "computer-1"},
+		logger:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		machineUpgradeGeneration: "generation-successor",
+		workspaces: map[string]*workspaceState{
+			"workspace-1": newWorkspaceState("workspace-1", []string{"runtime-claude"}),
+		},
+	}
+	journal := &machineUpgradeJournal{
+		ID: "upgrade-1", Generation: "generation-successor", TargetVersion: "v10.0.0",
+		RuntimeIDs: []string{"runtime-claude", "runtime-codex"},
+		RuntimeProviders: map[string]string{
+			"runtime-claude": "claude",
+			"runtime-codex":  "codex",
+		},
+		WorkspaceIDs: []string{"workspace-1"},
+		Phase:        "takeover_committed",
+	}
+	if err := d.writeMachineUpgradeJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	err := d.attestComputerMachineUpgrade(context.Background(), []string{"workspace-1"})
+	if err == nil || !strings.Contains(err.Error(), "runtime-codex") {
+		t.Fatalf("missing shipped provider error = %v", err)
+	}
+}
+
 func TestCurrentMachineUpgradeJournalAllowsCleanMachine(t *testing.T) {
 	root := t.TempDir()
 	previousRoot := versionStoreRootFn

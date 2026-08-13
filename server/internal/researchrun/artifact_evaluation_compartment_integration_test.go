@@ -221,6 +221,17 @@ func TestEvaluationPrivateStageEvalExcludedFromTaskExecutionManifest(t *testing.
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatalf("commit stage eval and passport: %v", err)
 	}
+	humanProjection, err := (artifactProjectionModule{store: store}).Load(
+		ctx, fixture.workspaceID, run.SessionID, artifactProjectionScope{},
+	)
+	if err != nil {
+		t.Fatalf("load human artifact projection: %v", err)
+	}
+	for _, item := range humanProjection.Items {
+		if item.EntityID == stageEvalID {
+			t.Fatalf("human projection leaked evaluation-private artifact existence: %+v", item)
+		}
+	}
 
 	claimID := uuid.NewString()
 	seedIntegrationClaimArtifact(t, ctx, pool, fixture.workspaceID, run.SessionID, claimID, "allowed-claim", "ordinary task claim")

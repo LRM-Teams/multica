@@ -282,6 +282,16 @@ func (m *agentProcessManager) Restart(callback agentProcessCallback, request age
 	if err != nil {
 		return protocol.AgentStartAckPayload{}, err
 	}
+	// Raft hasStarting: a start already in flight is rebound, not torn down.
+	// Killing it here makes the in-flight spawn callback stale and leaves
+	// queue_state=starting with no process — the stuck-Starting hole.
+	if managed.queueState == protocol.AgentStartQueueStarting && managed.processInstanceID == "" {
+		if request.LaunchID != managed.launchID {
+			m.rebindLaunchLocked(managed, request.LaunchID)
+			return m.rememberAcceptanceLocked(request, m.acceptanceLocked(managed, protocol.AgentStartQueueRebound)), nil
+		}
+		return m.rememberAcceptanceLocked(request, m.acceptanceLocked(managed, managed.queueState)), nil
+	}
 	m.stopLocked(managed)
 	return m.startLocked(request)
 }

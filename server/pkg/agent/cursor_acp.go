@@ -238,6 +238,11 @@ func (b *cursorACPBackend) acceptIdleInputPrompt(ctx context.Context, prompt str
 
 // RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller
 // poll process liveness between turns, not just during an in-flight one.
+func (b *cursorACPBackend) EnsureResidentProcess(ctx context.Context) error {
+	_, err := b.ensureProcess(ctx, b.cfg.ResidentOptions)
+	return err
+}
+
 func (b *cursorACPBackend) RuntimeAlive() (bool, bool) {
 	return b.runtimeAlive()
 }

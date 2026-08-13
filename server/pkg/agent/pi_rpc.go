@@ -673,6 +673,14 @@ func (b *piRPCBackend) RuntimeAlive() (bool, bool) {
 	return b.runtimeAlive()
 }
 
+func (b *piRPCBackend) EnsureResidentProcess(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := b.ensureProcess(b.cfg.ResidentOptions)
+	return err
+}
+
 func (b *piRPCBackend) runtimeAlive() (bool, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

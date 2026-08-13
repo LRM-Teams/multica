@@ -143,6 +143,40 @@ describe("ResearchConstellationWorkspace projection mismatch", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps projection retry focused while a gateway retry is pending", async () => {
+    const onRetry = vi.fn();
+    render(
+      <ResearchConstellationWorkspace
+        typedGraph={undefined}
+        typedLoading={false}
+        typedError
+        projectionErrorReason="V6 interface error"
+        onRetryTypedGraph={onRetry}
+        retryTypedGraphPending
+        snapshotNodes={snapshotNodes}
+        selectedNode={null}
+        onSelectNode={() => {}}
+        executionRows={[]}
+        onOpenAgentPanel={() => {}}
+        canvasMode="ready"
+        activeLens="relations"
+        sources={[]}
+        members={[]}
+        chatPanel={<div>chat</div>}
+        detailPanel={<div>detail</div>}
+        composer={<div>composer</div>}
+      />,
+    );
+
+    const retry = screen.getByRole("button", { name: "Retrying…" });
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    expect(retry).not.toBeDisabled();
+    retry.focus();
+    await userEvent.click(retry);
+    expect(document.activeElement).toBe(retry);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
 });
 
 describe("ResearchConstellationWorkspace local theme", () => {

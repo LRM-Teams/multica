@@ -465,8 +465,14 @@ export function ResearchConstellationWorkspace({
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={retryTypedGraphPending}
-                onClick={onRetryTypedGraph}
+                aria-disabled={retryTypedGraphPending || undefined}
+                className={
+                  retryTypedGraphPending ? "cursor-not-allowed opacity-50" : undefined
+                }
+                onClick={() => {
+                  if (retryTypedGraphPending) return;
+                  onRetryTypedGraph();
+                }}
               >
                 {retryTypedGraphPending
                   ? t(($) => $.interrupt.retrying)

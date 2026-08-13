@@ -93,6 +93,8 @@ export interface UseResearchSessionCanvasResult {
   error: { kind: "interface-error" | "unknown-version"; reason: string } | null;
   /** True while the snapshot query is loading. */
   isLoading: boolean;
+  /** True for initial loads and background capability/V5 retries. */
+  isFetching: boolean;
   /** V6 slice engine result (v6 mode only). */
   slice: UseResearchSliceReturn | null;
   refetch: () => void;
@@ -213,6 +215,9 @@ export function useResearchSessionCanvas({
   const isLoading =
     (canProbeV6 && probe.isLoading) ||
     (source === "v5" && v5Query.isLoading);
+  const isFetching =
+    (canProbeV6 && probe.isFetching) ||
+    (source === "v5" && v5Query.isFetching);
 
   const error =
     resolvedVerdict &&
@@ -248,6 +253,7 @@ export function useResearchSessionCanvas({
     canvas,
     error,
     isLoading,
+    isFetching,
     slice: sliceWithEnsure,
     refetch,
   };

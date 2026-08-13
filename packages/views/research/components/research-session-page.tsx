@@ -691,7 +691,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             void refetchTypedGraph();
             projectionGateway.refetch();
           }}
-          retryTypedGraphPending={typedGraphFetching && !typedGraphFetchingNextPage}
+          retryTypedGraphPending={
+            projectionGateway.isFetching ||
+            (typedGraphFetching && !typedGraphFetchingNextPage)
+          }
           snapshotNodeCount={data.nodes.length}
           typedGraphSessionId={sessionId}
           typedGraphVersion={displayTypedGraph?.graph_version ?? null}

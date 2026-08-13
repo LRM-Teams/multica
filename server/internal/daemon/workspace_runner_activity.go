@@ -28,6 +28,12 @@ func (runner *WorkspaceRunner) managedLaunch(agentID, runtimeID string) (agentPr
 }
 
 func (runner *WorkspaceRunner) observeMessageLifecycle(agentID, runtimeID string) {
+	runner.observeRuntimeStarting(agentID, runtimeID, "Message lifecycle")
+}
+
+// observeRuntimeStarting is Raft 1.0.16 spawn Activity: working / starting /
+// "Starting…". Called after the provider process is up and Activity is managed.
+func (runner *WorkspaceRunner) observeRuntimeStarting(agentID, runtimeID, phase string) {
 	launch, found := runner.managedLaunch(agentID, runtimeID)
 	if !found || runner.activity == nil {
 		return
@@ -35,7 +41,7 @@ func (runner *WorkspaceRunner) observeMessageLifecycle(agentID, runtimeID string
 	runner.observeActivity(AgentObservation{
 		AgentID: agentID, LaunchID: launch.LaunchID, Kind: AgentObservationRuntimeStarting,
 		Data: AgentRuntimeStageObservationData{RuntimeID: runtimeID}, At: time.Now().UTC(),
-	}, "Message lifecycle")
+	}, phase)
 }
 
 func (runner *WorkspaceRunner) observeResidentMessageRuntime(agentID, runtimeID string, message agent.Message) {

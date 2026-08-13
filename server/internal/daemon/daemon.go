@@ -326,7 +326,13 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 			runtimes: d.canonicalRuntimes,
 			sessions: sessions,
 			start: func(ctx context.Context, req agentLifecycleStartRequest) error {
-				return d.ensureResidentMessageRuntime(ctx, req.AgentID, req.RuntimeID, nil)
+				if err := d.ensureResidentMessageRuntime(ctx, req.AgentID, req.RuntimeID, nil); err != nil {
+					return err
+				}
+				if runner := d.currentWorkspaceRunner(req.WorkspaceID); runner != nil {
+					runner.observeRuntimeStarting(req.AgentID, req.RuntimeID, "Lifecycle start")
+				}
+				return nil
 			},
 		},
 		logger: logger,

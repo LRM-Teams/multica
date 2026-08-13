@@ -169,7 +169,7 @@ func projectAgentObservation(observation AgentObservation) (agentActivityProject
 		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Online")
 	case AgentObservationRuntimeStarting:
 		projection.activityKind, projection.detailKind = protocol.ActivityKindWorking, "starting"
-		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Starting")
+		entry, err = activityNarrativeEntry(projection.activityKind, projection.detailKind, "Starting…")
 	case AgentObservationRuntimeWorking:
 		data := observation.Data.(AgentRuntimeObservationData)
 		projection.activityKind, projection.processInstanceID = protocol.ActivityKindWorking, data.ProcessInstanceID

@@ -153,7 +153,7 @@ export function useUpdateAgent(wsId: string) {
           // A3: scheduled after busy run — don't claim "already restarted".
           toast.success(t(($) => $.detail.agent_updated_restart_scheduled_toast));
         } else {
-          toast.success(t(($) => $.detail.agent_updated_restart_toast));
+          toast.success(t(($) => $.detail.agent_updated_toast));
         }
       } catch (restartErr) {
         // Config already saved — surface restart failure without rolling back.

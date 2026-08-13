@@ -65,28 +65,31 @@ export const ResearchSessionSchema = z
 export const ResearchPresenceResponseSchema = z
   .object({
     session_id: z.string().optional().default(""),
-    presence: z
-      .record(
-        z.string(),
-        z
-          .object({
-            activity: z.string().optional(),
-            updated_at: z.number().optional(),
-            updatedAt: z.number().optional(),
-            phase: z.string().optional(),
-            role: z.string().optional(),
-            fleet_member_id: z.string().nullable().optional(),
-            task_id: z.string().nullable().optional(),
-            node_id: z.string().nullable().optional(),
-            branch_id: z.string().nullable().optional(),
-            stage: z.string().nullable().optional(),
-            expires_at: z.number().nullable().optional(),
-            stale_reason: z.string().nullable().optional(),
-          })
-          .passthrough(),
-      )
-      .optional()
-      .default({}),
+    presence: z.preprocess(
+      (value) => (value === null ? undefined : value),
+      z
+        .record(
+          z.string(),
+          z
+            .object({
+              activity: z.string().optional(),
+              updated_at: z.number().optional(),
+              updatedAt: z.number().optional(),
+              phase: z.string().optional(),
+              role: z.string().optional(),
+              fleet_member_id: z.string().nullable().optional(),
+              task_id: z.string().nullable().optional(),
+              node_id: z.string().nullable().optional(),
+              branch_id: z.string().nullable().optional(),
+              stage: z.string().nullable().optional(),
+              expires_at: z.number().nullable().optional(),
+              stale_reason: z.string().nullable().optional(),
+            })
+            .passthrough(),
+        )
+        .optional()
+        .default({}),
+    ),
   })
   .passthrough();
 
@@ -411,7 +414,19 @@ const ResearchRunSnapshotSchema = z
           .passthrough(),
       )
       .default([]),
-    attempts: z.array(z.record(z.string(), z.unknown())).default([]),
+    attempts: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            task_id: z.string(),
+            attempt_number: z.number(),
+            assigned_agent_id: z.string(),
+            status: z.string(),
+          })
+          .passthrough(),
+      )
+      .default([]),
     sources: z
       .array(
         z

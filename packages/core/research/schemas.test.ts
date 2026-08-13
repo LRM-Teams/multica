@@ -306,7 +306,7 @@ describe("research schemas", () => {
     const fallback = { session_id: "s1", presence: {} };
     expect(
       parseWithFallback(
-        { session_id: "s1", presence: null },
+        { session_id: "s1", presence: [] },
         ResearchPresenceResponseSchema,
         fallback,
         { endpoint: "test" },

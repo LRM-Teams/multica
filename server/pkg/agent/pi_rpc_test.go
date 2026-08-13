@@ -715,7 +715,9 @@ func TestPiRPCBackendRuntimeStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	<-session.Result
+	if result := <-session.Result; result.Status != "completed" {
+		t.Fatalf("Execute result = %+v", result)
+	}
 
 	stats, err := b.RuntimeStats(context.Background())
 	if err != nil {
@@ -723,6 +725,22 @@ func TestPiRPCBackendRuntimeStats(t *testing.T) {
 	}
 	if stats == nil || stats.ContextPercent == nil || *stats.ContextPercent != 44.8 {
 		t.Fatalf("RuntimeStats = %+v", stats)
+	}
+}
+
+func TestWaitPiRPCResponsePrefersBufferedAckOverTerminalEvent(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		turn := &piRPCTurn{
+			response: make(chan piRPCResponse, 1),
+			done:     make(chan piRPCCompletion, 1),
+		}
+		turn.response <- piRPCResponse{ID: "multica-turn", Success: true}
+		turn.done <- piRPCCompletion{}
+
+		response, completion, ok := waitPiRPCResponse(context.Background(), turn, "multica-turn")
+		if !ok || completion != nil || response.ID != "multica-turn" {
+			t.Fatalf("iteration %d: response=%+v completion=%+v ok=%v, want buffered ACK", i, response, completion, ok)
+		}
 	}
 }
 

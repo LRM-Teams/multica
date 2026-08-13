@@ -66,6 +66,34 @@ describe("TrajectoryExplorer (LRM-1480 / UI-06)", () => {
     expect(onSelect).toHaveBeenCalledWith("b");
   });
 
+  it("localizes graph, overview, and status semantics", () => {
+    const nodes = [node("a", "问题", "done", "theme-main")];
+    renderWithI18n(
+      <TrajectoryExplorer
+        nodes={nodes}
+        sessionStatus="running"
+        onSelect={vi.fn()}
+        onJumpToCanvas={vi.fn()}
+        onOpenNodeDetail={vi.fn()}
+      />,
+      { locale: "zh-Hans" },
+    );
+
+    expect(screen.getByTestId("trajectory-explorer")).toHaveAttribute(
+      "aria-label",
+      "轨迹探索器",
+    );
+    expect(screen.getByTestId("trajectory-graph")).toHaveAttribute(
+      "aria-label",
+      "探索轨迹图",
+    );
+    expect(screen.getByTestId("trajectory-minimap").querySelector("svg")).toHaveAttribute(
+      "aria-label",
+      "轨迹概览",
+    );
+    expect(screen.getByTestId("trajectory-commit-status")).toHaveTextContent("完成");
+  });
+
   it("shows loading skeleton without fake commits", () => {
     renderWithI18n(
       <TrajectoryExplorer

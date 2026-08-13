@@ -912,6 +912,8 @@
   "trajectory_explorer": {
     "title": "Trajectory explorer",
     "loading": "Loading trajectory",
+    "graph_label": "Exploration trajectory graph",
+    "overview_label": "Trajectory overview",
     "empty": "No exploration trajectory yet",
     "empty_hint": "Start a new research or wait for results to appear.",
     "error": "Failed to load trajectory",

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ResearchSession } from "@multica/core/types";
 import { ResearchSessionChrome } from "./research-session-chrome";
 
@@ -263,9 +263,9 @@ describe("ResearchSessionChrome", () => {
     expect(onOpenDelivery).toHaveBeenCalledTimes(1);
   });
 
-  it("awaiting_user_confirm shows approve + reject controls (LRM-840)", () => {
+  it("awaiting_user_confirm closes reject feedback only after commit succeeds (LRM-840)", async () => {
     const onConfirm = vi.fn();
-    const onReject = vi.fn();
+    const onReject = vi.fn().mockResolvedValue(undefined);
     renderChrome(makeSession({ status: "awaiting_user_confirm" }), {
       onConfirm,
       onReject,
@@ -285,6 +285,80 @@ describe("ResearchSessionChrome", () => {
     });
     fireEvent.click(screen.getByTestId("research-session-gate-reject-submit"));
     expect(onReject).toHaveBeenCalledWith("来源权重不够");
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("research-session-gate-reject-popover"),
+      ).toBeNull(),
+    );
+  });
+
+  it("keeps reject feedback and focus while canonical rejection is pending", () => {
+    let resolveReject: (() => void) | undefined;
+    const onReject = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReject = resolve;
+        }),
+    );
+    const session = makeSession({ status: "awaiting_user_confirm" });
+    const { rerender } = renderChrome(session, { onReject });
+
+    fireEvent.click(screen.getByTestId("research-session-gate-reject"));
+    const reason = screen.getByTestId("research-session-gate-reject-reason");
+    fireEvent.change(reason, { target: { value: "保留这条反馈" } });
+    const submit = screen.getByTestId("research-session-gate-reject-submit");
+    submit.focus();
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(onReject).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ResearchSessionChrome
+        session={session}
+        canConfirm
+        canHandoff
+        createProject
+        createChannel
+        onCreateProjectChange={() => {}}
+        onCreateChannelChange={() => {}}
+        onConfirm={() => {}}
+        onReject={onReject}
+        onHandoff={() => {}}
+        onOpenDelivery={() => {}}
+        rejectPending
+      />,
+    );
+
+    const pendingSubmit = screen.getByTestId(
+      "research-session-gate-reject-submit",
+    ) as HTMLButtonElement;
+    expect(screen.getByTestId("research-session-gate-reject-popover")).toBeTruthy();
+    expect(screen.getByTestId("research-session-gate-reject-reason")).toHaveValue(
+      "保留这条反馈",
+    );
+    expect(pendingSubmit.disabled).toBe(false);
+    expect(pendingSubmit).toHaveAttribute("aria-disabled", "true");
+    expect(document.activeElement).toBe(pendingSubmit);
+    fireEvent.click(pendingSubmit);
+    expect(onReject).toHaveBeenCalledTimes(1);
+    resolveReject?.();
+  });
+
+  it("keeps exact reject feedback available when the commit fails", async () => {
+    const onReject = vi.fn().mockRejectedValue(new Error("commit failed"));
+    renderChrome(makeSession({ status: "awaiting_user_confirm" }), { onReject });
+
+    fireEvent.click(screen.getByTestId("research-session-gate-reject"));
+    fireEvent.change(screen.getByTestId("research-session-gate-reject-reason"), {
+      target: { value: "不要丢失这条反馈" },
+    });
+    fireEvent.click(screen.getByTestId("research-session-gate-reject-submit"));
+
+    await waitFor(() => expect(onReject).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("research-session-gate-reject-popover")).toBeTruthy();
+    expect(screen.getByTestId("research-session-gate-reject-reason")).toHaveValue(
+      "不要丢失这条反馈",
+    );
   });
 
   it("LRM-1240: gateBusy keeps approve/reject focusable via aria-disabled (not native disabled)", () => {

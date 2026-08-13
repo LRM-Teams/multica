@@ -453,7 +453,10 @@ export function layoutStarGraph(
     const gap = 0.22; // radians of clear space between adjacent groups
     const usable = 2 * Math.PI - gap * sectorCount;
     const slot = sectorCount > 0 ? usable / sectorCount : 0;
-    let cursor = 0;
+    // Rotate the whole field by a quarter turn. With sparse data this keeps
+    // two stable results on the left/right axis and three in a broad triangle
+    // instead of collapsing the first impression into a vertical chain.
+    let cursor = -Math.PI / 2;
     const orderedGroups: (string | "__free__")[] = [...clusterKeys, "__free__"];
     for (const g of orderedGroups) {
       sectorStart.set(g, cursor + gap / 2);
@@ -734,4 +737,3 @@ function nodeSignatureCompat(
   const prevSig = `${prev.id}|${prev.tier}|${prev.clusterId ?? ""}|${prev.parentId ?? ""}`;
   return prevSig === currentSig;
 }
-

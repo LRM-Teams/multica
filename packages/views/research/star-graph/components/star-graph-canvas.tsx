@@ -658,6 +658,12 @@ export function StarGraphCanvas({
           width={worldSize.width}
           height={worldSize.height}
           lensHints={focusedLensHints}
+          relationLabels={{
+            decompose: mapKeyLabels.relations.decompose.label,
+            support: mapKeyLabels.relations.support.label,
+            challenge: mapKeyLabels.relations.challenge.label,
+            newdir: mapKeyLabels.relations.newdir.label,
+          }}
         />
         <StarGraphEntityLayer
           entities={visibleEntities}

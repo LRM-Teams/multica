@@ -488,17 +488,28 @@ type GateResult struct {
 }
 
 type RunSnapshot struct {
-	Run          Run                  `json:"run"`
-	Contract     ResearchContract     `json:"contract"`
-	Method       *ResearchMethod      `json:"method,omitempty"`
-	Questions    []Question           `json:"questions"`
-	Tasks        []Task               `json:"tasks"`
-	Attempts     []Attempt            `json:"attempts"`
-	Sources      []SourceSnapshotView `json:"sources"`
-	Observations []Observation        `json:"observations"`
-	Claims       []Claim              `json:"claims"`
-	Gate         GateResult           `json:"gate"`
-	AttemptContext *AttemptArtifactContext `json:"attempt_context,omitempty"`
+	Run               Run                        `json:"run"`
+	Contract          ResearchContract           `json:"contract"`
+	Method            *ResearchMethod            `json:"method,omitempty"`
+	Questions         []Question                 `json:"questions"`
+	Tasks             []Task                     `json:"tasks"`
+	Attempts          []Attempt                  `json:"attempts"`
+	Sources           []SourceSnapshotView       `json:"sources"`
+	Observations      []Observation              `json:"observations"`
+	Claims            []Claim                    `json:"claims"`
+	EvaluationPrivate []EvaluationPrivateContext `json:"evaluation_private,omitempty"`
+	Gate              GateResult                 `json:"gate"`
+	AttemptContext    *AttemptArtifactContext    `json:"attempt_context,omitempty"`
+}
+
+type EvaluationPrivateContext struct {
+	ID          string          `json:"id"`
+	Stage       string          `json:"stage"`
+	Passed      bool            `json:"passed"`
+	Score       float64         `json:"score"`
+	Findings    json.RawMessage `json:"findings"`
+	Remediation string          `json:"remediation"`
+	CreatedAt   time.Time       `json:"created_at"`
 }
 
 // AttemptArtifactContext is a bounded passport summary for task-bound reads.

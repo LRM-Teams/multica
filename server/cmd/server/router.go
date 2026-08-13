@@ -1047,6 +1047,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Research Fleet
 			r.Route("/api/research", func(r chi.Router) {
+				r.Route("/v6/runs/{runId}/projection", func(r chi.Router) {
+					r.Get("/snapshot", h.GetResearchV6ProjectionSnapshot)
+					r.Get("/deltas", h.GetResearchV6ProjectionDeltas)
+					r.Post("/resume", h.PostResearchV6ProjectionResume)
+				})
 				r.Get("/fleet", h.GetResearchFleet)
 				r.Post("/fleet/ensure", h.EnsureResearchFleet)
 				r.Post("/fleet/members", h.HireResearchFleetMember)

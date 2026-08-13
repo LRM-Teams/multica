@@ -6,51 +6,59 @@ import "fmt"
 type ArtifactEntityKind string
 
 const (
-	ArtifactKindRunSession          ArtifactEntityKind = "run_session"
-	ArtifactKindContractRevision    ArtifactEntityKind = "contract_revision"
-	ArtifactKindMethodDecision        ArtifactEntityKind = "method_decision"
-	ArtifactKindQuestion              ArtifactEntityKind = "question"
-	ArtifactKindTask                  ArtifactEntityKind = "task"
-	ArtifactKindAttempt               ArtifactEntityKind = "attempt"
-	ArtifactKindResultArtifact        ArtifactEntityKind = "result_artifact"
-	ArtifactKindLegacySource          ArtifactEntityKind = "legacy_source"
-	ArtifactKindSourceSnapshot        ArtifactEntityKind = "source_snapshot"
-	ArtifactKindObservation           ArtifactEntityKind = "observation"
-	ArtifactKindClaim                 ArtifactEntityKind = "claim"
-	ArtifactKindEvidenceLink          ArtifactEntityKind = "evidence_link"
-	ArtifactKindReportRevision        ArtifactEntityKind = "report_revision"
-	ArtifactKindEvaluationDecision    ArtifactEntityKind = "evaluation_decision"
-	ArtifactKindStageEvaluation       ArtifactEntityKind = "stage_evaluation"
-	ArtifactKindResearchMessage       ArtifactEntityKind = "research_message"
-	ArtifactKindProductRoundDecision  ArtifactEntityKind = "product_round_decision"
-	ArtifactKindContextManifest       ArtifactEntityKind = "context_manifest"
-	ArtifactKindRunEvent              ArtifactEntityKind = "run_event"
-	ArtifactKindGraphNode             ArtifactEntityKind = "graph_node"
-	ArtifactKindGraphEdge             ArtifactEntityKind = "graph_edge"
+	ArtifactKindRunSession           ArtifactEntityKind = "run_session"
+	ArtifactKindContractRevision     ArtifactEntityKind = "contract_revision"
+	ArtifactKindMethodDecision       ArtifactEntityKind = "method_decision"
+	ArtifactKindQuestion             ArtifactEntityKind = "question"
+	ArtifactKindTask                 ArtifactEntityKind = "task"
+	ArtifactKindAttempt              ArtifactEntityKind = "attempt"
+	ArtifactKindResultArtifact       ArtifactEntityKind = "result_artifact"
+	ArtifactKindLegacySource         ArtifactEntityKind = "legacy_source"
+	ArtifactKindSourceSnapshot       ArtifactEntityKind = "source_snapshot"
+	ArtifactKindObservation          ArtifactEntityKind = "observation"
+	ArtifactKindClaim                ArtifactEntityKind = "claim"
+	ArtifactKindEvidenceLink         ArtifactEntityKind = "evidence_link"
+	ArtifactKindReportRevision       ArtifactEntityKind = "report_revision"
+	ArtifactKindEvaluationDecision   ArtifactEntityKind = "evaluation_decision"
+	ArtifactKindStageEvaluation      ArtifactEntityKind = "stage_evaluation"
+	ArtifactKindResearchMessage      ArtifactEntityKind = "research_message"
+	ArtifactKindProductRoundDecision ArtifactEntityKind = "product_round_decision"
+	ArtifactKindContextManifest      ArtifactEntityKind = "context_manifest"
+	ArtifactKindRunEvent             ArtifactEntityKind = "run_event"
+	ArtifactKindGraphNode            ArtifactEntityKind = "graph_node"
+	ArtifactKindGraphEdge            ArtifactEntityKind = "graph_edge"
+	ArtifactKindHypothesis           ArtifactEntityKind = "hypothesis"
+	ArtifactKindBranch               ArtifactEntityKind = "branch"
+	ArtifactKindInsight              ArtifactEntityKind = "insight"
+	ArtifactKindInquiryEdge          ArtifactEntityKind = "inquiry_edge"
 )
 
 var registeredArtifactEntityKinds = map[ArtifactEntityKind]struct{}{
-	ArtifactKindRunSession:         {},
-	ArtifactKindContractRevision:   {},
-	ArtifactKindMethodDecision:     {},
-	ArtifactKindQuestion:           {},
-	ArtifactKindTask:               {},
-	ArtifactKindAttempt:            {},
-	ArtifactKindResultArtifact:     {},
-	ArtifactKindLegacySource:       {},
-	ArtifactKindSourceSnapshot:     {},
-	ArtifactKindObservation:        {},
-	ArtifactKindClaim:              {},
-	ArtifactKindEvidenceLink:       {},
-	ArtifactKindReportRevision:     {},
-	ArtifactKindEvaluationDecision: {},
-	ArtifactKindStageEvaluation:    {},
-	ArtifactKindResearchMessage:    {},
+	ArtifactKindRunSession:           {},
+	ArtifactKindContractRevision:     {},
+	ArtifactKindMethodDecision:       {},
+	ArtifactKindQuestion:             {},
+	ArtifactKindTask:                 {},
+	ArtifactKindAttempt:              {},
+	ArtifactKindResultArtifact:       {},
+	ArtifactKindLegacySource:         {},
+	ArtifactKindSourceSnapshot:       {},
+	ArtifactKindObservation:          {},
+	ArtifactKindClaim:                {},
+	ArtifactKindEvidenceLink:         {},
+	ArtifactKindReportRevision:       {},
+	ArtifactKindEvaluationDecision:   {},
+	ArtifactKindStageEvaluation:      {},
+	ArtifactKindResearchMessage:      {},
 	ArtifactKindProductRoundDecision: {},
-	ArtifactKindContextManifest:    {},
-	ArtifactKindRunEvent:           {},
-	ArtifactKindGraphNode:          {},
-	ArtifactKindGraphEdge:          {},
+	ArtifactKindContextManifest:      {},
+	ArtifactKindRunEvent:             {},
+	ArtifactKindGraphNode:            {},
+	ArtifactKindGraphEdge:            {},
+	ArtifactKindHypothesis:           {},
+	ArtifactKindBranch:               {},
+	ArtifactKindInsight:              {},
+	ArtifactKindInquiryEdge:          {},
 }
 
 // ArtifactLifecycleStatus is passport admissibility, not domain status.
@@ -87,9 +95,9 @@ const (
 type ArtifactHashOrigin string
 
 const (
-	ArtifactHashOriginProduction           ArtifactHashOrigin = "production"
-	ArtifactHashOriginMigrationRecomputed  ArtifactHashOrigin = "migration_recomputed"
-	ArtifactHashOriginLegacyStored         ArtifactHashOrigin = "legacy_stored"
+	ArtifactHashOriginProduction          ArtifactHashOrigin = "production"
+	ArtifactHashOriginMigrationRecomputed ArtifactHashOrigin = "migration_recomputed"
+	ArtifactHashOriginLegacyStored        ArtifactHashOrigin = "legacy_stored"
 )
 
 // ArtifactCanonicalizationVersion is the active canonical JSON profile.

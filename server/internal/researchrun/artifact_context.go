@@ -42,14 +42,17 @@ type artifactVersionCandidate struct {
 }
 
 type dispatchManifestPlan struct {
-	ManifestID          string
-	Entries             []artifactVersionCandidate
-	Omissions           []artifactVersionCandidate
-	PolicyWatermark     int64
-	ThroughStateVersion int64
-	ManifestHash        string
-	NormalGrantID       string
-	NormalGrantRevision int64
+	ManifestID              string
+	Entries                 []artifactVersionCandidate
+	Omissions               []artifactVersionCandidate
+	PolicyWatermark         int64
+	ThroughStateVersion     int64
+	ManifestHash            string
+	NormalGrantID           string
+	NormalGrantRevision     int64
+	EvaluationGrantID       string
+	EvaluationGrantRevision int64
+	Purpose                 ArtifactPurpose
 }
 
 func (m ArtifactContextModule) PlanDispatchManifest(
@@ -58,8 +61,14 @@ func (m ArtifactContextModule) PlanDispatchManifest(
 	workspaceID, sessionID string,
 	stateVersion int64,
 ) (dispatchManifestPlan, error) {
+	return m.PlanDispatchManifestForPurpose(ctx, tx, workspaceID, sessionID, stateVersion, ArtifactPurposeTaskExecution)
+}
+
+func (m ArtifactContextModule) PlanDispatchManifestForPurpose(
+	ctx context.Context, tx pgx.Tx, workspaceID, sessionID string, stateVersion int64, purpose ArtifactPurpose,
+) (dispatchManifestPlan, error) {
 	return m.planDispatchManifestWithClearance(
-		ctx, tx, workspaceID, sessionID, stateVersion, defaultTaskExecutionClearance(),
+		ctx, tx, workspaceID, sessionID, stateVersion, defaultTaskExecutionClearance(), purpose,
 	)
 }
 
@@ -69,17 +78,17 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 	workspaceID, sessionID string,
 	stateVersion int64,
 	clearance ArtifactClearance,
+	purpose ArtifactPurpose,
 ) (dispatchManifestPlan, error) {
 	candidates, err := loadArtifactVersionCandidates(ctx, tx, workspaceID, sessionID)
 	if err != nil {
 		return dispatchManifestPlan{}, err
 	}
-	purpose := manifestPurposeForTask()
-
 	var entries []artifactVersionCandidate
 	var omissions []artifactVersionCandidate
 	for _, candidate := range candidates {
-		if m.policy.EvaluationPrivateKind(candidate.Kind) && purpose == ArtifactPurposeTaskExecution {
+		private := m.policy.EvaluationPrivateKind(candidate.Kind)
+		if private && purpose == ArtifactPurposeTaskExecution {
 			candidate.OmissionReason = m.policy.ManifestOmissionReason(ArtifactDenyEvaluationCompartment)
 			omissions = append(omissions, candidate)
 			continue
@@ -93,7 +102,7 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 			continue
 		}
 		allowed, deny := m.policy.CanReadNormal(
-			clearance, candidate.AccessLevel, purpose, false,
+			clearance, candidate.AccessLevel, purpose, private,
 		)
 		if !allowed {
 			candidate.OmissionReason = m.policy.ManifestOmissionReason(deny)
@@ -125,6 +134,7 @@ func (m ArtifactContextModule) planDispatchManifestWithClearance(
 		PolicyWatermark:     watermark,
 		ThroughStateVersion: stateVersion,
 		ManifestHash:        manifestHash,
+		Purpose:             purpose,
 	}, nil
 }
 
@@ -255,6 +265,7 @@ type persistDispatchManifestInput struct {
 	TaskID            string
 	Plan              dispatchManifestPlan
 	ExpectedWatermark int64
+	Purpose           ArtifactPurpose
 }
 
 func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatchManifestInput) (dispatchManifestPlan, error) {
@@ -266,31 +277,45 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	plan.PolicyWatermark = reserved
 	plan.NormalGrantID = uuid.NewString()
 	plan.NormalGrantRevision = 1
-	if err := persistTaskExecutionGrantTx(ctx, tx, in.WorkspaceID, in.SessionID, in.AttemptID, plan, reserved); err != nil {
+	plan.Purpose = in.Purpose
+	if plan.Purpose == "" {
+		plan.Purpose = ArtifactPurposeTaskExecution
+	}
+	if plan.Purpose == ArtifactPurposeEvaluation {
+		plan.EvaluationGrantID = uuid.NewString()
+		plan.EvaluationGrantRevision = 1
+	}
+	if err := persistManifestGrantsTx(ctx, tx, in.WorkspaceID, in.SessionID, in.AttemptID, plan, reserved); err != nil {
 		return dispatchManifestPlan{}, err
 	}
-	clearance, err := loadTaskExecutionGrantClearanceTx(
-		ctx, tx, in.WorkspaceID, in.SessionID, plan.NormalGrantID, plan.NormalGrantRevision,
+	clearance, err := loadManifestNormalGrantClearanceTx(
+		ctx, tx, in.WorkspaceID, in.SessionID, plan.NormalGrantID, plan.NormalGrantRevision, plan.Purpose,
 	)
 	if err != nil {
 		return dispatchManifestPlan{}, err
 	}
 	authorized, err := NewArtifactContextModule().planDispatchManifestWithClearance(
-		ctx, tx, in.WorkspaceID, in.SessionID, plan.ThroughStateVersion, clearance,
+		ctx, tx, in.WorkspaceID, in.SessionID, plan.ThroughStateVersion, clearance, plan.Purpose,
 	)
 	if err != nil {
 		return dispatchManifestPlan{}, err
 	}
 	authorized.NormalGrantID = plan.NormalGrantID
 	authorized.NormalGrantRevision = plan.NormalGrantRevision
+	authorized.EvaluationGrantID = plan.EvaluationGrantID
+	authorized.EvaluationGrantRevision = plan.EvaluationGrantRevision
+	authorized.Purpose = plan.Purpose
 	authorized.PolicyWatermark = plan.PolicyWatermark
 	plan = authorized
+	if err = freezeEvidenceRepresentationsTx(ctx, tx, in.WorkspaceID, in.SessionID, plan.Entries); err != nil {
+		return dispatchManifestPlan{}, err
+	}
 	plan.ManifestHash = hashDispatchManifest(dispatchManifestHashInput{
 		WorkspaceID:         in.WorkspaceID,
 		SessionID:           in.SessionID,
 		AttemptID:           in.AttemptID,
 		TaskID:              in.TaskID,
-		Purpose:             ArtifactPurposeTaskExecution,
+		Purpose:             plan.Purpose,
 		PolicyVersion:       LegacyV1V5CompatPolicy,
 		PolicyWatermark:     plan.PolicyWatermark,
 		ThroughStateVersion: plan.ThroughStateVersion,
@@ -312,14 +337,14 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 		INSERT INTO research_artifact_context_manifest (
 		  id, workspace_id, session_id, attempt_id, task_id,
 		  purpose, policy_version, policy_watermark, through_state_version,
-		  normal_grant_id, normal_grant_revision, manifest_hash
+		  normal_grant_id, normal_grant_revision, evaluation_grant_id, evaluation_grant_revision, manifest_hash
 		) VALUES (
 		  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
-		  'task_execution', $6, $7, $8, $9::uuid, $10, $11
+		  $6, $7, $8, $9, $10::uuid, $11, NULLIF($12, '')::uuid, NULLIF($13, 0), $14
 		)
 	`, plan.ManifestID, in.WorkspaceID, in.SessionID, in.AttemptID, in.TaskID,
-		LegacyV1V5CompatPolicy, plan.PolicyWatermark, plan.ThroughStateVersion,
-		plan.NormalGrantID, plan.NormalGrantRevision, plan.ManifestHash); err != nil {
+		plan.Purpose, LegacyV1V5CompatPolicy, plan.PolicyWatermark, plan.ThroughStateVersion,
+		plan.NormalGrantID, plan.NormalGrantRevision, plan.EvaluationGrantID, plan.EvaluationGrantRevision, plan.ManifestHash); err != nil {
 		return dispatchManifestPlan{}, fmt.Errorf("insert context manifest: %w", err)
 	}
 
@@ -378,11 +403,12 @@ func persistDispatchManifestTx(ctx context.Context, tx pgx.Tx, in persistDispatc
 	return plan, nil
 }
 
-func loadTaskExecutionGrantClearanceTx(
+func loadManifestNormalGrantClearanceTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, grantID string,
 	grantRevision int64,
+	purpose ArtifactPurpose,
 ) (ArtifactClearance, error) {
 	var clearance string
 	err := tx.QueryRow(ctx, `
@@ -393,9 +419,9 @@ func loadTaskExecutionGrantClearanceTx(
 		  AND id = $3::uuid
 		  AND revision = $4
 		  AND status = 'active'
-		  AND purpose = 'task_execution'
+		  AND purpose = $5
 		  AND evaluation_private = false
-	`, workspaceID, sessionID, grantID, grantRevision).Scan(&clearance)
+	`, workspaceID, sessionID, grantID, grantRevision, purpose).Scan(&clearance)
 	if err != nil {
 		return "", fmt.Errorf("load task execution grant: %w", err)
 	}
@@ -406,7 +432,7 @@ func loadTaskExecutionGrantClearanceTx(
 	return parsed, nil
 }
 
-func persistTaskExecutionGrantTx(
+func persistManifestGrantsTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID, sessionID, attemptID string,
@@ -429,11 +455,11 @@ func persistTaskExecutionGrantTx(
 		  id, workspace_id, session_id, principal_kind, principal_id, purpose,
 		  normal_clearance, evaluation_private, policy_version, revision, status
 		) VALUES (
-		  $1::uuid, $2::uuid, $3::uuid, 'agent', $4::uuid, 'task_execution',
-		  $5, false, $6, $7, 'active'
+		  $1::uuid, $2::uuid, $3::uuid, 'agent', $4::uuid, $5,
+		  $6, false, $7, $8, 'active'
 		)
 	`, plan.NormalGrantID, workspaceID, sessionID, principalID,
-		defaultTaskExecutionClearance(), LegacyV1V5CompatPolicy, plan.NormalGrantRevision); err != nil {
+		plan.Purpose, defaultTaskExecutionClearance(), LegacyV1V5CompatPolicy, plan.NormalGrantRevision); err != nil {
 		return fmt.Errorf("insert task execution grant: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -443,6 +469,14 @@ func persistTaskExecutionGrantTx(
 		) VALUES ($1::uuid, $2::uuid, $3, 'grant_create', $4::uuid, 0, $5, 'active')
 	`, workspaceID, sessionID, watermark, plan.NormalGrantID, plan.NormalGrantRevision); err != nil {
 		return fmt.Errorf("record task execution grant: %w", err)
+	}
+	if plan.EvaluationGrantID != "" {
+		if _, err := tx.Exec(ctx, `INSERT INTO research_artifact_policy_grant (id,workspace_id,session_id,principal_kind,principal_id,purpose,normal_clearance,evaluation_private,policy_version,revision,status) VALUES ($1::uuid,$2::uuid,$3::uuid,'agent',$4::uuid,$5,NULL,true,$6,$7,'active')`, plan.EvaluationGrantID, workspaceID, sessionID, principalID, plan.Purpose, LegacyV1V5CompatPolicy, plan.EvaluationGrantRevision); err != nil {
+			return fmt.Errorf("insert evaluation grant: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO research_artifact_policy_mutation (workspace_id,session_id,watermark,mutation_kind,policy_grant_id,old_grant_revision,new_grant_revision,new_grant_status) VALUES ($1::uuid,$2::uuid,$3,'grant_create',$4::uuid,0,$5,'active')`, workspaceID, sessionID, watermark, plan.EvaluationGrantID, plan.EvaluationGrantRevision); err != nil {
+			return fmt.Errorf("record evaluation grant: %w", err)
+		}
 	}
 	return nil
 }
@@ -487,14 +521,24 @@ func persistManifestGateSnapshotTx(
 		return fmt.Errorf("encode manifest gate snapshot: %w", err)
 	}
 	hash := contentHashFromPayload(encoded)
+	members, err := listFleetMembersTx(ctx, tx, sessionID, workspaceID)
+	if err != nil {
+		return err
+	}
+	principalBytes, err := encodeManifestPrincipalHeader(members)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, `
 		UPDATE research_artifact_context_manifest
 		SET principal_header_bytes = $4,
-		    principal_header_hash = $5
+		    principal_header_hash = $5,
+		    gate_snapshot_bytes = $6,
+		    gate_snapshot_hash = $7
 		WHERE workspace_id = $1::uuid
 		  AND session_id = $2::uuid
 		  AND id = $3::uuid
-	`, workspaceID, sessionID, manifestID, encoded, hash)
+	`, workspaceID, sessionID, manifestID, principalBytes, contentHashFromPayload(principalBytes), encoded, hash)
 	return err
 }
 
@@ -505,7 +549,7 @@ func loadManifestGateSnapshotPool(
 ) (GateResult, bool, error) {
 	var raw []byte
 	err := pool.QueryRow(ctx, `
-		SELECT principal_header_bytes
+		SELECT gate_snapshot_bytes
 		FROM research_artifact_context_manifest
 		WHERE workspace_id = $1::uuid AND session_id = $2::uuid AND attempt_id = $3::uuid
 	`, workspaceID, sessionID, attemptID).Scan(&raw)

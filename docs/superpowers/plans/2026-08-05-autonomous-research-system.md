@@ -978,6 +978,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [ ] 实现统一工件护照、输入引用、schema/hash、版本和 data access level。
 - [ ] 所有 Task Context 只从护照选择可见工件；Prompt 不能读取无权数据。
 - [ ] evaluation-private 与被评对象隔离。
+  - [x] D-eval-1：Quality Gate/Citation Audit dispatch 使用 `evaluation` purpose，同时冻结同一 grader Agent 的 normal 与 evaluation-private 持久 grant；Stage Evaluation 私有 representation 只在 active evaluation grant、assigned Attempt 路径解码并进入 grader Prompt，普通任务继续 omission/fail-closed。完整 principal/revocation 矩阵仍由 §15.10/§15.23 退出测试收口。
 
 当前实现状态：migration 318–335 已落地 Passport、不可变 Version、Result Artifact、
 Context Manifest、Input Reference、Policy mutation ledger、canonicalization registry、
@@ -993,6 +994,7 @@ Manifest 不再仅依赖进程内硬编码 clearance。D 章尚未完成，最�
 
 - [ ] 一次冻结完整 V6 Plan/Result/Prompt/Gate JSON schema 设计，覆盖 Inquiry、Corpus、Integration、Dispute、Report 和 Evaluation；此时不把 V6 接到新 Run 默认值。
 - [ ] 增加 Hypothesis、Branch、Insight、Inquiry Edge schema、状态机和迁移。
+  - [x] E2a：migration 348 建立四类 canonical Inquiry 表、tenant/session scoped FK、状态约束、frontier 索引，并把四类实体加入 Artifact Passport fail-closed kind registry；V6 默认值保持关闭。写入命令、完整多态端点守卫、环检测和状态转换仍待 E2b。
 - [ ] Planner 输出从“问题列表”升级为 Contract-bound Inquiry 初始图。
 - [ ] 每批证据更新 Question/Hypothesis/Branch 的状态，保存 before/after 和理由。
 - [ ] steering 只废弃受影响分支和任务，保留仍有效证据。
